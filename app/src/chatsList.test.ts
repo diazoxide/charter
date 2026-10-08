@@ -1,21 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { FinishedTask } from "./bindings";
 import {
   arranged,
-  countsOf,
   filters,
   found,
   isLive,
   liveBelow,
-  overBelow,
-  overOf,
   matches,
   matchesFinished,
   rankOf,
   sessionOrder,
   sinceSaid,
   stamped,
-  summaryOf,
   type Rank,
 } from "./chatsList";
 import { chatsTree, type ChatRow, type ListedChat } from "./chatsTree";
@@ -240,79 +235,6 @@ describe("the filter (V100-49)", () => {
     expect(numbers(found(rows, new Set([3])))).toEqual([1, 2, 3]);
     expect(numbers(found(rows, new Set([4, 5])))).toEqual([1, 4, 5]);
     expect(numbers(found(rows, new Set()))).toEqual([]);
-  });
-});
-
-describe("what a folded session says of its finished tasks (V100-48)", () => {
-  const task = (outcome: string): FinishedTask => ({
-    id: outcome,
-    asker: 4,
-    name: outcome,
-    persona: null,
-    how: outcome === "ended without a report" ? "unreported" : (outcome as FinishedTask["how"]),
-    outcome,
-    folds: outcome === "done" || outcome === "cancelled",
-    report: "",
-    changed: null,
-    ended: null,
-    place: "alpha",
-    branch: null,
-    reopens: false,
-    not_reopened: null,
-    chat: null,
-    did_not_start: false,
-    attempts: 0,
-    waits: null,
-  });
-
-  it("counts them by how each ended, in the shape and the word a row says that state in", () => {
-    const summary = summaryOf(
-      ["done", "done", "failed", "done", "ended without a report"].map(task),
-    );
-
-    expect(countsOf(summary ?? "")).toEqual([
-      { shape: "tick", count: 3, word: "done" },
-      { shape: "cross", count: 1, word: "failed" },
-      { shape: "triangle", count: 1, word: "ended without a report" },
-    ]);
-  });
-
-  it("says nothing for a session with none", () => {
-    expect(summaryOf([])).toBeNull();
-  });
-
-  it("counts the open chats under it that are over with its finished tasks", () => {
-    const rows = chatsTree([listed(1), listed(2, 1), listed(3, 1), listed(4, 3), listed(5)]);
-    const shownAs = (kinds: Record<number, [ShownKind, string, string]>) => (row: ChatRow) => {
-      const one = kinds[row.session];
-      return one === undefined
-        ? undefined
-        : ({ kind: one[0], shape: one[1], word: one[2], token: "text.muted" } as Shown);
-    };
-    const over = overBelow(
-      rows,
-      shownAs({
-        2: ["done", "tick", "done"],
-        3: ["working", "ring", "working"],
-        4: ["failed", "cross", "failed"],
-      }),
-    );
-
-    // Each row with something over under it, at any depth; a chat at work is not counted.
-    const open = overOf(over);
-    expect([...open.keys()]).toEqual([1, 3]);
-    expect(open.get(1)?.map((shown) => shown.word)).toEqual(["done", "failed"]);
-    expect(open.get(3)?.map((shown) => shown.word)).toEqual(["failed"]);
-
-    // With one finished task of its own that came out done: two done, one failed.
-    expect(countsOf(summaryOf([task("done")], open.get(1)) ?? "")).toEqual([
-      { shape: "tick", count: 2, word: "done" },
-      { shape: "cross", count: 1, word: "failed" },
-    ]);
-    // And with no finished task at all, the open ones are still said.
-    expect(countsOf(summaryOf([], open.get(3)) ?? "")).toEqual([
-      { shape: "cross", count: 1, word: "failed" },
-    ]);
   });
 });
 

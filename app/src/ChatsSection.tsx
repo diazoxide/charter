@@ -19,19 +19,14 @@ import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
   arranged,
-  countsOf,
   filters,
   found,
   liveBelow,
-  overBelow,
-  overOf,
   matches,
   matchesFinished,
   sessionOrder,
-  shownOfRow,
   sinceSaid,
   stamped,
-  summaryOf,
   type Filter,
   type Rank,
 } from "./chatsList";
@@ -47,11 +42,13 @@ import {
 } from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
+import { standingOfRows } from "./sessionTasks";
+import { TaskCountShown } from "./TasksBelow";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
+import { useRevealedTask, type Reveal } from "./revealTask";
 import { useTabStop } from "./roving";
 import { stateClock, useStateSince, type StateClock } from "./stateClock";
-import { SHAPES } from "./StateShown";
 import { deletes } from "./tabKeys";
 
 /** A row's id in the section's roving focus. */
@@ -188,6 +185,9 @@ export function ChatsSection({
   onReopen = NOT_REOPENED,
   clock: given,
   onDrawn,
+  reveal,
+  onRevealed,
+  onLookFinished,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -216,6 +216,14 @@ export function ChatsSection({
   /** Tells whoever reads that clock which chats' rows are on screen (`StateClock.read`): this
    *  list's rows as they are drawn, and none once it is gone. */
   onDrawn?: (drawn: ReadonlySet<number>) => void;
+  /** A finished task to bring into view: one that failed, when the person goes to its
+   *  needs-you item (#1491). */
+  reveal?: Reveal;
+  /** What became of `reveal`: its row was shown and has the keyboard, or it could not be
+   *  shown and the list said so. Told once for each asking. */
+  onRevealed?: (reveal: Reveal, shown: boolean) => void;
+  /** The person opened a finished row to read it: a failed one has then been looked at. */
+  onLookFinished?: (task: FinishedTask) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -246,9 +254,11 @@ export function ChatsSection({
 
   // What the chats' own moves change, each read through the selector: a move that changes
   // none of them draws nothing here.
+  // Every row's state from the one pass (`standingOfRows`), so the order, the folds and the
+  // filter read the word each row draws, `waiting on n tasks` included (#1491).
   const kindsOf = (states: ChatStates) => {
-    const queue = new Set(states.needsYou);
-    return (row: ChatRow) => shownOfRow(states, row, queue)?.kind;
+    const stood = standingOfRows(states, rows);
+    return (row: ChatRow) => stood.get(row.session)?.shown?.kind;
   };
   const order = useChatsSelect(
     chats,
@@ -256,25 +266,15 @@ export function ChatsSection({
     sameList,
   );
   const live = useChatsSelect(chats, (states) => liveBelow(rows, kindsOf(states)), sameList);
-  /** The open chats under each row that are over: what a folded row counts with its finished
-   *  tasks (`overBelow`). */
-  const overOpen = useChatsSelect(
-    chats,
-    (states) => {
-      const queue = new Set(states.needsYou);
-      return overBelow(rows, (row) => shownOfRow(states, row, queue));
-    },
-    sameList,
-  );
   const asked = useChatsSelect(
     chats,
     (states) => {
       if (!filtering) return null;
-      const queue = new Set(states.needsYou);
+      const stood = standingOfRows(states, rows);
       return rows
         .filter(
           (row) =>
-            matches(row, shownOfRow(states, row, queue), filter) || finishedFound.has(row.session),
+            matches(row, stood.get(row.session)?.shown, filter) || finishedFound.has(row.session),
         )
         .map((row) => row.session);
     },
@@ -322,7 +322,8 @@ export function ChatsSection({
     });
 
   /** What each chat's finished tasks come to: whether one of them stands alone, which keeps
-   *  its chat open. */
+   *  its chat open. What a folded row says of them is its count (`TaskCountShown`, #1491),
+   *  the same on a folded row and an open one. */
   const ended = useMemo(
     () =>
       new Map(
@@ -332,17 +333,6 @@ export function ChatsSection({
       ),
     [finished],
   );
-  /** What a folded row says of what is over under it: its finished tasks, and the open chats
-   *  under it that are over and not ended yet. */
-  const summaries = useMemo(() => {
-    const open = overOf(overOpen);
-    const by = new Map<number, string>();
-    for (const session of new Set([...finished.keys(), ...open.keys()])) {
-      const summary = summaryOf(finished.get(session) ?? [], open.get(session));
-      if (summary !== null) by.set(session, summary);
-    }
-    return by;
-  }, [finished, overOpen]);
   /** The rows the list is drawn from: every chat, less the ones that arrived while it is
    *  held. A chat that ended is not in `rows`, and is not kept. */
   const steady = useMemo(() => {
@@ -460,6 +450,27 @@ export function ChatsSection({
     },
     [offers, onPress],
   );
+  const section = useRef<HTMLElement>(null);
+  useRevealedTask(section, reveal, rows, {
+    fold,
+    shut: (session) => opens.get(session) === false,
+    // A finished row, or a chat's own, that the filter does not ask for.
+    hides: (asked) =>
+      filtering &&
+      (asked.task === undefined ||
+        !base.some((row) => row.session === asked.asker) ||
+        !(finishedFound.get(asked.asker) ?? []).some((task) => task.name === asked.task)),
+    unfilter: (name) => {
+      clear();
+      setSaid(`The filter was taken off to show ${name}.`);
+    },
+    // The row was shown, or could not be: said to whoever asked, once (#1491).
+    shown: (asked) => onRevealed?.(asked, true),
+    missed: (asked) => {
+      setSaid(`${asked.task ?? "That chat"} has no row to show here.`);
+      onRevealed?.(asked, false);
+    },
+  });
   const stop = useTabStop(
     front === undefined ? undefined : rowId(front),
     drawn.map((row) => rowId(row.session)),
@@ -491,7 +502,12 @@ export function ChatsSection({
         .filter((one) => one !== "")
         .join(" ");
   return (
-    <section className="chats-section" data-testid="chats-section" aria-labelledby="chats-title">
+    <section
+      ref={section}
+      className="chats-section"
+      data-testid="chats-section"
+      aria-labelledby="chats-title"
+    >
       {/* The title and the filter stay at the top of the section while its rows scroll. */}
       <div className="chats-head">
         <h2 className="sidebar-title" id="chats-title">
@@ -685,7 +701,6 @@ export function ChatsSection({
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
-                      summary={open === false ? (summaries.get(row.session) ?? null) : null}
                       needs={lead === undefined ? null : lead}
                       needsName={
                         lead === undefined || lead === row.session
@@ -716,6 +731,7 @@ export function ChatsSection({
                         }
                         onClear={onClearFinished}
                         onReopen={onReopen}
+                        onLook={onLookFinished}
                       />
                     )),
                   ];
@@ -793,7 +809,6 @@ const Row = memo(function Row({
   tab,
   current,
   open,
-  summary,
   needs,
   needsName,
   stopping,
@@ -841,8 +856,6 @@ const Row = memo(function Row({
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
   open: boolean | null;
-  /** How its finished tasks ended (`summaryOf`), while it is folded over some. */
-  summary: string | null;
   /** The chat its hand leads to: itself, a chat below it, or none when it wears no hand. */
   needs: number | null;
   /** That chat's name, when it is a chat below this one. */
@@ -873,7 +886,6 @@ const Row = memo(function Row({
   };
   // Asked once, as the row is drawn: whether its chat's state changed while it was not.
   const [changed] = useState(() => clock.missed(session));
-  const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
   const cameFrom = from === null ? null : `from ${from}`;
   const wentTo = handedToName === null ? null : handedOffSaid(handedToName, handedMore);
@@ -925,6 +937,8 @@ const Row = memo(function Row({
             }
             data-tab={tab}
             data-lines={lines}
+            // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
+            data-session={session}
             title={lines === 1 && second.length > 0 ? second.join(" · ") : undefined}
             // The row goes to its chat, and the words that name another chat go to that one
             // (`ChatRowHandedOff`). Enter is a press on the row itself.
@@ -957,25 +971,10 @@ const Row = memo(function Row({
                 harness={harness}
                 changed={changed}
               />
-              {counts.length > 0 && (
-                /* Folded over finished tasks: how they ended, in the marks a state has
-                   (V100-48, "steward 4 · ✓5"). */
-                <span
-                  className="below-summary"
-                  role="img"
-                  aria-label={`${counts.map((one) => `${one.count} ${one.word}`).join(", ")}`}
-                >
-                  {counts.map((one) => {
-                    const Shape = SHAPES[one.shape];
-                    return (
-                      <span key={one.shape} className="counted" data-shape={one.shape}>
-                        <Shape aria-hidden="true" />
-                        {one.count}
-                      </span>
-                    );
-                  })}
-                </span>
-              )}
+              {/* How its tasks stand, where it has any (#1491): `2 working · 1 waiting ·
+                  3 done`. It reads its own tasks, so one that changes state redraws this and
+                  not the row. */}
+              <TaskCountShown session={session} />
               {stopping && <span className="stopping">Stopping…</span>}
             </span>
             {lines === 2 && (

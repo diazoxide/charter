@@ -11,7 +11,7 @@ import type { FinishedTask } from "./bindings";
 import { markOf, type ChatStates } from "./chatState";
 import type { ChatRow, ListedChat } from "./chatsTree";
 import { shownOf } from "./finished";
-import { shownState, type Shown, type ShownKind, type ShownShape } from "./shownState";
+import { shownState, type Shown, type ShownKind } from "./shownState";
 
 /** A row's state as `ChatShownState` draws it: the one function, on the row's own facts. */
 export function shownOfRow(
@@ -19,6 +19,10 @@ export function shownOfRow(
   row: Pick<ListedChat, "session" | "shell" | "report" | "outcome" | "asking" | "harness">,
   /** The needs-you queue as a set, for a caller that asks about every row. */
   queue: ReadonlySet<number> = new Set(states.needsYou),
+  /** How many tasks below it are working and are ones it waits on (#1491): with any, a row
+   *  whose turn has ended says it is waiting on them. A caller that reads a whole list takes
+   *  every row's standing from one pass instead (`sessionTasks.standingOfRows`). */
+  tasksAtWork = 0,
 ): Shown | undefined {
   return shownState({
     board: markOf(states, row.session, row.shell),
@@ -26,6 +30,7 @@ export function shownOfRow(
     task:
       row.report === null ? null : { report: row.report, outcome: row.outcome, asking: row.asking },
     harness: row.harness,
+    tasksAtWork,
   });
 }
 
@@ -39,7 +44,9 @@ export type Rank = 0 | 1 | 2;
  */
 export function rankOf(kind: ShownKind | undefined): Rank {
   if (kind === "needs-you") return 0;
-  if (kind === "working" || kind === "asking" || kind === "unheard") return 1;
+  // A chat waiting on its tasks is at work through them (#1491): nothing waits on the person.
+  if (kind === "working" || kind === "asking" || kind === "unheard" || kind === "waiting-on-tasks")
+    return 1;
   return 2;
 }
 
@@ -258,86 +265,6 @@ export function found(rows: readonly ChatRow[], asked: ReadonlySet<number>): Cha
   // may have been: back in the order they came.
   const place = new Map(rows.map((row, at) => [row.session, at]));
   return kept.sort((one, other) => (place.get(one.session) ?? 0) - (place.get(other.session) ?? 0));
-}
-
-/** The kinds a folded session counts its finished tasks by, in the order it says them. */
-const COUNTED: readonly ShownKind[] = ["done", "cancelled", "failed", "unreported", "reported"];
-
-/** One count of a folded session's summary: how many of its tasks ended one way. */
-export type Counted = { shape: ShownShape; count: number; word: string };
-
-/**
- * **The open chats under each row that are over**, as one plain value a row a session: its
- * number, then the kind, shape and word of each (`\t` between the parts, `|` between the
- * chats), in the rows' order. What a folded session counts beside its finished tasks: a task
- * that reported and has not been ended yet (the person is reading it, or it is blocked) is in
- * no finished row, and must not be in no count.
- */
-export function overBelow(
-  rows: readonly ChatRow[],
-  shownOf: (row: ChatRow) => Shown | undefined,
-): string[] {
-  const over: string[] = [];
-  rows.forEach((row, at) => {
-    const below: string[] = [];
-    for (let under = at + 1; under < endOf(rows, at); under += 1) {
-      const shown = shownOf(rows[under]);
-      if (shown !== undefined && COUNTED.includes(shown.kind))
-        below.push([shown.kind, shown.shape, shown.word].join("\t"));
-    }
-    if (below.length > 0) over.push(`${row.session}\t${below.join("|")}`);
-  });
-  return over;
-}
-
-/** `overBelow`'s value as the states it holds, by the row they are under. */
-export function overOf(over: readonly string[]): ReadonlyMap<number, Shown[]> {
-  return new Map(
-    over.map((one) => {
-      const [session, ...rest] = one.split("\t");
-      const shown = rest
-        .join("\t")
-        .split("|")
-        .map((chat) => {
-          const [kind, shape, word] = chat.split("\t");
-          // The colour is the row's own to draw; a count has none of its own.
-          return { kind, shape, word, token: "text.muted" } as Shown;
-        });
-      return [Number(session), shown];
-    }),
-  );
-}
-
-/**
- * **What a folded session says of the tasks under it that are over** (V100-48, "steward 4 ·
- * ✓5"): how many ended each way, each as the shape and the word that state has on a row, or
- * nothing where it has none. Its finished tasks, and with them the `open` chats under it that
- * are over and have not been ended. One plain value (`shape:count:word`, joined by `|`), so a
- * row held on it is drawn again only when a count changes.
- */
-export function summaryOf(
-  tasks: readonly FinishedTask[],
-  open: readonly Shown[] = [],
-): string | null {
-  const counts = new Map<ShownKind, { shown: Shown; count: number }>();
-  const all = [...tasks.map((task) => shownOf(task)), ...open];
-  for (const shown of all) {
-    if (shown === undefined) continue;
-    counts.set(shown.kind, { shown, count: (counts.get(shown.kind)?.count ?? 0) + 1 });
-  }
-  const said = COUNTED.flatMap((kind) => {
-    const one = counts.get(kind);
-    return one === undefined ? [] : [`${one.shown.shape}:${one.count}:${one.shown.word}`];
-  });
-  return said.length === 0 ? null : said.join("|");
-}
-
-/** A summary as its counts, in the order it says them. */
-export function countsOf(summary: string): Counted[] {
-  return summary.split("|").map((one) => {
-    const [shape, count, ...word] = one.split(":");
-    return { shape: shape as ShownShape, count: Number(count), word: word.join(":") };
-  });
 }
 
 /** How long a chat has been in its state, as its row says it. */

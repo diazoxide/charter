@@ -2,11 +2,11 @@
  * **What a session's tab says of its tasks** (#1487, V100-32, V100-33): the counts its chip
  * wears, the lines its menu lists, and which chat is the next one. Pure: the rows are the
  * tab's own (`tabChats.chatsOfTab`), each chat's state is the one function's (`shownState`),
- * the counts are the one rule's (`taskCounts.ts`), and nothing here is state, so the chip, the
+ * the counts are the one rule's (`taskBuckets.ts`), and nothing here is state, so the chip, the
  * menu and the shortcuts cannot disagree.
  */
 import type { ChatStates } from "./chatState";
-import { shownOfRow } from "./chatsList";
+import { kindsOf as standing, readOfRow } from "./sessionTasks";
 import type { ChatRow } from "./chatsTree";
 import type { Shown, ShownKind } from "./shownState";
 import {
@@ -20,8 +20,10 @@ import {
 /** Each row's state, in the rows' order: what a chip and a menu are held on, so a chat that
  *  moves without changing its state redraws neither. */
 export function kindsOf(states: ChatStates, rows: readonly ChatRow[]): (ShownKind | undefined)[] {
-  const queue = new Set(states.needsYou);
-  return rows.map((row) => shownOfRow(states, row, queue)?.kind);
+  // The one reading of what every row says (`sessionTasks.kindsOf`), which the Chats list's
+  // rows, order and counts take too: a task waiting on its own tasks is at work on the chip
+  // as it is on its row. `rows` is the tree's order, each chat before the chats under it.
+  return standing(states, rows.map(readOfRow)).map((stood) => stood.shown?.kind);
 }
 
 /**
@@ -68,7 +70,8 @@ export function countsOf(
 
 /** A chip's name: whose tasks, and the counts in words. */
 export function chipSaid(session: string, counts: TaskCounts): string {
-  const said = taskCountsSaid(counts);
+  // Read aloud in a name: commas, where a row draws its dots.
+  const said = taskCountsSaid(counts, { separator: ", " });
   return said === "" ? `Tasks of ${session}` : `Tasks of ${session}: ${said}`;
 }
 

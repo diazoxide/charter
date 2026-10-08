@@ -414,6 +414,86 @@ fn limits_between(held: &Held, asker: u32, task: u32) -> purlis_core::dispatchli
     )
 }
 
+/// **How many tasks each asking chat of one list of rows may have running at once** (#1491,
+/// V100-26): `running-per-chat`, as in force for the workspace the chat works in and the
+/// persona it runs as, by the limits function a dispatch is decided by
+/// (`purlis_core::dispatchlimits::of`). What a chat's row says it is at: `6 of 6 tasks`.
+///
+/// Asked only for a chat that has a task open, and the files are read once for each place and
+/// persona in the list: a sidebar with no task reads nothing.
+pub(crate) struct RunningLimits<'a> {
+    held: &'a Held,
+    /// The chats that have a task open.
+    askers: std::collections::BTreeSet<u32>,
+    read: std::collections::HashMap<(Option<String>, Option<String>), u32>,
+}
+
+impl<'a> RunningLimits<'a> {
+    pub(crate) fn of(held: &'a Held, open: &[crate::chats::Open]) -> Self {
+        Self {
+            held,
+            askers: open
+                .iter()
+                .filter_map(|one| one.from.as_ref())
+                .filter(|from| from.mode == Mode::Task)
+                .map(|from| from.chat)
+                .collect(),
+            read: std::collections::HashMap::new(),
+        }
+    }
+
+    /// How many tasks `chat` has running against that limit, where it has a task open: the
+    /// count a dispatch from it is decided over (`dispatchdecision::lineage_of`), a chat
+    /// still starting included, so `6 of 6 tasks` is said exactly when a seventh is refused.
+    pub(crate) fn running(&self, chat: &crate::chats::Open) -> Option<u32> {
+        use purlis_core::dispatchdecision::{lineage_of, pair_of};
+        if !self.askers.contains(&chat.session) {
+            return None;
+        }
+        let held = self.held;
+        let default = purlis_core::start::persona_for_a_new_chat(held.root());
+        let session = chat.session;
+        Some(held.chats().deciding_over(|open, starting| {
+            let pair = open
+                .iter()
+                .find(|(number, _)| *number == session)
+                .map(|(_, chat)| pair_of(chat, None, default.as_deref()))
+                .unwrap_or_default();
+            lineage_of(
+                session,
+                open,
+                default.as_deref(),
+                &|n| starting(n) || crate::handoff::still_working(held, n),
+                &pair,
+            )
+            .running
+        }))
+    }
+
+    /// The limit in force for `chat`, where it has a task open.
+    pub(crate) fn of_chat(&mut self, chat: &crate::chats::Open) -> Option<u32> {
+        if !self.askers.contains(&chat.session) {
+            return None;
+        }
+        let held = self.held;
+        let key = (chat.workspace.clone(), chat.persona.clone());
+        Some(
+            *self
+                .read
+                .entry(key)
+                .or_insert_with_key(|(workspace, persona)| {
+                    purlis_core::dispatchlimits::of(
+                        held.root(),
+                        workspace.as_deref(),
+                        persona.as_deref(),
+                        None,
+                    )
+                    .running
+                }),
+        )
+    }
+}
+
 /// A follow-up from chat `asker` to task `to`: refused unless `asker` dispatched it and it is
 /// still working and not being cancelled, then left for its next turn.
 fn tell(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
@@ -505,7 +585,10 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
         // that is waiting for the person is typed the line. A note is neither: it is read on
         // the asking chat's next turn, and starts none.
         held.tasks().changed();
-        tell_the_chat(held, asker);
+        // The asking chat is typed the line where it takes one. Where it does not, and its
+        // turn's end was held for this task, it is the one who must act and the person the
+        // one who can see that (#1491): this task no longer counts toward its wait.
+        told_or_settled(held, asker);
     }
     Ok(task(Answered::Sent {
         kind,
@@ -556,7 +639,9 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
     // Answered: its row stops saying it is asking (#1484).
     held.rows_changed();
     held.tasks().changed();
-    tell_the_chat(held, to);
+    // Typed the line where it takes one; where it does not, its held end of turn is the
+    // person's from here (#1491).
+    told_or_settled(held, to);
     Ok(task(Answered::Sent {
         kind: Kind::Answer,
         to: name,
@@ -842,7 +927,8 @@ pub fn outcome_for(
 
 /// Task `task`'s report was delivered for the chat `asker`: left in `file` for its next turn
 /// where that chat is open. A command waiting on it has it now. **Nothing is typed here**: it
-/// is called under the lock a report is taken under, and [`told`] follows once that is let go.
+/// is called under the lock a report is taken under, and [`told_or_settled`] follows once that is let
+/// go.
 pub fn reported(
     held: &Held,
     task: u32,
@@ -858,6 +944,131 @@ pub fn reported(
 /// answered yet. What its row in the window says it is waiting on (#1484).
 pub fn asks_its_asker(held: &Held, task: u32) -> bool {
     held.tasks().ledger().talk.asks(task).is_some()
+}
+
+/// **What chat `chat` waits on that is not the person** (#1491), by this project's own
+/// records at this moment: how many tasks below it, at any depth, still owe their report
+/// ([`crate::handoff::owing_below`]); whether it is a task paused on a question to the chat
+/// that dispatched it, while that chat is open and its program runs; and whether a line of
+/// purlis's own is about to start a turn of it (`Ledger::line_coming`).
+///
+/// Takes the chats, the board and the ledger in turn and holds none across another: never
+/// called with the board held.
+pub fn waits(held: &Held, chat: u32) -> purlis_core::state::Waits {
+    waits_as(held, chat, false)
+}
+
+/// [`waits`], asked as chat `chat`'s own turn ends where `turn_ends`: what the board is told
+/// as that end is applied (`purlis_core::state::Board::reported_while`), so it raises no
+/// needs-you item while the next move is a task's, the asking chat's, or a turn purlis is
+/// about to start.
+pub fn waits_as(held: &Held, chat: u32, turn_ends: bool) -> purlis_core::state::Waits {
+    let tasks = crate::handoff::owing_below(held, chat).len();
+    // Only while it still owes its report, and only while the chat it asked can answer: a
+    // question to a chat that has closed, or whose program has ended, is nobody's.
+    let its_asker = held
+        .chats()
+        .owed_task_report(chat)
+        .is_some_and(|from| asks_its_asker(held, chat) && !seen(held, from.chat).ended);
+    // A chat the person is stopping is typed its stop's line and no other.
+    let line_coming = !held.stopping().is_stopping(chat)
+        && held
+            .tasks()
+            .ledger()
+            .line_coming(chat, seen(held, chat), turn_ends);
+    purlis_core::state::Waits {
+        tasks: u32::try_from(tasks).unwrap_or(u32::MAX),
+        its_asker,
+        line_coming,
+    }
+}
+
+/// **Whether the end of turn held for chat `chat` is the person's now, and if it is, makes
+/// it the needs-you item** (#1491). The one place a held end is released: the board holds
+/// one for `chat`, nothing is left for it to wait on by the project's records ([`waits`]),
+/// and no line of purlis's own is about to start a turn of it.
+///
+/// **Asked wherever what a chat waits on may have gone**, for that chat and every chat above
+/// it ([`settle_above`]): a task reported, was stopped, was closed, died or was ended; a
+/// question was answered or the chat it was put to went; the chat's own turn ended; and the
+/// line typed into it was never taken. It reads and never types, so it may be called under
+/// the lock a report is taken under.
+///
+/// The rule it keeps: a chat that needs the person is never left idle with no hand.
+pub fn settle(held: &Held, chat: u32) {
+    // Two statements: the board is let go before the records are read, which read it too.
+    let holds = held.hooks().board().held(chat);
+    if !holds || waits(held, chat).on_something() {
+        return;
+    }
+    held.rested(chat);
+}
+
+/// [`settle`], for chat `chat` and every chat above it by task links: a task far below may
+/// have been the last thing each of them waited on. Each chat once, and no deeper than a
+/// chain may go.
+pub fn settle_above(held: &Held, chat: u32) {
+    let mut at = Some(chat);
+    let mut seen_already = Vec::new();
+    while let Some(one) = at {
+        if seen_already.contains(&one)
+            || seen_already.len() > purlis_core::dispatchdecision::DEEPEST as usize
+        {
+            break;
+        }
+        seen_already.push(one);
+        settle(held, one);
+        at = held
+            .chats()
+            .handed_from(one)
+            .filter(|from| from.mode == Mode::Task)
+            .map(|from| from.chat);
+    }
+}
+
+/// **Chat `chat` may now be told what was left for its next turn**: typed purlis's one line,
+/// where it may be sent one. Never called under `Chats::deciding()`.
+///
+/// Then it and every chat above it are looked at as chats that may have nothing left to wait
+/// on ([`settle_above`]): where no line was typed, a held end of turn is the person's once
+/// nothing will prompt the chat. Where one was, the chat is about to work, and a clock looks
+/// again if its harness never takes the line ([`line_typed_into`]).
+pub fn told_or_settled(held: &Held, chat: u32) {
+    tell_the_chat(held, chat);
+    settle_above(held, chat);
+}
+
+/// The line typed into chat `chat` was given its time and no turn began on it: its harness
+/// had something open that no hook reports. The chat is no longer about to work, and is
+/// looked at as one nothing will prompt ([`settle`]). Nothing where a turn did begin.
+pub fn line_not_taken(held: &Held, chat: u32) {
+    if held.tasks().ledger().line_not_taken(chat) {
+        settle_above(held, chat);
+    }
+}
+
+/// purlis typed its line into chat `chat`: in the time a typed line is taken within, the chat
+/// is looked at again ([`line_not_taken`]). On a thread of its own, holding the project
+/// weakly. A test turns the clock on where it means the time to pass (`Tasks::on_the_clock`),
+/// and calls [`line_not_taken`] itself otherwise.
+fn line_typed_into(held: &Held, chat: u32) {
+    #[cfg(test)]
+    if !held
+        .tasks()
+        .clocked
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    let held = held.weak();
+    let _ = std::thread::Builder::new()
+        .name("purlis-line-taken".into())
+        .spawn(move || {
+            std::thread::sleep(dispatched::A_LINE_IS_TAKEN_WITHIN);
+            if let Some(held) = held.upgrade() {
+                line_not_taken(&held, chat);
+            }
+        });
 }
 
 /// **Task `task`'s report is delivered: its program is now to be ended** (#1485). Called once
@@ -984,12 +1195,6 @@ fn end_look_after(held: &Held, task: u32, after: Duration, looked: Looked) {
         });
 }
 
-/// Chat `chat` may now be told what was left for its next turn: typed purlis's one line, where
-/// it may be sent one. Never called under `Chats::deciding()`.
-pub fn told(held: &Held, chat: u32) {
-    tell_the_chat(held, chat);
-}
-
 /// Types the line that says something was left for its next turn into chat `chat`, where
 /// there is something it was not told of and it may be sent a line now: the reports and
 /// questions of tasks it dispatched, and a message from the chat that dispatched it. Answers
@@ -1011,8 +1216,10 @@ fn tell_the_chat(held: &Held, chat: u32) -> bool {
         );
         return false;
     }
-    // The line starts a turn: a task that had reported is working again from now (#1485).
+    // The line starts a turn: a task that had reported is working again from now (#1485),
+    // and a chat whose end was held is about to work (#1491).
     held.tasks().ledger().line_typed(chat);
+    line_typed_into(held, chat);
     true
 }
 
@@ -1141,6 +1348,20 @@ pub fn moved(held: &Held, chat: u32) {
     // at work: a turn ending here, as a close does, is when that hold may have gone.
     if let Some(from) = held.chats().handed_from(chat) {
         end_look(held, from.chat, Looked::Moved);
+    }
+    // **Its own end of turn, where it was held** (#1491): the last report may have landed
+    // while that end was on its way, or its harness may take no line. Whatever it waited on
+    // is asked again now that the end is applied; a line just typed keeps it held.
+    settle(held, chat);
+    // And where its program has ended: a task of its that was paused on a question to it has
+    // nobody left to answer, and the chats above it may have waited on it.
+    if seen(held, chat).ended {
+        for (task, _) in held.chats().tasks_of(chat) {
+            settle(held, task);
+        }
+        if let Some(from) = held.chats().handed_from(chat) {
+            settle_above(held, from.chat);
+        }
     }
     // A chat a Reopen started that has ended: how that Reopen came out.
     if held.tasks().any_reopening() && seen(held, chat).ended {

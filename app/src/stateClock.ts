@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { ChatStates } from "./chatState";
-import { shownOfRow } from "./chatsList";
+import { standingOfRows } from "./sessionTasks";
 import type { ChatRow } from "./chatsTree";
 import type { ShownKind } from "./shownState";
 
@@ -55,10 +55,11 @@ export function stateClock(): StateClock {
   let highest: number | undefined;
   return {
     read: (states, rows, now, drawn) => {
-      const queue = new Set(states.needsYou);
+      // Every row's state from the one pass, so the clock times the word the row draws.
+      const stood = standingOfRows(states, rows);
       let changed = false;
       for (const row of rows) {
-        const kind = shownOfRow(states, row, queue)?.kind;
+        const kind = stood.get(row.session)?.shown?.kind;
         const heard = (states.movedAt[row.session] ?? 0) > 0;
         const was = seen.get(row.session);
         if (was === undefined) {

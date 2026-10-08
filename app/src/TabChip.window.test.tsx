@@ -572,7 +572,9 @@ describe("the menu a chip opens", () => {
     press(theChip("steward 1"));
 
     expect(lines()).toEqual([
-      "steward 1, shown now idle",
+      // Its turn has ended while the four tasks below it work: the word its row says, from
+      // the one reading the Chats list takes too (#1491).
+      "steward 1, shown now waiting on 4 tasks",
       "talk working",
       "deep, asked by talk running (no detail from claude)",
       "sweep running (no detail from claude)",

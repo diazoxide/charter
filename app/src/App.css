@@ -2751,6 +2751,20 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
+/* **How a session's tasks stand, on its row** (#1491): `2 working · 1 waiting · 3 done`.
+   Numbers that change under the eye, so they are tabular and the row does not shift as one
+   moves; muted, since the state's word beside it is what says whether the session is waiting
+   on them. It keeps to one line and gives way before the name does. */
+.chats-section .task-count {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .explorer .started-chat .elsewhere {
   padding: 0 0.3rem;
   color: var(--text-muted);
@@ -2926,27 +2940,6 @@ h2.sidebar-title .node-icon {
 .chats-section .chat .line.two .handed-off:hover {
   color: var(--text-primary);
   text-decoration: underline;
-}
-
-/* How a folded row's finished tasks ended: each state's mark and its count. */
-.chats-section .below-summary {
-  display: inline-flex;
-  flex: none;
-  gap: 0.3rem;
-  align-items: center;
-  color: var(--text-muted);
-  font-size: 0.9em;
-}
-
-.chats-section .below-summary .counted {
-  display: inline-flex;
-  gap: 0.1rem;
-  align-items: center;
-}
-
-.chats-section .below-summary svg {
-  width: 0.8rem;
-  height: 0.8rem;
 }
 
 /* The filter over the list: the box, then its two chips. The box gives way first. */
@@ -3838,10 +3831,8 @@ h2.sidebar-title .node-icon {
   font-size: 0.9em;
 }
 
-/* "reported": the ring, filled. An outline this small is no mark. The same in a folded
-   session's count of how its tasks ended (#1499), which draws the shapes outside a state. */
-.shown-state [data-shape="dot"] svg,
-.below-summary [data-shape="dot"] svg {
+/* "reported": the ring, filled. An outline this small is no mark. */
+.shown-state [data-shape="dot"] svg {
   fill: currentcolor;
   transform: scale(0.6);
 }

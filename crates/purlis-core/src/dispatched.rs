@@ -365,6 +365,10 @@ pub struct Ledger {
     tasks: HashMap<u32, Task>,
     /// By chat: what was left for its next turn that it has not been told of.
     landed: HashMap<u32, Vec<Landed>>,
+    /// The chats purlis typed its line into whose harness has not yet said a turn began
+    /// (#1491): the line starts that turn, so until it is heard, or given up on, the chat is
+    /// about to work and its rest is not the person's.
+    typed: std::collections::HashSet<u32>,
     /// The messages between asking chats and their tasks (#1442).
     pub talk: crate::dispatchtalk::Talk,
     /// The chats whose pane a key of the person's has gone to since the chat's last
@@ -631,6 +635,11 @@ pub const CANCELLED_UNASKED: &str = "The task was cancelled by the chat that ask
 /// it, the line counts as taken: the chat's next idle moment with no report ends the cancel.
 pub const A_PROMPT_IS_HEARD_WITHIN: Duration = Duration::from_secs(60);
 
+/// How long a line purlis typed into an asking chat has to start a turn before the chat is
+/// taken not to have taken it (#1491): a picker was open, which no hook reports. The chat is
+/// then looked at as one nothing will prompt.
+pub const A_LINE_IS_TAKEN_WITHIN: Duration = Duration::from_secs(60);
+
 /// The most closed tasks remembered, so a wait on one says how it ended.
 const MOST_GONE: usize = 512;
 
@@ -752,6 +761,7 @@ impl Ledger {
             ));
         }
         self.landed.remove(&chat);
+        self.typed.remove(&chat);
         self.keyed.remove(&chat);
         for told in self.landed.values_mut() {
             told.retain(|one| match one {
@@ -784,6 +794,8 @@ impl Ledger {
         if let Some(told) = self.landed.remove(&old) {
             self.landed.insert(new, told);
         }
+        // The line was typed into the old one's pane, which is gone: the new one took none.
+        self.typed.remove(&old);
         for told in self.landed.values_mut() {
             for one in told.iter_mut() {
                 match one {
@@ -933,6 +945,7 @@ impl Ledger {
     /// reported and was about to be ended is working again from now, before its harness has
     /// said the turn began. Its end waits for that turn's own end.
     pub fn line_typed(&mut self, chat: u32) {
+        self.typed.insert(chat);
         if let Some(entry) = self.tasks.get_mut(&chat)
             && entry.end.is_some()
         {
@@ -1252,8 +1265,35 @@ impl Ledger {
             }
         }
         self.landed.remove(&chat);
+        self.typed.remove(&chat);
         self.keyed.remove(&chat);
         self.talk.turn_began(chat);
+    }
+
+    /// The line purlis typed into chat `chat` was not taken: no turn began on it in the time a
+    /// prompt is heard within ([`A_LINE_IS_TAKEN_WITHIN`]). The chat is no longer about to
+    /// work. Answers whether a line was waited on.
+    pub fn line_not_taken(&mut self, chat: u32) -> bool {
+        self.typed.remove(&chat)
+    }
+
+    /// **Whether a line of purlis's own is about to start a turn of chat `chat`** (#1491):
+    /// one was typed and its turn has not been heard to begin, or something landed that it
+    /// has not been told of and it will be typed the line. `turn_ends` says this is asked as
+    /// the chat's own turn ends: the line is typed the moment it has, whatever the turn
+    /// showed and whatever keys the person sent during it, which that end puts behind it.
+    /// Otherwise it is typed only where the chat takes a line now ([`Self::nudge_step`]).
+    pub fn line_coming(&self, chat: u32, seen: Seen, turn_ends: bool) -> bool {
+        if self.typed.contains(&chat) {
+            return true;
+        }
+        let landed = self.landed.get(&chat).is_some_and(|told| !told.is_empty());
+        let takes_it = if turn_ends {
+            seen.measured && seen.heard && !seen.ended
+        } else {
+            seen.takes_a_line() && !self.keyed.contains(&chat)
+        };
+        landed && takes_it
     }
 
     /// Chat `chat`'s harness said its turn ended: whatever the person had open in its pane is
@@ -1782,6 +1822,58 @@ mod tests {
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
 
         assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+    }
+
+    #[test]
+    fn a_line_is_coming_while_something_landed_that_the_chat_will_be_typed_about() {
+        let mut ledger = Ledger::default();
+        assert!(!ledger.line_coming(ASKER, WAITING, false), "nothing landed");
+        ledger.landed(ASKER, Landed::Report(TASK));
+
+        // At rest and taking a line: it is typed now.
+        assert!(ledger.line_coming(ASKER, WAITING, false));
+        // Mid-turn nothing is typed, and none is coming until the turn ends: asked as it
+        // does, the line is.
+        assert!(!ledger.line_coming(ASKER, RUNNING, false));
+        assert!(ledger.line_coming(ASKER, RUNNING, true));
+        assert!(
+            ledger.line_coming(ASKER, ASKING, true),
+            "the end puts a prompt behind it"
+        );
+        // A harness purlis types nothing into, and a chat that has gone, get no line.
+        assert!(!ledger.line_coming(ASKER, Seen::default(), true));
+        assert!(!ledger.line_coming(
+            ASKER,
+            Seen {
+                ended: true,
+                ..WAITING
+            },
+            true
+        ));
+        // The person has a key in its pane: nothing is typed over it.
+        ledger.person_keyed(ASKER);
+        assert!(!ledger.line_coming(ASKER, WAITING, false));
+    }
+
+    #[test]
+    fn a_typed_line_is_coming_until_its_turn_is_heard_or_it_is_given_up_on() {
+        let mut ledger = Ledger::default();
+        ledger.landed(ASKER, Landed::Report(TASK));
+        assert_eq!(ledger.nudge_step(ASKER, WAITING).len(), 1);
+        ledger.line_typed(ASKER);
+        // What landed was taken to be typed, and the line itself is what is coming now.
+        assert!(ledger.line_coming(ASKER, WAITING, false));
+
+        // Heard: the turn began.
+        ledger.turn_began(ASKER);
+        assert!(!ledger.line_coming(ASKER, RUNNING, false));
+        assert!(!ledger.line_not_taken(ASKER), "there is none to give up on");
+
+        // Never heard: given up on, once.
+        ledger.line_typed(ASKER);
+        assert!(ledger.line_not_taken(ASKER));
+        assert!(!ledger.line_coming(ASKER, WAITING, false));
+        assert!(!ledger.line_not_taken(ASKER));
     }
 
     #[test]

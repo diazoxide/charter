@@ -314,7 +314,9 @@ pub(crate) const PLUGIN_DIR: &str = "plugin";
 /// nothing.
 fn told(app: &tauri::AppHandle, moved: Moved) {
     windows::emit_for_plane(app, &moved.plane.clone(), "chat-moved", &moved);
-    if moved.needs_you && !already_looking_at(app, &moved) {
+    // Only a move of the chat's own interrupts (#1491): a task that finished changes what the
+    // chat that asked counts, and sends nothing (`Moved::interrupts`).
+    if moved.interrupts() && !already_looking_at(app, &moved) {
         let name = chat_called(app, &moved).unwrap_or_else(|| format!("chat {}", moved.session));
         // Best effort, always. A desktop that refuses notifications, or an operator who
         // turned them off, is not a reason for anything else here to stop working.
@@ -579,6 +581,16 @@ struct OpenChat {
     /// this one.
     #[specta(optional)]
     shows: Option<u32>,
+    /// How many tasks it may have running at once, by the limits in force for it now (#1491,
+    /// V100-26): its row says `6 of 6 tasks` at that number. Only for a chat that has a task
+    /// open, in a list of rows (`dispatched::RunningLimits`); `null` otherwise.
+    #[specta(optional)]
+    tasks_limit: Option<u32>,
+    /// How many tasks it has running against `tasks_limit`, as a dispatch from it would be
+    /// decided: its own tasks that still owe a report, one still starting included. Sent with
+    /// the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
+    #[specta(optional)]
+    tasks_running: Option<u32>,
     /// The conversation it was resumed by, where it was. The UI says which happened.
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
@@ -778,8 +790,15 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let mut unfiled = Vec::new();
     // The dispatch records, read at most once for the whole list (#1484).
     let mut outcomes = dispatches::Outcomes::of(held);
-    for open in held.chats().open_now() {
-        let chat = with_task_standing(held, &mut outcomes, OpenChat::from(open));
+    let open_now = held.chats().open_now();
+    // The limits' files, read at most once for each place and persona that asked (#1491).
+    let mut limits = dispatched::RunningLimits::of(held, &open_now);
+    for open in open_now {
+        let limit = limits.of_chat(&open);
+        let running = limits.running(&open);
+        let mut chat = with_task_standing(held, &mut outcomes, OpenChat::from(open));
+        chat.tasks_limit = limit;
+        chat.tasks_running = running;
         match chat
             .cwd
             .as_deref()
@@ -1593,6 +1612,22 @@ fn ignore_needs_you(
     Ok(())
 }
 
+/// The person looked at one task of chat `session` that failed, ended without a report or did
+/// not start (#1491): `id` names the failure, as its needs-you item carries it. The item for
+/// that one task goes. Every other failure, whatever else the chat needs the person for, and
+/// the task's row and record all stay.
+#[tauri::command]
+#[specta::specta]
+fn task_failure_seen(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    id: String,
+) -> Result<(), String> {
+    planes.held(&plane)?.task_failure_cleared(session, &id);
+    Ok(())
+}
+
 /// The chats the app already has open — at a launch, the ones put back from the record.
 ///
 /// The window asks this instead of opening its own: the core puts the record back, once the
@@ -2149,6 +2184,8 @@ impl From<chats::Open> for OpenChat {
             persona: open.persona,
             in_front: open.in_front,
             shows: open.shows,
+            tasks_limit: None,
+            tasks_running: None,
             pinned: open.pinned,
             label: open.label,
             from: open
