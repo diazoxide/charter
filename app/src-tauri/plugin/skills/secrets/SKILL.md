@@ -32,6 +32,26 @@ purlis secret set <vault> <key> --from-file <path>    # multi-line or verbatim: 
 An argument list is not private. It shows up in `ps`, in shell history and in this
 transcript. Ask the user to supply the value by stdin or a file, or to set it themselves.
 
+## A vault's own token is the person's to give, never yours
+
+A 1Password vault is read with a credential of its own: a service-account token, or the
+1Password app's sign-in. **You never ask for that token, handle it or store it.** Do not ask
+the user to paste it into the conversation, do not write it to a file or a shell profile, do
+not `export` it, and do not pipe it into any command, `purlis vault add --token-stdin`
+included: inside a chat that command is refused, and it reads nothing.
+
+When a vault needs its token (it is being made, its token is missing, or it was refused),
+tell the user to give it to purlis themselves:
+
+- **New vault** in the app, with 1Password chosen: it asks how the vault signs in, tests it,
+  and keeps the token in the system keyring.
+- For a vault that exists: open **the vault's tab** in the app. It has the box for the token,
+  and *Change how this vault signs in*.
+- On a machine with no window: `purlis vault add <name> --provider 1password --op-vault <NAME>
+  --token-stdin`, typed by the user in a terminal of their own, outside the app.
+
+Then wait for them to say it is done, and run your command again. No restart is needed.
+
 ## Use one: pick an injection path
 
 **As an environment variable:**

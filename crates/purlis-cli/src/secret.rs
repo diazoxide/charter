@@ -230,6 +230,11 @@ pub struct VaultAdd {
     /// Shorthand for --env OP_SERVICE_ACCOUNT_TOKEN=SOURCE.
     #[arg(long, value_name = "SOURCE")]
     token_env: Option<String>,
+    /// Read a 1Password service-account token from a prompt (or standard input when piped),
+    /// test it, and keep it in the system keyring: no variable is needed. Never given as an
+    /// argument, and refused inside a chat.
+    #[arg(long)]
+    token_stdin: bool,
     /// Record it in the COMMITTED registry (vaults.json at the plane root).
     #[arg(long)]
     share: bool,
@@ -435,6 +440,7 @@ pub fn vault(here: &crate::Here, command: VaultCommand) -> u8 {
                 persona: a.persona,
                 env: a.env,
                 token_env: a.token_env,
+                token_stdin: a.token_stdin,
                 share: a.share,
                 force: a.force,
             },
@@ -461,6 +467,7 @@ pub fn add_persona_vault(here: &crate::Here, vault: &str, persona: &str) -> u8 {
         persona: Some(persona.to_string()),
         env: Vec::new(),
         token_env: None,
+        token_stdin: false,
         share: false,
         force: false,
     };

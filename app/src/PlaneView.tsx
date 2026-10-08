@@ -7278,6 +7278,13 @@ export const PlaneView = memo(function PlaneView({
           trouble={vaultTrouble}
           making={busyVault}
           onCreate={(name, provider, opVault) => void makeVault(name, provider, opVault)}
+          onMade={(done) => {
+            // The guided set-up made it in the core (#1527): the same ending as `makeVault`.
+            setMakingVault(false);
+            setVaultTrouble(undefined);
+            reloadVaults();
+            showView({ from: null, view: "vault", key: done.contents.name }, done.contents.name);
+          }}
           onCancel={() => {
             setMakingVault(false);
             setVaultTrouble(undefined);

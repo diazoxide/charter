@@ -38,6 +38,7 @@ pub mod program;
 pub mod reference;
 pub mod registry;
 pub mod run;
+pub mod setup;
 pub mod tty;
 pub mod vaultcmd;
 
@@ -468,12 +469,16 @@ pub fn env_overlay(
     ctx: &Ctx,
     vault: &registry::Vault,
 ) -> Result<Vec<(String, String)>, VaultError> {
+    if let Some(refused) = identity::token_refusal(vault) {
+        return Err(refused);
+    }
     let mut out = Vec::new();
     for (target, source) in identity::bindings(vault) {
         let kept = identity::from_keyring(ctx, vault, &source);
         let found = match &kept {
             Ok(Some(token)) => Some(token.clone()),
-            _ => ctx.env.get(&source).filter(|v| !v.is_empty()),
+            // Never for a token declared as kept in the keyring: that one is no variable.
+            _ => identity::set_here(ctx, &source),
         };
         match found {
             Some(val) => out.push((target, val)),
@@ -488,6 +493,9 @@ pub fn env_overlay(
 /// first one that cannot, or `None`. What `vault list` and the app's panel draw from, so neither
 /// makes the Keychain ask anything.
 pub fn identity_missing(ctx: &Ctx, vault: &registry::Vault) -> Option<VaultError> {
+    if let Some(refused) = identity::token_refusal(vault) {
+        return Some(refused);
+    }
     identity::held(ctx, vault)
         .into_iter()
         .find(|b| b.held == identity::Held::Unset)
@@ -510,6 +518,9 @@ fn identity_unset(
     source: &str,
     keyring: Option<VaultError>,
 ) -> VaultError {
+    if identity::kept(source) {
+        return kept_token_missing(ctx, vault, target, keyring);
+    }
     if identity::in_keyring(ctx, vault) {
         let why = keyring.map_or_else(
             || format!("{} holds no token for it", keyring::STORE_NAME),
@@ -538,19 +549,56 @@ fn identity_unset(
     ))
 }
 
+/// [`identity_unset`] for a vault that declares a token kept in the keyring and read through no
+/// variable (#1527): there is no export to name, so the ways out are the vault's tab and, in a
+/// terminal, the set-up again with the token on standard input.
+fn kept_token_missing(
+    ctx: &Ctx,
+    vault: &registry::Vault,
+    target: &str,
+    keyring: Option<VaultError>,
+) -> VaultError {
+    let again = format!(
+        "purlis vault add {} --provider {} --token-stdin --force",
+        vault.name, vault.provider
+    );
+    if identity::in_keyring(ctx, vault) {
+        let why = keyring.map_or_else(
+            || format!("{} holds none for it", keyring::STORE_NAME),
+            |e| e.message,
+        );
+        return VaultError::new(format!(
+            "vault '{}' is read with a service-account token purlis keeps in {}, but {why}. \
+             purlis will not fall back to an ambient ${target}.\n  Paste the token again in \
+             this vault's tab in the app. In a terminal, with the vault's other settings: {again}",
+            vault.name,
+            keyring::STORE_NAME
+        ));
+    }
+    VaultError::new(format!(
+        "vault '{}' is read with a service-account token purlis keeps in {}, and this machine \
+         has none for it. purlis will not fall back to an ambient ${target}: that would read \
+         this vault under an identity it does not declare.\n  Put the token in: open this \
+         vault's tab in the app and paste it into the box there. In a terminal, with the \
+         vault's other settings: {again}",
+        vault.name,
+        keyring::STORE_NAME
+    ))
+}
+
 /// `VaultProvider.identity_note`: ` (identity from $SOURCE)`, or `""` — appended to a read
-/// failure so a permission error points at the identity in play.
+/// failure so a permission error points at the identity in play. A token kept in the keyring
+/// and read through no variable is said as that.
 pub fn identity_note(vault: &registry::Vault) -> String {
-    let Some(mapping) = vault
-        .config
-        .get("env")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return String::new();
-    };
-    let srcs: Vec<String> = mapping
-        .values()
-        .map(|s| format!("${}", py_str(s)))
+    let srcs: Vec<String> = identity::bindings(vault)
+        .into_iter()
+        .map(|(_, source)| {
+            if identity::kept(&source) {
+                format!("the token kept in {}", keyring::STORE_NAME)
+            } else {
+                format!("${source}")
+            }
+        })
         .collect();
     if srcs.is_empty() {
         String::new()

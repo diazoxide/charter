@@ -273,6 +273,14 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       ". Also its warning that installing ends every chat (WARNING's case), and the channel " +
       "it moved to: what the last press answered, not a standing line",
   },
+  "VaultSignIn.tsx": {
+    count: 4,
+    why:
+      ACTION +
+      ". The set-up of a 1Password vault's sign-in (#1527): why the app's accounts could not " +
+      "be listed, what the test just pressed answered (passed, or the core's reason), and the " +
+      "refusal of the step just pressed",
+  },
   "VaultTab.tsx": {
     count: 7,
     why: VAULT,

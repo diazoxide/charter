@@ -142,6 +142,68 @@ link to it is in `~/.local/bin`. `purlis doctor` has a row for each such program
 use (`op for vaults`): green where it is found however purlis is started, a warning where only
 this `PATH` finds it, where it is missing, and where the only one is where a chat may write.
 
+**Setting up a 1Password vault asks how it signs in, tests it, and keeps the token in the
+keyring.** In the app, *New vault* with 1Password chosen is a short set-up:
+
+1. **How purlis signs in.** A *service-account token* (the choice for a vault agents use):
+   paste it once into the password box. Or *the 1Password app on this machine*, through its
+   command-line integration and its own unlock: choose the account from the ones `op` lists,
+   or type its sign-in address (`my.1password.com`, a regional one such as
+   `acme.1password.eu`, a company's own). The account is pinned for this machine only. A
+   1Password Connect server is not offered: the provider does not support one yet.
+2. **Where the items live.** The 1Password vault, chosen from the ones that sign-in can see
+   (typed where it may not list them), and the item purlis keeps this vault's secrets in
+   (`charter-<vault>` unless you name another).
+3. **Test.** purlis signs in with what you gave and reads that vault's item *names*, never a
+   value. Nothing is registered yet. A test that does not pass says why in purlis's own words,
+   as one of four kinds: the provider's program is missing, no network or a rate limit, a
+   refused sign-in, or something else. What `op` printed is never shown, since it can hold
+   what it was given. *Create vault* is offered once a test passed; *Create anyway* is offered
+   beside the reason when one did not.
+4. **Create** registers the vault and writes its keyring record in one step. If either part
+   fails, neither is left: there is never a registered vault whose token is nowhere, and never
+   a token nothing refers to.
+
+A vault made this way declares `"token": "keyring"` in the registry and binds **no variable**:
+there is nothing to export, in any shell, on this machine. The token is one item in the system
+keyring (the macOS Keychain, the Secret Service on Linux) and is nowhere else: not in the
+registry files, not in purlis's environment or a chat's, not in a log, an error, a command's
+answer or the page. The record that points at the item is in `.charter/vaults.json`, this
+machine's half, pinned to the 1Password vault, the item, the account and the `op` found when it
+was stored, exactly as a moved token's is. `"token": "keyring"` itself names no secret and may
+be committed with `--share`; on a teammate's machine the vault then says it has no token there
+until they give theirs.
+
+**From a terminal, the same set-up:**
+
+```bash
+purlis vault add team --provider 1password --op-vault Engineering --token-stdin
+```
+
+`--token-stdin` asks for the token at a prompt that does not show it, or reads it from standard
+input when that is a pipe. The token is never an argument and never a variable named on the
+command line. The command runs the same test, and a test that does not pass registers nothing;
+then the same one-step create. With `--force` it replaces a vault's token on a machine with no
+window. **It is refused inside a chat, or a shell the app started, before anything is read**:
+a chat is never the one supplying a vault's token. Type it in a terminal of your own.
+
+**One token for several vaults.** After a token is given, the set-up lists the *other* vaults
+bound to the same identity, each with a tick box and the settings that would be pinned for it
+(its 1Password vault, item and account) and which half of the registry names it. A vault the
+committed `vaults.json` names starts unticked. Only the vaults you tick are given the token,
+each under its own keyring item and its own record, and only while each is still as it was
+shown: one whose settings changed in between is skipped and named.
+
+**Changing how a vault signs in.** A 1Password vault's tab has *Change how this vault signs
+in*, which opens the same set-up for that vault. This is also how a vault bound to an
+environment variable is converted: give the token, test, store, and the variable's binding is
+replaced by the keyring record in this machine's half. The next read uses it; nothing is
+restarted and nothing is exported. A vault the committed half binds is converted on this
+machine alone, and `vaults.json` is left as it is.
+
+**An identity read from an environment variable is still supported**, for a machine with no
+keyring and for CI, and is no longer what the app sets up:
+
 A vault may declare the identity it is read through — `--env OP_SERVICE_ACCOUNT_TOKEN=<VAR>`
 or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, purlis refuses rather than read
 the vault as whoever the ambient token belongs to, and `secret exec` never hands one vault's
@@ -265,7 +327,7 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
 
 `purlis doctor`'s vaults row does not check vaults yet. Its `op for vaults` and `vault for
 vaults` rows say only whether each provider's program is found. Its `vault tokens` row says,
-for each vault read through an identity variable, whether the token is marked as kept in the
+for each vault read with a token (through a variable, or kept in the keyring alone), whether the token is marked as kept in the
 system keyring, in this environment only, or nowhere. It warns for the last two. It says so
 from this machine's record and reads no keyring item, so "marked as kept" is not a read that
 succeeded. Run inside a chat it prints no such row: a chat is given no identity variable, so
