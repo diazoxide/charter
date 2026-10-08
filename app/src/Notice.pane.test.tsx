@@ -102,6 +102,29 @@ describe("a Notice in a pane's corner", () => {
   });
 });
 
+describe("the dispatch question's extras, in a pane", () => {
+  it("draws what is under the answers in the Notice's own box: the choice, then the brief", () => {
+    // The shape the dispatch question hands the Notice (#1505): its workspace choice and the
+    // brief are both under the line, in that order, and neither is beside the answers.
+    aPaneNotice(
+      <>
+        <div className="dispatch-within" role="radiogroup">
+          <p>Where an Allow for you or for the project holds</p>
+        </div>
+        <pre>the brief</pre>
+      </>,
+    );
+    const box = document.querySelector(".notice-pane-box");
+    const line = box?.querySelector(".notice-pane");
+    const under = box?.querySelector(".notice-under-pane");
+    expect(under?.children.length).toBe(2);
+    expect(under?.children[0]).toHaveClass("dispatch-within");
+    expect(under?.children[1].tagName).toBe("PRE");
+    expect(line?.querySelector(".dispatch-within")).toBeNull();
+    expect(line?.nextElementSibling).toBe(under);
+  });
+});
+
 describe("a Notice under the strip or in the drawer", () => {
   it.each(["band", "drawer"] as const)("is not boxed at %s: the line and what it opened", (at) => {
     const { container } = render(
@@ -178,6 +201,27 @@ describe("the pane Notice's rules", () => {
     const draft = rule("\\.notice-under-pane pre");
     expect(draft).toMatch(/max-width:\s*100%/);
     expect(draft).toMatch(/overflow:\s*auto/);
+  });
+
+  it("keeps the dispatch question's workspace choice inside a narrow pane", () => {
+    // #1505. The group may shrink to the pane, and is never wider than the Notice.
+    const choice = rule("\\.dispatch-within");
+    expect(choice).toMatch(/min-width:\s*0/);
+    expect(choice).toMatch(/max-width:\s*100%/);
+    // The two choices go one under the other where they do not fit side by side.
+    expect(choice).toMatch(/display:\s*flex/);
+    expect(choice).toMatch(/flex-wrap:\s*wrap/);
+    // A workspace's long name breaks rather than widen the Notice.
+    for (const part of ["p", "label"]) {
+      const text = rule(`\\.dispatch-within ${part}`);
+      expect(text).toMatch(/max-width:\s*100%/);
+      expect(text).toMatch(/overflow-wrap:\s*anywhere/);
+    }
+    expect(rule("\\.dispatch-within label")).toMatch(/min-width:\s*0/);
+    // Nothing of it is positioned, floated or given a width of its own.
+    expect(choice).not.toMatch(/position|float|[^-]width:\s*\d/);
+    // And the list in Settings that changes a grant's workspace stays inside its column.
+    expect(rule("\\.dispatch-table select\\.dispatch-workspace")).toMatch(/max-width:\s*100%/);
   });
 
   it("is opaque, and over all of the terminal", () => {

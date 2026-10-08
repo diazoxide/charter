@@ -368,12 +368,23 @@ pub fn asked_by_a_chat(
         moment.counted,
     );
     let locks = crate::sandbox::policy::Locks::of(root);
+    // **Where the task works** (#1505): the workspace the dispatch names or moves into, else
+    // the asking chat's own. Said here, from the app's record of both, so a grant limited to
+    // one workspace is judged against where the new chat will run whatever the caller read.
+    let grants = moment
+        .grants
+        .clone()
+        .for_task_in(crate::dispatchwithin::works_in(
+            None,
+            moment.works_in,
+            workspace.as_deref(),
+        ));
     let grant = match pair.to.as_deref() {
         // With who is above the asking chat, so a never said for one of them holds here too.
         Some(to) => crate::dispatchgrant::covers_in_chain(
             pair.asking.as_deref(),
             to,
-            moment.grants,
+            &grants,
             &locks,
             &lineage.chain,
         ),
@@ -1372,6 +1383,88 @@ mod tests {
             asked_in("", 1, &open, None, &none, By::Chat).decision,
             Decision::Start
         );
+    }
+
+    #[test]
+    fn a_grant_for_one_workspace_is_judged_against_where_the_task_works_not_where_it_is_asked() {
+        // #1505. `stands_in` is where the asking chat works (none: the project's root), and
+        // `works_in` what the dispatch names; the grant is limited to `granted`.
+        let ask = |stands_in: Option<&str>, works_in: Option<&str>, granted: &str| {
+            let root = a_project("");
+            std::fs::create_dir_all(root.path().join("workspaces/beta")).unwrap();
+            let asking = Chat {
+                cwd: stands_in.map(|name| root.path().join("workspaces").join(name)),
+                ..chat(Some("steward"))
+            };
+            let grants = InForce {
+                limited: vec![(
+                    crate::sandbox::grant::Level::You,
+                    crate::dispatchwithin::Limited::new("steward", "devops", granted).unwrap(),
+                )],
+                ..Default::default()
+            };
+            asked_by_a_chat(
+                root.path(),
+                1,
+                &asking,
+                Some("devops"),
+                &Moment {
+                    open: &[(1, &asking)],
+                    working: &|_| true,
+                    default: None,
+                    grants: &grants,
+                    profile: None,
+                    by: By::Chat,
+                    mode: Mode::Task,
+                    counted: Counted::Tasks,
+                    works_in,
+                },
+            )
+            .decision
+        };
+        let needs = |decision: Decision| matches!(decision, Decision::NeedsGrant { .. });
+        // A chat in alpha that names no place works in alpha.
+        assert_eq!(ask(Some("alpha"), None, "alpha"), Decision::Start);
+        assert!(needs(ask(Some("alpha"), None, "beta")));
+        // It names beta: the task works in beta, and the grant for alpha does not go with it.
+        assert!(needs(ask(Some("alpha"), Some("beta"), "alpha")));
+        assert_eq!(ask(Some("alpha"), Some("beta"), "beta"), Decision::Start);
+        // A chat anywhere may send the task into the workspace the grant names.
+        assert_eq!(ask(None, Some("beta"), "beta"), Decision::Start);
+        // A task at the project's root works in no workspace.
+        assert!(needs(ask(None, None, "alpha")));
+        // What the caller read the grants for does not change where the task works.
+        let root = a_project("");
+        let asking = Chat {
+            cwd: Some(root.path().join("workspaces/alpha")),
+            ..chat(Some("steward"))
+        };
+        let read_for_beta = InForce {
+            limited: vec![(
+                crate::sandbox::grant::Level::You,
+                crate::dispatchwithin::Limited::new("steward", "devops", "beta").unwrap(),
+            )],
+            ..Default::default()
+        }
+        .for_task_in(Some("beta"));
+        let said = asked_by_a_chat(
+            root.path(),
+            1,
+            &asking,
+            Some("devops"),
+            &Moment {
+                open: &[(1, &asking)],
+                working: &|_| true,
+                default: None,
+                grants: &read_for_beta,
+                profile: None,
+                by: By::Chat,
+                mode: Mode::Task,
+                counted: Counted::Tasks,
+                works_in: None,
+            },
+        );
+        assert!(needs(said.decision));
     }
 
     #[test]

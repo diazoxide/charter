@@ -22,6 +22,8 @@ struct World {
     project: tempfile::TempDir,
     locks: sandbox::policy::Locks,
     audited: Heard,
+    /// The workspace each audit said, in the same order (#1505).
+    within: Mutex<Vec<Option<String>>>,
     /// The chats that are open.
     open: Vec<u32>,
     /// Whether the event log takes an audit.
@@ -36,6 +38,7 @@ impl World {
             project: tempfile::tempdir().expect("a project"),
             locks: sandbox::policy::Locks::none(),
             audited: Mutex::new(Vec::new()),
+            within: Mutex::new(Vec::new()),
             open: vec![3, 4, 5],
             logging: true,
             unsandboxed: Vec::new(),
@@ -71,6 +74,10 @@ impl World {
                 audited.target.to_owned(),
                 audited.level.word(),
             ));
+            self.within
+                .lock()
+                .unwrap()
+                .push(audited.workspace.map(str::to_owned));
             Ok(())
         };
         with(&Ground {
@@ -167,6 +174,7 @@ fn a_dispatch_to_another_persona_with_no_grant_starts_nothing_and_is_held_with_i
             },
             locked: None,
             at: 100,
+            works_in: None,
         }]
     );
     assert!(answered.lock().unwrap().is_empty(), "nothing started");
@@ -278,7 +286,7 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
     assert_eq!(
         world.listed(&store),
         [DispatchGrant {
-            id: "chat\u{1f}chat-3\u{1f}steward\u{1f}devops".to_owned(),
+            id: "chat\u{1f}chat-3\u{1f}steward\u{1f}devops\u{1f}".to_owned(),
             asking: Some("steward".to_owned()),
             target: "devops".to_owned(),
             level: GrantLevel::Chat,
@@ -288,6 +296,8 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
             locked: None,
             waiting: false,
             declined: false,
+            workspace: None,
+            nowhere: None,
         }]
     );
     assert_eq!(
@@ -346,6 +356,8 @@ fn allow_for_me_on_this_machine_is_kept_in_this_machine_s_record_and_covers_ever
             locked: None,
             waiting: false,
             declined: false,
+            workspace: None,
+            nowhere: None,
         }]
     );
     assert_eq!(world.audited().len(), 1, "one Allow, one audit");
@@ -572,6 +584,13 @@ fn a_revoke_nobody_recorded_revokes_nothing_and_an_id_that_names_no_grant_is_ref
         "chat\u{1f}steward\u{1f}devops",
         "everyone\u{1f}steward\u{1f}devops",
         "chat\u{1f}chat-3\u{1f}steward\u{1f}devops",
+        "chat\u{1f}chat-3\u{1f}steward\u{1f}devops\u{1f}",
+        "chat\u{1f}chat-3\u{1f}steward\u{1f}devops\u{1f}runners",
+        // #1505: a grant limited to a workspace that nobody made, and one at no level.
+        "in\u{1f}you\u{1f}steward\u{1f}devops\u{1f}runners",
+        "in\u{1f}project\u{1f}steward\u{1f}devops\u{1f}runners",
+        "in\u{1f}chat\u{1f}steward\u{1f}devops\u{1f}runners",
+        "in\u{1f}you\u{1f}steward\u{1f}devops\u{1f}../runners",
     ] {
         assert!(
             world
@@ -909,7 +928,7 @@ fn a_held_chat(persona: &str) -> (tempfile::TempDir, std::sync::Arc<crate::plane
 fn the_core_s_request_is_judged_from_the_app_s_record_of_the_chat_and_held_on_its_tab() {
     let (_dir, held, session) = a_held_chat("steward");
 
-    let asked = request_dispatch_grant(&held, session, "devops", BRIEF);
+    let asked = request_dispatch_grant(&held, session, "devops", BRIEF, None);
 
     let waiting = held.dispatch_grants().waiting(session);
     assert_eq!(waiting.len(), 1, "{asked:?}");
@@ -930,18 +949,18 @@ fn the_core_s_request_is_judged_from_the_app_s_record_of_the_chat_and_held_on_it
     // Its own persona needs no grant, a persona the project does not have is nothing to
     // dispatch to, and a chat this app does not hold is no asking chat.
     assert_eq!(
-        request_dispatch_grant(&held, session, "steward", BRIEF),
+        request_dispatch_grant(&held, session, "steward", BRIEF, None),
         Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("steward"))
     );
     assert_eq!(
-        request_dispatch_grant(&held, session, "nobody", BRIEF),
+        request_dispatch_grant(&held, session, "nobody", BRIEF, None),
         Requested::Refused(
             "this project has no persona named nobody, so there is nothing to dispatch to."
                 .to_owned()
         )
     );
     assert_eq!(
-        request_dispatch_grant(&held, session + 100, "devops", BRIEF),
+        request_dispatch_grant(&held, session + 100, "devops", BRIEF, None),
         Requested::Refused(format!(
             "chat {} is not one this app has open",
             session + 100
@@ -1313,7 +1332,7 @@ fn closing_a_chat_takes_what_it_had_waiting_and_its_own_grants_with_it() {
     // The wiring of `Store::chat_closed`: the project's close is what calls it. It opens a
     // terminal, so CI runs it first.
     let (_dir, held, session) = a_held_chat("steward");
-    let asked = request_dispatch_grant(&held, session, "devops", BRIEF);
+    let asked = request_dispatch_grant(&held, session, "devops", BRIEF, None);
     assert!(matches!(asked, Requested::NeedsGrant { .. }), "{asked:?}");
     assert_eq!(held.dispatch_grants().waiting(session).len(), 1);
 
@@ -1322,7 +1341,7 @@ fn closing_a_chat_takes_what_it_had_waiting_and_its_own_grants_with_it() {
     assert!(held.dispatch_grants().waiting(session).is_empty());
     // And a chat nobody is at is refused where an attended one would be asked.
     let (_dir, held, session) = a_held_chat("steward");
-    let asked = request_dispatch_grant_or_refuse(&held, session, "devops", BRIEF);
+    let asked = request_dispatch_grant_or_refuse(&held, session, "devops", BRIEF, None);
     assert!(matches!(asked, Requested::Refused(_)), "{asked:?}");
     assert!(held.dispatch_grants().waiting(session).is_empty());
 }
@@ -1765,6 +1784,9 @@ fn any_persona_is_granted_from_settings_audited_and_covers_a_persona_added_later
             level: GrantLevel::You,
             waiting: false,
             declined: false,
+            workspace: None,
+            nowhere: None,
+            id: None,
         }]
     );
     let (store, _) = store();
@@ -1848,6 +1870,9 @@ fn a_teammate_s_any_persona_waits_in_settings_and_covers_nothing_until_it_is_all
             level: GrantLevel::Project,
             waiting: true,
             declined: false,
+            workspace: None,
+            nowhere: None,
+            id: None,
         }]
     );
     // Asked on a chat's tab, Allow for everyone grants that pair and no more.
@@ -2048,7 +2073,7 @@ fn a_chat_still_running_as_a_persona_that_is_gone_is_covered_by_no_grant_and_ask
     sandbox::local::grant_dispatch(&root, "steward", "devops").expect("a grant of mine");
     sandbox::local::grant_dispatch_any(&root, "steward").expect("and any persona");
     assert!(matches!(
-        request_dispatch_grant(&held, session, "devops", BRIEF),
+        request_dispatch_grant(&held, session, "devops", BRIEF, None),
         Requested::Covered(_)
     ));
 
@@ -2056,7 +2081,7 @@ fn a_chat_still_running_as_a_persona_that_is_gone_is_covered_by_no_grant_and_ask
 
     for ask in [request_dispatch_grant, request_dispatch_grant_or_refuse] {
         assert_eq!(
-            ask(&held, session, "devops", BRIEF),
+            ask(&held, session, "devops", BRIEF, None),
             Requested::Refused(gone_persona_said("steward"))
         );
     }
@@ -2074,3 +2099,6 @@ fn a_chat_still_running_as_a_persona_that_is_gone_is_covered_by_no_grant_and_ask
 
 #[path = "dispatchgrants_table_tests.rs"]
 mod table;
+
+#[path = "dispatchgrants_within_tests.rs"]
+mod within;

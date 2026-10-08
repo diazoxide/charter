@@ -81,6 +81,14 @@
 //! check is the app's, where a dispatch is judged, before [`covers`] is asked. purlis has no
 //! persona rename.
 //!
+//! # In one workspace, or in any (#1505)
+//!
+//! A grant carries one condition ([`crate::dispatchwithin`], which says how each level
+//! spells it): it holds in any workspace, or only for a task that **works in** one named
+//! workspace. [`InForce::for_task_in`] says where the task works, and a limited grant covers
+//! nothing until it is said: read without it, [`covers`] counts only the grants that hold
+//! everywhere. "Any persona" may be limited the same way. A never is not limited.
+//!
 //! # Policy
 //!
 //! An administrator's policy can lock all dispatch, or a pair
@@ -181,6 +189,13 @@ pub struct InForce {
     /// Whether that record is there and does not read ([`crate::dispatchnever::Nevers::Unread`]):
     /// what you refused is unknown, so no grant here covers any pair ([`Covers::Unread`]).
     pub never_unread: bool,
+    /// The grants that hold in one workspace only (#1505), yours and the project's accepted
+    /// here, each only while its workspace stands ([`crate::dispatchwithin::in_force`]).
+    pub limited: Vec<(Level, crate::dispatchwithin::Limited)>,
+    /// The workspace the task being judged works in ([`InForce::for_task_in`]); none for the
+    /// project's root, **and none until it is said**, so a limited grant covers nothing for a
+    /// reader that never says where the task works.
+    pub works_in: Option<String>,
 }
 
 impl InForce {
@@ -210,6 +225,46 @@ impl InForce {
             project_any: any_of_the_project(root),
             never,
             never_unread,
+            limited: crate::dispatchwithin::in_force(root),
+            works_in: None,
+        }
+    }
+
+    /// These grants, for a task that works in `workspace` (`None`: at the project's root):
+    /// the workspace the task works in, never the one the asking chat is in
+    /// ([`crate::dispatchwithin::works_in`]). A grant limited to one workspace counts from
+    /// here on for a task in that workspace, and for no other.
+    #[must_use]
+    pub fn for_task_in(mut self, workspace: Option<&str>) -> Self {
+        self.works_in = workspace.map(str::to_owned);
+        self
+    }
+
+    /// The widest standing level at which a grant limited to `workspace` covers `asking` to
+    /// `target`: one that names the pair, or with `any` one for any persona.
+    fn limited_level(
+        &self,
+        asking: Option<&str>,
+        target: &str,
+        workspace: Option<&str>,
+        any: bool,
+    ) -> Option<Level> {
+        let (asking, workspace) = (asking?, workspace?);
+        let wanted = if any { ANY } else { target };
+        let at = |level: Level| {
+            self.limited.iter().any(|(held, one)| {
+                *held == level
+                    && one.asking == asking
+                    && one.target == wanted
+                    && one.workspace == workspace
+            })
+        };
+        if at(Level::Project) {
+            Some(Level::Project)
+        } else if at(Level::You) {
+            Some(Level::You)
+        } else {
+            None
         }
     }
 
@@ -236,6 +291,19 @@ impl InForce {
     /// The widest **standing** level at which a grant **names** the pair `asking` to
     /// `target`: the project's or yours. Never "any persona", and never one chat's.
     pub fn named_level_of(&self, asking: Option<&str>, target: &str) -> Option<Level> {
+        self.named_level_in(asking, target, self.works_in.as_deref())
+    }
+
+    /// [`InForce::named_level_of`], for a task that works in `workspace` whatever
+    /// [`InForce::works_in`] says: a grant that names the pair and holds in any workspace, or
+    /// one that names the pair and is limited to that workspace.
+    pub fn named_level_in(
+        &self,
+        asking: Option<&str>,
+        target: &str,
+        workspace: Option<&str>,
+    ) -> Option<Level> {
+        let limited = self.limited_level(asking, target, workspace, false);
         let named = |pairs: &[Pair]| {
             asking.is_some_and(|asking| {
                 pairs
@@ -243,9 +311,9 @@ impl InForce {
                     .any(|pair| pair.asking == asking && pair.target == target)
             })
         };
-        if named(&self.project) {
+        if named(&self.project) || limited == Some(Level::Project) {
             Some(Level::Project)
-        } else if named(&self.you) {
+        } else if named(&self.you) || limited == Some(Level::You) {
             Some(Level::You)
         } else {
             None
@@ -263,9 +331,18 @@ impl InForce {
                 && asking.is_some_and(|asking| personas.iter().any(|one| one == asking))
         };
         let named = self.named_level_of(asking, target);
-        if named == Some(Level::Project) || any(&self.project_any) {
+        // "Any persona", limited to the workspace the task works in.
+        let any_here = if crate::personas::valid_name(target) {
+            self.limited_level(asking, target, self.works_in.as_deref(), true)
+        } else {
+            None
+        };
+        if named == Some(Level::Project)
+            || any(&self.project_any)
+            || any_here == Some(Level::Project)
+        {
             Some(Level::Project)
-        } else if named == Some(Level::You) || any(&self.you_any) {
+        } else if named == Some(Level::You) || any(&self.you_any) || any_here == Some(Level::You) {
             Some(Level::You)
         } else if self
             .chat
@@ -373,6 +450,10 @@ pub struct Committed {
     pub pairs: Vec<Pair>,
     /// Each asking persona it lets dispatch to any persona (`"*"` in its list), once (#1503).
     pub any: Vec<String>,
+    /// Each grant it limits to one workspace (#1505), a pair or any persona, once: written
+    /// `{ to = "devops", in = "runners" }` in the asking persona's list
+    /// ([`crate::dispatchwithin::Limited::from_entry`]). Never in `pairs` or `any`.
+    pub limited: Vec<crate::dispatchwithin::Limited>,
     /// Each thing in it that grants nothing, as one sentence.
     pub refused: Vec<String>,
 }
@@ -405,6 +486,19 @@ pub fn committed(text: Option<&str>) -> Committed {
             continue;
         };
         for target in targets {
+            // A grant for one workspace is a table, never a string: a build that knows only
+            // names reads it as nothing.
+            if let Some(entry) = target.as_table() {
+                match crate::dispatchwithin::Limited::from_entry(asking, entry) {
+                    Ok(one) => {
+                        if !out.limited.contains(&one) {
+                            out.limited.push(one);
+                        }
+                    }
+                    Err(why) => out.refused.push(why),
+                }
+                continue;
+            }
             if target.as_str() == Some(ANY) && crate::personas::valid_name(asking) {
                 if !out.any.contains(asking) {
                     out.any.push(asking.clone());
@@ -786,6 +880,10 @@ pub struct Audited<'a> {
     pub asking: Option<&'a str>,
     pub target: &'a str,
     pub level: Level,
+    /// The workspace the grant is limited to (#1505); none for one that holds in any
+    /// workspace, and for a never, which is not limited. For a grant made for one chat, the
+    /// workspace its task works in, none at the project's root.
+    pub workspace: Option<&'a str>,
 }
 
 /// What a person did to a dispatch grant, as [`Audited`] records it.
@@ -841,6 +939,7 @@ impl Audited<'_> {
             "level": self.level.word(),
             "asking": self.asking,
             "target": self.target,
+            "workspace": self.workspace,
         })
     }
 }

@@ -65,6 +65,7 @@ fn a_never_refuses_the_pair_whatever_grants_it_at_any_level() {
         project_any: vec!["steward".to_owned()],
         never: never("steward", "devops"),
         never_unread: false,
+        ..InForce::default()
     };
     assert_eq!(asked("steward", "devops", &every), Covers::Never);
     // Only that pair: the same persona to another target, and the pair the other way round.
@@ -481,6 +482,7 @@ fn a_never_its_lifting_and_any_persona_are_trust_events_of_their_own() {
         asking: Some("steward"),
         target: "devops",
         level: Level::You,
+        workspace: None,
     };
     assert_eq!(said.kind(), "trust.dispatch.never");
     assert_eq!(
@@ -492,6 +494,7 @@ fn a_never_its_lifting_and_any_persona_are_trust_events_of_their_own() {
             "level": "you",
             "asking": "steward",
             "target": "devops",
+            "workspace": null,
         })
     );
     assert_eq!(
@@ -507,6 +510,7 @@ fn a_never_its_lifting_and_any_persona_are_trust_events_of_their_own() {
         asking: Some("steward"),
         target: ANY,
         level: Level::Project,
+        workspace: None,
     };
     assert_eq!(any.kind(), "trust.dispatch.grant");
     assert_eq!(any.body()["target"], "*");

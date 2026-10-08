@@ -42,6 +42,13 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  *
  * **Policy has the last word**: a pair an administrator's policy locks was refused already.
  * The Notice says so, with the policy's sentence and who set it, and offers no Allow.
+ *
+ * **Where an Allow holds** (#1505). Where the task works in a workspace (`works_in`), every
+ * Allow is for work in that workspace only, and the sentence says so. Under the answers and
+ * above the brief the person may choose **In any workspace** for the two wider Allows; the
+ * narrower one is preselected, and each new question starts from it. The narrower Allow is
+ * `allow_dispatch`, which the core limits by its own record of the task; the wider one is a
+ * command of its own, `allow_dispatch_anywhere`. The window never sends a workspace's name.
  */
 export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
@@ -50,6 +57,9 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   const [allowed, setAllowed] = useState<{ target: string; said: string }>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
+  /** The held dispatch the person chose "in any workspace" for. A later question is not it,
+   *  so each starts from the narrower choice. */
+  const [wide, setWide] = useState<number>();
 
   if (allowed !== undefined)
     return (
@@ -84,6 +94,38 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       .then(read)
       .catch(() => read());
   };
+
+  /** Whether an Allow for the person or the project can be limited to the task's workspace. */
+  const limits =
+    first.works_in !== null &&
+    first.locked === null &&
+    first.levels.some((level) => level !== "chat");
+  const anywhere = limits && wide === first.id;
+  // A group of radios with its own label, and no fieldset: a fieldset is as wide as its
+  // longest word in some engines, and this has to fit a narrow pane.
+  const where = limits && (
+    <div className="dispatch-within" role="radiogroup" aria-labelledby={`${id}-within`}>
+      <p id={`${id}-within`}>Where an Allow for you or for the project holds</p>
+      <label>
+        <input
+          type="radio"
+          name={`${id}-within`}
+          checked={!anywhere}
+          onChange={() => setWide(undefined)}
+        />{" "}
+        In {first.works_in} only
+      </label>
+      <label>
+        <input
+          type="radio"
+          name={`${id}-within`}
+          checked={anywhere}
+          onChange={() => setWide(first.id)}
+        />{" "}
+        In any workspace
+      </label>
+    </div>
+  );
 
   const brief = (
     <div className="block-report" id={id}>
@@ -120,8 +162,10 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     if (busy) return;
     setBusy(true);
     setSaid(undefined);
-    void commands
-      .allowDispatch(plane, first.id, level)
+    // The wider answer is a command of its own, and only the two wider Allows have one.
+    const run =
+      anywhere && level !== "chat" ? commands.allowDispatchAnywhere : commands.allowDispatch;
+    void run(plane, first.id, level)
       .then((done) => {
         if (done.status === "error") {
           setSaid(done.error);
@@ -156,12 +200,28 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   const fixes: readonly [NoticeAction, ...NoticeAction[]] = [one ?? keep, ...others];
 
   return (
-    <Notice cause={cause} at="pane" tone="trouble" label={label} fixes={fixes} under={brief}>
+    <Notice
+      cause={cause}
+      at="pane"
+      tone="trouble"
+      label={label}
+      fixes={fixes}
+      under={
+        <>
+          {where}
+          {brief}
+        </>
+      }
+    >
       {who} wants to dispatch to {first.target}. Nothing starts until you answer. Allowing it lets{" "}
       {first.asking === null ? "this chat" : `${first.asking} chats`} ask {first.target} for
       anything {first.target} can do, without asking you again. The grant covers the helper
       sub-agents {first.asking === null ? "this chat runs" : "those chats run"} too: what one of
       them asks is asked as its chat.
+      {first.works_in !== null &&
+        ` The task works in ${first.works_in}: an Allow holds for work there only${
+          limits ? ", unless you choose any workspace below" : ""
+        }.`}
       {first.never_unread !== null &&
         ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}

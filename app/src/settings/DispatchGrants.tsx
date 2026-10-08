@@ -32,6 +32,7 @@ const NOTHING_STANDS: DispatchStanding = {
   dormant: [],
   returned: [],
   back: [],
+  workspaces: [],
 };
 
 /** "Any persona", as a target is spelled to the core. Never a persona's name. */
@@ -56,11 +57,21 @@ export function dispatchSourceSaid(one: DispatchGrant): string {
 }
 
 /**
- * **Which workspaces a grant holds in.** Every grant holds in any workspace today. The
- * workspace condition (#1505) is said here, and nowhere else in the table.
+ * **Which workspace a grant holds in** (#1505), as the table says it, and nowhere else in the
+ * table: any workspace, or the one it is limited to. A grant made for one chat is for the task
+ * it was allowed for, so it says where that task works.
  */
-function workspaceOf(): string {
-  return "Any workspace";
+export function dispatchWorkspaceSaid(workspace: string | null, level?: string): string {
+  if (workspace !== null) return `In ${workspace}`;
+  return level === "chat" ? "At the project's root" : "Any workspace";
+}
+
+/** A grant whose workspace the person may change: which grant, and how a press names it. */
+interface Changes {
+  readonly level: "you" | "project";
+  readonly asking: string;
+  /** The target persona, or `*` for any persona. */
+  readonly target: string;
 }
 
 /**
@@ -103,7 +114,12 @@ interface Line {
   readonly says: ReactNode;
   /** A second, quieter sentence. */
   readonly note?: string;
-  readonly workspace: string;
+  /** Where it holds: null for any workspace. Absent where the line is no grant. */
+  readonly workspace?: string | null;
+  /** Said in the workspace column in place of where a grant holds. */
+  readonly everywhere?: string;
+  /** Whose grant it is, where the person may change its workspace here. */
+  readonly changes?: Changes;
   readonly offers: readonly Offer[];
   /** Words in place of a button, where there is nothing to press. */
   readonly fixed?: string;
@@ -149,6 +165,12 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  *   persona. A pair kept blocked for one chat's life is drawn read-only, with the chat.
  * - **Where the list of nevers does not read**, the core's sentence is at the top, no never is
  *   drawn, and every grant says it does not count.
+ * - **Each grant says which workspace it holds in** (#1505), and the person changes it there
+ *   for a grant of their own or of the project's: narrowing and widening are each asked first,
+ *   and a project grant's change says it edits the committed file. A grant whose workspace is
+ *   not a workspace of the project now, or was made again under the same name since, is drawn
+ *   greyed, says it covers nothing, and offers **Remove**; where a workspace of that name is
+ *   there, **Count it again** is the person's yes for that one.
  * - **A grant is in force only while both personas exist.** One that names a persona the
  *   project does not have now is drawn greyed and says so; nothing was moved, and it counts
  *   again when the persona is back. Where a persona of that name is there again and is not
@@ -327,20 +349,120 @@ export function DispatchGrantsList({
     notInForce(names) ??
     (unread === null ? undefined : "Does not count until the list above reads.");
 
+  /** Who a grant lets dispatch to whom, as a sentence says it. */
+  const pairSaid = (changes: Changes) =>
+    changes.target === ANY
+      ? `${changes.asking} chats will dispatch to any persona`
+      : `${changes.asking} chats will dispatch to ${changes.target}`;
+
+  /** What changing a grant's workspace to `to` (null: any workspace) will do, asked first. */
+  const changeOffer = (changes: Changes, from: string | null, to: string | null): Offer => {
+    const whose = changes.level === "you" ? "my grant" : "the project's grant";
+    const grant = `${whose} for ${changes.asking} to ${changes.target === ANY ? "any persona" : changes.target}`;
+    const committed =
+      changes.level === "project"
+        ? ` This changes ${file}, the project's committed file, for everyone: your teammates get it when they pull it, and each accepts it on their own machine.`
+        : "";
+    const run = async () =>
+      ran(
+        await commands.setDispatchWorkspace(
+          plane,
+          changes.asking,
+          changes.target,
+          changes.level,
+          from,
+          to,
+        ),
+      );
+    if (to === null)
+      return {
+        yes: "Hold in any workspace",
+        about: grant,
+        says: `Let this grant hold in any workspace? ${pairSaid(changes)} for work in every workspace of this project, and at its root, without asking you.${committed}`,
+        done: `It now holds in any workspace.${yetToCount(changes.asking, changes.target)}`,
+        run,
+      };
+    if (to === from)
+      return {
+        yes: "Count it again",
+        about: `${grant} in ${to}`,
+        says: `Let this grant hold in the workspace named ${to} that is there now? It was made for an earlier workspace of that name. ${pairSaid(changes)} for work in ${to} without asking you.`,
+        done: `It holds in ${to} again.${yetToCount(changes.asking, changes.target)}`,
+        run,
+      };
+    return {
+      yes: `Limit to ${to}`,
+      about: grant,
+      says: `Limit this grant to ${to}? ${pairSaid(changes)} without asking you only for work in ${to}. For work anywhere else the next dispatch asks you. ${tasksLeft}${committed}`,
+      done: `It now holds in ${to} only. ${tasksLeft}`,
+      run,
+    };
+  };
+
+  /** **Count it again**, for a grant whose workspace was made again under its name: offered
+   *  only where a workspace of that name is there now. */
+  const countAgain = (
+    changes: Changes,
+    one: { workspace: string | null; nowhere: string | null },
+  ): Offer[] =>
+    one.workspace !== null && one.nowhere !== null && standing.workspaces.includes(one.workspace)
+      ? [changeOffer(changes, one.workspace, one.workspace)]
+      : [];
+
+  /** The workspace column of one line: where the grant holds, and, for a grant the person
+   *  may change, the list that changes it. A choice asks first, like every press. */
+  const workspaceCell = (line: Line) => {
+    if (line.everywhere !== undefined) return line.everywhere;
+    if (line.workspace === undefined) return "";
+    const now = line.workspace;
+    const changes = line.changes;
+    // Nothing to choose between where the project has no workspace and the grant names none.
+    if (changes === undefined || (standing.workspaces.length === 0 && now === null))
+      return dispatchWorkspaceSaid(now);
+    const key = `${line.key}\u001eworkspace`;
+    const others = standing.workspaces.filter((name) => name !== now);
+    return (
+      <select
+        className="dispatch-workspace"
+        value={now ?? ""}
+        disabled={busy}
+        data-ask={key}
+        data-line={line.key}
+        aria-label={`Workspace: ${changes.level === "you" ? "my grant" : "the project's grant"} for ${changes.asking} to ${changes.target === ANY ? "any persona" : changes.target}`}
+        onChange={(event) => {
+          const to = event.target.value === "" ? null : event.target.value;
+          if (to === now) return;
+          setDone(undefined);
+          setAsking({ ...changeOffer(changes, now, to), key, line: line.key });
+        }}
+      >
+        <option value="">Any workspace</option>
+        {now !== null && <option value={now}>In {now}</option>}
+        {others.map((name) => (
+          <option key={name} value={name}>
+            In {name}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
   /** The line of one grant by name. */
   const grantLine = (one: DispatchGrant): Line => {
     const who = one.asking ?? "this chat";
     const pair = `${who} to ${one.target}`;
     const key = `grant:${one.id}`;
     const names = one.asking === null ? [one.target] : [one.asking, one.target];
-    const stalled = notInForce(names);
-    const workspace = workspaceOf();
+    const stalled = notInForce(names) ?? one.nowhere ?? undefined;
+    const workspace = one.workspace;
+    const within = workspace === null ? "" : ` in ${workspace}`;
     if (one.locked !== null)
       return {
         key,
         says: dispatchSourceSaid(one),
         note: one.locked,
         workspace,
+        everywhere: one.level === "chat" ? dispatchWorkspaceSaid(workspace, "chat") : undefined,
         offers: [],
         fixed: "Locked by policy",
       };
@@ -348,40 +470,71 @@ export function DispatchGrantsList({
       return {
         key,
         says: dispatchSourceSaid(one),
-        note: countsNote(names),
+        note: one.nowhere ?? countsNote(names),
         workspace,
+        everywhere: one.level === "chat" ? dispatchWorkspaceSaid(workspace, "chat") : undefined,
+        changes:
+          one.level === "you" && one.asking !== null
+            ? { level: "you", asking: one.asking, target: one.target }
+            : undefined,
         dormant: stalled !== undefined,
         offers: [
+          ...(one.level === "you" && one.asking !== null
+            ? countAgain({ level: "you", asking: one.asking, target: one.target }, one)
+            : []),
           {
-            yes: "Revoke",
-            about: one.level === "chat" ? `this chat's grant for ${pair}` : `my grant for ${pair}`,
-            says: `Revoke this grant? The next dispatch from ${who} to ${one.target} asks you again. ${tasksLeft}`,
-            done: `Revoked. The next dispatch from ${who} to ${one.target} asks you. ${tasksLeft}`,
+            yes: one.nowhere === null ? "Revoke" : "Remove",
+            about:
+              one.level === "chat"
+                ? `this chat's grant for ${pair}${within}`
+                : `my grant for ${pair}${within}`,
+            says:
+              one.nowhere === null
+                ? `Revoke this grant? The next dispatch from ${who} to ${one.target}${within} asks you again. ${tasksLeft}`
+                : "Remove this grant? It covers nothing now, so nothing changes for any chat.",
+            done:
+              one.nowhere === null
+                ? `Revoked. The next dispatch from ${who} to ${one.target}${within} asks you. ${tasksLeft}`
+                : "Removed.",
             run: async () => ran(await commands.revokeDispatchGrant(plane, one.id)),
           },
         ],
       };
     const asking = one.asking ?? "";
+    const changes: Changes = { level: "project", asking, target: one.target };
     const remove: Offer = {
       yes: "Remove for everyone",
-      about: `the project's grant for ${pair}`,
+      about: `the project's grant for ${pair}${within}`,
       says: `Remove this grant for everyone? This changes ${file}, the project's committed file: your teammates lose the grant when they pull it. ${tasksLeft}`,
       done: `Removed from ${file}. Commit and push the change for your team to follow it. ${tasksLeft}`,
       run: async () => ran(await commands.revokeDispatchGrant(plane, one.id)),
     };
     const decline: Offer = {
       yes: "Not on my machine",
-      about: `stop following the project's grant for ${pair}`,
-      says: `Stop following this grant on this machine? ${file} is not changed, so your teammates keep it. The next dispatch from ${asking} to ${one.target} here asks you. ${tasksLeft}`,
+      about: `stop following the project's grant for ${pair}${within}`,
+      says: `Stop following this grant on this machine? ${file} is not changed, so your teammates keep it. The next dispatch from ${asking} to ${one.target}${within} here asks you. ${tasksLeft}`,
       done: `Not followed on this machine. ${file} was not changed. ${tasksLeft}`,
-      run: async () => ran(await commands.declineProjectDispatch(plane, asking, one.target)),
+      run: async () =>
+        ran(
+          workspace === null
+            ? await commands.declineProjectDispatch(plane, asking, one.target)
+            : await commands.declineProjectDispatchIn(plane, asking, one.target, workspace),
+        ),
     };
     const accept: Offer = {
       yes: "Accept",
-      about: `the project's grant for ${pair}, on this machine`,
-      says: `Follow this grant on this machine? ${asking} chats will dispatch to ${one.target} here without asking you.`,
-      done: `Accepted on this machine: the project's grant for ${asking} to ${one.target}.${yetToCount(asking, one.target)}`,
-      run: async () => ran(await commands.acceptProjectDispatch(plane, asking, one.target)),
+      about: `the project's grant for ${pair}${within}, on this machine`,
+      says:
+        workspace === null
+          ? `Follow this grant on this machine? ${asking} chats will dispatch to ${one.target} here without asking you.`
+          : `Follow this grant on this machine? ${asking} chats will dispatch to ${one.target} for work in ${workspace} here without asking you, and for work anywhere else they still ask.`,
+      done: `Accepted on this machine: the project's grant for ${asking} to ${one.target}${within}.${yetToCount(asking, one.target)}`,
+      run: async () =>
+        ran(
+          workspace === null
+            ? await commands.acceptProjectDispatch(plane, asking, one.target)
+            : await commands.acceptProjectDispatchIn(plane, asking, one.target, workspace),
+        ),
     };
     const gone = names.find((name) => !isPersona(name));
     if (gone !== undefined)
@@ -405,17 +558,21 @@ export function DispatchGrantsList({
       return {
         key,
         says: dispatchSourceSaid(one),
-        note: "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
+        note:
+          one.nowhere ??
+          "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
         workspace,
-        offers: [accept, decline, remove],
+        dormant: one.nowhere !== null,
+        offers: one.nowhere === null ? [accept, decline, remove] : [remove],
       };
     return {
       key,
       says: dispatchSourceSaid(one),
-      note: countsNote(names),
+      note: one.nowhere ?? countsNote(names),
       workspace,
+      changes,
       dormant: stalled !== undefined,
-      offers: [remove, decline],
+      offers: [...countAgain(changes, one), remove, decline],
     };
   };
 
@@ -424,9 +581,11 @@ export function DispatchGrantsList({
   const anyLines = (persona: string): Line[] => {
     const here = isPersona(persona);
     const covers = `${persona} chats will dispatch to every persona of this project without asking you, and to any persona added later.`;
-    const mine = standing.any.find((one) => one.asking === persona && one.level === "you");
-    const ours = standing.any.find((one) => one.asking === persona && one.level === "project");
-    const workspace = workspaceOf();
+    const all = standing.any.filter((one) => one.asking === persona);
+    const mine = all.find((one) => one.level === "you" && one.workspace === null);
+    const ours = all.find((one) => one.level === "project" && one.workspace === null);
+    const limited = all.filter((one) => one.workspace !== null);
+    const workspace = null;
     const allow = (level: "you" | "project"): Offer => ({
       yes: level === "you" ? "Allow for me" : "Allow for everyone",
       about: `${persona} may dispatch to any persona`,
@@ -476,6 +635,7 @@ export function DispatchGrantsList({
         says: "Me on this machine: allowed",
         note: here ? countsNote([persona]) : gone,
         workspace,
+        changes: here ? { level: "you", asking: persona, target: ANY } : undefined,
         dormant: notInForce([persona]) !== undefined,
         offers: [clear("you")],
       };
@@ -516,11 +676,77 @@ export function DispatchGrantsList({
         says: "The project: allowed",
         note: countsNote([persona]),
         workspace,
+        changes: { level: "project", asking: persona, target: ANY },
         dormant: notInForce([persona]) !== undefined,
         offers: [clear("project"), decline],
       };
     };
-    return [mineLine(), oursLine(ours)].filter((one): one is Line => one !== undefined);
+    /** "Any persona" limited to one workspace: a line of its own, mine or the project's. */
+    const limitedLine = (one: DispatchAny): Line => {
+      const at = one.workspace ?? "";
+      const level = one.level === "project" ? "project" : "you";
+      const whose = level === "you" ? "Me on this machine" : "The project";
+      const changes: Changes = { level, asking: persona, target: ANY };
+      const id = one.id ?? "";
+      const coversIn = `${persona} chats will dispatch to every persona of this project for work in ${at} without asking you, and to any persona added later. For work anywhere else they still ask.`;
+      const clearIt: Offer = {
+        yes: level === "you" ? (one.nowhere === null ? "Clear" : "Remove") : "Remove for everyone",
+        about: `any persona for ${persona} in ${at}, ${level === "you" ? "for me on this machine" : "in this project"}`,
+        says:
+          level === "you"
+            ? `Stop letting ${persona} dispatch to any persona in ${at}? Grants that name a persona stay. ${tasksLeft}`
+            : `Remove "any persona" in ${at} for ${persona} for everyone? This changes ${file}, the project's committed file: your teammates lose it when they pull it. ${tasksLeft}`,
+        done: `Cleared. ${tasksLeft}`,
+        run: async () => ran(await commands.revokeDispatchGrant(plane, id)),
+      };
+      const acceptIt: Offer = {
+        yes: "Accept",
+        about: `the project's any persona for ${persona} in ${at}, on this machine`,
+        says: `Follow the project's "any persona" for ${persona} in ${at} on this machine? ${coversIn}`,
+        done: `Accepted on this machine: ${persona} to any persona in ${at}.${yetToCount(persona, ANY)}`,
+        run: async () => ran(await commands.acceptProjectDispatchIn(plane, persona, ANY, at)),
+      };
+      const declineIt: Offer = {
+        yes: "Not on my machine",
+        about: `stop following the project's any persona for ${persona} in ${at}`,
+        says: `Stop following the project's "any persona" for ${persona} in ${at} on this machine? ${file} is not changed, so your teammates keep it. ${tasksLeft}`,
+        done: `Not followed on this machine. ${file} was not changed. ${tasksLeft}`,
+        run: async () => ran(await commands.declineProjectDispatchIn(plane, persona, ANY, at)),
+      };
+      const key = `any:${level}:${persona}:${at}`;
+      if (!here)
+        return {
+          key,
+          says: `${whose}: allowed`,
+          note: gone,
+          workspace: at,
+          dormant: true,
+          offers: [clearIt],
+        };
+      if (one.waiting)
+        return {
+          key,
+          says: `${whose}: allowed`,
+          note:
+            one.nowhere ??
+            "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
+          workspace: at,
+          dormant: one.nowhere !== null,
+          offers: one.nowhere === null ? [acceptIt, clearIt] : [clearIt],
+        };
+      return {
+        key,
+        says: `${whose}: allowed`,
+        note: one.nowhere ?? countsNote([persona]),
+        workspace: at,
+        changes,
+        dormant: one.nowhere !== null || notInForce([persona]) !== undefined,
+        offers: [...countAgain(changes, one), clearIt, ...(level === "project" ? [declineIt] : [])],
+      };
+    };
+    return [mineLine(), oursLine(ours), ...limited.map(limitedLine)].filter(
+      (one): one is Line => one !== undefined,
+    );
   };
 
   const neverLine = (one: DispatchNever): Line => {
@@ -538,7 +764,8 @@ export function DispatchGrantsList({
       key: `never:${one.asking}\u001f${one.target}`,
       says: <strong>Never</strong>,
       note: `You said so on this machine. No grant covers it, and no ${one.asking} chat is asked. It also holds for a chain that starts from ${one.asking}: a chat working for a ${one.asking} chat does not dispatch to ${one.target} either.${whose}`,
-      workspace: workspaceOf(),
+      // A never is not limited to a workspace: it holds in every one.
+      everywhere: "Every workspace",
       offers: [
         {
           yes: "Lift",
@@ -555,7 +782,7 @@ export function DispatchGrantsList({
     key: `kept:${at}`,
     says: `Kept blocked in ${one.chat === "" ? "one chat" : one.chat}`,
     note: "For that chat only, until it closes. Other chats are still asked.",
-    workspace: workspaceOf(),
+    everywhere: "Every workspace",
     offers: [],
     fixed: "Ends with the chat",
   });
@@ -572,7 +799,7 @@ export function DispatchGrantsList({
           : here
             ? `It was an earlier ${one.was}'s. It allows nothing unless you give it back, with Give back to ${one.was}.`
             : `It was an earlier ${one.was}'s, and ${one.was} is not a persona of this project now. It allows nothing.`,
-      workspace: workspaceOf(),
+      workspace: null,
       offers: [
         {
           yes: "Remove",
@@ -728,7 +955,7 @@ export function DispatchGrantsList({
             <span>{line.says}</span>
             {line.note !== undefined && <span className="granted-note"> {line.note}</span>}
           </td>
-          <td>{line.workspace}</td>
+          <td>{workspaceCell(line)}</td>
           <td>
             {line.offers.length === 0 ? (
               <span className="granted-note">{line.fixed ?? ""}</span>

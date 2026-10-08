@@ -656,5 +656,46 @@ decided here. Nor is any of this a boundary against a chat: a chat that may writ
 project's `personas/` can edit a persona in place. **purlis has no persona rename**: a persona
 whose folder is moved is, to these rules, one that went away and another that appeared.
 
-Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
-(#1506).
+**8. A grant holds in one workspace, or in any (V100-27).** A grant carries one condition and
+no other. #1505 builds it.
+
+- **The workspace is the one the task works in**, never the one the asking chat is in: the
+  workspace a dispatch names, the one whose repo its worktree is cut from, the one a handoff
+  moves into, else the asking chat's own. Each is the app's own record, and the chat is then
+  started in that place. A grant is the person's consent to what the other persona may be
+  asked to do, and where that persona works is what bounds it; read the other way, a chat in
+  one workspace could send the other persona to work in any. A task at the project's root
+  works in no workspace, so no limited grant covers it and the question there offers none.
+- **The question offers the narrower grant first.** Where the task works in a workspace, an
+  Allow for the person or the project holds in that workspace only; *in any workspace* is the
+  explicit other choice. A grant for one chat is for the task it was asked about: it covers
+  that chat's dispatches in that workspace and nowhere else, and has no choice to make.
+- **"Any persona" may be limited the same way. A never is not**: it holds in every workspace.
+  A refusal that stopped at a workspace's edge would be walked around by naming another place.
+  The chain rule of change 4 and the loop rule are as they were.
+- **A limited grant never reads as an unlimited one.** Each level spells it apart from the
+  grants that hold everywhere: a table in the project's list (`{ to = "devops", in =
+  "runners" }`), and keys of their own on the machine. A build that does not know the
+  condition reads nothing there. An entry that does not read grants nothing. A grant written
+  before the condition existed holds in any workspace, as it did. A teammate's limited grant
+  waits for a yes of its own on each machine; a pair accepted for one workspace is not thereby
+  accepted for all, nor the reverse, and a teammate widening a grant is told as a new grant.
+- **A chat nobody is at crosses into another workspace** only under a grant that names the
+  pair and covers the workspace it crosses into: one that holds in any workspace, or one
+  limited to that workspace. "Any persona" still does not count there.
+- **A workspace that goes away.** A limited grant counts only while a workspace of its name
+  is there. A workspace made later under the name of one that was seen gone inherits no
+  grant: the grant is shown as covering nothing, with Remove, and the person may count it
+  again for the workspace that is there now. Nothing is moved by a read; the one thing a read
+  writes is the count of times the name was seen gone. **What this does not catch:** a
+  workspace removed and made again with nothing looked at in between; a workspace has no
+  identity beside its name. purlis has no workspace rename: one renamed by hand is the old
+  name gone and a new name no grant holds.
+- **Settings shows and changes it.** The table's workspace column says where each grant holds.
+  Narrowing and widening a grant of one's own are each a confirmed, recorded write; a project
+  grant's is changed for everyone, with the confirmation every write of the committed file
+  has.
+- **The audit says the workspace** of every grant, revoke and decline, and null for any.
+
+Still open, and not decided here: telling a teammate's "any persona", and a teammate's grant
+limited to one workspace, on the one-time Notice (#1506).
