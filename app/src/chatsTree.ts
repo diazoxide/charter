@@ -1,6 +1,12 @@
 /**
- * **The project's running chats as one tree** (#1447): which chat started which, whatever
- * workspace each works in.
+ * **The project's running chats as one tree** (#1447): which chat asked which for a task,
+ * whatever workspace each works in.
+ *
+ * **Only a task is nested** (#1492, V100-69). A handoff moved the work: its chat is a session
+ * of its own, with its own tab, and stands at the top of the tree. It is under no chat, so it
+ * is in no chat's counts, summary or needs-you mark, and nothing that ends a chat "and
+ * everything below it" ends it. Where it came from is said on its own row, and where the work
+ * went on the row of the chat it came from ({@link handedOff}).
  *
  * The lineage is the core's: a chat another chat started carries that chat's number, the mode
  * it was started in and whether it has a tab (`OpenChat.from`). This file only shapes it, so
@@ -9,6 +15,10 @@
 import type { OpenChat } from "./bindings";
 import { isShell } from "./chatState";
 import { rowFactsOf, type RowFacts } from "./shownState";
+
+/** What a task the person asked for themselves says on its row and in its breadcrumb (#1492,
+ *  V100-70). */
+export const ASKED_BY_YOU = "asked by you";
 
 /** One running chat, as the Chats section lists it. */
 export type ListedChat = {
@@ -32,6 +42,9 @@ export type ListedChat = {
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
    *  it, in a folder of its own, and nothing merges it. */
   branch: string | null;
+  /** A task the person asked for themselves, from its session's tab (#1492, V100-70): its row
+   *  and its breadcrumb say `asked by you`. */
+  byYou?: boolean;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.
 } & RowFacts;
@@ -78,11 +91,13 @@ export function listedChat(
     from: chat.from?.name ?? null,
     tab,
     branch: ownBranch(chat),
+    byYou: chat.from?.task === true && chat.from.by_person === true,
     ...rowFactsOf(chat, nameOf),
   };
 }
 
-/** The chats each chat started, by its number, in the order they are listed. */
+/** The chats each chat started, as a task or by a handoff, by its number, in the order they
+ *  are listed. */
 export function startedBy(chats: readonly ListedChat[]): ReadonlyMap<number, ListedChat[]> {
   const open = new Set(chats.map((chat) => chat.session));
   const by = new Map<number, ListedChat[]>();
@@ -91,6 +106,51 @@ export function startedBy(chats: readonly ListedChat[]): ReadonlyMap<number, Lis
     by.set(chat.parent, [...(by.get(chat.parent) ?? []), chat]);
   }
   return by;
+}
+
+/** Whether `chat` is nested under an open chat: a task whose asking chat is listed. */
+function nested(chat: ListedChat, open: ReadonlySet<number>): boolean {
+  return (
+    chat.mode === "task" &&
+    chat.parent !== null &&
+    chat.parent !== chat.session &&
+    open.has(chat.parent)
+  );
+}
+
+/**
+ * **The tasks each chat asked for**, by its number, in the order they are listed: the rows
+ * nested under its row, and what "everything below it" means. A handoff is not one (#1492).
+ */
+export function tasksOf(chats: readonly ListedChat[]): ReadonlyMap<number, ListedChat[]> {
+  const open = new Set(chats.map((chat) => chat.session));
+  const by = new Map<number, ListedChat[]>();
+  for (const chat of chats) {
+    if (chat.parent === null || !nested(chat, open)) continue;
+    by.set(chat.parent, [...(by.get(chat.parent) ?? []), chat]);
+  }
+  return by;
+}
+
+/**
+ * **Where each chat's work went by a handoff** (#1492, V100-69), by the number of the chat it
+ * came from: the chats it handed off to that are still open, the newest first. What that
+ * chat's row says, `handed off to <chat>`, and where a press on it goes.
+ */
+export function handedOff(chats: readonly ListedChat[]): ReadonlyMap<number, ListedChat[]> {
+  const to = new Map<number, ListedChat[]>();
+  for (const chat of chats) {
+    if (chat.mode !== "handoff" || chat.parent === null || chat.parent === chat.session) continue;
+    to.set(chat.parent, [...(to.get(chat.parent) ?? []), chat]);
+  }
+  // By number, which is the order they were started in: the last one started is first.
+  for (const went of to.values()) went.sort((a, b) => b.session - a.session);
+  return to;
+}
+
+/** `handed off to drop commons`, and `and 2 more` where the work went to several chats. */
+export function handedOffSaid(newest: string, more: number): string {
+  return more === 0 ? `handed off to ${newest}` : `handed off to ${newest} and ${more} more`;
 }
 
 /**
@@ -111,14 +171,18 @@ export function startedElsewhere(chats: readonly ListedChat[]): ReadonlyMap<numb
 }
 
 /**
- * The rows of the tree, top to bottom: each chat, then the chats it started, nested under it.
+ * The rows of the tree, top to bottom: each chat, then the tasks it asked for, nested under it.
  *
  * **A chat whose parent has closed stands at the top**, marked `orphaned`: it is still running,
  * and the tree must not lose it with the row it hung from. Every chat is drawn exactly once,
  * whatever the lineage says: a chain that loops back on itself is cut at the first chat seen.
+ *
+ * **A handoff stands at the top whatever became of the chat it came from** (#1492), and is
+ * `orphaned` only once that chat has closed.
  */
 export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
-  const children = startedBy(chats);
+  const children = tasksOf(chats);
+  const open = new Set(chats.map((chat) => chat.session));
   const rows: ChatRow[] = [];
   const seen = new Set<number>();
   const walk = (level: number, among: readonly ListedChat[], orphans: boolean) => {
@@ -131,17 +195,15 @@ export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
         level,
         posinset: at + 1,
         setsize: fresh.length,
-        orphaned: orphans && chat.parent !== null,
+        orphaned:
+          orphans && chat.parent !== null && (chat.mode === "task" || !open.has(chat.parent)),
       });
       walk(level + 1, children.get(chat.session) ?? [], false);
     });
   };
-  const open = new Set(chats.map((chat) => chat.session));
   walk(
     1,
-    chats.filter(
-      (chat) => chat.parent === null || !open.has(chat.parent) || chat.parent === chat.session,
-    ),
+    chats.filter((chat) => !nested(chat, open)),
     true,
   );
   // Whatever a loop in the lineage left out, at the top, so it is still listed.

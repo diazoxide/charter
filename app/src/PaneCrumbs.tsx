@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { ChatShownState } from "./ChatRows";
+import { ASKED_BY_YOU } from "./chatsTree";
 import type { Crumbs } from "./tabChats";
 
 /**
@@ -15,6 +16,9 @@ import type { Crumbs } from "./tabChats";
  *
  * **A task that works in another workspace says so** (V100-40), `in <workspace>`, beside its
  * name: its tab is on the strip of the session that asked.
+ *
+ * **A task the person asked for themselves says so after its state** (#1492, V100-70), `working
+ * · asked by you`, as its row does: the chat whose tab this is did not dispatch it.
  *
  * **The state is the one its row says** (#1484), from the one function. In a narrow pane the
  * names give way before it does (`App.css`, `.pane-crumbs`, which says how far that holds).
@@ -41,7 +45,8 @@ export function PaneCrumbs({
 }) {
   const last = crumbs.path.length - 1;
   const shown = crumbs.path[last];
-  const said = crumbs.path.map((chat) => chat.name).join(" › ");
+  const path = crumbs.path.map((chat) => chat.name).join(" › ");
+  const said = shown.byYou === true ? `${path}, ${ASKED_BY_YOU}` : path;
   return (
     <nav
       className="pane-crumbs"
@@ -90,6 +95,13 @@ export function PaneCrumbs({
           asking={shown.asking}
           harness={shown.harness}
         />
+      )}
+      {shown.byYou === true && (
+        /* One box with its separator, so both give way together, before the state does. */
+        <span className="crumb-by" title="You asked for this task from this tab">
+          <span aria-hidden="true">{" · "}</span>
+          {ASKED_BY_YOU}
+        </span>
       )}
     </nav>
   );

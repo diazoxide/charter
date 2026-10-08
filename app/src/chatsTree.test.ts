@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { OpenChat } from "./bindings";
 import {
+  below,
   belowCount,
   chatsTree,
+  handedOff,
+  handedOffSaid,
+  listedChat,
   needing,
   ownBranch,
   parentsIn,
   startedBy,
   startedElsewhere,
+  tasksOf,
   unfolded,
   type ListedChat,
 } from "./chatsTree";
@@ -178,5 +184,120 @@ describe("what is below a chat (#1448)", () => {
     expect(belowCount(deep(), 2)).toBe(2);
     expect(belowCount(deep(), 4)).toBe(0);
     expect(belowCount(deep(), 9)).toBe(0);
+  });
+});
+
+/** A chat the work of `parent` was handed off to. */
+const handoff = (session: number, parent: number, name = `chat ${session}`): ListedChat => ({
+  ...listed(session, parent),
+  name,
+  mode: "handoff",
+  tab: true,
+});
+
+describe("a handoff in the tree (#1492, V100-69)", () => {
+  /** 1 asked 2 for a task and handed off to 3, which asked 4 for a task. */
+  const moved = () => [listed(1), listed(2, 1), handoff(3, 1), listed(4, 3)];
+
+  it("stands at the top, never under the chat it came from, with its own tasks under it", () => {
+    expect(drawn(moved())).toEqual(["1:1", "2:2", "1:3", "2:4"]);
+  });
+
+  it("is an orphan only once the chat it came from has closed", () => {
+    const open = chatsTree(moved()).find((row) => row.session === 3);
+    expect(open?.orphaned).toBe(false);
+    const closed = chatsTree([handoff(3, 1), listed(4, 3)]).find((row) => row.session === 3);
+    expect(closed?.orphaned).toBe(true);
+  });
+
+  it("is not one of the tasks of the chat it came from, nor below it", () => {
+    expect(
+      tasksOf(moved())
+        .get(1)
+        ?.map((chat) => chat.session),
+    ).toEqual([2]);
+    expect(
+      tasksOf(moved())
+        .get(3)
+        ?.map((chat) => chat.session),
+    ).toEqual([4]);
+    expect(below(moved(), 1)).toEqual([2]);
+    expect(belowCount(moved(), 1)).toBe(1);
+    expect(parentsIn(chatsTree([listed(1), handoff(3, 1)])).has(1)).toBe(false);
+  });
+
+  it("does not put the hand on the row of the chat it came from when it needs you", () => {
+    const marks = needing(chatsTree(moved()), [4]);
+    expect([...marks.keys()]).toEqual([3, 4]);
+  });
+
+  it("is still a chat that chat started, for the explorer's line of what went elsewhere", () => {
+    const away = { ...handoff(3, 1), workspace: "beta" };
+    expect(startedElsewhere([listed(1), away]).get(1)).toEqual([away]);
+  });
+
+  it("is where the work of the chat it came from went, the newest first, open chats only", () => {
+    const went = handedOff([
+      listed(1),
+      listed(2, 1),
+      handoff(3, 1, "drop commons"),
+      handoff(5, 1, "release notes"),
+      handoff(6, 9, "from a closed chat"),
+    ]);
+    expect(went.get(1)?.map((chat) => chat.name)).toEqual(["release notes", "drop commons"]);
+    // A task is not a handoff, and the chat that handed off is said nothing of itself.
+    expect(went.has(2)).toBe(false);
+    expect(went.has(3)).toBe(false);
+  });
+
+  it("says the newest chat by name, and how many more there are", () => {
+    expect(handedOffSaid("release notes", 0)).toBe("handed off to release notes");
+    expect(handedOffSaid("release notes", 2)).toBe("handed off to release notes and 2 more");
+  });
+});
+
+describe("a task the person asked for (#1492, V100-70)", () => {
+  const from = {
+    chat: 1,
+    name: "steward 1",
+    workspace: "alpha",
+    task: true,
+    tab: false,
+    reported: false,
+    unreported: false,
+  };
+  const chat = (more: Partial<NonNullable<OpenChat["from"]>>) =>
+    listedChat(
+      {
+        session: 4,
+        name: "4",
+        cwd: null,
+        harness: "claude",
+        in_front: false,
+        resumed: null,
+        fresh: null,
+        guessed: null,
+        profile: null,
+        persona: "devops",
+        unreported: null,
+        card: null,
+        pinned: false,
+        label: null,
+        from: { ...from, ...more },
+      },
+      "alpha",
+      "devops 4",
+      false,
+    );
+
+  it("is a task of the session it was asked from, marked as the person's", () => {
+    const theirs = chat({ by_person: true });
+    expect([theirs.mode, theirs.parent, theirs.byYou]).toEqual(["task", 1, true]);
+    expect(drawn([listed(1), theirs])).toEqual(["1:1", "2:4"]);
+  });
+
+  it("is not marked where the chat dispatched it, and a handoff never is", () => {
+    expect(chat({}).byYou).toBe(false);
+    expect(chat({ task: false, tab: true, by_person: true }).byYou).toBe(false);
   });
 });

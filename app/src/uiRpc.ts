@@ -3463,8 +3463,8 @@ export type HandedFromNote = {
 	 */
 	workspace: string,
 	/**
-	 *  That chat's number: what the Chats section nests this one under while it is open.
-	 *  Never drawn; the note says the name.
+	 *  That chat's number: what the Chats section nests a task under while it is open, and
+	 *  names a handoff's row by (#1492). Never drawn; the note says the name.
 	 */
 	chat: number,
 	/**
@@ -3500,6 +3500,12 @@ export type HandedFromNote = {
 	 *  paused until that chat answers (#1484): its row says whom it is asking.
 	 */
 	asking?: boolean | null,
+	/**
+	 *  Whether, as a task, the person asked for it themselves from that chat's tab (#1492,
+	 *  V100-70): its row and its breadcrumb say `asked by you`. The app's own record of how it
+	 *  was started, never a word a chat said.
+	 */
+	by_person?: boolean | null,
 };
 
 /**

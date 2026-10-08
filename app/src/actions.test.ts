@@ -2694,6 +2694,17 @@ describe("stopping a chat (#1448)", () => {
     expect(rows.find((row) => row.id === stopId(1))?.title).toBe("Stop chat chat 1");
   });
 
+  it("counts no handoff as below the chat it came from", () => {
+    // #1492, V100-69: 1 handed its work off to 2, which is a session of its own.
+    const moved = [listed(1), { ...listed(2, 1), mode: "handoff" as const }];
+
+    expect(stopRows(moved, [1]).some((row) => row.id === stopBelowId(1))).toBe(false);
+    expect(by(catalogue(now({ listed: moved })), stopBelowId(1))).toMatchObject({
+      available: false,
+      reason: "chat 1 started no chat that is still running.",
+    });
+  });
+
   it("asks first: the row opens the question and stops nothing by itself", () => {
     const hands = doing();
     const offers = catalogue(now({ listed: three }));

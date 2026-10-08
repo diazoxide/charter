@@ -217,12 +217,26 @@ pub fn not_yours(of: u32) -> String {
     )
 }
 
+/// What a chat is told when it asks after a task the person started from its own tab (#1492,
+/// V100-70): the task is the person's, and the sentence says so. Said only to the chat the
+/// task's record names, which already sees it listed as theirs; every other chat is told
+/// [`not_yours`], so this says nothing of a chat to one that has nothing to do with it.
+pub fn asked_by_the_person(of: u32) -> String {
+    format!(
+        "the person asked for chat {of} themselves, from this chat's tab, so it is theirs and \
+         not this chat's to wait on, tell, answer or cancel. Nothing was sent. Its report \
+         comes to this chat when it has one."
+    )
+}
+
 /// The app's record of chat `of`'s dispatch, where `asker` dispatched it as a task; else the
 /// refusal. `record` is what the app holds for `of`, or none for a chat it does not have open.
 pub fn owned(asker: u32, of: u32, record: Option<&HandedFrom>) -> Result<&HandedFrom, String> {
-    record
-        .filter(|from| is_owner(asker, of, from))
-        .ok_or_else(|| not_yours(of))
+    match record {
+        Some(from) if is_owner(asker, of, from) => Ok(from),
+        Some(from) if is_the_persons(asker, of, from) => Err(asked_by_the_person(of)),
+        _ => Err(not_yours(of)),
+    }
 }
 
 /// **The one rule of who owns a task**: the chat its record names as its asking chat, where a
@@ -234,7 +248,18 @@ pub fn owned(asker: u32, of: u32, record: Option<&HandedFrom>) -> Result<&Handed
 /// nothing and holds no grant for the pair, and the person consented to one question, not to
 /// that chat steering the persona. It reads the report, sees the task listed, and that is all.
 fn is_owner(asker: u32, of: u32, from: &HandedFrom) -> bool {
-    from.chat == asker && from.mode == Mode::Task && asker != of && !from.by_person
+    reports_to(asker, of, from) && !from.by_person
+}
+
+/// Whether `of` is a task the person started from `asker`'s tab: `asker` owns nothing of it,
+/// and is told whose it is.
+fn is_the_persons(asker: u32, of: u32, from: &HandedFrom) -> bool {
+    reports_to(asker, of, from) && from.by_person
+}
+
+/// Whether `of`'s record names `asker` as the chat its report goes to, as a task.
+fn reports_to(asker: u32, of: u32, from: &HandedFrom) -> bool {
+    from.chat == asker && from.mode == Mode::Task && asker != of
 }
 
 /// What a chat is told when it cancels a task the person is already stopping (D-T59-j3): the
@@ -1299,7 +1324,7 @@ pub fn age_word(age: Duration) -> String {
 
 /// What a listed task the person started from this chat's tab says after its row.
 pub const STARTED_BY_THE_PERSON: &str = " · started by the person from this chat's tab: its \
-    report comes here, and it is not this chat's to wait on, tell or cancel";
+    report comes here, and it is not this chat's to wait on, tell, answer or cancel";
 
 /// A chat's list of the tasks it dispatched, as `purlis dispatch list` prints it: persona,
 /// task, where, state and age, one task a line.
@@ -1466,19 +1491,49 @@ mod tests {
     fn a_task_the_person_started_gives_the_chat_whose_tab_it_was_no_power_over_it() {
         // D-T59-j1. The record names the tab's chat, because the report goes there. That chat
         // dispatched nothing and holds no grant for the pair: every power is `owned`, so it has
-        // none of them, in the sentence any stranger is told.
+        // none of them, and is told whose the task is (#1492).
         let theirs = HandedFrom {
             by_person: true,
             ..dispatched_by(ASKER)
         };
-        assert_eq!(owned(ASKER, TASK, Some(&theirs)), Err(not_yours(TASK)));
+        assert_eq!(
+            owned(ASKER, TASK, Some(&theirs)),
+            Err(asked_by_the_person(TASK))
+        );
         assert_eq!(
             crate::dispatchtalk::down(ASKER, TASK, Some(&theirs)),
-            Err(not_yours(TASK))
+            Err(asked_by_the_person(TASK))
         );
         // And it cannot begin a cancel by another road: a cancel is recorded only for a record
         // `owned` answered, which this one is not.
         assert!(!Ledger::default().cancelling(TASK));
+    }
+
+    #[test]
+    fn a_task_the_person_asked_for_is_refused_in_words_that_say_the_person_asked() {
+        // #1492, V100-70: what `purlis dispatch cancel`, `tell` and `answer` print for it.
+        assert_eq!(
+            asked_by_the_person(TASK),
+            format!(
+                "the person asked for chat {TASK} themselves, from this chat's tab, so it is \
+                 theirs and not this chat's to wait on, tell, answer or cancel. Nothing was \
+                 sent. Its report comes to this chat when it has one."
+            )
+        );
+        // Said only to the chat its record names. Any other chat is told what a stranger is
+        // told of any chat, so the sentence says nothing to one it does not concern.
+        let theirs = HandedFrom {
+            by_person: true,
+            ..dispatched_by(ASKER)
+        };
+        assert_eq!(owned(ASKER + 1, TASK, Some(&theirs)), Err(not_yours(TASK)));
+        // The task asking after itself, and a handoff the person's word is on, are strangers.
+        assert_eq!(owned(TASK, TASK, Some(&theirs)), Err(not_yours(TASK)));
+        let moved = HandedFrom {
+            mode: Mode::Handoff,
+            ..theirs.clone()
+        };
+        assert_eq!(owned(ASKER, TASK, Some(&moved)), Err(not_yours(TASK)));
     }
 
     #[test]

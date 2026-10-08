@@ -14,6 +14,7 @@ import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from 
 import { BESIDE_ID, stopId, type Catalogued, type Offer } from "./actions";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
+import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
@@ -35,7 +36,15 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
-import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
+import {
+  ASKED_BY_YOU,
+  handedOff,
+  handedOffSaid,
+  needing,
+  parentsIn,
+  unfolded,
+  type ChatRow,
+} from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
 import { Menued } from "./Menus";
@@ -143,6 +152,12 @@ function byKeyboard(target: Element): boolean {
  * mark, and so does every row above it, where it is a button that goes to that chat. A row
  * with chats under it folds, and a folded row still wears the hand for what it hides, so a
  * fold never hides a chat that needs you.
+ *
+ * **A handoff is a row of its own at the top, never under the chat it came from** (#1492,
+ * V100-69): the work moved, and its chat is a session with its own tab. Its row says `from
+ * <chat>`, and that chat's row says `handed off to <chat>` while it is not working; a press on
+ * those words goes there. Both name the other chat as its own row does, so a rename is followed.
+ * **A task the person asked for themselves is marked `asked by you`** (V100-70).
  *
  * **A task that has finished stays under the chat that asked** (#1485), as a finished entry
  * and not a chat: its program has ended (`FinishedTasks`). They are drawn under their chat's
@@ -377,6 +392,8 @@ export function ChatsSection({
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
   const leads = useMemo(() => needing(rows, needsYou), [rows, needsYou]);
   const byNumber = useMemo(() => new Map(rows.map((row) => [row.session, row])), [rows]);
+  /** Where each chat's work went by a handoff, the newest first (#1492). */
+  const went = useMemo(() => handedOff(rows), [rows]);
   /**
    * **The chats that need the person and that the filter hides**, longest waiting first
    * (#1499): their own rows and every row above them are filtered out, so no hand is drawn
@@ -602,6 +619,7 @@ export function ChatsSection({
                   const lead = leads.get(row.session);
                   const open = opens.get(row.session);
                   const asker = row.parent === null ? undefined : byNumber.get(row.parent);
+                  const handed = went.get(row.session);
                   const above = at === 0 ? undefined : topBefore(drawn, at);
                   return [
                     // **A workspace's sessions stand together** (V100-47, a setting): its
@@ -641,7 +659,20 @@ export function ChatsSection({
                       level={row.level}
                       posinset={row.posinset}
                       setsize={row.setsize}
-                      from={row.orphaned ? row.from : null}
+                      // A handoff says the chat it came from, by what that chat is called
+                      // now, or was when it closed. A task says it only once its asker has
+                      // closed: under its asker's row, the nesting says it.
+                      from={
+                        row.mode === "handoff"
+                          ? (asker?.name ?? row.from)
+                          : row.orphaned
+                            ? row.from
+                            : null
+                      }
+                      byYou={row.byYou === true}
+                      handedTo={handed?.[0].session ?? null}
+                      handedToName={handed?.[0].name ?? null}
+                      handedMore={handed === undefined ? 0 : handed.length - 1}
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
@@ -721,8 +752,10 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
  * **Two lines** (#1499, V100-50). The first is the persona's mark, the name and the state; the
  * state's word is never cut short, and the name is, with the whole of it as its tooltip and in
  * what a screen reader is told. The second, dimmer, is what the chat is doing (`ChatRowActivity`,
- * which #1493 fills), where it works, how long it has been in its state, its own branch and
- * the closed chat it came from. **On one line the second is not drawn at all**, and what of it
+ * which #1493 fills) or, while it is not working, where its work was handed off to
+ * (`ChatRowHandedOff`, #1492); then that the person asked for it, where it works, how long it
+ * has been in its state, its own branch and the chat it came from. **On one line the second is
+ * not drawn at all**, and what of it
  * does not change is the row's tooltip: a row is never two lines squeezed into one.
  */
 const Row = memo(function Row({
@@ -743,6 +776,10 @@ const Row = memo(function Row({
   posinset,
   setsize,
   from,
+  byYou,
+  handedTo,
+  handedToName,
+  handedMore,
   tab,
   current,
   open,
@@ -777,8 +814,17 @@ const Row = memo(function Row({
   level: number;
   posinset: number;
   setsize: number;
-  /** The closed chat it came from, by name; nothing for a chat drawn under its parent. */
+  /** The chat it came from, by name: a handoff's, or a task's whose asker has closed. Nothing
+   *  for a chat drawn under its parent. */
   from: string | null;
+  /** A task the person asked for themselves, from its session's tab (V100-70). */
+  byYou: boolean;
+  /** The newest open chat its work was handed off to, and that chat's name; nothing for a chat
+   *  that handed nothing off. */
+  handedTo: number | null;
+  handedToName: string | null;
+  /** How many other open chats it handed off to. */
+  handedMore: number;
   tab: boolean;
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
@@ -818,10 +864,15 @@ const Row = memo(function Row({
   const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
   const cameFrom = from === null ? null : `from ${from}`;
+  const wentTo = handedToName === null ? null : handedOffSaid(handedToName, handedMore);
   /** What the second line says that does not change by itself: one line's tooltip. */
-  const second = [elsewhere ? workspace : null, ownBranch, cameFrom].filter(
-    (one): one is string => one !== null,
-  );
+  const second = [
+    wentTo,
+    byYou ? ASKED_BY_YOU : null,
+    elsewhere ? workspace : null,
+    ownBranch,
+    cameFrom,
+  ].filter((one): one is string => one !== null);
   return (
     <li role="none" data-level={level}>
       {open === null ? (
@@ -863,7 +914,9 @@ const Row = memo(function Row({
             data-tab={tab}
             data-lines={lines}
             title={lines === 1 && second.length > 0 ? second.join(" · ") : undefined}
-            onClick={() => onOpen(session)}
+            // The row goes to its chat, and the words that name another chat go to that one
+            // (`ChatRowHandedOff`). Enter is a press on the row itself.
+            onClick={(event) => onOpen(goesTo(event.target, event.currentTarget) ?? session)}
             onKeyDown={keys}
             // A button presses itself as Space comes up: Space is the row's own key here.
             onKeyUp={(event) => {
@@ -916,6 +969,24 @@ const Row = memo(function Row({
             {lines === 2 && (
               <span className="line two">
                 <ChatRowActivity session={session} />
+                {handedTo !== null && handedToName !== null && (
+                  <ChatRowHandedOff
+                    session={session}
+                    shell={shell}
+                    report={report}
+                    outcome={outcome}
+                    asking={asking}
+                    harness={harness}
+                    to={handedTo}
+                    name={handedToName}
+                    more={handedMore}
+                  />
+                )}
+                {byYou && (
+                  <span className="by-you" title="You asked for this task from its session's tab">
+                    {ASKED_BY_YOU}
+                  </span>
+                )}
                 {elsewhere && <span className="workspace">{workspace}</span>}
                 <StateSince clock={clock} session={session} />
                 {ownBranch !== null && (
