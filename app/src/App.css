@@ -7447,3 +7447,10 @@ textarea.ui-field {
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
 }
+
+/* The set-up of a 1Password vault's sign-in (#1527): its lines sit apart from the rows. */
+.vault-identity-change,
+.vault-signin-given,
+.vault-signin-passed {
+  margin: 0.4rem 0;
+}

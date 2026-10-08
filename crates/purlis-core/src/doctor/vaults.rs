@@ -249,13 +249,19 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
     let mut said: Vec<String> = Vec::new();
-    let (mut nowhere, mut here_only) = (false, false);
+    let (mut nowhere, mut here_only, mut kept_nowhere) = (false, false, false);
     for name in names {
         let Ok(vault) = registry::vault_in(&doc, &name) else {
             continue;
         };
         for bound in identity::held(ctx, &vault) {
-            let source = crate::personas::one_line(&bound.source);
+            // A token declared as kept in the keyring is read through no variable (#1527).
+            let kept = identity::kept(&bound.source);
+            let source = if kept {
+                "its token".to_owned()
+            } else {
+                format!("${}", crate::personas::one_line(&bound.source))
+            };
             let whereabouts = match bound.held {
                 Held::Keyring => {
                     format!(
@@ -269,11 +275,12 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
                 }
                 Held::Unset => {
                     nowhere = true;
+                    kept_nowhere |= kept;
                     "is nowhere".to_owned()
                 }
             };
             said.push(format!(
-                "'{}': ${source} {whereabouts}",
+                "'{}': {source} {whereabouts}",
                 crate::personas::one_line(&vault.name)
             ));
         }
@@ -297,6 +304,13 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
         hint.push_str(
             " A token in this environment only is found by a purlis started from it, and not \
              by the app opened from the Dock.",
+        );
+    }
+    if kept_nowhere {
+        hint.push_str(
+            " A vault that keeps its token in the keyring alone has no variable to export: in \
+             a terminal, register it again with `purlis vault add <name> --provider 1password \
+             --op-vault <NAME> --token-stdin --force`, which asks for the token.",
         );
     }
     Some(Row::warn(TOKENS, detail, hint))
@@ -632,6 +646,41 @@ mod tests {
             row.detail,
             "'kept': $OP_KEPT_TOKEN is marked as kept in the system keyring"
         );
+    }
+
+    #[test]
+    fn a_token_kept_in_the_keyring_alone_is_said_as_the_vaults_and_not_as_a_variable() {
+        // #1527: a vault that declares `"token": "keyring"` is read through no variable, so the
+        // row names no `$…`, and where this machine has none the hint has no export to offer.
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+        for name in ["made", "pulled"] {
+            plane.register(
+                name,
+                "1password",
+                json!({"op-vault": "Prod", "token": "keyring"}),
+                None,
+            );
+        }
+        let made = registry::vault(&plane.ctx, "made").unwrap();
+        crate::secrets::identity::put_in_keyring(&plane.ctx, &made, KEPT).unwrap();
+
+        let row = token_row(&plane.ctx).expect("a row");
+
+        assert_eq!(
+            row.detail,
+            "'made': its token is marked as kept in the system keyring; 'pulled': its token \
+             is nowhere"
+        );
+        assert!(
+            row.hint.ends_with(
+                "A vault that keeps its token in the keyring alone has no variable to export: \
+                 in a terminal, register it again with `purlis vault add <name> --provider \
+                 1password --op-vault <NAME> --token-stdin --force`, which asks for the token."
+            ),
+            "{}",
+            row.hint
+        );
+        assert!(!format!("{row:?}").contains(KEPT));
     }
 
     #[test]

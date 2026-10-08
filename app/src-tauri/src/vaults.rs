@@ -3,7 +3,9 @@
 use purlis_core::secrets::cmd::{self, Io, Say};
 use purlis_core::secrets::identity::{self, Held};
 use purlis_core::secrets::keyring;
+use purlis_core::secrets::onepassword;
 use purlis_core::secrets::registry::{self, Vault};
+use purlis_core::secrets::setup;
 use purlis_core::secrets::vaultcmd;
 use purlis_core::secrets::{Ctx, Env, VaultError, identity_missing};
 
@@ -216,6 +218,9 @@ pub(crate) enum IdentityHeld {
 pub(crate) struct VaultIdentity {
     pub variable: String,
     pub held: IdentityHeld,
+    /// The token is declared as kept in the keyring and read through no variable (#1527):
+    /// `variable` is then the core's word for that, and no variable's name to show.
+    pub kept: bool,
 }
 
 /// What kept a vault's contents from being read, as far as purlis can tell: what the tab says
@@ -277,6 +282,7 @@ fn identity_of(ctx: &Ctx, v: &Vault) -> Vec<VaultIdentity> {
     identity::held(ctx, v)
         .into_iter()
         .map(|b| VaultIdentity {
+            kept: identity::kept(&b.source),
             variable: b.source,
             held: match b.held {
                 Held::Keyring => IdentityHeld::Keyring,
@@ -393,7 +399,11 @@ pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
     let identity = identity_of(ctx, &v);
     let (secrets, refused) = match read(ctx, &v) {
         Ok(secrets) => (secrets, None),
-        Err(unread) if !identity.is_empty() => (Vec::new(), Some(unread)),
+        // A 1Password vault with no token of its own too (#1527): its tab is where how it
+        // signs in is changed, which a refusal alone would hide.
+        Err(unread) if !identity.is_empty() || v.provider == "1password" => {
+            (Vec::new(), Some(unread))
+        }
         Err(unread) => return Err(unread.why),
     };
     let health = match &refused {
@@ -706,6 +716,401 @@ pub(crate) fn move_identity(ctx: &Ctx, vault: &str) -> Result<VaultContents, Str
     open(ctx, vault)
 }
 
+// ---------------------------------------------------------------------------------------
+// The guided set-up of a 1Password vault's sign-in (#1527, `purlis_core::secrets::setup`).
+
+/// How long a token given to a set-up is held for it before it must be given again.
+const A_SETUP_IS_HELD_FOR: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// One set-up in progress: what the person gave at its first step, held here so that the page
+/// hands a token over **once** and never holds it between the test and the create.
+struct Pending {
+    number: u32,
+    plane: PlaneId,
+    sign_in: setup::SignIn,
+    account: Option<String>,
+    since: std::time::Instant,
+}
+
+/// The set-up the window has open, if it has one. One at a time: a new one replaces the last,
+/// whose token is dropped with it, and so does a cancel, a finished create and the time limit.
+#[derive(Default)]
+pub(crate) struct Setups {
+    held: std::sync::Mutex<Option<Pending>>,
+    made: std::sync::atomic::AtomicU32,
+}
+
+impl std::fmt::Debug for Setups {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Setups(***)")
+    }
+}
+
+/// What a set-up that is no longer held is told.
+const SETUP_GONE: &str = "This set-up is no longer held: it was left for a while, or another \
+                          was started. Give the sign-in again.";
+
+impl Setups {
+    fn held(&self) -> std::sync::MutexGuard<'_, Option<Pending>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Hold a new set-up in place of whatever was held, and answer its number.
+    fn begin(&self, plane: &PlaneId, sign_in: setup::SignIn, account: Option<String>) -> u32 {
+        let number = self.made.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        *self.held() = Some(Pending {
+            number,
+            plane: plane.clone(),
+            sign_in,
+            account,
+            since: std::time::Instant::now(),
+        });
+        number
+    }
+
+    /// What set-up `number` of `plane` was given, while it is still held.
+    fn given(
+        &self,
+        plane: &PlaneId,
+        number: u32,
+    ) -> Result<(setup::SignIn, Option<String>), String> {
+        let mut held = self.held();
+        if held
+            .as_ref()
+            .is_some_and(|p| p.since.elapsed() > A_SETUP_IS_HELD_FOR)
+        {
+            *held = None;
+        }
+        held.as_ref()
+            .filter(|p| p.number == number && p.plane == *plane)
+            .map(|p| (p.sign_in.clone(), p.account.clone()))
+            .ok_or_else(|| SETUP_GONE.to_owned())
+    }
+
+    /// Let go of set-up `number`, and of its token with it.
+    fn end(&self, number: u32) {
+        let mut held = self.held();
+        if held.as_ref().is_some_and(|p| p.number == number) {
+            *held = None;
+        }
+    }
+}
+
+/// A test or a listing that did not pass: its kind, as the vault's tab knows kinds, and the
+/// core's own sentence. Never what the provider's program printed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupFailed {
+    pub kind: UnreadFor,
+    pub why: String,
+}
+
+impl From<setup::Failed> for SetupFailed {
+    fn from(failed: setup::Failed) -> Self {
+        Self {
+            kind: match failed.kind {
+                setup::Kind::Program => UnreadFor::Program,
+                setup::Kind::TryAgain => UnreadFor::TryAgain,
+                setup::Kind::SignIn => UnreadFor::SignIn,
+                setup::Kind::Other => UnreadFor::Other,
+            },
+            why: failed.why,
+        }
+    }
+}
+
+/// One account the 1Password app on this machine is signed in to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupAccount {
+    pub address: String,
+    pub email: String,
+    /// What is pinned when it is chosen.
+    pub pin: String,
+}
+
+/// The accounts the 1Password app lists, or why they could not be listed (the address is then
+/// typed).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupAccounts {
+    pub accounts: Vec<SetupAccount>,
+    pub failed: Option<SetupFailed>,
+}
+
+/// One other vault bound to the same identity, as the person is shown it before they tick it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupAlike {
+    pub name: String,
+    pub op_vault: String,
+    pub op_item: String,
+    pub account: Option<String>,
+    /// The persona it is tagged for.
+    pub persona: Option<String>,
+    /// Which half of the registry names it: `local`, `shared` or `both`.
+    pub half: String,
+    pub held: IdentityHeld,
+    /// Whether its box starts ticked. Never for a vault the committed half names.
+    pub ticked: bool,
+    /// What the store is handed back with the name.
+    pub digest: String,
+}
+
+/// One vault the person ticked, with the digest they were shown for it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+pub(crate) struct SetupTick {
+    pub name: String,
+    pub digest: String,
+}
+
+/// The vault a set-up makes: its name, the 1Password vault its items live in, and the item
+/// (purlis's default for the vault when null).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+pub(crate) struct SetupNew {
+    pub vault: String,
+    pub op_vault: String,
+    pub op_item: Option<String>,
+}
+
+/// A set-up begun: its number, the 1Password vaults the sign-in can see (or why they could not
+/// be listed, and the name is typed), and the other vaults the token may be used for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupBegun {
+    pub setup: u32,
+    pub op_vaults: Vec<String>,
+    pub listing: Option<SetupFailed>,
+    pub alike: Vec<SetupAlike>,
+}
+
+/// What a test saw: names and counts, never a value. Or why it did not pass.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupTested {
+    pub items: u32,
+    pub item: String,
+    pub item_there: bool,
+    pub failed: Option<SetupFailed>,
+}
+
+/// A ticked vault that was not given the token.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupSkipped {
+    pub name: String,
+    /// `changed`: its settings are not the ones shown. `gone`: it is not registered, or not
+    /// bound to this identity, any more. `failed`: the keyring or the registry refused.
+    pub why: String,
+    /// The core's sentence, for `failed`.
+    pub said: Option<String>,
+}
+
+/// A vault made, or its sign-in changed: the vault as it now is, and what became of the ticks.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SetupDone {
+    pub contents: VaultContents,
+    pub marked: Vec<String>,
+    pub skipped: Vec<SetupSkipped>,
+}
+
+fn alike_shown(all: Vec<setup::Alike>) -> Vec<SetupAlike> {
+    all.into_iter()
+        .map(|a| SetupAlike {
+            name: a.name,
+            op_vault: a.op_vault,
+            op_item: a.op_item,
+            account: a.account,
+            persona: a.persona,
+            half: a.half,
+            held: match a.held {
+                Held::Keyring => IdentityHeld::Keyring,
+                Held::Environment => IdentityHeld::Environment,
+                Held::Unset => IdentityHeld::Unset,
+            },
+            ticked: a.ticked,
+            digest: a.digest,
+        })
+        .collect()
+}
+
+fn ticks_of(also: Vec<SetupTick>) -> Vec<setup::Tick> {
+    also.into_iter()
+        .map(|t| setup::Tick {
+            name: t.name,
+            digest: t.digest,
+        })
+        .collect()
+}
+
+fn done(ctx: &Ctx, vault: &str, marked: setup::Marked) -> Result<SetupDone, String> {
+    Ok(SetupDone {
+        contents: open(ctx, vault)?,
+        marked: marked.marked,
+        skipped: marked
+            .skipped
+            .into_iter()
+            .map(|(name, why)| {
+                let (why, said) = match why {
+                    setup::NotMarked::Changed => ("changed", None),
+                    setup::NotMarked::Gone => ("gone", None),
+                    setup::NotMarked::Failed(said) => ("failed", Some(said)),
+                };
+                SetupSkipped {
+                    name,
+                    why: why.to_owned(),
+                    said,
+                }
+            })
+            .collect(),
+    })
+}
+
+/// The accounts the 1Password app on this machine lists ([`setup::accounts`]).
+pub(crate) fn setup_accounts(ctx: &Ctx) -> SetupAccounts {
+    match setup::accounts(ctx) {
+        Ok(accounts) => SetupAccounts {
+            accounts: accounts
+                .into_iter()
+                .map(|a| SetupAccount {
+                    address: a.address,
+                    email: a.email,
+                    pin: a.pin,
+                })
+                .collect(),
+            failed: None,
+        },
+        Err(failed) => SetupAccounts {
+            accounts: Vec::new(),
+            failed: Some(failed.into()),
+        },
+    }
+}
+
+/// Begin a set-up with what the person gave: a token (`Some`), or the 1Password app with the
+/// account they chose. The token is cleaned and held by `setups`; the answer lists the
+/// 1Password vaults that sign-in can see and, for a token, the other vaults it may be used
+/// for: those bound as `vault` is when the set-up is for a vault that exists, those that keep a
+/// token when it is for a new one. No value is answered, and nothing is written.
+pub(crate) fn setup_begin(
+    ctx: &Ctx,
+    setups: &Setups,
+    plane: &PlaneId,
+    token: Option<&SecretValue>,
+    account: Option<&str>,
+    vault: Option<&str>,
+) -> Result<SetupBegun, String> {
+    let account = setup::clean_account(account).map_err(message_of)?;
+    let sign_in = match token {
+        Some(token) => setup::SignIn::Token(setup::clean_token(&token.0).map_err(message_of)?),
+        None => setup::SignIn::App,
+    };
+    let (op_vaults, listing) = match setup::op_vaults(ctx, &sign_in, account.as_deref()) {
+        Ok(names) => (names, None),
+        Err(failed) => (Vec::new(), Some(failed.into())),
+    };
+    let alike = match (&sign_in, vault) {
+        (setup::SignIn::App, _) => Vec::new(),
+        (_, Some(vault)) => setup::alike_of(ctx, vault),
+        (_, None) => setup::alike(ctx, &setup::kept_sources(), ""),
+    };
+    Ok(SetupBegun {
+        setup: setups.begin(plane, sign_in, account),
+        op_vaults,
+        listing,
+        alike: alike_shown(alike),
+    })
+}
+
+/// Test set-up `number` against the 1Password vault chosen, or against the one the registered
+/// vault `name` keeps its items in when none is named ([`setup::test`]): item names only,
+/// nothing registered, nothing stored.
+pub(crate) fn setup_test(
+    ctx: &Ctx,
+    setups: &Setups,
+    plane: &PlaneId,
+    number: u32,
+    name: &str,
+    op_vault: Option<&str>,
+    op_item: Option<&str>,
+) -> Result<SetupTested, String> {
+    let (sign_in, account) = setups.given(plane, number)?;
+    let place = match op_vault {
+        Some(op_vault) => setup::Place {
+            op_vault: op_vault.to_owned(),
+            op_item: op_item.map(str::to_owned),
+            account,
+        },
+        // A vault that exists is tested where its items already live.
+        None => {
+            let v = cmd::provider(ctx, name).map_err(message_of)?;
+            setup::Place {
+                op_vault: onepassword::op_vault(&v).map_err(message_of)?,
+                op_item: Some(onepassword::op_item(&v).map_err(message_of)?),
+                account,
+            }
+        }
+    };
+    Ok(match setup::test(ctx, name, &sign_in, &place) {
+        Ok(tested) => SetupTested {
+            items: counted(tested.items),
+            item: tested.item,
+            item_there: tested.item_there,
+            failed: None,
+        },
+        Err(failed) => SetupTested {
+            items: 0,
+            item: String::new(),
+            item_there: false,
+            failed: Some(failed.into()),
+        },
+    })
+}
+
+/// Make the vault set-up `number` is for and write its keyring record, in one step
+/// ([`setup::create`]). The set-up is let go of once the vault is made, and kept when it was
+/// refused, so a name that was taken can be changed without the token being given again.
+pub(crate) fn setup_create(
+    ctx: &Ctx,
+    setups: &Setups,
+    plane: &PlaneId,
+    number: u32,
+    new: &SetupNew,
+    also: Vec<SetupTick>,
+) -> Result<SetupDone, String> {
+    let (sign_in, account) = setups.given(plane, number)?;
+    let marked = setup::create(
+        ctx,
+        &setup::Request {
+            name: new.vault.clone(),
+            place: setup::Place {
+                op_vault: new.op_vault.clone(),
+                op_item: new.op_item.clone(),
+                account,
+            },
+            persona: None,
+            sign_in,
+            share: false,
+            force: false,
+            also: ticks_of(also),
+        },
+    )
+    .map_err(message_of)?;
+    setups.end(number);
+    done(ctx, &new.vault, marked)
+}
+
+/// Change how the vault `vault` signs in to what set-up `number` was given ([`setup::change`]).
+pub(crate) fn setup_change(
+    ctx: &Ctx,
+    setups: &Setups,
+    plane: &PlaneId,
+    number: u32,
+    vault: &str,
+    also: Vec<SetupTick>,
+) -> Result<SetupDone, String> {
+    let (sign_in, account) = setups.given(plane, number)?;
+    let marked = setup::change(ctx, vault, &sign_in, account.as_deref(), &ticks_of(also))
+        .map_err(message_of)?;
+    setups.end(number);
+    done(ctx, vault, marked)
+}
+
 /// What a new vault is kept in when the window does not say: the system's own credential
 /// store (#232, decision 1).
 const DEFAULT_PROVIDER: &str = "keyring";
@@ -980,6 +1385,130 @@ pub(crate) async fn vault_identity_move(
         move_identity(ctx, &vault)
     })
     .await
+}
+
+/// The accounts the 1Password app on this machine lists, for a vault that signs in through it
+/// ([`setup_accounts`]). No credential is involved and no value crosses.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_accounts(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<SetupAccounts, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| Ok(setup_accounts(ctx))).await
+}
+
+/// Begin setting up how a 1Password vault signs in ([`setup_begin`]): with a service-account
+/// token, which comes in here once and is held by the app until the set-up ends, or through
+/// the 1Password app (`token` null) with the account chosen. `vault` names the vault whose
+/// sign-in is being changed, and is null for a new one. Nothing is written, and the answer
+/// holds names only.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_begin(
+    planes: tauri::State<'_, Planes>,
+    setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    plane: PlaneId,
+    token: Option<SecretValue>,
+    account: Option<String>,
+    vault: Option<String>,
+) -> Result<SetupBegun, String> {
+    let setups = std::sync::Arc::clone(&setups);
+    let of = plane.clone();
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        setup_begin(
+            ctx,
+            &setups,
+            &of,
+            token.as_ref(),
+            account.as_deref(),
+            vault.as_deref(),
+        )
+    })
+    .await
+}
+
+/// Test a set-up before anything is registered ([`setup_test`]): purlis signs in with what was
+/// given and reads the chosen 1Password vault's item names. `op_vault` is null for a vault that
+/// exists, which is tested where its items already live. Never a value.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_test(
+    planes: tauri::State<'_, Planes>,
+    setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    plane: PlaneId,
+    setup: u32,
+    vault: String,
+    op_vault: Option<String>,
+    op_item: Option<String>,
+) -> Result<SetupTested, String> {
+    let setups = std::sync::Arc::clone(&setups);
+    let of = plane.clone();
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        setup_test(
+            ctx,
+            &setups,
+            &of,
+            setup,
+            &vault,
+            op_vault.as_deref(),
+            op_item.as_deref(),
+        )
+    })
+    .await
+}
+
+/// Make the vault `place` names, with its token in the keyring and its record, in one step
+/// ([`setup_create`]). `also` is the other vaults the person ticked, each with the digest they
+/// were shown; only those still matching are given the token. No value crosses.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_create(
+    planes: tauri::State<'_, Planes>,
+    setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    plane: PlaneId,
+    setup: u32,
+    place: SetupNew,
+    also: Vec<SetupTick>,
+) -> Result<SetupDone, String> {
+    let setups = std::sync::Arc::clone(&setups);
+    let of = plane.clone();
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        setup_create(ctx, &setups, &of, setup, &place, also)
+    })
+    .await
+}
+
+/// Change how a registered vault signs in, to what a set-up was given ([`setup_change`]): a
+/// vault bound to an environment variable comes to keep its token in the keyring, with no
+/// restart. No value crosses.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_change(
+    planes: tauri::State<'_, Planes>,
+    setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    plane: PlaneId,
+    setup: u32,
+    vault: String,
+    also: Vec<SetupTick>,
+) -> Result<SetupDone, String> {
+    let setups = std::sync::Arc::clone(&setups);
+    let of = plane.clone();
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        setup_change(ctx, &setups, &of, setup, &vault, also)
+    })
+    .await
+}
+
+/// Let go of a set-up, and of the token it was given: the dialog was cancelled or closed.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_setup_cancel(
+    setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    setup: u32,
+) -> Result<(), String> {
+    setups.end(setup);
+    Ok(())
 }
 
 /// The system clipboard, opened on first use and kept for the app's life: on X11 what a process
@@ -1960,6 +2489,261 @@ mod tests {
         for answer in &answers {
             assert!(!answer.contains(TOKEN), "{answer}");
         }
+    }
+
+    // --- #1527: the guided set-up ------------------------------------------------------- //
+
+    /// Made-up tokens: the stand-in signs in with any that holds `works`.
+    const GIVEN: &str = "fixture-word-that-works-1527-app";
+    const WRONG: &str = "fixture-word-refused-1527-app";
+
+    /// A stand-in `op` that signs in with a token holding `works`, and otherwise fails
+    /// printing the token it was handed on both streams.
+    const SIGNS_IN: &str = "case \"$OP_SERVICE_ACCOUNT_TOKEN\" in *works*) ;; *) \
+        printf '%s\n' \"$OP_SERVICE_ACCOUNT_TOKEN\"; \
+        printf '%s\n' \"$OP_SERVICE_ACCOUNT_TOKEN\" >&2; exit 1;; esac\n\
+        case \"$1 $2\" in\n\
+        'vault list') printf '%s' '[{\"name\":\"Engineering\"}]';;\n\
+        'item list') printf '%s' '[{\"title\":\"other\"}]';;\n\
+        'item get') printf '%s' '{\"fields\":[{\"label\":\"DEPLOY\",\"value\":\"x\"}]}';;\n\
+        esac";
+
+    fn id_of(ctx: &Ctx) -> PlaneId {
+        PlaneId::for_tests(&ctx.root)
+    }
+
+    /// A new vault `fresh`, its items in the 1Password vault `Engineering`.
+    fn fresh() -> SetupNew {
+        SetupNew {
+            vault: "fresh".into(),
+            op_vault: "Engineering".into(),
+            op_item: None,
+        }
+    }
+
+    #[test]
+    fn a_set_up_is_given_its_token_once_tested_and_made_and_no_answer_holds_the_token() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let mut answers = Vec::new();
+
+        let begun = setup_begin(
+            &ctx,
+            &setups,
+            &plane,
+            Some(&SecretValue::from(format!("{GIVEN}\n").as_str())),
+            None,
+            None,
+        );
+        answers.push(wire(&begun));
+        let begun = begun.unwrap();
+        assert_eq!(begun.op_vaults, ["Engineering"]);
+        assert_eq!(begun.listing, None);
+
+        let tested = setup_test(
+            &ctx,
+            &setups,
+            &plane,
+            begun.setup,
+            "fresh",
+            Some("Engineering"),
+            None,
+        );
+        answers.push(wire(&tested));
+        let tested = tested.unwrap();
+        assert_eq!(
+            (tested.items, tested.item.as_str(), tested.item_there),
+            (1, "charter-fresh", false)
+        );
+        assert_eq!(tested.failed, None);
+        // Nothing is registered by a test.
+        assert!(open(&ctx, "fresh").is_err());
+
+        let made = setup_create(&ctx, &setups, &plane, begun.setup, &fresh(), Vec::new());
+        answers.push(wire(&made));
+        let made = made.unwrap();
+        assert_eq!(made.contents.refused, None, "{made:?}");
+        assert_eq!(keys(&made.contents), ["DEPLOY"]);
+        assert_eq!(made.contents.identity.len(), 1);
+        assert!(made.contents.identity[0].kept);
+        assert_eq!(made.contents.identity[0].held, IdentityHeld::Keyring);
+        // The app lets go of the token once the vault is made.
+        assert!(setups.given(&plane, begun.setup).is_err());
+        assert!(format!("{setups:?}").len() < 20);
+
+        answers.push(wire(&list(&ctx)));
+        answers.extend(traced(&ctx).iter().map(ToString::to_string));
+        answers.push(std::fs::read_to_string(ctx.local_registry()).unwrap());
+        for answer in &answers {
+            assert!(!answer.contains(GIVEN), "{answer}");
+        }
+    }
+
+    #[test]
+    fn a_token_that_does_not_sign_in_is_said_by_kind_and_nothing_is_made_by_the_test() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let (setups, plane) = (Setups::default(), id_of(&ctx));
+
+        let begun = setup_begin(
+            &ctx,
+            &setups,
+            &plane,
+            Some(&SecretValue::from(WRONG)),
+            None,
+            None,
+        );
+        let tested = setup_test(
+            &ctx,
+            &setups,
+            &plane,
+            begun.as_ref().unwrap().setup,
+            "fresh",
+            Some("Engineering"),
+            None,
+        );
+
+        // The listing failed, so the name is typed; the test says why by kind.
+        assert!(begun.as_ref().unwrap().op_vaults.is_empty());
+        assert_eq!(
+            begun.as_ref().unwrap().listing.as_ref().map(|f| f.kind),
+            Some(UnreadFor::Other)
+        );
+        assert_eq!(
+            tested.as_ref().unwrap().failed.as_ref().map(|f| f.kind),
+            Some(UnreadFor::Other)
+        );
+        assert!(open(&ctx, "fresh").is_err());
+        assert!(!ctx.state.join(keyring::STUB_FILE).exists());
+        for answer in [wire(&begun), wire(&tested)] {
+            assert!(!answer.contains(WRONG), "{answer}");
+        }
+    }
+
+    #[test]
+    fn a_set_up_is_held_for_its_own_project_and_until_another_is_begun_or_it_is_cancelled() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let first = setup_begin(
+            &ctx,
+            &setups,
+            &plane,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+        let elsewhere = PlaneId::for_tests(dir.path());
+
+        assert!(setups.given(&elsewhere, first).is_err());
+        assert!(setups.given(&plane, first).is_ok());
+        let second = setup_begin(&ctx, &setups, &plane, None, Some("acme.1password.eu"), None)
+            .unwrap()
+            .setup;
+        assert_eq!(setups.given(&plane, first).unwrap_err(), SETUP_GONE);
+        setups.end(second);
+        assert!(setups.given(&plane, second).is_err());
+        // A create with nothing held makes nothing.
+        let refused = setup_create(&ctx, &setups, &plane, second, &fresh(), vec![]);
+        assert_eq!(refused.unwrap_err(), SETUP_GONE);
+        assert!(open(&ctx, "fresh").is_err());
+    }
+
+    #[test]
+    fn a_vault_bound_to_a_variable_is_converted_from_its_tab_and_read_at_once() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        alike(&ctx, "edge");
+        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        assert!(open(&ctx, "team").unwrap().refused.is_some());
+
+        let begun = setup_begin(
+            &ctx,
+            &setups,
+            &plane,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            Some("team"),
+        )
+        .unwrap();
+        // The other vault bound to the same variable is offered, with what would be pinned.
+        assert_eq!(begun.alike.len(), 1);
+        assert_eq!(
+            (
+                begun.alike[0].name.as_str(),
+                begun.alike[0].op_vault.as_str()
+            ),
+            ("edge", "Edge")
+        );
+        assert!(
+            begun.alike[0].ticked,
+            "this machine's own, with no token yet"
+        );
+        // Tested where the vault's items already live: no 1Password vault is named.
+        let tested = setup_test(&ctx, &setups, &plane, begun.setup, "team", None, None).unwrap();
+        assert_eq!(tested.failed, None);
+        assert_eq!(tested.item, "charter-team");
+
+        // Stored with no tick: `edge` is left alone.
+        let done = setup_change(&ctx, &setups, &plane, begun.setup, "team", vec![]).unwrap();
+
+        assert_eq!(done.contents.refused, None, "{done:?}");
+        assert_eq!(keys(&done.contents), ["DEPLOY"]);
+        assert!(done.contents.identity[0].kept);
+        assert!(done.marked.is_empty() && done.skipped.is_empty());
+        assert!(open(&ctx, "edge").unwrap().refused.is_some());
+    }
+
+    #[test]
+    fn a_tick_whose_vault_changed_since_it_was_shown_is_answered_as_skipped() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        alike(&ctx, "edge");
+        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let begun = setup_begin(
+            &ctx,
+            &setups,
+            &plane,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            Some("team"),
+        )
+        .unwrap();
+        let tick = SetupTick {
+            name: "edge".into(),
+            digest: "not-what-was-shown".into(),
+        };
+
+        let done = setup_change(&ctx, &setups, &plane, begun.setup, "team", vec![tick]).unwrap();
+
+        assert!(done.marked.is_empty());
+        assert_eq!(
+            done.skipped,
+            [SetupSkipped {
+                name: "edge".into(),
+                why: "changed".into(),
+                said: None
+            }]
+        );
+    }
+
+    #[test]
+    fn a_1password_vault_with_no_token_of_its_own_that_cannot_be_read_still_opens() {
+        // Its tab is where how it signs in is changed, so a refusal alone would hide the way out.
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, "exit 1");
+        let mut config = serde_json::Map::new();
+        config.insert("op-vault".into(), serde_json::json!("Mine"));
+        registry::add_vault(&ctx, "mine", "1password", config, None, false, false).unwrap();
+
+        let opened = open(&ctx, "mine").unwrap();
+
+        assert!(opened.identity.is_empty());
+        assert!(opened.refused.is_some());
+        assert!(opened.secrets.is_empty());
     }
 
     #[test]

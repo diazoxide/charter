@@ -2819,6 +2819,7 @@ pub fn run() {
             // The clipboard a vault's Copy writes to, and what it wrote, for the clear a minute
             // later and the one at exit.
             app.manage(vaults::SystemClipboard::default());
+            app.manage(std::sync::Arc::new(vaults::Setups::default()));
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a

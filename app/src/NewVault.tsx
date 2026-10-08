@@ -1,6 +1,8 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import type { SetupDone } from "./bindings";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
+import { VaultSignIn } from "./VaultSignIn";
 
 /**
  * The providers a new vault can be kept by, in the order they are offered, with what each means
@@ -17,7 +19,7 @@ const PROVIDERS = [
   {
     id: "1password",
     name: "1Password",
-    says: "Items in a 1Password vault, read through the op command.",
+    says: "Items in a 1Password vault, read through the op command. Asks how purlis signs in, and tests it.",
   },
   {
     id: "plain-file",
@@ -40,6 +42,11 @@ const PROVIDERS = [
  * committed — all of it is `vaultcmd::add`'s, reached through `vault_create`, so the window and a
  * terminal refuse the same things in the same words.
  *
+ * **A 1Password vault is a short guided set-up** (#1527, {@link VaultSignIn}): how purlis signs
+ * in, where the items live, a test, and then one step that registers the vault and stores its
+ * token. That part talks to the core itself, because a token is handed over once and held
+ * there, never here; it answers through `onMade` with the vault as it now is.
+ *
  * **Drawn from the settings set** (DS-3c, #1175; ADR 0037's 2026-10-04 amendment): each answer
  * is a {@link SettingRow} holding a {@link Field} or a {@link Choice}, so its line of help is
  * the box's own description, and the dialog looks like every other place charter asks.
@@ -49,6 +56,7 @@ export function NewVault({
   trouble,
   making,
   onCreate,
+  onMade,
   onCancel,
 }: {
   /** Where the vault is registered, so the dialog says so. */
@@ -58,15 +66,20 @@ export function NewVault({
   /** Whether charter is making it right now, so the answer cannot be given twice. */
   making: boolean;
   onCreate: (name: string, provider: string, opVault: string | null) => void;
+  /** A 1Password vault was made by the guided set-up: the vault as it now is, and what became
+   *  of the other vaults ticked for its token. */
+  onMade: (done: SetupDone) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<string>("keyring");
-  const [opVault, setOpVault] = useState("");
-  const needsOp = provider === "1password";
-  const ready = name.trim() !== "" && (!needsOp || opVault.trim() !== "") && !making;
+  /** Whether the guided set-up is at work in the core. */
+  const [settingUp, setSettingUp] = useState(false);
+  const guided = provider === "1password";
+  const busy = making || settingUp;
+  const ready = name.trim() !== "" && !guided && !making;
   const create = () => {
-    if (ready) onCreate(name.trim(), provider, needsOp ? opVault.trim() : null);
+    if (ready) onCreate(name.trim(), provider, null);
   };
   return (
     <Dialog.Root
@@ -74,7 +87,7 @@ export function NewVault({
       onOpenChange={(open) => {
         // Not while charter is making it: a vault made behind a closed dialog would open a tab
         // nobody asked to see, and a refusal would land where nobody is looking.
-        if (!open && !making) onCancel();
+        if (!open && !busy) onCancel();
       }}
     >
       <Dialog.Portal>
@@ -121,34 +134,37 @@ export function NewVault({
                   }))}
                   value={provider}
                   onValueChange={setProvider}
+                  disabled={settingUp}
                 />
               )}
             />
 
-            {needsOp && (
-              <SettingRow
-                label="1Password vault"
-                help="Where purlis creates this vault's items."
-                control={(ids) => (
-                  <Field kind="text" ids={ids} value={opVault} onChange={setOpVault} />
-                )}
+            {guided ? (
+              <VaultSignIn
+                plane={plane}
+                name={name}
+                onBusy={setSettingUp}
+                onDone={onMade}
+                onCancel={onCancel}
               />
-            )}
+            ) : (
+              <>
+                {trouble && (
+                  <p className="trouble" role="alert">
+                    {trouble}
+                  </p>
+                )}
 
-            {trouble && (
-              <p className="trouble" role="alert">
-                {trouble}
-              </p>
+                <SettingActions>
+                  <button type="submit" tabIndex={0} disabled={!ready}>
+                    Create vault
+                  </button>
+                  <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
+                    Cancel
+                  </button>
+                </SettingActions>
+              </>
             )}
-
-            <SettingActions>
-              <button type="submit" tabIndex={0} disabled={!ready}>
-                Create vault
-              </button>
-              <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
-                Cancel
-              </button>
-            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

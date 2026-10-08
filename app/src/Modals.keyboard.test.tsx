@@ -810,20 +810,27 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
   it("reaches every answer of New vault, its provider rows as one stop", async () => {
     // DS-3c (#1175) moved this dialog onto the settings set; the walk is the proof that the
     // move kept its keyboard order. The provider list is a radio group, one Tab stop whose
-    // rows are reached with the arrows, and 1Password's own box joins the walk when it is
-    // the chosen one.
+    // rows are reached with the arrows, and 1Password's own set-up (#1527) joins the walk
+    // when it is the chosen one: how it signs in (one stop), the token's box and its button.
     render(
-      <NewVault plane="/home/dev/plane" making={false} onCreate={() => {}} onCancel={() => {}} />,
+      <NewVault
+        plane="/home/dev/plane"
+        making={false}
+        onCreate={() => {}}
+        onMade={() => {}}
+        onCancel={() => {}}
+      />,
     );
     await userEvent.type(screen.getByLabelText("Name"), "ops");
     await userEvent.click(screen.getByRole("radio", { name: "1Password" }));
-    await userEvent.type(screen.getByLabelText("1Password vault"), "Engineering");
+    await userEvent.click(screen.getByLabelText("Service-account token"));
     expect(await reachableByKeyboard()).toEqual([
-      'input "1Password vault"',
-      'button "Create vault"',
+      'input "Service-account token"',
+      'button "Use this token"',
       'button "Cancel"',
       'input "Name"',
       'radio "1Password"',
+      'radio "A service-account token"',
     ]);
   });
 

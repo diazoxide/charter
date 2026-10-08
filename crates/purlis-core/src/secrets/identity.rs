@@ -30,6 +30,14 @@
 //! from its tab. [`unset_alike`] only NAMES the other vaults that still have none, for the tab
 //! to point at.
 //!
+//! **A vault may declare a token with no variable at all** (#1527, D-1527-1): `"token":
+//! "keyring"` says the vault is read with a service-account token purlis keeps in the keyring
+//! and names nothing else. It reads as one binding whose source is [`KEPT_SOURCE`], a word that
+//! is no variable's name and is never looked up in an environment, so everything above holds
+//! for it unchanged: the declaration may be committed, and the record, the item and the pinned
+//! program are this machine's alone. Such a vault is made, tested and given its record in one
+//! step by [`super::setup`].
+//!
 //! **A replaced token does not stay behind.** Once a new record is saved, the items the
 //! previous record named are deleted. A store that fails part way deletes what it had stored
 //! and leaves the record as it was.
@@ -99,6 +107,57 @@ pub const MARK: &str = "identity";
 /// [`MARK`]'s `held` value.
 pub const IN_KEYRING: &str = "keyring";
 
+/// The variable the 1Password CLI reads a service-account token from.
+pub const TOKEN_TARGET: &str = "OP_SERVICE_ACCOUNT_TOKEN";
+
+/// The config field that declares a token kept in the keyring and read through no variable
+/// (#1527). It names no secret and no keyring item, so it may be committed.
+pub const TOKEN: &str = "token";
+
+/// [`TOKEN`]'s one value: the keyring.
+pub const TOKEN_IN_KEYRING: &str = "keyring";
+
+/// The source a [`TOKEN`] declaration reads as: what the record's `bindings` and `ids` and the
+/// keyring item's account say where a bound vault's say its variable. The hyphens keep it from
+/// being a name `--env` accepts, and it is never looked up in an environment ([`set_here`]).
+pub const KEPT_SOURCE: &str = "service-account-token";
+
+/// Whether `source` is [`KEPT_SOURCE`]: a token that lives in the keyring and nowhere else.
+pub fn kept(source: &str) -> bool {
+    source == KEPT_SOURCE
+}
+
+/// Whether `vault` declares a token kept in the keyring ([`TOKEN`]). A 1Password vault's only:
+/// the field means nothing to another provider.
+pub fn declares_kept(vault: &Vault) -> bool {
+    vault.provider == "1password"
+        && super::config_str(&vault.config, TOKEN) == Some(TOKEN_IN_KEYRING)
+}
+
+/// The refusal for a [`TOKEN`] this purlis does not know, or `None`. A value a newer purlis
+/// wrote is refused, never read as "no token": that would read the vault as somebody else.
+pub fn token_refusal(vault: &Vault) -> Option<VaultError> {
+    let declared = vault.config.get(TOKEN).filter(|v| !v.is_null())?;
+    if vault.provider != "1password" || declared.as_str() == Some(TOKEN_IN_KEYRING) {
+        return None;
+    }
+    Some(VaultError::new(format!(
+        "vault '{}' declares a way of keeping its token that this purlis does not know. purlis \
+         will not read it as a vault with no token. Update purlis, or set it up again from the \
+         vault's tab.",
+        vault.name
+    )))
+}
+
+/// `source` as this process's environment has it, when it is set to something. Never for
+/// [`KEPT_SOURCE`], which is no variable.
+pub fn set_here(ctx: &Ctx, source: &str) -> Option<String> {
+    if kept(source) {
+        return None;
+    }
+    ctx.env.get(source).filter(|v| !v.is_empty())
+}
+
 /// The code-signing Team identifier of AgileBits' `op`, the value a signed 1Password CLI is
 /// expected to carry. It is not hard-checked — the record pins whatever `codesign` reported at
 /// move time and a later read must match THAT — but it is named here so an operator can confirm
@@ -126,15 +185,26 @@ pub struct Binding {
 
 /// The vault's identity bindings as `(target, source)` — the variable the CLI reads, and the
 /// variable this machine carries it in. Empty for a vault that declares none.
+///
+/// A vault that declares a kept token ([`declares_kept`]) reads its token through
+/// [`KEPT_SOURCE`] and through nothing else: an `env` binding of [`TOKEN_TARGET`] beside the
+/// declaration is not honoured, so no half of the registry can name a variable to read the
+/// token from instead.
 pub fn bindings(vault: &Vault) -> Vec<(String, String)> {
-    vault
+    let kept = declares_kept(vault);
+    let mut out: Vec<(String, String)> = vault
         .config
         .get("env")
         .and_then(Value::as_object)
         .into_iter()
         .flatten()
+        .filter(|(target, _)| !(kept && target.as_str() == TOKEN_TARGET))
         .map(|(target, source)| (target.clone(), super::py_str(source)))
-        .collect()
+        .collect();
+    if kept {
+        out.push((TOKEN_TARGET.to_owned(), KEPT_SOURCE.to_owned()));
+    }
+    out
 }
 
 /// The binding a move is pinned against: the `env` map, the op-vault and the account, read from
@@ -158,6 +228,11 @@ fn op_vault_of(vault: &Vault) -> Option<String> {
 
 fn account_of(vault: &Vault) -> Option<String> {
     cfg_str(vault, "account", "account")
+}
+
+/// The item the vault's secrets are kept in: the one it names, or its default.
+fn op_item_of(vault: &Vault) -> String {
+    cfg_str(vault, "op-item", "op_item").unwrap_or_else(|| format!("charter-{}", vault.name))
 }
 
 /// This machine's recorded identity for `vault`, from the LOCAL half — never the merged view, so
@@ -188,7 +263,13 @@ fn record_matches(rec: &Map<String, Value>, vault: &Vault) -> bool {
         })
         .unwrap_or_default();
     let recorded = |k: &str| rec.get(k).and_then(Value::as_str).map(str::to_owned);
-    recorded_env == env && recorded("op_vault") == op_vault && recorded("account") == account
+    // The item is pinned by every record made since #1527; an older record does not name one
+    // and is not held to it.
+    let item = !rec.contains_key("op_item") || recorded("op_item") == Some(op_item_of(vault));
+    recorded_env == env
+        && recorded("op_vault") == op_vault
+        && recorded("account") == account
+        && item
 }
 
 /// Whether this machine's registry marks `vault`'s identity as moved AND the pinned binding still
@@ -308,7 +389,7 @@ pub fn held(ctx: &Ctx, vault: &Vault) -> Vec<Binding> {
         .map(|(target, source)| {
             let held = if moved {
                 Held::Keyring
-            } else if ctx.env.get(&source).is_some_and(|v| !v.is_empty()) {
+            } else if set_here(ctx, &source).is_some() {
                 Held::Environment
             } else {
                 Held::Unset
@@ -401,7 +482,7 @@ fn new_id() -> Result<String, VaultError> {
 /// still written (the token is stored), and [`pinned_op`] then refuses every read until the
 /// token is put again where a real `op` is found, rather than resolving it from the caller's
 /// PATH. Best effort here, strict there.
-fn resolve_op_now(ctx: &Ctx) -> (String, String) {
+pub(super) fn resolve_op_now(ctx: &Ctx) -> (String, String) {
     match ctx.program("op") {
         // Where it was found, not the file behind an installer's link: the link keeps its
         // name across an upgrade. The lookup has already refused one a chat may write.
@@ -446,14 +527,41 @@ fn store_token(ctx: &Ctx, source: &str, token: &str) -> Result<String, VaultErro
     Ok(id)
 }
 
-/// Write the pinned record into this machine's half, beside whatever else it says of the vault.
-fn write_record(
-    ctx: &Ctx,
+/// Tokens stored as new items: the ids by source, for a record, and the items as `(service,
+/// account)`, to delete again if the record is never written.
+pub(super) struct Stashed {
+    pub ids: BTreeMap<String, String>,
+    pub items: Vec<(String, String)>,
+}
+
+/// Store each of `tokens` (`(source, token)`) as a new item. A keyring that fails part way has
+/// the items stored so far deleted again.
+pub(super) fn stash(ctx: &Ctx, tokens: &[(String, String)]) -> Result<Stashed, VaultError> {
+    let mut ids = BTreeMap::new();
+    let mut items: Vec<(String, String)> = Vec::new();
+    for (source, token) in tokens {
+        match store_token(ctx, source, token) {
+            Ok(id) => {
+                items.push((item_service(&id), source.clone()));
+                ids.insert(source.clone(), id);
+            }
+            Err(why) => {
+                forget(ctx, &items);
+                return Err(why);
+            }
+        }
+    }
+    Ok(Stashed { ids, items })
+}
+
+/// The pinned record of `vault` for the items `ids`: the binding as the vault has it now, the
+/// item it keeps its secrets in, and the program found now.
+pub(super) fn record_of(
     vault: &Vault,
-    ids: BTreeMap<String, String>,
+    ids: &BTreeMap<String, String>,
     op_cmd: &str,
     op_team: &str,
-) -> Result<Vec<String>, VaultError> {
+) -> Map<String, Value> {
     let (env, op_vault, account) = fingerprint(vault);
     let mut rec = Map::new();
     rec.insert("held".into(), Value::String(IN_KEYRING.into()));
@@ -470,6 +578,7 @@ fn write_record(
         "op_vault".into(),
         op_vault.map_or(Value::Null, Value::String),
     );
+    rec.insert("op_item".into(), Value::String(op_item_of(vault)));
     rec.insert("account".into(), account.map_or(Value::Null, Value::String));
     rec.insert("op_cmd".into(), Value::String(op_cmd.to_owned()));
     rec.insert("op_team".into(), Value::String(op_team.to_owned()));
@@ -481,16 +590,13 @@ fn write_record(
                 .collect(),
         ),
     );
+    rec
+}
 
-    let mut local = registry::load_local(ctx)?;
-    let vaults = object_at(&mut local, "vaults");
-    let entry = object_at(vaults, &vault.name);
-    object_at(entry, "config").insert(MARK.into(), Value::Object(rec));
-    registry::save_local(ctx, &local)?;
-
-    let sources: Vec<String> = env.into_values().collect();
+/// Record in the event log that a token of `vault` was stored. Named, never valued.
+pub(super) fn traced(ctx: &Ctx, vault: &Vault) -> Vec<String> {
+    let sources: Vec<String> = fingerprint(vault).0.into_values().collect();
     let listed: Vec<Value> = sources.iter().map(|s| Value::String(s.clone())).collect();
-    // Named, never valued: the fields are scrubbed against the tokens too.
     super::cmd::trace_secret_use(
         ctx,
         "identity-move",
@@ -500,12 +606,32 @@ fn write_record(
             ("variables", Value::Array(listed)),
         ],
     );
-    Ok(sources)
+    sources
+}
+
+/// Write the pinned record into this machine's half, beside whatever else it says of the vault.
+fn write_record(
+    ctx: &Ctx,
+    vault: &Vault,
+    ids: BTreeMap<String, String>,
+    op_cmd: &str,
+    op_team: &str,
+) -> Result<Vec<String>, VaultError> {
+    let rec = record_of(vault, &ids, op_cmd, op_team);
+    let mut local = registry::load_local(ctx)?;
+    let vaults = object_at(&mut local, "vaults");
+    let entry = object_at(vaults, &vault.name);
+    object_at(entry, "config").insert(MARK.into(), Value::Object(rec));
+    registry::save_local(ctx, &local)?;
+    Ok(traced(ctx, vault))
 }
 
 /// The object under `key` in `map`, made — or put in place of whatever else a hand-edited file
 /// held there.
-fn object_at<'a>(map: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
+pub(super) fn object_at<'a>(
+    map: &'a mut Map<String, Value>,
+    key: &str,
+) -> &'a mut Map<String, Value> {
     let slot = map
         .entry(key.to_owned())
         .or_insert_with(|| Value::Object(Map::new()));
@@ -521,7 +647,7 @@ fn object_at<'a>(map: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<Stri
 /// The vault's single identity source, for the password-box path — which stores ONE token the
 /// operator pasted and so needs exactly one. An error naming the variables when a vault declares
 /// none or several.
-fn sole_source(vault: &Vault) -> Result<String, VaultError> {
+pub(super) fn sole_source(vault: &Vault) -> Result<String, VaultError> {
     let mut sources: Vec<String> = bindings(vault).into_iter().map(|(_, s)| s).collect();
     sources.sort();
     sources.dedup();
@@ -571,7 +697,7 @@ pub fn unset_alike(ctx: &Ctx, vault: &Vault) -> Vec<String> {
 /// The keyring items this machine's record of `vault` names now, as `(service, account)`:
 /// what a new record replaces. Read from the local half whether or not the record still
 /// matches the vault's binding, since an item nothing honours is still a token in the keyring.
-fn items_recorded(ctx: &Ctx, vault: &Vault) -> Vec<(String, String)> {
+pub(super) fn items_recorded(ctx: &Ctx, vault: &Vault) -> Vec<(String, String)> {
     let Some(rec) = record(ctx, vault) else {
         return Vec::new();
     };
@@ -585,7 +711,7 @@ fn items_recorded(ctx: &Ctx, vault: &Vault) -> Vec<(String, String)> {
 
 /// Delete `items` from the keyring, best effort, and answer how many could not be deleted. A
 /// failure never refuses the store that asked: the new token is already in place.
-fn forget(ctx: &Ctx, items: &[(String, String)]) -> usize {
+pub(super) fn forget(ctx: &Ctx, items: &[(String, String)]) -> usize {
     let store = keyring::store(ctx);
     items
         .iter()
@@ -599,7 +725,11 @@ fn forget(ctx: &Ctx, items: &[(String, String)]) -> usize {
 /// **All or nothing.** A keyring that fails part way, or a record that cannot be saved, has the
 /// items stored so far deleted again and the error answered: the record is the one that was
 /// there, and no token is left that nothing refers to.
-fn keep(ctx: &Ctx, vault: &Vault, tokens: &[(String, String)]) -> Result<Vec<String>, VaultError> {
+pub(super) fn keep(
+    ctx: &Ctx,
+    vault: &Vault,
+    tokens: &[(String, String)],
+) -> Result<Vec<String>, VaultError> {
     let (op_cmd, op_team) = resolve_op_now(ctx);
     let before = items_recorded(ctx, vault);
     let mut ids = BTreeMap::new();
@@ -676,7 +806,15 @@ pub fn move_to_keyring(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultErr
     }
     let mut tokens: Vec<(String, String)> = Vec::new();
     for source in &sources {
-        match ctx.env.get(source).filter(|v| !v.is_empty()) {
+        if kept(source) {
+            return Err(VaultError::new(format!(
+                "vault '{}' keeps its token in {} and reads it through no variable, so there is \
+                 none to move. Paste the token into the vault's tab.",
+                vault.name,
+                keyring::STORE_NAME
+            )));
+        }
+        match set_here(ctx, source) {
             Some(token) => tokens.push((source.clone(), token)),
             None => {
                 return Err(VaultError::new(format!(
@@ -699,7 +837,7 @@ pub fn app_env_holds_a_token(ctx: &Ctx, vault: &Vault) -> Vec<String> {
     bindings(vault)
         .into_iter()
         .map(|(_, source)| source)
-        .filter(|source| ctx.env.get(source).is_some_and(|v| !v.is_empty()))
+        .filter(|source| set_here(ctx, source).is_some())
         .collect()
 }
 

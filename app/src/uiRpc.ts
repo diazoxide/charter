@@ -1401,6 +1401,39 @@ export const commands = {
 	 */
 	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
 	/**
+	 *  The accounts the 1Password app on this machine lists, for a vault that signs in through it
+	 *  ([`setup_accounts`]). No credential is involved and no value crosses.
+	 */
+	vaultSetupAccounts: (plane: PlaneId) => typedError<SetupAccounts, string>(__TAURI_INVOKE("vault_setup_accounts", { plane })),
+	/**
+	 *  Begin setting up how a 1Password vault signs in ([`setup_begin`]): with a service-account
+	 *  token, which comes in here once and is held by the app until the set-up ends, or through
+	 *  the 1Password app (`token` null) with the account chosen. `vault` names the vault whose
+	 *  sign-in is being changed, and is null for a new one. Nothing is written, and the answer
+	 *  holds names only.
+	 */
+	vaultSetupBegin: (plane: PlaneId, token: string | null, account: string | null, vault: string | null) => typedError<SetupBegun, string>(__TAURI_INVOKE("vault_setup_begin", { plane, token, account, vault })),
+	/**
+	 *  Test a set-up before anything is registered ([`setup_test`]): purlis signs in with what was
+	 *  given and reads the chosen 1Password vault's item names. `op_vault` is null for a vault that
+	 *  exists, which is tested where its items already live. Never a value.
+	 */
+	vaultSetupTest: (plane: PlaneId, setup: number, vault: string, opVault: string | null, opItem: string | null) => typedError<SetupTested, string>(__TAURI_INVOKE("vault_setup_test", { plane, setup, vault, opVault, opItem })),
+	/**
+	 *  Make the vault `place` names, with its token in the keyring and its record, in one step
+	 *  ([`setup_create`]). `also` is the other vaults the person ticked, each with the digest they
+	 *  were shown; only those still matching are given the token. No value crosses.
+	 */
+	vaultSetupCreate: (plane: PlaneId, setup: number, place: SetupNew, also: SetupTick[]) => typedError<SetupDone, string>(__TAURI_INVOKE("vault_setup_create", { plane, setup, place, also })),
+	/**
+	 *  Change how a registered vault signs in, to what a set-up was given ([`setup_change`]): a
+	 *  vault bound to an environment variable comes to keep its token in the keyring, with no
+	 *  restart. No value crosses.
+	 */
+	vaultSetupChange: (plane: PlaneId, setup: number, vault: string, also: SetupTick[]) => typedError<SetupDone, string>(__TAURI_INVOKE("vault_setup_change", { plane, setup, vault, also })),
+	/**  Let go of a set-up, and of the token it was given: the dialog was cancelled or closed. */
+	vaultSetupCancel: (setup: number) => typedError<null, string>(__TAURI_INVOKE("vault_setup_cancel", { setup })),
+	/**
 	 *  Make a persona: `charter persona create <name> [--role …] [--delegate-when …] [--extends …]`,
 	 *  where `parent` is `--extends` (a word TypeScript keeps for itself).
 	 * 
@@ -5641,6 +5674,103 @@ export type SettingsWhich =
 /**  `charter.local.toml` — gitignored; this machine only. */
 "local";
 
+/**  One account the 1Password app on this machine is signed in to. */
+export type SetupAccount = {
+	address: string,
+	email: string,
+	/**  What is pinned when it is chosen. */
+	pin: string,
+};
+
+/**
+ *  The accounts the 1Password app lists, or why they could not be listed (the address is then
+ *  typed).
+ */
+export type SetupAccounts = {
+	accounts: SetupAccount[],
+	failed: SetupFailed | null,
+};
+
+/**  One other vault bound to the same identity, as the person is shown it before they tick it. */
+export type SetupAlike = {
+	name: string,
+	op_vault: string,
+	op_item: string,
+	account: string | null,
+	/**  The persona it is tagged for. */
+	persona: string | null,
+	/**  Which half of the registry names it: `local`, `shared` or `both`. */
+	half: string,
+	held: IdentityHeld,
+	/**  Whether its box starts ticked. Never for a vault the committed half names. */
+	ticked: boolean,
+	/**  What the store is handed back with the name. */
+	digest: string,
+};
+
+/**
+ *  A set-up begun: its number, the 1Password vaults the sign-in can see (or why they could not
+ *  be listed, and the name is typed), and the other vaults the token may be used for.
+ */
+export type SetupBegun = {
+	setup: number,
+	op_vaults: string[],
+	listing: SetupFailed | null,
+	alike: SetupAlike[],
+};
+
+/**  A vault made, or its sign-in changed: the vault as it now is, and what became of the ticks. */
+export type SetupDone = {
+	contents: VaultContents,
+	marked: string[],
+	skipped: SetupSkipped[],
+};
+
+/**
+ *  A test or a listing that did not pass: its kind, as the vault's tab knows kinds, and the
+ *  core's own sentence. Never what the provider's program printed.
+ */
+export type SetupFailed = {
+	kind: UnreadFor,
+	why: string,
+};
+
+/**
+ *  The vault a set-up makes: its name, the 1Password vault its items live in, and the item
+ *  (purlis's default for the vault when null).
+ */
+export type SetupNew = {
+	vault: string,
+	op_vault: string,
+	op_item: string | null,
+};
+
+/**  A ticked vault that was not given the token. */
+export type SetupSkipped = {
+	name: string,
+	/**
+	 *  `changed`: its settings are not the ones shown. `gone`: it is not registered, or not
+	 *  bound to this identity, any more. `failed`: the keyring or the registry refused.
+	 */
+	why: string,
+	/**  The core's sentence, for `failed`. */
+	said: string | null,
+};
+
+/**  What a test saw: names and counts, never a value. Or why it did not pass. */
+export type SetupTested = {
+	items: number,
+	item: string,
+	item_there: boolean,
+	failed: SetupFailed | null,
+};
+
+/**  One vault the person ticked, with the digest they were shown for it. */
+export type SetupTick = {
+	name: string,
+	digest: string,
+};
+
 /**  One ask, as its row in the needs-you list draws it. */
 export type Shown = {
 	/**  The chat that asked. */
@@ -6002,6 +6132,11 @@ export type VaultHealth = {
 export type VaultIdentity = {
 	variable: string,
 	held: IdentityHeld,
+	/**
+	 *  The token is declared as kept in the keyring and read through no variable (#1527):
+	 *  `variable` is then the core's word for that, and no variable's name to show.
+	 */
+	kept: boolean,
 };
 
 /**

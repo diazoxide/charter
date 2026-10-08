@@ -26,6 +26,9 @@ pub struct AddRequest {
     pub persona: Option<String>,
     pub env: Vec<String>,
     pub token_env: Option<String>,
+    /// Read a service-account token from a prompt or standard input, test it, and keep it in
+    /// the keyring with the vault's registration, in one step ([`super::setup`], #1527).
+    pub token_stdin: bool,
     pub share: bool,
     pub force: bool,
 }
@@ -139,8 +142,131 @@ fn file_owner(ctx: &Ctx, file: &str, name: &str) -> Option<String> {
     })
 }
 
+/// `vault add --token-stdin` (#1527): the token from a prompt on a terminal, or from standard
+/// input, never from an argument or a variable. Tested first ([`setup::test`]); a test that
+/// does not pass registers nothing. Then the vault and its keyring record in one step
+/// ([`setup::create`]).
+///
+/// **Refused inside a chat before anything is read** ([`setup::in_a_chat`]): a chat is never
+/// the one supplying a vault's token.
+fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
+    use super::setup;
+    let refuse = |io: &mut dyn Io, why: String| {
+        io.say(Say::Err(why));
+        1
+    };
+    if req.provider != "1password" {
+        return refuse(
+            io,
+            "--token-stdin gives a 1Password service-account token: add --provider 1password."
+                .into(),
+        );
+    }
+    if req.token_env.as_deref().is_some_and(|t| !t.is_empty()) || !req.env.is_empty() {
+        return refuse(
+            io,
+            format!(
+                "--token-stdin keeps the token in {} and binds no variable, so it is not given \
+                 with --token-env or --env. Leave those out.",
+                super::keyring::STORE_NAME
+            ),
+        );
+    }
+    if setup::in_a_chat(ctx) {
+        return refuse(io, setup::NOT_FROM_A_CHAT.into());
+    }
+    let Some(op_vault) = req.op_vault.as_deref().filter(|v| !v.is_empty()) else {
+        return refuse(
+            io,
+            format!(
+                "--op-vault is required for a 1password vault: which 1Password vault should \
+                 purlis create its items in?\n  purlis vault add {} --provider 1password \
+                 --op-vault Engineering --token-stdin",
+                req.name
+            ),
+        );
+    };
+    if !registry::name_ok(&req.name) {
+        return refuse(io, registry::name_refusal(&req.name));
+    }
+    let given = if io.stdin_is_terminal() {
+        io.read_hidden(&format!(
+            "Service-account token for vault '{}' (not shown): ",
+            req.name
+        ))
+    } else {
+        io.read_stdin()
+    };
+    let token = match setup::clean_token(&given) {
+        Ok(token) => token,
+        Err(e) => return refuse(io, e.message),
+    };
+    drop(given);
+    let place = setup::Place {
+        op_vault: op_vault.to_owned(),
+        op_item: req.op_item.clone(),
+        account: req.account.clone(),
+    };
+    let sign_in = setup::SignIn::Token(token);
+    let tested = match setup::test(ctx, &req.name, &sign_in, &place) {
+        Ok(tested) => tested,
+        Err(failed) => {
+            io.say(Say::Err(failed.why));
+            io.say(Say::Info(
+                "  Nothing was registered and no token was stored.".into(),
+            ));
+            return 1;
+        }
+    };
+    io.say(Say::Ok(format!(
+        "Signed in to 1Password: {} item(s) in vault '{}'; item '{}' {}.",
+        tested.items,
+        crate::personas::one_line(op_vault),
+        crate::personas::one_line(&tested.item),
+        if tested.item_there {
+            "is there"
+        } else {
+            "will be made with the first secret"
+        }
+    )));
+    let made = setup::create(
+        ctx,
+        &setup::Request {
+            name: req.name.clone(),
+            place,
+            persona: req.persona.clone(),
+            sign_in,
+            share: req.share,
+            force: req.force,
+            also: Vec::new(),
+        },
+    );
+    if let Err(e) = made {
+        return refuse(io, e.message);
+    }
+    let where_ = if req.share {
+        "shared — commit vaults.json"
+    } else {
+        "local only"
+    };
+    io.say(Say::Ok(format!(
+        "Vault '{}' registered (provider: 1password) [{where_}]. Its token is in {}, and no \
+         variable is needed.",
+        req.name,
+        super::keyring::STORE_NAME
+    )));
+    io.say(Say::Info(format!(
+        "  add secrets with: purlis secret set {} <key> --stdin",
+        req.name
+    )));
+    0
+}
+
 /// `cmd_vault_add`.
 pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
+    if req.token_stdin {
+        return add_with_a_token(ctx, req, io);
+    }
     if !registry::name_ok(&req.name) {
         io.say(Say::Err(registry::name_refusal(&req.name)));
         return 1;

@@ -546,9 +546,9 @@ const VAULT_TROUBLED: VaultContents = {
   ...VAULT,
   health: { ok: false, detail: "the keyring is locked" },
   identity: [
-    { variable: "OP_SERVICE_ACCOUNT_TOKEN", held: "environment" },
-    { variable: "OP_CONNECT_TOKEN", held: "keyring" },
-    { variable: "VAULT_TOKEN", held: "unset" },
+    { variable: "OP_SERVICE_ACCOUNT_TOKEN", held: "environment", kept: false },
+    { variable: "OP_CONNECT_TOKEN", held: "keyring", kept: false },
+    { variable: "VAULT_TOKEN", held: "unset", kept: false },
   ],
   identity_in_app_env: ["OP_SERVICE_ACCOUNT_TOKEN"],
 };

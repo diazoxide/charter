@@ -16,6 +16,7 @@ import {
 import { useTabStop } from "./roving";
 import { Field, SettingActions, SettingRow } from "./settings/components";
 import { counted } from "./Vaults";
+import { saidOfTheOthers, VaultSignIn } from "./VaultSignIn";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
@@ -65,6 +66,11 @@ import { counted } from "./Vaults";
  * A tab already open hears of a store made in another ({@link STORED}) and reads again, so
  * what it points at is not stale.
  *
+ * **How a 1Password vault signs in is changed from here** (#1527): *Change how this vault signs
+ * in* opens {@link VaultSignIn} for this vault, which is also how a vault bound to an environment
+ * variable comes to keep its token in the Keychain. The token is handed to the core there and is
+ * never in this tab; the answer is the vault read again, with no restart.
+ *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
  * the secrets too.
@@ -91,6 +97,9 @@ export function VaultTab({
   const [shown, setShown] = useState<Shown>();
   const [note, setNote] = useState<{ said: string; trouble?: boolean }>();
   const [moving, setMoving] = useState(false);
+  /** Whether *Change how this vault signs in* is open, and whether the core is at work for it. */
+  const [changing, setChanging] = useState(false);
+  const [changingBusy, setChangingBusy] = useState(false);
   /** Bumped to read the vault again: Read again, and a token stored in another vault's tab. */
   const [again, setAgain] = useState(0);
   /** Whether this vault is read through a token, for the listener below to ask. */
@@ -179,7 +188,7 @@ export function VaultTab({
     const unread = answer.data.refused !== null;
     setNote({
       said: unread
-        ? `${names} is stored in the Keychain, and the vault still could not be read: the reason is above.${relaunch}`
+        ? `${sentence(names)} is stored in the Keychain, and the vault still could not be read: the reason is above.${relaunch}`
         : `Stored ${names} in the Keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
       trouble: unread || relaunch !== "",
     });
@@ -274,6 +283,21 @@ export function VaultTab({
     </>
   );
 
+  /** The way to the set-up, under what the tab says of the token: a 1Password vault's alone. */
+  const changeSignIn = contents?.provider === "1password" && (
+    <p className="vault-identity-change">
+      <button
+        type="button"
+        className="panel-view"
+        tabIndex={0}
+        disabled={moving}
+        onClick={() => setChanging(true)}
+      >
+        Change how this vault signs in
+      </button>
+    </p>
+  );
+
   return (
     <section
       className="view-pane vault-tab"
@@ -322,6 +346,7 @@ export function VaultTab({
                   onMove={() => void store("move")}
                   onAgain={() => setAgain((was) => was + 1)}
                 />
+                {changeSignIn}
                 {noted}
               </>
             )}
@@ -342,6 +367,7 @@ export function VaultTab({
               onPut={(token) => void store("put", token)}
               onMove={() => void store("move")}
             />
+            {changeSignIn}
             <div className="vault-tools">
               <div className="panel-search">
                 <Search className="node-icon" />
@@ -410,6 +436,53 @@ export function VaultTab({
         )}
       </div>
 
+      {changing && (
+        <Dialog.Root
+          open
+          onOpenChange={(open) => {
+            if (!open && !changingBusy) setChanging(false);
+          }}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="asking" />
+            <Dialog.Content
+              className="warning"
+              aria-describedby={undefined}
+              onInteractOutside={(e) => e.preventDefault()}
+            >
+              <Dialog.Title>{`How ${vault} signs in`}</Dialog.Title>
+              <VaultSignIn
+                plane={plane}
+                vault={vault}
+                name={vault}
+                onBusy={setChangingBusy}
+                onCancel={() => setChanging(false)}
+                onDone={(done) => {
+                  setChanging(false);
+                  setChangingBusy(false);
+                  setSaid({ contents: done.contents });
+                  hide();
+                  onChanged();
+                  // The other open vault tabs read again: a ticked one now has its token.
+                  window.dispatchEvent(
+                    new CustomEvent<Stored>(STORED, { detail: { plane, vault } }),
+                  );
+                  const others = saidOfTheOthers(done);
+                  const unread = done.contents.refused !== null;
+                  setNote({
+                    said: `${
+                      unread
+                        ? "How this vault signs in is stored, and the vault still could not be read: the reason is above."
+                        : "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart."
+                    }${others === "" ? "" : ` ${others}`}`,
+                    trouble: unread || done.skipped.length > 0,
+                  });
+                }}
+              />
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
       {asking?.doing === "add" && (
         <ValueDialog
           title={`Add a secret to ${vault}`}
@@ -446,9 +519,20 @@ export function VaultTab({
   );
 }
 
-/** Identity variables as the tab names them: `$OP_TEAM_TOKEN, $OP_OTHER_TOKEN`. */
+/** Identity variables as the tab names them: `$OP_TEAM_TOKEN, $OP_OTHER_TOKEN`. A token kept
+ *  in the Keychain and read through no variable (#1527) is "this vault's token". */
 function named(identity: VaultIdentity[]): string {
-  return identity.map((one) => `$${one.variable}`).join(", ");
+  return identity.map((one) => (one.kept ? "this vault's token" : `$${one.variable}`)).join(", ");
+}
+
+/** What a token is for, where a sentence says "the token for …": the variable, or the vault. */
+function tokenFor(identity: VaultIdentity[]): string {
+  return identity.every((one) => one.kept) ? "this vault" : named(identity);
+}
+
+/** `text` with its first letter in upper case, for a name that begins a sentence. */
+function sentence(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**
@@ -553,7 +637,7 @@ function IdentityPanel({
     : inKeychain
       ? KEPT_AND_UNREAD[unread ?? "other"](named(identity))
       : identity.every((one) => one.held === "unset")
-        ? `Paste the service-account token for ${named(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
+        ? `Paste the service-account token for ${tokenFor(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
         : `Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`;
   return (
     <div className="vault-identity">
@@ -567,7 +651,7 @@ function IdentityPanel({
             <input
               ref={box}
               type="password"
-              aria-label={`Token for ${named(identity)}`}
+              aria-label={`Token for ${tokenFor(identity)}`}
               placeholder="Paste the token"
               autoComplete="off"
               spellCheck={false}

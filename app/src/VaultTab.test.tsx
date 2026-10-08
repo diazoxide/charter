@@ -42,10 +42,7 @@ type Asked = { cmd: string; args: Record<string, unknown> };
  * The core: `vault_open` answers `opened`, and each write answers what `writes` says for it —
  * the vault as it now is, or an `Error` whose message is the core's refusal.
  */
-function core(
-  opened: VaultContents | Error,
-  writes: Record<string, VaultContents | string | Error> = {},
-): Asked[] {
+function core(opened: VaultContents | Error, writes: Record<string, unknown> = {}): Asked[] {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: args as Record<string, unknown> });
@@ -520,7 +517,7 @@ describe("a 1Password vault's token", () => {
   ): VaultContents {
     return contents([secret("DEPLOY", { size: null, updated: null })], {
       provider: "1password",
-      identity: [{ variable: "OP_TEAM_TOKEN", held }],
+      identity: [{ variable: "OP_TEAM_TOKEN", held, kept: false }],
       identity_in_app_env: inAppEnv,
     });
   }
@@ -637,7 +634,7 @@ describe("a 1Password vault's token", () => {
       provider: "1password",
       health: { ok: false, detail: why },
       refused: { why, kind },
-      identity: [{ variable: "OP_TEAM_TOKEN", held }],
+      identity: [{ variable: "OP_TEAM_TOKEN", held, kept: false }],
     });
   }
 
@@ -785,8 +782,8 @@ describe("a 1Password vault's token", () => {
         provider: "1password",
         refused: { why: UNSET, kind: "no-token" },
         identity: [
-          { variable: "OP_TEAM_TOKEN", held: "unset" },
-          { variable: "OP_CONNECT_TOKEN", held: "unset" },
+          { variable: "OP_TEAM_TOKEN", held: "unset", kept: false },
+          { variable: "OP_CONNECT_TOKEN", held: "unset", kept: false },
         ],
       }),
     );
@@ -859,5 +856,193 @@ describe("a 1Password vault's token", () => {
     });
 
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe("how a 1Password vault signs in, from its tab (#1527)", () => {
+  /** A made-up token. It may never be found in the document. */
+  const GIVEN = "made-up-word-for-the-tab-1527";
+
+  function onePassword(over: Partial<VaultContents> = {}): VaultContents {
+    return contents([secret("DEPLOY", { size: null, updated: null })], {
+      provider: "1password",
+      ...over,
+    });
+  }
+
+  const kept = (held: "keyring" | "unset") => [
+    { variable: "service-account-token", held, kept: true },
+  ];
+
+  it("names a token kept in the Keychain as the vault's, not as a variable", async () => {
+    core(onePassword({ identity: kept("keyring") }));
+    draw();
+    expect(
+      await screen.findByText("purlis reads this vault's token from the Keychain."),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("$service-account-token");
+  });
+
+  it("draws the box for a kept token this machine has none of, named for the vault", async () => {
+    core(
+      onePassword({
+        secrets: [],
+        count: 0,
+        identity: kept("unset"),
+        refused: { kind: "no-token", why: "vault 'ops' is read with a service-account token." },
+      }),
+    );
+    draw();
+    expect(await screen.findByLabelText("Token for this vault")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(
+      screen.getByText(/Paste the service-account token for this vault here/),
+    ).toBeInTheDocument();
+    // Nothing to move: a kept token is in no environment.
+    expect(screen.queryByRole("button", { name: /Move the token/ })).not.toBeInTheDocument();
+  });
+
+  it("offers the change for a 1Password vault only", async () => {
+    core(contents([secret("K")]));
+    draw();
+    await screen.findByRole("table", { name: "Secrets in ops" });
+    expect(
+      screen.queryByRole("button", { name: "Change how this vault signs in" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("converts a vault bound to a variable: token once, tested where it lives, stored", async () => {
+    const bound = onePassword({
+      secrets: [],
+      count: 0,
+      identity: [{ variable: "OP_TEAM_TOKEN", held: "unset", kept: false }],
+      refused: { kind: "no-token", why: "vault 'ops' is read through $OP_TEAM_TOKEN." },
+    });
+    const converted = onePassword({ identity: kept("keyring") });
+    const asked = core(bound, {
+      vault_setup_begin: {
+        setup: 3,
+        op_vaults: ["Engineering"],
+        listing: null,
+        alike: [
+          {
+            name: "edge",
+            op_vault: "Edge",
+            op_item: "charter-edge",
+            account: null,
+            persona: null,
+            half: "shared",
+            held: "unset",
+            ticked: false,
+            digest: "digest-of-edge",
+          },
+        ],
+      },
+      vault_setup_test: { items: 4, item: "charter-ops", item_there: true, failed: null },
+      vault_setup_change: {
+        contents: converted,
+        marked: [],
+        skipped: [{ name: "edge", why: "changed", said: null }],
+      },
+    });
+    const onChanged = draw();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change how this vault signs in" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "How ops signs in" });
+    await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
+    await within(dialog).findByText(/purlis has the token for this set-up/);
+
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_setup_begin",
+      args: { plane: PLANE, token: GIVEN, account: null, vault: "ops" },
+    });
+    noValueAnywhere(GIVEN);
+    // Where the items live is the vault's own: it is not asked again.
+    expect(within(dialog).queryByLabelText("1Password vault")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Name")).not.toBeInTheDocument();
+    // The committed vault bound to the same variable is listed, and starts unticked.
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "edge" }));
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(
+      "Signed in. 4 items in that 1Password vault; the item charter-ops is there.",
+    );
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_setup_test",
+      args: { plane: PLANE, setup: 3, vault: "ops", opVault: null, opItem: null },
+    });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Store" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_setup_change",
+      args: {
+        plane: PLANE,
+        setup: 3,
+        vault: "ops",
+        also: [{ name: "edge", digest: "digest-of-edge" }],
+      },
+    });
+    // The vault is read at once, with no restart, and the person is told what was skipped.
+    expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
+    expect(screen.getByText("purlis reads this vault's token from the Keychain.")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart. edge was not given the token: its settings changed after they were shown here.",
+    );
+    expect(onChanged).toHaveBeenCalled();
+    noValueAnywhere(GIVEN);
+    expect(asked.filter((one) => JSON.stringify(one.args).includes(GIVEN))).toHaveLength(1);
+  });
+
+  it("offers Store anyway beside the reason when the test did not pass", async () => {
+    core(onePassword({ identity: kept("keyring") }), {
+      vault_setup_begin: { setup: 4, op_vaults: [], listing: null, alike: [] },
+      vault_setup_test: {
+        items: 0,
+        item: "",
+        item_there: false,
+        failed: { kind: "try-again", why: "purlis could not reach 1Password." },
+      },
+    });
+    draw();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change how this vault signs in" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "How ops signs in" });
+    await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Test" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "purlis could not reach 1Password.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Store anyway" })).toBeEnabled();
+    expect(within(dialog).queryByRole("button", { name: "Store" })).not.toBeInTheDocument();
+  });
+
+  it("lets go of the token when the change is cancelled", async () => {
+    const asked = core(onePassword({ identity: kept("keyring") }), {
+      vault_setup_begin: { setup: 5, op_vaults: [], listing: null, alike: [] },
+    });
+    draw();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change how this vault signs in" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "How ops signs in" });
+    await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
+    await within(dialog).findByText(/purlis has the token for this set-up/);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(asked.at(-1)).toEqual({ cmd: "vault_setup_cancel", args: { setup: 5 } });
+    noValueAnywhere(GIVEN);
   });
 });
