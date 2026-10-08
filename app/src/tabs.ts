@@ -1340,6 +1340,205 @@ export function restoreShown(tabs: Tabs, shown: readonly number[], askedBy: Aske
 }
 
 /**
+ * **Where a task with a pane of its own is** (#1489): in a `tab` of its own, which the person
+ * asked for, or `beside` the session that asked for it, in a pane of that session's tab.
+ */
+export type Placed = "tab" | "beside";
+
+/**
+ * **Whether a task has a pane of its own, and where** (#1489): nothing for a task shown inside
+ * its session's tab or in no tab at all, which is every task until the person asks, and
+ * nothing for a chat nobody asked for. `tab` where it is its tab's own chat ({@link chatOf}),
+ * `beside` where its pane is in another chat's tab.
+ *
+ * Read off the layout, as everything about a tab is: a task with a pane is its own home
+ * ({@link homeOf}), and nothing else records it.
+ */
+export function placedOf(tabs: Tabs, chat: number, askedBy: AskedBy): Placed | undefined {
+  if (askedBy(chat) === undefined) return undefined;
+  const at = ownedIn(tabs).get(chat);
+  if (at === undefined) return undefined;
+  return chatOf(tabs, at.tab) === chat ? "tab" : "beside";
+}
+
+/**
+ * **The session a task belongs to: the home of the chat that asked for it** (#1489). Where a
+ * task with a pane of its own goes back to, and the tab whose chip still lists it. Nothing for
+ * a chat nobody asked for, and for a task whose asker has no tab in this window.
+ */
+export function sessionOf(
+  tabs: Tabs,
+  task: number,
+  askedBy: AskedBy,
+): { tab: number; pane: number; own: number } | undefined {
+  const asker = askedBy(task);
+  return asker === undefined || asker === task ? undefined : homeOf(tabs, asker, askedBy);
+}
+
+/**
+ * **Every task below chat `session` that has a pane of its own**, at any depth, by number
+ * (#1489): what a close of the session's tab has to say, and to send back.
+ */
+export function tasksPlacedBelow(
+  tabs: Tabs,
+  session: number,
+  askedBy: AskedBy,
+): { session: number; placed: Placed }[] {
+  const below = (chat: number): boolean => {
+    const seen = new Set<number>([chat]);
+    for (let at = askedBy(chat); at !== undefined && !seen.has(at); at = askedBy(at)) {
+      if (at === session) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  return [...ownedIn(tabs).keys()]
+    .filter(below)
+    .sort((one, other) => one - other)
+    .flatMap((chat) => {
+      const placed = placedOf(tabs, chat, askedBy);
+      return placed === undefined ? [] : [{ session: chat, placed }];
+    });
+}
+
+/**
+ * **`tabs` as a task leaves the pane it was shown in** (#1489): no pane goes on showing the
+ * task, **or any chat below it**. Those are at home wherever the task goes (`homeOf`), so a
+ * pane left showing one could not draw it, and the core would go on being told it is on
+ * screen there: its end held and its notifications withheld for a chat nobody can see.
+ */
+function leftBy(tabs: Tabs, task: number, askedBy: AskedBy): Tabs {
+  const goes = (shown: number): boolean => {
+    const seen = new Set<number>();
+    for (let at: number | undefined = shown; at !== undefined && !seen.has(at); at = askedBy(at)) {
+      if (at === task) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  return keepShown(tabs, (shown) => !goes(shown));
+}
+
+/**
+ * `tabs` without chat `session`'s pane, wherever it is, and without its tab where that was its
+ * only pane. **Nothing is put in front**: the caller says what is. Answers `tabs` itself for a
+ * chat with no pane.
+ */
+function withoutPaneOf(tabs: Tabs, session: number): Tabs {
+  const at = ownedIn(tabs).get(session);
+  if (at === undefined) return tabs;
+  const tab = tabs.byId[at.tab];
+  const left = without(tab.layout, at.pane);
+  if (!left) {
+    const order = tabs.order.filter((id) => id !== tab.id);
+    const byId = Object.fromEntries(order.map((id) => [id, tabs.byId[id]]));
+    return { ...tabs, byId, order, inFront: tabs.inFront === tab.id ? undefined : tabs.inFront };
+  }
+  const focused = tab.focused === at.pane ? panes(left)[0].pane : tab.focused;
+  const kept = showing({ ...tab, layout: left, focused }, tab.shows);
+  return { ...tabs, byId: { ...tabs.byId, [tab.id]: kept } };
+}
+
+/**
+ * **Moves a task to a tab of its own** (#1489, V100-38): at the strip's end, in front. It is
+ * taken out of any pane that was showing it, so one chat is in one place, and out of a split
+ * it was opened beside its session in. Its own tasks go with it: they are at home in its tab
+ * ({@link homeOf}). A task that already has its tab has it brought forward.
+ *
+ * **Nothing ends, and the session's tab is left on what it showed.** `chat`, `who` and
+ * `label` name the tab as {@link openTab} names any.
+ */
+export function moveToOwnTab(
+  tabs: Tabs,
+  task: number,
+  chat = "",
+  who: string | null = null,
+  label: string | null = null,
+  /** Who asked whom: what says which shown chats are below the task, and go with it. */
+  askedBy: AskedBy = () => undefined,
+): Tabs {
+  const at = ownedIn(tabs).get(task);
+  if (at !== undefined && chatOf(tabs, at.tab) === task) return selectTab(tabs, at.tab);
+  const front = tabs.inFront;
+  const cleared = withoutPaneOf(leftBy(tabs, task, askedBy), task);
+  return openTab({ ...cleared, inFront: cleared.inFront ?? front }, task, chat, who, label);
+}
+
+/**
+ * **Sends a task back out of its pane** (#1489): the minimise. Its tab leaves the strip, or
+ * its pane leaves the split and what shared the split takes the room. **Nothing ends**: the
+ * task is at home in its session's tab again, which shows what it showed, and its chip lists
+ * it. The front goes where closing that tab would send it ({@link closeTab}). Answers `tabs`
+ * itself for a task with no pane.
+ */
+export function sendBack(
+  tabs: Tabs,
+  task: number,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+  background: Backgrounded = nothingBackgrounded,
+): Tabs {
+  return closeChat(tabs, task, filedIn, pinned, background);
+}
+
+/**
+ * **Gives a task a pane beside its session, inside the session's tab** (#1489, V100-38): the
+ * pane it lives in ({@link sessionOf}) is split side by side, the session's chat stays where it
+ * was and the task is on the far side. The pane stops showing the task in place of its own
+ * chat, and a tab the task had of its own goes. **Nothing comes to the front and no pane takes
+ * the keyboard**: this is what a launch puts back ({@link openBeside} is the person's press).
+ *
+ * Answers `tabs` itself for a task whose session has no tab in this window, and for one that
+ * is beside its session already.
+ */
+export function placeBeside(tabs: Tabs, task: number, askedBy: AskedBy, chat?: string): Tabs {
+  const before = sessionOf(tabs, task, askedBy);
+  if (before === undefined) return tabs;
+  const had = ownedIn(tabs).get(task);
+  if (had !== undefined && had.tab === before.tab) return tabs;
+  const cleared = withoutPaneOf(leftBy(tabs, task, askedBy), task);
+  const home = sessionOf(cleared, task, askedBy);
+  if (home === undefined) return tabs;
+  const tab = cleared.byId[home.tab];
+  const pane = cleared.named.panes + 1;
+  const content: Content = {
+    kind: "session",
+    session: task,
+    chat: chat ?? chatNameOf(cleared, tab.id) ?? String(task),
+  };
+  const layout = replace(tab.layout, home.pane, (found) => ({
+    kind: "split",
+    direction: "row",
+    children: [found, { kind: "pane", pane, content }],
+  }));
+  return {
+    ...cleared,
+    byId: { ...cleared.byId, [tab.id]: { ...tab, layout } },
+    inFront: cleared.inFront ?? (tabs.inFront === undefined ? undefined : home.tab),
+    named: { ...cleared.named, panes: pane },
+  };
+}
+
+/**
+ * **Opens a task beside its session** (#1489): {@link placeBeside}, and then the session's tab
+ * is in front and the task's pane has the keyboard. A task already beside its session is
+ * focused there.
+ */
+export function openBeside(tabs: Tabs, task: number, askedBy: AskedBy, chat?: string): Tabs {
+  const placed = placeBeside(tabs, task, askedBy, chat);
+  const at = ownedIn(placed).get(task);
+  const home = sessionOf(placed, task, askedBy);
+  if (at === undefined || home === undefined || at.tab !== home.tab) return tabs;
+  const tab = placed.byId[at.tab];
+  if (tab.focused === at.pane && placed.inFront === tab.id) return placed;
+  return {
+    ...placed,
+    byId: { ...placed.byId, [tab.id]: { ...tab, focused: at.pane } },
+    inFront: tab.id,
+  };
+}
+
+/**
  * `tab` showing `shows`, kept true to the tab: only a chat pane the tab still has, and only a
  * chat other than the pane's own. A tab showing no task carries no `shows` at all, so it is
  * the value it was before any task was shown.

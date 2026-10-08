@@ -167,6 +167,19 @@ describe("the Chats list, in Settings (#1499, V100-73)", () => {
     expect(chatsListPrefs().grouped).toBe(true);
     expect(box).toBeChecked();
   });
+
+  it("opens tasks in their own tabs, off until it is turned on (#1489)", async () => {
+    render(<SettingsTab />);
+    await userEvent.click(group("Chats list"));
+
+    const box = screen.getByRole("checkbox", { name: "Open tasks in their own tabs" });
+    expect(box).not.toBeChecked();
+
+    await userEvent.click(box);
+
+    expect(chatsListPrefs().tabbed).toBe(true);
+    expect(box).toBeChecked();
+  });
 });
 
 describe("your editor, in Settings", () => {

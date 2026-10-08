@@ -551,6 +551,11 @@ pub fn left_out_at_launch(
             if chat.shows.is_some_and(|shown| gone.contains(&shown)) {
                 chat.shows = None;
             }
+            // Nor is a pane said to be beside one (#1489): its chat comes back as a tab of
+            // its own, or in the list.
+            if chat.beside.is_some_and(|beside| gone.contains(&beside)) {
+                chat.beside = None;
+            }
             chat
         })
         .collect();
@@ -3335,6 +3340,22 @@ mod tests {
         let (back, out) = left_out_at_launch(&record, |_| false);
         assert!(out.is_empty());
         assert_eq!(back.chats[0].shows, Some(TASK));
+
+        // The same for a pane beside a chat that is left out (#1489).
+        let beside = crate::reopen::Record {
+            chats: vec![
+                recorded(ASKER, None),
+                recorded(TASK, owing(Owed::Sent)),
+                crate::reopen::Chat {
+                    beside: Some(TASK),
+                    ..recorded(11, None)
+                },
+            ],
+            ..Default::default()
+        };
+        let (back, _) = left_out_at_launch(&beside, |_| true);
+        assert_eq!(back.chats.len(), 2);
+        assert_eq!(back.chats[1].beside, None);
     }
 
     #[test]

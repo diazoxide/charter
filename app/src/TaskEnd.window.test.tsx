@@ -535,7 +535,9 @@ describe("a task that has a tab of its own", () => {
     const { tree, asked } = await drawn({ 5: { working: true } }, true);
     expect(tabOf("sweep")).toBeDefined();
     // The cross says what it does, and is not drawn as one that ends a chat.
-    expect(closeOf("sweep").getAttribute("aria-label")).toBe("Send sweep back to the Chats list");
+    expect(closeOf("sweep").getAttribute("aria-label")).toBe(
+      "Send sweep back into steward 1's tab",
+    );
     expect(closeOf("sweep").className).toContain("keeps");
 
     await userEvent.click(closeOf("sweep"));

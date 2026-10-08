@@ -484,7 +484,11 @@ _Avoid_: spawn, delegate, delegation, sub-agent (that is the harness's child run
 A dispatch that expects a **report**, and the chat it starts: work done for the asking chat. It
 is listed under the asking chat, never hidden, and is shown inside its session's tab: the tab
 of the nearest chat above it that has one. Pressing the task switches that tab to it and adds
-no tab; the pane's top line then says the path (`steward 4 › talk · working`). "Task" is the
+no tab; the pane's top line then says the path (`steward 4 › talk · working`). It has a pane
+of its own only when the person asks: **a tab of its own**, drawn with the task mark, whose
+task it is and a minimise where a session's tab has its close, or a pane **beside** its
+session, inside the session's tab. The minimise **sends it back** and ends nothing; a session's
+close is the only close on the strip. "Task" is the
 word in every sentence the app shows for that chat. Its row says its state in a word
 beside a mark with a shape of its own, the same in every list: working, needs you,
 `asking <chat>`, done, failed, cancelled, or ended without a report. A chat at rest that is

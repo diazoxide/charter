@@ -170,14 +170,22 @@ describe("closing a chat with chats at work below it", () => {
     expect(asked("close_session")).toEqual([]);
   });
 
-  it("keeps them running: the chat closes, and its persona chat's tab stays", async () => {
+  it("keeps them running: the chat closes, and its persona chat goes back to the list, still open", async () => {
     const { asking, asked } = await closingTheStewardChat(ONE_RUNNING);
 
     await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 
     await waitFor(() => expect(asked("close_session")).toEqual([{ plane: PLANE, session: 4 }]));
     expect(asked("close_chat_stopping")).toEqual([]);
-    await waitFor(() => expect(tabNames()).toEqual(["check prod"]));
+    // **Its tab goes with the session's** (#1489, V100-39): a task's own tab is sent back when
+    // the session that asked closes, and the task is not ended by that. It was never closed,
+    // and the core is told it has no tab.
+    await waitFor(() =>
+      expect(within(screen.getByRole("tablist", { name: "Tabs" })).queryAllByRole("tab")).toEqual(
+        [],
+      ),
+    );
+    expect(asked("close_chat_tab")).toEqual([{ plane: PLANE, session: 9 }]);
   });
 
   it("stops them and closes in one command to the core, and their tabs go with the chat's", async () => {

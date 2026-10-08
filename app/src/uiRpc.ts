@@ -725,8 +725,9 @@ export const commands = {
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
 	/**
-	 *  The person opened a task chat's tab from the Chats section (#1447): the record keeps it,
-	 *  so a reloaded window and the next launch draw the tab again.
+	 *  The person gave a task chat a tab of its own (#1447, #1489): the record keeps it, so a
+	 *  reloaded window and the next launch draw the tab again. Sending it back is
+	 *  `close_chat_tab`. Nothing ends by either.
 	 */
 	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
 	/**
@@ -736,11 +737,17 @@ export const commands = {
 	 */
 	closeChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_chat_tab", { plane, session })),
 	/**
-	 *  Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
-	 *  (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
-	 *  put each tab back on the chat it showed.
+	 *  **Where chat `session`'s pane is and what it shows**: chat `shown` in place of its own, or
+	 *  its own again with none (#1486); and the chat whose tab the pane is in, `beside`, or none
+	 *  for a chat that is its tab's own or has no pane (#1489). The record keeps both on that
+	 *  chat's entry, so a reloaded window and the next launch put each pane back.
+	 * 
+	 *  **The one way the window says what is on screen** beside which chat is in front
+	 *  (`chat_in_front`): `Chats::looked_at` reads these, so a reported task is not ended under
+	 *  the person in any pane of the tab in front, and none of them is notified about. A window
+	 *  command only: no chat can call it.
 	 */
-	tabShows: (plane: PlaneId, session: number, shown: number | null) => typedError<null, string>(__TAURI_INVOKE("tab_shows", { plane, session, shown })),
+	tabShows: (plane: PlaneId, session: number, shown: number | null, beside: number | null) => typedError<null, string>(__TAURI_INVOKE("tab_shows", { plane, session, shown, beside })),
 	/**
 	 *  The order the chat strip draws this project's chats in, by session, so the record lists
 	 *  them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
@@ -4163,6 +4170,12 @@ export type OpenChat = {
 	 *  the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
 	 */
 	tasks_running?: number | null,
+	/**
+	 *  The chat whose tab it has a pane in, by session, where it is not its tab's own chat
+	 *  (#1489). The window puts a task back beside the session that asked for it, where that
+	 *  session has a tab; any other chat comes back as a tab of its own.
+	 */
+	beside?: number | null,
 	/**  The conversation it was resumed by, where it was. The UI says which happened. */
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */

@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import { Hand, SquareTerminal } from "lucide-react";
+import { Hand, ListTodo, SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
 import { markOf, useChatsHere, useChatsSelect } from "./chatState";
 import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
@@ -117,10 +117,18 @@ export function TabMarks({
   wrapping,
   persona,
   task,
+  taskOf,
   needs = NO_NAMES,
 }: {
   tabs: Tabs;
   id: number;
+  /**
+   * **The tab is a task's own** (#1489, V100-38): the name of the chat that asked for it, or
+   * nothing where that chat has no name to say any more. The tab then wears the task mark
+   * before its name and says whose task it is after it, dimmer (`talk · steward 4`), so it is
+   * never read as a session's tab. Left out for every other tab.
+   */
+  taskOf?: { asker: string | undefined };
   /** The task the tab shows in place of its session's own chat, by name (#1486): the label
    *  says it after the session's name, dimmer. Nothing while the tab shows its own chat. */
   task?: string;
@@ -161,7 +169,10 @@ export function TabMarks({
       {/* A shell tab's mark, before its name as a view's is: what kind of thing the tab holds,
           read before the name is. A chat that runs as a persona wears that persona's (#1449);
           one that runs as none wears nothing. */}
-      {chat !== undefined && shells.has(chat) ? (
+      {taskOf !== undefined ? (
+        /* The task mark: what kind of thing the tab holds, read before its name is (#1489). */
+        <ListTodo className="tab-mark" data-mark="task" aria-hidden="true" />
+      ) : chat !== undefined && shells.has(chat) ? (
         <SquareTerminal className="tab-mark" data-mark="shell" aria-hidden="true" />
       ) : (
         persona != null && <PersonaMark persona={persona} className="tab-mark" />
@@ -176,6 +187,21 @@ export function TabMarks({
           **Before the task's name, where the tab shows a task** (#1486): the mark is the
           session's, and beside the session's name it reads as the session's. */}
       <ChatStateMark session={chat} shell={chat !== undefined && shells.has(chat)} />
+      {/* **`talk · steward 4`, on a task's own tab** (#1489): whose task it is, dimmer. To a
+          screen reader the separator is the words it stands for. */}
+      {taskOf !== undefined && (
+        <>
+          <span className="hidden-words">, a task{taskOf.asker === undefined ? "" : " of "}</span>
+          {taskOf.asker !== undefined && (
+            <>
+              <span className="tab-task-sep" aria-hidden="true">
+                {" · "}
+              </span>
+              <span className="tab-task tab-asker">{taskOf.asker}</span>
+            </>
+          )}
+        </>
+      )}
       {/* **`steward 4 › talk`, while the tab shows a task** (#1486, V100-35). The tab is the
           session's, so the session's name stays first and the task's is the dimmer one. To a
           screen reader the separator is the words it stands for. */}

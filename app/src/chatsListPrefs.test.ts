@@ -32,19 +32,52 @@ afterEach(() => {
 describe("how the Chats list is drawn (#1499, V100-73)", () => {
   it("is two lines and one order until the person says otherwise", () => {
     expect(loadChatsList({ version: 1, regions: [] })).toEqual({
-      prefs: { lines: 2, grouped: false },
+      prefs: { lines: 2, grouped: false, tabbed: false },
       said: [],
     });
     expect(chatsListPrefs()).toEqual(DEFAULT_CHATS_LIST);
   });
 
   it("is read from the layout file, each field on its own", () => {
-    expect(loadChatsList({ chats: { lines: 1, grouped: true } }).prefs).toEqual({
+    expect(loadChatsList({ chats: { lines: 1, grouped: true, tabbed: false } }).prefs).toEqual({
       lines: 1,
       grouped: true,
+      tabbed: false,
     });
-    expect(loadChatsList({ chats: { grouped: true } }).prefs).toEqual({ lines: 2, grouped: true });
-    expect(loadChatsList({ chats: { lines: 1 } }).prefs).toEqual({ lines: 1, grouped: false });
+    expect(loadChatsList({ chats: { grouped: true, tabbed: false } }).prefs).toEqual({
+      lines: 2,
+      grouped: true,
+      tabbed: false,
+    });
+    expect(loadChatsList({ chats: { lines: 1 } }).prefs).toEqual({
+      lines: 1,
+      grouped: false,
+      tabbed: false,
+    });
+  });
+
+  it("opens a pressed task inside its session's tab until the person says otherwise (#1489)", () => {
+    expect(DEFAULT_CHATS_LIST.tabbed).toBe(false);
+    expect(loadChatsList({ chats: { tabbed: true } }).prefs).toEqual({
+      lines: 2,
+      grouped: false,
+      tabbed: true,
+    });
+    const { prefs, said } = loadChatsList({ chats: { tabbed: "always" } });
+    expect(prefs.tabbed).toBe(false);
+    expect(said.join()).toContain('"chats.tabbed" "always"');
+  });
+
+  it("writes that choice to the layout file with the others", async () => {
+    const written: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "write_layout") written.push((args as { text: string }).text);
+      return null;
+    });
+
+    setChatsListPrefs({ tabbed: true });
+    await expect.poll(() => written.length).toBe(1);
+    expect(JSON.parse(written[0]).chats).toEqual({ lines: 2, grouped: false, tabbed: true });
   });
 
   it("is the default where the file says something else, and says so", () => {
@@ -67,11 +100,11 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
   it("is what the launch started from, until it is changed", () => {
     handed({ version: 1, regions: [], chats: { lines: 1 } });
     const { result } = renderHook(() => useChatsListPrefs());
-    expect(result.current).toEqual({ lines: 1, grouped: false });
+    expect(result.current).toEqual({ lines: 1, grouped: false, tabbed: false });
 
-    act(() => setChatsListPrefs({ grouped: true }));
+    act(() => setChatsListPrefs({ grouped: true, tabbed: false }));
 
-    expect(result.current).toEqual({ lines: 1, grouped: true });
+    expect(result.current).toEqual({ lines: 1, grouped: true, tabbed: false });
   });
 
   it("is written to the layout file as it is changed, and left out of it at the default", async () => {
@@ -83,7 +116,7 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
 
     setChatsListPrefs({ lines: 1 });
     await expect.poll(() => written.length).toBe(1);
-    expect(JSON.parse(written[0]).chats).toEqual({ lines: 1, grouped: false });
+    expect(JSON.parse(written[0]).chats).toEqual({ lines: 1, grouped: false, tabbed: false });
 
     setChatsListPrefs({ lines: 2 });
     await expect.poll(() => written.length).toBe(2);
