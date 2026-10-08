@@ -26,6 +26,7 @@ mod changes;
 mod chats;
 mod clipath;
 mod curation;
+mod dispatchaway;
 mod dispatched;
 mod dispatches;
 mod dispatchgrants;
@@ -2767,6 +2768,19 @@ pub fn run() {
                         &needed.plane.clone(),
                         dispatchgrants::NEEDED,
                         &needed,
+                    );
+                })
+            });
+            // A dispatch refused while nobody was there: the window lists it in the title
+            // bar's needs-you list (#1507).
+            dispatchaway::telling({
+                let window = app.handle().clone();
+                std::sync::Arc::new(move |changed: dispatchaway::AwayRefusals| {
+                    windows::emit_for_plane(
+                        &window,
+                        &changed.plane.clone(),
+                        dispatchaway::CHANGED,
+                        &changed,
                     );
                 })
             });

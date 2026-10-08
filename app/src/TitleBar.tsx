@@ -5,6 +5,7 @@ import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
 import { NeedsYouMenu, type Needing, type PermissionAsk, type Quiet } from "./NeedsYou";
+import type { AwayItem } from "./AwayRefusals";
 import { KillSwitch } from "./KillSwitch";
 import type { Offer } from "./actions";
 
@@ -130,6 +131,11 @@ export function TitleBar({
     asks?: readonly PermissionAsk[];
     onAnswer?: (ask: PermissionAsk, option: string) => void;
     onOpen?: (ask: PermissionAsk) => void;
+    /** The dispatches refused while nobody was there (#1507), and their two answers. */
+    away?: readonly AwayItem[];
+    onAllowAway?: (item: AwayItem) => void;
+    onDismissAway?: (item: AwayItem) => void;
+    onLook?: () => void;
   };
   /**
    * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons

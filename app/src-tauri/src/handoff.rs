@@ -1734,7 +1734,19 @@ fn dispatch_it(
                     Requested::Locked(why) => {
                         return Err(dispatchdecision::Refused::Locked(why).say());
                     }
-                    Requested::Refused(why) => return Err(why),
+                    // Refused for lack of a grant with nobody there: kept for the person
+                    // to read afterwards, and the chat is told they will (#1507).
+                    Requested::Refused(why) => {
+                        return Err(crate::dispatchaway::refused(
+                            held,
+                            attended,
+                            &asking_as,
+                            to,
+                            why,
+                            workspace.as_deref(),
+                            label.as_deref(),
+                        ));
+                    }
                 }
             }
             (By::Person, Some(to)) => Some(dispatchgrant::grants_for_a_dispatched_chat(to)),

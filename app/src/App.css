@@ -3097,6 +3097,13 @@ h2.sidebar-title .node-icon {
   display: block;
   white-space: normal;
 }
+/* A dispatch refused while nobody was there (#1507): what Allow from now on allows, said
+   under the headline before the press, in the secondary text token so the headline leads. */
+.needs-you-allows {
+  margin-top: 0;
+  white-space: normal;
+  color: var(--text-secondary);
+}
 .needs-you-go {
   flex: 1;
   min-width: 0;

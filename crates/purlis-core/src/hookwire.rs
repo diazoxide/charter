@@ -5048,6 +5048,12 @@ mod tests {
             r#"{"dispatch_standing":{"chat":4}}"#,
             r#"{"dispatch_never":[{"asking":"steward","target":"devops"}]}"#,
             r#"{"dispatch_any":["steward"]}"#,
+            // #1507: the refusals kept while nobody was there, and their two answers.
+            r#"{"allow_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"chat":4,"allow_dispatch_away":{"asking":"steward","target":"devops"},"token":"t"}"#,
+            r#"{"dismiss_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"dispatch_away":{"chat":4}}"#,
+            r#"{"refused":[{"asking":"steward","target":"devops","latest":1,"times":1}]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {

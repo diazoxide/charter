@@ -518,6 +518,12 @@ target, made only in Settings; **never for this pair** is the person's refusal o
 machine, which no grant covers until they lift it.
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
+**Refused while you were away**:
+A dispatch a chat nobody was at was refused for lack of a standing grant, kept so the person
+reads of it in the needs-you list afterwards and can allow the pair from then on. One item a
+pair and workspace, attached to no chat; it is not a question and holds no dispatch.
+_Avoid_: pending dispatch, queued dispatch (nothing is waiting to start)
+
 **Headless chat**:
 A chat with no tab yet. It is listed, never hidden: its asks reach needs you, Stop and the kill
 switch reach it, like any chat's, and it gets a tab when the person opens it. Never a level-1

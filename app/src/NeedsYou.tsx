@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
+import { AwayRows, type AwayItem } from "./AwayRefusals";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
@@ -238,6 +239,10 @@ export function NeedsYouMenu({
   asks = [],
   onAnswer,
   onOpen,
+  away = [],
+  onAllowAway,
+  onDismissAway,
+  onLook,
 }: {
   items: readonly Needing[];
   /** The chats that can be waiting without saying so, across every project. */
@@ -250,6 +255,17 @@ export function NeedsYouMenu({
   onAnswer?: (ask: PermissionAsk, option: string) => void;
   /** Puts the chat that asked in front, where its own prompt shows the ask whole. */
   onOpen?: (ask: PermissionAsk) => void;
+  /**
+   * The dispatches refused while nobody was there (#1507), across every project: items of
+   * their own, attached to no chat. Counted in the hand's number and listed nowhere else.
+   */
+  away?: readonly AwayItem[];
+  /** Allow from now on: the standing grant for the one pair the item names. */
+  onAllowAway?: (item: AwayItem) => void;
+  /** Dismiss: the item goes and nothing is granted. */
+  onDismissAway?: (item: AwayItem) => void;
+  /** The list is being opened: what it shows is read again, so it is as things stand. */
+  onLook?: () => void;
 }) {
   /**
    * Whether the list is up — held here rather than left to Radix, for the show-more menu's
@@ -272,7 +288,8 @@ export function NeedsYouMenu({
   const anchor = useRef<HTMLSpanElement>(null);
   const held = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const count = items.length + asks.length;
+  const chats = items.length + asks.length;
+  const count = chats + away.length;
   const asked = count > 0;
   const none = !asked && quiet.length === 0;
   // The button appearing because a chat has just asked, as opposed to having been there when
@@ -290,9 +307,19 @@ export function NeedsYouMenu({
     if (trigger.current) trigger.current.focus();
     else if (anchor.current) moveAlong(anchor.current, false);
   }, [asked]);
-  const said = asked
-    ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
-    : quietSaid(quiet);
+  // A refusal kept while nobody was there is no chat needing you: the chat was told no and
+  // went on. Alone, the hand says what they are; beside chats, it counts things.
+  const said = !asked
+    ? quietSaid(quiet)
+    : away.length === 0
+      ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
+      : chats === 0
+        ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
+        : `${count} things need you`;
+  const show = (up: boolean) => {
+    if (up) onLook?.();
+    setOpen(up);
+  };
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
     <span
@@ -306,7 +333,7 @@ export function NeedsYouMenu({
       }}
     >
       {!none && (
-        <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
+        <Menu.Root modal={false} open={open} onOpenChange={show}>
           <Menu.Trigger asChild>
             {/* `tabIndex={0}`: WebKit leaves a `<button>` out of the tab sequence unless its
             `tabindex` is written down (`docs/ui-primitives.md`, charter-app#186), and Tauri's
@@ -320,7 +347,7 @@ export function NeedsYouMenu({
               aria-label={said}
               title={said}
               onPointerDown={(event) => event.preventDefault()}
-              onClick={() => setOpen((up) => !up)}
+              onClick={() => show(!open)}
             >
               <Hand aria-hidden="true" />
               {asked && <span className="needs-you-number">{count}</span>}
@@ -421,6 +448,7 @@ export function NeedsYouMenu({
                   </Menu.Item>
                 </Menu.Group>
               ))}
+              <AwayRows items={away} onAllow={onAllowAway} onDismiss={onDismissAway} />
               {quiet.length > 0 && (
                 <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
                   {quiet.map((one) => (

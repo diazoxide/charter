@@ -24,6 +24,11 @@
 //! **Outside a sandbox it dispatches to no other persona.** Whether the chat is sandboxed is
 //! this app's record of how it started it ([`crate::chats::Chats::confines_of`]): what its
 //! sandbox was compiled to, or nothing. No line a chat sends says so.
+//!
+//! **A refusal for lack of a grant is kept for the person** (#1507): [`refusal_of`] says which
+//! refusal an ask got, and [`crate::dispatchaway`] keeps the one a standing grant would mend,
+//! for the needs-you list. That changes nothing above: still no Notice, nothing held, and no
+//! question to the chat.
 
 use std::path::Path;
 
@@ -85,14 +90,51 @@ pub fn unattended(
     runs: Runs,
     target: &str,
 ) -> Requested {
+    match answered(root, locks, asking, runs, target) {
+        Err(said) => Requested::Refused(said),
+        Ok(Answer::Covered) => {
+            Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat(target))
+        }
+        Ok(Answer::Locked(why)) => Requested::Locked(why),
+        Ok(Answer::Refused(why)) => Requested::Refused(why.say()),
+    }
+}
+
+/// **Which refusal [`unattended`] answers that ask with**, where it refuses it for a reason
+/// the grants give ([`dispatchunattended::Refusal`]), and `None` where it does not refuse or
+/// refuses for another: what is kept for the person to read afterwards is chosen by it
+/// (#1507, [`crate::dispatchaway`]). The same read as [`unattended`]'s, and it decides
+/// nothing.
+pub fn refusal_of(
+    root: &Path,
+    locks: &Locks,
+    asking: &Asking,
+    runs: Runs,
+    target: &str,
+) -> Option<dispatchunattended::Refusal> {
+    match answered(root, locks, asking, runs, target) {
+        Ok(Answer::Refused(why)) => Some(why),
+        _ => None,
+    }
+}
+
+/// [`unattended`]'s answer before it is said: the grants' own, or the sentence of a refusal
+/// that is not theirs to give.
+fn answered(
+    root: &Path,
+    locks: &Locks,
+    asking: &Asking,
+    runs: Runs,
+    target: &str,
+) -> Result<Answer, String> {
     if !purlis_core::personas::valid_name(target) {
-        return Requested::Refused(format!(
+        return Err(format!(
             "{} is not a persona's name, so there is nothing to dispatch to.",
             purlis_core::shown::short(target)
         ));
     }
     if runs.holds_anothers {
-        return Requested::Refused(HOLDS_ANOTHERS.to_owned());
+        return Err(HOLDS_ANOTHERS.to_owned());
     }
     // No grant of one chat is read, so none can count.
     let standing = InForce::read(root, Vec::new());
@@ -105,18 +147,13 @@ pub fn unattended(
             .iter()
             .any(|pair| pair.asking == persona && pair.target == target)
     });
-    let answer = dispatchunattended::answer_of(
+    Ok(dispatchunattended::answer_of(
         dispatchgrant::covers(persona, target, &standing, locks),
         persona,
         target,
         named_by_the_project,
         runs.sandboxed,
-    );
-    match answer {
-        Answer::Covered => Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat(target)),
-        Answer::Locked(why) => Requested::Locked(why),
-        Answer::Refused(why) => Requested::Refused(why.say()),
-    }
+    ))
 }
 
 #[cfg(test)]

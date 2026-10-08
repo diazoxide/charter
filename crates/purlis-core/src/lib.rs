@@ -28,6 +28,7 @@ pub mod curation;
 pub mod datahome;
 pub mod diffscan;
 pub mod dispatch;
+pub mod dispatchaway;
 pub mod dispatchdecision;
 pub mod dispatched;
 pub mod dispatchgrant;

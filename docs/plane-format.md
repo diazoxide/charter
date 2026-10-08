@@ -275,6 +275,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`app/sandbox-blocks.json`](#appsandbox-blocksjson)
   - [`app/reopen.json`](#appreopenjson)
   - [`app/dispatches/<id>.json` — a dispatch's record](#appdispatchesidjson--a-dispatchs-record)
+  - [`app/dispatches/refused-while-away.json`](#appdispatchesrefused-while-awayjson)
   - [`app/hooks.sock`](#apphookssock)
   - [Top-level markers, gates and ledgers](#top-level-markers-gates-and-ledgers)
   - [`chat-turns/<chat>`](#chat-turnschat)
@@ -4965,7 +4966,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   tab lists them, and a session record's tab lists the ones its chat asked for.
 - **Format:** JSON, pretty-printed, trailing `\n`, mode 0600, replaced whole
   (`rewrite::replace`) under purlis's lock on the directory. `<id>` is a ULID minted when the
-  record is opened, and the only names read or written here are `<ULID>.json`. A file that is
+  record is opened, and the only names read or written as a record are `<ULID>.json`. A file that is
   not a record of this version is listed by nobody and left as it is.
 - **Keys:** `v` — `1`; `id`; `mode` — `"task"` or `"handoff"`; `asker` — the asking chat:
   `chat` (the app's number for it then), `id` (its ULID, absent for a chat given none), `name`
@@ -5085,6 +5086,63 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   open`, with no duration: it is not running, and runs again when its chat is opened.
 - **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and nothing else.
 - **Git:** gitignored (under `/.charter/`).
+
+### `app/dispatches/refused-while-away.json`
+- **What:** the dispatches a chat nobody was at was refused **for lack of a standing grant**
+  (#1507; ruling V100-29). A chat running with its harness's permission prompts off dispatches
+  under standing grants only, and is refused at once where none covers the pair: nothing is
+  asked of it and nothing is held. This file keeps that it happened, so the title bar's
+  needs-you list can say "`<persona>` wanted `<persona>` while you were away" when the person
+  is back, with **Allow from now on** and **Dismiss**. **It decides nothing**: no dispatch
+  reads it, an entry is no grant and no held dispatch, and the chat that was refused is not
+  waiting on it.
+- **One entry a pair and workspace, never one a refusal:** a second refusal of the same asking
+  persona, target persona and workspace raises `times`, moves `latest` and names the later
+  task. **At most 50 entries** a project: past that a new pair is not kept, and a pair
+  already there still counts. **An entry is dropped 30 days after its latest refusal**, from
+  every read and at the next write.
+- **Only a refusal a grant would mend is kept:** no standing grant between two different
+  personas (the project's pair nobody on this machine has reviewed included). A refusal for a
+  never, a policy lock, a limit, the loop rule, a profile that asks nobody, a chat started with
+  no sandbox, a chat on no persona, or a list of nevers that does not read is not kept.
+- **Format:** JSON, pretty-printed, trailing `\n`, mode 0600, replaced whole
+  (`rewrite::replace`) under purlis's lock on the directory.
+- **Keys:** `v` — `1`; `refused` — a list of `{"asking", "target", "workspace"?, "task"?,
+  "latest", "times"}`: `asking`, the persona the asking chat ran with, by the app's record of
+  it; `target`, the persona it asked for; `workspace`, where the asking chat worked, absent for
+  the project's root; `task`, the name of the task last refused, held to a task name's rule
+  and to 80 characters, absent where it gave none or one purlis would not draw; `latest`,
+  seconds since 1970; `times`, at least 1. **The brief is never kept**, and neither is the
+  chat's name or number.
+- **Read back with a check:** an entry is listed only where it reads as one the app would have
+  written: two different personas' names (a `"*"` is not one), a workspace and a task that draw
+  on one line within their bounds, a count of at least one, and a time not ahead of the clock.
+  One that does not is not listed and goes at the next write. A second entry for one pair and
+  workspace is not a second row. **A file that does not read lists nothing and is written
+  over**: every entry is an offer, so losing one loses no refusal and no grant. A file whose
+  `v` is another version lists nothing and is left as it is. Never read through a link.
+- **What Allow from now on writes:** the ordinary dispatch grant for you on this machine for
+  that one pair (`app/sandbox.json` `dispatch_mine`), recorded in the event log first
+  (`trust.dispatch.grant`, `level` `you`, no chat). It covers the pair in every workspace of the
+  project, as that grant does, and it starts nothing. It is made only for a pair this file
+  lists, and checked at the press: both names are personas of the project, no policy locks the
+  pair, and you have not said never to it. Nothing here writes the project's file or "any
+  persona". Every entry for the pair then goes. **By the time you look**, an entry whose pair
+  you said never to, a policy locks, a grant already covers, or whose persona is gone is taken
+  out without a word; while your list of nevers does not read, nothing is offered.
+- **Who writes it:** the app (`purlis_core::dispatchaway`, called from
+  `app/src-tauri/src/dispatchaway.rs`), from its own record of the asking chat. **No line on
+  the hook channel names an entry or answers one.** A sandboxed chat can neither read nor
+  write it: it is in `app/dispatches/`, denied for both in every harness's compiled sandbox,
+  so a chat does not read which pairs are about to be put to you. It is not a dispatch's
+  record: it is not named by a ULID, so the Dispatches tab, `purlis persona stats` and the
+  30-day sweep of records pass it by.
+- **Where the sandbox does not hold it:** in a project with no sandbox, and for a chat started
+  without it, the chat runs as you and can write this file, as it can write a grant itself
+  (`app/sandbox.json`). The check on reading and the checks at the press are what stand then.
+- **Tier:** Clone state — deleting it empties the list of what was refused while you were
+  away and changes no grant (ADR 0069).
+- **Git:** gitignored (under `/.purlis/`).
 
 ### `app/hooks.sock`
 - **Format:** a unix socket, not a file. Each chat's hooks write one JSON line to it with the

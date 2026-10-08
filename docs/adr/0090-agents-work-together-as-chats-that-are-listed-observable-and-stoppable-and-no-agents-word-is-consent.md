@@ -620,3 +620,20 @@ persona is a grant whose target is `*`.
 
 Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
 (#1506), and what a persona removed and made again under the same name inherits (V100-61).
+
+### Added 2026-10-08 (#1507): a refusal with nobody there reaches the person afterwards (V100-29)
+
+A chat nobody is at still dispatches under standing grants only, and is still refused at once
+where none covers the pair: no question is put to it, nothing is held, and no Notice is raised.
+What is new is after the fact. A refusal that was only for lack of a grant between two personas
+is kept (one entry a pair and workspace, with a count; capped; 30 days), and the title bar's
+needs-you list says "`<persona>` wanted `<persona>` while you were away", with **Allow from
+now on** and **Dismiss**.
+
+- **Allow from now on is the person's own standing grant for that one pair**, for them on this
+  machine, audited as theirs. It is the only level offered there: never the project's, never
+  "any persona". It starts nothing; the dispatch that was refused is gone.
+- The item is attached to no chat. The asking chat does not count as needing the person.
+- A never, a policy lock, a limit, the loop rule and every other refusal no grant mends are
+  not kept. A pair the person said never to by the time they look is dropped without a word.
+- The brief is not kept. The item's words are the app's, but for the task's name.
