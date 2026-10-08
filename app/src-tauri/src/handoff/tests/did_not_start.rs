@@ -347,8 +347,10 @@ fn a_task_a_launch_could_not_start_again_is_drawn_under_its_asker_and_nothing_is
     let record = dispatchrecord::read(held.root(), &it.record).expect("its record");
     assert!(record.running() && !record.did_not_start);
 
-    // The chat that asked is sent nothing at a launch.
+    // The chat that asked is sent nothing at a launch, and is flagged for nothing: a launch
+    // ends no task, so there is no failure yet for its hand to be raised over (#1491).
     assert!(left_for(held, it.steward).is_empty());
+    assert!(held.hooks().board().failed_tasks(it.steward).is_empty());
     // A wait on the task is answered at once with where it stands: not a report, and not
     // "not this chat's".
     let Waited::Running { state } = waited(held, it.steward, it.task) else {
@@ -440,6 +442,17 @@ fn ending_it_is_the_person_s_word_and_only_then_is_the_asking_chat_told_it_faile
     assert_eq!(report.summary, rows[0].report);
     assert_eq!(left_for(held, it.steward), vec![*report]);
     assert_eq!(listed_number(held, it.steward, "check prod"), it.task);
+    // And only now is it a failure the chat that asked is flagged for (#1491): named by the
+    // record its finished row carries, so going to the item finds that row.
+    assert_eq!(
+        held.hooks().board().failed_tasks(it.steward),
+        vec![purlis_core::state::FailedTask::new(
+            &it.record,
+            "check prod",
+            purlis_core::state::HowFailed::DidNotStart,
+            NOT_THE_HARNESS,
+        )]
+    );
 
     // And it ends once.
     assert!(crate::unstarted::end(held, &it.task_id).is_err());

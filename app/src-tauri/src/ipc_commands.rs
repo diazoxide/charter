@@ -85,6 +85,7 @@ macro_rules! app_commands {
                 open_shell_in_branch,
                 close_session,
                 ignore_needs_you,
+                task_failure_seen,
                 asking::pending_asks,
                 asking::answer_ask,
                 send_input,

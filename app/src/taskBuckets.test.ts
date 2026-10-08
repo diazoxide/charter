@@ -2,18 +2,29 @@ import { describe, expect, it } from "vitest";
 import { rankOf } from "./chatsList";
 import type { ShownKind } from "./shownState";
 import {
+  finishedBucketOf,
+  NO_TASKS,
+  sameBuckets,
   TASK_BUCKETS,
   TASK_BUCKET_DRAWN,
-  finishedBucketOf,
   taskBucketOf,
   taskCounts,
   taskCountsSaid,
   tasksIn,
+  type TaskCounts,
 } from "./taskBuckets";
 
-const KINDS: ShownKind[] = [
+/**
+ * **A session's tasks in four counts** (#1487, #1490, #1491): the one rule its row, its tab's
+ * chip and the explorer's line count by. Each task is in exactly one, and a zero is not said.
+ */
+
+const count = (more: Partial<TaskCounts>): TaskCounts => ({ ...NO_TASKS, ...more });
+
+const KINDS: (ShownKind | undefined)[] = [
   "working",
   "needs-you",
+  "waiting-on-tasks",
   "asking",
   "done",
   "failed",
@@ -22,16 +33,21 @@ const KINDS: ShownKind[] = [
   "reported",
   "idle",
   "unheard",
+  undefined,
 ];
 
-describe("how a session's tasks are counted", () => {
+describe("the count of an open task", () => {
   it("puts each state in the one count the ruling names for it", () => {
-    expect(Object.fromEntries(KINDS.map((kind) => [kind, taskBucketOf(kind)]))).toEqual({
+    expect(Object.fromEntries(KINDS.map((kind) => [String(kind), taskBucketOf(kind)]))).toEqual({
       working: "working",
       asking: "working",
       unheard: "working",
+      // A task that is itself waiting on its own tasks is at work.
+      "waiting-on-tasks": "working",
       "needs-you": "waiting",
       idle: "waiting",
+      // A row that says nothing yet.
+      undefined: "waiting",
       failed: "failed",
       unreported: "failed",
       done: "done",
@@ -40,50 +56,40 @@ describe("how a session's tasks are counted", () => {
     });
   });
 
-  it("calls working exactly what the Chats list ranks as at work", () => {
-    for (const kind of KINDS) expect(taskBucketOf(kind) === "working").toBe(rankOf(kind) === 1);
+  it("is working exactly where the list ranks a chat as at work", () => {
+    for (const kind of KINDS)
+      expect(taskBucketOf(kind) === "working", String(kind)).toBe(rankOf(kind) === 1);
+  });
+});
+
+describe("the count of a finished row", () => {
+  it("is failed where the task came to nothing, by the core's word for how it ended", () => {
+    for (const how of ["failed", "blocked", "unreported", "did_not_start"])
+      expect(finishedBucketOf(how), how).toBe("failed");
   });
 
-  it("counts a row that says nothing yet as waiting", () => {
-    expect(taskBucketOf(undefined)).toBe("waiting");
+  it("is done for every other end, a task the person stopped or closed among them", () => {
+    // Its row never folds, and it is no failure: the person ended it.
+    for (const how of ["done", "cancelled", "stopped_by_person"])
+      expect(finishedBucketOf(how), how).toBe("done");
   });
+});
 
-  it("counts a finished task by how it ended, and never by whether its row folds", () => {
-    expect(
-      Object.fromEntries(
-        (
-          ["done", "cancelled", "stopped_by_person", "failed", "blocked", "unreported"] as const
-        ).map((how) => [how, finishedBucketOf(how)]),
-      ),
-    ).toEqual({
-      done: "done",
-      cancelled: "done",
-      // Stopped or closed by the person: its row never folds, and it did not fail.
-      stopped_by_person: "done",
-      failed: "failed",
-      blocked: "failed",
-      unreported: "failed",
-    });
-    expect(taskCounts([], ["done", "done", "failed"])).toEqual({
-      working: 0,
-      waiting: 0,
-      failed: 1,
-      done: 2,
-    });
-  });
-
+describe("the count", () => {
   it("counts every task once", () => {
-    const counts = taskCounts(KINDS, ["done", "failed"]);
+    const counted = taskCounts(
+      ["working", "asking", "needs-you", "idle", "failed", "done"],
+      ["done", "stopped_by_person", "blocked"].map(finishedBucketOf),
+    );
 
-    expect(counts).toEqual({ working: 3, waiting: 2, failed: 3, done: 4 });
-    expect(tasksIn(counts)).toBe(KINDS.length + 2);
+    expect(counted).toEqual({ working: 2, waiting: 2, failed: 2, done: 3 });
+    expect(tasksIn(counted)).toBe(9);
+    expect(tasksIn(taskCounts(KINDS))).toBe(KINDS.length);
   });
 
-  it("says the counts in words, in their order, and nothing for a zero", () => {
-    expect(taskCountsSaid({ working: 2, waiting: 1, failed: 0, done: 3 })).toBe(
-      "2 working, 1 waiting, 3 done",
-    );
-    expect(taskCountsSaid({ working: 0, waiting: 0, failed: 0, done: 0 })).toBe("");
+  it("is the same count for the same numbers", () => {
+    expect(sameBuckets(count({ working: 1 }), count({ working: 1 }))).toBe(true);
+    expect(sameBuckets(count({ working: 1 }), count({ waiting: 1 }))).toBe(false);
   });
 
   it("draws each count with a shape of its own, the ring for work alone", () => {
@@ -91,5 +97,36 @@ describe("how a session's tasks are counted", () => {
 
     expect(shapes).toEqual(["ring", "pause", "cross", "tick"]);
     expect(new Set(shapes).size).toBe(shapes.length);
+  });
+});
+
+describe("what a surface says of a session's tasks", () => {
+  it("says each count in order, working first, and failed before done", () => {
+    expect(taskCountsSaid(count({ working: 2, waiting: 1, done: 3, failed: 1 }))).toBe(
+      "2 working · 1 waiting · 1 failed · 3 done",
+    );
+    expect(TASK_BUCKETS).toEqual(["working", "waiting", "failed", "done"]);
+  });
+
+  it("does not say a count that is zero, and says nothing of a session with no tasks", () => {
+    expect(taskCountsSaid(count({ working: 2, done: 3 }))).toBe("2 working · 3 done");
+    expect(taskCountsSaid(count({ done: 5 }))).toBe("5 done");
+    expect(taskCountsSaid(count({ failed: 1 }))).toBe("1 failed");
+    expect(taskCountsSaid(NO_TASKS)).toBe("");
+  });
+
+  it("says the same counts with the separator a surface asks for", () => {
+    expect(taskCountsSaid(count({ working: 2, waiting: 1, done: 3 }), { separator: ", " })).toBe(
+      "2 working, 1 waiting, 3 done",
+    );
+  });
+
+  it("says 6 of 6 tasks at its limit, in place of the tasks that count against it", () => {
+    const atLimit = { running: 6, limit: 6 };
+    expect(taskCountsSaid(count({ working: 5, waiting: 1, done: 3 }), { atLimit })).toBe(
+      "6 of 6 tasks · 3 done",
+    );
+    expect(taskCountsSaid(count({ working: 6 }), { atLimit })).toBe("6 of 6 tasks");
+    expect(taskCountsSaid(count({ working: 5 }), { atLimit: null })).toBe("5 working");
   });
 });

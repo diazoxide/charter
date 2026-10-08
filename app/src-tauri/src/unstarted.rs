@@ -431,7 +431,7 @@ pub(crate) fn end(held: &Held, id: &str) -> Result<(), String> {
         .map_err(|kept| kept.to_string())
         .and_then(|ended| {
             ended
-                .then_some(())
+                .then(|| record.id.clone())
                 .ok_or_else(|| "its dispatch's record had already ended".to_owned())
         }),
         // A task from before dispatches kept records: one is written for it now, under the
@@ -461,18 +461,23 @@ pub(crate) fn end(held: &Held, id: &str) -> Result<(), String> {
             if let Some(conversation) = conversation.as_deref() {
                 let _ = dispatchrecord::ended_in(root, &record.id, conversation);
             }
+            record.id
         }),
     };
-    if let Err(why) = ended {
-        // Still a task waiting to start, as it was: nothing ended, so nothing is forgotten.
-        held.chats().keep_waiting(taken);
-        held.rows_changed();
-        return Err(format!(
-            "'{}' could not be ended ({why}). It is still recorded, and will be tried again at \
-             the next launch.",
-            task.name
-        ));
-    }
+    let record = match ended {
+        Ok(record) => record,
+        Err(why) => {
+            // Still a task waiting to start, as it was: nothing ended, so nothing is
+            // forgotten.
+            held.chats().keep_waiting(taken);
+            held.rows_changed();
+            return Err(format!(
+                "'{}' could not be ended ({why}). It is still recorded, and will be tried again \
+                 at the next launch.",
+                task.name
+            ));
+        }
+    };
     tracing::info!(
         "purlis: the person ended task '{}', which did not start again ({})",
         task.name,
@@ -490,5 +495,20 @@ pub(crate) fn end(held: &Held, id: &str) -> Result<(), String> {
         },
         &task.why,
     );
+    // **Only now is it a failure the chat that asked is flagged for** (#1491, V100-15): the
+    // person ended it. A launch ends nothing and so flags nothing (D-1497-14); until this,
+    // the task was waiting to start and its row said so. Named by its dispatch record, as
+    // its finished row is, so going to the item finds that row.
+    if held.chats().shown_name(task.asker).is_some() {
+        held.task_failed(
+            task.asker,
+            purlis_core::state::FailedTask::new(
+                &record,
+                &task.name,
+                purlis_core::state::HowFailed::DidNotStart,
+                &task.why,
+            ),
+        );
+    }
     Ok(())
 }

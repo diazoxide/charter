@@ -3,6 +3,7 @@ import {
   Circle,
   Ellipsis,
   Hand,
+  Hourglass,
   MessageCircleQuestion,
   Minus,
   Pause,
@@ -24,6 +25,7 @@ import { property } from "./theme/theme";
 export const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
   ring: Circle,
   hand: Hand,
+  hourglass: Hourglass,
   question: MessageCircleQuestion,
   tick: Check,
   cross: X,

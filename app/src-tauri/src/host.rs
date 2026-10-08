@@ -248,6 +248,19 @@ pub trait ChatBoard: Send + Sync {
     /// Chat `session`'s report reached the chat that asked for it (#1448): the turn it is in
     /// ends without a needs-you item. Nothing a reader sees changes now.
     fn reported_to_its_asker(&self, session: u32);
+
+    /// What chat `session` waited on is over, and nothing will prompt it (#1491): the end of
+    /// turn that was held for its tasks, or for its asker's answer, is the needs-you item now.
+    /// Nothing when no reader would see a difference.
+    fn rested(&self, session: u32) -> Option<Moved>;
+
+    /// A task chat `session` asked for failed, ended without a report, or did not start
+    /// (#1491): a needs-you item on it. Nothing when no reader would see a difference.
+    fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) -> Option<Moved>;
+
+    /// The person looked at failure `id` of chat `session`, or cleared its row (#1491): that
+    /// one item goes. Nothing when no reader would see a difference.
+    fn failure_cleared(&self, session: u32, id: &str) -> Option<Moved>;
 }
 
 /// A session host that runs nothing, for a test of what sits above the seam.

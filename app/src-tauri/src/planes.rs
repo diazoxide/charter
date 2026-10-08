@@ -706,12 +706,29 @@ impl Held {
     /// work are the person's choice, asked before the close ([`Self::close_chat_stopping`]),
     /// and where they are kept their reports go to the workspace this chat asked from.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        // The chat above it, read before it goes: it is told and looked at once the lock is
+        // let go (#1491).
+        let above = self.chats.handed_from(session).map(|from| from.chat);
         let closed = {
             let deciding = self.chats.deciding();
             self.close_chat_held(session, &deciding)
         };
         self.stops_carry_on();
+        self.told_of_a_close(above);
         closed
+    }
+
+    /// A chat started by chat `above` has closed, and the lock its close held is let go:
+    /// `above` is typed purlis's line where something was left for it and it takes one (the
+    /// word that the person stopped a task of its), and it and every chat above it are looked
+    /// at as chats that may have nothing left to wait on (`crate::dispatched::settle`, #1491).
+    /// The close itself looked already, under its lock, where nothing could be typed.
+    fn told_of_a_close(&self, above: Option<u32>) {
+        if let Some(above) = above
+            && !self.chats.ending()
+        {
+            crate::dispatched::told_or_settled(self, above);
+        }
     }
 
     /// What a stop asked for while a close held the deciding lock is carried out now that it
@@ -768,6 +785,7 @@ impl Held {
     /// Answers every chat this closed now: `session`, where it was. The chats below end as
     /// their stops do, each after its one short turn, and the window is told of each.
     pub fn close_chat_stopping(&self, session: u32, close: bool) -> Vec<u32> {
+        let above = self.chats.handed_from(session).map(|from| from.chat);
         let mut closed = Vec::new();
         {
             let deciding = self.chats.deciding();
@@ -782,6 +800,9 @@ impl Held {
             }
         }
         self.stops_carry_on();
+        if close {
+            self.told_of_a_close(above);
+        }
         closed
     }
 
@@ -821,6 +842,9 @@ impl Held {
             .and_then(|chat| chat.identity.id);
         // While its record is still here: who asked for it is read, so a wait on it says how
         // it ended (#1441).
+        // And the chat above it, whatever started it: its held end is looked at once this
+        // one has gone (#1491).
+        let above = self.chats.handed_from(session).map(|from| from.chat);
         let task_of = self
             .chats
             .handed_from(session)
@@ -835,6 +859,16 @@ impl Held {
         self.unattended.forget(session);
         // Nothing else is remembered of it, and a command waiting on it is told (#1441).
         crate::dispatched::closed(self, session, task_of);
+        // **Whatever waited on it waits no more** (#1491): the chat that asked for it and
+        // every chat above that one may have held an end of turn for it, and a task of its
+        // own may have been paused on a question to it. However it went: stopped, closed,
+        // ended at its report, or a chat in the middle of a chain. Nothing is typed here.
+        if let Some(above) = above {
+            crate::dispatched::settle_above(self, above);
+        }
+        for (task, _) in self.chats.tasks_of(session) {
+            crate::dispatched::settle(self, task);
+        }
         // Its spool key does not outlive it (V99i): what its hooks spooled is recorded first.
         self.hooks.chat_ended(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
@@ -958,16 +992,51 @@ impl Held {
     /// A chat `session` handed work to, shown as `from`, has reported back to it, and the
     /// window is told (charter-app#259). Nothing is typed into the chat, and it is no needs-you
     /// item: a report is the asking chat's to read (#1448).
+    ///
+    /// **It changes what the asking chat's row counts, and interrupts nobody** (#1491,
+    /// V100-15): the move is told as one that only counts (`Moved::interrupts`), so no system
+    /// notification is sent for a task that finished, whatever else that chat needs the
+    /// person for.
     pub fn reported_back(&self, session: u32, from: &str) {
         if let Some(moved) = self.board().reported_back(session, from) {
-            (self.tell)(moved);
+            (self.tell)(moved.counting_only());
         }
     }
 
     /// The operator stopped `from`, a chat `session` started, and the window is told (#1448):
     /// the row says so. Nothing is typed into the chat, and it is no needs-you item.
+    /// A count on its row and no interruption, as a report is ([`Self::reported_back`]).
     pub fn stopped_below(&self, session: u32, from: &str) {
         if let Some(moved) = self.board().stopped_below(session, from) {
+            (self.tell)(moved.counting_only());
+        }
+    }
+
+    /// **A task chat `session` asked for failed, ended without a report, or did not start**
+    /// (#1491, V100-15): a needs-you item on `session` that says which task and why, whatever
+    /// it and its other tasks are doing, and the window is told. The one place such an item is
+    /// raised: a failed or blocked report and a report purlis wrote for a task that died come
+    /// here from the one delivery (`crate::handoff::deliver`), and a dispatch that does not
+    /// start is to call it too (#1497).
+    pub fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) {
+        if let Some(moved) = self.board().task_failed(session, failed) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// **The person looked at failure `id` of chat `session`, or cleared its row** (#1491):
+    /// the needs-you item for that one task goes, and the window is told. Every other
+    /// failure, and whatever else the chat needs them for, stays.
+    pub fn task_failure_cleared(&self, session: u32, id: &str) {
+        if let Some(moved) = self.board().failure_cleared(session, id) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// The end of chat `session`'s turn that was held is the needs-you item now, and the
+    /// window is told (#1491). Only `crate::dispatched::settle` decides that it is.
+    pub(crate) fn rested(&self, session: u32) {
+        if let Some(moved) = self.board().rested(session) {
             (self.tell)(moved);
         }
     }
@@ -1549,6 +1618,19 @@ impl Planes {
         // the socket's thread is where that report arrives. A person's typed `/smart-close` is
         // heard here too: only a report the board took, so a harness nested in the chat never
         // issues its chat a pass (#1332). Weak for the handoff's reason.
+        // What a chat waits on that is not the person, asked as the end of its turn is applied
+        // (#1491): the tasks below it and the chat that dispatched it are this project's
+        // records, which the board does not hold. Weak for the handoff's reason; a project
+        // that is going holds nothing back.
+        held.hooks.waits_by({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |chat, turn_ends| {
+                held.upgrade()
+                    .map_or_else(purlis_core::state::Waits::default, |held| {
+                        crate::dispatched::waits_as(&held, chat, turn_ends)
+                    })
+            })
+        });
         held.hooks.when_heard({
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
@@ -5982,10 +6064,11 @@ mod tests {
                 let board = held.hooks().board();
                 match event {
                     Event::UserPromptSubmit => board.turns(session) > turns,
+                    // In the queue, or held out of it for the tasks it waits on (#1491).
                     Event::Stop => {
                         board.state(session) == State::Waiting
                             && !board.asking(session)
-                            && board.needs_you().contains(&session)
+                            && (board.needs_you().contains(&session) || board.held(session))
                     }
                     Event::Notification => board.asking(session),
                     _ => board.state(session) == State::Waiting,
