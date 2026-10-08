@@ -241,14 +241,20 @@ pub struct Waits {
     /// How many tasks below it, at any depth, are still working, asking, or owing a report.
     pub tasks: u32,
     /// Whether it is a task paused on a question to the chat that dispatched it: that chat is
-    /// the one who can answer, and its row reads `asking <chat>`.
+    /// the one who can answer, and its row reads `asking <chat>`. Only while that chat is open
+    /// and its program runs: a question to a chat that has gone is nobody's to answer.
     pub its_asker: bool,
+    /// Whether a line of purlis's own is about to start a turn of it: a report or a question
+    /// landed that it has not been told of and it takes a line, or the line was typed and its
+    /// harness has not yet said the turn began. The end of this turn is then not the person's:
+    /// the next turn starts by itself, and its end is.
+    pub line_coming: bool,
 }
 
 impl Waits {
     /// Whether the end of its turn leaves the next move with somebody other than the person.
     pub fn on_something(self) -> bool {
-        self.tasks > 0 || self.its_asker
+        self.tasks > 0 || self.its_asker || self.line_coming
     }
 }
 
@@ -258,6 +264,13 @@ impl Waits {
 /// doing. A task that finished as done, or was cancelled, is none: it changes a count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailedTask {
+    /// What names this failure, and nothing else does: its dispatch record's id, which its
+    /// finished row carries too, or a word of the app's own for a task that never had a
+    /// record. Two tasks of one name are two failures.
+    pub id: String,
+    /// The task's chat, by number, where it is still open (a task that reported blocked
+    /// stays open as the chat it is): what going to the failure shows.
+    pub chat: Option<u32>,
     /// The task, by the name the person sees it under.
     pub task: String,
     /// Which of the three it was.
@@ -293,9 +306,11 @@ impl FailedTask {
     /// The most characters of a reason an item says: a few words, never a report.
     pub const WHY_AT_MOST: usize = 60;
 
-    /// `task` came to nothing as `how`, for `why` cut to a few words.
-    pub fn new(task: &str, how: HowFailed, why: &str) -> Self {
+    /// The failure `id` names: `task` came to nothing as `how`, for `why` cut to a few words.
+    pub fn new(id: &str, task: &str, how: HowFailed, why: &str) -> Self {
         Self {
+            id: id.to_owned(),
+            chat: None,
             task: task.to_owned(),
             how,
             why: Self::in_a_few_words(why),
@@ -316,6 +331,30 @@ impl FailedTask {
         let cut: String = line.chars().take(Self::WHY_AT_MOST - 1).collect();
         format!("{}…", cut.trim_end())
     }
+
+    /// This failure, of a task whose chat `chat` is still open.
+    #[must_use]
+    pub fn of_open_chat(mut self, chat: u32) -> Self {
+        self.chat = Some(chat);
+        self
+    }
+}
+
+/// Where a chat stands with the person at one moment ([`Board::standing`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Standing {
+    /// Whether it is in the needs-you queue.
+    pub queued: bool,
+    /// How many reasons of the app's own it is there for.
+    pub reasons: usize,
+}
+
+/// **Whether a move from `was` to `now` raised something for the person** (#1491): the chat
+/// came into the queue, or a reason was added to one already in it (a second task failed, a
+/// commit was refused). A chat that only moved while its item stood raised nothing, and
+/// neither did one that left the queue.
+pub fn raised(was: Standing, now: Standing) -> bool {
+    now.queued && (!was.queued || now.reasons > was.reasons)
 }
 
 /// One chat's state, and everything that is allowed to move it.
@@ -462,7 +501,11 @@ impl Chat {
     /// - **A chat that waited on its tasks becomes an item only once every one of them has
     ///   reported or ended and it has then stopped with nothing to do**: it is typed a line
     ///   when a report lands, reads it in a turn of its own, and that turn's end is the item.
-    ///   Where nothing will prompt it, the app says so ([`Chat::rested`]).
+    ///   A turn that ends with a line of purlis's own about to start the next is held too.
+    /// - **A chat that needs the person is never left at rest with no hand.** The hold is
+    ///   only a hold: wherever what a chat waits on may have gone, the app asks its records
+    ///   again and, where nothing is left and nothing will prompt the chat, says so
+    ///   ([`Chat::rested`]). Held in memory, and gone with the app, as every item is.
     /// - **A real prompt always is an item, whatever its tasks are doing**: a permission or a
     ///   question asked mid-turn ([`Chat::asking`]), a reason the app found ([`Need`]), a
     ///   refused commit, and a task of its that failed, ended without a report or did not
@@ -490,7 +533,7 @@ impl Chat {
     /// state is not touched. Answers whether anything a reader can see changed: nothing does
     /// for a failure it already says.
     pub fn task_failed(&mut self, failed: FailedTask) -> bool {
-        if self.ended || self.failed.contains(&failed) {
+        if self.ended || self.failed.iter().any(|one| one.id == failed.id) {
             return false;
         }
         self.failed.push(failed);
@@ -503,12 +546,19 @@ impl Chat {
         !std::mem::take(&mut self.failed).is_empty()
     }
 
-    /// The person cleared the row of task `task`, which this chat asked for: its item goes
-    /// with it. Answers whether anything a reader can see changed.
-    pub fn failure_cleared(&mut self, task: &str) -> bool {
+    /// The person looked at failure `id`, or cleared its row: that one item goes, and every
+    /// other stays. Answers whether anything a reader can see changed.
+    pub fn failure_cleared(&mut self, id: &str) -> bool {
         let was = self.failed.len();
-        self.failed.retain(|failed| failed.task != task);
+        self.failed.retain(|failed| failed.id != id);
         was != self.failed.len()
+    }
+
+    /// How many reasons of the app's own it is an item for: what it needs the person for
+    /// beyond its own hooks, its refused commits and its failed tasks. One more than before
+    /// is a reason raised ([`Board::standing`]).
+    fn reasons(&self) -> usize {
+        self.needs.len() + self.refusals.len() + self.failed.len()
     }
 
     /// **What this chat waited on is over, and nothing will prompt it** (#1491): every task
@@ -1124,12 +1174,25 @@ impl Board {
             .is_some_and(|tracked| tracked.chat.failures_seen())
     }
 
-    /// The person cleared the row of task `task`, which chat `number` asked for
+    /// The person looked at failure `id` of chat `number`, or cleared its row
     /// ([`Chat::failure_cleared`]). Not stamped as a move, as an Ignore is not.
-    pub fn failure_cleared(&mut self, number: u32, task: &str) -> bool {
+    pub fn failure_cleared(&mut self, number: u32, id: &str) -> bool {
         self.chats
             .get_mut(&number)
-            .is_some_and(|tracked| tracked.chat.failure_cleared(task))
+            .is_some_and(|tracked| tracked.chat.failure_cleared(id))
+    }
+
+    /// **Where chat `number` stands with the person**: whether it is in the queue, and how
+    /// many reasons of the app's own it is there for. Read before and after a move, it says
+    /// whether the move is one to interrupt the person for ([`raised`]): a system notification
+    /// is sent on the rising edge, never for a chat that merely moved while an item stood.
+    pub fn standing(&self, number: u32) -> Standing {
+        self.chats
+            .get(&number)
+            .map_or(Standing::default(), |tracked| Standing {
+                queued: tracked.chat.needs_you(),
+                reasons: tracked.chat.reasons(),
+            })
     }
 
     /// A tool hook of child agent `agent` of chat `number` was heard: a Codex child's first
@@ -3059,6 +3122,7 @@ mod tests {
         Waits {
             tasks,
             its_asker: false,
+            line_coming: false,
         }
     }
 
@@ -3066,6 +3130,14 @@ mod tests {
     const ASKS_ITS_ASKER: Waits = Waits {
         tasks: 0,
         its_asker: true,
+        line_coming: false,
+    };
+
+    /// A chat a line of purlis's own is about to start a turn of.
+    const A_LINE_IS_COMING: Waits = Waits {
+        tasks: 0,
+        its_asker: false,
+        line_coming: true,
     };
 
     #[test]
@@ -3273,12 +3345,19 @@ mod tests {
         // Failed: an item on the session, though another task still works below it.
         assert!(board.task_failed(
             7,
-            FailedTask::new("build", HowFailed::Failed, "the forge refused the push")
+            FailedTask::new(
+                "r-build",
+                "build",
+                HowFailed::Failed,
+                "the forge refused the push"
+            )
         ));
         assert_eq!(board.needs_you(), vec![7]);
         assert_eq!(
             board.failed_tasks(7),
             vec![FailedTask {
+                id: "r-build".to_owned(),
+                chat: None,
                 task: "build".to_owned(),
                 how: HowFailed::Failed,
                 why: "the forge refused the push".to_owned(),
@@ -3287,7 +3366,12 @@ mod tests {
         assert!(
             !board.task_failed(
                 7,
-                FailedTask::new("build", HowFailed::Failed, "the forge refused the push")
+                FailedTask::new(
+                    "r-build",
+                    "build",
+                    HowFailed::Failed,
+                    "the forge refused the push"
+                )
             ),
             "said once"
         );
@@ -3300,7 +3384,10 @@ mod tests {
         let mut board = Board::new();
         claude_chat(&mut board, 7, Some(A));
         board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
-        board.task_failed(7, FailedTask::new("build", HowFailed::Unreported, ""));
+        board.task_failed(
+            7,
+            FailedTask::new("r-build", "build", HowFailed::Unreported, ""),
+        );
 
         board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
 
@@ -3310,7 +3397,7 @@ mod tests {
 
     #[test]
     fn a_failed_task_s_item_goes_when_the_person_looks_or_clears_its_row_or_ignores_it() {
-        let failed = || FailedTask::new("build", HowFailed::Unreported, "");
+        let failed = || FailedTask::new("r-build", "build", HowFailed::Unreported, "");
         let mut board = Board::new();
         claude_chat(&mut board, 7, Some(A));
         board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
@@ -3326,19 +3413,25 @@ mod tests {
         board.task_failed(7, failed());
         board.task_failed(
             7,
-            FailedTask::new("lint", HowFailed::DidNotStart, "no profile runs it"),
+            FailedTask::new(
+                "r-lint",
+                "lint",
+                HowFailed::DidNotStart,
+                "no profile runs it",
+            ),
         );
-        assert!(board.failure_cleared(7, "build"));
+        assert!(board.failure_cleared(7, "r-build"));
         assert_eq!(
             board.failed_tasks(7),
             vec![FailedTask::new(
+                "r-lint",
                 "lint",
                 HowFailed::DidNotStart,
                 "no profile runs it"
             )]
         );
         assert_eq!(board.needs_you(), vec![7]);
-        assert!(!board.failure_cleared(7, "build"));
+        assert!(!board.failure_cleared(7, "r-build"));
 
         // Ignored: the person's dismissal takes it, as it takes every reason.
         assert!(board.ignored(7));
@@ -3360,7 +3453,10 @@ mod tests {
         claude_chat(&mut board, 7, Some(A));
         board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
         board.reported(&report(7, Event::Stop, Some(A)));
-        board.task_failed(7, FailedTask::new("build", HowFailed::Failed, ""));
+        board.task_failed(
+            7,
+            FailedTask::new("r-build", "build", HowFailed::Failed, ""),
+        );
 
         board.failures_seen(7);
 
@@ -3384,5 +3480,92 @@ mod tests {
             FailedTask::in_a_few_words(&wide).chars().count(),
             FailedTask::WHY_AT_MOST
         );
+    }
+
+    #[test]
+    fn a_turn_that_ends_with_a_line_about_to_start_the_next_is_held_and_released_if_none_does() {
+        // A report landed mid-turn: purlis types its line as this turn ends, so the end is
+        // not the person's. Where the line is never taken, the app says so and it is.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        board.reported_while(&report(7, Event::Stop, Some(A)), A_LINE_IS_COMING);
+
+        assert!(board.needs_you().is_empty());
+        assert!(board.held(7));
+        assert!(board.rested(7));
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn two_tasks_of_one_name_that_fail_are_two_failures_and_each_is_cleared_by_itself() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        assert!(board.task_failed(7, FailedTask::new("r-1", "check", HowFailed::Failed, "")));
+        assert!(board.task_failed(7, FailedTask::new("r-2", "check", HowFailed::Failed, "")));
+        assert!(
+            !board.task_failed(
+                7,
+                FailedTask::new("r-2", "check", HowFailed::Failed, "again")
+            ),
+            "one record is one failure"
+        );
+
+        assert!(board.failure_cleared(7, "r-1"));
+
+        assert_eq!(
+            board.failed_tasks(7),
+            vec![FailedTask::new("r-2", "check", HowFailed::Failed, "")]
+        );
+        assert_eq!(board.needs_you(), vec![7], "the other still flags it");
+    }
+
+    #[test]
+    fn a_move_raises_something_only_on_the_edge_into_the_queue_or_a_new_reason() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        let mut was = board.standing(7);
+        let mut moved = |board: &mut Board, act: &dyn Fn(&mut Board)| {
+            act(board);
+            let now = board.standing(7);
+            let rose = raised(was, now);
+            was = now;
+            rose
+        };
+
+        // A task fails: the rising edge.
+        assert!(moved(&mut board, &|board| {
+            board.task_failed(7, FailedTask::new("r-1", "build", HowFailed::Failed, ""));
+        }));
+        // The chat reads the report in a turn of its own, and a helper of its comes and goes:
+        // it moved, the item stands, and nothing was raised.
+        assert!(!moved(&mut board, &|board| {
+            board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        }));
+        assert!(!moved(&mut board, &|board| {
+            board.child_heard(7, "a1");
+        }));
+        assert!(!moved(&mut board, &|board| {
+            board.reported(&report(7, Event::Stop, Some(A)));
+        }));
+        // A second task fails while the first still stands: a new reason.
+        assert!(moved(&mut board, &|board| {
+            board.task_failed(7, FailedTask::new("r-2", "lint", HowFailed::Failed, ""));
+        }));
+        // Looked at, both: it is still an item for its own stop, and nothing was raised.
+        assert!(!moved(&mut board, &|board| {
+            board.failure_cleared(7, "r-1");
+            board.failure_cleared(7, "r-2");
+        }));
+        // Its next prompt takes it out; the stop after that is the edge again.
+        assert!(!moved(&mut board, &|board| {
+            board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        }));
+        assert!(moved(&mut board, &|board| {
+            board.reported(&report(7, Event::Stop, Some(A)));
+        }));
     }
 }

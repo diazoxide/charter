@@ -2,12 +2,12 @@ import { createContext, memo, useContext, useLayoutEffect, useState, type ReactN
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { useChatsHere, useChatsSelect } from "./chatState";
 import { bucketsSaid, sameBuckets, type TaskBuckets } from "./taskBuckets";
-import { atLimitOf, NONE_BELOW, sameBelow, taskCountOf, type TasksBelow } from "./taskCounts";
+import { atLimitOf, NONE_BELOW, sameBelow, taskCountOf, type TasksBelow } from "./sessionTasks";
 
 /*
  * **Each session's tasks, lent to whatever draws a session** (#1491, SC-3).
  *
- * The rows are `taskCounts.tasksBelowOf`'s, built once from the project's list of chats and its
+ * The rows are `sessionTasks.tasksBelowOf`'s, built once from the project's list of chats and its
  * finished rows. They are held here outside React, as the chats' states are (`chatState.ts`),
  * so a reader takes its own session's share and is drawn again only when that share changes:
  * a task that reports redraws its session's count and state, and no other row. A task that
@@ -96,7 +96,7 @@ export function useTaskCount(session: number | undefined): TaskBuckets {
 export function useTaskCountSaid(session: number | undefined): string | undefined {
   const below = useTasksBelow(session);
   return useChatsSelect(useChatsHere(), (states) =>
-    bucketsSaid(taskCountOf(states, below), atLimitOf(states, below)),
+    bucketsSaid(taskCountOf(states, below), atLimitOf(below)),
   );
 }
 

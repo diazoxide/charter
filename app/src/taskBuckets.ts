@@ -6,13 +6,14 @@
  *
  * - **working** (the ring): working, asking the chat that dispatched it, or on a harness
  *   nothing is heard from. A task that is itself waiting on its own tasks is working.
- * - **waiting** (the pause shape, muted): it needs the person, or it is idle.
- * - **failed** (the cross): failed, ended without a report, did not start, and any finished
- *   row the core says does not fold.
- * - **done** (the tick): a finished row the core says folds, and a task that reported.
+ * - **waiting** (the pause shape, muted): it needs the person, it is idle, or its row says
+ *   nothing yet.
+ * - **failed** (the cross): failed, blocked, ended without a report, did not start.
+ * - **done** (the tick): done, cancelled, reported, and a task the person stopped or closed.
+ *   The person ending a task is not the task failing: its row never folds, and it is done.
  *
  * Plain inputs and no state: the state kinds the open tasks' rows say (`shownState`) and the
- * finished rows' `folds`. Nothing here reads a chat, a store or the core.
+ * finished rows' `how`, the core's own word for how each ended. Nothing here reads a chat, a store or the core.
  */
 import type { ShownKind } from "./shownState";
 
@@ -25,13 +26,16 @@ export type TaskBucket = keyof TaskBuckets;
 /** No tasks at all. */
 export const NO_TASKS: TaskBuckets = { working: 0, waiting: 0, done: 0, failed: 0 };
 
-/** The bucket of an open task whose row says `kind`. A row that says nothing yet (a shell
- *  nothing has reported for) has not finished and asks for nobody: working. */
+/** The bucket of an open task whose row says `kind`. Working is what the list ranks as at
+ *  work (`chatsList.rankOf`'s rank 1). A row that says nothing yet is not at work that
+ *  anybody has heard: waiting. */
 export function bucketOfKind(kind: ShownKind | undefined): TaskBucket {
   switch (kind) {
-    case "needs-you":
-    case "idle":
-      return "waiting";
+    case "working":
+    case "asking":
+    case "unheard":
+    case "waiting-on-tasks":
+      return "working";
     case "failed":
     case "unreported":
       return "failed";
@@ -41,20 +45,30 @@ export function bucketOfKind(kind: ShownKind | undefined): TaskBucket {
     case "reported":
       return "done";
     default:
-      return "working";
+      return "waiting";
   }
 }
 
-/** The bucket of a finished row: done where the core says it folds, failed where it does not
- *  (failed, blocked, ended without a report, closed by the person, did not start). */
-export function bucketOfFinished(row: { folds: boolean }): TaskBucket {
-  return row.folds ? "done" : "failed";
+/** How a finished row ended that is the task coming to nothing, in the core's words
+ *  (`FinishedTask.how`). Every other end is done: `done`, `cancelled`, and
+ *  `stopped_by_person`, which is the person's doing and not the task's. */
+const CAME_TO_NOTHING: ReadonlySet<string> = new Set([
+  "failed",
+  "blocked",
+  "unreported",
+  "did_not_start",
+]);
+
+/** The bucket of a finished row, by how the core says it ended. **Not by whether it folds**: a
+ *  task the person stopped or closed never folds, and is done all the same. */
+export function bucketOfFinished(row: { how: string }): TaskBucket {
+  return CAME_TO_NOTHING.has(row.how) ? "failed" : "done";
 }
 
 /** **The one count**: the open tasks' state kinds and the finished rows, each in one bucket. */
 export function bucketsOf(
   open: Iterable<ShownKind | undefined>,
-  finished: Iterable<{ folds: boolean }> = [],
+  finished: Iterable<{ how: string }> = [],
 ): TaskBuckets {
   const count = { ...NO_TASKS };
   for (const kind of open) count[bucketOfKind(kind)] += 1;
@@ -87,7 +101,7 @@ export type AtLimit = {
 };
 
 /**
- * **What a surface says of a session's tasks**: `2 working · 1 waiting · 3 done · 1 failed`,
+ * **What a surface says of a session's tasks**: `2 working · 1 waiting · 1 failed · 3 done`,
  * each part only when it is not zero, and nothing for a session with no tasks.
  *
  * **At its limit it says `6 of 6 tasks`** in place of the working and waiting parts, which are
@@ -101,10 +115,11 @@ export function bucketsSaid(count: TaskBuckets, atLimit?: AtLimit | null): strin
           count.working > 0 ? `${count.working} working` : undefined,
           count.waiting > 0 ? `${count.waiting} waiting` : undefined,
         ];
+  // Failed before done: what came to nothing is said before what needs no look.
   const parts = [
     ...open,
-    count.done > 0 ? `${count.done} done` : undefined,
     count.failed > 0 ? `${count.failed} failed` : undefined,
+    count.done > 0 ? `${count.done} done` : undefined,
   ].filter((part) => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(" · ");
 }

@@ -35,6 +35,12 @@ export type ListedChat = {
   /** The most tasks it may have running at once, by the limits in force for it, where the
    *  core said: only for a chat that has a task open (#1491, V100-26). */
   tasksLimit?: number | null;
+  /** How many tasks it has running against that limit, as the core counts them for a
+   *  dispatch from it (#1491). */
+  tasksRunning?: number | null;
+  /** A task the person asked for themselves, from its session's tab (#1492, V100-70): its row
+   *  and its breadcrumb say `asked by you`. */
+  byYou?: boolean;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.
 } & RowFacts;
@@ -82,6 +88,8 @@ export function listedChat(
     tab,
     branch: ownBranch(chat),
     tasksLimit: chat.tasks_limit ?? null,
+    tasksRunning: chat.tasks_running ?? null,
+    byYou: chat.from?.task === true && chat.from.by_person === true,
     ...rowFactsOf(chat, nameOf),
   };
 }

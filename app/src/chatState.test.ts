@@ -389,11 +389,19 @@ describe("what the app found a chat needs you for (#1448)", () => {
 describe("a task that came to nothing, on the chat that asked for it (#1491)", () => {
   const failed = {
     kind: "task_failed" as const,
+    id: "01K6PROD",
+    chat: 9,
     task: "check prod",
-    how: "failed",
+    how: "failed" as const,
     why: "the forge refused the push",
   };
-  const unreported = { kind: "task_failed" as const, task: "lint", how: "unreported", why: "" };
+  const unreported = {
+    kind: "task_failed" as const,
+    id: "01K6LINT",
+    task: "lint",
+    how: "unreported" as const,
+    why: "",
+  };
 
   it("says which task and why, in a few words", () => {
     expect(needSays(failed)).toBe("check prod failed: the forge refused the push");
@@ -401,14 +409,23 @@ describe("a task that came to nothing, on the chat that asked for it (#1491)", (
     expect(needSays({ ...failed, how: "did_not_start", why: "no profile runs devops" })).toBe(
       "check prod did not start: no profile runs devops",
     );
-    // Nothing said why, and a word this window does not know: the least each can mean.
+    // Nothing said why.
     expect(needSays({ ...failed, why: "" })).toBe("check prod failed");
-    expect(taskFailedSaid({ task: "build", how: "something new", why: "" })).toBe("build failed");
+    expect(taskFailedSaid({ task: "build", how: "did_not_start", why: "" })).toBe(
+      "build did not start",
+    );
   });
 
   it("keeps which tasks they were by the chat that asked, so its item can go to their rows", () => {
     const told = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [failed, unreported] });
-    expect(failedTasksOf(told, 3)).toEqual(["check prod", "lint"]);
+    // By the id its finished row carries, and its chat while that is open.
+    expect(failedTasksOf(told, 3)).toEqual([
+      { id: "01K6PROD", task: "check prod", chat: 9 },
+      { id: "01K6LINT", task: "lint", chat: null },
+    ]);
+    // The same list when a move says the same thing.
+    const again = moved(told, { ...doing(3, "waiting", [3]), needs: [failed, unreported] });
+    expect(again.failedTasks).toBe(told.failedTasks);
     expect(needsOf(told, 3)).toEqual([
       "check prod failed: the forge refused the push",
       "lint ended without a report",

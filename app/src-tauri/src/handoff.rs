@@ -294,7 +294,11 @@ fn report_it(
     if let Some(asker) = tell {
         // Typed the line where it takes one. Where it does not, and this was the last task
         // it waited on, its held end of turn is the person's from here (#1491).
-        crate::dispatched::told_or_rested(held, asker);
+        crate::dispatched::told_or_settled(held, asker);
+    } else if let Some(from) = held.chats().handed_from(chat) {
+        // Its report reached no chat, and it owes none now: whoever waited on it waits no
+        // more.
+        crate::dispatched::settle_above(held, from.chat);
     }
     // **Delivered, and only then is the task's program to be ended** (#1485): the report is
     // kept for the chat that asked and its record says sent, both under the lock just let go.
@@ -612,10 +616,24 @@ fn came_to_nothing(
     } else {
         return None;
     };
-    let name = crate::finished::task_name(held, chat)
-        .or_else(|| held.chats().shown_name(chat))
-        .unwrap_or_else(|| chat.to_string());
-    Some(FailedTask::new(&name, how, why))
+    // Named, and told apart from every other failure, by its dispatch record: its finished
+    // row carries the same id. A task with no record is named by its chat.
+    let (id, name) = crate::finished::task_record(held, chat).unwrap_or_else(|| {
+        (
+            format!("chat-{chat}"),
+            held.chats()
+                .shown_name(chat)
+                .unwrap_or_else(|| chat.to_string()),
+        )
+    });
+    let failed = FailedTask::new(&id, &name, how, why);
+    // One that reported is still open as a chat, and a blocked one stays so: going to the
+    // failure shows that chat. One whose program died has only its finished row.
+    Some(if task.unreported {
+        failed
+    } else {
+        failed.of_open_chat(chat)
+    })
 }
 
 /// The hold [`crate::chats::Chats::deciding`] gives: proof, to the functions below, that the
@@ -740,6 +758,9 @@ pub(crate) fn operator_stopped(
             Some(purlis_core::dispatchrecord::EndedBy::Person),
         );
     }
+    // Stopped, it owes nothing more: the chat that asked and every chat above it may have
+    // held an end of turn for it (#1491). Read only: this is under the deciding lock.
+    crate::dispatched::settle_above(held, from.chat);
 }
 
 /// **A persona chat's program ended on its own** (#1443): [`unreported`], called as the
@@ -761,7 +782,7 @@ pub fn its_program_ended(held: &Held, chat: u32) {
             // Typed only once the lock is let go, as a chat's own report is (#1441).
             drop(deciding);
             if let Some(asker) = asker {
-                crate::dispatched::told_or_rested(held, asker);
+                crate::dispatched::told_or_settled(held, asker);
             }
             // Its asking chat is told it failed, and its row is a finished one from here
             // (#1485): the chat whose program is gone is closed, off this thread.
@@ -926,18 +947,36 @@ fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
 /// still below `asker`. A handoff moved the work to a session of its own (V100-69), so what is
 /// below a handoff's chat is that chat's and not `asker`'s. A task whose program has ended
 /// owes nothing more: purlis reports for it.
+///
+/// **Not a task the person asked for** from `asker`'s tab, nor anything below one (M4):
+/// `asker` asked for nothing there, and a long task of the person's would otherwise hide every
+/// end of `asker`'s own turns. It is still counted on the row. **And not a task of `asker`'s
+/// own that has a question open with `asker`** (M3): that task waits on `asker`, so `asker`
+/// stopping without answering is the person's to see, and neither waits on the other.
 pub fn owing_below(held: &Held, asker: u32) -> Vec<u32> {
-    fn below(held: &Held, asker: u32, deeper: u32, seen: &mut Vec<u32>, found: &mut Vec<u32>) {
+    fn below(
+        held: &Held,
+        asker: u32,
+        deeper: u32,
+        top: u32,
+        seen: &mut Vec<u32>,
+        found: &mut Vec<u32>,
+    ) {
         if deeper == 0 {
             return;
         }
         for (chat, from) in held.chats().started_by(asker) {
-            if from.mode != Mode::Task || seen.contains(&chat) {
+            // A task the person asked for from this chat's tab is theirs: the chat did not
+            // ask for it and waits on nothing of it or below it (M4).
+            if from.mode != Mode::Task || from.by_person || seen.contains(&chat) {
                 continue;
             }
             seen.push(chat);
-            below(held, chat, deeper - 1, seen, found);
-            if from.report == Owed::Due && still_working(held, chat) {
+            below(held, chat, deeper - 1, top, seen, found);
+            // A task of the chat's own that has a question open with it is waiting on the
+            // chat, not the other way round (M3): the next move is the chat's.
+            let asks_it = asker == top && crate::dispatched::asks_its_asker(held, chat);
+            if from.report == Owed::Due && still_working(held, chat) && !asks_it {
                 found.push(chat);
             }
         }
@@ -947,6 +986,7 @@ pub fn owing_below(held: &Held, asker: u32) -> Vec<u32> {
         held,
         asker,
         dispatchdecision::DEEPEST,
+        asker,
         &mut vec![asker],
         &mut found,
     );
@@ -2150,6 +2190,8 @@ pub fn answered(
         held.task_failed(
             wanted.chat,
             purlis_core::state::FailedTask::new(
+                // It never had a chat or a record: an id of its own.
+                &format!("not-started-{}", purlis_core::reopen::mint()),
                 &task,
                 purlis_core::state::HowFailed::DidNotStart,
                 &detail,
@@ -2240,7 +2282,7 @@ fn asks_nobody(
 
 /// Whether chat `chat`'s program still runs, by the board: one that has ended, with or
 /// without a report, owes no more work and is not counted against a limit (D-1436-18).
-fn still_working(held: &Held, chat: u32) -> bool {
+pub(crate) fn still_working(held: &Held, chat: u32) -> bool {
     !matches!(
         held.board().glance(chat).state,
         purlis_core::state::State::Done | purlis_core::state::State::Failed
@@ -3967,6 +4009,7 @@ mod tests {
                     unreported: false,
                     outcome: None,
                     asking: None,
+                    by_person: None,
                 }),
                 workspace: Some("alpha".to_owned()),
                 persona: None,
@@ -4794,6 +4837,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                by_person: None,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
@@ -5680,6 +5724,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                by_person: None,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.

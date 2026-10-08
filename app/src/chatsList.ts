@@ -19,6 +19,10 @@ export function shownOfRow(
   row: ChatRow,
   /** The needs-you queue as a set, for a caller that asks about every row. */
   queue: ReadonlySet<number> = new Set(states.needsYou),
+  /** How many tasks below it are working and are ones it waits on (#1491): with any, a row
+   *  whose turn has ended says it is waiting on them. A caller that reads a whole list takes
+   *  every row's standing from one pass instead (`sessionTasks.standingOfRows`). */
+  tasksAtWork = 0,
 ): Shown | undefined {
   return shownState({
     board: markOf(states, row.session, row.shell),
@@ -26,6 +30,7 @@ export function shownOfRow(
     task:
       row.report === null ? null : { report: row.report, outcome: row.outcome, asking: row.asking },
     harness: row.harness,
+    tasksAtWork,
   });
 }
 
@@ -39,7 +44,9 @@ export type Rank = 0 | 1 | 2;
  */
 export function rankOf(kind: ShownKind | undefined): Rank {
   if (kind === "needs-you") return 0;
-  if (kind === "working" || kind === "asking" || kind === "unheard") return 1;
+  // A chat waiting on its tasks is at work through them (#1491): nothing waits on the person.
+  if (kind === "working" || kind === "asking" || kind === "unheard" || kind === "waiting-on-tasks")
+    return 1;
   return 2;
 }
 

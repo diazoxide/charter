@@ -281,8 +281,8 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
-import type { Reveal } from "./revealTask";
-import { tasksBelowOf, type TasksBelow } from "./taskCounts";
+import { chatsListDrawn, type Reveal } from "./revealTask";
+import { tasksBelowOf, type TasksBelow } from "./sessionTasks";
 import { TasksBelowLent } from "./TasksBelow";
 import { finishedOf, qualifierOf, shownOf, useFinishedTasks } from "./finished";
 import {
@@ -488,13 +488,16 @@ export const PlaneView = memo(function PlaneView({
    * options, or a shell. A Notice with Dismiss, and it clears itself when that same action next
    * succeeds — it used to stand until some other refusal replaced it.
    */
-  const [trouble, setTrouble] = useState<{ from: "start-options" | "shell"; said: string }>();
+  const [trouble, setTrouble] = useState<{
+    from: "start-options" | "shell" | "needs-you";
+    said: string;
+  }>();
   const refusedBy = useCallback(
-    (from: "start-options" | "shell", said: string) => setTrouble({ from, said }),
+    (from: "start-options" | "shell" | "needs-you", said: string) => setTrouble({ from, said }),
     [],
   );
   const succeeded = useCallback(
-    (from: "start-options" | "shell") =>
+    (from: "start-options" | "shell" | "needs-you") =>
       setTrouble((was) => (was?.from === from ? undefined : was)),
     [],
   );
@@ -1397,6 +1400,8 @@ export const PlaneView = memo(function PlaneView({
   /** Every chat the Chats section lists, as of the last render: what a stop is asked about. A
    *  ref, so a read of the list does not make a new catalogue of the rows holding the ask. */
   const chatsListed = useRef<readonly ListedChat[]>([]);
+  /** Each chat's finished rows as last read, for a press that asks for one (#1491). */
+  const finishedNow = useRef<ReadonlyMap<number, readonly FinishedTask[]>>(new Map());
   /**
    * **Stop asks first** (#1448): a row of the catalogue opens the question, which says what
    * ends, and nothing is stopped until it is answered. A chat with no chat below it is asked
@@ -2535,11 +2540,14 @@ export const PlaneView = memo(function PlaneView({
 
   /**
    * **Go, on a needs-you item** (#1491, V100-15). An item that is there because a task failed,
-   * ended without a report or did not start **goes to that task's row**: the Chats list brings
-   * its finished row into view under the session that asked, where its report is, and the item
-   * has then been looked at, so the core is told and the hand goes. The session's pane is not
-   * brought forward for it: nothing there is asking. If the session needs the person for a
-   * reason of its own as well, its item stays, and the next Go is the chat.
+   * ended without a report or did not start **goes to that task**: its chat, where that is
+   * still open (a task that reported blocked stays one), and otherwise its finished row
+   * under the session that asked, which the Chats list brings into view.
+   *
+   * **The failure is looked at only once it was shown**, and only that one: the core is told
+   * which, by its id, when the chat was shown or the row was found (`failureShown`). Where
+   * there is nothing to show (no finished row, or the Chats list is not on screen), this says
+   * so, shows the session and leaves the hand where it is: one attempt, and no more.
    *
    * Every other item goes to its chat, as it always did.
    */
@@ -2551,17 +2559,58 @@ export const PlaneView = memo(function PlaneView({
         return;
       }
       // The latest, which is the one the item says.
-      const task = failed[failed.length - 1];
-      // A task that reported blocked stays open as the chat it is: its row is a chat's, and
-      // going to it shows that chat. Every other one has ended, and its row is a finished one.
-      const open = chatsListed.current.find(
-        (chat) => chat.parent === session && chat.mode === "task" && chat.name === task,
-      );
-      if (open !== undefined) showChat(open.session);
-      else setRevealed((was) => ({ asker: session, task, at: (was?.at ?? 0) + 1 }));
-      void commands.taskFailuresSeen(plane, session).catch(() => undefined);
+      const latest = failed[failed.length - 1];
+      const open =
+        latest.chat === null
+          ? undefined
+          : chatsListed.current.find((chat) => chat.session === latest.chat);
+      if (open !== undefined) {
+        showChat(open.session);
+        void commands.taskFailureSeen(plane, session, latest.id).catch(() => undefined);
+        return;
+      }
+      const row = (finishedNow.current.get(session) ?? []).find((task) => task.id === latest.id);
+      if (row === undefined || !chatsListDrawn()) {
+        refusedBy(
+          "needs-you",
+          row === undefined
+            ? `${latest.task} has no row left to show. Its chat is shown instead.`
+            : `${latest.task} is in the Chats list, which is not on screen. Its chat is shown instead.`,
+        );
+        showChat(session);
+        return;
+      }
+      succeeded("needs-you");
+      setRevealed((was) => ({
+        asker: session,
+        task: row.name,
+        id: row.id,
+        at: (was?.at ?? 0) + 1,
+      }));
     },
-    [failedTasks, plane, showChat],
+    [failedTasks, plane, refusedBy, showChat, succeeded],
+  );
+  /**
+   * What became of a row the Chats list was asked to bring into view. A failed task's row
+   * that was shown has been looked at, so its item goes; one that could not be shown (the
+   * list said so) leaves its item, and the session is shown instead.
+   */
+  const revealedSettled = useCallback(
+    (asked: Reveal, shown: boolean) => {
+      if (asked.id === undefined) return;
+      if (shown) void commands.taskFailureSeen(plane, asked.asker, asked.id).catch(() => undefined);
+      else showChat(asked.asker);
+    },
+    [plane, showChat],
+  );
+  /** A finished row was opened to be read: where it is a failure its session is flagged for,
+   *  it has been looked at (#1491). */
+  const lookedAtFinished = useCallback(
+    (task: FinishedTask) => {
+      if ((failedTasks[task.asker] ?? []).some((failed) => failed.id === task.id))
+        void commands.taskFailureSeen(plane, task.asker, task.id).catch(() => undefined);
+    },
+    [failedTasks, plane],
   );
 
   /**
@@ -3783,6 +3832,9 @@ export const PlaneView = memo(function PlaneView({
    * chat started, ended or closed, which is when a task finishes or its asking chat goes.
    */
   const { finished: finishedTasks, read: rereadFinished } = useFinishedTasks(plane, sidebar);
+  useEffect(() => {
+    finishedNow.current = finishedTasks;
+  }, [finishedTasks]);
   /** Clear finished: the rows go, and nothing else does. */
   const clearFinished = useCallback(
     (ids: string[]) => {
@@ -6203,6 +6255,8 @@ export const PlaneView = memo(function PlaneView({
                 onClearFinished={clearFinished}
                 onReopen={reopenFinished}
                 reveal={revealed}
+                onRevealed={revealedSettled}
+                onLookFinished={lookedAtFinished}
               />
               <Explorer
                 plane={plane}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { rankOf } from "./chatsList";
 import {
   bucketOfFinished,
   bucketOfKind,
@@ -18,15 +19,33 @@ import {
 const count = (more: Partial<TaskBuckets>): TaskBuckets => ({ ...NO_TASKS, ...more });
 
 describe("the bucket of an open task", () => {
-  it("is working while it works, asks its asker, waits on its own tasks, or says nothing", () => {
+  it("is working while it works, asks its asker, or waits on its own tasks", () => {
     for (const kind of ["working", "asking", "unheard", "waiting-on-tasks"] as const)
       expect(bucketOfKind(kind)).toBe("working");
-    expect(bucketOfKind(undefined)).toBe("working");
   });
 
-  it("is waiting when it needs the person or is idle", () => {
+  it("is waiting when it needs the person, is idle, or its row says nothing yet", () => {
     expect(bucketOfKind("needs-you")).toBe("waiting");
     expect(bucketOfKind("idle")).toBe("waiting");
+    expect(bucketOfKind(undefined)).toBe("waiting");
+  });
+
+  it("is working exactly where the list ranks a chat as at work", () => {
+    for (const kind of [
+      "working",
+      "needs-you",
+      "waiting-on-tasks",
+      "asking",
+      "done",
+      "failed",
+      "cancelled",
+      "unreported",
+      "reported",
+      "idle",
+      "unheard",
+      undefined,
+    ] as const)
+      expect(bucketOfKind(kind) === "working", String(kind)).toBe(rankOf(kind) === 1);
   });
 
   it("is failed when it failed or ended without a report", () => {
@@ -41,9 +60,15 @@ describe("the bucket of an open task", () => {
 });
 
 describe("the bucket of a finished row", () => {
-  it("is done where the core says it folds, and failed where it does not", () => {
-    expect(bucketOfFinished({ folds: true })).toBe("done");
-    expect(bucketOfFinished({ folds: false })).toBe("failed");
+  it("is failed where the task came to nothing, by the core's word for how it ended", () => {
+    for (const how of ["failed", "blocked", "unreported", "did_not_start"])
+      expect(bucketOfFinished({ how }), how).toBe("failed");
+  });
+
+  it("is done for every other end, a task the person stopped or closed among them", () => {
+    // Its row never folds, and it is no failure: the person ended it.
+    for (const how of ["done", "cancelled", "stopped_by_person"])
+      expect(bucketOfFinished({ how }), how).toBe("done");
   });
 });
 
@@ -51,7 +76,7 @@ describe("the count", () => {
   it("puts each task in exactly one bucket", () => {
     const counted = bucketsOf(
       ["working", "asking", "needs-you", "idle", "failed", "done"],
-      [{ folds: true }, { folds: true }, { folds: false }],
+      [{ how: "done" }, { how: "stopped_by_person" }, { how: "blocked" }],
     );
     expect(counted).toEqual({ working: 2, waiting: 2, done: 3, failed: 2 });
     expect(totalOf(counted)).toBe(9);
@@ -64,9 +89,9 @@ describe("the count", () => {
 });
 
 describe("what a surface says of a session's tasks", () => {
-  it("says each bucket in order, working first and failed last", () => {
+  it("says each bucket in order, working first, and failed before done", () => {
     expect(bucketsSaid(count({ working: 2, waiting: 1, done: 3, failed: 1 }))).toBe(
-      "2 working · 1 waiting · 3 done · 1 failed",
+      "2 working · 1 waiting · 1 failed · 3 done",
     );
   });
 

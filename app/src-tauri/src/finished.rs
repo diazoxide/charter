@@ -330,16 +330,16 @@ pub(crate) fn clear(held: &Held, ids: &[String]) -> u32 {
         .filter(|id| dispatchrecord::clear(held.root(), id).unwrap_or(false))
         .collect();
     for row in rows.iter().filter(|row| cleared.contains(&&row.id)) {
-        held.task_failure_cleared(row.asker, &row.name);
+        held.task_failure_cleared(row.asker, &row.id);
     }
     u32::try_from(cleared.len()).unwrap_or(u32::MAX)
 }
 
-/// What task chat `chat`'s finished row will be called: its newest dispatch record's name for
-/// it, as [`listed`] says it. Nothing for a chat with no record.
-pub(crate) fn task_name(held: &Held, chat: u32) -> Option<String> {
+/// Task chat `chat`'s newest dispatch record, as its finished row will carry it: the record's
+/// id and the name [`listed`] says it by. Nothing for a chat with no record.
+pub(crate) fn task_record(held: &Held, chat: u32) -> Option<(String, String)> {
     let me = crate::dispatches::chat_ref(held, chat)?;
-    dispatchrecord::latest_for(held.root(), &me).map(|record| name_of(&record))
+    dispatchrecord::latest_for(held.root(), &me).map(|record| (record.id.clone(), name_of(&record)))
 }
 
 /// The chat a Reopen of the finished task `id` starts, and the launch the core worked out for

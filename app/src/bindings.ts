@@ -524,11 +524,12 @@ export const commands = {
 	 */
 	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**
-	 *  The person looked at the tasks of chat `session` that failed, ended without a report or did
-	 *  not start (#1491): its needs-you item for them goes. Whatever else the chat needs the
-	 *  person for stays, and so do the tasks' rows and records.
+	 *  The person looked at one task of chat `session` that failed, ended without a report or did
+	 *  not start (#1491): `id` names the failure, as its needs-you item carries it. The item for
+	 *  that one task goes. Every other failure, whatever else the chat needs the person for, and
+	 *  the task's row and record all stay.
 	 */
-	taskFailuresSeen: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("task_failures_seen", { plane, session })),
+	taskFailureSeen: (plane: PlaneId, session: number, id: string) => typedError<null, string>(__TAURI_INVOKE("task_failure_seen", { plane, session, id })),
 	/**  The asks a project holds open now: what the window lists before any [`EVENT`] arrives. */
 	pendingAsks: (plane: PlaneId) => typedError<Asking, string>(__TAURI_INVOKE("pending_asks", { plane })),
 	/**
@@ -3488,6 +3489,12 @@ export type HandedFromNote = {
 	 *  paused until that chat answers (#1484): its row says whom it is asking.
 	 */
 	asking?: boolean | null,
+	/**
+	 *  Whether, as a task, the person asked for it themselves from that chat's tab (#1492,
+	 *  V100-70): its row and its breadcrumb say `asked by you`. The app's own record of how it
+	 *  was started, never a word a chat said.
+	 */
+	by_person?: boolean | null,
 };
 
 /**
@@ -3613,6 +3620,15 @@ export type How = "done" | "cancelled" | "blocked" | "failed" |
 "unreported" | 
 /**  The person stopped or closed it. */
 "stopped_by_person";
+
+/**  How a task came to nothing (`purlis_core::state::HowFailed`), as the window is sent it. */
+export type HowFailed = 
+/**  It reported that it failed, or that it was blocked. */
+"failed" | 
+/**  Its program ended while it still owed its report. */
+"unreported" | 
+/**  It was asked for and never started. */
+"did_not_start";
 
 /**  Where one of a vault's identity variables is read from now (#237). */
 export type IdentityHeld = 
@@ -3985,12 +4001,14 @@ export type Need =
 /**  Its report has nowhere to go: the chat that asked for it, `asker`, has gone. */
 { kind: "report_undelivered"; asker: string } | 
 /**
- *  A task it asked for, `task`, came to nothing (#1491): `how` is `failed`,
- *  `unreported` (it ended without a report) or `did_not_start`, and `why` says why in a
- *  few words, where anything does. Not emptied by the chat's next prompt: by the person's
- *  look at it, their Ignore, or the task's row being cleared.
+ *  A task it asked for, `task`, came to nothing (#1491), and `why` says why in a few
+ *  words, where anything does. `id` names this failure and no other: its dispatch
+ *  record's id, which its finished row carries. `chat` is the task's chat while it is
+ *  still open. Not emptied by the chat's next prompt: by the person's look at it, their
+ *  Ignore, or the task's row being cleared. Held in memory only: a restart of the app
+ *  keeps the task's finished row and not this item.
  */
-{ kind: "task_failed"; task: string; how: string; why: string };
+{ kind: "task_failed"; id: string; chat?: number | null; task: string; how: HowFailed; why: string };
 
 /**
  *  **A profile's command waiting on the operator's approval** (ADR 0022), as a waiting chat's
@@ -4120,6 +4138,12 @@ export type OpenChat = {
 	 *  open, in a list of rows (`dispatched::RunningLimits`); `null` otherwise.
 	 */
 	tasks_limit?: number | null,
+	/**
+	 *  How many tasks it has running against `tasks_limit`, as a dispatch from it would be
+	 *  decided: its own tasks that still owe a report, one still starting included. Sent with
+	 *  the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
+	 */
+	tasks_running?: number | null,
 	/**  The conversation it was resumed by, where it was. The UI says which happened. */
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */

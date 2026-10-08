@@ -258,13 +258,9 @@ pub trait ChatBoard: Send + Sync {
     /// (#1491): a needs-you item on it. Nothing when no reader would see a difference.
     fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) -> Option<Moved>;
 
-    /// The person looked at what failed below chat `session` (#1491): those items go. Nothing
-    /// when no reader would see a difference.
-    fn failures_seen(&self, session: u32) -> Option<Moved>;
-
-    /// The person cleared the row of task `task`, which chat `session` asked for (#1491): its
-    /// item goes with it. Nothing when no reader would see a difference.
-    fn failure_cleared(&self, session: u32, task: &str) -> Option<Moved>;
+    /// The person looked at failure `id` of chat `session`, or cleared its row (#1491): that
+    /// one item goes. Nothing when no reader would see a difference.
+    fn failure_cleared(&self, session: u32, id: &str) -> Option<Moved>;
 }
 
 /// A session host that runs nothing, for a test of what sits above the seam.

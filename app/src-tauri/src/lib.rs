@@ -585,6 +585,11 @@ struct OpenChat {
     /// open, in a list of rows (`dispatched::RunningLimits`); `null` otherwise.
     #[specta(optional)]
     tasks_limit: Option<u32>,
+    /// How many tasks it has running against `tasks_limit`, as a dispatch from it would be
+    /// decided: its own tasks that still owe a report, one still starting included. Sent with
+    /// the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
+    #[specta(optional)]
+    tasks_running: Option<u32>,
     /// The conversation it was resumed by, where it was. The UI says which happened.
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
@@ -647,6 +652,11 @@ pub struct HandedFromNote {
     /// paused until that chat answers (#1484): its row says whom it is asking.
     #[specta(optional)]
     pub asking: Option<bool>,
+    /// Whether, as a task, the person asked for it themselves from that chat's tab (#1492,
+    /// V100-70): its row and its breadcrumb say `asked by you`. The app's own record of how it
+    /// was started, never a word a chat said.
+    #[specta(optional)]
+    pub by_person: Option<bool>,
 }
 
 impl HandedFromNote {
@@ -666,6 +676,8 @@ impl HandedFromNote {
             // ([`with_task_standing`]): not the chat's record, so not read here.
             outcome: None,
             asking: None,
+            by_person: (from.mode == purlis_core::reopen::Mode::Task && from.by_person)
+                .then_some(true),
         }
     }
 }
@@ -782,8 +794,10 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let mut limits = dispatched::RunningLimits::of(held, &open_now);
     for open in open_now {
         let limit = limits.of_chat(&open);
+        let running = limits.running(&open);
         let mut chat = with_task_standing(held, &mut outcomes, OpenChat::from(open));
         chat.tasks_limit = limit;
+        chat.tasks_running = running;
         match chat
             .cwd
             .as_deref()
@@ -1597,17 +1611,19 @@ fn ignore_needs_you(
     Ok(())
 }
 
-/// The person looked at the tasks of chat `session` that failed, ended without a report or did
-/// not start (#1491): its needs-you item for them goes. Whatever else the chat needs the
-/// person for stays, and so do the tasks' rows and records.
+/// The person looked at one task of chat `session` that failed, ended without a report or did
+/// not start (#1491): `id` names the failure, as its needs-you item carries it. The item for
+/// that one task goes. Every other failure, whatever else the chat needs the person for, and
+/// the task's row and record all stay.
 #[tauri::command]
 #[specta::specta]
-fn task_failures_seen(
+fn task_failure_seen(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     session: u32,
+    id: String,
 ) -> Result<(), String> {
-    planes.held(&plane)?.task_failures_seen(session);
+    planes.held(&plane)?.task_failure_cleared(session, &id);
     Ok(())
 }
 
@@ -2144,6 +2160,7 @@ impl From<chats::Open> for OpenChat {
             in_front: open.in_front,
             shows: open.shows,
             tasks_limit: None,
+            tasks_running: None,
             pinned: open.pinned,
             label: open.label,
             from: open

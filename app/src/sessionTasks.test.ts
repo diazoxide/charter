@@ -4,7 +4,15 @@ import { nothingKnown, type ChatStates, type State } from "./chatState";
 import type { ListedChat } from "./chatsTree";
 import { shownState } from "./shownState";
 import { bucketsSaid, NO_TASKS } from "./taskBuckets";
-import { atLimitOf, NONE_BELOW, sameBelow, taskCountOf, tasksBelowOf } from "./taskCounts";
+import {
+  atLimitOf,
+  NONE_BELOW,
+  sameBelow,
+  standingOfRows,
+  taskCountOf,
+  tasksAtWorkOf,
+  tasksBelowOf,
+} from "./sessionTasks";
 
 /**
  * **Which rows are a session's tasks, and its count of them** (#1491): what its row says,
@@ -141,7 +149,7 @@ describe("a session's count", () => {
     // Working: 2 (running) and 8 (asking its asker). Waiting: 3 (idle). Done: 4, 6 (stopped
     // reads cancelled) and the two rows that fold. Failed: 5, 7 and the row that does not.
     expect(taskCountOf(now, below)).toEqual({ working: 2, waiting: 1, done: 4, failed: 3 });
-    expect(bucketsSaid(taskCountOf(now, below))).toBe("2 working · 1 waiting · 4 done · 3 failed");
+    expect(bucketsSaid(taskCountOf(now, below))).toBe("2 working · 1 waiting · 3 failed · 4 done");
   });
 
   it("counts a task that needs you as waiting, not as one the session waits on", () => {
@@ -151,7 +159,7 @@ describe("a session's count", () => {
   });
 
   it("is what the session's state says it is waiting on: the working ones only", () => {
-    const working = taskCountOf(now, below).working;
+    const working = tasksAtWorkOf(now, below);
     expect(
       shownState({
         board: "waiting",
@@ -184,40 +192,95 @@ describe("a session's count", () => {
 });
 
 describe("a session at its limit", () => {
-  const six = [listed(1), ...[2, 3, 4, 5, 6, 7].map((session) => listed(session, 1))];
-  const limited = (chats: ListedChat[], limit: number | null) =>
-    tasksBelowOf(chats, new Map(), () => limit).get(1) ?? NONE_BELOW;
+  const tasks = [2, 3, 4, 5, 6, 7].map((session) => listed(session, 1));
+  /** Chat 1 with the limit and the running count the core sent for it. */
+  const sent = (limit: number | null, running: number | null) =>
+    tasksBelowOf(
+      [listed(1, null, { tasksLimit: limit, tasksRunning: running }), ...tasks],
+      new Map(),
+    ).get(1) ?? NONE_BELOW;
 
-  it("says so when the tasks it asked for itself are as many as it may have running", () => {
-    const below = limited(six, 6);
-    expect(atLimitOf(states({}), below)).toEqual({ running: 6, limit: 6 });
-    expect(bucketsSaid(taskCountOf(states({}), below), atLimitOf(states({}), below))).toBe(
-      "6 of 6 tasks",
+  it("says so when the core's own count of its running tasks is its limit", () => {
+    const below = sent(6, 6);
+    expect(atLimitOf(below)).toEqual({ running: 6, limit: 6 });
+    expect(bucketsSaid(taskCountOf(states({}), below), atLimitOf(below))).toBe("6 of 6 tasks");
+  });
+
+  it("is not at it below the number, nor where the core said no limit or no count", () => {
+    expect(atLimitOf(sent(6, 5))).toBeNull();
+    expect(atLimitOf(sent(null, 6))).toBeNull();
+    expect(atLimitOf(sent(6, null))).toBeNull();
+  });
+
+  it("is the core's count and never one re-derived from the rows", () => {
+    // Six rows are open below it, and the core counts five against its limit: one has
+    // reported and is waiting on the person, which the window cannot tell from its rows.
+    expect(taskCountOf(states({}), sent(6, 5)).working).toBe(6);
+    expect(atLimitOf(sent(6, 5))).toBeNull();
+    // And a start still in flight is counted by the core before it has a row.
+    expect(atLimitOf(sent(7, 7))).toEqual({ running: 7, limit: 7 });
+  });
+
+  it("takes the limit from the caller where the caller holds it apart", () => {
+    const below = tasksBelowOf(
+      [listed(1, null, { tasksRunning: 6 }), ...tasks],
+      new Map(),
+      () => 6,
+    );
+    expect(atLimitOf(below.get(1) ?? NONE_BELOW)).toEqual({ running: 6, limit: 6 });
+  });
+});
+
+describe("what a session is waiting on", () => {
+  it("is the working tasks below it, at any depth", () => {
+    const below =
+      tasksBelowOf([listed(1), listed(2, 1), listed(3, 2), listed(4, 1)], new Map()).get(1) ??
+      NONE_BELOW;
+    expect(tasksAtWorkOf(states({ 2: "running", 3: "running", 4: "waiting" }), below)).toBe(2);
+    // A task at rest that waits on its own task is working through it.
+    expect(tasksAtWorkOf(states({ 2: "waiting", 3: "running", 4: "waiting" }), below)).toBe(2);
+  });
+
+  it("is not a task the person asked for, nor anything below one, though both are counted", () => {
+    const chats = [listed(1), listed(2, 1, { byYou: true }), listed(3, 2), listed(4, 1)];
+    const below = tasksBelowOf(chats, new Map()).get(1) ?? NONE_BELOW;
+    const now = states({ 2: "running", 3: "running", 4: "running" });
+
+    expect(tasksAtWorkOf(now, below)).toBe(1);
+    expect(taskCountOf(now, below).working).toBe(3);
+    // The person's task is a session to its own task, and waits on it.
+    const theirs = tasksBelowOf(chats, new Map()).get(2) ?? NONE_BELOW;
+    expect(tasksAtWorkOf(now, theirs)).toBe(1);
+  });
+});
+
+describe("how every row of a list stands, from the one pass", () => {
+  it("says of each row what its own row draws, waiting on its tasks included", () => {
+    const rows = [listed(1), listed(2, 1), listed(3, 2), listed(9)];
+    const stood = standingOfRows(
+      states({ 1: "waiting", 2: "waiting", 3: "running", 9: "waiting" }),
+      rows,
+    );
+
+    expect(stood.get(1)?.shown?.word).toBe("waiting on 2 tasks");
+    expect(stood.get(2)?.shown?.word).toBe("waiting on 1 task");
+    expect(stood.get(3)?.shown?.word).toBe("working");
+    expect(stood.get(9)?.shown?.word).toBe("idle");
+    // And the count of chat 1 reads the same tasks the same way.
+    const below = tasksBelowOf(rows, new Map()).get(1) ?? NONE_BELOW;
+    expect(tasksAtWorkOf(states({ 1: "waiting", 2: "waiting", 3: "running" }), below)).toBe(
+      stood.get(1)?.atWork,
     );
   });
 
-  it("is not at it below the number, nor where the core said no limit", () => {
-    expect(atLimitOf(states({}), limited(six.slice(0, 6), 6))).toBeNull();
-    expect(atLimitOf(states({}), limited(six, null))).toBeNull();
-  });
-
-  it("counts only its own tasks that have not finished, not the tasks below them", () => {
-    // Five of its own at work, and one of those has a task of its own: six working below it,
-    // five against its limit.
-    const chats = [
+  it("does not count below a handoff, nor a task the person asked for", () => {
+    const rows = [
       listed(1),
-      ...[2, 3, 4, 5, 6].map((session) => listed(session, 1)),
-      listed(7, 2),
+      listed(2, 1, { mode: "handoff", report: null }),
+      listed(3, 1, { byYou: true }),
     ];
-    const below = limited(chats, 6);
-    expect(taskCountOf(states({}), below).working).toBe(6);
-    expect(atLimitOf(states({}), below)).toBeNull();
-    // One of its own that waits on the person still counts against its limit.
-    const waiting = states({ 2: "waiting" }, [2]);
-    expect(atLimitOf(waiting, limited(six, 6))).toEqual({ running: 6, limit: 6 });
-    // And one of its own that has reported is not running.
-    const reported = [...six.slice(0, 6), listed(7, 1, { report: "sent", outcome: "done" })];
-    expect(atLimitOf(states({}), limited(reported, 6))).toBeNull();
+    const stood = standingOfRows(states({ 1: "waiting", 2: "running", 3: "running" }), rows);
+    expect(stood.get(1)?.shown?.word).toBe("idle");
   });
 });
 

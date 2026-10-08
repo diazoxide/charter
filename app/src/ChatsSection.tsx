@@ -18,17 +18,14 @@ import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
   arranged,
-  countsOf,
   filters,
   found,
   liveBelow,
   matches,
   matchesFinished,
   sessionOrder,
-  shownOfRow,
   sinceSaid,
   stamped,
-  summaryOf,
   type Filter,
   type Rank,
 } from "./chatsList";
@@ -36,13 +33,13 @@ import { useChatsListPrefs } from "./chatsListPrefs";
 import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
+import { standingOfRows } from "./sessionTasks";
 import { TaskCountShown } from "./TasksBelow";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
 import { useRevealedTask, type Reveal } from "./revealTask";
 import { useTabStop } from "./roving";
 import { stateClock, useStateSince, type StateClock } from "./stateClock";
-import { SHAPES } from "./StateShown";
 import { deletes } from "./tabKeys";
 
 /** A row's id in the section's roving focus. */
@@ -166,6 +163,8 @@ export function ChatsSection({
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
   reveal,
+  onRevealed,
+  onLookFinished,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -188,6 +187,11 @@ export function ChatsSection({
   /** A finished task to bring into view: one that failed, when the person goes to its
    *  needs-you item (#1491). */
   reveal?: Reveal;
+  /** What became of `reveal`: its row was shown and has the keyboard, or it could not be
+   *  shown and the list said so. Told once for each asking. */
+  onRevealed?: (reveal: Reveal, shown: boolean) => void;
+  /** The person opened a finished row to read it: a failed one has then been looked at. */
+  onLookFinished?: (task: FinishedTask) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -218,9 +222,11 @@ export function ChatsSection({
 
   // What the chats' own moves change, each read through the selector: a move that changes
   // none of them draws nothing here.
+  // Every row's state from the one pass (`standingOfRows`), so the order, the folds and the
+  // filter read the word each row draws, `waiting on n tasks` included (#1491).
   const kindsOf = (states: ChatStates) => {
-    const queue = new Set(states.needsYou);
-    return (row: ChatRow) => shownOfRow(states, row, queue)?.kind;
+    const stood = standingOfRows(states, rows);
+    return (row: ChatRow) => stood.get(row.session)?.shown?.kind;
   };
   const order = useChatsSelect(
     chats,
@@ -232,11 +238,11 @@ export function ChatsSection({
     chats,
     (states) => {
       if (!filtering) return null;
-      const queue = new Set(states.needsYou);
+      const stood = standingOfRows(states, rows);
       return rows
         .filter(
           (row) =>
-            matches(row, shownOfRow(states, row, queue), filter) || finishedFound.has(row.session),
+            matches(row, stood.get(row.session)?.shown, filter) || finishedFound.has(row.session),
         )
         .map((row) => row.session);
     },
@@ -283,17 +289,15 @@ export function ChatsSection({
       setRanks([]);
     });
 
-  /** What each chat's finished tasks come to: a folded row's summary, and whether one of them
-   *  stands alone, which keeps its chat open. */
+  /** What each chat's finished tasks come to: whether one of them stands alone, which keeps
+   *  its chat open. What a folded row says of them is its count (`TaskCountShown`, #1491),
+   *  the same on a folded row and an open one. */
   const ended = useMemo(
     () =>
       new Map(
         [...finished]
           .filter(([, tasks]) => tasks.length > 0)
-          .map(([session, tasks]) => [
-            session,
-            { summary: summaryOf(tasks), alone: tasks.some((task) => !task.folds) },
-          ]),
+          .map(([session, tasks]) => [session, { alone: tasks.some((task) => !task.folds) }]),
       ),
     [finished],
   );
@@ -400,7 +404,26 @@ export function ChatsSection({
     [offers, onPress],
   );
   const section = useRef<HTMLElement>(null);
-  useRevealedTask(section, reveal, rows, fold);
+  useRevealedTask(section, reveal, rows, {
+    fold,
+    shut: (session) => opens.get(session) === false,
+    // A finished row, or a chat's own, that the filter does not ask for.
+    hides: (asked) =>
+      filtering &&
+      (asked.task === undefined ||
+        !base.some((row) => row.session === asked.asker) ||
+        !(finishedFound.get(asked.asker) ?? []).some((task) => task.name === asked.task)),
+    unfilter: (name) => {
+      clear();
+      setSaid(`The filter was taken off to show ${name}.`);
+    },
+    // The row was shown, or could not be: said to whoever asked, once (#1491).
+    shown: (asked) => onRevealed?.(asked, true),
+    missed: (asked) => {
+      setSaid(`${asked.task ?? "That chat"} has no row to show here.`);
+      onRevealed?.(asked, false);
+    },
+  });
   const stop = useTabStop(
     front === undefined ? undefined : rowId(front),
     drawn.map((row) => rowId(row.session)),
@@ -616,7 +639,6 @@ export function ChatsSection({
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
-                      summary={open === false ? (ended.get(row.session)?.summary ?? null) : null}
                       needs={lead === undefined ? null : lead}
                       needsName={
                         lead === undefined || lead === row.session
@@ -647,6 +669,7 @@ export function ChatsSection({
                         }
                         onClear={onClearFinished}
                         onReopen={onReopen}
+                        onLook={onLookFinished}
                       />
                     )),
                   ];
@@ -717,7 +740,6 @@ const Row = memo(function Row({
   tab,
   current,
   open,
-  summary,
   needs,
   needsName,
   stopping,
@@ -754,8 +776,6 @@ const Row = memo(function Row({
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
   open: boolean | null;
-  /** How its finished tasks ended (`summaryOf`), while it is folded over some. */
-  summary: string | null;
   /** The chat its hand leads to: itself, a chat below it, or none when it wears no hand. */
   needs: number | null;
   /** That chat's name, when it is a chat below this one. */
@@ -786,7 +806,6 @@ const Row = memo(function Row({
   };
   // Asked once, as the row is drawn: whether its chat's state changed while it was not.
   const [changed] = useState(() => clock.missed(session));
-  const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
   const cameFrom = from === null ? null : `from ${from}`;
   /** What the second line says that does not change by itself: one line's tooltip. */
@@ -833,6 +852,8 @@ const Row = memo(function Row({
             }
             data-tab={tab}
             data-lines={lines}
+            // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
+            data-session={session}
             title={lines === 1 && second.length > 0 ? second.join(" · ") : undefined}
             onClick={() => onOpen(session)}
             onKeyDown={keys}
@@ -867,25 +888,6 @@ const Row = memo(function Row({
                   3 done`. It reads its own tasks, so one that changes state redraws this and
                   not the row. */}
               <TaskCountShown session={session} />
-              {counts.length > 0 && (
-                /* Folded over finished tasks: how they ended, in the marks a state has
-                   (V100-48, "steward 4 · ✓5"). */
-                <span
-                  className="below-summary"
-                  role="img"
-                  aria-label={`${counts.map((one) => `${one.count} ${one.word}`).join(", ")}`}
-                >
-                  {counts.map((one) => {
-                    const Shape = SHAPES[one.shape];
-                    return (
-                      <span key={one.shape} className="counted" data-shape={one.shape}>
-                        <Shape aria-hidden="true" />
-                        {one.count}
-                      </span>
-                    );
-                  })}
-                </span>
-              )}
               {stopping && <span className="stopping">Stopping…</span>}
             </span>
             {lines === 2 && (

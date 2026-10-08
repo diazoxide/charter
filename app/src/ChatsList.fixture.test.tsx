@@ -198,7 +198,6 @@ describe("the Chats list the e2e measures", () => {
       'data-level="5"',
       "rolled-up",
       "Stopping…",
-      "below-summary",
       "finished-task",
       'class="line two"',
     ])

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chatsTree, type ListedChat } from "./chatsTree";
-import { finishedRowOf, rowsAbove } from "./revealTask";
+import { chatRowOf, finishedRowById, finishedRowOf, rowsAbove } from "./revealTask";
 
 /** Bringing a failed task's finished row into view (#1491). */
 
@@ -64,5 +64,45 @@ describe("a finished row, found by what the list says of itself", () => {
     expect(finishedRowOf(list(), "steward 1", "check the queue")).toBeNull();
     expect(finishedRowOf(list(), "steward 3", "check prod")).toBeNull();
     expect(finishedRowOf(null, "steward 1", "check prod")).toBeNull();
+  });
+});
+
+describe("a chat's own row, found by its number (#1490)", () => {
+  it("is the row of the tree that carries it, and no other element that does", () => {
+    const section = document.createElement("section");
+    section.innerHTML = `
+      <div data-session="7">a pane</div>
+      <button role="treeitem" data-session="7">steward 7</button>
+      <button role="treeitem" data-session="70">steward 70</button>`;
+
+    expect(chatRowOf(section, 7)?.textContent).toBe("steward 7");
+    expect(chatRowOf(section, 8)).toBeNull();
+    expect(chatRowOf(null, 7)).toBeNull();
+  });
+});
+
+describe("a finished row, found by its dispatch record's id (#1491)", () => {
+  const list = () => {
+    const section = document.createElement("section");
+    section.innerHTML = `
+      <div class="finished-task" data-task-id="01K6A">
+        <button class="finished-name"><span class="session">check prod</span></button>
+        <button class="finished-clear">Clear</button>
+      </div>
+      <div class="finished-task" data-task-id="01K6B">
+        <button class="finished-name"><span class="session">check prod</span></button>
+      </div>`;
+    return section;
+  };
+
+  it("tells two tasks of one name apart, and is the row's own button", () => {
+    const row = finishedRowById(list(), "01K6B");
+    expect(row?.className).toBe("finished-name");
+    expect(row?.closest(".finished-task")?.getAttribute("data-task-id")).toBe("01K6B");
+  });
+
+  it("is nothing for a row that is not drawn", () => {
+    expect(finishedRowById(list(), "01K6C")).toBeNull();
+    expect(finishedRowById(null, "01K6A")).toBeNull();
   });
 });

@@ -27,6 +27,7 @@ export const FinishedTasks = memo(function FinishedTasks({
   tasks,
   onClear,
   onReopen,
+  onLook,
 }: {
   /** The chat that asked for them, by the name its row has. */
   asker: string;
@@ -37,6 +38,9 @@ export const FinishedTasks = memo(function FinishedTasks({
   onClear: (ids: string[]) => void;
   /** Reopens one as an ordinary chat; answers why not, where it could not. */
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
+  /** A row was opened to read its report: a task that failed has then been looked at, and
+   *  its needs-you item goes (#1491). */
+  onLook?: (task: FinishedTask) => void;
 }) {
   /** Whether the folded rows are drawn. This window's own, and folded to start with. */
   const [open, setOpen] = useState(false);
@@ -46,7 +50,13 @@ export const FinishedTasks = memo(function FinishedTasks({
     <li role="none" className="finished-tasks" data-level={level}>
       <div role="group" aria-label={`Finished tasks of ${asker}`}>
         {alone.map((task) => (
-          <FinishedRow key={task.id} task={task} onClear={onClear} onReopen={onReopen} />
+          <FinishedRow
+            key={task.id}
+            task={task}
+            onClear={onClear}
+            onReopen={onReopen}
+            onLook={onLook}
+          />
         ))}
         {folded.length > 0 && (
           <div className="finished-fold">
@@ -88,10 +98,12 @@ function FinishedRow({
   task,
   onClear,
   onReopen,
+  onLook,
 }: {
   task: FinishedTask;
   onClear?: (ids: string[]) => void;
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
+  onLook?: (task: FinishedTask) => void;
 }) {
   const [shown, setShown] = useState(false);
   const [refused, setRefused] = useState<string>();
@@ -111,7 +123,7 @@ function FinishedRow({
       .finally(() => setBusy(false));
   };
   return (
-    <div className="finished-task" data-how={task.how}>
+    <div className="finished-task" data-how={task.how} data-task-id={task.id}>
       <div className="finished-line">
         <button
           type="button"
@@ -119,7 +131,11 @@ function FinishedRow({
           tabIndex={0}
           aria-expanded={shown}
           title={firstLine(task.report) || undefined}
-          onClick={() => setShown((was) => !was)}
+          onClick={() => {
+            // Opened to be read: looked at.
+            if (!shown) onLook?.(task);
+            setShown((was) => !was);
+          }}
         >
           {task.persona === null ? (
             <SquareTerminal className="node-icon" aria-hidden="true" />

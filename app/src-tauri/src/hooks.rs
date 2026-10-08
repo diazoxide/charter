@@ -91,6 +91,13 @@ pub struct Moved {
     #[serde(skip)]
     #[specta(skip)]
     pub counts_only: bool,
+    /// Whether this move raised something for the person (#1491): the chat came into the
+    /// queue, or a reason was added to one already in it (`purlis_core::state::raised`). A
+    /// chat that moves while its item stands raised nothing. The app's own fact, and never
+    /// sent.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub raised: bool,
 }
 
 impl Moved {
@@ -101,10 +108,14 @@ impl Moved {
     /// something else. A task that failed is an item on the asking chat, raised as a move of
     /// its own, and that one does interrupt.
     ///
+    /// **On the rising edge only**: a failure's item stands across the asking chat's own
+    /// turns, and each prompt, stop and helper of that chat is a move with the item still
+    /// standing. One failure is one notification.
+    ///
     /// Whether the person is already looking at the chat is asked after this, and is not this
     /// rule's.
     pub fn interrupts(&self) -> bool {
-        self.needs_you && !self.counts_only
+        self.needs_you && self.raised && !self.counts_only
     }
 
     /// This move, as one that only changes what the chat's row counts.
@@ -122,22 +133,46 @@ impl Moved {
 pub enum Need {
     /// Its report has nowhere to go: the chat that asked for it, `asker`, has gone.
     ReportUndelivered { asker: String },
-    /// A task it asked for, `task`, came to nothing (#1491): `how` is `failed`,
-    /// `unreported` (it ended without a report) or `did_not_start`, and `why` says why in a
-    /// few words, where anything does. Not emptied by the chat's next prompt: by the person's
-    /// look at it, their Ignore, or the task's row being cleared.
+    /// A task it asked for, `task`, came to nothing (#1491), and `why` says why in a few
+    /// words, where anything does. `id` names this failure and no other: its dispatch
+    /// record's id, which its finished row carries. `chat` is the task's chat while it is
+    /// still open. Not emptied by the chat's next prompt: by the person's look at it, their
+    /// Ignore, or the task's row being cleared. Held in memory only: a restart of the app
+    /// keeps the task's finished row and not this item.
     TaskFailed {
+        id: String,
+        #[specta(optional)]
+        chat: Option<u32>,
         task: String,
-        how: String,
+        how: HowFailed,
         why: String,
     },
 }
 
+/// How a task came to nothing (`purlis_core::state::HowFailed`), as the window is sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum HowFailed {
+    /// It reported that it failed, or that it was blocked.
+    Failed,
+    /// Its program ended while it still owed its report.
+    Unreported,
+    /// It was asked for and never started.
+    DidNotStart,
+}
+
 impl From<purlis_core::state::FailedTask> for Need {
     fn from(failed: purlis_core::state::FailedTask) -> Self {
+        use purlis_core::state::HowFailed as How;
         Self::TaskFailed {
+            id: failed.id,
+            chat: failed.chat,
             task: failed.task,
-            how: failed.how.word().to_owned(),
+            how: match failed.how {
+                How::Failed => HowFailed::Failed,
+                How::Unreported => HowFailed::Unreported,
+                How::DidNotStart => HowFailed::DidNotStart,
+            },
             why: failed.why,
         }
     }
@@ -614,7 +649,8 @@ pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
 
 /// What chat `session` waits on that is not the person, by the project's own records
 /// (`purlis_core::state::Waits`, #1491): asked as a report that can end its turn is applied.
-pub type WaitsOf = Arc<dyn Fn(u32) -> purlis_core::state::Waits + Send + Sync + 'static>;
+/// The second argument says the report is that turn's end, and not the nudge after one.
+pub type WaitsOf = Arc<dyn Fn(u32, bool) -> purlis_core::state::Waits + Send + Sync + 'static>;
 
 /// What is told that chat `session` is now in conversation `id`: the id its own harness
 /// reported, that the board adopted or followed — and, where the move began a run (`/clear`,
@@ -939,10 +975,9 @@ impl Hooks {
                 Box::new(move |refused| {
                     let recorded = record(&events, |log| log.refused(plane.root(), refused.chat));
                     let what = {
-                        let mut guard = held_board(&board);
-                        guard
-                            .commit_refused(refused.chat, &refused.commit_refused)
-                            .then(|| seen_by(&guard, &plane, refused.chat))
+                        moving(&mut held_board(&board), &plane, refused.chat, |board| {
+                            board.commit_refused(refused.chat, &refused.commit_refused)
+                        })
                     };
                     if let Some(what) = what {
                         moved(what);
@@ -1382,10 +1417,9 @@ impl ChatBoard for Hooks {
     }
 
     fn needs(&self, session: u32, need: purlis_core::state::Need) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .needs(session, need)
-            .then(|| seen_by(&board, &self.plane, session))
+        moving(&mut self.board(), &self.plane, session, |board| {
+            board.needs(session, need)
+        })
     }
 
     fn reported_to_its_asker(&self, session: u32) {
@@ -1393,32 +1427,41 @@ impl ChatBoard for Hooks {
     }
 
     fn rested(&self, session: u32) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .rested(session)
-            .then(|| seen_by(&board, &self.plane, session))
+        moving(&mut self.board(), &self.plane, session, |board| {
+            board.rested(session)
+        })
     }
 
     fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .task_failed(session, failed)
-            .then(|| seen_by(&board, &self.plane, session))
+        moving(&mut self.board(), &self.plane, session, |board| {
+            board.task_failed(session, failed)
+        })
     }
 
-    fn failures_seen(&self, session: u32) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .failures_seen(session)
-            .then(|| seen_by(&board, &self.plane, session))
+    fn failure_cleared(&self, session: u32, id: &str) -> Option<Moved> {
+        moving(&mut self.board(), &self.plane, session, |board| {
+            board.failure_cleared(session, id)
+        })
     }
+}
 
-    fn failure_cleared(&self, session: u32, task: &str) -> Option<Moved> {
-        let mut board = self.board();
-        board
-            .failure_cleared(session, task)
-            .then(|| seen_by(&board, &self.plane, session))
+/// Makes one move of chat `session` on the board, and answers what the window must now be
+/// told where a reader would see a difference: [`seen_by`], with whether the move raised
+/// something for the person (`Moved::raised`), read off where the chat stood before and
+/// after. One hold from the read before to the snapshot, as every move's is.
+fn moving(
+    board: &mut Board,
+    plane: &PlaneId,
+    session: u32,
+    act: impl FnOnce(&mut Board) -> bool,
+) -> Option<Moved> {
+    let was = board.standing(session);
+    if !act(board) {
+        return None;
     }
+    let mut moved = seen_by(board, plane, session);
+    moved.raised = purlis_core::state::raised(was, board.standing(session));
+    Some(moved)
 }
 
 /// What the chat `report` names waits on, asked only of a report that can end its turn or
@@ -1433,7 +1476,7 @@ fn waits_at(waits: &Mutex<Option<WaitsOf>>, report: &Report) -> purlis_core::sta
     }
     let asked = waits.lock().unwrap_or_else(PoisonError::into_inner).clone();
     asked.map_or_else(purlis_core::state::Waits::default, |asked| {
-        asked(report.chat)
+        asked(report.chat, report.event == Event::Stop)
     })
 }
 
@@ -1471,6 +1514,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         )
         .filter(|needs| !needs.is_empty()),
         counts_only: false,
+        raised: false,
         children: board
             .children(session)
             .into_iter()
@@ -1553,9 +1597,9 @@ fn apply(
 ) -> Applied {
     let mut guard = held_board(board);
     let was = guard.conversation(report.chat).map(str::to_owned);
-    let moved = guard
-        .reported_while(report, waits)
-        .then(|| seen_by(&guard, plane, report.chat));
+    let moved = moving(&mut guard, plane, report.chat, |board| {
+        board.reported_while(report, waits)
+    });
     let now = guard.conversation(report.chat);
     let followed = now
         .filter(|now| was.as_deref() != Some(*now))

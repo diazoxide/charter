@@ -592,17 +592,22 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     render(<App />);
     await section();
 
-    // Five done and nothing at work: folded by itself, with the count in the state's mark.
-    const summary = await within(theTree()).findByRole("img", { name: "5 done" });
-    expect(summary.querySelector('[data-shape="tick"]')?.textContent).toBe("5");
+    // Five done and nothing at work: folded by itself, and its row counts them (#1491: the
+    // one count a row says, which its tab's chip and the explorer's line share).
+    await waitFor(() =>
+      expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("5 done"),
+    );
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("group", { name: "Finished tasks of steward 1" })).toBeNull();
 
-    // Opened by hand, the finished tasks are under it, and the row no longer counts them.
+    // Opened by hand, the finished tasks are under it, and the row says the same count: it
+    // is the same on a folded row and an open one.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowRight" });
     const group = await screen.findByRole("group", { name: "Finished tasks of steward 1" });
     expect(within(group).getByRole("button", { name: "Finished (5)" })).toBeTruthy();
-    expect(within(theTree()).queryByRole("img", { name: "5 done" })).toBeNull();
+    expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("5 done");
+    // One source: the folded marks the row drew before are gone.
+    expect(theTree().querySelector(".below-summary")).toBeNull();
   });
 
   it("does not fold a failure away: a session with a task that did not come out done stays open", async () => {
@@ -615,9 +620,9 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
 
     expect(await screen.findByRole("group", { name: "Finished tasks of steward 1" })).toBeTruthy();
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
-    // Folded by hand, it counts both ends.
+    // Folded by hand, it counts both ends, the failure first.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
-    expect(within(theTree()).getByRole("img", { name: "1 done, 1 failed" })).toBeTruthy();
+    expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("1 failed · 1 done");
   });
 });
 

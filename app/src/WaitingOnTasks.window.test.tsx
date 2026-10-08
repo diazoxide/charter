@@ -197,6 +197,11 @@ function core(open: OpenChat[], rows: FinishedTask[] = []) {
   };
   return {
     asked: (cmd: string) => asked.filter((one) => one.cmd === cmd).map((one) => one.args),
+    /** The core's count of chat `session`'s running tasks is `count` from the next read. */
+    running: (session: number, count: number) => {
+      const one = open.find((chat) => chat.session === session);
+      if (one !== undefined) one.tasks_running = count;
+    },
     /** A task's record changes, as when its report lands, and the core says so. */
     reports: async (session: number, outcome: string) => {
       const one = open.find((chat) => chat.session === session);
@@ -422,12 +427,12 @@ describe("the count on a session's row", () => {
     render(<App />);
     const tree = await rows(1);
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("3 done · 2 failed"));
+    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("2 failed · 3 done"));
   });
 
   it("says 6 of 6 tasks at the limit the core says is in force for it", async () => {
     const six = [2, 3, 4, 5, 6, 7].map((session) => task(session, `check ${session}`));
-    const { move } = core([chat(1, { tasks_limit: 6 }), ...six], FIVE);
+    const { move } = core([chat(1, { tasks_limit: 6, tasks_running: 6 }), ...six], FIVE);
     render(<App />);
     const tree = await rows(7);
     for (const one of six) move(one.session, "running", one.session);
@@ -437,11 +442,13 @@ describe("the count on a session's row", () => {
 
   it("is below its limit again when one of the six reports", async () => {
     const six = [2, 3, 4, 5, 6, 7].map((session) => task(session, `check ${session}`));
-    const { reports } = core([chat(1, { tasks_limit: 6 }), ...six]);
+    const { reports, running } = core([chat(1, { tasks_limit: 6, tasks_running: 6 }), ...six]);
     render(<App />);
     const tree = await rows(7);
     await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("6 of 6 tasks"));
 
+    // The core counts one fewer against the limit once it has reported.
+    running(1, 5);
     await reports(7, "done");
 
     await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("5 working · 1 done"));
@@ -457,9 +464,17 @@ describe("what a finishing task does to its session's row", () => {
   });
   const failure = {
     kind: "task_failed" as const,
+    id: FAILED.id,
     task: "check staging",
-    how: "failed",
+    how: "failed" as const,
     why: "The cluster refused the login.",
+  };
+  /** The title bar's item for a failure of chat 1's, pressed. */
+  const go = async (task = "check staging") => {
+    await userEvent.click(await screen.findByTestId("needs-you-button"));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: new RegExp(`^Go to steward 1: ${task} failed`) }),
+    );
   };
 
   it("puts no hand on it for a task that finished as done", async () => {
@@ -506,15 +521,13 @@ describe("what a finishing task does to its session's row", () => {
     move(1, "running", 2, [1], { needs: [failure] });
     const failedRow = await within(tree).findByRole("button", { name: /^check staging/ });
 
-    await userEvent.click(await screen.findByTestId("needs-you-button"));
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: /^Go to steward 1: check staging failed/ }),
-    );
+    await go();
 
-    await waitFor(() =>
-      expect(asked("task_failures_seen")).toEqual([{ plane: PLANE, session: 1 }]),
-    );
+    // Shown first, and only then looked at: that one failure, by its record's id.
     await waitFor(() => expect(failedRow).toHaveFocus());
+    await waitFor(() =>
+      expect(asked("task_failure_seen")).toEqual([{ plane: PLANE, session: 1, id: FAILED.id }]),
+    );
 
     // The core answers with the session out of the queue: the hand goes.
     move(1, "running", 3, [], { needs: null });
@@ -534,14 +547,120 @@ describe("what a finishing task does to its session's row", () => {
     expect(within(tree).queryByRole("button", { name: /^check staging/ })).toBeNull();
     move(1, "running", 2, [1], { needs: [failure] });
 
-    await userEvent.click(await screen.findByTestId("needs-you-button"));
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: /^Go to steward 1: check staging failed/ }),
-    );
+    await go();
 
     await waitFor(() =>
       expect(within(tree).getByRole("button", { name: /^check staging/ })).toHaveFocus(),
     );
+
+    // Opened once, for that asking: folded again by the person, it stays folded.
+    const again = tree.querySelector<HTMLElement>('.twist[data-fold="open"]');
+    if (again === null) throw new Error("the session's row does not fold");
+    await userEvent.click(again);
+    move(2, "running", 5, [1]);
+    move(2, "waiting", 6, [1]);
+    expect(within(tree).queryByRole("button", { name: /^check staging/ })).toBeNull();
+  });
+
+  it("clears the one failure it went to, and leaves the others their hand", async () => {
+    const OTHER = finished("01K6OTHER", "check prod", {
+      how: "failed",
+      outcome: "failed",
+      folds: false,
+    });
+    const { move, asked } = core([chat(1)], [OTHER, FAILED]);
+    render(<App />);
+    const tree = await rows(1);
+    await within(tree).findByRole("button", { name: /^check staging/ });
+    move(1, "running", 2, [1], {
+      needs: [{ ...failure, id: OTHER.id, task: "check prod", why: "No route." }, failure],
+    });
+
+    // The item says the latest, and Go is that one's.
+    await go();
+
+    await waitFor(() =>
+      expect(asked("task_failure_seen")).toEqual([{ plane: PLANE, session: 1, id: FAILED.id }]),
+    );
+  });
+
+  it("says so, shows the session and keeps the hand when the failed task has no row to show", async () => {
+    // Its finished row was never listed (a dispatch that did not start has none).
+    const { move, asked } = core([chat(1), chat(2)], []);
+    render(<App />);
+    const tree = await rows(2);
+    move(1, "running", 2, [1], {
+      needs: [
+        { ...failure, id: "not-started-1", how: "did_not_start" as const, why: "No profile." },
+      ],
+    });
+
+    await userEvent.click(await screen.findByTestId("needs-you-button"));
+    await userEvent.click(
+      await screen.findByRole("menuitem", {
+        name: /^Go to steward 1: check staging did not start/,
+      }),
+    );
+
+    expect(await screen.findByText(/check staging has no row left to show/)).toBeTruthy();
+    // Not looked at: nothing was shown, so the hand stays where it is.
+    expect(asked("task_failure_seen")).toEqual([]);
+    expect(says(row(tree, "steward 1"))).toEqual({ word: "needs you", shape: "hand" });
+  });
+
+  it("goes to the chat of a failed task that is still open, and then it is looked at", async () => {
+    // A task that reported blocked stays open as the chat it is; so does one that failed,
+    // for the moment before purlis ends it. The core says which chat it is.
+    const { move, asked } = core([chat(1), task(2, "check prod")]);
+    render(<App />);
+    await rows(2);
+    move(2, "waiting", 1, []);
+    move(1, "running", 2, [1], {
+      needs: [{ ...failure, id: "01K6BLOCKED", chat: 2, task: "check prod", why: "No access." }],
+    });
+
+    await go("check prod");
+
+    await waitFor(() =>
+      expect(asked("task_failure_seen")).toEqual([{ plane: PLANE, session: 1, id: "01K6BLOCKED" }]),
+    );
+    // Shown inside its session's tab, as a pressed task's row shows it.
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 2"));
+  });
+
+  it("is looked at when its finished row is opened to be read", async () => {
+    const { move, asked } = core([chat(1)], [FAILED, finished("01K6DONE", "live check")]);
+    render(<App />);
+    const tree = await rows(1);
+    move(1, "running", 2, [1], { needs: [failure] });
+
+    await userEvent.click(await within(tree).findByRole("button", { name: /^check staging/ }));
+
+    await waitFor(() =>
+      expect(asked("task_failure_seen")).toEqual([{ plane: PLANE, session: 1, id: FAILED.id }]),
+    );
+    // A row that is no failure its session is flagged for tells the core nothing.
+    await userEvent.click(await within(tree).findByRole("button", { name: /Finished \(1\)/ }));
+    await userEvent.click(await within(tree).findByRole("button", { name: /^live check/ }));
+    expect(asked("task_failure_seen")).toHaveLength(1);
+  });
+});
+
+describe("a task the person asked for", () => {
+  it("is counted on the session's row and is not what the session is waiting on", async () => {
+    const theirs = task(2, "check prod", 1, { by_person: true });
+    const { move } = core([chat(1), theirs]);
+    render(<App />);
+    const tree = await rows(2);
+    move(2, "running", 1);
+
+    move(1, "waiting", 2, []);
+
+    // Its turn ended with nothing it asked for at work: idle here, and the core queues it.
+    expect(says(row(tree, "steward 1"))).toEqual({ word: "idle", shape: "pause" });
+    expect(count(row(tree, "steward 1"))).toBe("1 working");
+    move(1, "waiting", 3, [1]);
+    expect(says(row(tree, "steward 1"))).toEqual({ word: "needs you", shape: "hand" });
   });
 });
 

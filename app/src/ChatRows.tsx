@@ -16,7 +16,7 @@ import { ViewMark } from "./Views";
 import type { ListedChat } from "./chatsTree";
 import { shownState, type Shown, type TaskFacts } from "./shownState";
 import { StateShown } from "./StateShown";
-import { taskCountOf } from "./taskCounts";
+import { tasksAtWorkOf } from "./sessionTasks";
 import { useTasksBelow } from "./TasksBelow";
 
 /*
@@ -62,7 +62,7 @@ function sameShown(one: Shown | undefined, other: Shown | undefined): boolean {
  *
  * **A chat waiting on its tasks says so, and how many** (#1491): it reads its own tasks
  * (`useTasksBelow`) and counts the ones that have not finished, by the one count
- * (`taskCounts.taskCountOf`), so the word agrees with the count on its row. A task below it
+ * (`sessionTasks.tasksAtWorkOf`), so the word agrees with the count on its row. A task below it
  * that finishes redraws this, and no other chat's.
  */
 export const ChatShownState = memo(function ChatShownState({
@@ -97,7 +97,7 @@ export const ChatShownState = memo(function ChatShownState({
         needsYou: states.needsYou.includes(session),
         task: report === null ? null : { report, outcome, asking },
         harness,
-        tasksAtWork: taskCountOf(states, below).working,
+        tasksAtWork: tasksAtWorkOf(states, below),
       }),
     sameShown,
   );
