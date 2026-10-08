@@ -266,7 +266,6 @@ const Row = memo(function Row({
               harness={harness}
             />
             {from !== null && <span className="from">from {from}</span>}
-            {!tab && <span className="no-tab">no tab</span>}
             {stopping && <span className="stopping">Stopping…</span>}
           </button>
         </RovingFocusGroup.Item>

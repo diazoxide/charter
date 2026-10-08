@@ -10,7 +10,11 @@ import { homeOf, panesOf, shownIn, type AskedBy, type Tabs } from "./tabs";
 
 /** Who asked whom, as the tabs are asked it (`tabs.AskedBy`), read off the core's list. */
 export function askedByOf(chats: readonly ListedChat[]): AskedBy {
-  const parents = new Map(chats.map((chat) => [chat.session, chat.parent]));
+  // **Task links only** (V100-69): a handoff moved the work and is a session of its own, so
+  // it is never shown inside the tab of the chat it came from, with or without a tab here.
+  const parents = new Map(
+    chats.map((chat) => [chat.session, chat.mode === "task" ? chat.parent : null]),
+  );
   return (session) => parents.get(session) ?? undefined;
 }
 
@@ -23,19 +27,25 @@ export function askedByOf(chats: readonly ListedChat[]): AskedBy {
  * its count of working and finished tasks is a count over them.
  */
 export function chatsOfTab(tabs: Tabs, id: number, chats: readonly ListedChat[]): ChatRow[] {
+  return panesOf(tabs, id).flatMap(({ pane }) => chatsOfPane(tabs, id, pane, chats));
+}
+
+/** The chats of one pane of tab `id`, as {@link chatsOfTab} lists a tab's: the pane's own chat
+ *  first, then the tasks at home in it. */
+export function chatsOfPane(
+  tabs: Tabs,
+  id: number,
+  pane: number,
+  chats: readonly ListedChat[],
+): ChatRow[] {
   const askedBy = askedByOf(chats);
-  const orphaned = new Map(chatsTree(chats).map((row) => [row.session, row.orphaned]));
-  return panesOf(tabs, id).flatMap(({ pane }) => {
-    const here = chats.filter((chat) => {
-      const home = homeOf(tabs, chat.session, askedBy);
-      return home !== undefined && home.tab === id && home.pane === pane;
-    });
-    // Nested among themselves: the pane's own chat is the only one whose asker is not here.
-    return chatsTree(here).map((row) => ({
-      ...row,
-      orphaned: orphaned.get(row.session) ?? false,
-    }));
+  const here = chats.filter((chat) => {
+    const home = homeOf(tabs, chat.session, askedBy);
+    return home !== undefined && home.tab === id && home.pane === pane;
   });
+  // Nested among themselves: the pane's own chat is the only one whose asker is not here, so
+  // it is never an orphan in this tree, whatever started it.
+  return chatsTree(here).map((row) => ({ ...row, orphaned: false }));
 }
 
 /** What a pane's breadcrumb says while the pane shows a task. */
@@ -67,7 +77,7 @@ export function crumbsOf(
       seen.add(at.session);
       path.unshift(at);
       if (at.session === own) break;
-      at = at.parent === null ? undefined : byNumber.get(at.parent);
+      at = at.parent === null || at.mode !== "task" ? undefined : byNumber.get(at.parent);
     }
     const [top] = path;
     const shown = path[path.length - 1];
@@ -82,26 +92,28 @@ export function crumbsOf(
 }
 
 /**
- * **The chats of tab `id` that need you and are not on screen in it**, longest waiting first:
- * what the tab wears the needs-you mark for. The session's own chat is not one of them: the
- * tab's own state mark is that chat's.
+ * **The chats of tab `id` that are waiting for the person and are not on screen**, in the
+ * order they wait: what the tab wears the hand for (V100-37).
+ *
+ * A chat is on screen only when its pane shows it AND its tab is in front: a task the person
+ * left a tab on, and then went elsewhere, is not on screen when it asks. The session's own
+ * chat counts when its pane shows another chat. While its pane shows it, the tab's own state
+ * mark is that chat's, in front or behind, as it is for a session with no tasks.
  */
 export function hiddenNeeding(
   tabs: Tabs,
   id: number,
   askedBy: AskedBy,
-  /** The chats asking for you, oldest first. */
-  needsYou: readonly number[],
+  /** The chats waiting for the person, the longest waiting first. */
+  waiting: readonly number[],
 ): number[] {
-  if (needsYou.length === 0) return [];
+  if (waiting.length === 0) return [];
+  const front = tabs.inFront === id;
   const shown = new Map(shownIn(tabs, id).map((one) => [one.pane, one.session]));
-  return needsYou.filter((session) => {
+  return waiting.filter((session) => {
     const home = homeOf(tabs, session, askedBy);
-    return (
-      home !== undefined &&
-      home.tab === id &&
-      home.own !== session &&
-      shown.get(home.pane) !== session
-    );
+    if (home === undefined || home.tab !== id) return false;
+    const onPane = shown.get(home.pane) === session;
+    return home.own === session ? !onPane : !(onPane && front);
   });
 }

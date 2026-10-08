@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useId, useState } from "react";
-import { commands, type PlaneId, type VaultRefused } from "./bindings";
-import { listen } from "./here";
+import { useId, useState } from "react";
+import { commands, type PlaneId } from "./bindings";
 import { useAskPersona } from "./AskPersona";
 import { useDispatchesHeld } from "./dispatchesHeld";
 import { Notice, type NoticeAction } from "./Notice";
+import { useVaultRefusals } from "./vaultRefusals";
 
 /** What a press answers: the sentence the Notice then says, or nothing for Keep blocked. */
 type Answer = { status: "ok"; data: { said: string } | null } | { status: "error"; error: string };
@@ -45,7 +45,7 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  */
 export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
-  const [refused, setRefused] = useState<readonly VaultRefused[]>([]);
+  const { refused, heard, read } = useVaultRefusals(plane, session);
   /** What the last press answered, said until it is put away. */
   const [answered, setAnswered] = useState<string>();
   const [said, setSaid] = useState<string>();
@@ -53,39 +53,14 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
   const askPersona = useAskPersona();
   const { waiting } = useDispatchesHeld(plane, session);
 
-  const read = useCallback(() => {
-    void commands
-      .vaultRefusals(plane, session)
-      .then((held) => {
-        // A core that answers nothing (an older one, a test's stand-in) holds none.
-        if (held.status === "ok") setRefused(Array.isArray(held.data) ? held.data : []);
-      })
-      // A list that cannot be read shows nothing: the chat's own refusal still names the ways.
-      .catch(() => {});
-  }, [plane, session]);
-
-  useEffect(() => {
-    read();
-    let gone = false;
-    let stop: (() => void) | undefined;
-    void (async () => {
-      try {
-        const unlisten = await listen<VaultRefused>("chat-vault-refused", (event) => {
-          if (gone || event.payload.plane !== plane || event.payload.session !== session) return;
-          setAnswered(undefined);
-          read();
-        });
-        if (gone) unlisten();
-        else stop = unlisten;
-      } catch {
-        // No window to listen in: a unit test, or a webview being torn down.
-      }
-    })();
-    return () => {
-      gone = true;
-      stop?.();
-    };
-  }, [plane, session, read]);
+  // The core said this chat was refused again: what the last press answered is put away, so
+  // the new refusal is what the pane says. Adjusted while rendering, as React has state
+  // follow what it is drawn from.
+  const [heardAt, setHeardAt] = useState(heard);
+  if (heardAt !== heard) {
+    setHeardAt(heard);
+    setAnswered(undefined);
+  }
 
   if (answered !== undefined)
     return (

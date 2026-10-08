@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ListedChat } from "./chatsTree";
-import { askedByOf, chatsOfTab, crumbsOf, hiddenNeeding } from "./tabChats";
-import { noTabs, openTab, panesOf, switchTabTo, type Tabs } from "./tabs";
+import { askedByOf, chatsOfPane, chatsOfTab, crumbsOf, hiddenNeeding } from "./tabChats";
+import { homeOf, noTabs, openTab, panesOf, selectTab, switchTabTo, type Tabs } from "./tabs";
 
 /** A listed chat: `parent` is the chat that started it, as a task unless said otherwise. */
 function listed(
@@ -129,20 +129,58 @@ describe("the path to the chat a pane shows", () => {
   });
 });
 
-describe("the hidden chats of a tab that need you", () => {
-  it("is each task of the tab in the queue that the tab is not showing, longest waiting first", () => {
-    const all = tabs();
+describe("the chats of a tab that are waiting and are not on screen", () => {
+  it("is each task of the tab in the list that the tab is not showing, longest waiting first", () => {
+    const all = selectTab(tabs(), tabOf(tabs(), 1));
     expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [6, 7, 4])).toEqual([6, 4]);
     expect(hiddenNeeding(all, tabOf(all, 2), askedBy, [6, 7, 4])).toEqual([7]);
   });
 
-  it("leaves out the task the tab shows, and the session's own chat", () => {
+  it("leaves out the task on screen in the tab in front", () => {
     const all = switchTabTo(tabs(), 4, askedBy);
-    // The session's own chat is hidden now, and its tab's own mark already says its state.
-    expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [1, 4, 6])).toEqual([6]);
+    expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [4, 6])).toEqual([6]);
   });
 
-  it("is nothing for a quiet queue", () => {
+  it("counts the task a tab was left showing, once the tab is not in front", () => {
+    const left = selectTab(switchTabTo(tabs(), 4, askedBy), tabOf(tabs(), 2));
+    expect(hiddenNeeding(left, tabOf(left, 1), askedBy, [4])).toEqual([4]);
+  });
+
+  it("counts the session's own chat while its pane shows a task, and not while it shows it", () => {
+    const shown = switchTabTo(tabs(), 4, askedBy);
+    expect(hiddenNeeding(shown, tabOf(shown, 1), askedBy, [1])).toEqual([1]);
+    // Its own chat on its own pane: the tab's state mark is that chat's, in front or behind.
+    expect(hiddenNeeding(tabs(), tabOf(tabs(), 1), askedBy, [1])).toEqual([]);
+    expect(hiddenNeeding(tabs(), tabOf(tabs(), 2), askedBy, [2])).toEqual([]);
+  });
+
+  it("is nothing for a quiet list", () => {
     expect(hiddenNeeding(tabs(), tabOf(tabs(), 1), askedBy, [])).toEqual([]);
+  });
+});
+
+describe("a handoff", () => {
+  it("is never at home in the tab of the chat it came from, with or without a tab here", () => {
+    // Only 1 and 2 have tabs in this window: the handoff 3 has none.
+    const two = openTab(openTab(noTabs(), 1), 2);
+    expect(homeOf(two, 3, askedBy)).toBeUndefined();
+    expect(homeOf(two, 8, askedBy)).toBeUndefined();
+    expect(chatsOfTab(two, tabOf(two, 1), chats).map((row) => row.name)).toEqual([
+      "steward 1",
+      "talk",
+      "probe",
+      "sweep",
+    ]);
+  });
+});
+
+describe("the chats of one pane", () => {
+  it("is the pane's own chat first, then the tasks at home in it", () => {
+    const all = tabs();
+    const [pane] = panesOf(all, tabOf(all, 2));
+    expect(chatsOfPane(all, tabOf(all, 2), pane.pane, chats).map((row) => row.name)).toEqual([
+      "steward 2",
+      "notes",
+    ]);
   });
 });

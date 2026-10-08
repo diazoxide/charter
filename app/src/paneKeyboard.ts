@@ -22,6 +22,34 @@ let owed: string | undefined;
 const chatKey = (plane: string, session: number) => `${plane}\n${session}`;
 
 /**
+ * **The keyboard went somewhere by the person's own hand** while a chat was owed it: a press in
+ * a field, a dialog that opened. That is where they are now, so nothing is owed any more. The
+ * body is not somewhere: it is where the focus falls when the terminal that had it is taken
+ * away, which is the very moment a switch is under way.
+ */
+function movedOn(event: FocusEvent) {
+  if (event.target === document.body || event.target === document.documentElement) return;
+  forgive();
+}
+
+function owe(key: string) {
+  owed = key;
+  document.addEventListener("focusin", movedOn);
+}
+
+function forgive() {
+  owed = undefined;
+  document.removeEventListener("focusin", movedOn);
+}
+
+/** Whether a dialog has the keyboard: a question the person is answering keeps it, whatever a
+ *  pane behind it is drawn as. */
+function inADialog(): boolean {
+  const at = document.activeElement;
+  return at instanceof Element && at.closest('[role="dialog"], [role="alertdialog"]') !== null;
+}
+
+/**
  * A pane says chat `session`'s terminal is drawn, and how to put the keyboard in it. Answers
  * what to call when that terminal is gone.
  */
@@ -29,11 +57,14 @@ export function paneDrawn(plane: string, session: number, take: () => void): () 
   const key = chatKey(plane, session);
   drawn.set(key, take);
   if (owed === key) {
-    take();
+    // The terminal's own focus is a focus like any other: it must not read as the person
+    // having moved on, in the turn a pane is drawn twice.
+    document.removeEventListener("focusin", movedOn);
+    if (!inADialog()) take();
     // Let go of after this turn and not before: a pane drawn twice in one turn, as React draws
     // one in development, is owed the keyboard by its second terminal, the one that stays.
     queueMicrotask(() => {
-      if (owed === key) owed = undefined;
+      if (owed === key) forgive();
     });
   }
   return () => {
@@ -42,20 +73,21 @@ export function paneDrawn(plane: string, session: number, take: () => void): () 
 }
 
 /** Chat `session`'s terminal takes the keyboard: now when it is on screen, and when it is
- *  drawn otherwise. */
+ *  drawn otherwise. One chat is owed it at a time, and only until the person puts the keyboard
+ *  somewhere themselves. */
 export function giveKeyboardTo(plane: string, session: number): void {
   const key = chatKey(plane, session);
   const take = drawn.get(key);
   if (take === undefined) {
-    owed = key;
+    owe(key);
     return;
   }
-  owed = undefined;
-  take();
+  forgive();
+  if (!inADialog()) take();
 }
 
 /** Nothing is owed and nothing is drawn: what a test starts from. */
 export function forgetKeyboard(): void {
   drawn.clear();
-  owed = undefined;
+  forgive();
 }

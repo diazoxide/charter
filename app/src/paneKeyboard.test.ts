@@ -60,6 +60,46 @@ describe("the keyboard after a tab is switched to another chat", () => {
     expect(took).toEqual([]);
   });
 
+  it("is owed no longer once the person puts the keyboard somewhere themselves", () => {
+    const took: number[] = [];
+    const field = document.createElement("input");
+    document.body.append(field);
+    giveKeyboardTo(PLANE, 4);
+
+    field.focus();
+    paneDrawn(PLANE, 4, () => took.push(4));
+
+    expect(took).toEqual([]);
+    field.remove();
+  });
+
+  it("is still owed when the focus only falls to the page, as it does when a terminal goes", () => {
+    const took: number[] = [];
+    giveKeyboardTo(PLANE, 4);
+
+    document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    paneDrawn(PLANE, 4, () => took.push(4));
+
+    expect(took).toEqual([4]);
+  });
+
+  it("is not taken from a dialog the person is answering", () => {
+    const took: number[] = [];
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    const answer = document.createElement("button");
+    dialog.append(answer);
+    document.body.append(dialog);
+    paneDrawn(PLANE, 4, () => took.push(4));
+    answer.focus();
+
+    giveKeyboardTo(PLANE, 4);
+
+    expect(took).toEqual([]);
+    expect(document.activeElement).toBe(answer);
+    dialog.remove();
+  });
+
   it("forgets a terminal that is gone", () => {
     const took: number[] = [];
     paneDrawn(PLANE, 4, () => took.push(4))();

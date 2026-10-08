@@ -2000,31 +2000,7 @@ export function catalogue(now: Now): Offer[] {
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   // A pane showing a view closes and ends nothing, so it says so and is not asked about.
-  //
-  // **A pane showing a task has no close** (#1486): its close would end the session under the
-  // task, which is not what is on screen, and ending a task is not a close. The tab's own
-  // close still ends the session, and says so.
-  const taskInFocus = front?.shows?.[front.focused] !== undefined;
-  offers.push(
-    focusedOn?.kind === "view"
-      ? can("pane.close", "Close this view", { verb: "closePane", ends: false })
-      : front && taskInFocus
-        ? cannot(
-            "pane.close",
-            "End this pane's chat",
-            `This pane shows a task of ${front.name}. Go back to ${front.name} to end its chat, or close the tab.`,
-          )
-        : front
-          ? {
-              ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
-              note: ENDS_IT,
-            }
-          : cannot(
-              "pane.close",
-              "End this pane's chat",
-              "No chat is in front, so there is no pane to close.",
-            ),
-  );
+  offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf));
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
   // the program and takes the chat off the board — correct, and what the `×` has always done.
@@ -2722,6 +2698,49 @@ function frontWorktree(now: Now, inFront: boolean): { cut: Cut } | { why: string
   if (now.worktree === undefined)
     return { why: "The chat in front is not working in a branch purlis cut." };
   return { cut: now.worktree };
+}
+
+/**
+ * **The close of one pane of the tab in front** (`pane.close`), decided for that pane: the
+ * catalogue's row is the focused pane's, and a pane's own corner draws its own (#1486).
+ *
+ * A pane's close ends its chat exactly as a tab's does, so it says the same thing. A pane
+ * showing a view closes and ends nothing, so it says so and is not asked about.
+ *
+ * **A pane showing a task has no close**: its close would end the session under the task,
+ * which is not what is on screen, and ending a task is not a close. The reason names the
+ * session that pane is. The tab's own close still ends the session, and says so.
+ */
+export function paneCloseOf(
+  tabs: Tabs,
+  pane: number | undefined,
+  nameOf: (session: number) => string,
+): Offer {
+  const front = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
+  const content =
+    front === undefined
+      ? undefined
+      : contentsOf(tabs, front.id).find((one) => one.pane === pane)?.content;
+  if (content?.kind === "view")
+    return can("pane.close", "Close this view", { verb: "closePane", ends: false });
+  if (front === undefined || content === undefined || pane === undefined)
+    return cannot(
+      "pane.close",
+      "End this pane's chat",
+      "No chat is in front, so there is no pane to close.",
+    );
+  if (front.shows?.[pane] !== undefined) {
+    const own = nameOf(content.session);
+    return cannot(
+      "pane.close",
+      "End this pane's chat",
+      `This pane shows a task of ${own}. Go back to ${own} to end its chat, or close the tab.`,
+    );
+  }
+  return {
+    ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
+    note: ENDS_IT,
+  };
 }
 
 /** The tab holding a session, or nothing when no tab does. */

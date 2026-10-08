@@ -376,13 +376,17 @@ describe("the stylesheet and the vocabulary agree", () => {
    *   has them there at all, so the number is `cfg!(target_os)`'s and cannot be written in a
    *   stylesheet that is built once for every target.
    *
+   * - `--pane-controls`: how wide the controls in a pane's end corner are, measured by the
+   *   controls themselves (`src/PlaneView.tsx`, `PaneDoing`, #1486): what the pane's top line
+   *   reserves while it shows a task's breadcrumb. Their number differs from pane to pane.
+   *
    * Each is here rather than in `TOKENS` because neither is a colour and a theme has no
    * business with either, and neither is in `App.css` because the Rust that decides the number
    * is the only honest source — two copies of a number that must agree is how they come to
    * differ. Listed by hand, so that adding one is a decision somebody makes in this file
    * rather than a hole that opens quietly; the test below holds each to being really set.
    */
-  const fromTheWindow = ["--least", "--root", "--chip", "--window-controls"];
+  const fromTheWindow = ["--least", "--root", "--chip", "--window-controls", "--pane-controls"];
 
   it("every custom property the stylesheet reads is a token, its own, or the window's", () => {
     // A `var(--typo)` resolves to nothing and the rule silently disappears, which is the one

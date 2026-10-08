@@ -718,6 +718,12 @@ export const commands = {
 	 */
 	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
 	/**
+	 *  Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
+	 *  (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
+	 *  put each tab back on the chat it showed.
+	 */
+	tabShows: (plane: PlaneId, session: number, shown: number | null) => typedError<null, string>(__TAURI_INVOKE("tab_shows", { plane, session, shown })),
+	/**
 	 *  The order the chat strip draws this project's chats in, by session, so the record lists
 	 *  them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
 	 * 
@@ -4008,6 +4014,12 @@ export type OpenChat = {
 	harness: string | null,
 	/**  Whether it is the chat to show: at a launch, the one that was in front at the quit. */
 	in_front: boolean,
+	/**
+	 *  The chat its tab shows in place of it, by session, where the person switched the tab
+	 *  to a task below it (#1486). The window shows it only where that chat is open and below
+	 *  this one.
+	 */
+	shows?: number | null,
 	/**  The conversation it was resumed by, where it was. The UI says which happened. */
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */
