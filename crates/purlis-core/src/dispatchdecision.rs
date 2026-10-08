@@ -2027,6 +2027,172 @@ mod tests {
         );
     }
 
+    /// V100-58 (#1509): **the loop rule is no grant's to lift.** The decision is handed "the
+    /// pair is covered", which is everything a grant can ever say to it: one pair's grant at
+    /// any level, or one that names every persona. It refuses the same.
+    #[test]
+    fn a_persona_above_the_asking_chat_is_refused_whatever_is_granted() {
+        // Room under every limit and a depth of 8, so nothing but the loop rule can refuse.
+        let limits = dispatchlimits::in_force(
+            &Table {
+                project: Level::unset().with(Limit::Depth, 8),
+                ..Table::default()
+            },
+            None,
+            Some("devops"),
+            Some("steward"),
+            &Table::default(),
+            &Level::unset(),
+        );
+        let devops = AskingChat {
+            persona: Some("devops"),
+            held: false,
+        };
+        let under = |above: &[&str]| Lineage {
+            depth: u32::try_from(above.len()).expect("a depth"),
+            chain: above.iter().map(|one| Some((*one).to_owned())).collect(),
+            ..alone()
+        };
+        let ask = |asker, mode, grant: &Covers, lineage: &Lineage| {
+            decide(&Request {
+                asker,
+                to: Persona::Defined("steward"),
+                mode,
+                grant,
+                profile: None,
+                limits: &limits,
+                lineage,
+            })
+        };
+        for above in [
+            &["steward"][..],
+            &["qa", "steward"],
+            &["steward", "qa", "steward"],
+        ] {
+            for grant in [Covers::Covered, Covers::NeedsGrant] {
+                // The person asking from the chat's tab needs no grant at all, and is refused
+                // the same.
+                for asker in [Asker::Chat(devops), Asker::Person(devops)] {
+                    for mode in [Mode::Task, Mode::Handoff] {
+                        assert_eq!(
+                            ask(asker, mode, &grant, &under(above)),
+                            Decision::Refused(Refused::Limit(dispatchlimits::Refused::Loop(
+                                "steward".to_owned()
+                            ))),
+                            "{above:?} {grant:?} {asker:?} {mode:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // The same ask from a chain steward is not in starts, so the refusal above is the
+        // loop rule's and nothing else's.
+        assert_eq!(
+            ask(
+                Asker::Chat(devops),
+                Mode::Task,
+                &Covers::Covered,
+                &under(&["qa", "reviewer"])
+            ),
+            Decision::Start
+        );
+    }
+
+    /// And it is not the depth limit: one dispatch below the chat the person started, with a
+    /// depth of 8 allowed, a covered dispatch back up is refused as a loop.
+    #[test]
+    fn the_loop_rule_refuses_where_the_depth_limit_has_room_and_is_said_as_itself() {
+        let limits = dispatchlimits::in_force(
+            &Table {
+                project: Level::unset().with(Limit::Depth, 8),
+                ..Table::default()
+            },
+            None,
+            Some("devops"),
+            Some("steward"),
+            &Table::default(),
+            &Level::unset(),
+        );
+        let lineage = Lineage {
+            depth: 1,
+            chain: vec![Some("steward".to_owned())],
+            ..alone()
+        };
+        let said = refused(decide(&Request {
+            asker: Asker::Chat(AskingChat {
+                persona: Some("devops"),
+                held: false,
+            }),
+            to: Persona::Defined("steward"),
+            mode: Mode::Task,
+            grant: &Covers::Covered,
+            profile: None,
+            limits: &limits,
+            lineage: &lineage,
+        }));
+        assert_eq!(
+            said,
+            Refused::Limit(dispatchlimits::Refused::Loop("steward".to_owned()))
+        );
+        assert_eq!(
+            said.say(),
+            "persona 'steward' is already in this chat's own chain of dispatches, and a \
+             persona is never dispatched to from below itself. Send it what you found in your \
+             report instead."
+        );
+    }
+
+    /// The same through the join, from the app's records and the grants in force: a grant of
+    /// the pair at every level there is does not let a chat dispatch back up its own chain.
+    #[test]
+    fn a_grant_at_every_level_does_not_let_a_chat_dispatch_back_up_its_chain() {
+        use crate::dispatchgrant::{ChatPair, Pair as Granted};
+        // 1 (steward) ── 2 (devops, task)
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let open = [(1, &one), (2, &two)];
+        let pair = Granted::new("devops", "steward").expect("a pair");
+        let granted = InForce {
+            chat: vec![ChatPair {
+                asking: Some("devops".to_owned()),
+                target: "steward".to_owned(),
+            }],
+            you: vec![pair.clone()],
+            project: vec![pair],
+        };
+        for by in [By::Chat, By::Person] {
+            let said = asked_in(
+                "[dispatch]\ndepth = 8\n",
+                2,
+                &open,
+                Some("steward"),
+                &granted,
+                by,
+            );
+            assert_eq!(
+                said.decision,
+                Decision::Refused(Refused::Limit(dispatchlimits::Refused::Loop(
+                    "steward".to_owned()
+                ))),
+                "{by:?}"
+            );
+        }
+        // The grant is real: the same chat, with nobody above it, is started on it.
+        let alone = chat(Some("devops"));
+        assert_eq!(
+            asked_in(
+                "[dispatch]\ndepth = 8\n",
+                2,
+                &[(2, &alone)],
+                Some("steward"),
+                &granted,
+                By::Chat
+            )
+            .decision,
+            Decision::Start
+        );
+    }
+
     #[test]
     fn an_asking_chat_has_at_most_its_limit_running_and_a_lineage_holds_at_most_its_own() {
         let ask = |lineage: Lineage| {
@@ -2177,6 +2343,12 @@ mod tests {
             Refused::Draft("x".to_owned()),
             Refused::Locked("Policy forbids one chat dispatching to another.".to_owned()),
             Refused::Profile(crate::personaprofile::Refused::NoProfile),
+            Refused::Profile(crate::personaprofile::Refused::NotListed {
+                profile: "x".to_owned(),
+                by: crate::personaprofile::Who::Asker,
+                persona: "y".to_owned(),
+                listed: vec!["z".to_owned()],
+            }),
             Refused::Limit(dispatchlimits::Refused::Loop("x".to_owned())),
             Refused::Limit(dispatchlimits::Refused::TooDeep { limit: 3, depth: 3 }),
             Refused::Limit(dispatchlimits::Refused::TooManyRunning {

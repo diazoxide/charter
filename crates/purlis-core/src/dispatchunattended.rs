@@ -238,11 +238,15 @@ const BYPASS_FLAGS: [&str; 4] = [
 ];
 
 /// The flags that name how a harness asks, and the value of each that means "ask nobody":
-/// Claude Code's permission mode, and Codex's approval policy by both its spellings.
-const MODE_FLAGS: [(&str, &str); 3] = [
+/// Claude Code's permission mode, and Codex's approval policy by both its spellings and as a
+/// configuration override.
+const MODE_FLAGS: [(&str, &str); 5] = [
     ("--permission-mode", crate::floorguard::UNATTENDED_MODE),
     ("--ask-for-approval", "never"),
     ("-a", "never"),
+    // Codex's approval policy again, set as a configuration override (#1509).
+    ("--config", "approval_policy=never"),
+    ("-c", "approval_policy=never"),
 ];
 
 /// **The word of `command` that starts a harness with its permission prompts off**, if one
@@ -265,7 +269,8 @@ pub fn bypass_in(command: &[String]) -> Option<&str> {
                         .then(|| command.get(at + 1).map(String::as_str))
                         .flatten()
                 });
-            value == Some(*never)
+            // A value may be written quoted and spaced (`approval_policy = "never"`).
+            value.is_some_and(|value| value.replace(['"', '\'', ' '], "") == *never)
         });
         (BYPASS_FLAGS.contains(&word.as_str()) || off).then_some(word.as_str())
     })

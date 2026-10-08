@@ -449,6 +449,22 @@ fn codex_s_own_ways_of_asking_nobody_are_recognised_and_its_asking_ones_are_not(
             words(&["codex", "--ask-for-approval=never"]),
             Some("--ask-for-approval=never"),
         ),
+        // The same policy, set as a configuration override, quoted or not (#1509).
+        (words(&["codex", "-c", "approval_policy=never"]), Some("-c")),
+        (
+            words(&["codex", "--config", "approval_policy=\"never\""]),
+            Some("--config"),
+        ),
+        (
+            words(&["codex", "--config=approval_policy='never'"]),
+            Some("--config=approval_policy='never'"),
+        ),
+        (
+            words(&["codex", "-c", "approval_policy = \"never\""]),
+            Some("-c"),
+        ),
+        (words(&["codex", "-c", "approval_policy=on-request"]), None),
+        (words(&["codex", "-c", "model=never"]), None),
         (words(&["codex", "-a", "on-request"]), None),
         (words(&["codex", "--ask-for-approval", "untrusted"]), None),
         // A value is the word after its flag, and nothing further along.

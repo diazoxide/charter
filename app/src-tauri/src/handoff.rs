@@ -7905,6 +7905,79 @@ mod tests {
         assert!(matches!(said, Answer::Dispatched { .. }), "{said:?}");
     }
 
+    /// #1509 (V100-60): where the project lists profiles for a persona, a chat dispatched to
+    /// it starts on one of them or not at all. And a listing adds nothing: a listed profile
+    /// that asks nobody is refused as any other is.
+    #[test]
+    fn a_dispatch_names_only_a_profile_the_project_lists_for_the_persona() {
+        let plane = a_plane_with_a_profile_that_asks_nobody();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n\
+             [dispatch.profiles]\ndevops = [\"work\", \"yolo\"]\n",
+        )
+        .expect("the manifest");
+        // On a host that runs nothing, so no chat here needs a terminal.
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
+            .expect("the person allowed the pair");
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+        let refused = |profile: &str| match dispatch_with(
+            &held,
+            &id,
+            asking,
+            Some("devops"),
+            "task",
+            brief,
+            Some(profile),
+        )
+        .0
+        {
+            Answer::No { why } => why,
+            other => panic!("{profile}: refused, not {other:?}"),
+        };
+
+        // A profile the project does not list for devops, under a grant that stands: refused
+        // in words that name the ones it lists.
+        assert_eq!(
+            refused("codex"),
+            "the dispatch names profile 'codex', which this project does not list for persona \
+             'devops', so nothing was started. The project lists 'work' and 'yolo' for that \
+             persona: name one of those in the dispatch."
+        );
+        // Listed, and its command switches the prompts off: the list does not let it through.
+        let why = refused("yolo");
+        assert!(
+            why.starts_with("the dispatch names profile 'yolo', which starts its harness")
+                && why.contains("(--dangerously-skip-permissions)"),
+            "{why}"
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
+
+        // A listed profile that asks starts, named or not: the asking chat's own is `work`.
+        for profile in [Some("work"), None] {
+            let (said, _) =
+                dispatch_with(&held, &id, asking, Some("devops"), "task", brief, profile);
+            let Answer::Dispatched { chat: task, .. } = said else {
+                panic!("{profile:?}: dispatched, not {said:?}")
+            };
+            assert_eq!(
+                held.chats()
+                    .recorded_chat(task)
+                    .and_then(|chat| chat.profile)
+                    .as_deref(),
+                Some("work"),
+                "{profile:?}"
+            );
+        }
+    }
+
     /// #1446, at the joined start: the profile a persona chat would take from the chat that
     /// dispatched it is that chat's own, and here its command switches the prompts off. The
     /// person may run their own chat so; nothing it dispatches inherits it.
