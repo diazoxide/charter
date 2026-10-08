@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791410723407,
+  "lastUpdate": 1791432289705,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3360,6 +3360,48 @@ window.BENCHMARK_DATA = {
             "value": 102.2169155,
             "unit": "ms",
             "extra": "median of 5 runs: 100.907, 101.415, 102.217, 102.518, 103.029 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "0be46c8ba158d16f9c34d42f474f1db70219169e",
+          "message": "Train 61: a handoff is held to the limits of the workspace it moves into (D-T61-7)\n\nReconciled: issue 1453 holds a task sent into another workspace to that\nworkspace's dispatch limits as well as the asking chat's, with a 0 there\nholding against a persona's own value (D-1453-17). A handoff has always named\na workspace, and the limits are the project's own configuration, so the one\ndecision now reads them for a handoff too: the same call, under the same lock,\nfirst refusal wins. The workspace is read by the name its folder has, so a\nspelling that differs only in case reads the same limits.\n\nThis amends D-T61-2 in one point. The rest of it stands: a handoff takes no\n`--in`, is cut no worktree, and the standing grant a chat nobody is at needs\nto cross workspaces stays a task's rule (ruling V99f is a handoff's).\n\nSeen in the core: a handoff into a workspace set to 0 is refused in that\nworkspace's sentence for a chat a person is at and for one nobody is at, a\npersona's value does not lift it, the asking chat's own 0 answers first, and\nwith nothing set it opens. One test in the app holds the same through a real\nhandoff; it starts a chat, so only CI runs it.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-08T08:03:16+04:00",
+          "tree_id": "c98619ade7834f1e67fcb6f0aff630bdcc60b955",
+          "url": "https://github.com/purlis/purlis/commit/0be46c8ba158d16f9c34d42f474f1db70219169e"
+        },
+        "date": 1791432289164,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.438983,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.419, 0.435, 0.439, 0.452, 0.455 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.480835,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.366, 16.418, 16.481, 16.605, 16.615 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.56867700000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.025, 102.306, 103.569, 103.831, 104.532 ms"
           }
         ]
       }
