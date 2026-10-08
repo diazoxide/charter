@@ -373,7 +373,7 @@ pub fn routes(ctx: &Ctx, not: &NotTagged) -> String {
     let dispatch = dispatchable(ctx, not).map(|theirs| {
         format!(
             "to have '{theirs}', the persona the vault is tagged for, do the work, dispatch to \
-             it: `purlis handoff <workspace> --persona {theirs}`"
+             it: `purlis dispatch --to {theirs}`"
         )
     });
     let said = match (

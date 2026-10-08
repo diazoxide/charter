@@ -646,8 +646,49 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
             (REASON_BRIEF_SOURCE, said.to_string())
         });
     }
+    // Asking for the command's help reads no brief and opens no chat (#1515).
+    if asks_for_help(cmd, &seg, piped) {
+        return None;
+    }
     let what = brief_source(cmd, &seg, piped)?;
     Some((REASON_BRIEF_SOURCE, handoff_source(what)))
+}
+
+/// Whether a handoff segment only asks for the command's help: `purlis handoff --help`, or
+/// `-h`, which prints the help and exits before a brief is read (#1515). There is then no
+/// brief whose source could be wrong, so the call is not refused for lacking a heredoc.
+///
+/// **Only where nothing is fed to it.** The flag is a bare word among the command's own words
+/// after `handoff`, before any `--`; the segment reads nothing (no heredoc, here-string or
+/// file) and no pipe feeds it; and the call holds no live substitution, which the shell would
+/// rewrite before purlis reads a word. Anything else is judged as the handoff it may be
+/// ([`brief_source`]): a help flag beside a quoted heredoc passes as that handoff does, and one
+/// beside a file or a pipe is refused as it was.
+fn asks_for_help(cmd: &str, seg: &[Tok], piped: bool) -> bool {
+    if piped
+        || seg
+            .iter()
+            .any(|t| t.is_op(&["<<", "<<<"]) || t.is_op(&REDIRECT_READS))
+        || livesub::live_substitution(cmd).is_some()
+    {
+        return false;
+    }
+    let texts: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+    let (prog, _env, argv) = shellwrap::split_env(&texts);
+    let Some(words) = charter_words(&prog, &argv) else {
+        return false;
+    };
+    // The reader's words are the segment's own tail, as for a report ([`is_a_report`]).
+    let Some(at) = texts.len().checked_sub(words.len()) else {
+        return false;
+    };
+    if texts[at..] != words[..] || words.first().is_none_or(|word| word != "handoff") {
+        return false;
+    }
+    seg[at + 1..]
+        .iter()
+        .take_while(|word| !(word.bare && word.text == "--"))
+        .any(|word| word.bare && (word.text == "--help" || word.text == "-h"))
 }
 
 /// Whether a handoff segment is `purlis handoff report <summary>` — a report back, which
@@ -1201,6 +1242,83 @@ mod tests {
                 "{harness}"
             );
         }
+    }
+
+    // ----- asking for the command's help (#1515) -----------------------------------------
+
+    /// `purlis handoff --help` prints the help and reads no brief, so there is no brief whose
+    /// source could be wrong: it is not refused for lacking a heredoc.
+    #[test]
+    fn asking_for_the_handoff_commands_help_is_not_refused_for_lacking_a_heredoc() {
+        for cmd in [
+            "purlis handoff --help",
+            "purlis handoff -h",
+            "charter handoff --help",
+            "/usr/local/bin/purlis handoff --help",
+            "purlis handoff beta --help",
+            "purlis handoff --name x --help",
+            "purlis handoff --help 2>&1",
+            "purlis handoff --help | head -40",
+            "cd /tmp && purlis handoff --help",
+        ] {
+            assert_eq!(refusal(cmd), None, "{cmd:?}");
+        }
+    }
+
+    /// Every real refusal stands in front of a help flag: a sub-agent, a string a shell runs,
+    /// a spelling purlis cannot read, and a stdin or a substitution the shell would feed it.
+    #[test]
+    fn a_help_flag_lifts_no_other_refusal() {
+        let helper = Caller {
+            agent_id: Some("sub-1"),
+            ..attended()
+        };
+        assert_eq!(
+            handoff_refusal("purlis handoff --help", helper).map(|(r, _)| r),
+            Some(REASON_SUBAGENT)
+        );
+        assert_eq!(
+            reason("bash -c 'purlis handoff --help'"),
+            Some(REASON_SHELL_STRING)
+        );
+        assert_eq!(reason("purlis ${x:-handoff} --help"), Some(REASON_SPELLING));
+        for cmd in [
+            // Something is fed to it: that is a handoff with a brief, whatever else it says.
+            "purlis handoff beta --help < brief.txt",
+            "cat brief.txt | purlis handoff beta --help",
+            "purlis handoff beta --help <<<'x'",
+            "purlis handoff beta --help <<BRIEF\nx\nBRIEF",
+            // The shell would rewrite the call before purlis reads it.
+            "purlis handoff \"$(cat name)\" --help",
+            // Quoted, it is a value and not the flag; and `--helpful` is no flag purlis has.
+            "purlis handoff beta '--help'",
+            "purlis handoff beta --helpful",
+            // After `--` it is a word, not a flag.
+            "purlis handoff -- --help",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+        }
+        // With a quoted heredoc it is judged as any handoff is, and passes as one.
+        assert_eq!(refusal("purlis handoff beta --help <<'B'\nx\nB"), None);
+    }
+
+    /// Text that only mentions the command is not the command: a file written from a heredoc
+    /// a reader takes is data, whatever its lines say.
+    #[test]
+    fn a_file_that_only_mentions_the_command_inside_a_heredoc_is_not_refused() {
+        for cmd in [
+            "cat > notes.md <<'EOF'\npurlis handoff --name x beta\nEOF",
+            "cat > notes.md <<'EOF'\nRun `purlis handoff --report beta` no more.\npurlis handoff beta --persona devops\nEOF",
+            "cat > SKILL.md <<EOF\npurlis handoff --name \"x\" beta <<'BRIEF'\nbrief\nBRIEF\nEOF",
+            "tee -a docs/handoff.md <<'EOF'\npurlis handoff --help\nEOF",
+        ] {
+            assert_eq!(refusal(cmd), None, "{cmd:?}");
+        }
+        // A shell that runs the same lines is still looked into.
+        assert_eq!(
+            reason("bash <<'EOF'\npurlis handoff --name x beta\nEOF"),
+            Some(REASON_SHELL_STRING)
+        );
     }
 
     #[test]

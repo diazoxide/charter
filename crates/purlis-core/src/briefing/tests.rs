@@ -1530,6 +1530,48 @@ fn a_sandboxed_chat_is_told_how_to_get_unblocked_under_purlis() {
     }
 }
 
+/// #1515: a chat the app started is told the one route for work that reports back, in the
+/// words the skills, the handoff page and the command's help use. A session in a terminal is
+/// not: neither command starts a chat there.
+#[test]
+fn a_chat_the_app_started_is_told_the_one_route_for_work_that_reports_back() {
+    let env = |socket: Option<&'static str>| {
+        move |name: &str| {
+            (name == crate::hookwire::SOCKET_ENV)
+                .then_some(socket)
+                .flatten()
+                .map(str::to_owned)
+        }
+    };
+    assert_eq!(
+        one_route_note(&env(Some("/tmp/p/hooks.sock"))),
+        Some(format!(
+            "⬢ **Work for another chat.** {}",
+            crate::handoff::ONE_ROUTE
+        ))
+    );
+    for socket in [None, Some("")] {
+        assert_eq!(one_route_note(&env(socket)), None, "{socket:?}");
+    }
+    // The sentence itself, written out: a change to a word of it is made here on purpose.
+    assert_eq!(
+        crate::handoff::ONE_ROUTE,
+        "Work this chat needs an answer from, for its own persona or another, is `purlis \
+         dispatch` (with `--in workspace:<name>` when it must run elsewhere). A handoff is \
+         fire-and-forget: the person's work moves to a chat they will read themselves."
+    );
+    // And what a handoff that asked for a report is told ends with it.
+    let told = crate::handoff::reported_as_a_task();
+    assert!(told.ends_with(crate::handoff::ONE_ROUTE), "{told}");
+    for said in [
+        "purlis treated this as a task of this chat and not as a handoff",
+        "A task is in `purlis dispatch list`",
+        "From now on, run `purlis dispatch` yourself",
+    ] {
+        assert!(told.contains(said), "{said}");
+    }
+}
+
 #[test]
 fn only_the_exact_mark_the_app_sets_reads_as_a_sandboxed_chat() {
     // The same decision as above, without a plane on disk (a sandbox that refuses writing a

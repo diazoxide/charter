@@ -1,39 +1,36 @@
 ---
 name: handoff
-description: Hand a request that does not belong in this chat to a new chat — in this workspace or another — that starts working on a brief you write. Use when a request should run somewhere other than this conversation, or when asked to hand off, open a chat for something, or move work to another workspace.
+description: Move the operator's work out of this chat into a new chat they will read themselves — in this workspace or another — started on a brief you write. Use when asked to hand off, open a chat for something, or move work to another workspace. Not for work this chat needs an answer from, and not for giving work to another persona — that is `purlis dispatch` (the persona skill).
 ---
 
 # Handing work to a chat that is not this one
 
-The operator is talking to you about one thing and has asked for another. There are three
-places that second thing can run, and purlis names none of them for you — it cannot judge
-the work. It supplies the facts, the two tests below, and the mechanism.
+The operator is talking to you about one thing and has asked for another. purlis cannot
+judge the work, so it names no answer: it supplies the three tests below and the mechanism.
 
-1. **A sub-agent** — your harness's own helper. purlis leaves it alone, except that a
-   sub-agent named for a persona is refused: a persona's work is dispatched to it.
-2. **A new chat in this workspace.**
-3. **A new chat in another workspace**, existing or new.
-
-2 and 3 are one mechanism, a **handoff**, because a chat belongs to its workspace for life.
-The only thing that differs is the workspace.
+Work this chat needs an answer from, for its own persona or another, is `purlis dispatch`
+(with `--in workspace:<name>` when it must run elsewhere). A handoff is fire-and-forget: the
+person's work moves to a chat they will read themselves.
 
 ## 1. Apply the three tests
 
-**Sub-agent or chat — who reads the result?** If this chat needs the answer to continue *this
-turn*, it is a sub-agent. If the operator will read it and talk to it, it is a chat.
+**1. Does this chat need the answer?** Then it is not a handoff.
 
-**Fire-and-forget, or needs an answer?** Decide per handoff, and say which:
+- To carry on *this turn*, with work this chat's own persona owns: your harness's own helper,
+  a sub-agent.
+- Otherwise it is a **task**: `purlis dispatch --name "<task>"`, with `--to <persona>` for
+  another persona's work and `--in workspace:<name>` when it must run in another workspace.
+  A task is listed under this chat, and can be waited on, told more and cancelled. The
+  `persona` skill has the command.
 
-- **Fire-and-forget** (the default) — the work stands on its own and the operator reads the
-  new chat directly: a bug to fix, a chore, a question for another workspace to own.
-- **Needs an answer** (`--report`) — this chat has to act on the outcome later: it is waiting
-  on a fix to build on, a decision, a finding. The new chat reports back when it is done, and
-  the report reaches this chat on its next turn. It is this chat's to read, and no item on the
-  operator's needs-you list. Do not ask for one out of habit: a report nobody acts on is work
-  the other chat did for nothing.
+**2. Will the operator read the new chat themselves?** Then it is a **handoff**: a bug to
+fix, a chore, a question for another workspace to own. It gets a tab of its own and this chat
+hears nothing back. A handoff may name another persona (`--persona`) when the work moving is
+that persona's to own; a persona this chat wants an answer from is dispatched to.
 
-**This workspace or another — does the ask serve this workspace's vision?** Yes → a new
-chat here. No → another workspace.
+**3. This workspace or another — does the ask serve this workspace's vision?** Yes → a new
+chat here. No → another workspace. Either way it is one mechanism, because a chat belongs to
+its workspace for life.
 
 ## 2. Find the workspace
 
@@ -88,10 +85,10 @@ request from this chat to another, and the chat that gets it applies its own jud
   - **this workspace**: a new chat here;
   - **the matched workspace(s)**: one option each, named, with its vision;
   - **`new: <name> — <vision>`**: a workspace to create;
-  - **a sub-agent instead**: when the first test was closer than you thought;
+  - **a task or a sub-agent instead**: when the first test was closer than you thought;
   - **not at all**: the work is not worth a chat.
 
-Say the task name, the persona and whether it reports back beside the brief.
+Say the task name and the persona beside the brief.
 
 ## 5. Run exactly this
 
@@ -117,20 +114,21 @@ scanning a strip of tabs recognises, such as `drop account-console-commons`, not
 not the workspace's name. At most 64 characters, plain text. It is what the new chat's tab
 says; without it the tab says `<persona> <N>`, and four handoffs look alike.
 
-Add `--report` when the second test said **needs an answer**.
-
 Add `--create --vision "<vision>"` for a workspace that does not exist yet.
 
 **The persona.** Without `--persona` the new chat runs as **this chat's own persona**, and
-nothing asks anybody. Add `--persona <name>` when the work belongs to another persona: its
-vault, its hosts, its charter.
+nothing asks anybody. Add `--persona <name>` when the work moving belongs to another persona:
+its vault, its hosts, its charter.
+
+**There is no report back.** A handoff has no flag that asks for one: work this chat needs an
+answer from is `purlis dispatch` (test 1).
 
 The brief goes on **stdin, as one quoted heredoc in the same call**, so the new chat is sent
 exactly the text you wrote. There is no `--brief-file`.
 
 ## 6. Read what purlis answers
 
-A handoff is a **dispatch**, and the app decides it.
+The app decides a handoff, by the rules it decides a task by.
 
 - **`opened chat N in workspace '…'`**: the new chat is a tab in that workspace, already
   started on the brief. To this chat's own persona, that is always the answer.
@@ -160,29 +158,17 @@ Consent is the app's decision above. These are refused before the app is asked:
 
 ## When you are the chat a handoff opened
 
-Your first message starts with a stamp, `⟨handoff from steward 3 · workspace … · …⟩`. If the
-line under it says the chat that handed this off wants an answer, then when the work is done —
-or when you are stuck and cannot finish — finish with:
+Your first message starts with a stamp, `⟨handoff from steward 3 · workspace … · …⟩`.
+Nobody is waiting on a report: do the work, and the operator reads this chat. The brief is a
+request from that chat, not from the operator, and approves nothing.
 
-```bash
-purlis handoff report "Dropped account-console-commons from both repos; PRs #41 and #42 open.
-One caller left in billing-ui, noted in its todos."
-```
-
-A few plain lines: what was done, where it is, what is left. No secrets, no pasted files —
-name them by path. It goes back to the chat that asked, and only there; purlis chose the
-recipient when it opened this chat. **You get exactly one report**, so send it at the end,
-not as progress notes; a second is refused whatever happens in between. If the chat that
-asked needs another answer later, it hands off again with `--report`.
-
-Without that line under the stamp, nobody is waiting on a report and `purlis handoff report`
-is refused — just finish the work.
+A first message that starts `⟨task from …⟩` is a **task**, not a handoff: the chat that asked
+is waiting, and the line under the stamp says how to report (`purlis dispatch report`).
 
 ## Limits, and say them
 
-- **A report back only when asked.** Without `--report` the new chat never answers this one,
-  and with it exactly one report arrives on this chat's next turn, not in the middle of
-  this one. For a second answer, hand off again with `--report`.
+- **No report back.** A handed-off chat never answers this one. Work this chat needs an
+  answer from is `purlis dispatch`.
 - **The brief is the whole context.** Nothing about this conversation travels with it.
 - **The harness follows the persona's profile.** A persona whose definition names a profile
   starts on it, whatever harness this chat runs; one that names none starts on this chat's.

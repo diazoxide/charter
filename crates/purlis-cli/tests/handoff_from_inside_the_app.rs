@@ -473,27 +473,286 @@ fn the_open(asked: &Asked) -> OpenChat {
 }
 
 #[test]
-fn a_handoff_carries_its_task_name_and_whether_it_wants_an_answer() {
+fn a_handoff_carries_its_task_name_and_owes_no_report() {
     let tmp = daily();
     let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
 
     let out = charter(
         &root(&tmp),
         Some(&socket),
-        &[
-            "handoff",
-            "alpha",
-            "--name",
-            "  retry webhooks ",
-            "--report",
-        ],
+        &["handoff", "alpha", "--name", "  retry webhooks "],
     );
 
     assert_eq!(text(&out.stderr), "");
     assert_eq!(out.status.code(), Some(0));
     let open = the_open(&asked);
     assert_eq!(open.name.as_deref(), Some("retry webhooks"), "trimmed");
-    assert!(open.report);
+    assert!(!open.report, "a handoff is fire-and-forget");
+}
+
+// ----- a handoff that asks for a report is a task (#1515) --------------------------------
+
+/// The route every place that teaches it says, and a reporting handoff's result ends with.
+const THE_ROUTE: &str = "purlis handoff: --report asks for an answer, so purlis treated this as a task of this chat and not as a handoff. A task is in `purlis dispatch list`, and `purlis dispatch wait`, `tell`, `answer` and `cancel` work on it. From now on, run `purlis dispatch` yourself for this: purlis dispatch --name \"<task>\" [--to <persona>] [--in workspace:<name>]. Work this chat needs an answer from, for its own persona or another, is `purlis dispatch` (with `--in workspace:<name>` when it must run elsewhere). A handoff is fire-and-forget: the person's work moves to a chat they will read themselves.";
+
+/// The command's own help says the route in the words the skills and the handoff page say it
+/// in (`purlis_core::handoff::ONE_ROUTE`), and offers `--report` as nothing but a flag it
+/// still takes.
+#[test]
+fn the_handoff_commands_help_says_the_one_route_in_the_same_words() {
+    let out = unsteered(Command::new(env!("CARGO_BIN_EXE_purlis")))
+        .args(["handoff", "--help"])
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("the binary runs");
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let help = words(&text(&out.stdout));
+    assert!(
+        help.contains(&words(purlis_core::handoff::ONE_ROUTE)),
+        "{help}"
+    );
+    assert!(
+        help.contains("Kept for chats that learned it: the work is dispatched as a task"),
+        "{help}"
+    );
+    assert!(
+        help.contains("use `purlis dispatch --to <persona>`"),
+        "{help}"
+    );
+    assert!(
+        !help.contains("Ask the new chat to report back"),
+        "--report is not offered as the way to get an answer: {help}"
+    );
+}
+
+/// The app's ticket half, and a dispatch that starts as chat 9, running as the persona it
+/// named, in the workspace it named: what `app/src-tauri/src/handoff.rs` answers a task with.
+fn starts_a_task_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
+    match ask {
+        Ask::Dispatch(dispatch) => {
+            match tickets.spend(dispatch.chat, connection, &dispatch.ticket, Instant::now()) {
+                Ok(()) => Answer::Dispatched {
+                    chat: 9,
+                    name: dispatch.name.clone(),
+                    persona: dispatch.to.clone(),
+                    note: None,
+                    works: dispatch
+                        .place
+                        .as_deref()
+                        .and_then(|place| place.strip_prefix("workspace:"))
+                        .map(|ws| format!("in the workspace {ws}")),
+                },
+                Err(why) => Answer::No { why },
+            }
+        }
+        // A reporting handoff opens nothing by a handoff's own ask.
+        Ask::Open(_) => Answer::No {
+            why: "a reporting handoff was sent as a handoff".to_owned(),
+        },
+        other => opens_as_nine(tickets, connection, other),
+    }
+}
+
+/// The dispatch the stand-in app was sent, after its ticket.
+fn the_dispatch(asked: &Asked) -> purlis_core::hookwire::DispatchAsk {
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2, "a ticket, then one ask: {asked:?}");
+    match asked.get(1) {
+        Some((_, Ask::Dispatch(dispatch))) => (**dispatch).clone(),
+        other => panic!("a dispatch second, not {other:?}"),
+    }
+}
+
+/// The operator's chat ran exactly this: `--persona <name> --report <workspace>`. It is the
+/// ask `purlis dispatch --to <name> --in workspace:alpha` sends, so the app starts a task:
+/// listed under the asking chat, waited on, steered and cancelled, its report delivered and
+/// the asking chat woken, as for any task. Its result names the route.
+#[test]
+fn a_handoff_that_asks_for_a_report_is_dispatched_as_a_task_into_the_workspace_it_names() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let before = alphas_todos(&root).len();
+    let (app, _reading, asked) = an_app(&tmp, starts_a_task_as_nine);
+
+    let out = charter(
+        &root,
+        Some(&app),
+        &[
+            "handoff",
+            "--name",
+            "retry webhooks",
+            "--persona",
+            "steward",
+            "--report",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    let dispatch = the_dispatch(&asked);
+    assert_eq!(dispatch.chat, ASKING);
+    assert_eq!(dispatch.to.as_deref(), Some("steward"));
+    assert_eq!(dispatch.name, "retry webhooks");
+    assert_eq!(dispatch.place.as_deref(), Some("workspace:alpha"));
+    assert_eq!(dispatch.profile, None);
+    assert_eq!(
+        dispatch.brief.trim_end(),
+        BRIEF.trim_end(),
+        "the brief as it was written, with no handoff stamp: the app writes a task's"
+    );
+    assert_eq!(
+        text(&out.stdout),
+        format!(
+            "purlis dispatch: started 'retry webhooks' as steward (chat 9). It works in the \
+             workspace alpha, and its report reaches this chat as context on its next turn.\n\
+             {THE_ROUTE}\n"
+        )
+    );
+    // A task leaves no todo and no `handoff` row: its dispatch record is the app's.
+    assert_eq!(alphas_todos(&root).len(), before);
+    assert_eq!(handoff_rows(&root), Vec::<serde_json::Value>::new());
+}
+
+/// A task needs a name and a handoff may go without: it is listed by where the work went.
+#[test]
+fn a_reporting_handoff_with_no_name_is_a_task_named_for_the_workspace() {
+    let tmp = daily();
+    let (app, _reading, asked) = an_app(&tmp, starts_a_task_as_nine);
+
+    let out = charter(&root(&tmp), Some(&app), &["handoff", "alpha", "--report"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let dispatch = the_dispatch(&asked);
+    assert_eq!(dispatch.name, "handoff to alpha");
+    assert_eq!(dispatch.to, None, "this chat's own persona");
+    assert!(text(&out.stdout).ends_with(&format!("{THE_ROUTE}\n")));
+}
+
+/// Held for the person, it is held as a task is, and still told the route.
+#[test]
+fn a_reporting_handoff_the_person_is_asked_about_is_held_as_a_task_and_names_the_route() {
+    let tmp = daily();
+    let (app, _reading, asked) = an_app(&tmp, |tickets, connection, ask| match ask {
+        Ask::Dispatch(dispatch) => {
+            match tickets.spend(dispatch.chat, connection, &dispatch.ticket, Instant::now()) {
+                Ok(()) => Answer::NeedsGrant {
+                    from: Some("steward".to_owned()),
+                    to: "devops".to_owned(),
+                    waiting: None,
+                },
+                Err(why) => Answer::No { why },
+            }
+        }
+        other => opens_as_nine(tickets, connection, other),
+    });
+
+    let out = charter(
+        &root(&tmp),
+        Some(&app),
+        &[
+            "handoff",
+            "--name",
+            "retry webhooks",
+            "--persona",
+            "steward",
+            "--report",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
+    the_dispatch(&asked);
+    let said = text(&out.stdout);
+    assert!(
+        said.starts_with("purlis dispatch: held for the person. 'steward' chats may not dispatch")
+            && said.ends_with(&format!("{THE_ROUTE}\n")),
+        "{said}"
+    );
+}
+
+/// A refusal is the dispatch's own, and the route is said beside it.
+#[test]
+fn a_reporting_handoff_the_app_refuses_says_why_and_still_names_the_route() {
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app(&tmp, |tickets, connection, ask| match ask {
+        Ask::Ticket { .. } => opens_as_nine(tickets, connection, ask),
+        _ => Answer::No {
+            why: "this chat already waits on 6 tasks".to_owned(),
+        },
+    });
+
+    let out = charter(&root(&tmp), Some(&app), &["handoff", "alpha", "--report"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    let said = text(&out.stderr);
+    assert!(
+        said.contains("this chat already waits on 6 tasks")
+            && said.ends_with(&format!("\u{2022} {THE_ROUTE}\n")),
+        "{said}"
+    );
+}
+
+/// A task works in a workspace that exists, so `--create` cannot go with `--report`: refused
+/// before the brief is read or the app is asked, with the two commands that do it.
+#[test]
+fn a_reporting_handoff_cannot_create_its_workspace_and_says_what_to_run() {
+    let tmp = daily();
+
+    let out = charter(
+        &root(&tmp),
+        None,
+        &[
+            "handoff",
+            "gamma",
+            "--create",
+            "--vision",
+            "billing retries",
+            "--report",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    let said = text(&out.stderr);
+    assert!(
+        said.contains("--create cannot go with it")
+            && said.contains("purlis workspace create gamma")
+            && said.contains("purlis dispatch --name \"<task>\" --in workspace:gamma"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("no purlis app answered"),
+        "refused before any app is looked for: {said}"
+    );
+    assert!(!root(&tmp).join("workspaces").join("gamma").exists());
+}
+
+/// With no app behind the chat it is the dispatch that has nobody to ask, and it says so in
+/// its own sentence; the route is still said.
+#[test]
+fn a_reporting_handoff_with_no_app_behind_it_is_refused_as_a_dispatch_is() {
+    let tmp = daily();
+
+    let out = charter(
+        &root(&tmp),
+        None,
+        &["handoff", "--name", "retry webhooks", "--report", "alpha"],
+    );
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    let said = text(&out.stderr);
+    assert!(
+        said.starts_with("\u{2717} purlis dispatch: ")
+            && said.ends_with(&format!("\u{2022} {THE_ROUTE}\n")),
+        "{said}"
+    );
+    assert_eq!(handoff_rows(&root(&tmp)), Vec::<serde_json::Value>::new());
 }
 
 #[test]
