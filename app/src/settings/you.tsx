@@ -11,6 +11,7 @@ import {
   type Which,
 } from "../textSize";
 import { EDITORS, setYourEditor, useYourEditor } from "../yourEditor";
+import { setChatsListPrefs, useChatsListPrefs } from "../chatsListPrefs";
 import { Choice, Field } from "./components";
 import type { Setting, SettingsGroup } from "./groups";
 import { thisMachineGroup } from "./thisMachine";
@@ -37,6 +38,12 @@ export function youGroups(): SettingsGroup[] {
       label: "Editor",
       help: "The editor purlis hands a file to.",
       settings: [editor],
+    },
+    {
+      id: "you.chats",
+      label: "Chats list",
+      help: "How the list of chats in the sidebar is drawn, on this machine.",
+      settings: [chatRows, chatsGrouped],
     },
     thisMachineGroup(),
   ];
@@ -99,6 +106,59 @@ const editor: Setting = {
         />
       ),
       grouped: true,
+    };
+  },
+};
+
+/** Whether a row of the Chats list is two lines or one (#1499, V100-73). */
+const chatRows: Setting = {
+  id: "you.chats.rows",
+  label: "Rows",
+  help: "How much each chat's row says.",
+  useControl: function useChatRows() {
+    const { lines } = useChatsListPrefs();
+    return {
+      control: (ids) => (
+        <Choice
+          kind="radio"
+          ids={ids}
+          options={[
+            {
+              value: "2",
+              label: "Two lines",
+              says: "Name and state, then where it works and for how long.",
+            },
+            {
+              value: "1",
+              label: "One line",
+              says: "Name and state only. What the second line said is the row's tooltip.",
+            },
+          ]}
+          value={String(lines)}
+          onValueChange={(to) => setChatsListPrefs({ lines: to === "1" ? 1 : 2 })}
+        />
+      ),
+      grouped: true,
+    };
+  },
+};
+
+/** Whether the Chats list groups its sessions by workspace (#1499, V100-73). */
+const chatsGrouped: Setting = {
+  id: "you.chats.grouped",
+  label: "Group by workspace",
+  help: "The sessions of one workspace stand together, the workspaces by name. Off, the list is one order: needs you, working, then idle.",
+  useControl: function useChatsGrouped() {
+    const { grouped } = useChatsListPrefs();
+    return {
+      control: (ids) => (
+        <Choice
+          kind="toggle"
+          ids={ids}
+          checked={grouped}
+          onCheckedChange={(to) => setChatsListPrefs({ grouped: to })}
+        />
+      ),
     };
   },
 };

@@ -98,6 +98,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: ACTION,
   },
+  "ChatsSection.tsx": {
+    count: 2,
+    why:
+      "the Chats list's live count of what its filter hides, and why the key just pressed on " +
+      "a row did nothing: a live value and an action's answer, replaced by the next (#1499)",
+  },
   "DeleteVault.tsx": {
     count: 2,
     why: ACTION,

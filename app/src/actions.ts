@@ -2032,6 +2032,8 @@ export function catalogue(now: Now): Offer[] {
   }
 
   offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
+  offers.push(...taskRows(now.listed ?? [], now.tabs));
+  offers.push(BESIDE);
 
   const remove = "Remove the folder of this chat's branch";
   offers.push(
@@ -2557,6 +2559,46 @@ export function stopRows(listed: readonly ListedChat[], stopping: readonly numbe
     ];
   });
 }
+
+/**
+ * **A row for each task that has no tab** (#1499, V100-49), so the palette's search finds a
+ * task as it finds a tab: `chat.show:<session>`, which shows the task as its row in the Chats
+ * list does. Its title says where it works and who asked, so either finds it. A chat with a
+ * tab is found by its `Switch to tab` row and has none here.
+ */
+export function taskRows(listed: readonly ListedChat[], tabs: Tabs): Offer[] {
+  return listed
+    .filter((chat) => chat.mode === "task" && tabHolding(tabs, chat.session) === undefined)
+    .map((chat) => {
+      const asker = chat.from === null ? "" : `, asked by ${chat.from}`;
+      return can(
+        taskShowId(chat.session),
+        `Show task ${chat.name} in ${chat.workspace}${asker}`,
+        { verb: "showChat", session: chat.session },
+        chat.name,
+      );
+    });
+}
+
+/** The catalogue's id for the row that shows a task with no tab. */
+export function taskShowId(session: number): string {
+  return `chat.show:${session}`;
+}
+
+/** The catalogue's id for opening a chat beside the one in front. */
+export const BESIDE_ID = "chat.beside";
+
+/**
+ * **Open a chat beside the one in front**: Space on a row of the Chats list (#1499). The way
+ * to do it arrives with #1489, which makes this row able to run; until then it says why it
+ * cannot, and the key that presses it says the same. One row, not one per chat: what it would
+ * open is the row the key was pressed on.
+ */
+const BESIDE: Offer = cannot(
+  BESIDE_ID,
+  "Open a chat beside the one in front",
+  "purlis cannot open a chat beside another yet. Press Enter to open it in front.",
+);
 
 /** What stopping everything below does that its title cannot fit. */
 export const BELOW_TOO =

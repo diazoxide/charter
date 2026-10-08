@@ -7,6 +7,7 @@ import { forgetThisLaunch } from "../regions";
 import { DEFAULT_TEXT, setTextSize, textSizes } from "../textSize";
 import { GLOBAL } from "../windowprefs";
 import { yourEditor } from "../yourEditor";
+import { chatsListPrefs } from "../chatsListPrefs";
 
 /**
  * **The Settings tab at the You level** (SE-16, #1166; the spec on #558, rulings V89a–i): a
@@ -37,7 +38,7 @@ const shown = () => screen.getByRole("region", { name: /./ });
 const slider = (name: RegExp) => screen.getByRole("slider", { name });
 
 describe("the Settings tab, at the You level", () => {
-  it("opens at You, with Text, Editor and This machine in the nav and Text's settings on the right", () => {
+  it("opens at You, with Text, Editor, Chats list and This machine in the nav and Text's settings on the right", () => {
     render(<SettingsTab />);
 
     const levels = screen.getByRole("radiogroup", { name: "Level" });
@@ -54,7 +55,7 @@ describe("the Settings tab, at the You level", () => {
       within(nav())
         .getAllByRole("button")
         .map((one) => one.textContent),
-    ).toEqual(["Text", "Editor", "This machine"]);
+    ).toEqual(["Text", "Editor", "Chats list", "This machine"]);
     expect(group("Text")).toHaveAttribute("aria-current", "true");
     expect(shown()).toHaveAccessibleName("Text");
     expect(slider(/window text size/i)).toBeInTheDocument();
@@ -137,6 +138,34 @@ describe("text size, in Settings", () => {
     expect(slider(/terminal text size/i)).toHaveAccessibleDescription(
       /Every chat's terminal, refitted to the new size\./,
     );
+  });
+});
+
+describe("the Chats list, in Settings (#1499, V100-73)", () => {
+  it("chooses two lines or one for a row, and starts at two", async () => {
+    render(<SettingsTab />);
+    await userEvent.click(group("Chats list"));
+
+    const rows = screen.getByRole("radiogroup", { name: "Rows" });
+    expect(within(rows).getByRole("radio", { name: "Two lines" })).toBeChecked();
+
+    await userEvent.click(within(rows).getByRole("radio", { name: "One line" }));
+
+    expect(chatsListPrefs().lines).toBe(1);
+    expect(within(rows).getByRole("radio", { name: "One line" })).toBeChecked();
+  });
+
+  it("groups the list by workspace, off until it is turned on", async () => {
+    render(<SettingsTab />);
+    await userEvent.click(group("Chats list"));
+
+    const box = screen.getByRole("checkbox", { name: "Group by workspace" });
+    expect(box).not.toBeChecked();
+
+    await userEvent.click(box);
+
+    expect(chatsListPrefs().grouped).toBe(true);
+    expect(box).toBeChecked();
   });
 });
 
