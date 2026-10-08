@@ -277,6 +277,8 @@ pub(crate) mod pretend {
         running: Mutex<Vec<u32>>,
         dealt: AtomicU32,
         ends: Mutex<Option<Ends>>,
+        /// Why it starts nothing, while a test has it refuse ([`Pretend::refuses`]).
+        refusing: Mutex<Option<String>>,
     }
 
     impl Pretend {
@@ -288,6 +290,12 @@ pub(crate) mod pretend {
         /// Everything it was asked to start, whole, in the order it was asked.
         pub fn openings(&self) -> Vec<Opening> {
             lock(&self.seen.openings).clone()
+        }
+
+        /// Refuses every start from now with `why`, as a host with no pseudo-terminal to give
+        /// does; `None` starts them again.
+        pub fn refuses(&self, why: Option<&str>) {
+            *lock(&self.seen.refusing) = why.map(str::to_owned);
         }
 
         /// Says its sessions report on `socket`.
@@ -319,6 +327,9 @@ pub(crate) mod pretend {
             opening: &Opening,
             announce: &dyn Fn(u32),
         ) -> Result<u32, String> {
+            if let Some(why) = lock(&self.seen.refusing).clone() {
+                return Err(why);
+            }
             let id = wanted.unwrap_or_else(|| self.deal());
             self.seen.dealt.fetch_max(id, Ordering::SeqCst);
             announce(id);

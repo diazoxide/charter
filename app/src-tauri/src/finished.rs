@@ -60,6 +60,9 @@ pub(crate) struct FinishedTask {
     pub reopens: bool,
     /// Why the last Reopen of it did not hold, where one did not: said on its row.
     pub not_reopened: Option<String>,
+    /// Whether it never started (#1497): its report is then purlis's own sentence saying why,
+    /// which its row shows without a press.
+    pub did_not_start: bool,
 }
 
 /// How a finished task ended (`dispatchrecord::Finished`), as the window is sent it.
@@ -128,6 +131,7 @@ fn row(record: &Record, asker: u32, how: Finished) -> FinishedTask {
             .and_then(|tree| tree.branch.clone()),
         reopens: record.conversation.is_some(),
         not_reopened: None,
+        did_not_start: record.did_not_start,
     }
 }
 
@@ -563,6 +567,7 @@ mod tests {
             cleared: false,
             ended_by: None,
             kept_open: false,
+            did_not_start: false,
         }
     }
 
@@ -590,6 +595,7 @@ mod tests {
                 branch: None,
                 reopens: true,
                 not_reopened: None,
+                did_not_start: false,
             }
         );
     }

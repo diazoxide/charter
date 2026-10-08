@@ -13,6 +13,9 @@ import { StateShown } from "./StateShown";
  * **Clear finished**. Every other end is a row of its own until it is cleared, so a failure is
  * never behind a count.
  *
+ * **A task that did not start is one of those rows** (#1497): failed, with the reason shown
+ * under it at once, as text. It is never a banner across the window.
+ *
  * **A finished task cannot be typed into**: its program has ended. Pressing its row shows its
  * report, in place, **as text**: every word of it is a text node, so nothing a task wrote is
  * ever read as markup. **Reopen** resumes its conversation as an ordinary chat with a tab; it
@@ -93,7 +96,9 @@ function FinishedRow({
   onClear?: (ids: string[]) => void;
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
 }) {
-  const [shown, setShown] = useState(false);
+  // A task that did not start says why at once (#1497): its report is purlis's one sentence,
+  // and the reason is the whole of what there is to know about it.
+  const [shown, setShown] = useState(task.did_not_start);
   const [refused, setRefused] = useState<string>();
   const [busy, setBusy] = useState(false);
   const state = shownOf(task);

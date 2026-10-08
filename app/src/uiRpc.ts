@@ -3201,6 +3201,11 @@ export type FinishedTask = {
 	reopens: boolean,
 	/**  Why the last Reopen of it did not hold, where one did not: said on its row. */
 	not_reopened: string | null,
+	/**
+	 *  Whether it never started (#1497): its report is then purlis's own sentence saying why,
+	 *  which its row shows without a press.
+	 */
+	did_not_start: boolean,
 };
 
 /**  What the first-run screen shows about this machine. */

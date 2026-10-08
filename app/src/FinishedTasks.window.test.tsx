@@ -82,6 +82,7 @@ function finished(id: string, name: string, more: Partial<FinishedTask> = {}): F
     branch: null,
     reopens: true,
     not_reopened: null,
+    did_not_start: false,
     ...more,
   };
 }

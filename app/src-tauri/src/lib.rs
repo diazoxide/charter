@@ -75,6 +75,7 @@ mod smartclose;
 mod stopping;
 mod thismachine;
 mod todos;
+mod unstarted;
 mod updates;
 mod usage;
 mod vaultroute;

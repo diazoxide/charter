@@ -2749,6 +2749,27 @@ impl Chats {
             .collect()
     }
 
+    /// The chats a launch could not start as the record holds them, each with why: what says
+    /// whose task one was (#1497, `crate::unstarted`). The window's list is
+    /// [`Self::would_not_start`].
+    pub(crate) fn waiting_to_start(&self) -> Vec<(Chat, String)> {
+        lock(&self.would_not_start)
+            .iter()
+            .map(|one| (one.chat.clone(), one.why.clone()))
+            .collect()
+    }
+
+    /// In a test, `chat` is one a launch could not start, for `why`: held as
+    /// [`Self::put_back`] holds one, without a launch.
+    #[cfg(test)]
+    pub(crate) fn was_not_put_back(&self, chat: Chat, why: &str) {
+        lock(&self.would_not_start).push(Waiting {
+            chat,
+            why: why.to_owned(),
+            approval: None,
+        });
+    }
+
     /// **Retry now** on a chat a launch could not start (NO-3): starts it again the way the
     /// launch did ([`Self::start_recorded`], as a relaunch), and answers its session.
     ///

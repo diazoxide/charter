@@ -292,6 +292,12 @@ pub struct Record {
     /// next launch. It is a finished row once it is closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub kept_open: bool,
+    /// Whether the task never started (#1497): it was let through, and no program was started
+    /// for it. Its report is then purlis's own sentence saying why ([`did_not_start`]), failed,
+    /// and its `worker` is the chat it would have been, which no chat ever was. Absent for
+    /// every dispatch that started.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub did_not_start: bool,
 }
 
 /// Who ended a dispatch, where the app knows it was not the persona chat's own report alone.
@@ -393,6 +399,7 @@ pub fn open_as(
         cleared: false,
         ended_by: None,
         kept_open: false,
+        did_not_start: false,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -488,6 +495,35 @@ pub fn ended_in(root: &Path, id: &str, conversation: &str) -> io::Result<bool> {
     })
 }
 
+/// **The task of dispatch `id` did not start** (#1497): its record ends here, failed, with
+/// purlis's own sentence saying `why` ([`crate::didnotstart::said`]), and is marked so. `false`
+/// for a record that is not there or has already ended: a dispatch ends once.
+///
+/// A record opened a moment ago for a task whose start was refused, or the running record of
+/// a task a launch could not put back: either way the row that stays under the chat that
+/// asked is read from it, as every finished row is ([`finished_for`]).
+pub fn did_not_start(
+    root: &Path,
+    id: &str,
+    why: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<bool> {
+    let report = capped_report(&Report {
+        outcome: Outcome::Failed,
+        text: crate::didnotstart::said(why),
+        changed: Changed::default(),
+    });
+    change(root, id, |record| {
+        if !record.running() {
+            return false;
+        }
+        record.ended = Some(crate::dispatch::stamp(now));
+        record.report = Some(report);
+        record.did_not_start = true;
+        true
+    })
+}
+
 /// How a finished task ended, as its row says it (#1485, V100-9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Finished {
@@ -576,7 +612,9 @@ pub fn finished(root: &Path, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
         .filter(|record| {
             !record.cleared
                 && Finished::of(record).is_some()
-                && !open(&record.worker.chat)
+                // A task that did not start has no chat to be open: the number it was dealt
+                // is all its record has of one, and is no chat's (#1497).
+                && (record.did_not_start || !open(&record.worker.chat))
                 && sound(record)
         })
         .collect();
@@ -815,6 +853,7 @@ fn capped(record: &Record) -> Record {
         cleared: record.cleared,
         ended_by: record.ended_by,
         kept_open: record.kept_open,
+        did_not_start: record.did_not_start,
     }
 }
 

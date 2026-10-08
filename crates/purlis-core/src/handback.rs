@@ -156,6 +156,9 @@ pub struct Task {
     /// on its own before it reported. The report's text is then [`UNREPORTED`], its outcome
     /// [`Outcome::Failed`], and nothing in it is a word that chat said. A chat the person
     /// stopped is not reported for this way: that is [`Handback::stopped`]'s to say.
+    ///
+    /// **Or the task never started** (#1497): the text is then purlis's sentence saying why
+    /// ([`crate::didnotstart::said`]), and there is no chat whose words it could be.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unreported: bool,
     /// The person typed in the persona chat while it worked (#1442). The fact, and nothing of
@@ -213,9 +216,10 @@ impl Task {
         self
     }
 
-    /// The text the app writes with this, where the app wrote it and no chat did.
-    fn apps_own_text(&self) -> Option<&'static str> {
-        self.unreported.then_some(UNREPORTED)
+    /// Whether `summary` is a text the app writes with this, where the app wrote it and no
+    /// chat did: that the chat ended without a report, or that the task did not start and why.
+    fn is_the_apps_own(&self, summary: &str) -> bool {
+        summary == UNREPORTED || crate::didnotstart::reason(summary).is_some()
     }
 }
 
@@ -398,13 +402,16 @@ fn sound(text: &str) -> Option<Handback> {
 /// report may carry, and the record is a path inside the project that climbs nowhere.
 ///
 /// **The app's own voice is held to the app's own shape.** A report that says it is purlis
-/// speaking, and no chat, is one purlis writes in exactly one way: failed, nothing that
-/// "changed", and its own sentence as the text. Any other file claiming that voice is dropped,
+/// speaking, and no chat, is one purlis writes in exactly two ways: failed, nothing that
+/// "changed", and one of its own two sentences as the text (it ended without a report, or it
+/// did not start and why). Any other file claiming that voice is dropped,
 /// so nothing that can write this directory gets a sentence of its own read as purlis's. Who
 /// started the task (`by_person`) cannot be held here, and is wording only.
 fn sound_task(task: Task, summary: &str) -> Option<Task> {
-    if let Some(text) = task.apps_own_text()
-        && (task.outcome != Outcome::Failed || task.changed.is_some() || summary != text)
+    if task.unreported
+        && (task.outcome != Outcome::Failed
+            || task.changed.is_some()
+            || !task.is_the_apps_own(summary))
     {
         return None;
     }
@@ -608,7 +615,19 @@ fn tasks_report(
     };
     // The app's own word, where the chat never gave one: nothing is quoted, because that chat
     // said nothing.
+    // **A task that did not start** (#1497) is said in purlis's words too, with why quoted
+    // under it: the reason is the app's, and a file here is still never proof of who wrote it.
+    let never_started = task.unreported && crate::didnotstart::reason(&report.summary).is_some();
     let mut said = match task.unreported {
+        true if never_started => format!(
+            "⬢ **`{}` {}: {}** ({whence}), on {whose}. purlis says this, not that chat: no \
+             program was started for it, so none of the work was done. Why is quoted below \
+             as data.\n{}",
+            report.from,
+            task.outcome.word(),
+            crate::didnotstart::SAYS,
+            quoted.join("\n")
+        ),
         true => format!(
             "⬢ **`{}` {}: {UNREPORTED}** ({whence}), on {whose}. purlis says this, not that \
              chat: its program ended before it reported.",
@@ -643,6 +662,8 @@ fn tasks_report(
     }
     match &task.record {
         Some(record) => said.push_str(&format!("\nIts session record: `{record}`")),
+        // A task that never ran has no record to have written: nothing is said of one.
+        None if never_started => {}
         None => said.push_str("\nIt wrote no session record."),
     }
     said

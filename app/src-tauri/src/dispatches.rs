@@ -991,6 +991,7 @@ mod tests {
             cleared: false,
             ended_by: None,
             kept_open: false,
+            did_not_start: false,
         }
     }
 

@@ -672,6 +672,11 @@ impl Held {
                 "purlis: plane {}, {back} of {wanted} chats back",
                 self.root.display()
             );
+            // **A task that could not be put back is a failed row under the chat that asked,
+            // and that chat is told** (#1497, V100-63): it is no longer one of the chats the
+            // window lists as waiting to start. What is left is the person's own: a chat they
+            // opened, a handoff's, and a task whose asking chat did not come back either.
+            crate::unstarted::not_put_back(self);
             for crate::chats::NotStarted { name, why, .. } in self.chats.would_not_start() {
                 tracing::warn!("purlis: {name} did not start ({why}); it is still recorded");
             }

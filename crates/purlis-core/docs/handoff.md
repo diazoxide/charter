@@ -674,6 +674,37 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   reads `waiting on the operator` to the chat that asked. That chat cannot answer for you,
   and is told the wait is not its own to end.
 
+### When a task does not start
+
+A dispatch can be let through and still start no chat: the profile's program is missing or
+does not answer as its harness, the sandbox will not wrap it, there is no pseudo-terminal, its
+folder or workspace is gone, its worktree could not be cut, a limit filled between the
+person's Allow and the start, or a launch could not put the task's chat back
+(`crates/purlis-core/src/didnotstart.rs`, #1497).
+
+Such a task is a finished one, failed, under the chat that asked. Its dispatch record ends
+with purlis's own sentence, `it did not start: <reason>`, and is marked `did_not_start`; its
+row is read from that record, never folds, is cleared as the others are, and is there after
+the app is started again. The window draws no line across itself for it.
+
+The chat that asked is told once:
+
+- **while its own command is still on the line** (`purlis dispatch`, with or without
+  `--wait`), that command prints the refusal, as it always did. The row is written, and
+  nothing is left for the chat's next turn.
+- **where nobody is on the line** (the person pressed Allow on the dispatch's Notice, or the
+  app was started again and could not put the task back), it is told as it is told a task's
+  report: `failed`, in purlis's voice, with the reason quoted as data. It is listed by a
+  chat number, so `purlis dispatch wait <chat>` returns at once with it, and a chat waiting
+  for the person is typed the one line a landed report types.
+
+A task a launch could not put back keeps the conversation it was in, so Reopen on its row
+carries it on as an ordinary chat. A task that had already reported before the quit is not
+failed: it finished, and its row says how. A chat the person opened, a handoff's chat, and a
+task whose asking chat did not come back either stay in the window's list of chats that did
+not start, with Retry now and Forget this chat, as before. A task the person asked for from a
+tab is answered in the dialog they asked from, and leaves no row.
+
 ### Asking a persona yourself
 
 You can dispatch too, from the app: **Ask <persona>…** on a chat's tab menu and in the palette,

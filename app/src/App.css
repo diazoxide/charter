@@ -3215,6 +3215,9 @@ h2.sidebar-title .node-icon {
   font-size: 0.85rem;
   background: var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
+  /* **It wraps, whatever it says** (#1497): a reason with a path or one long word in it
+     breaks inside the window, never past its edge. */
+  overflow-wrap: anywhere;
 }
 
 .notice-band.notice-trouble {
