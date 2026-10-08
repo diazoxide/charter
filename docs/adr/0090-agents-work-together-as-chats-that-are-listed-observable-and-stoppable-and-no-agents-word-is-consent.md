@@ -585,3 +585,20 @@ marked as reported, until the person or its asking chat closes it."
 
 Everything else in this record stands. A handoff's chat is not a task and is not ended by its
 report.
+
+### Rulings added in review (2026-10-08, delegated to the dispatcher; the operator is told)
+
+- **A task that is working again is never ended mid-turn.** A key of the person's in its pane
+  after the report, or a Smart close of it beginning, stands the end down for good. The bound
+  on a turn that does not end is the reporting turn's alone.
+- **A chat the person is looking at is not ended under them.** While the task is the chat in
+  front, the end is held, and it is carried out when they move away from it. No Notice.
+- **A persona chat the person started with Ask from a tab is never ended by purlis at its
+  report.** It is the person's conversation: it stays open, and its finished row appears when
+  they close it.
+- **`blocked` does not end the program.** A blocked task stays open as its own row: it is
+  waiting on something, and its conversation is what the next step needs.
+- **A task the person stopped does not fold into Finished (n)**, whatever its own last report
+  says. It stays a row of its own.
+- **A task that had reported when the app quit is not started again.** At the next launch it
+  is a finished row, read from its record.

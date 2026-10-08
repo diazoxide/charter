@@ -4952,28 +4952,51 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **What is kept for a finished task** (#1485): a task ends at its report. purlis ends its
   program once the report is delivered and the turn that sent it is over, and closes its
   chat; from then the record is all of it there is, and the row under the chat that asked is
-  read from it. Two more keys, both absent from a record written before them and from a
-  handoff's:
-  - `conversation` — the conversation the persona chat was in when the dispatch ended, by its
-    harness's id for it, held to a name's cap. Written once the record has ended (with the
+  read from it. **Not every report ends the program**: one that came out `blocked` does not
+  (the task is waiting on something, and its conversation is what the next step needs), nor
+  does the report of a task the person started from a tab (`asker.by_person`: it is their
+  conversation, and they close it), nor one that reached no chat because the asking chat had
+  gone. Those chats stay open as the chats they are, and are finished rows once they are
+  closed. Four more keys, all absent from a record written before them:
+  - `conversation` — the conversation the persona chat was in when the dispatch ended: **the
+    id that chat's own harness reported**, as the board follows it, and only where the harness
+    reported none, the id the app started the chat on. Never a value a line on the hook
+    channel names for another chat. Held to a name's cap. Written once the record has ended (with the
     report, or as the chat is closed), and never while it runs. **It is what Reopen resumes**:
     a new chat on the record's `worker.profile`, `persona` and `place.folder`, which names no
     asking chat and so is no task. Absent for a chat whose harness named none, and such a
-    task is not offered Reopen.
+    task is not offered Reopen. Reopen is refused where `worker.harness` is not the harness
+    that profile runs now.
   - `cleared` — `true` once the finished task's row was taken off its asking chat's list: by
-    Clear finished, by Reopen, or because the asking chat closed. Absent until then. **It is
-    the row's mark and nothing else**: a cleared record keeps its brief, its report and every
-    other key, is still listed in the Dispatches tab, and is collected as any record is.
+    Clear finished, by a Reopen whose new chat was heard from (or lived past a quarter of a
+    minute), or because the asking chat closed. Absent until then. A Reopen whose chat ended
+    at once clears nothing: the row is drawn again. **It is the row's mark and nothing
+    else**: a cleared record keeps its brief, its report and every other key, is still listed
+    in the Dispatches tab, and is collected as any record is.
+  - `ended_by` — who ended the dispatch, where that was not its chat's own report alone:
+    `"unreported"` where the chat went without reporting and purlis said so in its place,
+    `"person"` where the person stopped or closed it, whatever it reported in the one turn its
+    stop gave it. Written by the app in the same write as the ending. **How a row reads is
+    decided from this and never from the report's words**, so a task cannot make its row say
+    purlis's sentence by reporting it. Absent for a dispatch that ended by its own report.
+  - `kept_open` — `true` once the person took the task's chat over after it reported: a key
+    of theirs in its pane, or a Smart close of it beginning. purlis does not end such a chat,
+    then or at the next launch.
 
   **A finished task's row** is every record with `mode: "task"` and a `report`, not `cleared`,
-  whose `asker` is a chat the app has open (matched by `asker.id`, which a restart and a
-  relaunch keep) and whose `worker` is not, oldest first. So the rows are there again after
-  the app is quit and reopened, with no other store. How a row ended is the report's:
-  `done` and `cancelled` fold into the window's one "Finished (n)" line; `blocked`, `failed`,
-  `failed` with purlis's own text `ended without a report` (said as that), and `stopped`
-  (said as "closed by the person") each stay a row of their own until cleared. `purlis
-  dispatch list` lists the same records after the asking chat's open tasks, until the row is
-  cleared or that chat closes.
+  whose `asker.id` is the id of a chat the app has open and whose `worker.id` is not, oldest
+  first. **By id and never by number**: a number is dealt again in another launch, so a
+  record that names its asking chat by number alone has no row. So the rows are there again
+  after the app is quit and reopened, with no other store. **A task that had reported when the
+  app quit is not started again**: at the next launch its chat is left out of what is put
+  back (`dispatched::left_out_at_launch`) and it is a finished row, unless it was blocked,
+  `kept_open`, started by the person, or its asking chat is not coming back. How a row ended:
+  `ended_by: "person"` or the outcome `stopped` is "closed by the person"; `ended_by:
+  "unreported"` is "ended without a report"; else the report's outcome. `done` and `cancelled`
+  fold into the window's one "Finished (n)" line; every other end stays a row of its own until
+  cleared. **A reported task's own finished rows go when purlis ends it**: it is their asking
+  chat, and it has closed. `purlis dispatch list` lists the same records after the asking
+  chat's open tasks, until the row is cleared or that chat closes.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.

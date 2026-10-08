@@ -2454,7 +2454,7 @@ h2.sidebar-title .node-icon {
 
 .chats-section .finished-name:hover,
 .chats-section .finished-count:hover,
-.chats-section .finished-reopen:hover:not(:disabled),
+.chats-section .finished-reopen:hover:not([aria-disabled="true"]),
 .chats-section .finished-clear:hover {
   background: var(--surface-hover);
 }
@@ -2463,6 +2463,17 @@ h2.sidebar-title .node-icon {
 .chats-section .finished-clear {
   border: 1px solid var(--border-subtle);
   font-size: 0.9em;
+}
+
+/* Reopen where there is nothing to resume: still reachable, and drawn as not for pressing. */
+.chats-section .finished-reopen[aria-disabled="true"] {
+  opacity: 0.55;
+}
+
+.chats-section .finished-note {
+  max-width: 28rem;
+  margin: 0.1rem 0 0.2rem;
+  white-space: normal;
 }
 
 .chats-section .finished-count svg {

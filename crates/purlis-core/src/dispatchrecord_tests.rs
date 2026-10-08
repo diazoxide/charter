@@ -1278,17 +1278,59 @@ fn done_and_cancelled_fold_and_every_other_end_stays_a_row_of_its_own() {
     );
     assert_eq!(said(Outcome::Failed, "It broke."), ("failed", false));
     assert_eq!(said(Outcome::Blocked, "Needs a login."), ("blocked", false));
+    // **A chat's words never pass for purlis's**: a task that reports `failed` with purlis's
+    // own sentence is a failed task, and says so.
     assert_eq!(
         said(Outcome::Failed, ENDED_WITHOUT_A_REPORT),
-        ("ended without a report", false)
+        ("failed", false)
     );
     assert_eq!(
         said(Outcome::Failed, crate::handback::UNREPORTED),
-        ("ended without a report", false)
+        ("failed", false)
     );
     assert_eq!(
         said(Outcome::Stopped, crate::handback::STOPPED),
         ("closed by the person", false)
+    );
+    // Who ended it is the app's fact, written with the ending.
+    let ended_by = |outcome: Outcome, text: &str, by: EndedBy| {
+        let opened = open(
+            &root,
+            Opening {
+                mode: Mode::Task,
+                ..a_handoff()
+            },
+            at("2026-10-07T12:10:00Z"),
+        )
+        .unwrap();
+        close_by(
+            &root,
+            &opened.id,
+            Ending {
+                report: Some(ended(outcome, text)),
+                usage: None,
+            },
+            Some(by),
+            at("2026-10-07T12:11:00Z"),
+        )
+        .unwrap();
+        let record = read(&root, &opened.id).unwrap();
+        assert_eq!(record.ended_by, Some(by));
+        let how = Finished::of(&record).unwrap();
+        (how.word(), how.folds())
+    };
+    assert_eq!(
+        ended_by(Outcome::Failed, "anything at all", EndedBy::Unreported),
+        ("ended without a report", false)
+    );
+    // A task the person stopped does not fold, whatever its own last report says.
+    assert_eq!(
+        ended_by(Outcome::Done, "All good, honest.", EndedBy::Person),
+        ("closed by the person", false)
+    );
+    assert_eq!(
+        serde_json::to_string(&EndedBy::Person).unwrap(),
+        r#""person""#
     );
     // A handoff's record is no finished task, whatever it ended with.
     let moved = open(&root, a_handoff(), at("2026-10-07T12:03:00Z")).unwrap();
@@ -1329,4 +1371,80 @@ fn the_conversation_a_task_ended_in_is_kept_for_a_reopen() {
         Some(task.id)
     );
     assert_eq!(task_worked_by(&root, "01K6NOBODY0000000000000000"), None);
+}
+
+#[test]
+fn a_dispatch_settled_as_gone_without_a_report_is_said_so_by_the_app_s_own_mark() {
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    assert_eq!(settle(&root, |_| false, at("2026-10-07T12:30:00Z")), 1);
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(record.ended_by, Some(EndedBy::Unreported));
+    assert_eq!(
+        Finished::of(&record).map(Finished::word),
+        Some("ended without a report")
+    );
+}
+
+#[test]
+fn a_finished_row_is_matched_to_its_asking_chat_by_id_and_never_by_number() {
+    // A record that names its asking chat by number alone: after a restart that number is
+    // another chat's, so the row is nobody's.
+    let (_d, root) = project();
+    let numbered = Opening {
+        mode: Mode::Task,
+        asker: Asker {
+            chat: ChatRef {
+                id: None,
+                ..steward()
+            },
+            ..a_handoff().asker
+        },
+        ..a_handoff()
+    };
+    let opened = open(&root, numbered, at("2026-10-07T12:00:00Z")).unwrap();
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(done("Healthy.")),
+            usage: None,
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    // The chat that has that number now, with or without an id of its own.
+    assert!(finished_for(&root, &steward(), nobody_open).is_empty());
+    let no_id = ChatRef {
+        id: None,
+        ..steward()
+    };
+    assert!(finished_for(&root, &no_id, nobody_open).is_empty());
+    assert_eq!(clear_for(&root, &no_id), 0);
+}
+
+#[test]
+fn a_chat_the_person_took_over_is_marked_on_its_record_once() {
+    let (_d, root) = project();
+    let task = a_finished_task(&root, "check prod", 7, done("Healthy."), 1);
+    assert!(!task.kept_open);
+
+    assert!(kept_open(&root, &task.id).unwrap());
+    assert!(!kept_open(&root, &task.id).unwrap());
+
+    let kept = read(&root, &task.id).unwrap();
+    assert!(kept.kept_open);
+    assert!(!serde_json::to_string(&task).unwrap().contains("kept_open"));
+    assert!(!serde_json::to_string(&task).unwrap().contains("ended_by"));
 }

@@ -824,6 +824,44 @@ fn a_brief_that_is_empty_or_carries_a_secret_is_refused_and_the_secret_is_never_
 
 // ----- the report ---------------------------------------------------------------------------
 
+/// An app that takes a task's report and will end the task's program for it (#1485).
+fn finishes_it(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
+    on_a_ticket(tickets, connection, ask, |_| Answer::Finished {
+        to: "steward 1".to_owned(),
+    })
+}
+
+#[test]
+fn a_task_told_it_is_finished_is_told_its_program_ends_with_the_turn() {
+    // Only where the app says so: a handoff's chat, a blocked task and a task the person
+    // started are answered as any report is, and are told nothing of an end.
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app(&tmp, finishes_it);
+
+    let out = purlis_as(
+        &root(&tmp),
+        Some(&app),
+        STARTED,
+        &[
+            "dispatch",
+            "report",
+            "--outcome",
+            "done",
+            "Forty are stuck.",
+        ],
+        "",
+    );
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        text(&out.stdout),
+        "purlis dispatch report: sent to 'steward 1' (done). It reaches that chat as context \
+         on its next turn. This task is finished: this chat's program is ended once this turn \
+         is over, so start nothing more.\n"
+    );
+}
+
 #[test]
 fn a_task_s_report_goes_to_the_app_on_one_ticket_with_its_outcome_and_names_no_recipient() {
     let tmp = daily();
@@ -850,8 +888,7 @@ fn a_task_s_report_goes_to_the_app_on_one_ticket_with_its_outcome_and_names_no_r
     assert_eq!(
         text(&out.stdout),
         "purlis dispatch report: sent to 'steward 1' (blocked). It reaches that chat as \
-         context on its next turn. This task is finished: this chat's program is ended once \
-         this turn is over, so start nothing more.\n"
+         context on its next turn.\n"
     );
     let all = asked.lock().unwrap().clone();
     assert_eq!(all.len(), 2, "a ticket, then the report: {all:?}");
@@ -1226,8 +1263,7 @@ fn a_task_goes_end_to_end() {
     assert_eq!(
         text(&reported.stdout),
         "purlis dispatch report: sent to 'steward 1' (done). It reaches that chat as context \
-         on its next turn. This task is finished: this chat's program is ended once this \
-         turn is over, so start nothing more.\n"
+         on its next turn.\n"
     );
 
     // And the asking chat's next turn is handed it: marked as data from another chat, every

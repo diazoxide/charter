@@ -184,8 +184,9 @@ pub struct Row {
     pub branch_stands: Option<String>,
     /// It has finished and its program has ended (#1485): listed from its dispatch record
     /// until its row is cleared or the asking chat closes. `chat` is then the number its chat
-    /// had, which `wait` still reads its report by; or 0 for a task that finished before this
-    /// app was started, whose number may be another chat's by now.
+    /// had, which `wait` still reads its report by; or 0 where that number is no longer
+    /// known to be its own: it finished before this app was started, or longer ago than the
+    /// app remembers closed tasks by number.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
 }
@@ -387,6 +388,8 @@ struct Task {
     report: Option<Kept>,
     /// How far ending it has got, from its report on (#1485).
     end: Option<End>,
+    /// A turn began in it after its report: the bound on the reporting turn is spent.
+    later_turn: bool,
 }
 
 /// A report the app delivered, kept so a wait can answer with it.
@@ -417,7 +420,8 @@ enum Cancel {
 enum End {
     /// Its report is delivered, and the turn that sent it has not ended.
     Reported,
-    /// It is to be ended, and a task of its own is still at work: when that one has gone.
+    /// It is to be ended, and is held back: a task of its own is still at work, or the
+    /// person has it in front of them. When the hold has gone.
     Due,
     /// Its turn has ended, and it is having its moment to settle.
     Settling,
@@ -469,6 +473,43 @@ pub fn ends_within(seen: Seen) -> Duration {
     } else {
         AN_UNHEARD_TASK_ENDS_AFTER
     }
+}
+
+/// **The chats of `record` that are not put back at a launch, because they are tasks that had
+/// finished when the app quit** (#1485): purlis ends a task's program once it has reported,
+/// and a quit can come first, in its moment to settle or while something held the end back.
+/// Such a chat is left out of the put-back and nothing is started for it: its dispatch record
+/// already holds its report and its conversation, so it is a finished row under the chat that
+/// asked, as it would have been a moment later.
+///
+/// Left out: a chat a dispatch started as a task, whose report was sent or written for it,
+/// that a chat asked for (a task the person started from a tab is their conversation, and
+/// comes back), whose asking chat is in the record too (with nobody to list it under, it
+/// comes back as the chat it was), and that `finished` answers for: the app's own dispatch
+/// record of it says it ended, not blocked, and not taken over by the person.
+///
+/// Answers the record to put back and the chats left out of it, in the record's order.
+pub fn left_out_at_launch(
+    record: &crate::reopen::Record,
+    finished: impl Fn(&crate::reopen::Chat) -> bool,
+) -> (crate::reopen::Record, Vec<crate::reopen::Chat>) {
+    let numbers: Vec<u32> = record.chats.iter().filter_map(|chat| chat.number).collect();
+    let (out, back): (Vec<_>, Vec<_>) = record.chats.iter().cloned().partition(|chat| {
+        chat.from.as_ref().is_some_and(|from| {
+            from.mode == Mode::Task
+                && matches!(from.report, Owed::Sent | Owed::Failed)
+                && !from.by_person
+                && Some(from.chat) != chat.number
+                && numbers.contains(&from.chat)
+        }) && finished(chat)
+    });
+    (
+        crate::reopen::Record {
+            chats: back,
+            ..record.clone()
+        },
+        out,
+    )
 }
 
 /// What a chat is told when it asks something of a task that has finished, which only a
@@ -547,7 +588,7 @@ pub const CANCELLED_UNASKED: &str = "The task was cancelled by the chat that ask
 pub const A_PROMPT_IS_HEARD_WITHIN: Duration = Duration::from_secs(60);
 
 /// The most closed tasks remembered, so a wait on one says how it ended.
-const MOST_GONE: usize = 64;
+const MOST_GONE: usize = 512;
 
 /// What an outcome of `cancelled` from a chat nobody cancelled is told.
 pub const NOT_CANCELLED: &str = "this task was not cancelled, and only a task its asking chat \
@@ -718,8 +759,12 @@ impl Ledger {
     }
 
     /// A key of the person's went to chat `chat`'s pane.
-    pub fn person_keyed(&mut self, chat: u32) {
+    ///
+    /// **In a task that has reported, that is the person taking it over**: its end stands
+    /// down for good ([`Self::end_stood_down`]). Answers whether one did.
+    pub fn person_keyed(&mut self, chat: u32) -> bool {
         self.keyed.insert(chat);
+        self.end_stood_down(chat)
     }
 
     /// Whether a key of the person's has gone to chat `chat`'s pane since its harness last
@@ -776,6 +821,19 @@ impl Ledger {
     /// next turn where that chat is open (`file` is none for one kept for a workspace). A
     /// cancel of it is over.
     pub fn reported(&mut self, task: u32, asker: u32, report: Handback, file: Option<PathBuf>) {
+        // **Which reports end their task's program** (#1485): one left for an open asking
+        // chat, of a task a chat asked for, that did not come out blocked. A report kept for a
+        // workspace reached no chat, and its writer stays open to say so. **A task the person
+        // started from a tab is their conversation**: it stays open until they close it. **A
+        // blocked task is waiting on something**, and its conversation is what the next step
+        // needs. And purlis's own word that the person stopped a chat is no report: the stop
+        // ends it.
+        let ends = file.is_some()
+            && report.stopped.is_none()
+            && report
+                .task
+                .as_ref()
+                .is_some_and(|said| !said.by_person && said.outcome != Outcome::Blocked);
         let has_reader = file.is_some();
         if has_reader {
             self.landed(asker, Landed::Report(task));
@@ -789,12 +847,10 @@ impl Ledger {
         let entry = self.tasks.entry(task).or_default();
         entry.cancel = None;
         entry.report = Some(Kept { report, file });
-        // And from here its program is to be ended (#1485): the report is delivered to the
-        // chat that asked. **One kept for a workspace is not**: the chat that asked has gone,
-        // and the chat that wrote it stays open, which is where the person is told a report
-        // had nowhere to go.
-        if has_reader && entry.end.is_none() {
+        // And from here its program is to be ended (#1485): the report is delivered.
+        if ends && entry.end.is_none() {
             entry.end = Some(End::Reported);
+            entry.later_turn = false;
         }
     }
 
@@ -803,25 +859,70 @@ impl Ledger {
         self.tasks.get(&task).is_some_and(|task| task.end.is_some())
     }
 
+    /// The tasks that have reported and are held back from their end by something that is not
+    /// their own turn: a chat below at work, or the person looking at them. What the app
+    /// looks at again when the chat in front changes.
+    pub fn held_back(&self) -> Vec<u32> {
+        let mut held: Vec<u32> = self
+            .tasks
+            .iter()
+            .filter(|(_, task)| task.end == Some(End::Due))
+            .map(|(chat, _)| *chat)
+            .collect();
+        held.sort_unstable();
+        held
+    }
+
+    /// **The end of task `task` stands down, for good**: it has reported, and it is working
+    /// again for the person. A key of theirs in its pane after the report, or a Smart close of
+    /// it beginning. It stays an open chat that has reported, as every such chat did before
+    /// tasks ended at their report, and is a finished row once it is closed. Answers whether
+    /// there was an end to stand down.
+    pub fn end_stood_down(&mut self, task: u32) -> bool {
+        self.tasks
+            .get_mut(&task)
+            .is_some_and(|entry| entry.end.take().is_some())
+    }
+
+    /// purlis typed a line of its own into chat `chat`, which starts a turn: a task that had
+    /// reported and was about to be ended is working again from now, before its harness has
+    /// said the turn began. Its end waits for that turn's own end.
+    pub fn line_typed(&mut self, chat: u32) {
+        if let Some(entry) = self.tasks.get_mut(&chat)
+            && entry.end.is_some()
+        {
+            entry.end = Some(End::Reported);
+            entry.later_turn = true;
+        }
+    }
+
     /// **What the app does next for task `task`, which has reported** (#1485): its program is
     /// ended once its report is delivered and the turn that sent it is over.
     ///
-    /// `seen` is what the app knows of its chat, `below_at_work` whether a chat it started is
-    /// still at work, and `looked` why the app looks.
+    /// `seen` is what the app knows of its chat, `held` whether something outside its own
+    /// turn holds the end back (a chat it started is still at work, or the person has it in
+    /// front of them), and `looked` why the app looks.
     ///
     /// - **Never before the report is delivered**: only [`Self::reported`] makes a task one to
     ///   end, and that is called once the report is kept for the chat that asked.
-    /// - **When its turn has ended, by its harness's own word**, it is given a moment
-    ///   ([`Ends::Settle`], [`A_TURN_SETTLES_WITHIN`]) and then ended: the harness has
-    ///   finished its turn, and has that moment to finish writing the conversation down. A
-    ///   program that has ended already is treated the same, so the end is never made on the
-    ///   thread that heard it move.
-    /// - **A turn that does not end, and a harness purlis hears nothing from**, are ended
-    ///   when [`Looked::WaitedOut`] says the task has had as long as it is given
-    ///   ([`ends_within`]).
-    /// - **Not while a task of its own is at work.** Ending it would leave that one's report
-    ///   with nobody to read it. It is ended when the last of them has gone.
-    pub fn end_step(&mut self, task: u32, seen: Seen, below_at_work: bool, looked: Looked) -> Ends {
+    /// - **Never mid-turn, but for the reporting turn that will not end.** Every answer that
+    ///   moves toward the end first checks that the chat's turn is over, by its harness's own
+    ///   word: as the turn ends, again when its moment to settle has passed, and again when
+    ///   what held it back has gone. A chat found working goes back to waiting for that
+    ///   turn's `Stop`.
+    /// - **When its turn has ended**, it is given a moment ([`Ends::Settle`],
+    ///   [`A_TURN_SETTLES_WITHIN`]) and then ended: the harness has that moment to finish
+    ///   writing the conversation down. A program that has ended already is treated the
+    ///   same, so the end is never made on the thread that heard it move.
+    /// - **The bound ends the reporting turn and no other** ([`Looked::WaitedOut`],
+    ///   [`ends_within`]): a turn that does not end, or a harness purlis hears nothing from.
+    ///   Once a later turn has begun in the chat (purlis typed it a line: a report of a task
+    ///   of its own landed), the bound ends nothing, and that turn's own end is waited for.
+    ///   Nor does it end a chat that is showing the person a prompt.
+    /// - **Not while it is held.** Ending it while a task of its own works would leave that
+    ///   one's report with nobody to read it; ending it in front of the person would take
+    ///   away what they are reading. It is ended when the hold has gone.
+    pub fn end_step(&mut self, task: u32, seen: Seen, held: bool, looked: Looked) -> Ends {
         let Some(entry) = self.tasks.get_mut(&task) else {
             return Ends::Nothing;
         };
@@ -830,22 +931,36 @@ impl Ledger {
         };
         let over = seen.ended || seen.turn_ended();
         match (looked, stage) {
-            (Looked::WaitedOut, _) | (Looked::Settled, End::Settling) if below_at_work => {
+            // The bound was the reporting turn's. A later turn is waited for, a prompt is the
+            // person's to answer, and a settle under way is the settle's to finish.
+            (Looked::WaitedOut, _) if entry.later_turn && !seen.ended => Ends::Hold,
+            (Looked::WaitedOut, _) if seen.asking && !seen.ended => Ends::Hold,
+            (Looked::WaitedOut, End::Settling) => Ends::Hold,
+            (Looked::WaitedOut, _) if held => {
                 entry.end = Some(End::Due);
                 Ends::Hold
             }
-            (Looked::WaitedOut, _) | (Looked::Settled, End::Settling) => {
+            (Looked::WaitedOut, _) => {
                 entry.end = None;
                 Ends::End
             }
-            // A settle that was overtaken: it is waiting on a chat below it, or was not begun.
+            // Its moment has passed. A turn that began in it meanwhile is waited for.
+            (Looked::Settled, End::Settling) if !over => {
+                entry.end = Some(End::Reported);
+                Ends::Hold
+            }
+            (Looked::Settled, End::Settling) if held => {
+                entry.end = Some(End::Due);
+                Ends::Hold
+            }
+            (Looked::Settled, End::Settling) => {
+                entry.end = None;
+                Ends::End
+            }
+            // A settle that was overtaken: it is held, or working again.
             (Looked::Settled, _) => Ends::Hold,
             (Looked::Moved, End::Settling) => Ends::Hold,
-            (Looked::Moved, End::Due) if !below_at_work => {
-                entry.end = Some(End::Settling);
-                Ends::Settle
-            }
-            (Looked::Moved, End::Reported) if over && !below_at_work => {
+            (Looked::Moved, End::Due | End::Reported) if over && !held => {
                 entry.end = Some(End::Settling);
                 Ends::Settle
             }
@@ -1067,6 +1182,15 @@ impl Ledger {
         {
             entry.cancel = Some(Cancel::Heard);
         }
+        // A turn after its report: the bound on the reporting turn ends nothing from here.
+        if let Some(entry) = self.tasks.get_mut(&chat)
+            && entry.end.is_some()
+        {
+            entry.later_turn = true;
+            if entry.end == Some(End::Settling) {
+                entry.end = Some(End::Reported);
+            }
+        }
         self.landed.remove(&chat);
         self.keyed.remove(&chat);
         self.talk.turn_began(chat);
@@ -1189,7 +1313,7 @@ pub fn list_text(rows: &[Row]) -> String {
         // A finished task's program has ended, and that is said: nothing can be sent to it.
         // One that finished before this app was started has no number to be asked after by.
         let chat = match (row.finished, row.chat) {
-            (true, 0) => "finished before this app started".to_owned(),
+            (true, 0) => "finished earlier, under a chat number no longer known".to_owned(),
             (_, chat) => format!("chat {chat}"),
         };
         let age = if row.finished {
@@ -2484,7 +2608,7 @@ mod tests {
                 "2 tasks dispatched by this chat:\n\
                  - chat 9 · 'check the queue' · devops · {place} · reported: done · started 3m \
                  ago · finished, its program has ended\n\
-                 - finished before this app started · 'check the queue' · devops · {place} · \
+                 - finished earlier, under a chat number no longer known · 'check the queue' · devops · {place} · \
                  reported: done · started 3m ago · finished, its program has ended",
                 place = Place::Workspace("alpha".to_owned()).said()
             )
@@ -2495,5 +2619,401 @@ mod tests {
                 .unwrap()
                 .contains("\"finished\":true")
         );
+    }
+
+    // ----- a task working again after its report is never ended mid-turn (#1485, M1) --------
+
+    /// A task that reported to an open asking chat, as a ledger holds it.
+    fn reported_task() -> Ledger {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+        ledger
+    }
+
+    #[test]
+    fn a_key_of_the_person_s_after_the_report_stands_the_end_down_for_good() {
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+
+        // They type a line into its pane while the reporting turn goes on.
+        assert!(ledger.person_keyed(TASK), "an end stood down");
+
+        assert!(!ledger.ending(TASK));
+        // Its turn ends, its moment passes, the bound runs out: nothing ends it.
+        for (seen, looked) in [
+            (WAITING, Looked::Moved),
+            (WAITING, Looked::Settled),
+            (RUNNING, Looked::WaitedOut),
+            (WAITING, Looked::WaitedOut),
+        ] {
+            assert_eq!(
+                ledger.end_step(TASK, seen, false, looked),
+                Ends::Nothing,
+                "{seen:?} {looked:?}"
+            );
+        }
+        // And not a second time: there is no end left to stand down.
+        assert!(!ledger.person_keyed(TASK));
+        // The report is still the asking chat's.
+        assert!(ledger.report(TASK).is_some());
+        // A key in a chat that has not reported stands nothing down.
+        assert!(!Ledger::default().person_keyed(TASK));
+    }
+
+    #[test]
+    fn a_key_during_the_settle_stands_the_end_down_too() {
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+
+        assert!(ledger.person_keyed(TASK));
+
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Nothing
+        );
+    }
+
+    #[test]
+    fn a_smart_close_beginning_stands_the_end_down() {
+        // The chat that asked is closing, and asks this one for its session record: a new
+        // turn, which the pending end must not cut.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+
+        assert!(ledger.end_stood_down(TASK));
+
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Nothing
+        );
+        assert!(!ledger.end_stood_down(TASK));
+    }
+
+    #[test]
+    fn a_turn_that_began_during_the_settle_is_waited_for_and_never_cut() {
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+
+        // A turn is under way when the moment has passed, whether or not purlis heard it
+        // begin: the look itself sees the chat working.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Hold
+        );
+        assert!(
+            ledger.ending(TASK),
+            "still one to end, when that turn is over"
+        );
+        // Nothing ends it while it works.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Hold
+        );
+        // That turn's own end settles it, and then it is ended.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn the_bound_ends_the_reporting_turn_and_never_a_later_one() {
+        // The reporting turn ended and a later turn began: purlis heard its prompt.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        ledger.turn_began(TASK);
+
+        // The bound set at the report runs out mid-turn: it ends nothing.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        // Nor once that turn has ended: the turn's end is what settles it.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+
+        // A reporting turn that never ends is what the bound is for.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::End
+        );
+        // But not while it shows the person a prompt: that is theirs to answer.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        // And a bound that runs out during the settle leaves the end to the settle.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn a_task_reading_its_own_task_s_report_is_not_ended_while_it_reads() {
+        // T1 reported while T2, a task of its own, worked: held.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        // T2 reports. purlis types T1 its one line, which starts a turn: T1 is working from
+        // that moment, before its harness has said so.
+        ledger.line_typed(TASK);
+        // T2 is ended and goes; T1 is looked at, mid-turn. It is not settled toward its end.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        // Even where the board has not caught up and still says it waits, a settle begun now
+        // finds it working when the moment has passed.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        ledger.turn_began(TASK);
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Settled),
+            Ends::Hold
+        );
+        // The bound is spent: it was the reporting turn's.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        // It has read the report and its turn is over: now it is ended.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn a_held_task_is_settled_only_once_its_own_turn_is_over() {
+        // (Moved, Due): what held it has gone, and it is working. Nothing moves toward the end.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(ledger.held_back(), vec![TASK]);
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(ledger.held_back(), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn a_task_the_person_has_in_front_of_them_is_held_until_they_move_away() {
+        // The same hold as a task of its own at work: the app says which.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Settled),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        // They bring another chat forward.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        // And come back within the moment: held again, not ended under them.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Settled),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn a_blocked_task_and_a_task_the_person_started_are_not_ended_by_their_report() {
+        // Blocked: it is waiting on something, and its conversation is what comes next.
+        let mut ledger = Ledger::default();
+        ledger.reported(
+            TASK,
+            ASKER,
+            a_report(Outcome::Blocked),
+            Some("a.json".into()),
+        );
+        assert!(!ledger.ending(TASK));
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::WaitedOut),
+            Ends::Nothing
+        );
+        // The report itself is delivered and told of as any is.
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Report(TASK)]
+        );
+
+        // Started by the person from a tab: their conversation, which they close.
+        let mut theirs = a_report(Outcome::Done);
+        theirs.task.as_mut().unwrap().by_person = true;
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, theirs, Some("a.json".into()));
+        assert!(!ledger.ending(TASK));
+
+        // Done, failed and cancelled, asked for by a chat, do end.
+        for outcome in [Outcome::Done, Outcome::Failed, Outcome::Cancelled] {
+            let mut ledger = Ledger::default();
+            ledger.reported(TASK, ASKER, a_report(outcome), Some("a.json".into()));
+            assert!(ledger.ending(TASK), "{outcome:?}");
+        }
+    }
+
+    // ----- a task that had reported when the app quit (#1485, M2) ---------------------------
+
+    fn recorded(number: u32, from: Option<HandedFrom>) -> crate::reopen::Chat {
+        crate::reopen::Chat {
+            program: "claude".to_owned(),
+            name: number.to_string(),
+            number: Some(number),
+            from,
+            ..Default::default()
+        }
+    }
+
+    fn owing(owed: Owed) -> Option<HandedFrom> {
+        Some(HandedFrom {
+            report: owed,
+            ..dispatched_by(ASKER)
+        })
+    }
+
+    #[test]
+    fn a_task_that_had_reported_when_the_app_quit_is_left_out_of_the_put_back() {
+        let record = crate::reopen::Record {
+            chats: vec![
+                recorded(ASKER, None),
+                // Reported, and purlis had not ended it yet.
+                recorded(TASK, owing(Owed::Sent)),
+                // Its program had died, and purlis had said so.
+                recorded(10, owing(Owed::Failed)),
+                // Still working: it comes back and reports when it runs again.
+                recorded(11, owing(Owed::Due)),
+                // A handoff's chat that reported is no task.
+                recorded(
+                    12,
+                    Some(HandedFrom {
+                        report: Owed::Sent,
+                        mode: Mode::Handoff,
+                        ..dispatched_by(ASKER)
+                    }),
+                ),
+                // The person started it from a tab: their conversation.
+                recorded(
+                    13,
+                    Some(HandedFrom {
+                        report: Owed::Sent,
+                        by_person: true,
+                        ..dispatched_by(ASKER)
+                    }),
+                ),
+                // Its asking chat is not coming back: nobody to list it under.
+                recorded(
+                    14,
+                    Some(HandedFrom {
+                        report: Owed::Sent,
+                        ..dispatched_by(77)
+                    }),
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let (back, out) = left_out_at_launch(&record, |_| true);
+
+        let numbers = |chats: &[crate::reopen::Chat]| -> Vec<u32> {
+            chats.iter().filter_map(|chat| chat.number).collect()
+        };
+        assert_eq!(numbers(&out), [TASK, 10]);
+        assert_eq!(numbers(&back.chats), [ASKER, 11, 12, 13, 14]);
+
+        // What the app's own dispatch record says is the last word: a blocked task, one the
+        // person took over, and one with no ended record all come back as the chats they were.
+        let (back, out) = left_out_at_launch(&record, |chat| chat.number != Some(TASK));
+        assert_eq!(numbers(&out), [10]);
+        assert!(numbers(&back.chats).contains(&TASK));
+        let (back, out) = left_out_at_launch(&record, |_| false);
+        assert!(out.is_empty());
+        assert_eq!(back, record);
     }
 }

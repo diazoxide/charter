@@ -615,8 +615,9 @@ pub struct HandedFromNote {
     /// Whether it has a tab. A handoff always has one; a task chat has none until the person
     /// opens it from the Chats section (`open_chat_tab`).
     pub tab: bool,
-    /// Whether, as a task, it has sent its one report: it stays open, marked reported,
-    /// until it is closed.
+    /// Whether, as a task, it has sent its one report. purlis ends its program once that
+    /// turn is over, and it is a finished row from then (#1485); until then it is listed as
+    /// the open chat it is, marked reported.
     pub reported: bool,
     /// Whether, as a task, it ended without a report, and purlis told the chat that asked
     /// that it failed.
@@ -1790,7 +1791,10 @@ fn chat_in_front(
     plane: PlaneId,
     session: Option<u32>,
 ) -> Result<(), String> {
-    planes.held(&plane)?.chats().bring_to_front(session);
+    let held = planes.held(&plane)?;
+    held.chats().bring_to_front(session);
+    // A reported task that was held because the person had it in front is looked at again.
+    dispatched::front_moved(&held);
     Ok(())
 }
 
