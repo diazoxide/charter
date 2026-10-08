@@ -658,7 +658,10 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   where the profile the task ran on now runs another harness.
 - **Past tasks is where an ended task is read afterwards.** Each workspace has a Past tasks
   tab, opened from the workspace's menu, from the palette, and from **See past tasks** under a
-  chat's finished rows. It lists every task that was asked from the workspace or worked in it
+  chat's finished rows. **The project's root has one too**, "Past tasks · project root", in
+  the palette and on the project's own menu: a task asked from the root that worked at the
+  root is in no workspace's list. Times and days are in your local time, and the view says
+  which zone once, above the list. It lists every task that was asked from the workspace or worked in it
   and has ended, newest first: when it ended, its name, who asked whom (or "you", where you
   dispatched it yourself), how it ended in the same word and mark its row had, how long it
   ran, where it worked and on which branch of its own. A task still running is not there; it
@@ -668,12 +671,14 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   chat wrote where it wrote one. The list can be narrowed by persona (the one that asked or
   the one that ran it), by how it ended, by a range of days and by the task's name. **Reopen
   is the one thing that acts on a past task**, by the same rules as on a finished row, and a
-  task is reopened once. It reads only the dispatch records this machine holds for this
+  task is reopened once: where a chat already carries it on, Reopen brings that chat forward
+  and starts no second one. It reads only the dispatch records this machine holds for this
   project, which are kept 30 days after their last write; at most the newest 500 are listed,
   and the view says how many older ones are not, how many records could not be read, and how
   many it will not draw. It takes in a task that ends while it is open. The project-wide
   **Dispatches** tab is still the ledger of every dispatch, running or ended, handoffs too,
-  with what each cost and the folder of its own branch to discard.
+  with what each cost and the folder of its own branch to discard; it says where to find an
+  ended task.
 - **Closing a chat asks you once about the chats at work below it**: its persona chats that
   have not reported, the chats it handed work to that are mid-turn, and the same below those,
   however deep. Keep them running, or stop them. Kept, they go on working, and a persona

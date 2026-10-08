@@ -452,6 +452,25 @@ pub(crate) fn reopening(
     Ok((chat, ready))
 }
 
+/// The open chat that carries the finished task `record` on, where one does: a chat whose own
+/// record says it was resumed from the task's chat (`Identity::resumed_from`, which a relaunch
+/// keeps), or that was started on the conversation the task ended in. What a Reopen brings
+/// forward where one is already there ([`reopen`]).
+fn carried_on_by(held: &Held, record: &Record) -> Option<u32> {
+    let was = record.worker.chat.id.as_deref();
+    let conversation = record.conversation.as_deref();
+    held.chats().open_now().into_iter().find_map(|open| {
+        let chat = held.chats().recorded_chat(open.session)?;
+        let from_it = was.is_some() && chat.identity.resumed_from.as_deref() == was;
+        let on_it = conversation.is_some()
+            && chat.resume.as_ref().map(|resume| resume.as_str()) == conversation;
+        // The task's own chat, still open in its moment to settle, is the task and not a
+        // chat that carries it on.
+        let itself = was.is_some() && chat.identity.id.as_deref() == was;
+        ((from_it || on_it) && !itself).then_some(open.session)
+    })
+}
+
 /// **Reopens the finished task `id`** as an ordinary chat on its conversation, and answers the
 /// new chat's number. The chat that asked is told nothing, here or later.
 ///
@@ -463,7 +482,11 @@ pub(crate) fn reopening(
 ///
 /// **The row is not cleared here.** It is not drawn while the new chat starts, and is marked
 /// reopened, and so cleared, when that chat is first heard from, or has lived long enough to
-/// have resumed (`dispatchrecord::reopened`). A chat that
+/// have resumed (`dispatchrecord::reopened`).
+///
+/// **Where a chat already carries the task on, that chat is the answer** ([`carried_on_by`]):
+/// its number is given back for the window to bring forward, the task is marked reopened, and
+/// nothing is started. A chat that
 /// ends at once is a harness that could not bring the conversation back: the row is drawn
 /// again and says so (`dispatched::NOT_RESUMED`).
 pub(crate) fn reopen(
@@ -474,7 +497,26 @@ pub(crate) fn reopen(
     if !held.tasks().reopen_begins(id) {
         return Err("That task is being reopened already: its chat is starting.".to_owned());
     }
-    let started = match dispatchrecord::read(held.root(), id) {
+    let record = dispatchrecord::read(held.root(), id);
+    // **A chat that already carries this task on is brought forward, and none is started**
+    // (#1510). The mark that a task was reopened is written once its new chat is heard from
+    // or has lived a moment; quit before that and the mark is missing, while the chat itself
+    // is put back at the next launch. Its own record says which task it resumed, so a second
+    // press finds it: one task is one chat on its conversation, across a quit too.
+    // A task already marked reopened is refused below, as it was: only the unmarked one,
+    // which the lists still offer, is looked for.
+    if let Some(session) = record
+        .as_ref()
+        .filter(|record| !record.reopened)
+        .and_then(|record| carried_on_by(held, record))
+    {
+        held.tasks().reopen_failed(id);
+        if let Err(why) = dispatchrecord::reopened(held.root(), id) {
+            tracing::warn!("purlis: a reopened task was not marked so ({why})");
+        }
+        return Ok(session);
+    }
+    let started = match record {
         // **Reopened, and not merely cleared** (#1510): a row cleared from the sidebar, or
         // gone with the chat that asked, is still reopened from Past tasks, once.
         Some(record) if record.reopened => Err(crate::past::REOPENED_ALREADY.to_owned()),

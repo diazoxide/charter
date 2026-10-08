@@ -1700,3 +1700,51 @@ fn a_reopened_task_is_marked_so_once_and_a_cleared_one_is_not_reopened() {
     let running = open(&root, a_handoff(), at("2026-10-07T12:09:00Z")).unwrap();
     assert!(!reopened(&root, &running.id).unwrap());
 }
+
+#[test]
+fn a_record_written_with_the_clock_ahead_does_not_stop_later_reads_finding_what_ends() {
+    let (_d, root) = project();
+    let ahead = a_past_task(&root, "written with the clock ahead", "alpha", "alpha", 1);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir(&root).join(format!("{}.json", ahead.id)))
+        .unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+        .unwrap();
+    let now_ms = || {
+        u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    };
+
+    let first = past(&root, Some("alpha"), nobody_open, &whole(MOST_PAST));
+    // Never later than now, whatever a file says of itself.
+    assert!(
+        first.read_at <= now_ms(),
+        "{} is in the future",
+        first.read_at
+    );
+
+    // So a task that ends afterwards, written at the real time, is still found.
+    let new = a_past_task(&root, "ended since", "alpha", "alpha", 2);
+    let later = past(
+        &root,
+        Some("alpha"),
+        nobody_open,
+        &PastAsk {
+            most: MOST_PAST,
+            since: Some(first.read_at),
+            also: &[],
+        },
+    );
+    assert!(
+        ids(&later.records).contains(&new.id),
+        "{:?}",
+        ids(&later.records)
+    );
+    assert!(later.read_at <= now_ms());
+}

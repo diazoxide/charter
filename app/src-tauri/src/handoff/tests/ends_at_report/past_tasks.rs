@@ -224,3 +224,41 @@ fn an_opened_past_task_says_why_it_cannot_be_reopened_in_the_finished_row_s_word
         "{cannot}"
     );
 }
+
+#[test]
+fn a_second_reopen_after_a_quit_inside_the_settle_brings_the_chat_it_started_forward() {
+    let (_plane, host, _planes, id, held, _steward, task) = a_steward_and_its_task();
+    reports_and_ends(&held, &id, task);
+    let record = record_of(&held, task);
+    let reopened = crate::finished::reopen(&held, &record.id, A_SIZE).expect("reopened");
+    // Not heard from yet, so the task is not marked reopened.
+    assert!(!record_of(&held, task).reopened);
+    // The app quits and is started again: what it remembered of a Reopen under way is gone,
+    // and the chat is put back as the open chat it is.
+    held.tasks().reopen_failed(&record.id);
+    assert!(
+        past_of(&held, &record).rows[0].reopens,
+        "the list cannot tell, so it still offers Reopen"
+    );
+    let chats_before = open_chats(&held).len();
+    let started_before = host.openings().len();
+
+    // The press finds the chat that carries the task on: that chat, and no second one.
+    assert_eq!(
+        crate::finished::reopen(&held, &record.id, A_SIZE),
+        Ok(reopened)
+    );
+    assert_eq!(open_chats(&held).len(), chats_before);
+    assert_eq!(host.openings().len(), started_before);
+    // And the task is marked now, so no row offers it again.
+    assert!(record_of(&held, task).reopened);
+    let after = past_of(&held, &record).rows.remove(0);
+    assert!(after.reopened && !after.reopens);
+
+    // Once that chat is closed, the task was still reopened once.
+    closes(&held, reopened).expect("closed");
+    assert_eq!(
+        crate::finished::reopen(&held, &record.id, A_SIZE).unwrap_err(),
+        crate::past::REOPENED_ALREADY
+    );
+}

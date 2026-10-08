@@ -17,7 +17,6 @@ import {
   type PastTasks,
   type PlaneId,
 } from "./bindings";
-import { saidAt } from "./dispatches";
 import { qualifierOf, shownOf } from "./finished";
 import { listen } from "./here";
 import {
@@ -26,10 +25,12 @@ import {
   counted,
   endsOf,
   EVERY_PAST,
+  localAt,
   mergedPast,
   narrows,
   personasOfPast,
   shownPast,
+  zoneSaid,
   type PastFilter,
 } from "./pastTasks";
 import { PersonaMark } from "./PersonaMark";
@@ -68,6 +69,10 @@ const REOPENED = "It was reopened already: a task is reopened once, and that cha
  * records this machine keeps for this project. A task still running is not here; it is in the
  * Chats list. A task whose row was cleared there, or went when its session closed, is: this is
  * where it went.
+ *
+ * **Times and days are the person's own.** A record keeps UTC; the rows say local time and the
+ * day boxes mean local days, so "today" finds what ended today where they are. The zone is
+ * said once, above the table.
  *
  * A row says when it ended, its name, who asked whom, **how it ended in the word and the shape
  * every row says a state in** (`shownOf`, as its finished row did), how long it ran and where
@@ -349,13 +354,13 @@ export function PastTasksTab({
             </option>
           ))}
         </select>
-        {/* Days as the rows say them: a record's time is UTC. */}
+        {/* The person's own days, as the rows say a time: the zone is in the heading. */}
         <label className="past-day">
           From
           <input
             type="date"
             tabIndex={0}
-            aria-label="Ended on or after (UTC)"
+            aria-label="Ended on or after"
             value={filter.from}
             onChange={(e) => set({ from: e.target.value })}
           />
@@ -365,7 +370,7 @@ export function PastTasksTab({
           <input
             type="date"
             tabIndex={0}
-            aria-label="Ended on or before (UTC)"
+            aria-label="Ended on or before"
             value={filter.to}
             onChange={(e) => set({ to: e.target.value })}
           />
@@ -381,10 +386,17 @@ export function PastTasksTab({
           </button>
         )}
       </div>
-      <p className="past-count" role="status">
-        {narrows(filter)
-          ? `${shown.length} of ${counted(rows.length, "past task", "past tasks")}`
-          : counted(rows.length, "past task", "past tasks")}
+      <p className="past-count">
+        <span role="status">
+          {narrows(filter)
+            ? `${shown.length} of ${counted(rows.length, "past task", "past tasks")}`
+            : counted(rows.length, "past task", "past tasks")}
+        </span>
+        {/* Said once, for every time and day below: the records keep UTC, and the person
+            reads their own clock. */}
+        <span className="past-zone" data-testid="past-zone">
+          {` · Times and days are your local time (${zoneSaid()}).`}
+        </span>
       </p>
       {shown.length === 0 ? (
         // Not the empty state: the workspace has past tasks, and the narrowing keeps none.
@@ -473,7 +485,7 @@ function PastRow({
   const cannot = row.reopened ? REOPENED : row.reopens ? undefined : NO_CONVERSATION;
   return (
     <tr data-testid={`past-${row.id}`} data-how={row.how}>
-      <td>{row.ended === null ? "" : saidAt(row.ended)}</td>
+      <td>{row.ended === null ? "" : localAt(row.ended)}</td>
       <td>
         <span className="dispatch-task">
           <button
@@ -578,8 +590,8 @@ function Opened({
   const facts = (
     <p className="dispatch-facts">
       {[
-        `started ${saidAt(row.started)}`,
-        ...(row.ended === null ? [] : [`ended ${saidAt(row.ended)}`]),
+        `started ${localAt(row.started)}`,
+        ...(row.ended === null ? [] : [`ended ${localAt(row.ended)}`]),
         `asked by ${askedBy(row)}`,
         ...(row.asker_persona === null ? [] : [`as ${row.asker_persona}`]),
       ].join(" · ")}

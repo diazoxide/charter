@@ -26,7 +26,8 @@ export type PastFilter = {
   persona: string;
   /** How it ended (`PastTask.how`). */
   how: string;
-  /** The first and the last day it may have ended on, `YYYY-MM-DD`, as the rows say a day. */
+  /** The first and the last day it may have ended on, `YYYY-MM-DD`: **the person's own days**,
+   *  where they are, as the rows say a time. */
   from: string;
   to: string;
   /** Text in the task's name, whatever its case. */
@@ -41,10 +42,59 @@ export function narrows(filter: PastFilter): boolean {
   return Object.values(filter).some((part) => part !== "");
 }
 
-/** The day a task ended, as its record's time says it (UTC): `2026-10-07`. Empty where the
- *  time does not read as one. */
+/** A record's time (UTC, RFC 3339) as a moment, or nothing where it does not read as one. */
+function momentOf(stamp: string | null): Date | undefined {
+  if (stamp === null || !/^\d{4}-\d{2}-\d{2}T/.test(stamp)) return undefined;
+  const at = new Date(stamp);
+  return Number.isNaN(at.getTime()) ? undefined : at;
+}
+
+const two = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * **The day a task ended, where the person is**: `2026-10-07`. The record keeps its time in
+ * UTC, and a day is the person's own: a task that ended at 01:00 their time ended today, though
+ * it was still yesterday in UTC. Empty where the time does not read as one.
+ */
 export function dayOf(row: Pick<PastTask, "ended">): string {
-  return /^\d{4}-\d{2}-\d{2}/.exec(row.ended ?? "")?.[0] ?? "";
+  const at = momentOf(row.ended);
+  return at === undefined
+    ? ""
+    : `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+}
+
+/**
+ * A record's time as this view says it, **in the person's local time**: `2026-10-07 16:15`. The
+ * zone is said once, in the view's heading ({@link zoneSaid}), and not on every row. The text
+ * as it is where it is not a time.
+ */
+export function localAt(stamp: string): string {
+  const at = momentOf(stamp);
+  if (at === undefined) return stamp;
+  const day = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+  return `${day} ${two(at.getHours())}:${two(at.getMinutes())}`;
+}
+
+/**
+ * The zone the view's times and days are in, as its heading says it: the zone's name where the
+ * machine names one, and how far it is from UTC now (`Asia/Yerevan, UTC+4`, `UTC`). The stored
+ * times stay UTC; this is only how they are read.
+ */
+export function zoneSaid(now: Date = new Date()): string {
+  // Minutes to ADD to local time to get UTC: negative east of Greenwich.
+  const minutes = -now.getTimezoneOffset();
+  const [hours, rest] = [Math.trunc(Math.abs(minutes) / 60), Math.abs(minutes) % 60];
+  const offset =
+    minutes === 0
+      ? "UTC"
+      : `UTC${minutes > 0 ? "+" : "-"}${hours}${rest === 0 ? "" : `:${two(rest)}`}`;
+  let name: string | undefined;
+  try {
+    name = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    // No zone database: the offset alone is still true.
+  }
+  return name === undefined || name === "" || name === offset ? offset : `${name}, ${offset}`;
 }
 
 /** The rows `filter` keeps, in the order they came: newest ended first. */

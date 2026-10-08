@@ -96,6 +96,33 @@ describe("what a menu lists", () => {
     expect(shown.below).toEqual([]);
   });
 
+  it("offers the project root's Past tasks on the project's menu and on the root's (#1510)", () => {
+    // A task asked from the root that worked at the root is in no workspace's list, so the
+    // root's list is reached by itself: here, and from the palette, which reads the same row.
+    const now = {
+      workspaces: [OUTSIDE, "alpha"],
+      plane: "/plane",
+      projects: [
+        { plane: "/plane", name: "plane" },
+        { plane: "/other", name: "other" },
+      ],
+    };
+    expect(titles({ on: "project", plane: "/plane" }, now).above).toContain(
+      "Past tasks · project root",
+    );
+    expect(titles({ on: "root", plane: "/plane" }, now).above).toEqual([
+      "Focus the plane root",
+      "New chat at the plane root",
+      "New shell at the plane root",
+      "Past tasks · project root",
+      "New workspace…",
+    ]);
+    // Another project in the window has a root of its own, which this window's row is not.
+    expect(titles({ on: "project", plane: "/other" }, now).above).not.toContain(
+      "Past tasks · project root",
+    );
+  });
+
   it("puts everything that destroys something below the line and nothing else", () => {
     const chat = titles({ on: "chat", tab: 1 }, { tabs: openTab(noTabs(), 7, "3 steward") });
 

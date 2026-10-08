@@ -317,6 +317,10 @@ describe("the Dispatches tab", () => {
     expect(cells("01K6B")[7]).toBe("$0.42");
     expect(cells("01K6A")[7]).toBe("not reported");
     expect(screen.queryByText("$0.00")).toBeNull();
+    // This is the ledger: the way to find one ended task is said, once (#1510).
+    expect(screen.getByTestId("dispatches-past")).toHaveTextContent(
+      "To find a task that has ended, open Past tasks from its workspace's menu",
+    );
   });
 
   it("is offered from the palette", async () => {

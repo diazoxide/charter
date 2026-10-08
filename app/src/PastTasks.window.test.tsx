@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -46,6 +46,19 @@ vi.mock("./SessionPane", () => ({
 
 const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMode>);
 configure({ asyncUtilTimeout: 3_000 });
+
+/**
+ * **The person is four hours east of UTC here** (#1510, B1): the records keep UTC, and every
+ * time and day the view says is theirs. A zone with no summer time, so the offset is one number.
+ */
+const ZONE_BEFORE = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "Asia/Yerevan";
+});
+afterAll(() => {
+  if (ZONE_BEFORE === undefined) delete process.env.TZ;
+  else process.env.TZ = ZONE_BEFORE;
+});
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -131,7 +144,8 @@ const ROWS: PastTask[] = [
     by_person: true,
     how: "unreported",
     outcome: "ended without a report",
-    ended: "2026-10-05T18:30:00+00:00",
+    // Half past one in the morning of the 6th where the person is, and still the 5th in UTC.
+    ended: "2026-10-05T21:30:00+00:00",
     reopens: false,
   }),
   past({
@@ -183,10 +197,14 @@ function core(
     refuses?: string;
     /** The finished rows under the steward chat, for the sidebar. */
     finished?: FinishedTask[];
+    /** The past tasks of the project's root, which is no workspace. */
+    root?: PastTask[];
+    /** The chats open now: the steward chat, unless it has closed. */
+    open?: OpenChat[];
   } = {},
 ) {
   const asked: Asked[] = [];
-  const chats = [STEWARD];
+  const chats = [...(on.open ?? [STEWARD])];
   let listed = on.rows instanceof Error ? [] : [...(on.rows ?? ROWS)];
   let finished = [...(on.finished ?? [])];
   /** What ended since the last read: what a later read answers. */
@@ -233,6 +251,17 @@ function core(
         if (on.rows instanceof Error) throw on.rows.message;
         clock += 1;
         const whole = given.since === null || given.since === undefined;
+        if (given.workspace === null)
+          return {
+            rows: whole ? (on.root ?? []) : [],
+            waiting: [],
+            whole,
+            older: 0,
+            most: 500,
+            unread: 0,
+            undrawn: 0,
+            read_at: String(clock),
+          };
         const rows = whole ? listed : since;
         if (!whole) {
           listed = [...since, ...listed.filter((row) => !since.some((one) => one.id === row.id))];
@@ -308,6 +337,13 @@ async function opened(): Promise<HTMLElement> {
   return screen.findByRole("table", { name: "Past tasks" });
 }
 
+/** The palette's row for the catalogue's row `id`. */
+function paletteRow(id: string): HTMLElement {
+  const row = document.getElementById(`palette-row-${id}`);
+  if (row === null) throw new Error(`the palette has no row ${id}`);
+  return row;
+}
+
 /** The tasks the table lists, top to bottom. */
 function names(table: HTMLElement): string[] {
   return [...table.querySelectorAll("tr[data-testid^='past-'] .past-name")].map(
@@ -346,7 +382,8 @@ describe("a workspace's Past tasks", () => {
     ]);
     // When, the task, who asked whom, how it ended, how long, where.
     expect(cells("01K6D").slice(0, 7)).toEqual([
-      "2026-10-07 12:15 UTC",
+      // A quarter past noon UTC, said on the person's own clock.
+      "2026-10-07 16:15",
       "test the rollout",
       "steward 4",
       "qa",
@@ -398,7 +435,9 @@ describe("a workspace's Past tasks", () => {
     await userEvent.keyboard("{F2}");
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await userEvent.type(within(palette).getByRole("combobox"), "past tasks");
-    await userEvent.click(await within(palette).findByRole("option", { name: /Past tasks/ }));
+    // One row a workspace and one for the project's root, told apart by their notes.
+    await within(palette).findAllByRole("option", { name: /Past tasks/ });
+    await userEvent.click(paletteRow("workspace.past:alpha"));
 
     expect(await screen.findByRole("table", { name: "Past tasks" })).toBeInTheDocument();
     expect(selected()).toContain("Past tasks · alpha");
@@ -407,7 +446,7 @@ describe("a workspace's Past tasks", () => {
   it("narrows by persona, by how it ended, by day and by the task's name", async () => {
     core();
     render(<App />);
-    const table = await opened();
+    let table = await opened();
     const search = screen.getByRole("search", { name: "Narrow the past tasks" });
 
     // A persona is found as the one that ran a task and as the one that asked for it.
@@ -442,13 +481,29 @@ describe("a workspace's Past tasks", () => {
     await userEvent.selectOptions(ends, "");
 
     // A range of days, each end of it included.
-    const from = within(search).getByLabelText("Ended on or after (UTC)");
-    const to = within(search).getByLabelText("Ended on or before (UTC)");
+    const from = within(search).getByLabelText("Ended on or after");
+    const to = within(search).getByLabelText("Ended on or before");
     // A date box takes its value whole, as a picker gives it.
     fireEvent.change(from, { target: { value: "2026-10-05" } });
     expect(names(table)).toEqual(["test the rollout", "check prod", "rotate the key"]);
     fireEvent.change(to, { target: { value: "2026-10-06" } });
     expect(names(table)).toEqual(["check prod", "rotate the key"]);
+    // **A day is the person's own**: the task that ended at 01:30 on the 6th where they are
+    // is found on the 6th, though its record says 21:30 on the 5th in UTC. And not on the 5th.
+    fireEvent.change(from, { target: { value: "2026-10-06" } });
+    expect(names(table)).toEqual(["check prod", "rotate the key"]);
+    expect(cells("01K6B")[0]).toBe("2026-10-06 01:30");
+    fireEvent.change(from, { target: { value: "2026-10-05" } });
+    fireEvent.change(to, { target: { value: "2026-10-05" } });
+    expect(screen.getByText("No past task matches.")).toBeInTheDocument();
+    fireEvent.change(to, { target: { value: "2026-10-06" } });
+    // The table went while nothing matched, and is drawn anew.
+    table = await screen.findByRole("table", { name: "Past tasks" });
+    // The zone is said once, above the table, and on no row.
+    expect(screen.getByTestId("past-zone")).toHaveTextContent(
+      "Times and days are your local time (Asia/Yerevan, UTC+4).",
+    );
+    expect(table).not.toHaveTextContent("UTC");
 
     // And text in the name, whatever its case, on top of the rest.
     // Focused by hand: with no layout to measure, a press anywhere in the window lands on the
@@ -499,7 +554,7 @@ describe("a workspace's Past tasks", () => {
     expect(shown).toHaveTextContent("values.yaml: replicas 2 to 3");
     expect(shown).toHaveTextContent("deploy/values.yaml");
     expect(shown).toHaveTextContent("3a823aab");
-    expect(shown).toHaveTextContent("started 2026-10-07 12:00 UTC");
+    expect(shown).toHaveTextContent("started 2026-10-07 16:00 · ended 2026-10-07 16:15");
 
     // Pressed again, it shuts.
     await userEvent.click(
@@ -712,6 +767,42 @@ describe("a workspace's Past tasks", () => {
   });
 });
 
+describe("the project root's Past tasks", () => {
+  it("is opened by itself from the palette, after the chat that asked has closed", async () => {
+    // A steward chat at the root asked for a task that worked at the root, and has closed:
+    // no chat is open, so no finished row and no "See past tasks" is left to press, and the
+    // task is in no workspace's list.
+    const { of } = core({
+      open: [],
+      root: [
+        past({
+          id: "01K6R",
+          name: "audit the personas",
+          place: "project root",
+          says: "Three are unused.",
+        }),
+      ],
+    });
+    render(<App />);
+    await screen.findByRole("tab", { name: /alpha/ });
+
+    await userEvent.keyboard("{F2}");
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.type(within(palette).getByRole("combobox"), "past tasks");
+    await within(palette).findAllByRole("option", { name: /Past tasks/ });
+    const row = paletteRow(`project.past:${PLANE}`);
+    expect(row).toHaveTextContent("Past tasks · project root");
+    await userEvent.click(row);
+
+    const table = await screen.findByRole("table", { name: "Past tasks" });
+    expect(selected()).toContain("Past tasks · project root");
+    // Asked for the root, which is no workspace.
+    expect(of("past_tasks")).toContainEqual({ plane: PLANE, workspace: null, since: null });
+    expect(names(table)).toEqual(["audit the personas"]);
+    expect(cells("01K6R")[6]).toBe("project root");
+  });
+});
+
 describe("a chat's cleared finished rows", () => {
   const done = (id: string, name: string): FinishedTask => ({
     id,
@@ -728,6 +819,7 @@ describe("a chat's cleared finished rows", () => {
     branch: null,
     reopens: true,
     not_reopened: null,
+    chat: null,
   });
 
   /** The steward chat's finished rows. Its row folds over tasks that are all done by itself

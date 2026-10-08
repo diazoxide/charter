@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PastTask } from "./bindings";
 import {
   askedBy,
@@ -7,6 +7,8 @@ import {
   CLIP_LINES,
   dayOf,
   endSaid,
+  localAt,
+  zoneSaid,
   endsOf,
   EVERY_PAST,
   mergedPast,
@@ -15,6 +17,16 @@ import {
   shownPast,
 } from "./pastTasks";
 import { pastTasksTitle, pastTasksView } from "./tabs";
+
+/** Four hours east of UTC, with no summer time: every time below is read there. */
+const ZONE_BEFORE = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "Asia/Yerevan";
+});
+afterAll(() => {
+  if (ZONE_BEFORE === undefined) delete process.env.TZ;
+  else process.env.TZ = ZONE_BEFORE;
+});
 
 function past(over: Partial<PastTask> & Pick<PastTask, "id">): PastTask {
   return {
@@ -42,7 +54,7 @@ function past(over: Partial<PastTask> & Pick<PastTask, "id">): PastTask {
 
 describe("a workspace's past tasks, narrowed", () => {
   const rows = [
-    past({ id: "c", name: "Check prod", ended: "2026-10-07T23:59:59+00:00" }),
+    past({ id: "c", name: "Check prod", ended: "2026-10-07T19:59:59+00:00" }),
     past({ id: "b", name: "rotate the key", persona: "qa", asker_persona: "planner" }),
     past({ id: "a", name: "tidy", persona: null, asker_persona: null, ended: "not a time" }),
   ];
@@ -74,6 +86,25 @@ describe("a workspace's past tasks, narrowed", () => {
     expect(kept({ text: "  check " })).toEqual(["c"]);
     expect(kept({ text: "KEY", persona: "qa" })).toEqual(["b"]);
     expect(kept({ text: "KEY", persona: "devops" })).toEqual([]);
+  });
+});
+
+describe("a past task's time, where the person is", () => {
+  it("puts a task that ended after midnight their time on their day, not on UTC's", () => {
+    // 21:30 UTC on the 6th is 01:30 on the 7th, four hours east.
+    const late = past({ id: "late", ended: "2026-10-06T21:30:00+00:00" });
+    expect(dayOf(late)).toBe("2026-10-07");
+    expect(localAt("2026-10-06T21:30:00+00:00")).toBe("2026-10-07 01:30");
+    const only = (day: string) =>
+      shownPast([late], { ...EVERY_PAST, from: day, to: day }).map((row) => row.id);
+    expect(only("2026-10-07")).toEqual(["late"]);
+    expect(only("2026-10-06")).toEqual([]);
+  });
+
+  it("says the zone once, by its name and how far it is from UTC, and leaves a text that is no time as it is", () => {
+    expect(zoneSaid(new Date("2026-10-07T00:00:00Z"))).toBe("Asia/Yerevan, UTC+4");
+    expect(localAt("not a time")).toBe("not a time");
+    expect(dayOf({ ended: null })).toBe("");
   });
 });
 

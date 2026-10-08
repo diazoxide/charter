@@ -690,8 +690,10 @@ pub struct Past {
     /// Records that read and that purlis will not draw ([`sound`]), among those read: the
     /// whole store's too, for a name purlis will not draw is not one to match a workspace by.
     pub refused: usize,
-    /// When the newest record seen was written, in milliseconds since the epoch: what the
-    /// next read hands back as [`PastAsk::since`].
+    /// When the newest record seen was written, in milliseconds since the epoch, **and never
+    /// later than now**: what the next read hands back as [`PastAsk::since`]. One file with a
+    /// time in the future (written while the clock was ahead) would otherwise make every
+    /// later read skip all that is written before that time comes.
     pub read_at: u64,
     /// Whether the store was read whole.
     pub whole: bool,
@@ -719,12 +721,33 @@ pub fn in_workspace(record: &Record, workspace: Option<&str>) -> bool {
 /// [`PastAsk::most`]. **A later read does not read everything**: it stats each file and parses
 /// only those written since the read before ([`PastAsk::since`]) and those it is asked about
 /// by name ([`PastAsk::also`]). Its counts are of what it read, and it leaves nothing out.
+///
+/// **A clock set back is not followed.** A later read looks for what was written after the
+/// read before it, by the files' own times: with the clock put back, a record written since
+/// carries an earlier time and is not found until the list is read whole again, which
+/// reopening the view does. A clock that was ahead is: [`Past::read_at`] has a ceiling of now.
 pub fn past(
     root: &Path,
     workspace: Option<&str>,
     open: impl Fn(&ChatRef) -> bool,
     ask: &PastAsk<'_>,
 ) -> Past {
+    past_at(root, workspace, open, ask, std::time::SystemTime::now())
+}
+
+/// [`past`], read at `now`.
+fn past_at(
+    root: &Path,
+    workspace: Option<&str>,
+    open: impl Fn(&ChatRef) -> bool,
+    ask: &PastAsk<'_>,
+    now: std::time::SystemTime,
+) -> Past {
+    let now = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(u64::MAX, |at| {
+            u64::try_from(at.as_millis()).unwrap_or(u64::MAX)
+        });
     let mut past = Past {
         read_at: ask.since.unwrap_or(0),
         whole: ask.since.is_none(),
@@ -732,6 +755,7 @@ pub fn past(
     };
     let from = ask.since.map(|at| at.saturating_sub(SINCE_SLACK_MS));
     let Ok(entries) = std::fs::read_dir(dir(root)) else {
+        past.read_at = past.read_at.min(now);
         return past;
     };
     for entry in entries.flatten() {
@@ -779,6 +803,7 @@ pub fn past(
     past.records
         .sort_by(|a, b| (&b.ended, &b.id).cmp(&(&a.ended, &a.id)));
     past.waiting.sort();
+    past.read_at = past.read_at.min(now);
     if past.whole && past.records.len() > ask.most {
         past.older = past.records.len() - ask.most;
         past.records.truncate(ask.most);

@@ -5097,8 +5097,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   one purlis will not draw: both counts are of the whole store, since such a file names no
   workspace purlis would trust. A row's brief and report are read for the one row that is
   opened. While the view is open, a later read parses only the records written since the read
-  before it (by the file's modification time) and those that were waiting for their chat to
-  close.
+  before it (by the file's modification time, never taken as later than now) and those that
+  were waiting for their chat to close.
 - **In the Dispatches tab:** a record that has not ended and whose persona chat this app does
   not have open (one the reopen record lists that was not brought back) is said to be `not
   open`, with no duration: it is not running, and runs again when its chat is opened.

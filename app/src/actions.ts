@@ -1050,6 +1050,10 @@ function isPinned<T>(held: readonly T[], one: T): boolean {
 /** The catalogue's id for the row that opens a workspace's Past tasks (#1510). */
 export const pastTasksId = (workspace: string): string => `workspace.past:${workspace}`;
 
+/** The catalogue's id for the row that opens the Past tasks of a project's root (#1510): the
+ *  tasks asked from the root and worked at it, which are in no workspace's list. */
+export const rootPastTasksId = (plane: string): string => `project.past:${plane}`;
+
 /** The catalogue's id for the row that opens the project's Dispatches tab (#1452). */
 export const DISPATCHES_SHOW = "dispatches.show";
 
@@ -1546,6 +1550,23 @@ export function catalogue(now: Now): Offer[] {
     ...projects.pin,
     ...projects.settings,
     ...projects.saving,
+    // **The project root's past tasks** (#1510): a task asked from the root that worked at the
+    // root is in no workspace's list, and its asking chat's finished rows go when that chat
+    // closes. So the root's list has a row of its own, in the palette, on the project's menu
+    // and on the root's, filed on the strip outside every workspace.
+    ...(now.plane === undefined
+      ? []
+      : [
+          {
+            ...can(rootPastTasksId(now.plane), pastTasksTitle(""), {
+              verb: "openView" as const,
+              view: pastTasksView(""),
+              title: pastTasksTitle(""),
+              on: OUTSIDE,
+            }),
+            note: "The tasks dispatched at the project's root, in no workspace, that have ended.",
+          },
+        ]),
     ...projects.window,
     ...projects.back,
   );
@@ -2946,7 +2967,7 @@ export type MenuOn =
   | { on: "listed"; session: number }
   | { on: "workspace"; workspace: string }
   /** The plane root's tab (SI-1): not a workspace, so a menu of its own. */
-  | { on: "root" }
+  | { on: "root"; plane?: string }
   | { on: "project"; plane: string }
   /** One worktree of the focused workspace, as the explorer's rows name it — the clone and
    *  the piece. Not a `Cut`: the workspace is the focused one on every surface that draws
@@ -3038,6 +3059,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `workspace.focus:${OUTSIDE}`,
           "root.chat",
           `shell.new:${OUTSIDE}`,
+          ...(what.plane === undefined ? [] : [rootPastTasksId(what.plane)]),
           "workspace.create",
         ],
         below: [],
@@ -3049,6 +3071,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `project.pin:${what.plane}`,
           `project.settings:${what.plane}`,
           `project.saving:${what.plane}`,
+          rootPastTasksId(what.plane),
           `project.window:${what.plane}`,
           `project.main:${what.plane}`,
           "project.create",

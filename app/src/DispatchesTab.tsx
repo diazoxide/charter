@@ -172,7 +172,7 @@ export function DispatchesTab({
       <EmptyState
         mark={Send}
         headline="No dispatches yet"
-        body="When a chat hands work to another chat, it is listed here with its brief and its report."
+        body="When a chat hands work to another chat, it is listed here with its brief and its report. To find a task that has ended, open Past tasks from its workspace's menu."
         testid="dispatches-empty"
       />
     );
@@ -213,6 +213,12 @@ export function DispatchesTab({
           ))}
         </select>
       </div>
+      {/* This is the project's ledger. One workspace's ended tasks, to search and to reopen,
+          are its Past tasks (#1510): said here, so nobody searches the ledger for one. */}
+      <p className="none" data-testid="dispatches-past">
+        To find a task that has ended, open Past tasks from its workspace's menu: it searches by
+        name, persona and day, and can reopen one.
+      </p>
       {shown.length === 0 ? (
         // Not the empty state: the project has dispatches, and the filters keep none of them.
         <p className="none">No dispatch matches these filters.</p>

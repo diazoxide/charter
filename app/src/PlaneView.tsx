@@ -3819,15 +3819,19 @@ export const PlaneView = memo(function PlaneView({
   );
   /**
    * **See past tasks**, from under a chat's finished rows (#1510): the Past tasks of the
-   * workspace that chat works in, on that workspace's strip; the project root's for a chat in
-   * no workspace.
+   * workspace that chat works in, on that workspace's strip; the project root's, on the strip
+   * outside every workspace, for a chat in no workspace.
    */
   const seePastTasks = useCallback(
     (asker: number) => {
       const workspace = sidebar?.workspaces.find((ws) =>
         ws.chats.some((chat) => chat.session === asker),
       )?.name;
-      showView(pastTasksView(workspace ?? ""), pastTasksTitle(workspace ?? ""), workspace);
+      showView(
+        pastTasksView(workspace ?? ""),
+        pastTasksTitle(workspace ?? ""),
+        workspace ?? OUTSIDE,
+      );
     },
     [showView, sidebar],
   );
@@ -5605,7 +5609,7 @@ export const PlaneView = memo(function PlaneView({
                                 key opens a menu only on the trigger that has the keyboard
                                 (`openFromTheKeyboard`), and that is the tab. */}
                             <Menued
-                              on={root ? { on: "root" } : { on: "workspace", workspace }}
+                              on={root ? { on: "root", plane } : { on: "workspace", workspace }}
                               offers={found}
                               onPress={press}
                             >
