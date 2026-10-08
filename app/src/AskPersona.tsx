@@ -41,6 +41,7 @@ export function AskPersona({
   chat,
   workspaces,
   prefill,
+  from,
   trouble,
   asking,
   onAsk,
@@ -52,6 +53,8 @@ export function AskPersona({
   chat: string;
   /** What the boxes start with, where whoever opened the dialog already knows. */
   prefill?: AskPrefill;
+  /** `notice` when a Notice on the chat's pane opened it: the dialog then says why it is empty. */
+  from?: AskFrom;
   /** Why the last attempt started nothing, in the core's sentence, unchanged. */
   trouble?: string;
   /** The project's other workspaces, by name: where else the new chat can work. */
@@ -88,7 +91,7 @@ export function AskPersona({
         <Dialog.Overlay className="asking" />
         <Dialog.Content
           ref={content}
-          className="warning"
+          className="warning ask-persona"
           // A click outside answers nothing, as in every dialog here (`docs/ui-primitives.md`).
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
@@ -132,6 +135,10 @@ export function AskPersona({
                   A chat starts as {persona} on these words, with {persona}&apos;s own sandbox,
                   hosts and vaults. Its report comes back to <code>{chat}</code>, marked as started
                   by you.
+                  {/* Opened from a chat's Notice, the empty box is a question: the chat said
+                      what it wanted, and none of it is here. That is the rule, said once. */}
+                  {from === "notice" &&
+                    " Write the request yourself: the chat's own words are not copied here."}
                 </>
               }
               control={(ids) => (
@@ -213,6 +220,9 @@ export function AskPersona({
 /** What the dialog's boxes start with. */
 export type AskPrefill = { name?: string; ask?: string };
 
+/** What opened the dialog, where that changes what it says: a Notice on a chat's pane. */
+export type AskFrom = "notice";
+
 /**
  * Opens **Ask {persona}** for chat `session`, with its boxes prefilled where the caller knows
  * what to ask: the one way into the dialog for anything that is not a row of the catalogue.
@@ -222,7 +232,12 @@ export type AskPrefill = { name?: string; ask?: string };
  * same dialog the tab's menu does and starts the same chat. Nothing starts until the dialog is
  * answered.
  */
-export type OpenAskPersona = (session: number, persona: string, prefill?: AskPrefill) => void;
+export type OpenAskPersona = (
+  session: number,
+  persona: string,
+  prefill?: AskPrefill,
+  from?: AskFrom,
+) => void;
 
 const Opener = createContext<OpenAskPersona>(() => undefined);
 

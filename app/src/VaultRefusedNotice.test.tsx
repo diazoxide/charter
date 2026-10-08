@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { AskPersonaOpener, type OpenAskPersona } from "./AskPersona";
 import { VaultRefusedNotice } from "./VaultRefusedNotice";
-import type { VaultRefused } from "./bindings";
+import { DispatchGrantNotice } from "./DispatchGrantNotice";
+import type { DispatchPending, VaultRefused } from "./bindings";
 
 /**
  * A vault refused for a chat's persona offers a way forward on the chat's tab (#1430): Allow
@@ -30,8 +31,27 @@ const DEVOPS: VaultRefused = {
   locked: null,
 };
 
-/** A core holding `held` for chat 7, answering each press as the app does. */
-function core(held: VaultRefused[]) {
+/** What only reads: the refusals, and the dispatches this chat has held for the person. */
+const READS = ["vault_refusals", "dispatch_grants_needed"];
+
+/** A dispatch chat 7 asked of devops, held for the person. */
+const HELD: DispatchPending = {
+  plane: PLANE,
+  id: 3,
+  session: 7,
+  chat: "steward 9",
+  asking: "steward",
+  target: "devops",
+  brief: "# Verify the release on prod",
+  brief_cut: false,
+  brief_lines: 1,
+  levels: ["chat", "you", "project"],
+  locked: null,
+};
+
+/** A core holding `held` for chat 7, answering each press as the app does. `dispatches` are
+ *  what that chat has asked of other personas and is held for the person. */
+function core(held: VaultRefused[], dispatches: DispatchPending[] = []) {
   const asked: { cmd: string; args: unknown }[] = [];
   let now = held;
   mockIPC(
@@ -42,6 +62,7 @@ function core(held: VaultRefused[]) {
         now = now.filter((one) => one.vault !== vault);
       };
       if (cmd === "vault_refusals") return now;
+      if (cmd === "dispatch_grants_needed") return dispatches;
       if (cmd === "allow_refused_vault") {
         answered();
         return {
@@ -58,7 +79,7 @@ function core(held: VaultRefused[]) {
   );
   return {
     asked,
-    pressed: () => asked.filter((one) => one.cmd !== "vault_refusals"),
+    pressed: () => asked.filter((one) => !READS.includes(one.cmd)),
     refuse: (one: VaultRefused) => {
       now = [...now, one];
     },
@@ -106,9 +127,79 @@ describe("the refused vault Notice", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Dispatch to devops…" }));
 
-    expect(opened.mock.calls).toEqual([[7, "devops"]]);
+    // No prefill, and where it was opened from: the dialog then says why it is empty.
+    expect(opened.mock.calls).toEqual([[7, "devops", undefined, "notice"]]);
     // It only opens the dialog: nothing is allowed, kept or started by the press.
     expect(pressed()).toEqual([]);
+  });
+
+  it("points to the chat's own held dispatch, and offers no second, manual one", async () => {
+    // The chat has already asked devops, and that is waiting for the person's answer on this
+    // pane. A Dispatch to devops… beside it sent the person to an empty form (#1481).
+    const { pressed } = core([DEVOPS], [HELD]);
+    const opened = vi.fn<OpenAskPersona>();
+    render(
+      <AskPersonaOpener value={opened}>
+        <DispatchGrantNotice plane={PLANE} session={7} />
+        <VaultRefusedNotice plane={PLANE} session={7} />
+      </AskPersonaOpener>,
+    );
+
+    await screen.findByRole("button", { name: "Show the request" });
+    expect(await notice()).toHaveTextContent(
+      "so purlis did not open it. This chat has already asked devops: answer that above.",
+    );
+    expect(screen.queryByRole("button", { name: /^Dispatch to/ })).toBeNull();
+    expect(screen.getByText(/is to have devops do the work/)).toHaveTextContent(
+      "The other way is to have devops do the work, and this chat has asked it to. Nothing starts until you answer that request.",
+    );
+
+    // The press goes to the question, on its line and never on one of its answers: the next
+    // key must not be able to allow anything.
+    await userEvent.click(screen.getByRole("button", { name: "Show the request" }));
+    const request = screen.getByRole("status", { name: "Dispatch to devops" });
+    expect(request).toHaveFocus();
+    expect(request).toHaveAttribute("data-cause", "dispatch-grant:7:3");
+    // It opens no dialog, and allows, keeps and starts nothing.
+    expect(opened).not.toHaveBeenCalled();
+    expect(pressed()).toEqual([]);
+  });
+
+  it("still offers Dispatch to where the chat's held dispatch is to someone else", async () => {
+    core([DEVOPS], [{ ...HELD, target: "reviewer" }]);
+    show();
+
+    expect(await screen.findByRole("button", { name: "Dispatch to devops…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show the request" })).toBeNull();
+    expect(await notice()).not.toHaveTextContent("has already asked");
+  });
+
+  it("offers Dispatch to again once the held dispatch is answered", async () => {
+    // One answer, read by both Notices: after Keep blocked on the request there is nothing
+    // to show, so the vault's Notice must not go on pointing at it.
+    let dispatches = [HELD];
+    mockIPC((cmd) => {
+      if (cmd === "vault_refusals") return [DEVOPS];
+      if (cmd === "dispatch_grants_needed") return dispatches;
+      if (cmd === "keep_dispatch_blocked") {
+        dispatches = [];
+        return true;
+      }
+      return null;
+    });
+    render(
+      <>
+        <DispatchGrantNotice plane={PLANE} session={7} />
+        <VaultRefusedNotice plane={PLANE} session={7} />
+      </>,
+    );
+    await screen.findByRole("button", { name: "Show the request" });
+
+    const request = screen.getByRole("status", { name: "Dispatch to devops" });
+    await userEvent.click(within(request).getByRole("button", { name: "Keep blocked" }));
+
+    expect(await screen.findByRole("button", { name: "Dispatch to devops…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show the request" })).toBeNull();
   });
 
   it("offers Dispatch to where policy forbids Allow, and none where no persona is named", async () => {
@@ -241,12 +332,13 @@ describe("the refused vault Notice", () => {
   it("reads again when the core says this chat was refused, and not for another chat's", async () => {
     const held = core([]);
     show();
-    await waitFor(() => expect(held.asked).toHaveLength(1));
+    const read = () => held.asked.filter((one) => one.cmd === "vault_refusals");
+    await waitFor(() => expect(read()).toHaveLength(1));
 
     held.refuse(DEVOPS);
     await act(() => emit("chat-vault-refused", { ...DEVOPS, session: 8 }));
     await act(() => emit("chat-vault-refused", { ...DEVOPS, plane: "/somewhere/else" }));
-    expect(held.asked).toHaveLength(1);
+    expect(read()).toHaveLength(1);
 
     await act(() => emit("chat-vault-refused", DEVOPS));
     expect(await notice()).toHaveTextContent("vault devops is tagged for devops");

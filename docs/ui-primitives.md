@@ -182,6 +182,15 @@ others come and go. A Dismiss of a
 cause the core answers for lasts until the cause changes, across relaunches
 (`app/src/dismissals.ts`).
 
+In a pane's corner (`at="pane"`), a Notice is one box: its line, and under it what a way out
+opened. A pane's Notices are stacked in `.pane-notices`, the one that waits for an answer before
+anything starts first, and the stack is never wider or taller than the pane: the sentence has
+the row, the ways out go under it when they do not fit beside it, and the stack scrolls
+(#1481). `Notice.pane.test.tsx` holds the shape and the rules, and `pane-notices.e2e.ts`
+measures them. Everything the window draws is ordered inside `#root`, which is one stacking
+context, so no `z-index` in the window is over a dialog or a menu: those are portaled to the
+body and need no number.
+
 ## Why Radix, and why not the other two
 
 **Not Material (MUI).** Material is the wrong visual language for a dense terminal-adjacent

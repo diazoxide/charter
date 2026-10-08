@@ -13,7 +13,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
-import type { AskOffer } from "./bindings";
+import type { AskOffer, DispatchPending, VaultRefused } from "./bindings";
 import { forgetDismissals } from "./dismissals";
 
 /**
@@ -81,7 +81,40 @@ const OPEN: AskOffer = { personas: ["devops", "steward"], locked: null, locked_f
 const LOCKED =
   "No chat is dispatched to a persona in this project. Locked by policy, set by root in /etc/purlis/policy.toml.";
 
-type Core = { offer: AskOffer; refused?: string };
+type Core = {
+  offer: AskOffer;
+  refused?: string;
+  /** The vaults the steward chat was refused. */
+  refusals?: VaultRefused[];
+  /** What the steward chat asked of other personas, held for the person. */
+  dispatches?: DispatchPending[];
+};
+
+/** Vault devops, refused to the steward chat: it is tagged for devops. */
+const REFUSED: VaultRefused = {
+  plane: PLANE,
+  session: 4,
+  vault: "devops",
+  persona: "steward",
+  tagged_for: "devops",
+  dispatch_to: "devops",
+  locked: null,
+};
+
+/** The steward chat's own dispatch to devops, held for the person's answer. */
+const HELD: DispatchPending = {
+  plane: PLANE,
+  id: 3,
+  session: 4,
+  chat: "4",
+  asking: "steward",
+  target: "devops",
+  brief: "# Verify the release on prod\n\nRead-only.",
+  brief_cut: false,
+  brief_lines: 3,
+  levels: ["chat", "you", "project"],
+  locked: null,
+};
 
 function core(now: Core) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -111,6 +144,8 @@ function core(now: Core) {
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
       if (cmd === "ask_persona_offer") return now.offer;
+      if (cmd === "vault_refusals") return now.refusals ?? [];
+      if (cmd === "dispatch_grants_needed") return now.dispatches ?? [];
       if (cmd === "ask_persona_chat") {
         if (now.refused !== undefined) throw new Error(now.refused);
         return 9;
@@ -330,6 +365,97 @@ describe("Ask a persona from a chat's tab", () => {
         },
       ]),
     );
+  });
+});
+
+/**
+ * **Dispatching is the chat's work, and the pane says so** (#1481). The operator pressed
+ * Dispatch to devops… on a refused vault's Notice, met an empty form and asked: *"is
+ * dispatching a manual job? why is it not handled by the caller persona?"* The chat had
+ * already dispatched; its request, with its Allow buttons, was on the same pane, hidden by a
+ * broken layout, under a Notice that offered a second, manual way.
+ */
+describe("a refused vault, on a pane whose chat has already asked that persona", () => {
+  /** The pane's Notices, top to bottom, by their accessible names. */
+  const said = () =>
+    [...document.querySelectorAll(".pane-notices > .notice-pane-box > [role='status']")].map(
+      (one) => one.getAttribute("aria-label"),
+    );
+
+  it("draws the request that waits for an answer first, above what purlis only reports", async () => {
+    await aStewardChat({ refusals: [REFUSED], dispatches: [HELD] });
+    await screen.findByRole("status", { name: "Vault" });
+
+    expect(said()).toEqual(["Dispatch to devops", "Vault"]);
+    // The chat at a glance is a row of its own, and the Notices are not items of it.
+    const corner = document.querySelector(".pane-corner.at-start");
+    expect([...(corner?.children ?? [])].map((one) => one.className)).toEqual([
+      "pane-chips",
+      "pane-notices",
+    ]);
+  });
+
+  it("reads the request top to bottom: the sentence, the answers in order, then the brief", async () => {
+    await aStewardChat({ refusals: [REFUSED], dispatches: [HELD] });
+
+    const request = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect([...request.children].map((one) => one.textContent)).toEqual([
+      expect.stringMatching(/^This chat runs as steward and wants to dispatch to devops\./),
+      "Allow for this chat",
+      "Allow for me on this machine",
+      "Allow for everyone in this project",
+      "Keep blocked",
+    ]);
+    // The brief is under the answers, in the same box, in a box of its own that scrolls.
+    const brief = screen.getByRole("region", { name: "Brief from the chat" });
+    expect(request.nextElementSibling).toContainElement(brief);
+    expect(request.nextElementSibling).toHaveClass("notice-under-pane");
+    expect(brief.querySelector("pre")).toHaveClass("block-report-draft", "block-report-brief");
+    expect(brief.querySelector("pre")).toHaveTextContent("# Verify the release on prod");
+  });
+
+  it("points the vault's Notice at that request, and offers no manual dispatch beside it", async () => {
+    const { asked } = await aStewardChat({ refusals: [REFUSED], dispatches: [HELD] });
+
+    const vault = await screen.findByRole("status", { name: "Vault" });
+    await within(vault).findByRole("button", { name: "Show the request" });
+    expect(vault).toHaveTextContent("This chat has already asked devops: answer that above.");
+    expect(within(vault).queryByRole("button", { name: /^Dispatch to/ })).toBeNull();
+
+    await userEvent.click(within(vault).getByRole("button", { name: "Show the request" }));
+
+    // On the request's line, and no dialog: nothing is asked a second time, and nothing starts.
+    expect(screen.getByRole("status", { name: "Dispatch to devops" })).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Ask devops" })).toBeNull();
+    expect(asked("allow_dispatch")).toEqual([]);
+    expect(asked("ask_persona_chat")).toEqual([]);
+  });
+});
+
+describe("a refused vault, on a pane whose chat has not asked", () => {
+  it("opens Ask devops empty, and the dialog says why it is empty", async () => {
+    await aStewardChat({ refusals: [REFUSED] });
+
+    const vault = await screen.findByRole("status", { name: "Vault" });
+    await userEvent.click(within(vault).getByRole("button", { name: "Dispatch to devops…" }));
+
+    // Nothing a chat produced is typed for the person (the vault's name, the refused command).
+    const dialog = await screen.findByRole("dialog", { name: "Ask devops" });
+    expect(within(dialog).getByLabelText("Task name")).toHaveValue("");
+    expect(within(dialog).getByLabelText("What to ask")).toHaveValue("");
+    expect(dialog).toHaveTextContent(
+      "Write the request yourself: the chat's own words are not copied here.",
+    );
+    expect(dialog).toHaveClass("ask-persona");
+  });
+
+  it("does not say so when you open it yourself, from the tab's menu", async () => {
+    await aStewardChat();
+
+    await userEvent.click(within(await tabMenu()).getByRole("menuitem", { name: /Ask devops/ }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Ask devops" });
+    expect(dialog).not.toHaveTextContent("Write the request yourself");
   });
 });
 

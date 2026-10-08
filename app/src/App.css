@@ -33,6 +33,16 @@ body {
   margin: 0;
 }
 
+/* **Everything the window draws is ordered inside the window, and what is opened over it is
+   over all of it** (#1481). A dialog, a menu and a tooltip are portaled to the body, after this
+   element, and none is given a number to win with. Without this, a `z-index` anywhere in the
+   window competed with them in the page's own order, and a pane's corner (`z-index: 2`) was
+   drawn over an open dialog and its scrim. One stacking context here, and no number in the
+   window can reach above what is opened over it. */
+#root {
+  isolation: isolate;
+}
+
 /* **Chrome is not selectable; content is** (SI-7). The operator's ruling: a drag or a
    double-click on a tab, a row, a button or a caption must not leave words highlighted, which
    in a desktop app reads as a web page leaking through. So nothing selects unless it opts in
@@ -900,6 +910,10 @@ button.show-more:focus-visible {
   width: 100%;
   overflow: hidden;
   border: 1px solid transparent;
+  /* The terminal's own layers (xterm raises its helpers and decorations) are ordered among
+     themselves, never against the pane's corners: what purlis says over a terminal is over
+     all of it (#1481). */
+  isolation: isolate;
 }
 
 .pane.focused {
@@ -914,6 +928,10 @@ button.show-more:focus-visible {
   height: 100%;
   width: 100%;
   min-height: 0;
+  /* **Nothing a pane draws is drawn outside it** (#1481). `clip`, not `hidden`: a hidden box
+     can still be scrolled by a focus, and a pane scrolled sideways by a button that overflowed
+     it is the defect this rule answers; a clipped one cannot be scrolled at all. */
+  overflow: clip;
 }
 
 /* **A pane's two corners, and the only two things in this window that position anything over a
@@ -936,8 +954,58 @@ button.show-more:focus-visible {
   gap: 0.3rem;
 }
 
+/* **The start corner is a column: the chat at a glance on one row, and under it what purlis
+   has to say** (#1481). It was one row that did not wrap, written when a Notice was one short
+   line; a long sentence, three long buttons and what one of them opened were then all items of
+   that row, so the sentence was squeezed to one word and the opened block was drawn beside the
+   Notice and off the pane.
+
+   - **Never wider or taller than the pane**: the two `max-` rules are the pane's inner box, less
+     the corner's own margin on each side.
+   - **It takes no clicks of its own**: it can be as wide as the pane now, and what is under the
+     part of it that draws nothing is the terminal. Its two rows take theirs. */
 .pane-corner.at-start {
   left: 8px;
+  flex-direction: column;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 6px);
+  pointer-events: none;
+}
+
+.pane-corner.at-start > * {
+  pointer-events: auto;
+}
+
+/* The chat at a glance: the gauge, the harness, where it came from, its work item. One row,
+   as the corner was. */
+.pane-chips {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 0.3rem;
+  max-width: 100%;
+}
+
+/* **A pane's Notices, one under another** (`PlaneView`, `PaneFrame`), in the order the pane
+   wrote them: the one that waits for an answer first.
+
+   - **Together never taller than the pane**: this is the row of the corner that gives way
+     (`min-height: 0`), and it scrolls, so a Notice's buttons are always reachable.
+   - **Each as wide as what it says, never wider than the pane, and no wider than a sentence
+     reads well** (`max-width`). The cap is here and not on each Notice, so the stack is never
+     wider than its widest Notice may be, and takes no clicks meant for the terminal beside it. */
+.pane-notices {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  max-width: min(100%, 40rem);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pane-notices:empty {
+  display: none;
 }
 
 .pane-corner.at-end {
@@ -1107,16 +1175,18 @@ button.show-more:focus-visible {
 }
 
 /* **A Notice in a pane's corner** (`Notice` with `at="pane"`), first for a harness started by
-   hand in a shell tab (ADR 0062): one line in the pane's top-left
+   hand in a shell tab (ADR 0062): in the pane's top-left
    corner, over the terminal and taking no row, for the gauge's reason — a pane does not change
    height because charter has something to say. Bordered in the waiting colour so it reads as
    charter speaking to the operator and not as the shell's output, and quieter than a needs-you
-   item: nothing is waiting, and the harness is running whatever is pressed. */
-.notice-pane {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.15rem 0.45rem;
+   item: nothing is waiting, and the harness is running whatever is pressed.
+
+   **One box: the line, and under it what a way out opened** (#1481). The box has the border and
+   the ground, so the two read as one thing and the terminal never shows between them. */
+.notice-pane-box {
+  flex: none;
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.78rem;
   color: var(--text-primary);
   background: var(--surface-raised);
@@ -1124,8 +1194,73 @@ button.show-more:focus-visible {
   border-radius: 4px;
 }
 
+/* In a pane a Notice is as wide as its line, up to the stack's width. One that has opened
+   something takes that width whole, so what it opened is not drawn as narrow as a short line. */
+.pane-notices > .notice-pane-box.notice-opened {
+  width: 40rem;
+}
+
+/* **The sentence has the row.** It is as wide as it reads on one line, so the ways out stand
+   beside it only when all of it fits unwrapped; when it does not, the sentence takes the whole
+   row and wraps there, and the ways out go under it, on as many rows as they need. */
+.notice-pane {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.notice-pane > .notice-says {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The persona the line names: the sentence's first word (`Notice`). */
+.notice-pane > .notice-says > .persona-mark {
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+/* Where "Show the request" lands (`VaultRefusedNotice`): the line itself, never one of its
+   buttons, so no key pressed next answers it. */
+.notice-pane:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* **What a way out opened, under the line and at its width.** `min-width: 0` and the `pre`
+   rule: a long line of a draft scrolls inside its own box and never widens the Notice. */
+.notice-under-pane {
+  min-width: 0;
+  padding: 0 0.45rem 0.35rem;
+}
+
+.notice-under-pane > * {
+  max-width: 100%;
+}
+
+.notice-under-pane pre {
+  max-width: 100%;
+  margin: 0.25rem 0;
+  overflow: auto;
+}
+
+.notice-under-pane p {
+  margin: 0.25rem 0;
+}
+
+/* **A way out is never broken across lines unless it alone is wider than the Notice.** It
+   does not shrink (`flex: none`), so a row that has no room for it sends it to the next; only
+   `max-width` can make it narrower than its words, and then they wrap. */
+.notice-pane > button {
+  flex: none;
+  max-width: 100%;
+}
+
 .notice-pane button {
-  padding: 0 0.4rem;
+  padding: 0.1rem 0.5rem;
   font: inherit;
   color: var(--text-primary);
   background: var(--control-base);
@@ -1161,6 +1296,13 @@ button.show-more:focus-visible {
   overflow: auto;
   white-space: pre-wrap;
   font-family: ui-monospace, monospace;
+}
+
+/* A chat's brief (`DispatchGrantNotice`): about eight lines, and the rest by scrolling its box,
+   so the Allow buttons above it and the pane under it both stay in view. */
+.block-report-brief {
+  max-height: 11.5em;
+  line-height: 1.4;
 }
 
 .block-report-actions {
@@ -2611,6 +2753,35 @@ h2.sidebar-title .node-icon {
 .warning h2 {
   margin: 0 0 0.75rem;
   font-size: 1rem;
+}
+
+/* **Ask {persona}** (`AskPersona.tsx`, #1481): the tallest of the dialogs, opened over narrow
+   windows too.
+
+   - **It fits the window**, with a margin, and scrolls inside itself.
+   - **Its answers are always in reach**: the row of buttons stays at the dialog's bottom edge
+     while the form scrolls under it, on the dialog's own ground.
+   - **The box you write in takes the row**, as the name's does, and grows downwards only. */
+.warning.ask-persona {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding-bottom: 0;
+}
+
+.ask-persona .ui-setting-control > textarea.ui-field {
+  flex: 1 1 100%;
+  min-width: 0;
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.ask-persona .ui-setting-actions {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 0.75rem 0 1.25rem;
+  background: var(--surface-base);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .ending {
