@@ -1196,9 +1196,23 @@ button.show-more:focus-visible {
   overflow: hidden;
 }
 
+/* **Everything on the line that is not the breadcrumb gives way first** (#1494): the gauge,
+   the harness's name, Brief, and whatever a later ticket puts here. A flex line takes the room
+   it lacks from each item in proportion to its width times this number, and the breadcrumb is
+   the widest item, so at 1 each it gave the most from the first missing pixel, and its state
+   word was pushed out under its neighbour while the harness's name still had room. At a
+   thousand to one the others are down to their padding before the breadcrumb has given a
+   pixel in a thousand; from there the breadcrumb's own order holds (below), the state last.
+   The selector outranks each item's own `flex`, so a new item obeys it without a rule. The
+   ways to end a task are the one exception: they never shrink, and which of them are drawn
+   is measured (`wholeWays.ts`, below). */
 .pane-chips:has(.pane-crumbs) > :not(.pane-crumbs) {
   min-width: 0;
   overflow: hidden;
+}
+
+.pane-chips:has(.pane-crumbs) > :not(.pane-crumbs):not(.pane-task-ends) {
+  flex-shrink: 1000;
 }
 
 /* **Where the line also holds the two ways to end the task** (#1488), the gauge and the
@@ -1458,6 +1472,47 @@ button.show-more:focus-visible {
   text-overflow: ellipsis;
   white-space: pre;
   color: var(--text-muted);
+}
+
+/* **Brief, on the breadcrumb line** (#1494, `Brief.tsx`): one small icon button after the
+   breadcrumb, in the line's own quiet box, as tall as the breadcrumb beside it.
+
+   **An item of the line, and not part of the breadcrumb**, so the line's rule for every such
+   item holds it (`.pane-chips:has(.pane-crumbs) > :not(.pane-crumbs)`, which outranks the
+   `flex` here): it gives way with the gauge and the harness's name, before the breadcrumb
+   gives anything, and is cut at its own edge. Its padding and border do not shrink. Only once
+   every such item is down to that does the breadcrumb shrink, by its own order: the names,
+   and the state word last. */
+.pane-brief {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  align-self: stretch;
+  justify-content: center;
+  padding: 0 0.3rem;
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+  cursor: pointer;
+}
+
+.pane-brief svg {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.pane-brief:hover {
+  color: var(--text-primary);
+}
+
+.pane-brief:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* **Words for a screen reader and for nobody else**: what a drawn separator stands for. Clipped
@@ -3465,6 +3520,7 @@ h2.sidebar-title .node-icon {
 
 .chats-section .finished-name,
 .chats-section .finished-count,
+.chats-section .finished-brief,
 .chats-section .finished-reopen,
 .chats-section .finished-clear {
   display: inline-flex;
@@ -3512,11 +3568,13 @@ h2.sidebar-title .node-icon {
 
 .chats-section .finished-name:hover,
 .chats-section .finished-count:hover,
+.chats-section .finished-brief:hover,
 .chats-section .finished-reopen:hover:not([aria-disabled="true"]),
 .chats-section .finished-clear:hover {
   background: var(--surface-hover);
 }
 
+.chats-section .finished-brief,
 .chats-section .finished-reopen,
 .chats-section .finished-clear {
   border: 1px solid var(--border-subtle);
@@ -3925,6 +3983,73 @@ h2.sidebar-title .node-icon {
   width: min(34rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
   padding-bottom: 0;
+}
+
+/* **The Brief panel** (`Brief.tsx`, #1494): the brief a task was sent, read back.
+
+   - **It fits the window**, and its title, its facts and its two buttons stay put: a column,
+     in which the brief's own box is the row that gives way.
+   - **The brief's box scrolls, and the panel cuts nothing**: every line of a long brief is
+     reached by scrolling the box. Lines wrap, and a word longer than the box breaks, so
+     nothing is ever off to the side.
+   - **Text, set as text**: one face, the lines and the spaces as they were sent. */
+.warning.brief-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(44rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+}
+
+.brief-panel .brief-facts {
+  margin: 0 0 0.75rem;
+}
+
+.brief-panel .honest {
+  margin: 0 0 0.6rem;
+}
+
+.brief-panel .brief-whose {
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.brief-panel .brief-text {
+  flex: 1 1 auto;
+  min-height: 4rem;
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.6rem;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Each line takes its direction from its own first letter, and none from the line before. */
+  unicode-bidi: plaintext;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.brief-panel .brief-text:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.brief-panel .answer {
+  flex: none;
+  align-items: center;
+}
+
+/* What Copy did, said at the row's start: the buttons do not move when it is said. */
+.brief-panel .brief-copied {
+  margin-right: auto;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
 }
 
 .ask-persona .ui-setting-control > textarea.ui-field {

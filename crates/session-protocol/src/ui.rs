@@ -111,6 +111,10 @@ pub struct Server {
 /// to a question other than a chat's ask, typing into a chat, saying what is on screen) end,
 /// start and restart nothing. They are served to a `local-ui` peer of the same build, and
 /// whether they join this list awaits a ruling.
+///
+/// **And every command that reads back what a task was sent** (#1494): `task_brief`. A brief
+/// is whatever the work held, and the store it is read from is kept from the project's chats,
+/// so the read is held to the window's own IPC too.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -144,6 +148,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "restart_chat",
     "start_chat_fresh",
     "ask_chat_restart",
+    // Reads what a task was sent.
+    "task_brief",
 ];
 
 /// The commands that take a vault's sign-in from the person and use it (#1527, ADR 0052 as

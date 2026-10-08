@@ -258,6 +258,7 @@ import { finishedBucketOf, taskBucketOf } from "./taskBuckets";
 import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
+import { BriefButton, BriefOpener, BriefPanel, type BriefAsk, type OpenBrief } from "./Brief";
 import { PaneCrumbs } from "./PaneCrumbs";
 import {
   asksInAModal,
@@ -4795,6 +4796,11 @@ export const PlaneView = memo(function PlaneView({
     [plane],
   );
 
+  /** The task whose brief is being read, while its panel is open (#1494). */
+  const [briefOf, setBriefOf] = useState<BriefAsk>();
+  /** Opens the Brief panel for a task: the one way in, for the catalogue's rows, a finished
+   *  row and the breadcrumb's button ({@link OpenBrief}). It reads when it opens. */
+  const openBrief: OpenBrief = setBriefOf;
   /**
    * Opens **Ask {persona}** for chat `session`: the one way in, for the catalogue's rows and
    * for a Notice that names the persona to ask ({@link OpenAskPersona}). Nothing starts here.
@@ -4911,6 +4917,8 @@ export const PlaneView = memo(function PlaneView({
       beside: besideOf,
       sendBack: sendBackOf,
       showTabTasks,
+      showBrief: (session: number) =>
+        openBrief({ chat: session, name: nameOfNow.current(session) }),
       ignoreNeedsYou,
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
@@ -4992,6 +5000,7 @@ export const PlaneView = memo(function PlaneView({
       newShell,
       pickVault,
       newTabIn,
+      openBrief,
       openWorkspaceSettings,
       pickSpot,
       pinTab,
@@ -6309,6 +6318,7 @@ export const PlaneView = memo(function PlaneView({
       references={referenceChats}
       personas={personaMarks}
       askPersona={openAskPersona}
+      brief={openBrief}
     >
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
@@ -7317,6 +7327,16 @@ export const PlaneView = memo(function PlaneView({
         />
       )}
 
+      {briefOf && (
+        <BriefPanel
+          // Another task's brief is another panel: it reads again, from nothing.
+          key={"chat" in briefOf ? `chat:${briefOf.chat}` : `dispatch:${briefOf.dispatch}`}
+          plane={plane}
+          of={briefOf}
+          onClose={() => setBriefOf(undefined)}
+        />
+      )}
+
       {askingPersona && (
         <AskPersona
           // A new question is a new dialog: its boxes start from its own prefill.
@@ -7578,8 +7598,9 @@ export const PlaneView = memo(function PlaneView({
 
 /**
  * What a project's window lends everything it draws: its chats' states (`ChatsHere`), the
- * chats a file can be handed to (`ReferenceChats`, FM-9), and the way to open Ask {persona}
- * for one of its chats (`useAskPersona`), which a Notice on a pane calls.
+ * chats a file can be handed to (`ReferenceChats`, FM-9), the way to open Ask {persona}
+ * for one of its chats (`useAskPersona`), which a Notice on a pane calls, and the way to open
+ * a task's brief (`useOpenBrief`, #1494).
  */
 function Lent({
   chats,
@@ -7588,6 +7609,7 @@ function Lent({
   references,
   personas,
   askPersona,
+  brief,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
@@ -7599,6 +7621,8 @@ function Lent({
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
   askPersona: OpenAskPersona;
+  /** Opens the Brief panel for a task (`useOpenBrief`, #1494). */
+  brief: OpenBrief;
   children: ReactNode;
 }) {
   return (
@@ -7608,7 +7632,9 @@ function Lent({
         <ReferenceChats.Provider value={references}>
           <PersonaMarks.Provider value={personas.marks}>
             <ReloadPersonaMarks.Provider value={personas.reload}>
-              <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
+              <AskPersonaOpener value={askPersona}>
+                <BriefOpener value={brief}>{children}</BriefOpener>
+              </AskPersonaOpener>
             </ReloadPersonaMarks.Provider>
           </PersonaMarks.Provider>
         </ReferenceChats.Provider>
@@ -8286,6 +8312,9 @@ function PaneFrame({
                 <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
               </Menued>
             ))}
+          {/* **Brief** (#1494): what the task on screen was sent. Right after the breadcrumb,
+              before anything else the line holds for a task. */}
+          {crumbs && <BriefButton of={briefOfShown(crumbs)} />}
           {crumbs && ending}
           <ChatGauge usage={usage} />
           {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
@@ -8298,6 +8327,13 @@ function PaneFrame({
       {children}
     </div>
   );
+}
+
+/** The task a breadcrumb's pane shows, as the Brief panel is asked for it: the last chat of
+ *  the path, by its number. */
+function briefOfShown(crumbs: Crumbs): BriefAsk {
+  const shown = crumbs.path[crumbs.path.length - 1];
+  return { chat: shown.session, name: shown.name };
 }
 
 /** A chat that lives in a pane and is not the one the pane shows, with what purlis has to say
@@ -9086,6 +9122,17 @@ function LayoutPanes({
                 }
                 gone={(session) => !hidden.some((other) => other.session === session)}
               />
+              {/* A task that has ended is read by its finished row's record (#1494), and has
+                  no Brief here once that row is gone; one still running, by its chat. */}
+              {(gone.why !== "ended" || row !== undefined) && (
+                <BriefButton
+                  of={
+                    gone.why === "ended" && row !== undefined
+                      ? { dispatch: row.id, name: row.name }
+                      : briefOfShown(gone.crumbs)
+                  }
+                />
+              )}
             </div>
             <PaneNotices notices={null} others={hidden} onShowChat={onShowChat} />
           </div>

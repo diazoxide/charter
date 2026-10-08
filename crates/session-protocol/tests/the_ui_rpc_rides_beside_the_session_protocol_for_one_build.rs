@@ -160,8 +160,44 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
-    // And the list is exactly that rule's: nothing else is kept from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 29);
+    // And the list is that rule's, with what a task was sent (#1494): nothing else is kept
+    // from a link by it.
+    assert_eq!(ui::WINDOW_ONLY.len(), 30);
+}
+
+#[tokio::test]
+async fn a_task_s_brief_is_never_served_on_the_link_even_to_the_window() {
+    // #1494: the brief a task was sent is read over Tauri's IPC alone, even when a host is
+    // built with the app's whole command list.
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(BUILD, ["rename_chat", "task_brief"], commands.clone());
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    for of in [
+        json!({"chat": 3}),
+        json!({"dispatch": "01K6DISPATCH00000000000000"}),
+    ] {
+        let refused = ui
+            .call("task_brief", json!({"plane": 1, "of": of}))
+            .await
+            .unwrap();
+        assert!(refused.is_err(), "{refused:?}");
+    }
+
+    assert!(commands.asked.lock().unwrap().is_empty());
+    assert!(ui::WINDOW_ONLY.contains(&"task_brief"));
 }
 
 #[tokio::test]
