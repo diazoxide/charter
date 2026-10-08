@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791500305714,
+  "lastUpdate": 1791500755506,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3738,6 +3738,48 @@ window.BENCHMARK_DATA = {
             "value": 104.59214499999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.017, 103.469, 104.592, 105.076, 105.156 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "032d67c5911fa616accaaeb7f28d1cc94b3aff85",
+          "message": "A vault only the committed half declares is given no token from a terminal\n\nThe re-review of the guided 1Password set-up found that `--token-stdin` on a vault only\nthe committed vaults.json declares made a keyring record that pinned settings a commit\nchose, which nobody was shown.\n\n- Such a vault is refused before anything is read. Its record is made in its tab in the\n  app, which shows its settings first. A vault this machine's half declares still has only\n  its token changed.\n- The token-missing sentence and doctor print the terminal command only where it works,\n  and point to the vault's tab otherwise.\n- A held set-up's limit is checked on the wall clock as well as the monotonic clock, so it\n  never outlives fifteen minutes of real time across a sleep. Its timer now starts as the\n  set-up is held.\n\nRefs #1527\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T02:52:34+04:00",
+          "tree_id": "3ec0c97a699d364c93be1d8fc37a859c1c4f80c1",
+          "url": "https://github.com/purlis/purlis/commit/032d67c5911fa616accaaeb7f28d1cc94b3aff85"
+        },
+        "date": 1791500754648,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.51508,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.482, 0.509, 0.515, 0.540, 0.557 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.507523000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.455, 16.473, 16.508, 16.647, 17.066 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.12326850000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.609, 102.807, 103.123, 103.399, 103.415 ms"
           }
         ]
       }
