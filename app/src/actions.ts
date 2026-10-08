@@ -2009,7 +2009,11 @@ export function catalogue(now: Now): Offer[] {
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   // A pane showing a view closes and ends nothing, so it says so and is not asked about.
-  offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf));
+  /** The chats that are tasks, by number: a close never ends one. */
+  const tasks = new Set(
+    (now.listed ?? []).filter((chat) => chat.mode === "task").map((chat) => chat.session),
+  );
+  offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf, (session) => tasks.has(session)));
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
   // the program and takes the chat off the board — correct, and what the `×` has always done.
@@ -2028,6 +2032,21 @@ export function catalogue(now: Now): Offer[] {
       offers.push(
         can(`tab.close:${tab}`, `Close ${name}`, { verb: "closeTab", tab, ends: false }, name),
       );
+      continue;
+    }
+    // **A task's own tab ends nothing when it closes** (#1488, V100-38): the tab goes, and
+    // the task goes back to the Chats list and keeps working. So its row says that, is not
+    // asked about, and is not drawn as a row that ends a chat.
+    if (panesOf(now.tabs, tab).every((pane) => tasks.has(pane.session))) {
+      offers.push({
+        ...can(
+          `tab.close:${tab}`,
+          `Send ${name} back to the Chats list`,
+          { verb: "closeTab", tab, ends: false },
+          name,
+        ),
+        note: BACK_TO_THE_LIST,
+      });
       continue;
     }
     const title =
@@ -2615,10 +2634,14 @@ export const CLOSES_THE_TASK =
  * task (Delete on its row) presses the first.
  *
  * **Neither is the tab's close, and neither offers a Smart close**: a task writes its record
- * before it reports, and what a close would lose here is said by the row. Each asks the core
- * what ending the task would do before anything ends (`endTask`): a task mid-turn, or with
- * tasks at work below it, is asked about once, and one purlis may not type into is said so
- * there, with Close now as the way left.
+ * before it reports, and what a close would lose here is said by the row. **Neither ends
+ * anything by being pressed**: the window asks the core what ending the task would do, and
+ * then asks the person, in place for an idle task and in the one modal question for a task
+ * mid-turn or with tasks at work below it (`endTask`).
+ *
+ * **On a harness purlis types nothing into, Stop is not offered** (V100-71): its row says
+ * why, and Close now is the way. Where purlis may not type for a reason of the moment (a
+ * prompt, the person's keys), the row is offered and the answer says so.
  *
  * **A task already being stopped is not stopped a second time**: its first row says why, and
  * Close now ends it without waiting for its turn.
@@ -2628,8 +2651,9 @@ export function taskEndRows(listed: readonly ListedChat[], stopping: readonly nu
     .filter((chat) => chat.mode === "task")
     .flatMap((chat) => {
       const { session, name } = chat;
-      const stop = `Stop task ${name} and get its report`;
-      const close = `Close task ${name} now`;
+      // Each begins with the words its button on the breadcrumb's line draws.
+      const stop = `Stop and get its report: task ${name}`;
+      const close = `Close now: task ${name}`;
       return [
         stopping.includes(session)
           ? cannot(
@@ -2638,10 +2662,24 @@ export function taskEndRows(listed: readonly ListedChat[], stopping: readonly nu
               `${name} is being stopped already, and has one short turn to say what it did. Close now ends it without waiting.`,
               name,
             )
-          : {
-              ...can(taskStopId(session), stop, { verb: "endTask", session, way: "report" }, name),
-              note: STOPS_THE_TASK,
-            },
+          : chat.typed === false
+            ? // V100-71: purlis types nothing into this harness, so there is no turn to give
+              // it. Said on the row, which is not offered; Close now is.
+              cannot(
+                taskStopId(session),
+                stop,
+                `purlis does not type into ${chat.harness ?? "the program this task runs"}, so it cannot ask ${name} for a report. Close now ends it.`,
+                name,
+              )
+            : {
+                ...can(
+                  taskStopId(session),
+                  stop,
+                  { verb: "endTask", session, way: "report" },
+                  name,
+                ),
+                note: STOPS_THE_TASK,
+              },
         {
           ...can(taskCloseId(session), close, { verb: "endTask", session, way: "now" }, name),
           note: CLOSES_THE_TASK,
@@ -2849,6 +2887,8 @@ export function paneCloseOf(
   tabs: Tabs,
   pane: number | undefined,
   nameOf: (session: number) => string,
+  /** Whether a chat is a task: its pane's close sends it back to the list and ends nothing. */
+  isTask: (session: number) => boolean = () => false,
 ): Offer {
   const front = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
   const content =
@@ -2871,11 +2911,23 @@ export function paneCloseOf(
       `This pane shows a task of ${own}. Go back to ${own} to end its chat, or close the tab.`,
     );
   }
+  if (isTask(content.session))
+    return {
+      ...can("pane.close", "Send this pane's task back to the Chats list", {
+        verb: "closePane",
+        ends: false,
+      }),
+      note: BACK_TO_THE_LIST,
+    };
   return {
     ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
     note: ENDS_IT,
   };
 }
+
+/** What closing a task's own tab or pane does, which is not what closing a chat's does. */
+export const BACK_TO_THE_LIST =
+  "Its tab goes and nothing ends: the task keeps working, and is in the Chats list.";
 
 /** The tab holding a session, or nothing when no tab does. */
 function tabHolding(tabs: Tabs, session: number): number | undefined {

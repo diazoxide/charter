@@ -730,6 +730,12 @@ export const commands = {
 	 */
 	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
 	/**
+	 *  The person sent a task chat's tab back to the Chats list: the tab goes, and the task keeps
+	 *  working. It ends nothing and tells no chat anything. Refused for a chat that is not a task.
+	 *  The record keeps it, so a reloaded window and the next launch draw no tab for it.
+	 */
+	closeChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_chat_tab", { plane, session })),
+	/**
 	 *  Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
 	 *  (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
 	 *  put each tab back on the chat it showed.

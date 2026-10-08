@@ -1336,7 +1336,7 @@ describe("closing, while a tab shows a task", () => {
       .filter((name) => /\b(end|stop|close)\b/i.test(name) && /talk/.test(name));
     // The two ways a person ends a task (#1488), in words on the breadcrumb's line: neither
     // is a close, and nothing else on screen ends the task.
-    expect(ending).toEqual(["Stop task talk and get its report", "Close task talk now"]);
+    expect(ending).toEqual(["Stop and get its report: task talk", "Close now: task talk"]);
     // The splits are the pane's still.
     expect(screen.getAllByRole("button", { name: /^Split/ })).toHaveLength(2);
   });

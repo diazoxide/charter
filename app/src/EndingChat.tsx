@@ -62,6 +62,12 @@ import { ENDS_IT, type Offer } from "./actions";
  * `App.test.tsx` and not in `palette.e2e.ts`. Two findings, one true of the product and one true
  * only of the test rig; keeping them apart is the whole point of writing them down.
  */
+/** The one line a close says of the tasks among what it closes. */
+export const BACK_SAYS = (back: readonly string[]) =>
+  back.length === 1
+    ? `${back[0]} is a task: its tab goes, it is not ended, and it stays in the Chats list.`
+    : `${back.join(", ")} are tasks: their tabs go, they are not ended, and they stay in the Chats list.`;
+
 export function EndingChat({
   offer,
   smart,
@@ -69,6 +75,7 @@ export function EndingChat({
   closing = [],
   keeps = false,
   shows,
+  back = [],
   onEnd,
   onSmartClose,
   onCancel,
@@ -93,6 +100,9 @@ export function EndingChat({
   /** The task the tab shows in place of its session's own chat, where it shows one (#1486):
    *  the dialog says the close is the session's, since the task is what is on screen. */
   shows?: { task: string; session: string };
+  /** The tasks among what is being closed, by name (#1488): a close ends no task. Their tabs
+   *  go, they go back to the Chats list, and the dialog says so in one line. */
+  back?: readonly string[];
   /** `stop` is the answer about the running persona chats: stop them, or keep them running. */
   onEnd: (stop: boolean) => void;
   onSmartClose: (stop: boolean) => void;
@@ -152,6 +162,8 @@ export function EndingChat({
               {shows.session}, not {shows.task}.
             </p>
           )}
+          {/* Tasks among them are not ended by a close: said, so the count is not a surprise. */}
+          {back.length > 0 && <p className="honest">{BACK_SAYS(back)}</p>}
           {/* What else this close closes, said before it is answered. */}
           {closing.length > 0 && <p className="honest">{CLOSING_SAYS(closing)}</p>}
           {/* Several chats at once: nothing is asked about what each started, so it is said. */}

@@ -241,7 +241,7 @@ fn is_owner(asker: u32, of: u32, from: &HandedFrom) -> bool {
 /// stop is the person's and the later word, and it ends in the chat being told all the same.
 pub fn being_stopped(name: &str, of: u32) -> String {
     format!(
-        "'{name}' (chat {of}) is being stopped by the operator, so there is nothing to cancel. \
+        "'{name}' (chat {of}) is being stopped by the person, so there is nothing to cancel. \
          This chat is told when it has ended."
     )
 }
@@ -1581,7 +1581,7 @@ mod tests {
         assert_eq!(
             being_stopped("check the queue", TASK),
             format!(
-                "'check the queue' (chat {TASK}) is being stopped by the operator, so there is \
+                "'check the queue' (chat {TASK}) is being stopped by the person, so there is \
                  nothing to cancel. This chat is told when it has ended."
             )
         );

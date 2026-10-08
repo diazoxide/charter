@@ -247,7 +247,14 @@ which, in purlis's own words:
   task sends after that is the stop's report, even if it says it is done. One that landed
   before you pressed was an ordinary report.
 - **Close now.** Its program is ended at once. The chat that asked is told `closed by the
-  person`, with no report. Closing the tab of a task that had not reported says the same.
+  person`, with no report.
+
+**Either takes a second step.** A task that is not mid-turn is asked about where you pressed:
+"Stop it" or "Close it", beside "Keep", which has the keyboard. A task mid-turn, or with tasks
+of its own still working, is asked about in one question. **Closing a task's tab ends
+nothing**: the tab goes, and the task goes back to the Chats list and keeps working. A task
+you are closing is in its stop until its program is gone: a report it still gets in is the
+stop's report, and it starts no chat. If you quit while a task is being stopped, it is closed.
 
 Both add one sentence: "The person ended this task. Do not dispatch it again unless they ask."
 A task whose program ends on its own is told of as `ended without a report`, and has no such
@@ -256,8 +263,10 @@ its harness is one purlis does not type into or has not been heard from), only C
 offered, and the window says why. A stop never waits for good: a line that starts no turn, and
 a turn that does not end, both close the task. A task with tasks of its own still working asks
 you once whether they are ended too or kept; the report to the chat above names what was ended
-below. Only the window can ask for either: a chat's own way to end a task it dispatched is
-`purlis dispatch cancel`.
+below. Only the window can ask for either, over its own channel to the app and never over a
+link: a chat's own way to end a task it dispatched is `purlis dispatch cancel`. A task cannot
+say any of these three ends of itself through its report. The folder reports wait in is still
+writable from outside a sandbox, and a file left there is read as purlis's word.
 
 A chat can cancel a task it dispatched itself (`purlis dispatch cancel`, below), which asks
 that task for a short report and ends nothing. **Only you stop any other chat**: no command or

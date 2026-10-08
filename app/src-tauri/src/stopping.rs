@@ -61,6 +61,15 @@
 //! stop's report; one that landed before it was an ordinary report, and the task had ended by
 //! itself.
 //!
+//! **A chat is in its stop until its end is settled** (#1488, review M1). Deciding that a chat
+//! ends ([`Stops`], which touches no chat) and ending it are two moments, and between them the
+//! chat's program is still running. So a chat whose end is decided is kept as *ending*, and is
+//! still stopping for everything that asks: it starts no chat, it is not started again, and a
+//! report it sends is its stop's. Its word to the chat that asked and its close are then made
+//! in **one hold** of the lock a report is taken under ([`end`]), and only that close lets go
+//! of it. Close now is this and nothing else: every chat of the stop is ending from the
+//! moment the press is recorded, and each is ended under the lock, deepest first.
+//!
 //! **Everything below, deepest first.** The stop of a subtree takes the chats the lineage
 //! nests under the pressed one and no other. A chat's own stop begins only when every chat
 //! below it has ended, so each chat's last turn is handed what the chats under it wrote, and
@@ -90,15 +99,14 @@ pub const PROMPT: &str = "The operator stopped this chat. Start nothing new. In 
      \"<summary>\"`. This chat ends when the turn does.";
 
 /// What a chat being stopped, or a chat below one, is told when it asks to start a chat.
-pub const STARTS_NOTHING: &str =
-    "this chat is being stopped by the operator; it cannot start a chat";
+pub const STARTS_NOTHING: &str = "this chat is being stopped by the person; it cannot start a chat";
 
 /// What a restart of a chat being stopped is refused with.
 pub const NOT_STARTED_AGAIN: &str = "This chat is being stopped, so it is not started again.";
 
 /// [`PROMPT`], for a chat that was dispatched as a task: its report says how it ended, and has
 /// a command of its own.
-pub const TASK_PROMPT: &str = "The operator stopped this chat. Start nothing new. In this one \
+pub const TASK_PROMPT: &str = "The person stopped this task. Start nothing new. In this one \
      turn, report what you did and what is left undone in a few lines, with `purlis dispatch report \
      --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
      chat ends when the turn does.";
@@ -280,7 +288,19 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct Stops {
     chats: HashMap<u32, Entry>,
+    /// The chats whose end is decided and not yet carried out: each is still stopping until
+    /// its close lets go of it ([`Self::forget`]).
+    ending: HashMap<u32, Ending>,
     dealt: u64,
+}
+
+/// A chat whose end is decided and not yet carried out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ending {
+    /// It was dispatched as a task: a report it still gets in is its stop's.
+    task: bool,
+    /// Whether it has sent the one report its stop takes.
+    wrote: bool,
 }
 
 impl Stops {
@@ -302,6 +322,13 @@ impl Stops {
         started: impl Fn(u32) -> Option<u32>,
         facts: impl Fn(u32) -> Facts,
     ) -> Vec<Act> {
+        // A chat whose end is already decided is ending: nothing more is decided of it.
+        let order: Vec<u32> = order
+            .iter()
+            .copied()
+            .filter(|session| !self.ending.contains_key(session))
+            .collect();
+        let order = order.as_slice();
         let fresh: Vec<u32> = order
             .iter()
             .copied()
@@ -379,7 +406,7 @@ impl Stops {
         // A lineage is at most a few deep; the bound is for one that loops.
         for _ in 0..64 {
             let Some(chat) = at else { return false };
-            if self.chats.contains_key(&chat) {
+            if self.stopping(chat) {
                 return true;
             }
             at = started(chat);
@@ -387,14 +414,28 @@ impl Stops {
         false
     }
 
-    /// Whether any chat is being stopped.
+    /// Whether any chat's stop is still being decided: waiting, or in its last turn. What a
+    /// test of the deciding asks; the app asks [`Self::idle`].
+    #[cfg(test)]
     pub fn any(&self) -> bool {
         !self.chats.is_empty()
     }
 
-    /// Whether chat `session` itself is being stopped.
+    /// Whether chat `session`'s stop is still being decided ([`Self::any`]).
+    #[cfg(test)]
     pub fn has(&self, session: u32) -> bool {
         self.chats.contains_key(&session)
+    }
+
+    /// **Whether chat `session` is being stopped**: its stop is being decided, or its end is
+    /// decided and not yet carried out. What everything outside this engine asks.
+    pub fn stopping(&self, session: u32) -> bool {
+        self.chats.contains_key(&session) || self.ending.contains_key(&session)
+    }
+
+    /// Whether no chat is being stopped at all ([`Self::stopping`]).
+    pub fn idle(&self) -> bool {
+        self.chats.is_empty() && self.ending.is_empty()
     }
 
     /// The board heard from chat `session`, whose facts are now `facts`: a queued prompt is
@@ -436,6 +477,12 @@ impl Stops {
         let Some(entry) = self.chats.get_mut(&session) else {
             return Vec::new();
         };
+        // **It reported in the moment its turn was given to stop**: it has written what its
+        // stop asks for, and no harness reports an interrupted turn's end, so nothing else
+        // would end it before its last turn's own clock. It is ended here.
+        if entry.number == number && entry.step == Step::Wrote {
+            return self.end(session, &facts);
+        }
         if entry.number != number || entry.step != Step::Interrupted {
             return Vec::new();
         }
@@ -498,8 +545,12 @@ impl Stops {
 
     /// Chat `session` is gone from the app by another road — its tab's Close. Its stop is let
     /// go of, and the chats above it no longer wait for it.
+    ///
+    /// **And the close a stop's own end makes lets go of it here** (#1488): until this, a chat
+    /// whose end was decided is still stopping ([`Self::stopping`]).
     pub fn forget(&mut self, session: u32, facts: impl Fn(u32) -> Facts) -> Vec<Act> {
-        if self.take(session).is_none() {
+        self.ending.remove(&session);
+        if self.remove(session).is_none() {
             return Vec::new();
         }
         // Closed already: nothing is ended twice, and nobody is told it was stopped.
@@ -526,7 +577,16 @@ impl Stops {
                 }
                 true
             }
-            _ => false,
+            Some(_) => false,
+            // **Its end is decided and not yet carried out** (Close now, a clock): a report a
+            // task still gets in is its stop's, and never an ordinary one.
+            None => match self.ending.get_mut(&session) {
+                Some(ending) if ending.task && !ending.wrote => {
+                    ending.wrote = true;
+                    true
+                }
+                _ => false,
+            },
         }
     }
 
@@ -535,12 +595,22 @@ impl Stops {
         if let Some(entry) = self.chats.get_mut(&session) {
             entry.wrote = false;
         }
+        if let Some(ending) = self.ending.get_mut(&session) {
+            ending.wrote = false;
+        }
     }
 
-    /// Every chat being stopped, in number order.
+    /// Every chat being stopped, in number order: those still being decided, and those whose
+    /// end is decided and not yet carried out.
     pub fn now(&self) -> Vec<u32> {
-        let mut now: Vec<u32> = self.chats.keys().copied().collect();
+        let mut now: Vec<u32> = self
+            .chats
+            .keys()
+            .chain(self.ending.keys())
+            .copied()
+            .collect();
         now.sort_unstable();
+        now.dedup();
         now
     }
 
@@ -551,20 +621,35 @@ impl Stops {
         acts
     }
 
-    /// Takes chat `session` out, answering its end, and frees the chats that waited for it.
+    /// Decides chat `session`'s end, answering it, and frees the chats that waited for it.
+    /// **The chat is ending from here, and still stopping** ([`Self::stopping`]): what was
+    /// decided is carried out under the lock a report is taken under, and until the close
+    /// that makes lets go of it ([`Self::forget`]) it starts no chat and its report is its
+    /// stop's.
     fn take(&mut self, session: u32) -> Option<Act> {
-        let entry = self.chats.remove(&session)?;
-        for other in self.chats.values_mut() {
-            other.below.retain(|below| *below != session);
-        }
+        let entry = self.remove(session)?;
+        self.ending.insert(
+            session,
+            Ending {
+                task: entry.task,
+                wrote: entry.wrote,
+            },
+        );
         Some(Act::End {
             session,
             wrote: entry.wrote,
             // A chat still in this stop is ending too, and reads nothing more.
-            tell: entry
-                .asker
-                .is_none_or(|asker| !self.chats.contains_key(&asker)),
+            tell: entry.asker.is_none_or(|asker| !self.stopping(asker)),
         })
+    }
+
+    /// Takes chat `session`'s entry out, and frees the chats that waited for it.
+    fn remove(&mut self, session: u32) -> Option<Entry> {
+        let entry = self.chats.remove(&session)?;
+        for other in self.chats.values_mut() {
+            other.below.retain(|below| *below != session);
+        }
+        Some(entry)
     }
 
     /// Begins the stop of every held chat nothing below is left of, lowest number first, and
@@ -653,7 +738,7 @@ impl Stopping {
     /// Whether chat `session` is being stopped: such a chat is not started again under a new
     /// number, which would take it out of its stop.
     pub fn is_stopping(&self, session: u32) -> bool {
-        self.stops().has(session)
+        self.stops().stopping(session)
     }
 
     /// Every chat being stopped.
@@ -791,6 +876,22 @@ fn press_where(
     way: Way,
     a_task: bool,
 ) -> Result<(), String> {
+    let acts = record(held, session, below, way, a_task, || ())?;
+    carry_out(held, acts);
+    Ok(())
+}
+
+/// Records the stop [`press_where`] asks for, under the lock a report is taken under, and
+/// answers what it asks the app to do, not yet done. `while_held` runs before that lock is let
+/// go: nothing in the app, and what a test parks a report on the lock with.
+fn record(
+    held: &Arc<Held>,
+    session: u32,
+    below: bool,
+    way: Way,
+    a_task: bool,
+    while_held: impl FnOnce(),
+) -> Result<Vec<Act>, String> {
     let acts = {
         let _deciding = held.chats().deciding();
         let lineage = lineage_of(held);
@@ -802,6 +903,12 @@ fn press_where(
         });
         if a_task && !is_a_task {
             return Err(NOT_A_TASK.to_owned());
+        }
+        // **A task being stopped is not stopped a second time**: it has its one short turn,
+        // and asking again for its report must not be what cuts that turn. Close now is the
+        // way to end it without waiting.
+        if a_task && way == Way::Report && held.stopping().is_stopping(session) {
+            return Ok(Vec::new());
         }
         let order = subtree(&lineage, session, below);
         // The tasks ended with it, below it, that still owed their report: what the word to
@@ -832,10 +939,10 @@ fn press_where(
             |chat| facts_of(held, chat),
         );
         cancels_stand_down(held, &order);
+        while_held();
         acts
     };
-    carry_out(held, acts);
-    Ok(())
+    Ok(acts)
 }
 
 /// **"Stop them"** (#1443): the person's answer as they close chat `asker`. Every chat at work
@@ -876,6 +983,26 @@ pub(crate) fn end_task_in_a_test(
     below: bool,
 ) -> Result<(), String> {
     end_a_task(held, session, way, below)
+}
+
+/// Records the person's end of task `session` and carries nothing out: the moment between a
+/// press and the ends it decided, held open for a test. `while_held` runs under the lock the
+/// stop is recorded under.
+#[cfg(test)]
+pub(crate) fn record_in_a_test(
+    held: &Arc<Held>,
+    session: u32,
+    way: Way,
+    below: bool,
+    while_held: impl FnOnce(),
+) -> Result<Vec<Act>, String> {
+    record(held, session, below, way, true, while_held)
+}
+
+/// Carries out what [`record_in_a_test`] answered, or part of it.
+#[cfg(test)]
+pub(crate) fn carry_out_in_a_test(held: &Arc<Held>, acts: Vec<Act>) {
+    carry_out(held, acts);
 }
 
 /// A clock of chat `session`'s stop ran out, in a test that does not wait for it: the line it
@@ -921,7 +1048,7 @@ pub(crate) fn settled_in_a_test(held: &Arc<Held>, session: u32) {
 /// (D-T59-j4). The callers ask this of a chat's own ask only.
 pub(crate) fn refuses_a_start(held: &Held, chat: u32) -> bool {
     let stops = held.stopping().stops();
-    if !stops.any() {
+    if stops.idle() {
         return false;
     }
     let lineage = lineage_of(held);
@@ -1054,16 +1181,43 @@ fn carry_out(held: &Arc<Held>, acts: Vec<Act>) {
 /// Ends chat `session`, stopped by the person: the chat that asked is told when `tell`, in
 /// purlis's own marked word, then the chat is closed as its tab's Close closes it, and the
 /// window takes its tab away.
+///
+/// **The word and the close are one step, under one hold of the lock a report is taken
+/// under** (#1488, review M1; review-1438 F4). The chat is still stopping until that close
+/// lets go of it, so from the moment its end was decided to the moment its program is gone it
+/// starts no chat and no report of its is an ordinary one: one in flight is taken first, as
+/// its stop's, or finds it settled and is refused.
 fn end(held: &Held, session: u32, wrote: bool, tell: bool) {
-    let below = held.stopping().named().remove(&session).unwrap_or_default();
-    {
-        // The one word, by the one function, under the lock a report is taken under: the
-        // close that follows finds the task settled and says nothing a second time.
+    // The chat that asked for it, where it is a task: read before its record goes.
+    let asker = held
+        .chats()
+        .handed_from(session)
+        .filter(|from| from.mode == purlis_core::dispatchdecision::Mode::Task)
+        .map(|from| from.chat);
+    let closed = {
         let deciding = held.chats().deciding();
+        // Read under the hold: a report taken a moment ago has named them already.
+        let below = held.stopping().named().remove(&session).unwrap_or_default();
         crate::handoff::operator_stopped(held, session, wrote, tell, below, &deciding);
-    }
-    if let Err(why) = held.close_chat(session) {
+        held.close_chat_held(session, &deciding)
+    };
+    if let Err(why) = closed {
         tracing::warn!("purlis: chat {session}, stopped, did not end cleanly ({why})");
+    }
+    // Let go of whatever the close found nothing of: a chat that had gone already.
+    held.stopping().stops().forget(session, |_| Facts {
+        state: State::Done,
+        asking: false,
+        turns: 0,
+        shell: false,
+        dispatched: false,
+        task: false,
+        types: false,
+    });
+    held.stops_carry_on();
+    // The chat that asked is woken as for any report, the lock let go (V100-6).
+    if let Some(asker) = asker {
+        crate::dispatched::told(held, asker);
     }
     held.tell_stop(session, StopPhase::Stopped);
 }
@@ -1195,7 +1349,8 @@ fn end_a_task(held: &Arc<Held>, session: u32, way: Way, below: bool) -> Result<(
 
 /// What ending a task would do: whether it is mid-turn, whether it can be asked for a report
 /// and why not where it cannot, and the tasks still at work below it.
-// Its plane is a `PlaneId` the registry vouches for. **A window command and nothing else.**
+// Its plane is a `PlaneId` the registry vouches for. **The window's alone, over Tauri's IPC**
+// (`purlis_session_protocol::ui::WINDOW_ONLY`): no link serves it, as none serves `answer_ask`.
 #[tauri::command]
 #[specta::specta]
 pub fn task_ending(
@@ -1212,9 +1367,10 @@ pub fn task_ending(
 /// With `below`, the tasks still at work below it are ended the same way, deepest first;
 /// without, they are left to finish. The chat that asked is told which, in purlis's own
 /// words: stopped by the person, with the task's report, or closed by the person.
-// Its plane is a `PlaneId` the registry vouches for. **A window command and nothing else**: no
-// hook line reaches it, and no chat's own command does. On a blocking thread: ending a
-// program waits for it to go.
+// Its plane is a `PlaneId` the registry vouches for. **The window's alone, over Tauri's IPC**
+// (`purlis_session_protocol::ui::WINDOW_ONLY`): it is left out of the client a link is served,
+// because it writes a sentence in the person's name. No hook line reaches it, and no chat's
+// own command does. On a blocking thread: ending a program waits for it to go.
 #[tauri::command]
 #[specta::specta]
 pub async fn end_task(
@@ -1233,7 +1389,8 @@ pub async fn end_task(
 /// Stops a chat, or a chat and every chat below it. A chat another chat started gets one short
 /// turn to write what it did, and the chat that asked is told the operator stopped it.
 // Its plane is a `PlaneId` the registry vouches for. Not a doc comment, because the generated
-// bindings carry those. **A window command and nothing else**: no hook line reaches it.
+// bindings carry those. **The window's alone, over Tauri's IPC**
+// (`purlis_session_protocol::ui::WINDOW_ONLY`): no link serves it and no hook line reaches it.
 #[tauri::command]
 #[specta::specta]
 pub fn stop_chat(
@@ -1403,7 +1560,7 @@ mod tests {
         assert!(PROMPT.contains("`purlis handoff report \"<summary>\"`"));
         // A task is told the command a task's report is taken by.
         let to_a_task = sent_as(true);
-        assert!(to_a_task.starts_with("\x1b[200~The operator stopped this chat."));
+        assert!(to_a_task.starts_with("\x1b[200~The person stopped this task."));
         assert!(to_a_task.ends_with("\x1b[201~\r"));
         assert!(TASK_PROMPT.contains("`purlis dispatch report --outcome blocked \"<summary>\"`"));
         assert!(!TASK_PROMPT.contains("handoff report"));
@@ -1413,7 +1570,7 @@ mod tests {
     fn the_refusals_are_fixed_words_that_name_no_chat() {
         assert_eq!(
             STARTS_NOTHING,
-            "this chat is being stopped by the operator; it cannot start a chat"
+            "this chat is being stopped by the person; it cannot start a chat"
         );
         assert_eq!(
             NOT_STARTED_AGAIN,
@@ -1437,7 +1594,7 @@ mod tests {
                 tell: true,
             }]
         );
-        assert!(stops.now().is_empty());
+        assert!(!stops.any());
     }
 
     #[test]
@@ -1494,7 +1651,7 @@ mod tests {
                 tell: true,
             }]
         );
-        assert!(stops.now().is_empty());
+        assert!(!stops.any());
     }
 
     #[test]
@@ -1560,7 +1717,7 @@ mod tests {
         let acts = stops.press(&[2], Way::Report, started, |_| running());
 
         assert_eq!(ended(&acts), [2]);
-        assert!(stops.now().is_empty());
+        assert!(!stops.any());
     }
 
     #[test]
@@ -1653,7 +1810,7 @@ mod tests {
         let acts = stops.press(&order, Way::Report, started, |_| showing_a_prompt());
 
         assert_eq!(ended(&acts), [5, 4, 2]);
-        assert!(stops.now().is_empty());
+        assert!(!stops.any());
     }
 
     #[test]
@@ -1821,7 +1978,7 @@ mod tests {
         let acts = stops.press(&order, Way::Report, started, |_| waiting());
 
         assert_eq!(ended(&acts), [5, 4, 2]);
-        assert!(stops.now().is_empty());
+        assert!(!stops.any());
     }
 
     #[test]
@@ -2008,6 +2165,8 @@ mod tests {
         stops.press(&[2], Way::Report, started, |_| a_task(State::Running));
         let earlier = stops.number(2).unwrap();
         stops.give_up(2, |_| a_task(State::Running));
+        // Its close lets go of it, and it is stopped again later.
+        stops.forget(2, |_| a_task(State::Done));
         stops.press(&[2], Way::Report, started, |_| a_task(State::Running));
         assert!(
             stops
@@ -2031,18 +2190,22 @@ mod tests {
         let number = stops.number(2).unwrap();
         assert!(stops.take_last_report(2));
         assert!(!stops.take_last_report(2), "one report, and no second");
-        assert!(
-            stops
-                .settled(2, number, |_| a_task(State::Running))
-                .is_empty()
-        );
+        // No line is sent after it: its stop ends when its turn does, or when the moment
+        // its ended turn was given has passed.
+        let acts = stops.moved(2, |_| a_task(State::Waiting));
         assert_eq!(
-            stops.moved(2, |_| a_task(State::Waiting)),
+            acts,
             [Act::End {
                 session: 2,
                 wrote: true,
                 tell: true
             }]
+        );
+        assert!(
+            stops
+                .settled(2, number, |_| a_task(State::Running))
+                .is_empty(),
+            "ended once"
         );
 
         // Sent while it waited for the tasks below it: ended when they have, and not asked.
@@ -2134,10 +2297,105 @@ mod tests {
         );
     }
 
+    // ----- a chat is in its stop until its end is carried out (review M1) -----
+
+    #[test]
+    fn a_chat_whose_end_is_decided_is_still_stopping_until_its_close_lets_go_of_it() {
+        let mut stops = Stops::default();
+        let order = subtree(&LINEAGE, 2, true);
+        let acts = stops.press(&order, Way::Now, started, |_| a_task(State::Running));
+        assert_eq!(ended(&acts), [5, 4, 2]);
+
+        // Decided, and not carried out: nothing is being decided any more, and every chat of
+        // the stop is still stopping. None starts a chat, and nor does a chat below one.
+        assert!(!stops.any());
+        for chat in [2, 4, 5] {
+            assert!(stops.stopping(chat), "{chat}");
+            assert!(stops.holds(chat, started), "{chat}");
+        }
+        assert!(!stops.holds(3, started), "outside the stop");
+        assert_eq!(stops.now(), [2, 4, 5]);
+        assert!(!stops.idle());
+
+        // A report one of them still gets in is its stop's, once.
+        assert!(stops.take_last_report(4));
+        assert!(!stops.take_last_report(4));
+        stops.give_back_last_report(4);
+        assert!(stops.take_last_report(4));
+
+        // Each close lets go of its own chat and of no other.
+        assert!(stops.forget(5, |_| a_task(State::Done)).is_empty());
+        assert!(!stops.stopping(5));
+        assert!(
+            stops.stopping(4) && stops.holds(5, started),
+            "5 is still below 4"
+        );
+        stops.forget(4, |_| a_task(State::Done));
+        stops.forget(2, |_| a_task(State::Done));
+        assert!(stops.idle());
+        assert!(!stops.take_last_report(2));
+    }
+
+    #[test]
+    fn a_chat_that_is_ending_is_not_pressed_decided_or_ended_a_second_time() {
+        let mut stops = Stops::default();
+        stops.press(&[2], Way::Now, started, |_| a_task(State::Running));
+
+        // A second press of either way, a clock, a move and a program's end find it ending.
+        assert!(
+            stops
+                .press(&[2], Way::Now, started, |_| a_task(State::Running))
+                .is_empty()
+        );
+        assert!(
+            stops
+                .press(&[2], Way::Report, started, |_| a_task(State::Running))
+                .is_empty()
+        );
+        assert!(stops.moved(2, |_| a_task(State::Waiting)).is_empty());
+        assert!(stops.give_up(2, |_| a_task(State::Done)).is_empty());
+        assert!(!stops.has(2) && stops.stopping(2));
+        // A chat a handoff opened that is ending takes no report as its last words.
+        let mut stops = Stops::default();
+        stops.press(&[2], Way::Now, started, |_| running());
+        assert!(!stops.take_last_report(2));
+    }
+
+    #[test]
+    fn a_task_that_reports_while_its_ended_turn_settles_is_ended_when_that_moment_has_passed() {
+        // Fold-in 1. No harness reports the end of an interrupted turn, so a task that
+        // reported in that moment would wait for a turn end that never comes.
+        let mut stops = Stops::default();
+        stops.press(&[2], Way::Report, started, |_| a_task(State::Running));
+        let number = stops.number(2).unwrap();
+        assert!(stops.take_last_report(2));
+
+        assert_eq!(
+            stops.settled(2, number, |_| a_task(State::Running)),
+            [Act::End {
+                session: 2,
+                wrote: true,
+                tell: true
+            }]
+        );
+        // And the clock of another stop of it ends nothing.
+        let mut stops = Stops::default();
+        stops.press(&[2], Way::Report, started, |_| a_task(State::Running));
+        let number = stops.number(2).unwrap();
+        stops.take_last_report(2);
+        assert!(
+            stops
+                .settled(2, number + 1, |_| a_task(State::Running))
+                .is_empty()
+        );
+    }
+
     // ----- only the person -----
     //
     // `press` is private to this file, so the compiler holds that `stop_chat` and `end_task`
-    // are its only callers. What every ask on the socket does to a plane's stops is tested where the asks are
+    // are its only callers. **That is the guard.** The test below only shows that no spelling
+    // on this list reads as an ask today; it would still pass were an ask added under another
+    // spelling, so it is no evidence by itself. What every ask on the socket does to a plane's stops is tested where the asks are
     // answered (`handoff.rs`).
 
     #[test]

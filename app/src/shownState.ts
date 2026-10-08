@@ -30,6 +30,41 @@ export type ShownKind =
   | "idle"
   | "unheard";
 
+/**
+ * **The four counts a session's tasks are summed into** (#1488, a delegated ruling): what a
+ * tab's chip and a session's row count by. A task the person stopped or closed is **done
+ * with, not failed**: it is counted with done and cancelled, and never raises the hand a
+ * failure raises. Its own row still says which it was and never folds.
+ */
+export type Bucket = "working" | "waiting" | "failed" | "done";
+
+/**
+ * The bucket a state is counted in. Working: at work, asking the chat that dispatched it, or
+ * running unheard. Waiting: on the person, or idle with nothing reported. Failed: failed
+ * (which is how a blocked task and one that did not start read) and ended without a report.
+ * Done: done, cancelled, stopped by you, closed by you, and a report with no known outcome.
+ */
+export function bucketOf(kind: ShownKind): Bucket {
+  switch (kind) {
+    case "working":
+    case "asking":
+    case "unheard":
+      return "working";
+    case "needs-you":
+    case "idle":
+      return "waiting";
+    case "failed":
+    case "unreported":
+      return "failed";
+    case "done":
+    case "cancelled":
+    case "stopped-by-you":
+    case "closed-by-you":
+    case "reported":
+      return "done";
+  }
+}
+
 /** The mark's shape, one per kind, so a state is told without its colour. */
 export type ShownShape =
   | "ring"

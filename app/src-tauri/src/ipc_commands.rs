@@ -120,6 +120,7 @@ macro_rules! app_commands {
                 thismachine::pin_on_this_machine,
                 pin_chat,
                 open_chat_tab,
+                close_chat_tab,
                 tab_shows,
                 chat_order,
                 rename_chat,

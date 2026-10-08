@@ -725,7 +725,7 @@ impl Held {
 
     /// What a stop asked for while a close held the deciding lock is carried out now that it
     /// is let go (`crate::stopping::carry_pending`): ending the next chat takes that lock.
-    fn stops_carry_on(&self) {
+    pub(crate) fn stops_carry_on(&self) {
         if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
             crate::stopping::carry_pending(&me);
         }

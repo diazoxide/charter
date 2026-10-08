@@ -1234,21 +1234,36 @@ button.show-more:focus-visible {
 }
 
 /* **The two ways to end the task a pane shows** (#1488), beside its path: words, in the line's
-   own quiet colours, and no cross. They are the first thing the line gives up after the gauge
-   and the harness's name: the same two rows are on the task's row in the Chats list and in the
-   palette. */
+   own quiet colours, and no cross.
+
+   **Each is drawn whole or not at all, never cut mid-word.** The group is one line tall and
+   wraps: a button the line has no room for goes to a second line, which is not drawn. And the
+   group is the first thing the line gives up (it shrinks a thousand times faster than the
+   path), because the same two rows are on the task's row in the Chats list and in the
+   palette. So the breadcrumb's own thresholds above hold as they are once the two are gone:
+   with both drawn the line wants about 7rem more ("Stop", "Close now" and their gaps), "Close
+   now" goes under about 31rem of pane and "Stop" under about 27rem, with the longest state. */
 .pane-task-ends {
   display: flex;
-  flex: 0 1 auto;
-  gap: 0.25rem;
+  flex: 0 1000 auto;
+  flex-wrap: wrap;
+  gap: 0 0.25rem;
   align-items: center;
+  align-content: flex-start;
+  height: 1.25rem;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
 }
 
-.pane-task-ends .task-end {
+.pane-task-ends .task-end,
+.task-end-confirm button {
+  flex: none;
+  height: 1.25rem;
   padding: 0 0.35rem;
   font: inherit;
   font-size: 0.72rem;
+  line-height: 1;
   color: var(--text-secondary);
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
@@ -1256,13 +1271,52 @@ button.show-more:focus-visible {
   cursor: pointer;
 }
 
-.pane-task-ends .task-end:hover {
+.pane-task-ends .task-end:hover,
+.task-end-confirm button:hover:not(:disabled) {
   color: var(--text-primary);
 }
 
-.pane-task-ends .task-end[aria-disabled="true"] {
+.pane-task-ends .task-end[aria-disabled="true"],
+.task-end-confirm button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* **The second step of ending a task, where the press was made** (#1488): what is asked, the
+   answer, and Keep. On the breadcrumb it takes the two buttons' place and is not given up: a
+   question that is asked is drawn. On a row of the Chats list it is a line of its own under
+   the row, which is the one time a row grows: the person asked for it, on that row. */
+.pane-task-ends.asking {
+  flex: none;
+  flex-wrap: nowrap;
+  height: auto;
+  overflow: visible;
+}
+
+.task-end-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.task-end-confirm .task-end-says {
+  white-space: normal;
+}
+
+.task-end-confirm button.ends-it {
+  color: var(--text-primary);
+}
+
+.chats-section li:has(> .task-end-confirm) {
+  flex-wrap: wrap;
+}
+
+.chats-section li > .task-end-confirm {
+  flex-basis: 100%;
+  padding: 0.15rem 0.5rem 0.3rem 1.6rem;
 }
 
 /* What becomes of the tasks at work below a task being ended (#1488): one choice, in the

@@ -19,8 +19,9 @@ import { forgetThisLaunch } from "./regions";
 /**
  * **The person ends a task with Stop and get its report or Close now** (#1488, V100-5,
  * V100-18), against the whole window: the two rows on a task's row menu, the two buttons on
- * the breadcrumb's line while a tab shows the task, the one question a task mid-turn asks, and
- * the words its row says afterwards.
+ * the breadcrumb's line while a tab shows the task, the second step every ending takes (in
+ * place for an idle task, the one modal question for a task mid-turn), and the words its row
+ * says afterwards. **Nothing here ends a task on one press**, and no close ends one at all.
  *
  * The core here is a fixture. It answers `task_ending` with what ending a task would do, as
  * the real one reads it from its own records, and takes `end_task`. What the chat that asked
@@ -115,11 +116,20 @@ type Asked = { cmd: string; args: Record<string, unknown> };
  * The core: steward 1 dispatched talk (4), which dispatched deep (7), and sweep (5). `endings`
  * is what it answers `task_ending` with, by chat; a task not in it is idle.
  */
-function core(endings: Record<number, Partial<TaskEnding>> = {}, sweepHasATab = false) {
+function core(
+  endings: Record<number, Partial<TaskEnding>> = {},
+  sweepHasATab = false,
+  sweepRunsOn = "claude",
+) {
   const open: Listed[] = [
     chat(1),
     chat(4, { persona: "devops", label: "talk", from: taskOf(1) }),
-    chat(5, { persona: "devops", label: "sweep", from: taskOf(1, { tab: sweepHasATab }) }),
+    chat(5, {
+      persona: "devops",
+      label: "sweep",
+      harness: sweepRunsOn,
+      from: taskOf(1, { tab: sweepHasATab }),
+    }),
     chat(7, { persona: "devops", label: "deep", from: taskOf(4, { name: "talk" }) }),
   ];
   const asked: Asked[] = [];
@@ -146,6 +156,13 @@ function core(endings: Record<number, Partial<TaskEnding>> = {}, sweepHasATab = 
     }
     if (cmd === "end_task") {
       if (refuses.why !== undefined) throw new Error(refuses.why);
+      return null;
+    }
+    if (cmd === "close_chat_tab") {
+      // The core's half of sending a task's tab back: it has no tab from here on.
+      const one = open.find((chat) => chat.session === a.session);
+      if (!one?.from?.task) throw new Error("Only a task goes back to the Chats list.");
+      one.from = { ...one.from, tab: false };
       return null;
     }
     if (cmd === "finished_tasks") return [...finished];
@@ -232,11 +249,20 @@ const onScreen = () =>
 const ends = (asked: Asked[]) =>
   asked.filter((one) => one.cmd === "end_task").map((one) => one.args);
 
-const STOP = "Stop task talk and get its report";
-const CLOSE = "Close task talk now";
+const STOP = "Stop and get its report: task talk";
+const CLOSE = "Close now: task talk";
+const STOP_SWEEP = "Stop and get its report: task sweep";
+const CLOSE_SWEEP = "Close now: task sweep";
 
-async function drawn(endings: Record<number, Partial<TaskEnding>> = {}, sweepHasATab = false) {
-  const held = core(endings, sweepHasATab);
+/** The second step, where it is asked: the group named by what it asks. */
+const second = (says: string) => screen.findByRole("group", { name: says });
+
+async function drawn(
+  endings: Record<number, Partial<TaskEnding>> = {},
+  sweepHasATab = false,
+  sweepRunsOn = "claude",
+) {
+  const held = core(endings, sweepHasATab, sweepRunsOn);
   render(<App />);
   const tree = await section();
   await waitFor(() => expect(within(tree).getAllByRole("treeitem")).toHaveLength(4));
@@ -279,45 +305,123 @@ describe("a task's row menu", () => {
     const items = await menuOf(tree, "steward 1");
 
     expect(items).toContain("Stop chat steward 1");
-    expect(items.filter((item) => item?.startsWith("Stop task"))).toEqual([]);
-    expect(items.filter((item) => item?.startsWith("Close task"))).toEqual([]);
+    expect(items.filter((item) => item?.startsWith("Stop and get its report"))).toEqual([]);
+    expect(items.filter((item) => item?.startsWith("Close now"))).toEqual([]);
   });
 
-  it("ends an idle task as pressed, with no question", async () => {
+  it("does not offer Stop on a harness purlis types nothing into, and says why on the row", async () => {
+    const { tree } = await drawn({}, false, "opencode");
+
+    await menuOf(tree, "sweep");
+
+    const stop = screen.getByRole("menuitem", { name: STOP_SWEEP });
+    expect(stop).toHaveAttribute("aria-disabled", "true");
+    expect(stop.getAttribute("title")).toContain("purlis does not type into");
+    expect(stop.getAttribute("title")).toContain("Close now ends it.");
+    expect(screen.getByRole("menuitem", { name: CLOSE_SWEEP })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+});
+
+describe("the second step, for a task that is not in the middle of a turn", () => {
+  it("ends nothing on the press: it asks on the task's own row, with the keyboard on Keep", async () => {
     const { tree, asked } = await drawn();
 
     await menuOf(tree, "sweep");
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
+
+    const step = await second("Stop sweep and get its report?");
+    // On its row, in the list, and no dialog: nothing else in the window is taken away.
+    expect(row(tree, "sweep").closest("li")).toContainElement(step);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(
+      within(step)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Stop it", "Keep"]);
+    expect(within(step).getByRole("button", { name: "Keep" })).toHaveFocus();
+    expect(ends(asked)).toEqual([]);
+
+    // A stray Return is Keep: nothing ends, and the keyboard is back on the row.
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Stop sweep/ })).toBeNull());
+    expect(ends(asked)).toEqual([]);
+    expect(row(tree, "sweep")).toHaveFocus();
+  });
+
+  it("does it on the answer: Stop it, or Close it", async () => {
+    const { tree, asked } = await drawn();
+
+    await menuOf(tree, "sweep");
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
     await userEvent.click(
-      screen.getByRole("menuitem", { name: "Stop task sweep and get its report" }),
+      within(await second("Stop sweep and get its report?")).getByRole("button", {
+        name: "Stop it",
+      }),
     );
 
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "report", below: false }]),
     );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Stop sweep/ })).toBeNull());
 
     await menuOf(tree, "sweep");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Close task sweep now" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
+    const step = await second("Close sweep now, with no report?");
+    await waitFor(() => expect(within(step).getByRole("button", { name: "Keep" })).toHaveFocus());
+    await userEvent.click(within(step).getByRole("button", { name: "Close it" }));
 
     await waitFor(() => expect(ends(asked)).toHaveLength(2));
     expect(ends(asked)[1]).toEqual({ plane: PLANE, session: 5, way: "now", below: false });
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("ends a task that has reported with no question, and asks it for no second report", async () => {
+  it("is Keep on Escape, and ends nothing", async () => {
+    const { tree, asked } = await drawn();
+    await menuOf(tree, "sweep");
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
+    await second("Close sweep now, with no report?");
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Close sweep/ })).toBeNull());
+    expect(ends(asked)).toEqual([]);
+  });
+
+  it("asks a task that has reported only whether to close it, and for no second report", async () => {
     const { tree, asked } = await drawn({
       5: { reported: true, no_report: "'sweep' has reported already." },
     });
 
     await menuOf(tree, "sweep");
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Stop task sweep and get its report" }),
-    );
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
+    const step = await second("sweep has reported. Close it?");
+    await userEvent.click(within(step).getByRole("button", { name: "Close it" }));
 
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "now", below: false }]),
     );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps the core's refusal where the answer was given, and the task as it was", async () => {
+    const { tree, refuses } = await drawn();
+    refuses.why = "That chat is not open any more.";
+    await menuOf(tree, "sweep");
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
+
+    await userEvent.click(
+      within(await second("Close sweep now, with no report?")).getByRole("button", {
+        name: "Close it",
+      }),
+    );
+
+    const step = await second("Close sweep now, with no report?");
+    expect(await within(step).findByRole("alert")).toHaveTextContent(
+      "That chat is not open any more.",
+    );
+    expect(row(tree, "sweep")).toBeTruthy();
   });
 });
 
@@ -326,7 +430,7 @@ describe("the one question, for a task in the middle of a turn", () => {
     const { tree, asked } = await drawn({ 5: { working: true } });
 
     await menuOf(tree, "sweep");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Close task sweep now" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
 
     const question = await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" });
     expect(question.textContent).toContain("It is working.");
@@ -351,9 +455,7 @@ describe("the one question, for a task in the middle of a turn", () => {
     ] as const) {
       const { tree, asked } = await drawn({ 5: { working: true } });
       await menuOf(tree, "sweep");
-      await userEvent.click(
-        screen.getByRole("menuitem", { name: "Stop task sweep and get its report" }),
-      );
+      await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
       const question = await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" });
 
       await userEvent.click(within(question).getByRole("button", { name: answer }));
@@ -370,9 +472,7 @@ describe("the one question, for a task in the middle of a turn", () => {
   it("is never the standard close dialog: no Smart close, no End chat, and no session is closed", async () => {
     const { tree, asked } = await drawn({ 5: { working: true } });
     await menuOf(tree, "sweep");
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Stop task sweep and get its report" }),
-    );
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
 
     const question = await screen.findByRole("alertdialog");
 
@@ -396,7 +496,7 @@ describe("the one question, for a task in the middle of a turn", () => {
     const { tree, refuses } = await drawn({ 5: { working: true } });
     refuses.why = "That chat is not open any more.";
     await menuOf(tree, "sweep");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Close task sweep now" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
     const question = await screen.findByRole("alertdialog");
 
     await userEvent.click(within(question).getByRole("button", { name: "Close now" }));
@@ -410,44 +510,58 @@ describe("the one question, for a task in the middle of a turn", () => {
 });
 
 describe("a task that has a tab of its own", () => {
+  /** The tab called `name`, on the strip. */
+  const tabOf = (name: string) =>
+    within(screen.getByRole("tablist", { name: "Tabs" }))
+      .queryAllByRole("tab")
+      .find((one) => one.querySelector(".tab-name")?.textContent === name);
   /** The close on the strip of the tab called `name`. */
   const closeOf = (name: string) => {
-    const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
-      .getAllByRole("tab")
-      .find((one) => one.querySelector(".tab-name")?.textContent === name);
-    const close = tab?.closest(".tab")?.querySelector<HTMLElement>("button.closer");
+    const close = tabOf(name)?.closest(".tab")?.querySelector<HTMLElement>("button.closer");
     if (!close) throw new Error(`no tab called ${name} has a close`);
     return close;
   };
-  const standard = ["close_session", "smart_close", "smart_close_offer", "close_chat_stopping"];
+  const ending = [
+    "end_task",
+    "close_session",
+    "smart_close",
+    "smart_close_offer",
+    "close_chat_stopping",
+    "stop_chat",
+  ];
 
-  it("is never asked the standard close question: its tab's close is the task's own ending", async () => {
-    const { asked } = await drawn({ 5: { working: true } }, true);
+  it("ends nothing when its tab is closed: the tab goes, and the task is back in the list", async () => {
+    // Mid-turn, which is where a close that ended it would lose the most.
+    const { tree, asked } = await drawn({ 5: { working: true } }, true);
+    expect(tabOf("sweep")).toBeDefined();
+    // The cross says what it does, and is not drawn as one that ends a chat.
+    expect(closeOf("sweep").getAttribute("aria-label")).toBe("Send sweep back to the Chats list");
+    expect(closeOf("sweep").className).toContain("keeps");
 
     await userEvent.click(closeOf("sweep"));
 
-    const question = await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" });
-    expect(screen.queryByRole("alertdialog", { name: /^End chat/ })).toBeNull();
-    expect(question.textContent).not.toMatch(/Smart close|session record/);
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Stop and get its report" }),
-    );
-    await waitFor(() =>
-      expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "report", below: false }]),
-    );
-    expect(asked.filter((one) => standard.includes(one.cmd))).toEqual([]);
+    // No question of any kind: there is nothing to lose.
+    await waitFor(() => expect(tabOf("sweep")).toBeUndefined());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(asked.filter((one) => one.cmd === "close_chat_tab").map((one) => one.args)).toEqual([
+      { plane: PLANE, session: 5 },
+    ]);
+    expect(asked.filter((one) => ending.includes(one.cmd))).toEqual([]);
+    // Still a task of steward 1, still listed, and its row opens it again.
+    expect(row(tree, "sweep")).toBeTruthy();
+    await userEvent.click(row(tree, "sweep"));
+    await waitFor(() => expect(onScreen()).toEqual([5]));
   });
 
-  it("is stopped with no question when it is idle, and the session's own close is as it was", async () => {
-    const { asked } = await drawn({}, true);
+  it("is sent back by the close shortcut too, and a session's own close is as it was", async () => {
+    const { tree, asked } = await drawn({}, true);
 
-    await userEvent.click(closeOf("sweep"));
+    act(() => tabOf("sweep")?.focus());
+    await userEvent.keyboard("{Delete}");
 
-    await waitFor(() =>
-      expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "report", below: false }]),
-    );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(asked.filter((one) => standard.includes(one.cmd))).toEqual([]);
+    await waitFor(() => expect(tabOf("sweep")).toBeUndefined());
+    expect(asked.filter((one) => ending.includes(one.cmd))).toEqual([]);
+    expect(row(tree, "sweep")).toBeTruthy();
     // A session is not a task: its close still asks the close question.
     await userEvent.click(closeOf("steward 1"));
     expect(await screen.findByRole("alertdialog", { name: "End chat steward 1?" })).toBeTruthy();
@@ -455,15 +569,14 @@ describe("a task that has a tab of its own", () => {
 });
 
 describe("where purlis may not type into the task", () => {
-  it("says why, offers Close now alone, and leaves the keyboard on Cancel", async () => {
-    const why =
-      "'sweep' is showing a prompt that is yours to answer, and purlis types nothing into a chat that is.";
-    const { tree, asked } = await drawn({ 5: { no_report: why } });
+  const why =
+    "'sweep' is showing a prompt that is yours to answer, and purlis types nothing into a chat that is.";
+
+  it("says why in the modal question, offers Close now alone, and leaves the keyboard on Cancel", async () => {
+    const { tree, asked } = await drawn({ 5: { working: true, no_report: why } });
 
     await menuOf(tree, "sweep");
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Stop task sweep and get its report" }),
-    );
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
 
     const question = await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" });
     expect(question.textContent).toContain(why);
@@ -483,16 +596,39 @@ describe("where purlis may not type into the task", () => {
     );
   });
 
-  it("closes an idle task now with no question, whatever it could have been asked", async () => {
-    const { tree, asked } = await drawn({ 5: { no_report: "purlis has heard nothing." } });
+  it("says why in place for an idle task, and offers only to close it", async () => {
+    const { tree, asked } = await drawn({ 5: { no_report: why } });
 
     await menuOf(tree, "sweep");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Close task sweep now" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: STOP_SWEEP }));
+
+    const step = await second(`${why} Close it now, with no report?`);
+    expect(
+      within(step)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Close it", "Keep"]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await userEvent.click(within(step).getByRole("button", { name: "Close it" }));
 
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "now", below: false }]),
     );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("offers no Stop in the question for a task already being stopped", async () => {
+    const { tree } = await drawn({ 5: { working: true, stopping: true } });
+
+    await menuOf(tree, "sweep");
+    await userEvent.click(screen.getByRole("menuitem", { name: CLOSE_SWEEP }));
+
+    const question = await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" });
+    expect(question.textContent).toContain("It is being stopped already");
+    expect(
+      within(question)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Cancel", "Close now"]);
   });
 });
 
@@ -550,16 +686,33 @@ describe("Delete on a task's row", () => {
     expect(ends(asked)).toEqual([]);
   });
 
-  it("stops an idle task and gets its report, with no question", async () => {
+  it("asks on the row for an idle task, and a second key that is not the answer ends nothing", async () => {
     const { tree, asked } = await drawn();
 
     act(() => row(tree, "sweep").focus());
     await userEvent.keyboard("{Delete}");
 
+    const step = await second("Stop sweep and get its report?");
+    expect(within(step).getByRole("button", { name: "Keep" })).toHaveFocus();
+    expect(ends(asked)).toEqual([]);
+    // Delete again, Return, Space: the keyboard is on Keep, and none of them stops the task.
+    await userEvent.keyboard("{Delete}");
+    expect(ends(asked)).toEqual([]);
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Stop sweep/ })).toBeNull());
+    expect(ends(asked)).toEqual([]);
+
+    // Asked again and answered: it is stopped, and its report asked for.
+    act(() => row(tree, "sweep").focus());
+    await userEvent.keyboard("{Delete}");
+    await userEvent.click(
+      within(await second("Stop sweep and get its report?")).getByRole("button", {
+        name: "Stop it",
+      }),
+    );
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "report", below: false }]),
     );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });
 
@@ -575,9 +728,11 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     const group = screen.getByRole("group", { name: "End this task" });
     const buttons = within(group).getAllByRole("button");
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([STOP, CLOSE]);
-    // Words, not a cross: nothing here is drawn as the tab's close is.
+    // Words, not a cross: nothing here is drawn as the tab's close is. And each name begins
+    // with the words drawn, so a voice command for what is on screen presses it.
     expect(buttons.map((button) => button.textContent)).toEqual(["Stop", "Close now"]);
     for (const button of buttons) {
+      expect(button.getAttribute("aria-label")?.startsWith(button.textContent ?? "?")).toBe(true);
       expect(button.querySelector("svg")).toBeNull();
       expect(button.className).not.toMatch(/closer|ends-a-chat/);
     }
@@ -586,15 +741,39 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     expect(group.closest(".pane-doing")).toBeNull();
     expect(screen.queryByRole("button", { name: "End this pane's chat" })).toBeNull();
 
+    // A press ends nothing: it is asked there, in the buttons' place, with Keep focused.
     await userEvent.click(within(group).getByRole("button", { name: CLOSE }));
 
+    const step = await second("Close talk now, with no report?");
+    expect(step.closest(".pane-chips")).not.toBeNull();
+    expect(within(step).getByRole("button", { name: "Keep" })).toHaveFocus();
+    expect(ends(asked)).toEqual([]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Not on the task's row as well: one question, where the press was made.
+    expect(row(tree, "talk").closest("li")?.querySelector(".task-end-confirm")).toBeNull();
+
+    await userEvent.click(within(step).getByRole("button", { name: "Keep" }));
+
+    // Kept: the two buttons are back, and nothing ended.
+    await waitFor(() => expect(screen.getByRole("group", { name: "End this task" })).toBeTruthy());
+    expect(ends(asked)).toEqual([]);
+
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "End this task" })).getByRole("button", {
+        name: CLOSE,
+      }),
+    );
+    await userEvent.click(
+      within(await second("Close talk now, with no report?")).getByRole("button", {
+        name: "Close it",
+      }),
+    );
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 4, way: "now", below: false }]),
     );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("asks first from there too when the task is mid-turn", async () => {
+  it("asks in the one question from there when the task is mid-turn", async () => {
     const { tree, asked } = await drawn({ 4: { working: true } });
     await userEvent.click(row(tree, "talk"));
     await waitFor(() => expect(onScreen()).toEqual([4]));
@@ -615,8 +794,8 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     );
   });
 
-  it("says a task is being stopped, stops it no second time, and still closes it now", async () => {
-    const { tree, stopping } = await drawn();
+  it("says a task is being stopped, stops it no second time, and says why to whoever cannot see a tooltip", async () => {
+    const { tree, asked, stopping } = await drawn();
     await userEvent.click(row(tree, "talk"));
     await waitFor(() => expect(onScreen()).toEqual([4]));
 
@@ -626,7 +805,10 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     const group = screen.getByRole("group", { name: "End this task" });
     const stop = within(group).getByRole("button", { name: STOP });
     expect(stop).toHaveAttribute("aria-disabled", "true");
-    expect(stop.getAttribute("title")).toContain("is being stopped already");
+    expect(stop).toHaveAccessibleDescription(/is being stopped already/);
+    await userEvent.click(stop);
+    expect(screen.queryByRole("group", { name: /^Stop talk/ })).toBeNull();
+    expect(ends(asked)).toEqual([]);
     expect(within(group).getByRole("button", { name: CLOSE })).not.toHaveAttribute("aria-disabled");
   });
 });

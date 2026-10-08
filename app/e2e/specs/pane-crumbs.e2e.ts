@@ -116,6 +116,56 @@ async function draw(
   );
 }
 
+/**
+ * Draws the two ways to end the task after pane `pane`'s breadcrumb, as `TaskEnds` draws them
+ * (#1488): a group of two word buttons. Answers whether there was a breadcrumb to draw after.
+ */
+async function drawEnds(pane: number): Promise<boolean> {
+  return browser.execute((at: number) => {
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const crumbs = frames[at]?.querySelector('[data-drawn="pane-crumbs.e2e"]');
+    if (!crumbs) return false;
+    const group = document.createElement("span");
+    group.className = "pane-task-ends";
+    group.dataset.drawn = "pane-crumbs.e2e";
+    for (const words of ["Stop", "Close now"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "task-end";
+      button.tabIndex = 0;
+      button.textContent = words;
+      group.append(button);
+    }
+    crumbs.after(group);
+    return true;
+  }, pane);
+}
+
+/** The group of the two ways to end the task in pane `pane`, and each button as it is drawn. */
+async function measuredEnds(pane: number) {
+  return browser.execute((at: number) => {
+    const box = (el: Element) => {
+      const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
+      return { left, right, top, bottom, width, height };
+    };
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const group = frames[at]?.querySelector(".pane-task-ends");
+    if (!group) return null;
+    return {
+      group: box(group),
+      buttons: [...group.querySelectorAll<HTMLElement>(".task-end")].map((button) => ({
+        words: button.textContent ?? "",
+        box: box(button),
+        cut: button.scrollWidth > button.clientWidth + 1,
+      })),
+    };
+  }, pane);
+}
+
 /** Takes away everything this file drew, and puts back every control it took away. */
 async function erase(): Promise<void> {
   await browser.execute(() => {
@@ -438,4 +488,61 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
       check("the top line wrapped", (seen.line as Box).height, "atMost", seen.rem * 2);
     });
   }
+  // **The two ways to end the task are each drawn whole or not at all** (#1488): a narrow
+  // line gives them up before anything of the path or the state, and never cuts one mid-word.
+  for (const width of [1280, 900, 700, 560]) {
+    it(`draws each way to end the task whole or not at all in a ${width}px window`, async () => {
+      await windowIs(width, 800);
+      await asATaskPane(0);
+      expect(await draw(0, { path: LONG_PATH, state: LONGEST_STATE })).toBe(true);
+      expect(await drawEnds(0)).toBe(true);
+      const seen = await measured(0);
+      const ends = await measuredEnds(0);
+      check("the two ways were not drawn", ends !== null, "is", true);
+      if (ends === null) return;
+
+      // The group is one line of the top line, and added no row to it.
+      check("the group is taller than a line", ends.group.height, "atMost", seen.rem * 2);
+      check("the top line wrapped", (seen.line as Box).height, "atMost", seen.rem * 2);
+      for (const button of ends.buttons) {
+        // On the group's one line, or on a second line that is not drawn.
+        const onTheLine = button.box.top < ends.group.bottom - 1;
+        if (!onTheLine) continue;
+        check(
+          `"${button.words}" starts left of its group`,
+          button.box.left,
+          "atLeast",
+          ends.group.left - 1,
+        );
+        check(
+          `"${button.words}" is cut at its group's edge`,
+          button.box.right,
+          "atMost",
+          ends.group.right + 1,
+        );
+        check(`"${button.words}" is cut mid-word`, button.cut, "is", false);
+        check(
+          `"${button.words}" runs past the top line`,
+          button.box.right,
+          "atMost",
+          (seen.line as Box).right + 1,
+        );
+      }
+      // They give way before the state word does: it is never cut to make room for them.
+      if (ends.buttons.some((button) => button.box.top < ends.group.bottom - 1))
+        check("the state word was cut to keep a button", seen.wordCut, "is", false);
+    });
+  }
+
+  it("draws both ways to end the task where there is room", async () => {
+    await windowIs(1280, 800);
+    expect(await draw(0, { path: ["steward 4", "talk"], state: "working" })).toBe(true);
+    expect(await drawEnds(0)).toBe(true);
+    const ends = await measuredEnds(0);
+    check("the two ways were not drawn", ends !== null, "is", true);
+    if (ends === null) return;
+    expect(
+      ends.buttons.filter((button) => button.box.top < ends.group.bottom - 1 && !button.cut),
+    ).toHaveLength(2);
+  });
 });

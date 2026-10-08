@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { OpenChat } from "./bindings";
-import { rowFactsOf, shownState, taskFactsOf, type Facts, type TaskFacts } from "./shownState";
+import {
+  bucketOf,
+  rowFactsOf,
+  shownState,
+  taskFactsOf,
+  type Facts,
+  type TaskFacts,
+} from "./shownState";
 import { TOKENS } from "./theme/theme";
 
 /**
@@ -242,5 +249,36 @@ describe("what a task's record says of it", () => {
     const asking = chat({ ...from, asking: true });
     expect(taskFactsOf(asking, () => undefined)?.asking).toBe("steward 4");
     expect(taskFactsOf(asking)?.asking).toBe("steward 4");
+  });
+});
+
+describe("the four counts a session's tasks are summed into (#1488)", () => {
+  const bucket = (more: Partial<Facts>) => {
+    const shown = shownState(of(more));
+    return shown === undefined ? undefined : bucketOf(shown.kind);
+  };
+
+  it("counts a task the person stopped or closed as done with, never as failed", () => {
+    expect(bucket({ board: "done", task: sent("stopped_by_person") })).toBe("done");
+    // Its record says no report was sent (`failed`), and it is still not a failure.
+    expect(bucket({ board: "done", task: inItsPlace("closed_by_person") })).toBe("done");
+    expect(bucket({ board: "done", task: inItsPlace("stopped") })).toBe("done");
+    expect(bucket({ board: "waiting", task: sent("done") })).toBe("done");
+    expect(bucket({ board: "waiting", task: sent("cancelled") })).toBe("done");
+  });
+
+  it("counts failed, blocked and ended without a report as failed", () => {
+    expect(bucket({ board: "waiting", task: sent("failed") })).toBe("failed");
+    expect(bucket({ board: "waiting", task: sent("blocked") })).toBe("failed");
+    expect(bucket({ board: "done", task: inItsPlace(null) })).toBe("failed");
+    expect(bucket({ board: "failed", task: OWED })).toBe("failed");
+  });
+
+  it("counts what is at work as working and what waits on the person as waiting", () => {
+    expect(bucket({ board: "running", task: OWED })).toBe("working");
+    expect(bucket({ board: "unknown", task: OWED })).toBe("working");
+    expect(bucket({ board: "waiting", task: { ...OWED, asking: "steward 1" } })).toBe("working");
+    expect(bucket({ board: "waiting", needsYou: true, task: OWED })).toBe("waiting");
+    expect(bucket({ board: "waiting", task: OWED })).toBe("waiting");
   });
 });

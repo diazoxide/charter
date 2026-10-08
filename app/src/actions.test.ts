@@ -25,6 +25,7 @@ import {
   taskEndIds,
   taskEndRows,
   taskStopId,
+  BACK_TO_THE_LIST,
   CLOSES_THE_TASK,
   STOPS_THE_TASK,
   STOPS_IT,
@@ -2741,13 +2742,13 @@ describe("ending a task by hand (#1488)", () => {
     const offers = catalogue(now({ listed: tasks }));
 
     expect(by(offers, taskStopId(2))).toMatchObject({
-      title: "Stop task chat 2 and get its report",
+      title: "Stop and get its report: task chat 2",
       available: true,
       note: STOPS_THE_TASK,
       does: { verb: "endTask", session: 2, way: "report" },
     });
     expect(by(offers, taskCloseId(2))).toMatchObject({
-      title: "Close task chat 2 now",
+      title: "Close now: task chat 2",
       available: true,
       note: CLOSES_THE_TASK,
       does: { verb: "endTask", session: 2, way: "now" },
@@ -2780,6 +2781,45 @@ describe("ending a task by hand (#1488)", () => {
     });
     expect(rows.find((row) => row.id === taskCloseId(2))?.available).toBe(true);
     expect(rows.find((row) => row.id === taskStopId(3))?.available).toBe(true);
+  });
+
+  it("does not offer Stop on a harness purlis types nothing into, and offers Close now", () => {
+    // V100-71: there is no turn to give it. Said on the row, which cannot run.
+    const unheard: ListedChat = { ...listed(3, 2, false), typed: false, harness: "opencode" };
+    const rows = taskEndRows([listed(1), listed(2, 1), unheard], []);
+
+    expect(rows.find((row) => row.id === taskStopId(3))).toMatchObject({
+      available: false,
+      reason:
+        "purlis does not type into opencode, so it cannot ask chat 3 for a report. Close now ends it.",
+    });
+    expect(rows.find((row) => row.id === taskCloseId(3))?.available).toBe(true);
+    // A harness it does type into, and a chat nothing was read of: offered.
+    expect(rows.find((row) => row.id === taskStopId(2))?.available).toBe(true);
+  });
+
+  it("closes a task's own tab and pane by sending it back to the list, ending nothing", () => {
+    // A tab holding task 2 and nothing else, and a tab holding the session.
+    const tabs = openTab(openTab(noTabs(), 1, "chat 1", null, null), 2, "chat 2", null, null);
+    const offers = catalogue(now({ tabs, listed: tasks }));
+    const [session, task] = tabs.order;
+
+    expect(by(offers, `tab.close:${task}`)).toMatchObject({
+      title: "Send chat 2 back to the Chats list",
+      available: true,
+      note: BACK_TO_THE_LIST,
+      // It ends nothing, so nothing is asked and it is not drawn as a row that ends a chat.
+      does: { verb: "closeTab", tab: task, ends: false },
+    });
+    expect(by(offers, `tab.close:${session}`)).toMatchObject({
+      title: "End chat chat 1",
+      does: { verb: "closeTab", tab: session, ends: true },
+    });
+    // The pane's close of the tab in front (the task's) says the same.
+    expect(by(offers, "pane.close")).toMatchObject({
+      title: "Send this pane's task back to the Chats list",
+      does: { verb: "closePane", ends: false },
+    });
   });
 
   it("asks first: a row hands the window the task and the way, and ends nothing by itself", () => {

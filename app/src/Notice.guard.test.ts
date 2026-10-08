@@ -259,8 +259,8 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "TabRename.tsx": { count: 1, why: "a rename's refusal, beside the box being typed in" },
   "TaskEnd.tsx": {
-    count: 1,
-    why: ACTION,
+    count: 2,
+    why: ACTION + ". Twice: in the one modal question, and in the second step asked in place",
   },
   "TodoTab.tsx": {
     count: 1,

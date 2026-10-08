@@ -32,6 +32,9 @@ export type ListedChat = {
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
    *  it, in a folder of its own, and nothing merges it. */
   branch: string | null;
+  /** Whether its harness is one purlis types a line of its own into (`typedInto`). Not said
+   *  for a chat nothing was read of: only a plain `false` takes an offer away. */
+  typed?: boolean;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.
 } & RowFacts;
@@ -46,6 +49,17 @@ export function ownBranch(chat: OpenChat): string | null {
   if (!chat.from?.task || chat.cwd === null) return null;
   const at = /\/workspaces\/[^/]+\/\.worktrees\/[^/]+\/([^/]+)(?:\/|$)/.exec(chat.cwd);
   return at?.[1] ?? null;
+}
+
+/**
+ * Whether purlis types a line of its own into harness `harness`, by the core's name for it
+ * (`purlis_core::dispatched::told_by_a_line`): Claude Code and Codex. On any other, and in a
+ * chat with none, it types nothing, so a task there cannot be given a turn to report (V100-71).
+ * The half of that rule that never changes while a chat runs; the rest (a prompt, the person's
+ * keys, a harness not yet heard from) is the core's to say when it is asked.
+ */
+export function typedInto(harness: string | null): boolean {
+  return harness === "claude" || harness === "codex";
 }
 
 /** A listed chat at its place in the tree. */
@@ -78,6 +92,7 @@ export function listedChat(
     from: chat.from?.name ?? null,
     tab,
     branch: ownBranch(chat),
+    typed: typedInto(chat.harness),
     ...rowFactsOf(chat, nameOf),
   };
 }

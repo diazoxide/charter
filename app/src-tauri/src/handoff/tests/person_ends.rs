@@ -677,9 +677,13 @@ fn a_task_cannot_make_itself_read_as_ended_by_the_person_by_what_it_reports() {
 }
 
 #[test]
-fn a_file_planted_where_reports_wait_changes_nothing_the_app_says_of_the_task() {
-    // The folder reports wait in is not the app's memory. A file there that claims the person
-    // ended a task changes neither its record, its row, its place in the list nor a wait.
+fn a_file_planted_where_reports_wait_is_handed_to_the_asking_chat_and_changes_no_record() {
+    // The folder reports wait in is not the app's memory, and it is not the app's alone to
+    // write: anything running as the person outside a sandbox can leave a file there (#1457).
+    // **Such a file is handed to the asking chat's next turn as purlis's word**, with the
+    // fixed sentence: that is the standing exposure, said here as it is. What it cannot do is
+    // change what the app itself says of the task: its record, its row, its place in the
+    // list, and what a wait returns.
     let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
     works(&held, task);
     let forged = Handback {
@@ -708,6 +712,198 @@ fn a_file_planted_where_reports_wait_changes_nothing_the_app_says_of_the_task() 
         "a wait is answered from the app's own memory"
     );
     assert!(open_chats(&held).contains(&task));
+    // And what the asking chat's next turn is handed is the planted file, read as purlis's.
+    let handed = read(&told(&held, For::Chat(steward)));
+    assert!(
+        handed.starts_with("⬢ **`check prod`: closed by the person**"),
+        "{handed}"
+    );
+    assert!(handed.contains(PERSON_ENDED), "{handed}");
+}
+
+// ---- a chat is in its stop until its end is carried out (review M1) ----------------------------
+
+#[test]
+fn a_report_parked_on_the_lock_while_close_now_is_recorded_is_the_stop_s_and_never_ordinary() {
+    // Two threads. The person's Close now is recorded under the lock a report is taken
+    // under, and the task's report is parked on that lock at that moment. When the lock is
+    // let go the report takes it before the task's end does. It must not come out as an
+    // ordinary "reported: done" for a task the person closed.
+    let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
+    works(&held, task);
+    let parked: std::sync::Mutex<Option<std::thread::JoinHandle<Answer>>> =
+        std::sync::Mutex::new(None);
+
+    let acts = crate::stopping::record_in_a_test(&held, task, Way::Now, false, || {
+        let (held, id) = (kept(&held), id.clone());
+        let reporting = std::thread::spawn(move || reports(&held, &id, task));
+        // Long enough for it to reach the lock, which this thread holds.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!reporting.is_finished(), "parked on the lock");
+        *parked.lock().unwrap() = Some(reporting);
+    })
+    .expect("recorded");
+
+    // The lock is let go, and nothing has ended yet: the report goes first.
+    let said = parked
+        .lock()
+        .unwrap()
+        .take()
+        .expect("a report in flight")
+        .join()
+        .expect("the report's thread");
+    assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+    assert!(
+        open_chats(&held).contains(&task),
+        "its end is still to come"
+    );
+    assert!(held.stopping().is_stopping(task));
+    let (held_too, later) = (kept(&held), acts);
+    bounded("the end the press decided", move || {
+        crate::stopping::carry_out_in_a_test(&held_too, later);
+    });
+
+    assert!(!open_chats(&held).contains(&task));
+    assert!(!held.stopping().is_stopping(task));
+    let word = told(&held, For::Chat(steward));
+    assert_eq!(word.len(), 1, "one word, and no second: {word:?}");
+    assert!(word[0].stopped.is_some(), "the person's, by purlis's mark");
+    let text = read(&word);
+    assert!(
+        text.starts_with("⬢ **`check prod`: stopped by the person**"),
+        "{text}"
+    );
+    assert!(text.contains(PERSON_ENDED), "{text}");
+    assert!(!text.contains("reported: done"), "{text}");
+    let record = record_of(&held, task);
+    assert_eq!(record.ended_by, Some(EndedBy::Person));
+    assert!(finished_under(&held, steward).iter().all(|row| !row.folds));
+}
+
+#[test]
+fn during_a_close_now_of_a_subtree_no_task_in_it_starts_a_chat_or_is_started_again() {
+    // review-1438 F4, on this road: from the press to each program's end, a task of the
+    // stop is still in it. One above the others cannot dispatch a task that outlives them.
+    let (_plane, _host, _planes, id, held, steward, task, below) = three_deep();
+    works(&held, task);
+    works(&held, below);
+
+    let acts =
+        crate::stopping::record_in_a_test(&held, task, Way::Now, true, || ()).expect("recorded");
+
+    // Recorded, nothing ended: both are stopping, and neither starts a chat.
+    assert_eq!(acts.len(), 2, "{acts:?}");
+    for chat in [task, below] {
+        assert!(held.stopping().is_stopping(chat), "{chat}");
+        assert!(crate::stopping::refuses_a_start(&held, chat), "{chat}");
+    }
+    let refused = Answer::No {
+        why: crate::stopping::STARTS_NOTHING.to_owned(),
+    };
+    let (said, _) = dispatch(&held, &id, &Tickets::default(), task, None, "one more");
+    assert_eq!(said, refused);
+
+    // The deeper one is ended. The task above is alive for a moment yet, and still refused.
+    let mut acts = acts.into_iter();
+    let first = acts.next().expect("the deeper end");
+    let held_too = kept(&held);
+    bounded("the deeper end", move || {
+        crate::stopping::carry_out_in_a_test(&held_too, vec![first]);
+    });
+    assert!(!open_chats(&held).contains(&below));
+    assert!(open_chats(&held).contains(&task));
+    assert!(held.stopping().is_stopping(task));
+    let (said, _) = dispatch(&held, &id, &Tickets::default(), task, None, "one more");
+    assert_eq!(said, refused);
+
+    let (held_too, rest) = (kept(&held), acts.collect::<Vec<_>>());
+    bounded("the last end", move || {
+        crate::stopping::carry_out_in_a_test(&held_too, rest);
+    });
+    assert_eq!(open_chats(&held), vec![steward], "nothing outlives it");
+    assert!(held.stopping().now().is_empty());
+    assert_eq!(told(&held, For::Chat(steward)).len(), 1);
+}
+
+#[test]
+fn stop_and_get_its_report_pressed_again_on_a_task_being_stopped_cuts_nothing() {
+    // Fold-in 2: a second ask for its report is not what ends its one short turn.
+    let (_plane, host, _planes, _id, held, _steward, task) = a_steward_and_its_task();
+    rests(&held, task);
+    ends(&held, task, Way::Report, false).expect("stopping");
+    let typed = host.typed(task);
+
+    ends(&held, task, Way::Report, false).expect("nothing more");
+
+    assert!(open_chats(&held).contains(&task), "still in its turn");
+    assert!(held.stopping().is_stopping(task));
+    assert_eq!(host.typed(task), typed, "and asked nothing twice");
+}
+
+#[test]
+fn a_report_purlis_writes_for_a_cancelled_task_is_never_taken_as_a_stop_s_last_words() {
+    // Fold-in 3. A chat's cancel was about to write the task's report in its place when the
+    // person's stop was recorded. purlis's own sentence is not the task's last words: nothing
+    // is written, and the stop tells the chat that asked.
+    let (_plane, _host, _planes, _id, held, steward, task) = a_steward_and_its_task();
+    rests(&held, task);
+    ends(&held, task, Way::Report, false).expect("stopping");
+
+    let written = report_for(
+        &held,
+        task,
+        purlis_core::dispatched::CANCELLED_UNREPORTED,
+        Outcome::Cancelled,
+    );
+
+    assert!(written.is_err(), "{written:?}");
+    assert_eq!(told(&held, For::Chat(steward)), Vec::new());
+    assert!(record_of(&held, task).running());
+    // The stop goes on, and still takes the task's own one report.
+    assert!(held.stopping().is_stopping(task));
+    ends(&held, task, Way::Now, false).expect("closed");
+    let word = told(&held, For::Chat(steward));
+    assert!(read(&word).contains("closed by the person"), "{word:?}");
+}
+
+// ---- a task's tab goes back to the list (review M2) --------------------------------------------
+
+#[test]
+fn sending_a_task_s_tab_back_to_the_list_ends_nothing_and_tells_nobody() {
+    let (_plane, host, _planes, _id, held, steward, task) = a_steward_and_its_task();
+    works(&held, task);
+    held.chats().open_tab(task).expect("opened");
+    let has_tab = |held: &Held| {
+        held.chats()
+            .open_now()
+            .into_iter()
+            .find(|open| open.session == task)
+            .map(|open| open.tab)
+    };
+    assert_eq!(has_tab(&held), Some(true));
+
+    held.chats().close_tab(task).expect("sent back");
+
+    // No tab from here on, in the record the next launch reads too.
+    assert_eq!(has_tab(&held), Some(false));
+    assert!(
+        held.chats()
+            .record()
+            .chats
+            .iter()
+            .all(|chat| chat.number != Some(task) || !chat.has_tab())
+    );
+    // And nothing else: it works on, it owes its report, nothing was typed or said.
+    assert!(open_chats(&held).contains(&task));
+    assert!(held.chats().owed_task_report(task).is_some());
+    assert!(!held.stopping().is_stopping(task));
+    assert_eq!(host.typed(task), Vec::<Vec<u8>>::new());
+    assert_eq!(told(&held, For::Chat(steward)), Vec::new());
+    assert!(record_of(&held, task).running());
+    // Asked twice, it is as it was. A chat that is not a task is its tab: refused.
+    held.chats().close_tab(task).expect("already back");
+    assert!(held.chats().close_tab(steward).is_err());
+    assert!(open_chats(&held).contains(&steward));
 }
 
 #[test]
@@ -730,7 +926,7 @@ fn only_a_task_is_ended_this_way_and_a_chat_s_own_cancel_is_refused_once_the_per
     ends(&held, task, Way::Report, false).expect("stopping");
     let said = asks(&held, &id, steward, What::Cancel { of: task });
     assert!(
-        matches!(&said, Answer::No { why } if why.contains("is being stopped by the operator")),
+        matches!(&said, Answer::No { why } if why.contains("is being stopped by the person")),
         "{said:?}"
     );
 }

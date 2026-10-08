@@ -493,6 +493,25 @@ not asking for the person reads idle, and one whose harness sends nothing reads
 _Avoid_: job, todo (that is the workspace's), work item, task chat, sub-chat, persona chat (in a
 shown sentence, where a task is meant)
 
+**Ending a task** (by the person):
+The two ways a person ends a task by hand, and no other: **Stop and get its report**, which
+ends its turn and gives it one short turn to say what it did, and **Close now**, which ends its
+program at once. Either takes a second step before anything ends. Closing a task's tab is
+neither: the tab goes, and the task goes **back to the list** and keeps working. A chat's own
+way to end a task it dispatched is a **cancel**.
+_Avoid_: kill, terminate, close the task's tab (to mean ending it), stop chat (that is a
+session's or a handoff's)
+
+**Outcome** (of a task the asking chat is told of):
+How a task ended, in purlis's own words to the chat that asked. Beside a report's own outcome
+(done, blocked, failed, cancelled) there are three that are never a task's to say: **stopped by
+the person** (with the task's short report, quoted as data), **closed by the person** (no
+report), and **ended without a report** (its program ended by itself). The first two carry one
+fixed sentence telling the asking chat not to dispatch the task again unless the person asks.
+The window says the same two ends to the person as "stopped by you" and "closed by you". In
+counts they are done with, never failed.
+_Avoid_: killed, aborted, cancelled (for a stop by the person: a cancel is the asking chat's)
+
 **Helper** (of a chat):
 A sub-agent or child its harness spawns inside a chat: the harness's own, a **child run** of the
 chat's run. It carries the chat's persona, sandbox and asks, is never a chat or a persona, and

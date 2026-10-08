@@ -623,3 +623,28 @@ report.
   a session and a handoff's chat are unchanged. The record keeps who ended a task
   (`ended_by`) and which way (`ended_way`).
 - **Only the window asks for either.** No hook line and no chat's command reaches them.
+
+#### Rulings added in review of #1488 (2026-10-08, delegated to the dispatcher; the operator is told)
+
+- **Ending a task always takes a second step, and never a modal dialog for an idle task.**
+  Delete on a row, the breadcrumb's two controls and the menu's rows ask in place ("Stop it" or
+  "Close it", and "Keep", which has the keyboard). The one modal question is for a task in the
+  middle of a turn or with tasks of its own still working. This narrows V100-18's "no dialog
+  for an idle task" to "no modal dialog".
+- **A close ends no task.** The cross and the close shortcut on a task's own tab send the task
+  back to the Chats list, and it keeps working. A close of several tabs does the same for the
+  tasks among them, and says so in one line.
+- **A chat is in its stop until its program is gone.** Its word to the chat that asked and
+  its close are one step under the lock a report is taken under. A report in flight for a task
+  the person closed is the stop's report, never an ordinary one, and no task of a stop starts
+  a chat.
+- **Ending a task, the question it asks first, stopping a chat and closing one are the
+  window's alone**, over its own channel to the app. None is served on a link.
+- **What "a task cannot forge them" means.** A task cannot produce any of the three ends or
+  the fixed sentence through the report channel. The folder reports wait in is writable from
+  outside a sandbox, and that exposure stays with issue 1457.
+- **Counts.** A task the person stopped or closed is done with, not failed: it is counted with
+  done and cancelled. Failed is failed, blocked, ended without a report and did not start. The
+  rows of tasks the person ended still never fold.
+- **On a harness purlis does not type into, Stop is drawn disabled with its reason**, and
+  Close now is the offer.

@@ -517,8 +517,6 @@ export const commands = {
 	 *  Refused, in the core's sentence, for a folder outside the branch, a link or git's own.
 	 */
 	openShellInBranch: (plane: PlaneId, workspace: string, repo: string, piece: string | null, folder: string, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_shell_in_branch", { plane, workspace, repo, piece, folder, name, columns, rows })),
-	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
-	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
 	/**
 	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
 	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
@@ -717,6 +715,12 @@ export const commands = {
 	 *  so a reloaded window and the next launch draw the tab again.
 	 */
 	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
+	/**
+	 *  The person sent a task chat's tab back to the Chats list: the tab goes, and the task keeps
+	 *  working. It ends nothing and tells no chat anything. Refused for a chat that is not a task.
+	 *  The record keeps it, so a reloaded window and the next launch draw no tab for it.
+	 */
+	closeChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_chat_tab", { plane, session })),
 	/**
 	 *  Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
 	 *  (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
@@ -1596,26 +1600,8 @@ export const commands = {
 	 *  tabs are wrapping up.
 	 */
 	smartClosing: (plane: PlaneId) => typedError<SmartClosing[], string>(__TAURI_INVOKE("smart_closing", { plane })),
-	/**
-	 *  Stops a chat, or a chat and every chat below it. A chat another chat started gets one short
-	 *  turn to write what it did, and the chat that asked is told the operator stopped it.
-	 */
-	stopChat: (plane: PlaneId, session: number, below: boolean) => typedError<null, string>(__TAURI_INVOKE("stop_chat", { plane, session, below })),
 	/**  Every chat of a plane being stopped, so a window that has just drawn it says so. */
 	stoppingChats: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("stopping_chats", { plane })),
-	/**
-	 *  What ending a task would do: whether it is mid-turn, whether it can be asked for a report
-	 *  and why not where it cannot, and the tasks still at work below it.
-	 */
-	taskEnding: (plane: PlaneId, session: number) => typedError<TaskEnding, string>(__TAURI_INVOKE("task_ending", { plane, session })),
-	/**
-	 *  Ends a task, the way you chose: `report` gives it one short turn to say what it did, where
-	 *  it can be given one, and then ends it; `now` ends its program at once, with no report.
-	 *  With `below`, the tasks still at work below it are ended the same way, deepest first;
-	 *  without, they are left to finish. The chat that asked is told which, in purlis's own
-	 *  words: stopped by the person, with the task's report, or closed by the person.
-	 */
-	endTask: (plane: PlaneId, session: number, way: Way, below: boolean) => typedError<null, string>(__TAURI_INVOKE("end_task", { plane, session, way, below })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In

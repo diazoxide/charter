@@ -11,7 +11,8 @@ import {
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
-import { BESIDE_ID, taskStopId, type Catalogued, type Offer } from "./actions";
+import { BESIDE_ID, taskStopId, type Catalogued, type Offer, type TaskEndWay } from "./actions";
+import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
 import { ChatShownState } from "./ChatRows";
@@ -164,6 +165,9 @@ export function ChatsSection({
   finished = NONE_FINISHED,
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
+  ending,
+  onEndTask,
+  onEndConfirm,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -183,6 +187,12 @@ export function ChatsSection({
   onClearFinished?: (ids: string[]) => void;
   /** Reopens a finished task as an ordinary chat; answers why not, where it could not. */
   onReopen?: (task: FinishedTask) => Promise<string | undefined>;
+  /** The second step of ending a task, while it is asked on that task's row (#1488). */
+  ending?: TaskEndInline;
+  /** A way to end a task was pressed on its row: its menu, or Delete. Asked about on the row. */
+  onEndTask?: (session: number, way: TaskEndWay) => void;
+  /** The second step was answered: end it, or keep it. */
+  onEndConfirm?: (yes: boolean) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -381,7 +391,17 @@ export function ChatsSection({
     },
     [filtering],
   );
-  const press = useCallback((offer: Offer) => onPress?.(offer), [onPress]);
+  // **A way to end a task pressed on its row is asked about on that row** (#1488): the
+  // window is told where the press was made. Every other row of a menu is carried out as it is.
+  const press = useCallback(
+    (offer: Offer) => {
+      if (offer.does.verb === "endTask" && onEndTask !== undefined)
+        onEndTask(offer.does.session, offer.does.way);
+      else onPress?.(offer);
+    },
+    [onEndTask, onPress],
+  );
+  const confirm = useCallback((yes: boolean) => onEndConfirm?.(yes), [onEndConfirm]);
   const act = useCallback(
     (session: number, what: Asked) => {
       // Delete on a task asks to stop it and get its report (#1488, V100-17): the task's own
@@ -392,10 +412,12 @@ export function ChatsSection({
         setSaid(offer.reason);
         return;
       }
-      onPress?.(offer);
+      press(offer);
     },
-    [offers, onPress],
+    [offers, press],
   );
+  /** The row the second step is asked on, where it is drawn. */
+  const second = ending?.where === "row" ? ending : undefined;
   const stop = useTabStop(
     front === undefined ? undefined : rowId(front),
     drawn.map((row) => rowId(row.session)),
@@ -614,6 +636,11 @@ export function ChatsSection({
                           : (byNumber.get(lead)?.name ?? null)
                       }
                       stopping={stopping?.has(row.session) ?? false}
+                      asks={second?.session === row.session ? second.says : null}
+                      answer={second?.session === row.session ? second.answer : null}
+                      busy={second?.session === row.session && second.busy}
+                      trouble={second?.session === row.session ? (second.trouble ?? null) : null}
+                      onConfirm={confirm}
                       offers={offers}
                       clock={clock}
                       onOpen={onOpen}
@@ -711,6 +738,11 @@ const Row = memo(function Row({
   needs,
   needsName,
   stopping,
+  asks,
+  answer,
+  busy,
+  trouble,
+  onConfirm,
   offers,
   clock,
   onOpen,
@@ -751,6 +783,14 @@ const Row = memo(function Row({
   /** That chat's name, when it is a chat below this one. */
   needsName: string | null;
   stopping: boolean;
+  /** The second step of ending this task, while it is asked here: what is asked, and the
+   *  button that does it. Nothing while it is not. */
+  asks: string | null;
+  answer: string | null;
+  busy: boolean;
+  /** The core's refusal of the answer, which stays on the row. */
+  trouble: string | null;
+  onConfirm: (yes: boolean) => void;
   offers: Catalogued;
   clock: StateClock;
   onOpen: (session: number) => void;
@@ -774,6 +814,8 @@ const Row = memo(function Row({
     else return;
     event.preventDefault();
   };
+  /** The row itself, which takes the keyboard back when the second step is answered Keep. */
+  const self = useRef<HTMLButtonElement>(null);
   // Asked once, as the row is drawn: whether its chat's state changed while it was not.
   const [changed] = useState(() => clock.missed(session));
   const counts = summary === null ? [] : countsOf(summary);
@@ -807,6 +849,7 @@ const Row = memo(function Row({
         <RovingFocusGroup.Item asChild tabStopId={rowId(session)}>
           <button
             type="button"
+            ref={self}
             className="chat"
             role="treeitem"
             aria-level={level}
@@ -893,6 +936,21 @@ const Row = memo(function Row({
           </button>
         </RovingFocusGroup.Item>
       </Menued>
+      {asks !== null && answer !== null && (
+        /* **The second step of ending this task, on its own row** (#1488): nothing ends on
+           one press. Keep has the keyboard, and gives it back to the row. */
+        <TaskEndConfirm
+          says={asks}
+          answer={answer}
+          busy={busy}
+          trouble={trouble ?? undefined}
+          onAnswer={() => onConfirm(true)}
+          onKeep={() => {
+            onConfirm(false);
+            self.current?.focus();
+          }}
+        />
+      )}
       {needs !== null && needs !== session && (
         /* **A chat below this one needs you**: the hand, and a press goes to that chat. Its
            own button beside the row, since the row goes to this row's chat. Out of the arrows'

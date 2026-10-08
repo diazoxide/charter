@@ -173,7 +173,14 @@ pub fn answer(
             if let Err(why) = tickets.spend(back.chat, connection, &back.ticket, now) {
                 return no(why);
             }
-            report_it(held, back.chat, &back.summary, back.task.as_ref()).unwrap_or_else(no)
+            report_it(
+                held,
+                back.chat,
+                &back.summary,
+                back.task.as_ref(),
+                Voice::Chat,
+            )
+            .unwrap_or_else(no)
         }
         Ask::Dispatch(dispatch) => {
             // Spent first, for the open's reason: one run of the command starts one chat.
@@ -247,7 +254,17 @@ pub(crate) fn report_for(
         outcome,
         changed: None,
     };
-    report_it(held, chat, text, Some(&task)).map(|_| ())
+    report_it(held, chat, text, Some(&task), Voice::Purlis).map(|_| ())
+}
+
+/// Whose words a report is: the chat's own, or purlis's, written in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Voice {
+    Chat,
+    /// **purlis writing in a task's place never takes a stop's last words** (#1488): those
+    /// are the one report a stopped chat itself may send. And while the person is stopping
+    /// the task nothing is written for it at all: the stop tells the chat that asked.
+    Purlis,
 }
 
 /// Hands `summary` back from `chat` to the chat whose handoff opened it, or says why not
@@ -277,12 +294,19 @@ fn report_it(
     chat: u32,
     summary: &str,
     task: Option<&TaskReport>,
+    voice: Voice,
 ) -> Result<Answer, String> {
     // From "is one owed" to "one was sent" under one lock, so two reports in flight are one
     // report and one refusal, and a restart of the chat that asked lands on one side of it.
     let deciding = held.chats().deciding();
+    // Asked under the lock a stop is recorded under, so it is one or the other.
+    if voice == Voice::Purlis && held.stopping().is_stopping(chat) {
+        return Err(format!(
+            "chat {chat} is being stopped by the person, and its stop tells the chat that asked"
+        ));
+    }
     // The one report a stop asks for, tested and taken in one call.
-    let last_words = held.stopping().take_last_report(chat);
+    let last_words = voice == Voice::Chat && held.stopping().take_last_report(chat);
     let said = report_under(held, chat, summary, task, last_words);
     if said.is_err() && last_words {
         held.stopping().give_back_last_report(chat);
