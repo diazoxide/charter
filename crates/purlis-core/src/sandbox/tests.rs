@@ -2096,6 +2096,34 @@ fn whether_a_harness_ever_starts_sandboxed_here_is_its_compiler_its_hold_and_its
     );
 }
 
+/// #1422: the window shows why a held-back harness never starts sandboxed, and a ticket number
+/// is no part of a sentence the window shows (`docs/ui-copy.md`). The issue stays with the
+/// adapter that holds it back.
+#[test]
+fn a_held_back_harness_is_said_without_the_issue_it_waits_for() {
+    let why = never_with(compiler(Harness::Codex), Some(1150), Os::MacOs)
+        .expect("a held-back harness never starts sandboxed");
+    assert_eq!(why, "purlis cannot keep its chats inside the sandbox yet");
+    let refused = NotStarted::HeldBack(Harness::Codex, 1150).to_string();
+    assert!(
+        !refused.contains('#') && !refused.contains("1150"),
+        "{refused}"
+    );
+}
+
+/// #1422: which preset lets a chat write the project's package caches is the core's to say,
+/// and the window reads it from the preset rather than keeping a copy of its word.
+#[test]
+fn only_the_toolchains_preset_widens_the_package_caches() {
+    assert_eq!(
+        Preset::ALL
+            .into_iter()
+            .filter(|preset| preset.widens_caches())
+            .collect::<Vec<_>>(),
+        [Preset::Toolchains]
+    );
+}
+
 // -------------------------------------------------------------------------------------
 // The per-chat opt-out (ADR 0067 §7) and Windows (ruling V21 3, V78 b)
 // -------------------------------------------------------------------------------------
@@ -2608,7 +2636,8 @@ fn the_picker_shows_codex_sandboxed_where_charter_wraps_it_and_the_opt_out_elsew
     ) else {
         panic!("refused on Linux");
     };
-    assert!(why.contains("(#1040)"), "{why}");
+    assert!(why.contains("not yet on Linux, so"), "{why}");
+    assert!(!why.contains('#'), "{why}");
     assert_eq!(install, None, "nothing to install fixes it");
     assert_eq!(
         decide(

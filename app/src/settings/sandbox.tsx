@@ -30,9 +30,6 @@ const EGRESS = key("sandbox", "egress");
 /** `[sandbox] certificate-checks` (#1337): off unless the file says `true`. */
 const CERTIFICATE_CHECKS = key("sandbox", "certificate-checks");
 
-/** The preset whose caches a chat may write while it is on (#1337): the core's word for it. */
-const PACKAGES = "toolchains";
-
 /**
  * The presets in force as `shared` stands: those `egress` names, in the core's order; every
  * preset where the file names none, as the core reads a missing `egress` (ADR 0067 §3).
@@ -90,7 +87,7 @@ function counted(n: number, one: string, many: string): string {
 export function whatAChatCanDo(reach: Reach): string {
   if (!reach.on)
     return "Chats here run without a sandbox, so a chat can change any file you can and reach any host.";
-  const caches = reach.presets.some((preset) => preset.word === PACKAGES);
+  const caches = reach.presets.some((preset) => preset.widens_caches);
   const places = [
     "the folder it works in",
     ...(caches ? ["in the project's package caches"] : []),
@@ -455,7 +452,7 @@ export function sandboxReasons(
       ? ""
       : " Once the sandbox is on.";
   const caches = presetsOn(shared, sandbox?.presets ?? [], sandbox?.policy ?? null).some(
-    (one) => one.word === PACKAGES,
+    (one) => one.widens_caches,
   );
   return [
     reasons(

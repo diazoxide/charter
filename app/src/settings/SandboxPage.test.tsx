@@ -31,16 +31,19 @@ const AI: SandboxPreset = {
   word: "model-providers",
   title: "AI providers",
   hosts: ["api.anthropic.com", "api.openai.com"],
+  widens_caches: false,
 };
 const CODE: SandboxPreset = {
   word: "forge",
   title: "Code hosting",
   hosts: ["github.com", "gitlab.com", "git.example.org"],
+  widens_caches: false,
 };
 const PACKAGES: SandboxPreset = {
   word: "toolchains",
   title: "Package registries",
   hosts: ["registry.npmjs.org", "crates.io"],
+  widens_caches: true,
 };
 const PRESETS = [AI, CODE, PACKAGES];
 
