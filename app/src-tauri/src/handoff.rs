@@ -1697,9 +1697,14 @@ fn dispatch_it(
         if let Decision::Refused(why) = &asked.decision {
             // Said to whoever asked: a chat reads what to do instead, and the person
             // reading the dialog is not that chat.
-            return Err(match wanted.by {
-                By::Chat => why.say(),
-                By::Person => said_to_the_person(why),
+            return Err(match (wanted.by, why, &wanted.moved) {
+                (By::Person, _, _) => said_to_the_person(why),
+                // A handoff names no profile, so a profile the project does not list for
+                // the persona is said in a handoff's own words (#1509).
+                (By::Chat, dispatchdecision::Refused::Profile(profile), Some(_)) => {
+                    profile.said_on(purlis_core::personaprofile::Road::Handoff)
+                }
+                (By::Chat, _, _) => why.say(),
             });
         }
         // The decision refused where no profile was chosen.
@@ -2435,6 +2440,12 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
     match why {
         Refused::Profile(Profile::NoProfile) => "This tab is not on a harness profile, so there                                                  is no harness to start the new chat on. Ask                                                  from a chat that was started on a profile."
             .to_owned(),
+        // The person's ask names no profile, so what they can do about one the project does
+        // not list for the persona is theirs: ask from another chat, or change the list or
+        // the persona (#1509).
+        Refused::Profile(unlisted @ Profile::NotListed { .. }) => {
+            sentence(&unlisted.said_on(purlis_core::personaprofile::Road::Person))
+        }
         // Written for a chat or a person alike (`personaprofile::Refused::say`).
         Refused::Profile(other) => sentence(&other.say()),
         Refused::NoPersona(name) => {
@@ -7948,7 +7959,7 @@ mod tests {
             refused("codex"),
             "the dispatch names profile 'codex', which this project does not list for persona \
              'devops', so nothing was started. The project lists 'work' and 'yolo' for that \
-             persona: name one of those in the dispatch."
+             persona. Name one of them with --profile."
         );
         // Listed, and its command switches the prompts off: the list does not let it through.
         let why = refused("yolo");
@@ -7976,6 +7987,92 @@ mod tests {
                 "{profile:?}"
             );
         }
+    }
+
+    /// #1509: the list holds on every road a dispatch comes by, and each reader is told what
+    /// they can do. A handoff and the person's ask name no profile, so neither is told to
+    /// name one there.
+    #[test]
+    fn the_list_holds_a_handoff_the_person_s_ask_and_the_persona_s_own_profile() {
+        // `ops` names the profile `cx` in its own definition; the project lists only `work`
+        // for it, and only `cx` for `devops`, which names none.
+        let plane = a_plane_with_personas().with_a_codex_persona();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n\
+             [dispatch.profiles]\nops = [\"work\"]\ndevops = [\"cx\"]\n",
+        )
+        .expect("the manifest");
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        // The asking chat is on `work`.
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        for to in ["ops", "devops"] {
+            purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", to)
+                .expect("the person allowed the pair");
+        }
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+
+        // The persona's own profile, outside the project's list for it: the two disagree,
+        // and the task is told which two and what it can do meanwhile.
+        let (said, _) = dispatch_with(&held, &id, asking, Some("ops"), "task", brief, None);
+        assert_eq!(
+            said,
+            Answer::No {
+                why: "persona 'ops' names profile 'cx', which this project does not list for \
+                      persona 'ops', so nothing was started. The project lists only 'work' for \
+                      that persona. The project's list and the persona's own definition \
+                      disagree: a person changes [dispatch.profiles] in the project's file, or \
+                      the `profile:` line of the persona's definition. Until then, name that \
+                      one with --profile."
+                    .to_owned()
+            }
+        );
+
+        // A handoff to devops from a chat on `work`, with a report owed and with none.
+        for report in [true, false] {
+            let tickets = Tickets::default();
+            let ticket = ticket(&held, &id, &tickets, asking);
+            let open = Ask::Open(Box::new(OpenChat {
+                chat: asking,
+                workspace: "alpha".to_owned(),
+                create_vision: None,
+                persona: Some("devops".to_owned()),
+                message: stamped(asking),
+                ticket,
+                name: None,
+                report,
+            }));
+            let said = answer(&held, &id, &tickets, 1, open, &nothing_opens);
+            assert_eq!(
+                said,
+                Answer::No {
+                    why: "the asking chat runs on profile 'work', which this project does not \
+                          list for persona 'devops', so nothing was started. The project lists \
+                          only 'cx' for that persona. A handoff names no profile and starts on \
+                          the asking chat's: hand off from a chat on that one, or dispatch a \
+                          task to devops, naming that one with --profile."
+                        .to_owned()
+                },
+                "report: {report}"
+            );
+        }
+
+        // The person's ask from that chat's tab, in the person's words.
+        let why = ask_from_the_tab(&held, &id, asking, "devops", "check prod")
+            .expect_err("nothing is started");
+        assert_eq!(
+            why,
+            "This tab's chat runs on profile 'work', which this project does not list for \
+             persona 'devops', so nothing was started. The project lists only 'cx' for that \
+             persona. Ask from a chat on that one, or list 'work' for devops under \
+             [dispatch.profiles] in the project's file."
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
     }
 
     /// #1446, at the joined start: the profile a persona chat would take from the chat that

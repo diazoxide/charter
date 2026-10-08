@@ -244,7 +244,9 @@ BRIEF
   otherwise (*Where it works*, below). You can see it, open it, type in it and stop it. It is listed in the Chats section under the chat that asked for it, by
   its name and what it is doing, and has a tab once you open it.
 - **Its harness profile is its persona's own** where the persona's definition names one, else
-  this chat's; `--profile` names another of the project's profiles. A profile is only ever one
+  this chat's; `--profile` names another of the project's profiles. Where the project lists
+  profiles for the persona (`[dispatch.profiles]`), the chat starts on one of those or not at
+  all, whoever chose the profile. A profile is only ever one
   the project offers on this machine and has approved: any other name is refused, and nothing
   is started in its place. Where the persona's own profile is not offered on this machine, the
   chat starts on this chat's profile, and the command and the new chat's first message say so.
@@ -278,8 +280,8 @@ that says what to do:
 | from inside a sub-agent, where purlis's hook can tell (see below) | a persona chat belongs to a chat you can see; the sub-agent returns what it found to its chat, which dispatches |
 | with no profile to start it on: the chat is on none, the persona names none and `--profile` names none | there is no harness to start the new chat on |
 | on a profile the project does not offer on this machine, or one whose command has not been approved here | a profile is looked up, never run on a chat's word |
-| on a profile the project does not list for that persona, where it lists any (`[dispatch.profiles]` in the project's file), whoever chose the profile: `--profile`, the persona's own definition, or the asking chat's own | the project said which profiles that persona's dispatched chats run on; the refusal names them |
-| on a profile whose own command switches the harness's permission prompts off, whoever named it and whether or not anybody is at the asking chat | a chat one chat starts for another always asks |
+| on a profile the project does not list for that persona, where it lists any (`[dispatch.profiles]` in the project's file, the persona's own list or the nearest one it `extends:`), whoever chose the profile: `--profile`, the persona's own definition, or the asking chat's own | the project said which profiles that persona's dispatched chats run on; the refusal names them and says what its reader can do |
+| on a profile whose own command carries one of the flags purlis knows for switching the harness's permission prompts off, whoever named it and whether or not anybody is at the asking chat | purlis starts no chat for another chat on such a profile; a setting kept in a file or a wrapper script is not seen |
 | across a pair, or at all, where an administrator's policy locks dispatch | no grant covers it; the refusal says who locked it |
 | where this machine's policy file is refused | dispatch is off until an administrator fixes the file |
 | from a chat that still holds another persona's grants | it has none of its own to dispatch with until you allow them on its tab |

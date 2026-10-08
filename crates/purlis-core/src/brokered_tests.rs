@@ -280,6 +280,44 @@ fn no_brokered_write_creates_widens_or_revokes_a_dispatch_grant() {
 }
 
 #[test]
+fn no_brokered_write_adds_widens_empties_or_removes_a_personas_profile_list() {
+    // #1509: which profiles a persona's dispatched chats run on is the project's to say, so a
+    // write a chat asks purlis to make never changes `[dispatch.profiles]`.
+    let listed = "schema = 1\n\n[dispatch.profiles]\ndevops = [\"work\"]\n";
+    for (before, after) in [
+        // Added, in a file that had none and where there was no file.
+        (Some("schema = 1\n"), listed),
+        (None, listed),
+        // Widened: another profile, and another persona.
+        (
+            Some(listed),
+            "schema = 1\n\n[dispatch.profiles]\ndevops = [\"work\", \"codex\"]\n",
+        ),
+        (
+            Some(listed),
+            "schema = 1\n\n[dispatch.profiles]\ndevops = [\"work\"]\nqa = [\"work\"]\n",
+        ),
+        // Emptied, and removed.
+        (
+            Some(listed),
+            "schema = 1\n\n[dispatch.profiles]\ndevops = []\n",
+        ),
+        (Some(listed), "schema = 1\n\n[dispatch.profiles]\n"),
+        (Some(listed), "schema = 1\n"),
+    ] {
+        assert!(
+            changes_what_a_chat_runs_under(before, after),
+            "{before:?} to {after}"
+        );
+    }
+    // The same lists under another line of the file are no change.
+    assert!(!changes_what_a_chat_runs_under(
+        Some(listed),
+        "schema = 2\n\n[dispatch.profiles]\ndevops = [\"work\"]\n"
+    ));
+}
+
+#[test]
 fn a_brokered_write_never_touches_what_decides_whether_the_local_settings_are_ignored() {
     let (_dir, root) = a_project();
     for path in [

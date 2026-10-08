@@ -148,7 +148,8 @@ pub enum DispatchCommand {
 /// What a dispatch may say besides whom it is to, its name and its brief.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options<'a> {
-    /// `--profile`: one of the project's harness profiles.
+    /// `--profile`: one of the project's harness profiles, and one of those the project
+    /// lists for the persona where it lists any (#1509).
     pub profile: Option<&'a str>,
     /// `--in`: `worktree`, or `workspace:<name>` (#1453).
     pub place: Option<&'a str>,
