@@ -223,6 +223,7 @@ export const IMPORTANCE: readonly string[] = [
   "session-saved",
   "sandbox-offer",
   "sandbox-hosts",
+  "sandbox-presets",
   "vaults-waiting",
   "pin-dormant",
   "chat-fresh",

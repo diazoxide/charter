@@ -191,7 +191,17 @@ pub(crate) fn save(
             }
         }
     };
+    // A preset turned on or off here, by you, is one this machine has seen (#1385), unless
+    // another change was already waiting to be told.
+    let shared = matches!(which, SettingsWhich::Shared);
+    let pending = shared && purlis_core::sandbox::local::presets_changed(root).is_some();
     match settings::save(root, which.into(), base, &text) {
+        Ok(()) if shared => {
+            purlis_core::sandbox::local::presets_seen_by_you(root, pending);
+            Ok(SettingsSaved::Saved {
+                file: file_of(root, which)?,
+            })
+        }
         Ok(()) => Ok(SettingsSaved::Saved {
             file: file_of(root, which)?,
         }),

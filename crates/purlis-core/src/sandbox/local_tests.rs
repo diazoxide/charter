@@ -445,3 +445,172 @@ fn a_vault_allowed_for_a_persona_is_kept_here_once_and_revoked_with_its_record()
     assert!(path(root).starts_with(crate::names::state(root)));
     assert!(!root.join("vaults.json").exists());
 }
+
+// -------------------------------------------------------------------------------------
+// The project's Internet access presets: one Notice per change, on each machine (#1385)
+// -------------------------------------------------------------------------------------
+
+fn presets(
+    text: &str,
+    locks: &super::super::policy::Locks,
+    seen: Option<&[&str]>,
+) -> Option<PresetsChange> {
+    let seen: Option<Vec<String>> =
+        seen.map(|seen| seen.iter().map(|one| (*one).to_owned()).collect());
+    presets_change(&Plane::of(Some(text)), locks, seen.as_deref())
+}
+
+fn no_locks() -> super::super::policy::Locks {
+    super::super::policy::Locks::none()
+}
+
+#[test]
+fn a_project_on_the_default_presets_tells_nothing_on_first_sight() {
+    assert_eq!(
+        presets("[sandbox]\nmode = \"on\"\n", &no_locks(), None),
+        None
+    );
+    assert_eq!(
+        presets(
+            "[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"forge\", \"toolchains\"]\n",
+            &no_locks(),
+            None
+        ),
+        None
+    );
+}
+
+#[test]
+fn certificate_checks_turned_on_is_told_with_what_it_widens() {
+    let told = presets(
+        "[sandbox]\nmode = \"on\"\ncertificate-checks = true\n",
+        &no_locks(),
+        None,
+    )
+    .expect("a widening is told");
+    assert_eq!(told.added, ["Certificate checks"]);
+    assert_eq!(told.removed, Vec::<String>::new());
+    assert_eq!(
+        told.now,
+        [
+            "model-providers",
+            "forge",
+            "toolchains",
+            "certificate-checks"
+        ]
+    );
+    assert_eq!(told.widens.len(), 1, "{told:?}");
+    assert!(told.widens[0].contains("certificate"), "{told:?}");
+}
+
+#[test]
+fn a_preset_turned_back_on_after_it_was_seen_off_is_told_with_the_caches_it_widens() {
+    let told = presets(
+        "[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"toolchains\"]\n",
+        &no_locks(),
+        Some(&["model-providers"]),
+    )
+    .expect("a widening is told");
+    assert_eq!(told.added, ["Package registries"]);
+    assert_eq!(told.removed, Vec::<String>::new());
+    assert_eq!(told.now, ["model-providers", "toolchains"]);
+    assert!(
+        told.widens.iter().any(|one| one.contains("package caches")),
+        "{told:?}"
+    );
+}
+
+#[test]
+fn a_narrowed_project_is_told_once_so_a_later_widening_is_never_missed() {
+    // First sight of a project that turned presets off: told, so what is seen is recorded.
+    let told = presets(
+        "[sandbox]\nmode = \"on\"\negress = [\"model-providers\"]\n",
+        &no_locks(),
+        None,
+    )
+    .expect("told");
+    assert_eq!(told.added, Vec::<String>::new());
+    assert_eq!(told.removed, ["Code hosting", "Package registries"]);
+    assert_eq!(told.widens, Vec::<String>::new());
+    // Seen as shown: nothing more until it changes.
+    assert_eq!(
+        presets(
+            "[sandbox]\nmode = \"on\"\negress = [\"model-providers\"]\n",
+            &no_locks(),
+            Some(&told.now.iter().map(String::as_str).collect::<Vec<_>>()),
+        ),
+        None
+    );
+}
+
+#[test]
+fn what_was_acknowledged_is_what_was_shown_and_order_is_no_change() {
+    assert_eq!(
+        presets(
+            "[sandbox]\nmode = \"on\"\negress = [\"toolchains\", \"forge\"]\n",
+            &no_locks(),
+            Some(&["forge", "toolchains"]),
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_preset_policy_turns_off_reaches_no_chat_and_is_not_named() {
+    let locks = super::super::policy::Locks::parse(
+        r#"{"sandbox": {"presets": ["model-providers"]}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    assert_eq!(
+        presets(
+            "[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"toolchains\"]\n",
+            &locks,
+            Some(&["model-providers"]),
+        ),
+        None
+    );
+}
+
+#[test]
+fn on_first_sight_a_preset_policy_turns_off_is_not_told_as_turned_off() {
+    let locks = super::super::policy::Locks::parse(
+        r#"{"sandbox": {"presets": ["model-providers"]}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    // The project asks for the defaults; policy lets one through. Nothing was turned off.
+    assert_eq!(presets("[sandbox]\nmode = \"on\"\n", &locks, None), None);
+    // A policy that requires the sandbox: a project with none says nothing either.
+    let required = super::super::policy::Locks::parse(
+        r#"{"sandbox": {"opt-out": false, "presets": ["model-providers"]}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    assert_eq!(presets("schema = 1\n", &required, None), None);
+}
+
+#[test]
+fn a_project_whose_chats_are_not_sandboxed_tells_nothing_of_its_presets() {
+    assert_eq!(
+        presets("[sandbox]\ncertificate-checks = true\n", &no_locks(), None),
+        None
+    );
+    assert_eq!(presets("schema = 1\n", &no_locks(), None), None);
+}
+
+/// Over the file: told once, and not again once acknowledged as shown.
+#[test]
+fn a_teammate_is_told_once_of_a_preset_change() {
+    let project = a_project("[sandbox]\nmode = \"on\"\ncertificate-checks = true\n");
+    let told = presets_changed(project.path()).expect("told");
+    assert_eq!(told.added, ["Certificate checks"]);
+    acknowledge_presets(project.path(), &told.now).expect("kept");
+    assert_eq!(presets_changed(project.path()), None, "told once");
+    std::fs::write(
+        project.path().join(crate::plane::MANIFEST),
+        "[sandbox]\nmode = \"on\"\n",
+    )
+    .expect("a teammate's push");
+    assert_eq!(
+        presets_changed(project.path()).map(|told| told.removed),
+        Some(vec!["Certificate checks".to_owned()])
+    );
+}

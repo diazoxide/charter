@@ -177,6 +177,7 @@ function state(more: Partial<SandboxState> = {}): SandboxState {
     said: "no chat has started under this project's sandbox on this machine yet",
     never: [],
     hosts_changed: null,
+    presets_changed: null,
     presets: PRESETS,
     persona_hosts: [],
     besides: { project_hosts: 0, your_hosts: 0, folders: 0 },

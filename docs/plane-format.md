@@ -4762,6 +4762,14 @@ down rather than read off the code.
   them (#1341), each spelled as the sandbox writes it, absent before the first: the window's
   one-time Notice names what was added and taken away since, and "Got it" records the list it
   showed. A change made in this machine's own Settings is recorded as seen as it is written;
+  `presets_seen` — the project's Internet access presets in force (`[sandbox].egress`, each by
+  its word, less any an administrator's policy turns off) and `certificate-checks` where it is
+  on, as this machine last told the person of them (#1385), absent before the first, which
+  reads as the defaults a project starts with (every preset an administrator's policy allows, certificate checks off): the
+  window's one-time Notice names what was turned on and off since, and what each one turned on
+  widens past its hosts (the package caches, the certificate check), and "Got it" records the
+  set it showed. A change saved in this machine's own Settings is recorded as seen as it is
+  written;
   `hosts_mine` — your own `charter.local.toml` hosts you added or confirmed in Settings on this
   machine (#1341), the only ones of that file that grant anything; `writes_mine` — the
   folders you let every chat of this project write on this machine from a block's Notice
@@ -4787,7 +4795,7 @@ down rather than read off the code.
   taken away since, and allowing there (all shown, or one pair) adds to the list, as does Allow
   for everyone on a chat's tab. A pair revoked in this machine's own window is taken off it.
 - **Who writes it:** the app, at each new chat's start, at the offer's answer, when the
-  hosts Notice or the dispatch grants Notice is read, and at a grant's Allow or Revoke (`sandbox::local`). A sandboxed chat cannot: `.charter/app/` is the integrity class's.
+  hosts Notice, the presets Notice or the dispatch grants Notice is read, and at a grant's Allow or Revoke (`sandbox::local`). A sandboxed chat cannot: `.charter/app/` is the integrity class's.
 - **Tier:** Clone state — deleting it asks the offer again, if the project still has the
   sandbox off, and starts the count from nothing (ADR 0069).
 - **Git:** gitignored (under `/.charter/`).
