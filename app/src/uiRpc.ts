@@ -2246,6 +2246,13 @@ export type BranchStatus = {
 	base: string | null,
 };
 
+/**  Which task's brief is asked for. */
+export type BriefOf = 
+/**  A task whose chat is open, by that chat's number in this project. */
+({ chat: number }) & { dispatch?: never } | 
+/**  A dispatch by its record's id: what a finished task's row is named by. */
+({ dispatch: string }) & { chat?: never };
+
 /**  What kind of build this is, which decides which section is shown. */
 export type Build = 
 /**  The changelog has a section for this version. */
@@ -3666,6 +3673,15 @@ export type InstructionStanding =
 { kind: "in-memory" } | 
 /**  It cannot, and why. */
 { kind: "left-out"; why: string };
+
+/**  How much of the brief the record holds. */
+export type Kept = 
+/**  All of it. */
+"whole" | 
+/**  Its start: the record keeps a bounded brief, and this one was longer. */
+"cut" | 
+/**  None of it: the record holds no brief. */
+"missing";
 
 /**
  *  What a Land would do, before it does any of it: the request, the head its checks passed at,
@@ -5821,6 +5837,40 @@ export type SubjectCurations = {
 	left_out: LeftOut[],
 	/**  Why this subject has no list at all — a workspace deleted a moment ago, say. */
 	trouble: string | null,
+};
+
+/**  The brief a task was sent, and the facts of its sending. */
+export type TaskBrief = {
+	/**  The task's name: the one its dispatch gave it, else its chat's. */
+	name: string,
+	/**
+	 *  **The brief as it was sent, byte for byte**: what Copy puts on the clipboard. A chat's
+	 *  words or the person's, never purlis's, and never markup to the window. For a brief
+	 *  the record cut ([`Kept::Cut`]), the part it kept.
+	 */
+	brief: string,
+	kept: Kept,
+	/**
+	 *  The brief written out inertly, **only where it holds a character that draws as
+	 *  nothing, moves the cursor or turns the words around it**: each such character as its
+	 *  escape, and a backslash doubled so the text cannot spell an escape itself. What the
+	 *  window draws in place of `brief` then. `null` for a brief that is plain text.
+	 */
+	inert: string | null,
+	/**  The chat that asked, by the name it had then. */
+	asker: string,
+	/**  Whether the person sent it themselves, from that chat's tab, and not the chat. */
+	by_person: boolean,
+	/**  When it was sent, as the record keeps it (UTC, RFC 3339). */
+	sent: string,
+	/**  The persona it was sent to; `null` for a chat started as none. */
+	persona: string | null,
+	/**  Where it works: the workspace's name, or `project root`. */
+	place: string,
+	/**  The folder it started in, relative to the project, where the record says. */
+	folder: string | null,
+	/**  The branch purlis cut for it, where its dispatch gave it one. */
+	branch: string | null,
 };
 
 /**

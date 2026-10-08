@@ -218,6 +218,9 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
+  /** Opens the Brief panel of a task (#1494): the brief it was sent, read back from its
+   *  dispatch record. It reads, and changes nothing. */
+  | { verb: "showBrief"; session: number }
   /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
    *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
   | { verb: "ignoreNeedsYou"; session: number }
@@ -677,6 +680,9 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
+  /** Opens the Brief panel of the task chat `session` (#1494). It reads and changes nothing
+   *  by itself, so it answers no `Ran`. */
+  showBrief: (session: number) => void;
   /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
   ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
@@ -2034,6 +2040,7 @@ export function catalogue(now: Now): Offer[] {
   offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
   offers.push(...taskRows(now.listed ?? []));
   offers.push(BESIDE);
+  offers.push(...briefRows(now.listed ?? []));
 
   const remove = "Remove the folder of this chat's branch";
   offers.push(
@@ -2258,6 +2265,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "showChat":
       doing.showChat(does.session);
+      return DID;
+    case "showBrief":
+      doing.showBrief(does.session);
       return DID;
     case "ignoreNeedsYou":
       return doing.ignoreNeedsYou(does.session);
@@ -2586,6 +2596,35 @@ export function taskRows(listed: readonly ListedChat[]): Offer[] {
 export function taskShowId(session: number): string {
   return `chat.show:${session}`;
 }
+
+/**
+ * **Brief, for each task** (#1494, V100-45): `chat.brief:<session>`, which opens the panel
+ * that shows the brief the task was sent, as it was sent. On the task's row menu in the Chats
+ * list, on its tab's menu where it has a tab of its own, and in the palette. **A task only**:
+ * a chat a person opened was sent nothing. It reads and changes nothing, so it is among a
+ * menu's ordinary rows and never under its line.
+ */
+export function briefRows(listed: readonly ListedChat[]): Offer[] {
+  return listed
+    .filter((chat) => chat.mode === "task")
+    .map((chat) => ({
+      ...can(
+        briefId(chat.session),
+        `Brief of ${chat.name}`,
+        { verb: "showBrief", session: chat.session },
+        chat.name,
+      ),
+      note: BRIEF_SAYS,
+    }));
+}
+
+/** The catalogue's id for a task's Brief row. */
+export function briefId(session: number): string {
+  return `chat.brief:${session}`;
+}
+
+/** What Brief shows that its title cannot fit. */
+export const BRIEF_SAYS = "What this task was sent, as it was sent. Read-only.";
 
 /** The catalogue's id for opening a chat beside the one in front. */
 export const BESIDE_ID = "chat.beside";
@@ -2988,6 +3027,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.pin:${what.tab}`,
           `tab.worklink:${what.tab}`,
           `tab.workunlink:${what.tab}`,
+          // A task that has a tab of its own: an id the catalogue lacks is not in the menu.
+          ...(what.session === undefined ? [] : [briefId(what.session)]),
         ],
         below: [
           `tab.restart:${what.tab}`,
@@ -2998,7 +3039,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       };
     case "listed":
       return {
-        above: [showId(what.session)],
+        above: [showId(what.session), briefId(what.session)],
         below: [stopId(what.session), stopBelowId(what.session)],
       };
     case "workspace":

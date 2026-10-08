@@ -39,6 +39,7 @@ import {
   titleOf,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows } from "./actions";
+import { BRIEF_SAYS, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
 import {
   noTabs,
@@ -118,6 +119,9 @@ function doing(): Doing & { calls: string[] } {
     }),
     stopChat: vi.fn((session: number, below: boolean) => {
       calls.push(`stopChat:${session}:${below}`);
+    }),
+    showBrief: vi.fn((session: number) => {
+      calls.push(`showBrief:${session}`);
     }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
@@ -2700,7 +2704,8 @@ describe("stopping a chat (#1448)", () => {
 
     const row = menuRows({ on: "listed", session: 2 }, offers);
     expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
-    expect(ids(row.above)).toEqual([]);
+    // Chat 2 is a task, so the one ordinary row its menu has is its Brief (#1494).
+    expect(ids(row.above)).toEqual([briefId(2)]);
 
     expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-2)).toEqual([
       stopId(2),
@@ -2800,5 +2805,51 @@ describe("what a queued chat's row says first (#1448)", () => {
     expect(title(["chat 4"], [], [], ["a key in config.env"])).toBe(
       "Show chat 3: chat 4 reported back",
     );
+  });
+});
+
+describe("Brief, for a task (#1494)", () => {
+  /** 1 is a chat a person opened; it asked for 2, which asked for 3. */
+  const three = [listed(1), listed(2, 1), listed(3, 2, false)];
+
+  it("has a row for each task, named for it, and none for a chat nobody sent a brief", () => {
+    const rows = briefRows(three);
+
+    expect(rows.map((row) => [row.id, row.title, row.available])).toEqual([
+      [briefId(2), "Brief of chat 2", true],
+      [briefId(3), "Brief of chat 3", true],
+    ]);
+    expect(rows.every((row) => row.note === BRIEF_SAYS)).toBe(true);
+    expect(briefId(2)).toBe("chat.brief:2");
+    // In the catalogue, so the palette finds it too.
+    const offers = catalogue(now({ listed: three }));
+    expect(ids(offers).filter((id) => id.startsWith("chat.brief:"))).toEqual([
+      briefId(2),
+      briefId(3),
+    ]);
+    expect(ids(catalogue(now())).filter((id) => id.startsWith("chat.brief:"))).toEqual([]);
+  });
+
+  it("is an ordinary row of the task's row menu and of its own tab's menu, never under the line", () => {
+    const offers = catalogued(catalogue(now({ listed: three })));
+
+    const task = menuRows({ on: "listed", session: 3 }, offers);
+    expect(ids(task.above)).toEqual([briefId(3)]);
+    expect(ids(task.below)).not.toContain(briefId(3));
+    // A chat a person opened has no Brief on its row or its tab.
+    expect(ids(menuRows({ on: "listed", session: 1 }, offers).above)).toEqual([]);
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).above).toContain(briefId(2));
+    expect(menuOn({ on: "chat", tab: 7 }).above.some((id) => id.startsWith("chat.brief:"))).toBe(
+      false,
+    );
+  });
+
+  it("opens the panel through the window's hands, and does nothing else", () => {
+    const hands = doing();
+    const offers = catalogue(now({ listed: three }));
+
+    void run(offers, briefId(3), hands);
+
+    expect(hands.calls).toEqual(["showBrief:3"]);
   });
 });

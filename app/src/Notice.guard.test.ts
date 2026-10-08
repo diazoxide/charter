@@ -80,6 +80,13 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: ACTION,
   },
+  "Brief.tsx": {
+    count: 2,
+    why:
+      READ_ONCE +
+      "; and what Copy did in the Brief panel, beside its button: replaced by the next press, " +
+      "not about something true now (#1494)",
+  },
   "BottomBar.tsx": {
     count: 2,
     why:

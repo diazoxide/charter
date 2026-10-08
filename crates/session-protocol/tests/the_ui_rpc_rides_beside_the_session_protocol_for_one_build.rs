@@ -129,6 +129,41 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
 }
 
 #[tokio::test]
+async fn a_task_s_brief_is_never_served_on_the_link_even_to_the_window() {
+    // #1494: the brief a task was sent is read over Tauri's IPC alone, even when a host is
+    // built with the app's whole command list.
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(BUILD, ["rename_chat", "task_brief"], commands.clone());
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    for of in [
+        json!({"chat": 3}),
+        json!({"dispatch": "01K6DISPATCH00000000000000"}),
+    ] {
+        let refused = ui
+            .call("task_brief", json!({"plane": 1, "of": of}))
+            .await
+            .unwrap();
+        assert!(refused.is_err(), "{refused:?}");
+    }
+
+    assert!(commands.asked.lock().unwrap().is_empty());
+    assert!(ui::WINDOW_ONLY.contains(&"task_brief"));
+}
+
+#[tokio::test]
 async fn a_window_of_another_build_is_refused_the_ui_rpc_and_keeps_the_session_protocol() {
     let commands = Commands::default();
     let client = linked(Scope::LocalUi, Some(commands.clone())).await;

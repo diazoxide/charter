@@ -761,6 +761,70 @@ pub fn cut(text: &str, most: usize) -> String {
     format!("{} [cut at {most} bytes]", &text[..end])
 }
 
+/// How much of a dispatch's brief its record holds ([`brief_sent`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BriefKept {
+    /// All of it, as it was sent.
+    Whole,
+    /// Its start: the store cut it at [`MOST_BRIEF_BYTES`] ([`cut`]).
+    Cut,
+    /// None of it: the record holds no brief.
+    Missing,
+}
+
+/// The brief of a dispatch, read back from its record (#1494).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentBrief {
+    /// **The brief as it was sent, byte for byte**, where the record holds it whole. For one
+    /// the store cut, the part it kept, without the store's own mark: every byte here is one
+    /// the asking chat sent.
+    pub text: String,
+    pub kept: BriefKept,
+}
+
+/// **The brief `record`'s dispatch was sent** (#1494, V100-45): the record's own text, which
+/// the app wrote as it started the chat, and nothing derived from it.
+///
+/// A brief that could start a chat is always held whole: a first message is at most
+/// [`crate::handoff::FIRST_MESSAGE_MAX_BYTES`], under [`MOST_BRIEF_BYTES`]. So a text that
+/// ends in [`cut`]'s mark, with the cap's worth of bytes before it, is one the store cut, and
+/// no brief the app sent reads as that. The mark is the store's word and not the chat's: it
+/// is taken off, and said as [`BriefKept::Cut`].
+pub fn brief_sent(record: &Record) -> SentBrief {
+    let stored = record.brief.as_str();
+    if stored.is_empty() {
+        return SentBrief {
+            text: String::new(),
+            kept: BriefKept::Missing,
+        };
+    }
+    let mark = format!(" [cut at {MOST_BRIEF_BYTES} bytes]");
+    // Cut at the cap, or up to three bytes before it where the cap fell inside a character.
+    let kept_by_a_cut = (MOST_BRIEF_BYTES - 3)..=MOST_BRIEF_BYTES;
+    match stored.strip_suffix(mark.as_str()) {
+        Some(start) if kept_by_a_cut.contains(&start.len()) => SentBrief {
+            text: start.to_owned(),
+            kept: BriefKept::Cut,
+        },
+        _ => SentBrief {
+            text: stored.to_owned(),
+            kept: BriefKept::Whole,
+        },
+    }
+}
+
+/// Whether `record` may be put on the screen **but for its brief**: every other text in it
+/// passes [`sound`]. What the brief's own reader asks (#1494): a brief is shown there as
+/// inert text whatever it holds ([`crate::dispatchgrant::inert`]), so a character in it that
+/// draws as nothing is written out and read, where a name holding one is still refused.
+pub fn sound_but_for_its_brief(record: &Record) -> bool {
+    record.brief.len() <= MOST_BRIEF_BYTES + MARK_ROOM
+        && sound(&Record {
+            brief: String::new(),
+            ..record.clone()
+        })
+}
+
 /// `record` as the store writes it: every text held to its cap ([`cut`]), so **a record is
 /// never written larger than it can be read back** and a long brief or report never costs the
 /// dispatch its record. Applied to what the app hands in, at [`open`] and to a [`close`]'s

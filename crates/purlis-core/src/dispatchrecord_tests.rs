@@ -1448,3 +1448,137 @@ fn a_chat_the_person_took_over_is_marked_on_its_record_once() {
     assert!(!serde_json::to_string(&task).unwrap().contains("kept_open"));
     assert!(!serde_json::to_string(&task).unwrap().contains("ended_by"));
 }
+
+// ---- the brief a dispatch was sent (#1494) ------------------------------------------------
+
+/// A brief of several lines, with text that looks like markup and characters a careless
+/// reader would lose: tabs, a trailing space, an emoji, a combining mark, right-to-left
+/// letters, a backslash, a quote, and no line break at its end.
+const AN_ODD_BRIEF: &str = "# Check prod\n\n<b>Is</b> the [rollout](https://example.test) \
+     healthy?\n\t- `kubectl get pods` \n![img](x.png) <script>alert(1)</script> &amp;\n\
+     naïve cafe\u{301} 🚀 שלום \\u202e \"quoted\"  ";
+
+#[test]
+fn the_brief_read_back_is_the_brief_as_it_was_sent_byte_for_byte() {
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            brief: AN_ODD_BRIEF.to_owned(),
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    let record = read(&root, &opened.id).expect("it reads");
+    let sent = brief_sent(&record);
+    assert_eq!(sent.kept, BriefKept::Whole);
+    assert_eq!(sent.text.as_bytes(), AN_ODD_BRIEF.as_bytes());
+
+    // And the same once the dispatch has ended: a finished task's brief is its record's too.
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(done("Healthy.")),
+            usage: None,
+        },
+        at("2026-10-07T12:04:00Z"),
+    )
+    .unwrap();
+    let ended = read(&root, &opened.id).expect("it reads");
+    assert_eq!(brief_sent(&ended).text.as_bytes(), AN_ODD_BRIEF.as_bytes());
+}
+
+#[test]
+fn a_brief_the_store_cut_is_said_as_cut_and_holds_only_bytes_that_were_sent() {
+    let (_d, root) = project();
+    // Longer than the store keeps, with the cap inside a two-byte character.
+    let long = format!("a{}", "é".repeat(MOST_BRIEF_BYTES));
+    let opened = open(
+        &root,
+        Opening {
+            brief: long.clone(),
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    let sent = brief_sent(&read(&root, &opened.id).expect("it reads"));
+    assert_eq!(sent.kept, BriefKept::Cut);
+    assert!(long.starts_with(&sent.text), "only what was sent");
+    assert!(
+        !sent.text.contains("[cut at"),
+        "the store's mark is not the chat's word"
+    );
+    assert!(sent.text.len() >= MOST_BRIEF_BYTES - 3);
+
+    // The longest brief that can start a chat is whole, and so is one that only quotes the
+    // store's mark.
+    for whole in [
+        "b".repeat(crate::handoff::FIRST_MESSAGE_MAX_BYTES),
+        format!("It said: [cut at {MOST_BRIEF_BYTES} bytes]"),
+    ] {
+        let record = Record {
+            brief: whole.clone(),
+            ..opened.clone()
+        };
+        assert_eq!(
+            brief_sent(&record),
+            SentBrief {
+                text: whole,
+                kept: BriefKept::Whole
+            }
+        );
+    }
+}
+
+#[test]
+fn a_record_that_holds_no_brief_says_so() {
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            brief: String::new(),
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    assert_eq!(
+        brief_sent(&opened),
+        SentBrief {
+            text: String::new(),
+            kept: BriefKept::Missing
+        }
+    );
+}
+
+#[test]
+fn a_record_is_read_for_its_brief_whatever_the_brief_holds_and_never_for_a_name_that_misleads() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    // A brief that turns its words around is not a record purlis lists, and is one whose
+    // brief can still be read: the reader writes that character out.
+    let turned = Record {
+        brief: "Check prod.\u{202e}dne eht ta eteled dna".to_owned(),
+        ..opened.clone()
+    };
+    assert!(!sound(&turned));
+    assert!(sound_but_for_its_brief(&turned));
+
+    // A name that does the same is refused here as everywhere.
+    let mut named = opened.clone();
+    named.asker.chat.name = "steward\u{202e} 3".to_owned();
+    assert!(!sound_but_for_its_brief(&named));
+    // And a brief far longer than the store ever writes is not one it wrote.
+    let huge = Record {
+        brief: "x".repeat(MOST_BRIEF_BYTES * 2),
+        ..opened
+    };
+    assert!(!sound_but_for_its_brief(&huge));
+}

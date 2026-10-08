@@ -1301,6 +1301,45 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* **Brief, on the breadcrumb line** (#1494, `Brief.tsx`): one small icon button after the
+   breadcrumb, in the line's own quiet box, as tall as the breadcrumb beside it.
+
+   **An item of the line, and not part of the breadcrumb**, so the rule above already holds it:
+   it gives way with the gauge and the harness's name (`.pane-chips:has(.pane-crumbs) >
+   :not(.pane-crumbs)`), and is cut at its edge before the state word loses a letter. Its
+   padding does not shrink; the path's names give that room, never the state. */
+.pane-brief {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  align-self: stretch;
+  justify-content: center;
+  padding: 0 0.3rem;
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+  cursor: pointer;
+}
+
+.pane-brief svg {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.pane-brief:hover {
+  color: var(--text-primary);
+}
+
+.pane-brief:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* **Words for a screen reader and for nobody else**: what a drawn separator stands for. Clipped
    to nothing rather than hidden, so it is read where it stands. */
 .hidden-words {
@@ -2876,6 +2915,7 @@ h2.sidebar-title .node-icon {
 
 .chats-section .finished-name,
 .chats-section .finished-count,
+.chats-section .finished-brief,
 .chats-section .finished-reopen,
 .chats-section .finished-clear {
   display: inline-flex;
@@ -2923,11 +2963,13 @@ h2.sidebar-title .node-icon {
 
 .chats-section .finished-name:hover,
 .chats-section .finished-count:hover,
+.chats-section .finished-brief:hover,
 .chats-section .finished-reopen:hover:not([aria-disabled="true"]),
 .chats-section .finished-clear:hover {
   background: var(--surface-hover);
 }
 
+.chats-section .finished-brief,
 .chats-section .finished-reopen,
 .chats-section .finished-clear {
   border: 1px solid var(--border-subtle);
@@ -3333,6 +3375,71 @@ h2.sidebar-title .node-icon {
   width: min(34rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
   padding-bottom: 0;
+}
+
+/* **The Brief panel** (`Brief.tsx`, #1494): the brief a task was sent, read back.
+
+   - **It fits the window**, and its title, its facts and its two buttons stay put: a column,
+     in which the brief's own box is the row that gives way.
+   - **The brief's box scrolls, and the panel cuts nothing**: every line of a long brief is
+     reached by scrolling the box. Lines wrap, and a word longer than the box breaks, so
+     nothing is ever off to the side.
+   - **Text, set as text**: one face, the lines and the spaces as they were sent. */
+.warning.brief-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(44rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+}
+
+.brief-panel .brief-facts {
+  margin: 0 0 0.75rem;
+}
+
+.brief-panel .honest {
+  margin: 0 0 0.6rem;
+}
+
+.brief-panel .brief-whose {
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.brief-panel .brief-text {
+  flex: 1 1 auto;
+  min-height: 4rem;
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.6rem;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.brief-panel .brief-text:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.brief-panel .answer {
+  flex: none;
+  align-items: center;
+}
+
+/* What Copy did, said at the row's start: the buttons do not move when it is said. */
+.brief-panel .brief-copied {
+  margin-right: auto;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
 }
 
 .ask-persona .ui-setting-control > textarea.ui-field {
