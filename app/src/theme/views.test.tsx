@@ -756,6 +756,7 @@ const ACTIVITY: Activity = {
     to_key: to === "steward 3" ? "01K6STEWARD" : `01K6${to}`,
     text: kind === "answer" || kind === "not listed" ? "" : text,
     by_person: n === 0 && dispatch === "01K6D1",
+    asks: false,
     by_purlis: kind === "stopped" || kind === "not listed",
     // The answer's words were kept for 30 days and are gone.
     expired: kind === "answer",
@@ -974,6 +975,31 @@ const STATES: State[] = [
     drawn: /lint's report also names deploy\/values\.yaml/,
     then: async () => {
       await userEvent.click(await screen.findByRole("button", { name: "Show all" }));
+    },
+  },
+  {
+    // #1496: a question its task is paused on, with the form that answers it open, and an
+    // answer the person gave to an earlier one.
+    name: "a chat's activity, a question being answered",
+    view: { from: null, view: "activity", key: "3" },
+    answers: {
+      activity: {
+        ...ACTIVITY,
+        undrawn: 0,
+        lines: [
+          ACTIVITY.lines[0],
+          { ...ACTIVITY.lines[2], n: 1 },
+          { ...ACTIVITY.lines[3], n: 2, text: "prod-2.", expired: false, by_person: true },
+          { ...ACTIVITY.lines[2], n: 3, text: "Which region?", asks: true },
+        ],
+      },
+      activity_chat: 3,
+    },
+    drawn: /Enter sends, Shift\+Enter starts a new line/,
+    then: async () => {
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Answer check prod's question" }),
+      );
     },
   },
   {

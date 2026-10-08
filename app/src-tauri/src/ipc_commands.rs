@@ -139,6 +139,8 @@ macro_rules! app_commands {
                 dispatches::dispatch_worktree_discard,
                 activity::activity,
                 activity::activity_chat,
+                dispatched::task_question,
+                dispatched::answer_task_question,
                 resume_session,
                 autosave::plane_fetch,
                 saving::plane_saving,

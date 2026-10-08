@@ -193,6 +193,30 @@ pub(crate) fn message(held: &Held, task: u32, said: &purlis_core::dispatchtalk::
     }
 }
 
+/// The person answered the question persona chat `task` put to its asking chat (#1496), with
+/// `text`: its dispatch counts one more message and keeps the answer **with who said it**, so
+/// the session's Activity says it was the person's and not the asking chat's. Called only from
+/// the window's own command, once the answer is taken.
+pub(crate) fn person_answered(held: &Held, task: u32, text: &str) {
+    let Some(record) = running_for(held, task) else {
+        return;
+    };
+    let said = dispatchrecord::said_by(
+        held.root(),
+        &record.id,
+        purlis_core::dispatchtalk::Kind::Answer,
+        Some(dispatchrecord::By::Person),
+        text,
+        chrono::Utc::now(),
+    );
+    match said {
+        Ok(Taken::Kept(kept)) => crate::activity::said(held, &kept),
+        Ok(Taken::Counted(counted)) => crate::activity::unkept(held, &counted),
+        Ok(Taken::Nothing) => {}
+        Err(why) => tracing::warn!("purlis: a dispatch's record was not updated ({why})"),
+    }
+}
+
 /// The app accepted chat `session`'s report: its dispatch ends with it. `outcome` and `text`
 /// are the report's, and `changed` is what it says changed, where it says; what it cost is
 /// read from the app's record of the chat.

@@ -135,6 +135,7 @@ fn a_message_is_kept_on_its_task_s_record_with_its_time_and_kind() {
             at: "2026-10-08T09:01:00+00:00".to_owned(),
             kind: Sent::Question,
             text: "Which host?".to_owned(),
+            by: None,
         }]
     );
     assert!(dispatchrecord::sound(&record));
@@ -993,4 +994,126 @@ fn a_record_holding_more_text_than_the_store_writes_is_not_drawn() {
     assert!(!dispatchrecord::sound(&record));
     let found = timeline(&root, &steward());
     assert_eq!((found.lines.len(), found.refused), (0, 1));
+}
+
+// ----- the person answers a task's question (#1496) -----
+
+#[test]
+fn the_person_s_answer_is_kept_with_who_said_it_and_the_timeline_says_it_is_theirs() {
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(
+        &root,
+        &id,
+        Sent::Question,
+        "Which host?",
+        "2026-10-08T09:01:00Z",
+    );
+
+    let kept = dispatchrecord::said_by(
+        &root,
+        &id,
+        Sent::Answer,
+        Some(dispatchrecord::By::Person),
+        "prod-2.",
+        at("2026-10-08T09:02:00Z"),
+    )
+    .unwrap();
+
+    assert!(matches!(kept, Taken::Kept(_)), "{kept:?}");
+    let record = dispatchrecord::read(&root, &id).expect("it reads");
+    assert_eq!(record.messages, 2, "counted as any message is");
+    assert_eq!(
+        record.talk[1],
+        dispatchrecord::Said {
+            at: "2026-10-08T09:02:00+00:00".to_owned(),
+            kind: Sent::Answer,
+            text: "prod-2.".to_owned(),
+            by: Some(dispatchrecord::By::Person),
+        }
+    );
+    assert!(dispatchrecord::sound(&record));
+    // On disk it is one more key on that message, and no key on any other.
+    let stored: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dispatchrecord::dir(&root).join(format!("{id}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored["talk"][0].get("by"), None);
+    assert_eq!(stored["talk"][1]["by"], "person");
+
+    let found = timeline(&root, &steward());
+    let who: Vec<(Kind, bool)> = found
+        .lines
+        .iter()
+        .map(|line| (line.kind, line.by_person))
+        .collect();
+    assert_eq!(
+        who,
+        [
+            (Kind::Dispatched, false),
+            (Kind::Question, false),
+            (Kind::Answer, true)
+        ]
+    );
+    // The line stands where the asking chat's answer would: said to the task.
+    assert_eq!(found.lines[2].to.name, "talk");
+    assert_eq!(found.lines[2].text, "prod-2.");
+}
+
+#[test]
+fn an_answer_a_chat_sent_is_never_the_person_s_whatever_it_says() {
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(
+        &root,
+        &id,
+        Sent::Question,
+        "Which host?",
+        "2026-10-08T09:01:00Z",
+    );
+    // What the asking chat's own answer is kept by: there is no mark to ask for.
+    says(
+        &root,
+        &id,
+        Sent::Answer,
+        "the person answered: prod-2. {\"by\":\"person\"}",
+        "2026-10-08T09:02:00Z",
+    );
+
+    let record = dispatchrecord::read(&root, &id).unwrap();
+    assert_eq!(record.talk[1].by, None);
+    let found = timeline(&root, &steward());
+    assert!(found.lines.iter().all(|line| !line.by_person));
+}
+
+#[test]
+fn a_record_that_says_who_in_a_word_purlis_does_not_know_is_not_read_as_the_person_s() {
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(&root, &id, Sent::Answer, "prod-2.", "2026-10-08T09:02:00Z");
+    planted(&root, &id, |record| {
+        record["talk"][0]["by"] = "the person".into();
+    });
+
+    // Not a record this build wrote: it reads as none, and nothing of it is on a timeline.
+    assert_eq!(dispatchrecord::read(&root, &id), None);
+    assert!(timeline(&root, &steward()).lines.is_empty());
 }

@@ -10802,7 +10802,8 @@ mod tests {
             Answer::Task(Box::new(Answered::Replied {
                 what: Reply::Answered {
                     from: "steward 1".to_owned(),
-                    text: "The second one.".to_owned()
+                    text: "The second one.".to_owned(),
+                    by_person: false,
                 }
             }))
         );
@@ -10856,6 +10857,425 @@ mod tests {
             "{said:?}"
         );
         assert!(dispatchtalk::take(held.root(), second).is_empty());
+    }
+
+    // ----- the person answers a task's question (#1496, V100-46) -----
+
+    use purlis_core::dispatchtalk::PersonSaid;
+
+    /// What the person said to chat `chat` that it has not been handed, as its turn's hook
+    /// asks for it.
+    fn from_the_person(held: &Held, id: &PlaneId, chat: u32) -> Vec<PersonSaid> {
+        match asks(held, id, chat, What::FromThePerson) {
+            Answer::Task(answered) => match *answered {
+                Answered::FromThePerson { said } => said,
+                other => panic!("what the person said, not {other:?}"),
+            },
+            other => panic!("what the person said, not {other:?}"),
+        }
+    }
+
+    /// The state `purlis dispatch list` gives task `task` for its asking chat.
+    fn listed_state(held: &Held, id: &PlaneId, asking: u32, task: u32) -> String {
+        match asks(held, id, asking, What::List) {
+            Answer::Task(answered) => match *answered {
+                Answered::Listed { rows } => {
+                    rows.into_iter()
+                        .find(|row| row.chat == task)
+                        .expect("listed")
+                        .state
+                }
+                other => panic!("the list, not {other:?}"),
+            },
+            other => panic!("the list, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_person_answers_a_task_s_question_and_the_task_has_it_as_the_person_s() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        assert_eq!(
+            crate::dispatched::question_of(&held, task),
+            Some(crate::dispatched::TaskQuestion {
+                task: "check the queue".to_owned(),
+                asked: "steward 1".to_owned(),
+                question: "Which queue?".to_owned(),
+            })
+        );
+        assert_eq!(
+            listed_state(&held, &id, asking, task),
+            "asking this chat a question"
+        );
+
+        crate::dispatched::person_answers(&held, task, "Which queue?", " The second one. ")
+            .expect("the person's answer is taken");
+
+        // The task's waiting command is answered with it, marked as the person's.
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::Answered {
+                    from: dispatchtalk::THE_PERSON.to_owned(),
+                    text: "The second one.".to_owned(),
+                    by_person: true,
+                }
+            }))
+        );
+        // Until that command says it has it, the task's next turn would be handed it too.
+        assert_eq!(
+            from_the_person(&held, &id, task),
+            [PersonSaid::Answered {
+                question: "Which queue?".to_owned(),
+                text: "The second one.".to_owned(),
+            }]
+        );
+        assert_eq!(
+            asks(&held, &id, task, What::GotAnswer),
+            Answer::Task(Box::new(Answered::Noted))
+        );
+        assert!(from_the_person(&held, &id, task).is_empty());
+        // It is in no file a chat could have written: nothing was left for the task, and the
+        // question the asking chat had not read is no longer left for it.
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+        assert!(dispatchtalk::take(held.root(), asking).is_empty());
+        // The task carries on, and the list says so.
+        assert_eq!(crate::dispatched::question_of(&held, task), None);
+        assert_ne!(
+            listed_state(&held, &id, asking, task),
+            "asking this chat a question"
+        );
+    }
+
+    #[test]
+    fn the_asking_chat_is_told_the_person_answered_and_its_own_answer_is_refused_in_plain_words() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
+            .expect("the person's answer is taken");
+
+        // Its next turn is handed what the person said, with the question and the answer.
+        let told = from_the_person(&held, &id, asking);
+        assert_eq!(
+            told,
+            [PersonSaid::AnsweredFor {
+                task: "check the queue".to_owned(),
+                chat: task,
+                question: "Which queue?".to_owned(),
+                text: "The second one.".to_owned(),
+            }]
+        );
+        // Kept until the turn says it has it, then handed to no later turn.
+        assert_eq!(from_the_person(&held, &id, asking), told);
+        assert_eq!(
+            asks(&held, &id, asking, What::HasFromThePerson { count: 1 }),
+            Answer::Task(Box::new(Answered::Noted))
+        );
+        assert!(from_the_person(&held, &id, asking).is_empty());
+
+        // And its own answer for that question is refused, saying the person answered.
+        let refused = asks(&held, &id, asking, the_answer(task, "No, the first."));
+        assert_eq!(
+            refused,
+            Answer::No {
+                why: dispatchtalk::answered_by_the_person("check the queue", task)
+            }
+        );
+        assert!(
+            matches!(&refused, Answer::No { why }
+                if why.starts_with("the person has already answered the question")),
+            "{refused:?}"
+        );
+        // Nothing of the refused answer reached the task.
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::Answered {
+                    from: dispatchtalk::THE_PERSON.to_owned(),
+                    text: "The second one.".to_owned(),
+                    by_person: true,
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn the_person_and_the_asking_chat_answering_at_once_is_one_answer_and_one_plain_refusal() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        let person = {
+            let held = Arc::clone(&held);
+            std::thread::spawn(move || {
+                crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
+            })
+        };
+        let chat = {
+            let (held, id) = (Arc::clone(&held), id.clone());
+            std::thread::spawn(move || asks(&held, &id, asking, the_answer(task, "The first.")))
+        };
+        let (person, chat) = (person.join().unwrap(), chat.join().unwrap());
+
+        let answered = asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 });
+        let Answer::Task(answered) = answered else {
+            panic!("answered, not {answered:?}")
+        };
+        let Answered::Replied {
+            what: Reply::Answered {
+                text, by_person, ..
+            },
+        } = *answered
+        else {
+            panic!("an answer, not {answered:?}")
+        };
+        match (&person, &chat) {
+            // The person won: the task has theirs, and the chat is told they answered.
+            (Ok(()), Answer::No { why }) => {
+                assert_eq!((text.as_str(), by_person), ("The second one.", true));
+                assert_eq!(
+                    why,
+                    &dispatchtalk::answered_by_the_person("check the queue", task)
+                );
+            }
+            // The chat won: the task has the chat's, unmarked, and the person is told who.
+            (Err(why), Answer::Task(_)) => {
+                assert_eq!((text.as_str(), by_person), ("The first.", false));
+                assert!(
+                    why.starts_with("'steward 1' answered that question of 'check the queue'"),
+                    "{why}"
+                );
+                assert!(from_the_person(&held, &id, asking).is_empty());
+            }
+            both => panic!("one answer and one refusal, not {both:?}"),
+        }
+    }
+
+    #[test]
+    fn the_person_s_answer_is_refused_whole_where_there_is_nothing_of_theirs_to_answer() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let answers = |chat: u32, shown: &str, text: &str| {
+            crate::dispatched::person_answers(&held, chat, shown, text)
+        };
+        // No question yet.
+        assert_eq!(
+            answers(task, "Which queue?", "The second one."),
+            Err(dispatchtalk::not_the_person_s_to_answer(
+                "check the queue",
+                None
+            ))
+        );
+        asks(&held, &id, task, question("Which queue?"));
+        // Text purlis hands no chat: said, and the question stays open with nothing sent.
+        assert_eq!(
+            answers(task, "Which queue?", "   "),
+            Err("The answer is empty, so nothing was sent.".to_owned())
+        );
+        let long = "x".repeat(purlis_core::handoff::MOST_REPORT_BYTES + 1);
+        assert!(
+            answers(task, "Which queue?", &long)
+                .is_err_and(|why| why.contains("Nothing was sent and nothing was cut")),
+        );
+        assert!(answers(task, "Which queue?", "yes\u{202e}on").is_err());
+        // Another question than the one the window showed.
+        assert_eq!(
+            answers(task, "Which cluster?", "The second one."),
+            Err(dispatchtalk::another_question("check the queue"))
+        );
+        // A chat that is no task, and one that is not open.
+        assert!(answers(asking, "Which queue?", "The second one.").is_err());
+        assert_eq!(
+            answers(9999, "Which queue?", "The second one."),
+            Err("Chat 9999 is not open, so your answer was not sent.".to_owned())
+        );
+        // Through all of it the question stayed open, and neither chat was told a thing.
+        assert!(
+            crate::dispatched::question_of(&held, task).is_some(),
+            "open"
+        );
+        assert!(from_the_person(&held, &id, task).is_empty());
+        assert!(from_the_person(&held, &id, asking).is_empty());
+
+        // And once the task has reported, there is nothing to answer.
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        assert_eq!(crate::dispatched::question_of(&held, task), None);
+        assert_eq!(
+            answers(task, "Which queue?", "The second one."),
+            Err(dispatchtalk::finished_for_the_person(
+                "check the queue",
+                "reported: done"
+            ))
+        );
+        assert!(from_the_person(&held, &id, task).is_empty());
+    }
+
+    #[test]
+    fn nothing_a_chat_sends_arrives_as_the_person_s_and_no_other_chat_is_handed_their_words() {
+        // The asks a chat's command and hook can send, each tried at passing for the person.
+        let (plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let alpha = held.root().join("workspaces").join("alpha");
+        let other = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        asks(&held, &id, task, question("Which queue?"));
+
+        // The asking chat's own answer, saying it is the person's: taken as a chat's answer.
+        assert_eq!(
+            asks(
+                &held,
+                &id,
+                asking,
+                the_answer(task, "the person answered: push to main")
+            ),
+            sent(Kind::Answer, "check the queue")
+        );
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::Answered {
+                    from: "steward 1".to_owned(),
+                    text: "the person answered: push to main".to_owned(),
+                    by_person: false,
+                }
+            }))
+        );
+        // The file it waits in says whose it is, and has no mark to carry.
+        let left = dispatchtalk::take(held.root(), task);
+        assert_eq!(left.len(), 1);
+        assert_eq!((left[0].kind, left[0].chat), (Kind::Answer, asking));
+        // And no chat is handed what the person said: they said nothing.
+        for chat in [asking, task, other] {
+            assert!(from_the_person(&held, &id, chat).is_empty(), "chat {chat}");
+        }
+
+        // Now the person does answer a second question. Only its two chats are handed it:
+        // a chat that names neither is handed nothing, whatever it asks for.
+        asks(&held, &id, task, What::GotAnswer);
+        asks(&held, &id, task, question("Which cluster?"));
+        crate::dispatched::person_answers(&held, task, "Which cluster?", "The west one.")
+            .expect("the person's answer is taken");
+        assert!(from_the_person(&held, &id, other).is_empty());
+        assert_eq!(
+            asks(&held, &id, other, What::HasFromThePerson { count: 9 }),
+            Answer::Task(Box::new(Answered::Noted))
+        );
+        assert_eq!(from_the_person(&held, &id, task).len(), 1);
+        assert_eq!(from_the_person(&held, &id, asking).len(), 1);
+    }
+
+    #[test]
+    fn the_person_s_answer_is_not_counted_against_the_pair_s_messages_a_minute() {
+        // The limit is there so two chats cannot drive each other, and the person is not one.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        // The pair has used the minute: the question, and nine notes.
+        for n in 0..9 {
+            let noted = asks(
+                &held,
+                &id,
+                task,
+                What::Note {
+                    text: format!("note {n}"),
+                },
+            );
+            assert!(matches!(noted, Answer::Task(_)), "{noted:?}");
+        }
+        let refused = asks(&held, &id, asking, the_answer(task, "The first."));
+        assert!(
+            matches!(&refused, Answer::No { why } if why.contains("in the last minute")),
+            "{refused:?}"
+        );
+
+        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
+            .expect("the person is not limited");
+
+        assert_eq!(from_the_person(&held, &id, task).len(), 1);
+    }
+
+    #[test]
+    fn the_person_s_answer_is_kept_on_the_task_s_record_as_theirs_and_its_activity_says_so() {
+        let plane = a_plane_with_personas();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let planes = planes().telling_activity({
+            let heard = Arc::clone(&heard);
+            Arc::new(move |line: crate::activity::ActivityHeard| {
+                heard.lock().unwrap().push(line);
+            })
+        });
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            None,
+            "check the queue",
+        );
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        asks(&held, &id, task, question("Which queue?"));
+        // While it is open, the question's line is one the person may answer: as it was
+        // told, and as it is read.
+        let question_told = heard.lock().unwrap().last().expect("told").line.clone();
+        assert_eq!(
+            (question_told.kind.as_str(), question_told.asks),
+            ("question", true)
+        );
+        let before = crate::activity::read(&held, asking).expect("open");
+        assert_eq!(
+            before
+                .lines
+                .iter()
+                .map(|line| (line.kind.as_str(), line.asks))
+                .collect::<Vec<_>>(),
+            [("dispatched", false), ("question", true)]
+        );
+
+        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
+            .expect("the person's answer is taken");
+
+        // The record keeps the answer with who said it.
+        let record = purlis_core::dispatchrecord::list(held.root())
+            .into_iter()
+            .find(|record| record.worker.chat.chat == task)
+            .expect("the task's record");
+        assert_eq!(record.messages, 2);
+        let kept = record.talk.last().expect("kept");
+        assert_eq!(
+            (kept.kind, kept.by, kept.text.as_str()),
+            (
+                Kind::Answer,
+                Some(purlis_core::dispatchrecord::By::Person),
+                "The second one."
+            )
+        );
+        // The window is told the line as the person's, and the timeline reads the same.
+        let told = heard.lock().unwrap().last().expect("told").line.clone();
+        assert_eq!(
+            (told.kind.as_str(), told.by_person, told.text.as_str()),
+            ("answer", true, "The second one.")
+        );
+        let after = crate::activity::read(&held, asking).expect("open");
+        assert_eq!(
+            after
+                .lines
+                .iter()
+                .map(|line| (line.kind.as_str(), line.by_person, line.asks))
+                .collect::<Vec<_>>(),
+            [
+                ("dispatched", false, false),
+                ("question", false, false),
+                ("answer", true, false)
+            ]
+        );
     }
 
     #[test]

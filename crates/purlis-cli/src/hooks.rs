@@ -343,6 +343,10 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
             // (#1442): quoted as data, as a report is.
             let messages = purlis_core::dispatchtalk::take(hook.root, chat);
             parts.extend(purlis_core::dispatchtalk::context(&messages));
+            // And what the person said to it in the purlis window (#1496): their answer to a
+            // question this task asked, or word that they answered one a task of its asked.
+            // The app's own to say, so it is asked of the app and read from no file.
+            parts.extend(crate::dispatch::from_the_person());
         }
         // One line when where this chat is working has changed since it was last told (#1450),
         // by the app's own count of what it was told.

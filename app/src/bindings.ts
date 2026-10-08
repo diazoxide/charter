@@ -906,6 +906,33 @@ export const commands = {
 	 */
 	activityChat: (plane: PlaneId, key: string) => typedError<number | null, string>(__TAURI_INVOKE("activity_chat", { plane, key })),
 	/**
+	 *  **The question a task is paused on, for the window to show before the person answers it**
+	 *  (#1496): chat `session`'s question to its asking chat. `null` where there is none to
+	 *  answer: the chat is no task, has reported or ended, or asks nothing now.
+	 */
+	taskQuestion: (plane: PlaneId, session: number) => typedError<{
+	/**  The task, by the name the person sees it under. */
+	task: string,
+	/**  The chat it asked, by its name. */
+	asked: string,
+	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
+	question: string,
+} | null, string>(__TAURI_INVOKE("task_question", { plane, session })),
+	/**
+	 *  **The person answers the question a task put to its asking chat** (#1496, V100-46): chat
+	 *  `session`'s question, which is `question` as the window showed it, with `text`.
+	 * 
+	 *  The task is handed the answer as the person's and carries on; the asking chat is told the
+	 *  person answered and does not answer again. An error is a sentence for the person, and
+	 *  nothing was sent: the question was answered first by the asking chat, the task has moved
+	 *  on, or the text is empty, too long or holds a character purlis hands to no chat.
+	 * 
+	 *  **The window's alone.** No chat's command, hook or tool reaches it, and no link serves it
+	 *  (`purlis_session_protocol::ui::WINDOW_ONLY`): what it sends reaches a chat marked as the
+	 *  person's. On a blocking thread, as it writes the dispatch's record.
+	 */
+	answerTaskQuestion: (plane: PlaneId, session: number, question: string, text: string) => typedError<null, string>(__TAURI_INVOKE("answer_task_question", { plane, session, question, text })),
+	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
 	 *  (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
@@ -2066,10 +2093,17 @@ export type ActivityLine = {
 	 */
 	text: string,
 	/**
-	 *  The person dispatched the task themselves from the asking chat's tab: on the
-	 *  dispatch's own line, whose words are theirs and not that chat's.
+	 *  The person said it, and not the chat it is `from`: on a dispatch's own line, they
+	 *  dispatched the task themselves from that chat's tab; on an answer, they answered the
+	 *  task's question in the window (#1496). The words are theirs.
 	 */
 	by_person: boolean,
+	/**
+	 *  **A question its task is paused on now** (#1496): the person may answer it. Said by the
+	 *  app from what it holds open as the line is read or told, and never by the record. An
+	 *  answer, a report or an ending told later for the same dispatch closes it in the tab.
+	 */
+	asks: boolean,
 	/**
 	 *  purlis wrote the line, and not the task: an ending it recorded in a chat's place, and
 	 *  a `not listed` line.
@@ -5847,6 +5881,16 @@ export type SubjectCurations = {
 	left_out: LeftOut[],
 	/**  Why this subject has no list at all — a workspace deleted a moment ago, say. */
 	trouble: string | null,
+};
+
+/**  A question a task is paused on, as the window shows it to be answered (#1496). */
+export type TaskQuestion = {
+	/**  The task, by the name the person sees it under. */
+	task: string,
+	/**  The chat it asked, by its name. */
+	asked: string,
+	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
+	question: string,
 };
 
 /**

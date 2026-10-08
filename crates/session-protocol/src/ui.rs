@@ -85,7 +85,12 @@ pub struct Server {
 /// `answer_ask` answers a chat's ask as the operator (HP-6). Only a human scope answers one (V16,
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
-pub const WINDOW_ONLY: &[&str] = &["answer_ask"];
+///
+/// `answer_task_question` answers, as the person, a question a task put to its asking chat
+/// (#1496). What it sends reaches a chat marked as the person's own words, so it is held to
+/// what `answer_ask` is: the window's own IPC, and no link until the session protocol has a
+/// scoped message for it.
+pub const WINDOW_ONLY: &[&str] = &["answer_ask", "answer_task_question"];
 
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host

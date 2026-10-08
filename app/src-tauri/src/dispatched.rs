@@ -52,6 +52,25 @@
 //! **The person's words in a task's pane are remembered as one bit** ([`person_typed`]), which
 //! its report carries as "the operator stepped in". Nothing they typed is kept.
 //!
+//! # The person answers a task's question (#1496, V100-46)
+//!
+//! A question a task put to its asking chat may be answered by the person, in the window
+//! ([`answer_task_question`], [`person_answers`]). It is taken under the hold the asking chat's
+//! own answer is taken under, so the question is answered once and whoever comes second is
+//! told who answered. The task is handed the answer as the person's; the asking chat is told
+//! the person answered, with the question and the answer, and its own answer is refused from
+//! then on.
+//!
+//! **Only the window can say the person answered.** [`answer_task_question`] is a command of
+//! the window's and of nothing else: it is in no ask a chat's command or hook can send
+//! ([`answer`] has no arm that reaches [`person_answers`]), and no link serves it
+//! (`purlis_session_protocol::ui::WINDOW_ONLY`). What the person said is kept in this
+//! module's memory and handed to each chat on the app's own channel, to the command of the
+//! task's that waits or to the chat's next turn when its hook asks ([`What::FromThePerson`]):
+//! it is left in no file, because the folder a chat's messages wait in is one a chat may be
+//! able to write. Nothing of it is typed into a pane: each chat is typed purlis's one line,
+//! where it may be typed one.
+//!
 //! # A wait holds a thread, never the listener (D-1441-14)
 //!
 //! [`wait`] runs on the thread the hook channel gives each connection, so the listener and
@@ -228,6 +247,17 @@ pub fn answer(held: &Held, asked: &Asked, connection: u64) -> Answer {
             }
             task(Answered::Noted)
         }
+        // What the person said to the chat that asks (#1496), and to no other: the chat is
+        // the one whose token the line carried. Read, and kept until it says it has it.
+        What::FromThePerson => task(Answered::FromThePerson {
+            said: held.tasks().ledger().talk.from_person(asker),
+        }),
+        What::HasFromThePerson { count } => {
+            held.tasks()
+                .ledger()
+                .handed_from_person(asker, usize::try_from(*count).unwrap_or(usize::MAX));
+            task(Answered::Noted)
+        }
     }
 }
 
@@ -364,8 +394,12 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
 /// showing the person is not a question held here, so it cannot be answered this way.
 fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
     let (from, name) = owned(held, asker, to)?;
-    if from.report != Owed::Due || held.tasks().ledger().talk.asks(to).is_none() {
-        return Err(dispatchtalk::no_question(&name, to));
+    {
+        // Where the person answered it first (#1496), the refusal says so.
+        let ledger = held.tasks().ledger();
+        if from.report != Owed::Due || ledger.talk.asks(to).is_none() {
+            return Err(ledger.talk.nothing_to_answer(&name, to));
+        }
     }
     let text = dispatchtalk::text(said)?;
     let asker_name = shown(held, asker)?;
@@ -377,9 +411,11 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
     };
     let limits = limits_between(held, asker, to);
     {
+        // The hold the person's own answer is taken under ([`person_answers`]): of the two,
+        // one is the answer and the other is told who gave it.
         let mut ledger = held.tasks().ledger();
         if ledger.talk.asks(to).is_none() {
-            return Err(dispatchtalk::no_question(&name, to));
+            return Err(ledger.talk.nothing_to_answer(&name, to));
         }
         ledger.talk.count(asker, to, &limits, Instant::now())?;
         let file = dispatchtalk::leave(held.root(), to, &message).map_err(kept)?;
@@ -387,6 +423,7 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
             from: asker_name,
             text,
             file: Some(file),
+            by_person: false,
         };
         ledger.talk.answer(to, &name, given)?;
         ledger.landed(to, Landed::Answer);
@@ -433,6 +470,7 @@ pub fn await_answer(held: &Weak<Held>, asked: &Asked, connection: u64) -> Answer
                 what: Reply::Answered {
                     from: given.from.clone(),
                     text: given.text.clone(),
+                    by_person: given.by_person,
                 },
             });
         }
@@ -456,6 +494,135 @@ pub fn await_answer(held: &Weak<Held>, asked: &Asked, connection: u64) -> Answer
             .wait_timeout(ledger, left.min(A_WAIT_LOOKS_EVERY))
             .unwrap_or_else(PoisonError::into_inner);
     }
+}
+
+/// A question a task is paused on, as the window shows it to be answered (#1496).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct TaskQuestion {
+    /// The task, by the name the person sees it under.
+    pub task: String,
+    /// The chat it asked, by its name.
+    pub asked: String,
+    /// What it asked, **as text**: a chat's own words, never drawn as markup.
+    pub question: String,
+}
+
+/// The question task `task` has put to its asking chat and is paused on, where the person may
+/// answer it now: `None` for a chat that is no task, one that has reported or ended, and one
+/// that asks nothing.
+pub fn question_of(held: &Held, task: u32) -> Option<TaskQuestion> {
+    let from = held.chats().handed_from(task)?;
+    if from.mode != Mode::Task || from.report != Owed::Due || seen(held, task).ended {
+        return None;
+    }
+    let question = held.tasks().ledger().talk.asks(task)?.to_owned();
+    Some(TaskQuestion {
+        task: held.chats().shown_name(task)?,
+        asked: held
+            .chats()
+            .shown_name(from.chat)
+            .unwrap_or_else(|| from.name.clone()),
+        question,
+    })
+}
+
+/// **The person answers the question task `task` put to its asking chat** (#1496, V100-46).
+/// `question` is the question as the window showed it, and `said` what they typed.
+///
+/// Refused, with a sentence for the person and nothing sent, where the chat is not a task
+/// that is still working, where it is paused on no question or on another one, where the
+/// asking chat answered first, and where the text is not one purlis hands a chat
+/// (`dispatchtalk::person_text`). **The text is never cut**: it is sent whole or not at all.
+///
+/// Taken, the question is closed under the hold the asking chat's answer is taken under, and:
+///
+/// - the task has the answer **as the person's**, from its waiting command or on its next
+///   turn, quoted as data under purlis's sentence;
+/// - the asking chat is told the person answered, with the question and the answer, on its
+///   next turn, and the question it had not read yet is no longer left for it;
+/// - the dispatch's record keeps the answer with who said it, for the Activity view;
+/// - each of the two is typed purlis's one line where it may be typed one, and never while
+///   the person is typing in it ([`tell_the_chat`]).
+///
+/// **The pair's messages-a-minute limit is not asked.** It is there so two chats cannot drive
+/// each other in a loop, and the person is not a chat: their answer is not counted against
+/// the pair, and a limit of 0 does not stop it.
+pub fn person_answers(held: &Held, task: u32, question: &str, said: &str) -> Result<(), String> {
+    let name = held
+        .chats()
+        .shown_name(task)
+        .ok_or_else(|| format!("Chat {task} is not open, so your answer was not sent."))?;
+    let from = held
+        .chats()
+        .handed_from(task)
+        .filter(|from| from.mode == Mode::Task)
+        .ok_or_else(|| dispatchtalk::not_the_person_s_to_answer(&name, None))?;
+    let seen_now = seen(held, task);
+    if from.report != Owed::Due || seen_now.ended {
+        let state = held.tasks().ledger().state(task, &from, seen_now).say();
+        return Err(dispatchtalk::finished_for_the_person(&name, &state));
+    }
+    let text = dispatchtalk::person_text(said)?;
+    // The asking chat, while it is open: one that has closed is told nothing, and its number
+    // may be another chat's by now.
+    let asker = Some(from.chat).filter(|asker| !seen(held, *asker).ended);
+    let unread = held
+        .tasks()
+        .ledger()
+        .person_answers(task, &name, asker, question, &text)?;
+    // The question the asking chat had not read: it is told it was answered, and not asked it.
+    if let Some(file) = unread {
+        purlis_core::handback::took(held.root(), &file);
+    }
+    // One more message on the task's dispatch record, kept as the person's (#1495).
+    crate::dispatches::person_answered(held, task, &text);
+    held.tasks().changed();
+    tell_the_chat(held, task);
+    if let Some(asker) = asker {
+        tell_the_chat(held, asker);
+    }
+    Ok(())
+}
+
+/// **The question a task is paused on, for the window to show before the person answers it**
+/// (#1496): chat `session`'s question to its asking chat. `null` where there is none to
+/// answer: the chat is no task, has reported or ended, or asks nothing now.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn task_question(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    session: u32,
+) -> Result<Option<TaskQuestion>, String> {
+    let held = planes.held(&plane)?;
+    Ok(question_of(&held, session))
+}
+
+/// **The person answers the question a task put to its asking chat** (#1496, V100-46): chat
+/// `session`'s question, which is `question` as the window showed it, with `text`.
+///
+/// The task is handed the answer as the person's and carries on; the asking chat is told the
+/// person answered and does not answer again. An error is a sentence for the person, and
+/// nothing was sent: the question was answered first by the asking chat, the task has moved
+/// on, or the text is empty, too long or holds a character purlis hands to no chat.
+///
+/// **The window's alone.** No chat's command, hook or tool reaches it, and no link serves it
+/// (`purlis_session_protocol::ui::WINDOW_ONLY`): what it sends reaches a chat marked as the
+/// person's. On a blocking thread, as it writes the dispatch's record.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn answer_task_question(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    session: u32,
+    question: String,
+    text: String,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("answering a task's question", move || {
+        person_answers(&held, session, &question, &text)
+    })
+    .await
 }
 
 /// The person sent `bytes` from chat `chat`'s pane.

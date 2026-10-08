@@ -52,9 +52,14 @@ pub struct ActivityLine {
     /// What was said, **as text**: a chat's own words, never drawn as markup. Empty where
     /// `expired`, and for a `not listed` line.
     pub text: String,
-    /// The person dispatched the task themselves from the asking chat's tab: on the
-    /// dispatch's own line, whose words are theirs and not that chat's.
+    /// The person said it, and not the chat it is `from`: on a dispatch's own line, they
+    /// dispatched the task themselves from that chat's tab; on an answer, they answered the
+    /// task's question in the window (#1496). The words are theirs.
     pub by_person: bool,
+    /// **A question its task is paused on now** (#1496): the person may answer it. Said by the
+    /// app from what it holds open as the line is read or told, and never by the record. An
+    /// answer, a report or an ending told later for the same dispatch closes it in the tab.
+    pub asks: bool,
     /// purlis wrote the line, and not the task: an ending it recorded in a chat's place, and
     /// a `not listed` line.
     pub by_purlis: bool,
@@ -134,6 +139,7 @@ pub(crate) fn drawn(line: &Line, open: &[OpenChat], depth: u32) -> ActivityLine 
         to_key: key(&line.to),
         text: line.text.clone(),
         by_person: line.by_person,
+        asks: false,
         by_purlis: line.by_purlis,
         expired: line.expired,
         unkept: line.unkept.map(|(count, _)| count),
@@ -152,16 +158,39 @@ pub(crate) fn read(held: &Held, session: u32) -> Option<Activity> {
     let chat = crate::dispatches::chat_ref(held, session)?;
     let open = crate::dispatches::open_chats(held);
     let found = activity::timeline(held.root(), &chat, chrono::Utc::now());
+    let mut lines: Vec<ActivityLine> = found
+        .lines
+        .iter()
+        .map(|line| drawn(line, &open, line.depth))
+        .collect();
+    still_asked(&mut lines, |task| {
+        held.tasks().ledger().talk.asks(task).map(str::to_owned)
+    });
     Some(Activity {
         key: key(&chat),
         name: chat.name,
-        lines: found
-            .lines
-            .iter()
-            .map(|line| drawn(line, &open, line.depth))
-            .collect(),
+        lines,
         undrawn: u32::try_from(found.refused).unwrap_or(u32::MAX),
     })
+}
+
+/// Marks, among `lines`, **each question its task is paused on now** ([`ActivityLine::asks`]):
+/// the last question of a dispatch, from a chat that is open, whose words are the question
+/// `asks` says that chat has open. An earlier question of the same task was answered, and a
+/// question whose words are not kept cannot be shown to be answered.
+fn still_asked(lines: &mut [ActivityLine], asks: impl Fn(u32) -> Option<String>) {
+    let mut seen: Vec<String> = Vec::new();
+    for line in lines.iter_mut().rev() {
+        if line.kind != activity::Kind::Question.word() || seen.contains(&line.dispatch) {
+            continue;
+        }
+        seen.push(line.dispatch.clone());
+        line.asks = !line.expired
+            && line
+                .from_session
+                .and_then(&asks)
+                .is_some_and(|open| open == line.text);
+    }
 }
 
 /// One chat's Activity (#1495): what it and its tasks said to each other, and the tasks of
@@ -237,7 +266,13 @@ fn tell(held: &Held, record: &Record, line: Option<&Line>) {
     if record.mode != Mode::Task || !dispatchrecord::sound(record) {
         return;
     }
-    held.tell_activity(drawn(line, &crate::dispatches::open_chats(held), 0));
+    let mut told = [drawn(line, &crate::dispatches::open_chats(held), 0)];
+    // A question told as it is asked is one its task is paused on: the person may answer it.
+    still_asked(&mut told, |task| {
+        held.tasks().ledger().talk.asks(task).map(str::to_owned)
+    });
+    let [told] = told;
+    held.tell_activity(told);
 }
 
 /// The app opened `record`: its first line, the dispatch and its brief.
@@ -345,6 +380,76 @@ mod tests {
             (line.dispatch.as_str(), line.n),
             ("01K6Z3V9QJ8M4T2W7XB5RC0DEF", 4)
         );
+    }
+
+    /// A question `talk` (chat 7, dispatch `dispatch`) asked, as line `n`.
+    fn a_question(dispatch: &str, n: u32, text: &str) -> ActivityLine {
+        let line = Line {
+            dispatch: dispatch.to_owned(),
+            n,
+            kind: Kind::Question,
+            text: text.to_owned(),
+            outcome: None,
+            files: Vec::new(),
+            ..a_report()
+        };
+        drawn(
+            &line,
+            &[OpenChat {
+                session: 7,
+                id: Some("worker".to_owned()),
+            }],
+            1,
+        )
+    }
+
+    #[test]
+    fn only_the_question_a_task_is_paused_on_now_is_one_the_person_may_answer() {
+        let asked = |task: u32| (task == 7).then(|| "Which region?".to_owned());
+        let mut lines = vec![
+            // Answered long ago, by its words and by its place.
+            a_question("A", 1, "Which queue?"),
+            a_question("A", 3, "Which region?"),
+            // Another task's, which the app holds no question for.
+            ActivityLine {
+                from_session: Some(8),
+                ..a_question("B", 1, "Which region?")
+            },
+            // A report is never a question, whatever it says.
+            ActivityLine {
+                kind: "report".to_owned(),
+                ..a_question("C", 1, "Which region?")
+            },
+        ];
+
+        still_asked(&mut lines, asked);
+
+        let asks: Vec<bool> = lines.iter().map(|line| line.asks).collect();
+        assert_eq!(asks, [false, true, false, false]);
+    }
+
+    #[test]
+    fn a_question_is_not_one_to_answer_once_its_chat_is_closed_or_its_words_are_gone() {
+        let asked = |_: u32| Some("Which region?".to_owned());
+        let mut lines = vec![
+            ActivityLine {
+                from_session: None,
+                ..a_question("A", 1, "Which region?")
+            },
+            ActivityLine {
+                expired: true,
+                text: String::new(),
+                ..a_question("B", 1, "")
+            },
+            // The same words as the open question, in an earlier line of the task that has a
+            // later question: the later one is the open one.
+            a_question("C", 1, "Which region?"),
+            a_question("C", 3, "Which zone?"),
+        ];
+
+        still_asked(&mut lines, asked);
+
+        assert!(lines.iter().all(|line| !line.asks), "{lines:?}");
     }
 
     #[test]

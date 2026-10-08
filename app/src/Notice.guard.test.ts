@@ -72,6 +72,13 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       "the Alerts drawer's own read refusals, in place of a project's rows; the rows themselves " +
       "are Notices with their ways out (NO-6)",
   },
+  "AnswerQuestion.tsx": {
+    count: 2,
+    why:
+      "the refusal of the person's answer to a task's question (#1496), in the core's sentence " +
+      "under the box, with what was typed kept: Send is the retry. And, where the form was " +
+      "opened for a task that asks nothing now, the sentence that says so, beside Close",
+  },
   "App.tsx": {
     count: 1,
     why: "what the last action answered: replaced by the next action, not about something true now",

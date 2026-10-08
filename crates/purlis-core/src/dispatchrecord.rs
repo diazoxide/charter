@@ -236,7 +236,7 @@ pub use crate::usage::Spent as Usage;
 /// One message that passed between the two chats after the brief (#1495): a follow-up or an
 /// answer from the asking chat, a progress note or a question from the persona chat. **Which
 /// chat said it is its kind's to say**, so a line names no chat: the two are the record's own
-/// `asker` and `worker`.
+/// `asker` and `worker`. The one message that is neither chat's says so ([`Said::by`]).
 ///
 /// Kept because the message itself is not: it waits in the project only until the chat it is
 /// for reads it ([`crate::dispatchtalk`]), and the Activity view ([`crate::activity`]) is read
@@ -250,6 +250,20 @@ pub struct Said {
     /// Empty once its dispatch ended [`TALK_KEPT_FOR`] ago ([`expire_talk`]): a message is
     /// never taken empty, so an empty one is one whose words were kept and are gone.
     pub text: String,
+    /// **Who said it, where that is not the chat its kind names** (#1496): [`By::Person`] on
+    /// an answer the person gave in the purlis window, in the asking chat's place. Absent on
+    /// every message a chat sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<By>,
+}
+
+/// Who said a message, where it was not the chat its kind names ([`Said::by`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum By {
+    /// The person, in the purlis window. Written by the app where it takes the person's
+    /// answer ([`said_by`]), and by nothing a chat can ask for.
+    Person,
 }
 
 /// One dispatch.
@@ -460,6 +474,19 @@ pub fn said(
     text: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<Taken> {
+    said_by(root, id, kind, None, text, now)
+}
+
+/// [`said`], for a message that `by` said in a chat's place (#1496): the person's answer to a
+/// task's question, which the timeline then says is theirs. Counted and kept as any message is.
+pub fn said_by(
+    root: &Path,
+    id: &str,
+    kind: crate::dispatchtalk::Kind,
+    by: Option<By>,
+    text: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<Taken> {
     let mut taken = Taken::Nothing;
     change(root, id, |record| {
         if !record.running() {
@@ -476,6 +503,7 @@ pub fn said(
                 at: crate::dispatch::stamp(now),
                 kind,
                 text,
+                by,
             });
             taken = Taken::Kept(record.clone());
         } else {

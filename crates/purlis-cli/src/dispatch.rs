@@ -662,6 +662,7 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
              back only from a chat a dispatch started."
         ));
     };
+    let asked_text = text.clone();
     let asker = match answered(
         &mut asking,
         chat,
@@ -691,7 +692,12 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
     );
     match replied {
         Ok(Answered::Replied {
-            what: Reply::Answered { from, text },
+            what:
+                Reply::Answered {
+                    from,
+                    text,
+                    by_person,
+                },
         }) => {
             // On the same connection, so the next turn is not handed the same answer again.
             let _ = answered(
@@ -700,6 +706,16 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
                 What::GotAnswer,
                 crate::handoff::A_TICKET_TAKES_AT_MOST,
             );
+            // The person answered it, in the purlis window (#1496): the app says so, on the
+            // connection this command asked on, and the sentence is the person's own.
+            if by_person {
+                return Ok(dispatchtalk::person_said(
+                    &dispatchtalk::PersonSaid::Answered {
+                        question: asked_text,
+                        text,
+                    },
+                ));
+            }
             Ok(dispatchtalk::said(&Message {
                 kind: Kind::Answer,
                 from,
@@ -718,6 +734,46 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
         // where a wait that ran out does.
         Ok(_) | Err(_) => Ok(paused),
     }
+}
+
+/// How long a turn's hook waits on the app for what the person said, for each of the ask and
+/// the answer: it holds the turn, so an app that is slow costs the turn nothing, and what the
+/// person said is handed to the next one.
+const A_HOOK_WAITS: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// **What the person said to this chat in the purlis window** since it was last handed any
+/// (#1496): their answer to a question this task asked its asking chat, or word that they
+/// answered a question one of this chat's tasks asked it. Each is purlis's sentence with the
+/// person's words quoted under it as data; `None` for nothing, outside a chat the app started,
+/// and where the app does not answer.
+///
+/// **Asked of the app and read from no file.** That the person said it is the app's to say,
+/// on the connection it answers this chat on: a file is something another chat can write.
+/// The app keeps each until this says the turn has it, on the same connection, so a hook that
+/// is killed in between loses nothing.
+pub fn from_the_person() -> Option<String> {
+    let (mut asking, chat) = the_app()?;
+    let asked = Ask::Task(Box::new(Asked {
+        chat,
+        what: What::FromThePerson,
+    }));
+    let Ok(Answer::Task(answered)) = asking.ask(&asked, A_HOOK_WAITS) else {
+        return None;
+    };
+    let Answered::FromThePerson { said } = *answered else {
+        return None;
+    };
+    let told = dispatchtalk::person_context(&said)?;
+    let has = Ask::Task(Box::new(Asked {
+        chat,
+        what: What::HasFromThePerson {
+            count: u32::try_from(said.len()).unwrap_or(u32::MAX),
+        },
+    }));
+    // Briefly: the turn has its words either way, and an acknowledgement the app is slow to
+    // take costs only that the next turn is handed them again.
+    let _ = asking.ask(&has, A_HOOK_WAITS / 3);
+    Some(told)
 }
 
 /// How much longer than the wait itself the app has to answer one: it answers when the wait

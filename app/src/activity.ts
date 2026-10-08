@@ -110,6 +110,42 @@ export function heard(was: Timeline, line: ActivityLine): Timeline {
   return { lines, chats, tasks };
 }
 
+/**
+ * **A chat's name as the timeline draws it** (#1496). The timeline says "you" for the person
+ * and "purlis" for the app, and those marks are the app's alone to put on a line. A chat can be
+ * given any name, a task's by the chat that dispatched it, so a name that begins with one of
+ * those words is drawn with what it is beside it: a chat. Every other name is drawn as it is.
+ */
+export function chatShown(name: string): string {
+  return /^\s*(you|purlis|the person|the operator)(?![\p{L}\p{N}])/iu.test(name)
+    ? `${name} (a chat)`
+    : name;
+}
+
+/**
+ * **The questions the person may answer now** (#1496), by {@link lineKey}: a question the app
+ * said its task is paused on (`ActivityLine.asks`), with nothing after it in its dispatch that
+ * closes it. An answer closes it, whoever gave it; so does the task's report, and its ending.
+ *
+ * The app says which question is open as it reads the timeline and as it tells a question. What
+ * is told afterwards for the same dispatch is folded in here, so a question answered while the
+ * tab is open stops offering Answer without the timeline being read again.
+ */
+export function answerable(lines: readonly Drawn[]): ReadonlySet<string> {
+  /** By dispatch: the place of its last line that closes a question. */
+  const closed = new Map<string, number>();
+  for (const { line } of lines) {
+    if (line.kind === "answer" || line.kind === "report" || line.kind === "stopped")
+      closed.set(line.dispatch, Math.max(closed.get(line.dispatch) ?? -1, line.n));
+  }
+  const open = new Set<string>();
+  for (const { line } of lines) {
+    if (line.kind === "question" && line.asks && line.n > (closed.get(line.dispatch) ?? -1))
+      open.add(lineKey(line));
+  }
+  return open;
+}
+
 /** A file another task's report names too, and those tasks, by name. */
 export type Also = { file: string; others: readonly string[] };
 

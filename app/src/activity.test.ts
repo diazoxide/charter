@@ -3,6 +3,8 @@ import type { Activity, ActivityLine } from "./bindings";
 import {
   activityView,
   alsoSaid,
+  answerable,
+  chatShown,
   heard,
   namedByOthers,
   timelineOf,
@@ -22,6 +24,7 @@ function line(over: Partial<ActivityLine> & Pick<ActivityLine, "dispatch" | "n">
     to_key: "01K6STEWARD",
     text: "",
     by_person: false,
+    asks: false,
     by_purlis: false,
     expired: false,
     unkept: null,
@@ -200,5 +203,80 @@ describe("a chat that is restarted", () => {
     const tabs = openView(openTab(noTabs(), 3), activityView(4), "Activity · other", "alpha");
 
     expect(replaceSession(tabs, 9, 12)).toBe(tabs);
+  });
+});
+
+describe("the questions the person may answer (#1496)", () => {
+  const question = (dispatch: string, n: number, asks = true) =>
+    line({ dispatch, n, kind: "question", text: "Which host?", asks });
+
+  it("is the question the app says its task is paused on", () => {
+    const lines = drawn([
+      line({ dispatch: "01K6D1", n: 0, kind: "dispatched" }),
+      question("01K6D1", 1),
+      // Not open by the app's word: answered before the tab read it, or never held.
+      question("01K6D2", 1, false),
+      // A note is not a question, whatever the app says of it.
+      line({ dispatch: "01K6D3", n: 1, kind: "note", asks: true }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
+  });
+
+  it("is none once an answer, a report or an ending follows it in its dispatch", () => {
+    for (const kind of ["answer", "report", "stopped"]) {
+      const lines = drawn([question("01K6D1", 1), line({ dispatch: "01K6D1", n: 2, kind })]);
+      expect([...answerable(lines)], kind).toEqual([]);
+    }
+    // Whoever answered: the person's own answer closes it as the asking chat's does.
+    expect([
+      ...answerable(
+        drawn([
+          question("01K6D1", 1),
+          line({ dispatch: "01K6D1", n: 2, kind: "answer", by_person: true }),
+        ]),
+      ),
+    ]).toEqual([]);
+  });
+
+  it("is still one after a note or a follow-up, and after another task's answer", () => {
+    const lines = drawn([
+      question("01K6D1", 1),
+      line({ dispatch: "01K6D1", n: 2, kind: "note" }),
+      line({ dispatch: "01K6D1", n: 3, kind: "follow-up" }),
+      line({ dispatch: "01K6D2", n: 4, kind: "answer" }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
+  });
+
+  it("is the later question where a task asked again after its first was answered", () => {
+    const lines = drawn([
+      question("01K6D1", 1),
+      line({ dispatch: "01K6D1", n: 2, kind: "answer" }),
+      question("01K6D1", 3),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:3"]);
+  });
+});
+
+describe("a chat's name on the timeline (#1496)", () => {
+  it("is drawn as it is", () => {
+    for (const name of ["talk", "steward 3", "youth survey", "purlisd logs", "the personnel list"])
+      expect(chatShown(name), name).toBe(name);
+  });
+
+  it("is marked as a chat's where it begins with a word the app uses for the person or itself", () => {
+    for (const name of [
+      "you",
+      "You",
+      " you, from steward 3",
+      "purlis",
+      "PURLIS, for talk",
+      "the person",
+      "The operator",
+    ])
+      expect(chatShown(name), name).toBe(`${name} (a chat)`);
   });
 });

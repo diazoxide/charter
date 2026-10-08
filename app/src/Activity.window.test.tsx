@@ -97,6 +97,7 @@ function line(
     to: up ? "steward 3" : "talk",
     to_key: up ? STEWARD_KEY : TALK_KEY,
     by_person: false,
+    asks: false,
     by_purlis: false,
     expired: false,
     unkept: null,
@@ -126,6 +127,8 @@ function core(
     reopened?: ViewTab[];
     /** The session each chat has now, by its key: what a press on a line's chat is answered. */
     now?: Record<string, number | null>;
+    /** What the core says of the person's answer in place of taking it: its refusal. */
+    refuses?: string;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -164,6 +167,10 @@ function core(
           undrawn: on.undrawn ?? 0,
         };
         return answer;
+      }
+      if (cmd === "answer_task_question") {
+        if (on.refuses !== undefined) throw on.refuses;
+        return null;
       }
       if (cmd === "activity_chat") {
         const now: Record<string, number | null> = {
@@ -665,5 +672,252 @@ describe("a session's Activity tab", () => {
     expect(await screen.findByTestId("activity-closed")).toHaveTextContent("This chat is not open");
     // Reading again would say the same, so it is not offered.
     expect(screen.queryByRole("button", { name: "Read again" })).toBeNull();
+  });
+});
+
+/** A task that has asked its asking chat a question, and is paused on it. */
+const ASKING: ActivityLine[] = [LINES[0], LINES[1], { ...LINES[2], asks: true }];
+
+const answerControl = (within_: HTMLElement) =>
+  within(within_).queryByRole("button", { name: "Answer talk's question" });
+
+/**
+ * Types `text` into `box` from the keyboard alone. Not `userEvent.type`'s own click first: in
+ * this DOM nothing has a size, so the pane splitter takes every pointer press for its own.
+ */
+async function typed(box: HTMLElement, text: string): Promise<void> {
+  act(() => box.focus());
+  await userEvent.type(box, text, { skipClick: true });
+}
+
+/** Presses Answer on the open question, and answers the form it opens. */
+async function answering(list: HTMLElement): Promise<HTMLElement> {
+  const control = answerControl(list);
+  expect(control).not.toBeNull();
+  await userEvent.click(control as HTMLElement);
+  return within(list).findByRole("form", { name: "Answer talk's question" });
+}
+
+describe("answering a task's question from the Activity tab (#1496)", () => {
+  it("offers Answer on the question its task is paused on, and on no other line", async () => {
+    core({ lines: ASKING });
+    render(<App />);
+
+    const list = await opened();
+
+    const items = within(list).getAllByRole("listitem");
+    expect(answerControl(items[2])).not.toBeNull();
+    expect(answerControl(items[0])).toBeNull();
+    expect(answerControl(items[1])).toBeNull();
+    expect(within(list).getAllByRole("button", { name: /^Answer / })).toHaveLength(1);
+    // Until it is pressed there is nothing to type into.
+    expect(within(list).queryByRole("textbox")).toBeNull();
+  });
+
+  it("sends the answer with the question it shows, and the line that lands says you answered", async () => {
+    const { asked } = core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+
+    const form = await answering(list);
+    // The question, as text, above the box; and the keyboard is in the box.
+    expect(within(form).getByText("Which host?")).toBeInTheDocument();
+    const box = within(form).getByRole("textbox", { name: "Your answer" });
+    expect(box).toHaveFocus();
+    await typed(box, "prod-2.{Enter}");
+
+    await waitFor(() =>
+      expect(asked("answer_task_question")).toEqual([
+        { plane: PLANE, session: 7, question: "Which host?", text: "prod-2." },
+      ]),
+    );
+    await waitFor(() => expect(within(list).queryByRole("form")).toBeNull());
+
+    // The app records the answer and tells the tab: it is the person's, and the question is
+    // answered, so nothing offers Answer any more.
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 3, kind: "answer", text: "prod-2.", by_person: true }),
+      }),
+    );
+    await waitFor(() =>
+      expect(read(list)[3]).toBe("2026-10-08 09:03 UTC answer you → talk: prod-2."),
+    );
+    expect(within(list).queryByRole("button", { name: /^Answer / })).toBeNull();
+    // "you" is not a chat: nothing on that line opens one.
+    const answered = within(list).getAllByRole("listitem")[3];
+    expect(within(answered).queryByRole("button", { name: /Show chat/ })).toBeNull();
+  });
+
+  it("reaches the task under the number its chat has now", async () => {
+    // The task's chat was restarted since the timeline was read: it is session 12 now.
+    const { asked } = core({ lines: ASKING, now: { [TALK_KEY]: 12 } });
+    render(<App />);
+    const list = await opened();
+
+    const form = await answering(list);
+    await typed(within(form).getByRole("textbox"), "prod-2.");
+    await userEvent.click(within(form).getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(asked("answer_task_question")).toEqual([
+        { plane: PLANE, session: 12, question: "Which host?", text: "prod-2." },
+      ]),
+    );
+  });
+
+  it("starts a new line on Shift+Enter, and refuses an empty answer without asking the core", async () => {
+    const { asked } = core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    const box = within(form).getByRole("textbox", { name: "Your answer" });
+
+    // Nothing typed: refused in a sentence, by Enter and by Send, and the form stays.
+    await typed(box, "{Enter}");
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "The answer is empty, so nothing was sent.",
+    );
+    await typed(box, "   ");
+    await userEvent.click(within(form).getByRole("button", { name: "Send" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "The answer is empty, so nothing was sent.",
+    );
+    expect(asked("answer_task_question")).toEqual([]);
+
+    await userEvent.clear(box);
+    await typed(box, "prod-2,{Shift>}{Enter}{/Shift}the quiet one.");
+
+    expect(box).toHaveValue("prod-2,\nthe quiet one.");
+    // Typing put the refusal away, and nothing was sent by the new line.
+    expect(within(form).queryByRole("alert")).toBeNull();
+    expect(asked("answer_task_question")).toEqual([]);
+  });
+
+  it("keeps what was typed when the core refuses, and says why in the core's words", async () => {
+    const refusal =
+      "'steward 3' answered that question of 'talk' first, so your answer was not sent. What it answered is in the asking chat's Activity.";
+    const { asked } = core({ lines: ASKING, refuses: refusal });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    const box = within(form).getByRole("textbox", { name: "Your answer" });
+
+    await typed(box, "prod-2.{Enter}");
+
+    expect(await within(form).findByRole("alert")).toHaveTextContent(refusal);
+    expect(asked("answer_task_question")).toHaveLength(1);
+    // Nothing the person typed is lost, and the form is still there to read it from.
+    expect(box).toHaveValue("prod-2.");
+    expect(box).toHaveFocus();
+  });
+
+  it("puts the form away on Cancel, sends nothing, and gives the keyboard back", async () => {
+    const { asked } = core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    await typed(within(form).getByRole("textbox"), "prod-");
+
+    await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(within(list).queryByRole("form")).toBeNull());
+    expect(asked("answer_task_question")).toEqual([]);
+    await waitFor(() => expect(answerControl(list)).toHaveFocus());
+  });
+
+  it("draws the question as text in the form, never as markup", async () => {
+    const hostile = "<img src=x onerror=alert(1)> **Which** [host](https://example.com)?";
+    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: true, text: hostile }] });
+    render(<App />);
+    const list = await opened();
+
+    const form = await answering(list);
+
+    expect(within(form).getByText(hostile)).toBeInTheDocument();
+    expect(form.querySelector("img, a, strong")).toBeNull();
+  });
+
+  it("offers no Answer for a question the asking chat has answered", async () => {
+    // Answered before the tab was opened: the app says no question is open.
+    core({ lines: LINES });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(within(list).queryByRole("button", { name: /^Answer / })).toBeNull();
+  });
+
+  it("offers no Answer for a question whose task's chat is closed", async () => {
+    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: true, from_session: null }] });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(within(list).queryByRole("button", { name: /^Answer / })).toBeNull();
+  });
+
+  it("takes Answer away as the question is answered, and as its task reports", async () => {
+    // Open when the tab was read, then the asking chat answers; and, for another question,
+    // the task reports. Each is told as a line, and each takes Answer away.
+    core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    expect(answerControl(list)).not.toBeNull();
+
+    await act(() => emit("activity-line", { plane: PLANE, line: LINES[3] }));
+    await waitFor(() => expect(answerControl(list)).toBeNull());
+
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 4, kind: "question", text: "Which region?", asks: true }),
+      }),
+    );
+    await waitFor(() => expect(answerControl(list)).not.toBeNull());
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 5, kind: "report", text: "Stopped early.", outcome: "failed" }),
+      }),
+    );
+    await waitFor(() => expect(answerControl(list)).toBeNull());
+  });
+
+  it("draws a chat that is named like the person's mark as a chat, so only the app's line says you", async () => {
+    // A chat can be given any name. One called "you" answers its task's question: the line is
+    // a chat's, it opens that chat, and it does not read as the person's answer.
+    core({
+      lines: [
+        LINES[0],
+        LINES[2],
+        line({ n: 3, kind: "answer", text: "prod-9.", from: "you" }),
+        line({ n: 4, kind: "answer", text: "prod-2.", by_person: true }),
+      ],
+    });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(read(list).slice(2)).toEqual([
+      "2026-10-08 09:03 UTC answer you (a chat) → talk: prod-9.",
+      "2026-10-08 09:04 UTC answer you → talk: prod-2.",
+    ]);
+    const items = within(list).getAllByRole("listitem");
+    expect(within(items[2]).getByRole("button", { name: "Show chat you" })).toBeInTheDocument();
+    expect(within(items[3]).queryByRole("button")).toBeNull();
+  });
+
+  it("stops offering Answer when a press finds the task's chat closed", async () => {
+    const { asked } = core({ lines: ASKING, now: { [TALK_KEY]: null } });
+    render(<App />);
+    const list = await opened();
+
+    await userEvent.click(answerControl(list) as HTMLElement);
+
+    await waitFor(() => expect(answerControl(list)).toBeNull());
+    expect(within(list).queryByRole("form")).toBeNull();
+    expect(asked("answer_task_question")).toEqual([]);
   });
 });
