@@ -203,8 +203,8 @@ impl Refused {
 
 /// What a helper sub-agent that tries to dispatch is told ([`Refused::Helper`]). Spelled once:
 /// the tool guard says it before the command runs, where a sub-agent is known for one.
-pub const HELPER: &str = "a dispatch is refused from inside a sub-agent. A persona chat belongs \
-     to a chat the person can see, open and stop, and a sub-agent is not one. Return what you \
+pub const HELPER: &str = "a dispatch is refused from inside a helper. A task belongs to a chat \
+     the person can see, open and stop, and a helper is not one. Return what you \
      found to your chat, and let that chat dispatch.";
 
 /// What a chat that holds another persona's grants is told ([`Refused::Held`]).
@@ -1326,7 +1326,7 @@ mod tests {
         );
         assert_eq!(
             refusal(&said),
-            "this chat already has 1 persona chat running, and it may have 1 at once. Wait \
+            "this chat already has 1 task running, and it may have 1 at once. Wait \
              for one to report, then dispatch again."
         );
         // A persona's own row is more specific than the project's.
@@ -1521,7 +1521,7 @@ mod tests {
                 &none,
                 By::Chat
             )),
-            "chats as steward already have 1 persona chat running between them, and may have \
+            "chats as steward already have 1 task running between them, and may have \
              1 at once in this project. Wait for one to finish, then dispatch again."
         );
         // How many chats run as the target at once: both of these do.

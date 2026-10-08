@@ -423,13 +423,13 @@ fn running_per_chat_refuses_at_its_number_and_allows_one_below() {
     assert_eq!(limit_of(&refused), Some(Limit::RunningPerChat));
     assert_eq!(
         sentence_of(&refused),
-        "this chat already has 6 persona chats running, and it may have 6 at once. Wait for \
+        "this chat already has 6 tasks running, and it may have 6 at once. Wait for \
          one to report, then dispatch again."
     );
     // The count said is the real one, where a limit was lowered under what is running.
     assert_eq!(
         sentence_of(&decide(&limits, &at(9))),
-        "this chat already has 9 persona chats running, and it may have 6 at once. Wait for \
+        "this chat already has 9 tasks running, and it may have 6 at once. Wait for \
          one to report, then dispatch again."
     );
 }
@@ -508,7 +508,7 @@ fn may_dispatch_counts_every_chat_running_as_the_asking_persona_in_the_project()
     assert_eq!(limit_of(&refused), Some(Limit::MayDispatch));
     assert_eq!(
         sentence_of(&refused),
-        "chats as steward already have 2 persona chats running between them, and may have 2 \
+        "chats as steward already have 2 tasks running between them, and may have 2 \
          at once in this project. Wait for one to finish, then dispatch again."
     );
 }

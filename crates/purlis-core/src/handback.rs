@@ -747,7 +747,7 @@ mod tests {
         let not_started = context(
             &[answered(
                 Answered::NotStarted,
-                "this chat already has 6 persona chats running, and it may have 6 at once.",
+                "this chat already has 6 tasks running, and it may have 6 at once.",
             )],
             false,
         )
@@ -757,9 +757,8 @@ mod tests {
             "{not_started}"
         );
         assert!(
-            not_started.ends_with(
-                "\n> this chat already has 6 persona chats running, and it may have 6 at once."
-            ),
+            not_started
+                .ends_with("\n> this chat already has 6 tasks running, and it may have 6 at once."),
             "{not_started}"
         );
     }

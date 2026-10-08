@@ -410,7 +410,7 @@ fn a_profile_that_switches_the_prompts_off_is_not_passed_on_to_the_persona_chat(
             ),
             Err(format!(
                 "profile 'night' starts its harness with the permission prompts off ({flag}), \
-                 and a persona chat never takes that from the chat that dispatched it. \
+                 and a task never takes that from the chat that dispatched it. \
                  Dispatch from a chat on a profile that asks."
             )),
             "{command:?}"

@@ -302,7 +302,7 @@ pub fn bypass_refusal(profile: &str, command: &[String], by: NamedBy<'_>) -> Opt
     Some(match by {
         NamedBy::TheAskingChat => format!(
             "profile '{profile}' starts its harness with the permission prompts off ({flag}), \
-             and a persona chat never takes that from the chat that dispatched it. Dispatch \
+             and a task never takes that from the chat that dispatched it. Dispatch \
              from a chat on a profile that asks."
         ),
         NamedBy::TheDispatch => format!(
