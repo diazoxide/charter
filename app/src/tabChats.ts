@@ -48,6 +48,35 @@ export function chatsOfPane(
   return chatsTree(here).map((row) => ({ ...row, orphaned: false }));
 }
 
+/**
+ * **The chats of every tab, each as {@link chatsOfTab} lists its own**, by tab (#1487): what
+ * the strip draws each tab's chip from. One walk of the list for all of them, since a strip
+ * of fifty tabs asking {@link chatsOfTab} fifty times reads every chat fifty times.
+ */
+export function chatsOfTabs(
+  tabs: Tabs,
+  chats: readonly ListedChat[],
+): ReadonlyMap<number, ChatRow[]> {
+  const askedBy = askedByOf(chats);
+  const here = new Map<string, ListedChat[]>();
+  for (const chat of chats) {
+    const home = homeOf(tabs, chat.session, askedBy);
+    if (home === undefined) continue;
+    const key = `${home.tab}:${home.pane}`;
+    const among = here.get(key);
+    if (among === undefined) here.set(key, [chat]);
+    else among.push(chat);
+  }
+  return new Map(
+    tabs.order.map((id) => [
+      id,
+      panesOf(tabs, id).flatMap(({ pane }) =>
+        chatsTree(here.get(`${id}:${pane}`) ?? []).map((row) => ({ ...row, orphaned: false })),
+      ),
+    ]),
+  );
+}
+
 /** What a pane's breadcrumb says while the pane shows a task. */
 export type Crumbs = {
   /** The session's own chat first, then each chat that asked, then the chat shown. */
