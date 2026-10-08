@@ -241,6 +241,8 @@ pub struct Held {
     stopping: crate::stopping::Stopping,
     /// The window, for each step of a stop.
     stops: crate::stopping::Teller,
+    /// The window, for a change in how a chat stands that no file and no hook says (#1484).
+    changes: crate::planewatch::Changed,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
     /// The vaults each chat was refused for its persona, until the person answers (#1430).
@@ -470,6 +472,19 @@ impl Held {
     /// The chats the person is stopping (#1448).
     pub fn stopping(&self) -> &crate::stopping::Stopping {
         &self.stopping
+    }
+
+    /// **Tells the window that what a chat's row says has changed** (#1484), where the change
+    /// is one the app holds and nothing else reports: a task's question to the chat that asked
+    /// was opened or answered, or the report it owes was settled. The rows ride the sidebar's
+    /// answer, so this says that answer moved and no other
+    /// ([`purlis_core::planechange::chats`]); the window reads it again. The board's own moves
+    /// are told as they always were.
+    pub fn rows_changed(&self) {
+        (self.changes)(
+            self.id.clone(),
+            Some(vec![purlis_core::planechange::chats()]),
+        );
     }
 
     /// Tells the window chat `session`'s stop is at `phase`.
@@ -2390,6 +2405,7 @@ impl Planes {
             smart: Arc::clone(&self.smart),
             stopping: crate::stopping::Stopping::default(),
             stops: Arc::clone(&self.stops),
+            changes: Arc::clone(&self.changes),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),

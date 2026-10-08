@@ -267,7 +267,7 @@ describe("a chat's finished tasks", () => {
     expect(says(theRow(group, "broke"))).toEqual({ word: "failed", shape: "cross" });
     expect(says(theRow(group, "died"))).toEqual({
       word: "ended without a report",
-      shape: "slash",
+      shape: "triangle",
     });
     // The two ends the one vocabulary has no word of its own for keep the core's word beside
     // the state's, so neither is said less exactly than before.
@@ -294,8 +294,9 @@ describe("a chat's finished tasks", () => {
       .find((one) => one.querySelector(".session")?.textContent === "probe");
     if (open === undefined) throw new Error("the open task has no row");
     expect(says(open)).toEqual({ word: "failed", shape: "cross" });
-    // And the word is the mark's accessible name, read once.
-    expect(within(theRow(group, "counted")).getByRole("img", { name: "done" })).toBeTruthy();
+    // And the word is text, read as it is drawn: the mark beside it is decoration.
+    expect(within(theRow(group, "counted")).getByText("done")).toBeVisible();
+    expect(within(theRow(group, "counted")).queryByRole("img")).toBeNull();
   });
 
   it("clears the finished rows and nothing else: the failure stays, and no chat is touched", async () => {

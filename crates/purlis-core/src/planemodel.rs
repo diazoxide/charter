@@ -225,7 +225,7 @@ impl Model {
                     }
                 },
                 Kind::Sessions => held.sessions = sessions_of(root, name),
-                Kind::Project | Kind::Harness | Kind::Persona | Kind::Git => {}
+                Kind::Project | Kind::Harness | Kind::Persona | Kind::Git | Kind::Chats => {}
             }
         }
     }

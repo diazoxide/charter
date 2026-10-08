@@ -62,6 +62,9 @@ import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
 /** No chat started another, for a window that has not said. */
 const NONE_STARTED: ReadonlyMap<number, readonly ListedChat[]> = new Map();
 
+/** No chat is named: what an explorer drawn on its own, in a test, is given. */
+const NO_NAME = () => undefined;
+
 /** No chat wrapping up, for a window that has not said. */
 const NONE_WRAPPING: ReadonlySet<number> = new Set();
 
@@ -203,6 +206,7 @@ export function Explorer({
   cloning,
   onReadAgain,
   started = NONE_STARTED,
+  nameOf = NO_NAME,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -238,6 +242,10 @@ export function Explorer({
   /** The chats each chat here started that work in another workspace, by its number (#1447):
    *  drawn under its row, naming that workspace. */
   started?: ReadonlyMap<number, readonly ListedChat[]>;
+  /** What a chat of the project is called now, by its number, whichever workspace it works
+   *  in (#1484): a task that is asking the chat that dispatched it names that chat as its own
+   *  row does. Nothing for a chat that has closed. */
+  nameOf?: (session: number) => string | undefined;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -549,6 +557,7 @@ export function Explorer({
               chats={here}
               started={started}
               dispatched={dispatched}
+              nameOf={nameOf}
               wrapping={wrapping}
               onShow={onShowChat}
               treeitem={treeitem}
@@ -605,6 +614,7 @@ export function Explorer({
             chats={atTheRoot}
             started={started}
             dispatched={dispatched}
+            nameOf={nameOf}
             wrapping={wrapping}
             onShow={onShowChat}
             treeitem={treeitem}
@@ -752,6 +762,7 @@ export function Explorer({
                               chats={working.filter(isTop)}
                               started={started}
                               dispatched={dispatched}
+                              nameOf={nameOf}
                               wrapping={wrapping}
                               onShow={onShowChat}
                               treeitem={treeitem}
@@ -873,6 +884,7 @@ function ChatList({
   chats,
   started,
   dispatched,
+  nameOf,
   wrapping,
   onShow,
   treeitem,
@@ -883,6 +895,8 @@ function ChatList({
   started: ReadonlyMap<number, readonly ListedChat[]>;
   /** The persona chats a chat dispatched as tasks, which are listed under it (#1436). */
   dispatched: (session: number) => readonly OpenChat[];
+  /** What a chat of the project is called now, by its number. */
+  nameOf: (session: number) => string | undefined;
   wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
@@ -925,7 +939,11 @@ function ChatList({
               {/* Its own chat's state, a mark and a word, read by the mark itself (SC-3): the
                 value the Chats list's row draws (#1484). A task that has reported says how,
                 and one that ended without a report says that. */}
-              <ChatShownState session={chat.session} shell={isShell(chat)} {...rowFactsOf(chat)} />
+              <ChatShownState
+                session={chat.session}
+                shell={isShell(chat)}
+                {...rowFactsOf(chat, nameOf)}
+              />
               <WrappingUp held={wrapping.has(chat.session)} />
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
@@ -955,6 +973,7 @@ function ChatList({
             chats={dispatched(chat.session)}
             started={started}
             dispatched={dispatched}
+            nameOf={nameOf}
             wrapping={wrapping}
             onShow={onShow}
             treeitem={treeitem}

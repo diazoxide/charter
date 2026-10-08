@@ -149,6 +149,7 @@ pub enum ChangeKind {
     Sessions,
     Persona,
     Git,
+    Chats,
 }
 
 /// One changed path ([`purlis_core::planechange::Change`], mirrored for the bindings).
@@ -175,6 +176,7 @@ impl From<Change> for PlaneChange {
                 Kind::Sessions => ChangeKind::Sessions,
                 Kind::Persona => ChangeKind::Persona,
                 Kind::Git => ChangeKind::Git,
+                Kind::Chats => ChangeKind::Chats,
             },
             workspace: change.workspace,
             persona: change.persona,

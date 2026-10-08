@@ -9,7 +9,7 @@
  *
  * **Nothing is guessed.** A harness purlis has heard nothing from reads `running (no detail
  * from <harness>)`: the program is running, which the app knows itself, and the rest is said
- * to be unknown (V100-71). A report whose outcome the app no longer has reads `reported`.
+ * to be unknown (V100-71). A report whose outcome no record gives reads `reported`.
  */
 import type { OpenChat } from "./bindings";
 import type { State } from "./chatState";
@@ -30,16 +30,7 @@ export type ShownKind =
 
 /** The mark's shape, one per kind, so a state is told without its colour. */
 export type ShownShape =
-  | "ring"
-  | "hand"
-  | "question"
-  | "tick"
-  | "cross"
-  | "dash"
-  | "slash"
-  | "dot"
-  | "pause"
-  | "broken-ring";
+  "ring" | "hand" | "question" | "tick" | "cross" | "dash" | "triangle" | "dot" | "pause" | "dots";
 
 /** A chat's state as a row shows it. */
 export type Shown = {
@@ -57,7 +48,8 @@ export type TaskFacts = {
   /** The one report it owes the chat that dispatched it: still owed, sent, or failed, which
    *  is purlis's word for a task that ended without one. */
   report: "owed" | "sent" | "failed";
-  /** How it reported, in the report's word, where the app still knows. */
+  /** How it ended, in its dispatch record's word, where a record says: its own report's, or
+   *  the one purlis wrote in its place (`stopped` for a task the person stopped). */
   outcome: string | null;
   /** The chat it has a question open with, by name, while it has one. */
   asking: string | null;
@@ -96,41 +88,52 @@ const CANCELLED: Shown = {
 const UNREPORTED: Shown = {
   kind: "unreported",
   word: "ended without a report",
-  shape: "slash",
+  shape: "triangle",
   token: "state.unreadable",
 };
 const IDLE: Shown = { kind: "idle", word: "idle", shape: "pause", token: "text.muted" };
 const REPORTED: Shown = { kind: "reported", word: "reported", shape: "dot", token: "text.muted" };
 
 /**
- * How a report's outcome reads, by the dispatch record's word for it. `blocked` is a task that
- * could not do the work, which the row says as `failed`; its report says why. `stopped` is a
- * task the person stopped, which reported on its way out: `cancelled`, as one its asking chat
- * cancelled is. Any other word is not one this window knows, and is not guessed at.
+ * How a report a task sent reads, by the dispatch record's word for its outcome. `blocked` is
+ * a task that could not do the work, which the row says as `failed`; its report says why. Any
+ * other word is not one this window knows, and is not guessed at.
  */
 const BY_OUTCOME: ReadonlyMap<string, Shown> = new Map([
   ["done", DONE],
   ["failed", FAILED],
   ["blocked", FAILED],
   ["cancelled", CANCELLED],
-  ["stopped", CANCELLED],
 ]);
+
+/** The record's word for a task the person stopped before it reported: purlis wrote the
+ *  report in its place, so the task itself sent none, and it did not die either. */
+const STOPPED = "stopped";
 
 /**
  * The state a chat's row shows, or nothing for a chat with none to show (a shell tab nothing
  * has reported for).
  *
- * **A task's record is read before its program's state.** A task that reported is done, failed
- * or cancelled whatever its program does afterwards: its turn ending after the report is what
- * made a finished task look like a chat waiting on the person.
+ * **The needs-you queue is read first.** It is the core's word for "the person has the next
+ * move", and the title bar's list and the hands on the rows above are drawn from it: a row
+ * that said anything else would disagree with them. The core keeps a reported task's ordinary
+ * end of turn out of the queue, so a finished task is not in it for having finished.
+ *
+ * **Then a task's record, before its program's state.** A task that reported is done, failed
+ * or cancelled however its turn then ends: that end is what made a finished task look like a
+ * chat waiting on the person. One that is running again, on the person's word, is working.
  */
 export function shownState({ board, needsYou, task, harness }: Facts): Shown | undefined {
+  if (needsYou) return NEEDS_YOU;
   if (task?.report === "sent") {
+    if (board === "running") return WORKING;
     return (task.outcome === null ? undefined : BY_OUTCOME.get(task.outcome)) ?? REPORTED;
   }
-  const ended = board === "done" || board === "failed";
-  // Ended owing its report: purlis tells the chat that asked, and the row says the same.
-  if (task !== null && (task.report === "failed" || ended)) return UNREPORTED;
+  // The person stopped it: not a task that died, though neither sent a report.
+  if (task?.report === "failed") return task.outcome === STOPPED ? CANCELLED : UNREPORTED;
+  // Its program ended owing its report: purlis tells the chat that asked, and the row says
+  // the same without waiting to be told.
+  if (task !== null && (board === "done" || board === "failed")) return UNREPORTED;
   if (board === "done") return DONE;
   if (board === "failed") return FAILED;
   if (task !== null && task.asking !== null) {
@@ -141,7 +144,6 @@ export function shownState({ board, needsYou, task, harness }: Facts): Shown | u
       token: "state.waiting",
     };
   }
-  if (needsYou) return NEEDS_YOU;
   // Its turn has ended and it is not asking for the person: the hand is not raised for it.
   if (board === "waiting") return IDLE;
   if (board === "running") return WORKING;
@@ -149,19 +151,28 @@ export function shownState({ board, needsYou, task, harness }: Facts): Shown | u
   return {
     kind: "unheard",
     word: harness === null ? "running (no detail)" : `running (no detail from ${harness})`,
-    shape: "broken-ring",
+    shape: "dots",
     token: "text.muted",
   };
 }
 
-/** What `chat`'s record says of it as a task, or nothing for a chat that is not one. */
-export function taskFactsOf(chat: Pick<OpenChat, "from">): TaskFacts | null {
+/**
+ * What `chat`'s record says of it as a task, or nothing for a chat that is not one.
+ *
+ * `nameOf` is what a chat is called now, by its number: the chat it is asking is named as that
+ * chat's own row names it, so a rename is followed. Its name when the task was dispatched is
+ * what is left to say once that chat has closed.
+ */
+export function taskFactsOf(
+  chat: Pick<OpenChat, "from">,
+  nameOf: (session: number) => string | undefined = () => undefined,
+): TaskFacts | null {
   const from = chat.from;
   if (!from?.task) return null;
   return {
     report: from.unreported ? "failed" : from.reported ? "sent" : "owed",
     outcome: from.outcome ?? null,
-    asking: from.asking ? from.name : null,
+    asking: from.asking ? (nameOf(from.chat) ?? from.name) : null,
   };
 }
 
@@ -179,9 +190,13 @@ export type RowFacts = {
   harness: string | null;
 };
 
-/** `chat` as a row hands it on: its record as a task, flat, and its harness's name. */
-export function rowFactsOf(chat: Pick<OpenChat, "from" | "harness" | "card">): RowFacts {
-  const task = taskFactsOf(chat);
+/** `chat` as a row hands it on: its record as a task, flat, and its harness's name. `nameOf`
+ *  is `taskFactsOf`'s. */
+export function rowFactsOf(
+  chat: Pick<OpenChat, "from" | "harness" | "card">,
+  nameOf?: (session: number) => string | undefined,
+): RowFacts {
+  const task = taskFactsOf(chat, nameOf);
   return {
     report: task?.report ?? null,
     outcome: task?.outcome ?? null,

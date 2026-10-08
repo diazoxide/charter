@@ -344,12 +344,12 @@ describe("the explorer", () => {
       /helper thread-10/,
     );
     expect(screen.getByRole("treeitem", { name: /ide\.2/ })).not.toHaveAccessibleDescription(
-      /sub-agent/,
+      /helper/,
     );
     expect(screen.queryByRole("list", { name: "Helpers of ide.2" })).toBeNull();
-    // Not rows of the tree: a child agent is drawn under its chat, and the chat is what the
+    // Not rows of the tree: a helper is drawn under its chat, and the chat is what the
     // arrows stop on and what a press brings forward.
-    expect(screen.queryByRole("treeitem", { name: /sub-agent/ })).toBeNull();
+    expect(screen.queryByRole("treeitem", { name: /helper thread/ })).toBeNull();
   });
 
   it("lists a task under the chat that asked for it, by name and state (#1436)", () => {

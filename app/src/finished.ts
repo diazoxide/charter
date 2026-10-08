@@ -45,16 +45,18 @@ export function firstLine(report: string): string {
 /**
  * What the record of a task that ended as `outcome` says of it, as a chat's row is told it
  * (`TaskFacts`). The core's words for an end (`FinishedTask.outcome`) are the dispatch record's
- * own, but for two it says in a phrase: one that sent no report, and one the person stopped.
+ * own, but for the two where purlis wrote the report in the task's place, which it says in a
+ * phrase: one whose program ended owing it, and one the person stopped (the record's
+ * `stopped`). Neither sent a report itself.
  */
 function recordOf(outcome: string): TaskFacts {
-  if (outcome === "ended without a report")
+  if (outcome === "ended without a report") {
     return { report: "failed", outcome: null, asking: null };
-  return {
-    report: "sent",
-    outcome: outcome === "closed by the person" ? "stopped" : outcome,
-    asking: null,
-  };
+  }
+  if (outcome === "closed by the person") {
+    return { report: "failed", outcome: "stopped", asking: null };
+  }
+  return { report: "sent", outcome, asking: null };
 }
 
 /**
