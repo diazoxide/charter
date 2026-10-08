@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791475730145,
+  "lastUpdate": 1791482571558,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3528,6 +3528,48 @@ window.BENCHMARK_DATA = {
             "value": 102.9442165,
             "unit": "ms",
             "extra": "median of 5 runs: 100.982, 101.670, 102.944, 105.768, 107.019 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "918ce402c5d90ddc3d5dbbe3d759d85c520b2d5b",
+          "message": "Where the tickets of this train meet: four seams the review found, and six smaller ones\n\nThe review of the joining work found four things wrong where two tickets meet,\nnone of them inside one ticket.\n\nA pane left on an ended task could draw another task's report. The finished row\nwas found by the asking chat and the task's name, and a chat dispatches again\nunder one name as a matter of course. FinishedTask now carries the number its\ntask's chat had when it ended in this launch (the ledger's memory of closed\ntasks says whether the number is still its own), and the pane finds its row by\nthat number and never by the name. A row with no number is no pane's.\n\nA session folded by itself over an open task that reads failed. A blocked task\nis no longer ended at its report and stays an open chat, and the list's own fold\ntook every end for over. Only an open chat that reads done or cancelled lets its\nsession fold now; one that failed, went without a report or only reported keeps\nit open, as a finished row that stands alone does. A folded row counts the open\nchats under it that are over with its finished tasks, so a done task the person\nis still reading is in a count.\n\nA task the person was looking at when its bound passed was never ended on a\nharness purlis hears nothing from, or where the reporting turn hangs: the bound\nwas spent, and nothing looked again once they looked away. When the hold goes\nand that turn is still not over, the bound is set again (Ends::Bound). Only for\nthe reporting turn: a later turn still has none.\n\nAfter a relaunch the core could go on taking a tab to show a task that was not\nput back, so the session on screen was notified about each time it needed the\nperson. A launch that leaves a finished task out takes `shows` off the tab that\nshowed it, and the window, which starts from what the core said each tab shows,\nsays \"its own chat\" for whatever it did not put back. docs/plane-format.md now\nsays what turns on `shows`.\n\nSmaller, in the same files. A look that found a task held re-reads once, so a\nmove that landed between the read and the answer is not lost. What a tab shows\nis said again where the core did not take it. A task's row stays in the Chats\nlist until the finished row that replaces it is read, so the rows below move\nonce. A comment that said a chat's number is dealt again at each launch says\nwhat is true. The three tests of the hold were seen failing against the old\ncheck.\n\nFrom the first CI run of the train, which was cancelled with its Rust job hung.\n\nThe hang was a test, and a drop with no bound under it. The test of \"a task\nthat had reported at a quit is a finished row at the next launch\" opened the\nsame project a second time in one process while the first was still open. Each\nopen binds the project's hook socket at one path, and a listener that is\ndropped wakes its own thread by connecting to that path: the first one's\nconnection reached the second listener, or nothing once that had gone, and its\njoin waited for good. Only where a socket can be bound, so not in the sandbox\nthe test was written in. The test now closes the app that quit before the next\none opens, under a bound. And a dropped listener waits five seconds for its\nthread and then leaves it, saying so: nothing that closes a project can be held\nfor good by it.\n\nThree older tests held expectations the tickets had changed and could not run\nwhere they were written. The refusal of a second report after a handoff now\nends \"Another answer needs a task\" (issue 1515's wording). A task whose report\nreaches its open asking chat is answered Finished, not Reported. A cancel of\nthe chat's own closed task says it has finished and that there is nothing to\ncancel; another chat's is still refused as not its own.\n\nThe breadcrumb did not shrink in a real engine: as an item of its line it was\nnever narrower than its own content, so the line clipped its end and no name\ngave way. It has `min-width: 0` now. The chats-list scenario looked for a row\nwith an empty second line, and every row's second line is always there and\nalways has something in the recorded markup: it now changes every second line,\nadding to some and emptying the rest, and checks that no row moves.\n\nThe Rust job in ci.yml has `timeout-minutes: 45`. It takes 19 on main; a hung\ntest now fails the job instead of holding a runner.\n\nRefs #1485, #1486, #1499\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-08T21:54:41+04:00",
+          "tree_id": "f2ed9a2046e1691ff4a8ffc7df1cb0695ae9ed8d",
+          "url": "https://github.com/purlis/purlis/commit/918ce402c5d90ddc3d5dbbe3d759d85c520b2d5b"
+        },
+        "date": 1791482570113,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5337485,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.521, 0.523, 0.534, 0.563, 0.567 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.973883999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.763, 16.921, 16.974, 17.036, 17.112 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.47006049999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.406, 102.789, 104.470, 104.620, 106.354 ms"
           }
         ]
       }
