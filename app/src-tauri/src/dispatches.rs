@@ -159,9 +159,11 @@ impl<'a> Outcomes<'a> {
         let listed = self
             .listed
             .get_or_insert_with(|| dispatchrecord::list(root));
-        let newest = listed
-            .iter()
-            .find(|record| dispatchrecord::same_chat(&record.worker.chat, &me))?;
+        let newest = listed.iter().find(|record| {
+            // A task no chat ever was is nobody's by its number (#1497).
+            !dispatchrecord::never_a_chat(record)
+                && dispatchrecord::same_chat(&record.worker.chat, &me)
+        })?;
         Some(newest.report.as_ref()?.outcome.word())
     }
 }
@@ -992,6 +994,7 @@ mod tests {
             ended_by: None,
             kept_open: false,
             did_not_start: false,
+            attempts: 0,
         }
     }
 

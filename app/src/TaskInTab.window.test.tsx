@@ -621,6 +621,9 @@ describe("a shown task that ends", () => {
     branch: null,
     reopens: true,
     not_reopened: null,
+    did_not_start: false,
+    attempts: 0,
+    waits: null,
     ...more,
   });
 

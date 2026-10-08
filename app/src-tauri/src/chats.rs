@@ -313,6 +313,14 @@ struct Waiting {
     approval: Option<NeedsApproval>,
 }
 
+/// A chat a launch could not start, as [`Chats::waiting_to_start`] hands it over.
+#[derive(Debug, Clone)]
+pub(crate) struct WaitingChat {
+    pub chat: Chat,
+    pub why: String,
+    pub approval: Option<NeedsApproval>,
+}
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     /// The open project's root, as the app holds it (#1410): the project of every chat
@@ -2749,25 +2757,48 @@ impl Chats {
             .collect()
     }
 
-    /// The chats a launch could not start as the record holds them, each with why: what says
-    /// whose task one was (#1497, `crate::unstarted`). The window's list is
-    /// [`Self::would_not_start`].
-    pub(crate) fn waiting_to_start(&self) -> Vec<(Chat, String)> {
+    /// The chats a launch could not start as the record holds them, each with why and the
+    /// approval its profile needs: what says whose task one was (#1497, `crate::unstarted`).
+    /// The window's list is [`Self::would_not_start`].
+    pub(crate) fn waiting_to_start(&self) -> Vec<WaitingChat> {
         lock(&self.would_not_start)
             .iter()
-            .map(|one| (one.chat.clone(), one.why.clone()))
+            .map(|one| WaitingChat {
+                chat: one.chat.clone(),
+                why: one.why.clone(),
+                approval: one.approval.clone(),
+            })
             .collect()
     }
 
-    /// In a test, `chat` is one a launch could not start, for `why`: held as
-    /// [`Self::put_back`] holds one, without a launch.
-    #[cfg(test)]
-    pub(crate) fn was_not_put_back(&self, chat: Chat, why: &str) {
+    /// Takes the chat `id` out of the chats waiting to start, and out of the record, and
+    /// answers it: what [`Self::forget`] drops, handed back so that whoever took it can put
+    /// it back ([`Self::keep_waiting`]) if what it took it for did not happen.
+    pub(crate) fn take_waiting(&self, id: &str) -> Option<WaitingChat> {
+        let taken = {
+            let mut waiting = lock(&self.would_not_start);
+            let at = waiting
+                .iter()
+                .position(|one| one.chat.identity.id.as_deref() == Some(id))?;
+            waiting.remove(at)
+        };
+        self.write_it_down();
+        Some(WaitingChat {
+            chat: taken.chat,
+            why: taken.why,
+            approval: taken.approval,
+        })
+    }
+
+    /// Holds `waiting` as a chat a launch could not start, as [`Self::put_back`] holds one:
+    /// recorded, and tried again at the next launch.
+    pub(crate) fn keep_waiting(&self, waiting: WaitingChat) {
         lock(&self.would_not_start).push(Waiting {
-            chat,
-            why: why.to_owned(),
-            approval: None,
+            chat: waiting.chat,
+            why: waiting.why,
+            approval: waiting.approval,
         });
+        self.write_it_down();
     }
 
     /// **Retry now** on a chat a launch could not start (NO-3): starts it again the way the

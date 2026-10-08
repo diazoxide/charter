@@ -4999,28 +4999,43 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   chat, and it has closed. `purlis dispatch list` lists the same records after the asking
   chat's open tasks, until the row is cleared or that chat closes.
 - **A task that did not start** (#1497): a task that was let through and started no chat
-  still has a record, written by the app at that moment and ended in the same breath. One
-  more key says so:
-  - `did_not_start` — `true` for a task no program was ever started for: the profile's
-    program was missing or did not answer as its harness, the sandbox would not wrap it,
-    there was no pseudo-terminal, its folder or workspace was gone, its worktree could not be
-    cut, a limit had filled between the person's Allow and the start, or a launch could not
-    put its chat back. Absent for every dispatch that started. Its `report` is then
-    `{"outcome": "failed", "text": "it did not start: <reason>"}`, where the text is purlis's
-    own sentence around the reason the start gave, on one line and in full, and `ended`
-    equals `started` for one that never ran. Its `worker` is the chat it would have been: the
-    number it was dealt and no `id`, because no chat ever had that number; for a task a
-    launch could not put back it is the chat it was, with its `id`, and `conversation` is the
-    one it was in, which Reopen resumes. A worktree cut for it was taken back, so `place`
-    names none.
+  still has a record, written by the app at that moment and ended in the same breath. Two
+  more keys say so:
+  - `did_not_start` — `true` for a task that did not start: the profile's program was missing
+    or did not answer as its harness, the sandbox would not wrap it, there was no
+    pseudo-terminal, its folder or workspace was gone, its worktree could not be cut, or a
+    limit had filled between the person's Allow and the start; and for a task a launch could
+    not start again **that the person then ended** (End task on its row). Absent for every
+    other dispatch. Its `report` is then `{"outcome": "failed", "text": "it did not start:
+    <reason>"}`, where the text is purlis's own sentence around the reason the start gave, on
+    one line, cut at a character with `…` past 3600 bytes.
+  - `attempts` — how many starts of the task were refused, where the asking chat tried again
+    and it was more than one: an integer of 2 or more. Absent for one. Each try writes a
+    record; the newest counts the earlier ones of the same asking chat and task name that did
+    not start and were not yet cleared, and marks them `cleared`, so they are one row with
+    the latest reason.
+
+  **For a task no chat ever was**, `worker` is the chat it would have been: the number it was
+  dealt and no `id`. That number is nobody's: such a record is never matched to a chat by it,
+  and its row is listed whatever chat later has the number. `ended` equals `started`. A
+  worktree cut for it and taken back whole is not named; one that could not be taken back,
+  or whose branch git kept, is named in `place.worktree` (repo, folder and branch), because
+  it is still on the disk. **For a task that had run and that the person ended**, the record
+  is the one it was running under: `worker` keeps the chat's `id`, and `conversation` is the
+  one it was in, which Reopen resumes. Its row is drawn only while that chat is not open, as
+  every finished row is.
 
   **It is a finished task's row like the others**: `failed`, a row of its own that never
   folds, cleared by Clear finished and gone when the asking chat closes, and there again
-  after the app is quit and reopened. It is listed whatever chat now has its `worker`'s
-  number. The window draws no line across itself for it; that line is kept for a chat nobody
-  asked for. A record of this kind is written for a chat's own task and for one the person
-  allowed from a Notice, never for a refusal made before a start was tried on the asking
-  chat's own command, which that command answers.
+  after the app is quit and reopened. `purlis dispatch list` says `did not start` for it. A
+  record of this kind is written for a chat's own task and for one the person allowed from a
+  Notice, never for a refusal made before a start was tried on the asking chat's own command,
+  which that command answers, and never for a start the person's stop refused.
+
+  **A launch writes nothing here.** A task a launch could not start again stays in
+  `app/reopen.json` with its dispatch record still running, and is tried again at the next
+  launch. The window draws it under the chat that asked, from those two files and no third,
+  until it starts or the person ends it.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.

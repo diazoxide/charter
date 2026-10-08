@@ -624,7 +624,7 @@ impl Held {
     /// always did. A fresh start writes the cleared record at once — the choice is the moment
     /// the old one stops being wanted, and a record left as it was would ask again at the next
     /// launch about chats the operator already declined.
-    fn reopen(&self, size: Size, record: Read, choice: Choice) {
+    pub(crate) fn reopen(&self, size: Size, record: Read, choice: Choice) {
         self.records.allow();
         // A record another clone or device wrote is a copy's or a move's (V43): a copy's chats
         // get ids of their own before any of them starts, and are written with them once
@@ -672,11 +672,9 @@ impl Held {
                 "purlis: plane {}, {back} of {wanted} chats back",
                 self.root.display()
             );
-            // **A task that could not be put back is a failed row under the chat that asked,
-            // and that chat is told** (#1497, V100-63): it is no longer one of the chats the
-            // window lists as waiting to start. What is left is the person's own: a chat they
-            // opened, a handoff's, and a task whose asking chat did not come back either.
-            crate::unstarted::not_put_back(self);
+            // Every chat that did not start stays recorded, a task among them (#1497): a
+            // launch ends nothing. A task whose asking chat came back is drawn under it and
+            // not across the window (`crate::unstarted`).
             for crate::chats::NotStarted { name, why, .. } in self.chats.would_not_start() {
                 tracing::warn!("purlis: {name} did not start ({why}); it is still recorded");
             }

@@ -1612,7 +1612,28 @@ fn chats_that_would_not_start(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
 ) -> Result<Vec<chats::NotStarted>, String> {
-    Ok(planes.held(&plane)?.chats().would_not_start())
+    let held = planes.held(&plane)?;
+    // A task a launch could not start again is drawn under the chat that asked, with the
+    // reason (#1497, `finished_tasks`), and so not in this list, which the window draws as a
+    // line across itself: that line is kept for a chat nobody asked for.
+    Ok(unstarted::across_the_window(&held))
+}
+
+/// **End task** (#1497): the person ends a task a launch could not start again, by its chat's
+/// id. Its dispatch ends failed with the reason, the chat that asked is told once as it is
+/// told a task's report, and it is no longer tried at a launch. Its row stays, as a finished
+/// one, with Reopen where its conversation is known.
+#[tauri::command]
+#[specta::specta]
+async fn end_task_that_did_not_start(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    id: String,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || unstarted::end(&held, &id))
+        .await
+        .map_err(|err| format!("purlis could not end the task: {err}"))?
 }
 
 /// The chat `session` as the window draws it, once it has started: the answer of the commands
@@ -1643,8 +1664,11 @@ async fn retry_chat_that_did_not_start(
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = held.chats().retry(&id, Size { columns, rows })?;
-        drawn(&held, session)
+        let session = held.chats().retry(&id, Size { columns, rows });
+        // A task drawn under the chat that asked reads from the same list (#1497): its row
+        // goes where it started, and says the new reason where it did not.
+        held.rows_changed();
+        drawn(&held, session?)
     })
     .await
     .map_err(|err| format!("purlis could not start the chat: {err}"))?

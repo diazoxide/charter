@@ -105,6 +105,9 @@ function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): 
   return {
     how: HOW[more.outcome ?? "done"],
     not_reopened: null,
+    did_not_start: false,
+    attempts: 0,
+    waits: null,
     id,
     asker,
     name: `check ${id}`,

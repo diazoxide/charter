@@ -1,9 +1,10 @@
-import { memo, useState } from "react";
+import { memo, useContext, useState } from "react";
 import { ChevronDown, ChevronRight, SquareTerminal } from "lucide-react";
 import type { FinishedTask } from "./bindings";
 import { firstLine, foldedOf, qualifierOf, shownOf } from "./finished";
 import { PersonaMark } from "./PersonaMark";
 import { StateShown } from "./StateShown";
+import { WaitingTaskWaysContext } from "./waitingTasks";
 
 /**
  * **A chat's finished tasks, under its row in the Chats section** (#1485).
@@ -14,7 +15,13 @@ import { StateShown } from "./StateShown";
  * never behind a count.
  *
  * **A task that did not start is one of those rows** (#1497): failed, with the reason shown
- * under it at once, as text. It is never a banner across the window.
+ * under it at once, as text. It is never a banner across the window. One the chat that asked
+ * tried more than once is one row, which says how often.
+ *
+ * **A task a launch could not start again is drawn here too, and is not ended** (`waits`): it
+ * is still recorded and is tried again at the next launch. Its row offers Try to start again,
+ * Review and approve… where its profile waits on that, and End task, which is the only thing
+ * that ends it. It has no Reopen and no Clear.
  *
  * **A finished task cannot be typed into**: its program has ended. Pressing its row shows its
  * report, in place, **as text**: every word of it is a text node, so nothing a task wrote is
@@ -101,12 +108,24 @@ function FinishedRow({
   const [shown, setShown] = useState(task.did_not_start);
   const [refused, setRefused] = useState<string>();
   const [busy, setBusy] = useState(false);
+  /** Whether End task was pressed once and waits for the second press. */
+  const [ending, setEnding] = useState(false);
+  const ways = useContext(WaitingTaskWaysContext);
+  const waits = task.waits;
   const state = shownOf(task);
   const more = qualifierOf(task);
   /** Why Reopen does nothing, where it does nothing: said to a screen reader on the button,
    *  which stays in the Tab order, and in the opened row. A disabled button takes no focus,
    *  so its reason would reach nobody on a keyboard. */
   const cannot = task.reopens ? undefined : NO_CONVERSATION;
+  const doing = (what: Promise<string | undefined>) => {
+    setBusy(true);
+    setRefused(undefined);
+    void what.then(setRefused).finally(() => {
+      setBusy(false);
+      setEnding(false);
+    });
+  };
   const reopen = () => {
     if (cannot !== undefined || busy) return;
     setBusy(true);
@@ -141,23 +160,92 @@ function FinishedRow({
             does (blocked, closed by the person), so no end is said less exactly here. */}
           {state !== undefined && <StateShown shown={state} />}
           {more !== undefined && <span className="outcome">{more}</span>}
+          {task.attempts > 1 && <span className="outcome">tried {task.attempts} times</span>}
         </button>
-        <button
-          type="button"
-          className="finished-reopen"
-          tabIndex={0}
-          aria-disabled={cannot !== undefined || busy || undefined}
-          aria-label={`Reopen ${task.name}`}
-          aria-description={cannot}
-          title={
-            cannot ??
-            "Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told."
-          }
-          onClick={reopen}
-        >
-          Reopen
-        </button>
-        {onClear !== undefined && (
+        {/* Still a task (`waits`): the ways out a chat that did not start has, and never
+          Reopen or Clear, which are for one that has ended. */}
+        {waits !== null && ways !== null && (
+          <>
+            <button
+              type="button"
+              className="finished-reopen"
+              tabIndex={0}
+              disabled={busy}
+              aria-label={`Try to start ${task.name} again`}
+              title="Starts it again as the launch tried to. It stays a task of the chat that asked."
+              onClick={() => doing(ways.retry(task).then(() => undefined))}
+            >
+              Try to start again
+            </button>
+            {waits.approval !== null && (
+              <button
+                type="button"
+                className="finished-reopen"
+                tabIndex={0}
+                disabled={busy}
+                aria-label={`Review and approve what ${task.name} would run`}
+                onClick={() => waits.approval !== null && ways.approve(task, waits.approval)}
+              >
+                Review and approve…
+              </button>
+            )}
+            {ending ? (
+              <>
+                <button
+                  type="button"
+                  className="finished-clear"
+                  tabIndex={0}
+                  disabled={busy}
+                  aria-label={`End ${task.name} now`}
+                  onClick={() => doing(ways.end(task))}
+                >
+                  End it
+                </button>
+                <button
+                  type="button"
+                  className="finished-clear"
+                  tabIndex={0}
+                  disabled={busy}
+                  aria-label={`Keep ${task.name}`}
+                  onClick={() => setEnding(false)}
+                >
+                  Keep
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="finished-clear"
+                tabIndex={0}
+                disabled={busy}
+                aria-label={`End task ${task.name}`}
+                title="Ends the task: the chat that asked is told it failed and why, and it is not tried again. Its conversation can still be reopened as an ordinary chat."
+                onClick={() => setEnding(true)}
+              >
+                End task
+              </button>
+            )}
+          </>
+        )}
+        {/* Reopen and Clear are for a task that has ended. */}
+        {waits === null && (
+          <button
+            type="button"
+            className="finished-reopen"
+            tabIndex={0}
+            aria-disabled={cannot !== undefined || busy || undefined}
+            aria-label={`Reopen ${task.name}`}
+            aria-description={cannot}
+            title={
+              cannot ??
+              "Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told."
+            }
+            onClick={reopen}
+          >
+            Reopen
+          </button>
+        )}
+        {waits === null && onClear !== undefined && (
           <button
             type="button"
             className="finished-clear"
@@ -184,6 +272,11 @@ function FinishedRow({
           <p className="report-text">{task.report}</p>
           {task.changed !== null && (
             <p className="report-text report-changed">Changed: {task.changed}</p>
+          )}
+          {waits !== null && (
+            <p className="report-text">
+              It is still recorded, and will be tried again at the next launch.
+            </p>
           )}
           <p className="report-where">
             {task.place}

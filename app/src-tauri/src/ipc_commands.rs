@@ -98,6 +98,7 @@ macro_rules! app_commands {
                 chats_that_would_not_start,
                 retry_chat_that_did_not_start,
                 forget_chat_that_did_not_start,
+                end_task_that_did_not_start,
                 start_chat_fresh,
                 ask_chat_restart,
                 restart_chat,

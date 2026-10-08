@@ -186,9 +186,19 @@ fn a_reason_that_cannot_be_drawn_is_never_written_as_it_came() {
         said("   "),
         "it did not start: purlis could not write down why; the app's log has it"
     );
-    // A reason longer than a report may be is cut, and still a report's text.
-    let long = said(&"x".repeat(20_000));
-    assert!(crate::handoff::report_summary(&long).is_ok());
+    // A reason longer than a report may be is cut, and still a report's text: cut, in
+    // whatever script, and never replaced by the sentence for no reason at all.
+    for long in [
+        "x".repeat(20_000),
+        "папка ".repeat(4_000),
+        "資料夾".repeat(4_000),
+    ] {
+        let said = said(&long);
+        assert!(crate::handoff::report_summary(&said).is_ok());
+        let kept = reason(&said).expect("a reason");
+        assert!(kept.ends_with('…') && long.starts_with(kept.trim_end_matches('…')));
+        assert!(kept.len() > 3000, "most of it is kept: {}", kept.len());
+    }
 }
 
 #[test]
@@ -286,14 +296,14 @@ fn a_record_under_the_id_minted_for_its_worktree_is_written_once() {
     assert_eq!(kept.id, id);
     // A dispatch ends once: a second word on it changes nothing.
     assert!(
-        !dispatchrecord::did_not_start(&root, &id, "another reason", at("2026-10-08T09:05:00Z"))
+        !dispatchrecord::did_not_start(&root, &id, "another reason", 1, at("2026-10-08T09:05:00Z"))
             .unwrap()
     );
     assert_eq!(dispatchrecord::read(&root, &id), Some(kept));
 }
 
 #[test]
-fn a_task_a_launch_could_not_put_back_ends_failed_and_keeps_its_conversation() {
+fn a_task_a_launch_could_not_start_again_that_the_person_ends_keeps_its_conversation() {
     let (_d, root) = project();
     // It ran before the app was quit: its record is a running one, and names its chat.
     let running = dispatchrecord::open(
@@ -337,7 +347,8 @@ fn a_task_a_launch_could_not_put_back_ends_failed_and_keeps_its_conversation() {
         dispatchrecord::finished_for(&root, &steward(), nobody_open),
         vec![kept]
     );
-    // Told of once: a second launch that finds it ended changes nothing.
+    // The chat it was is not open, so its row is drawn; were that chat open, it would not be
+    // (below). And it ends once: a second word on it changes nothing.
     assert!(!not_put_back(&root, &running, &why, None, at("2026-10-09T09:00:00Z")).unwrap());
 }
 
@@ -354,7 +365,7 @@ fn what_a_chat_that_was_not_put_back_is_follows_its_own_record_of_who_started_it
         by_person: false,
     };
     let of = |from: Option<&HandedFrom>, open| NotPutBack::of(from, open);
-    // A task that still owed its report, under a chat that came back: failed, and told.
+    // A task that still owed its report, under a chat that came back: drawn under it.
     assert_eq!(
         of(Some(&from(Mode::Task, Owed::Due)), true),
         NotPutBack::Failed
@@ -489,5 +500,143 @@ fn a_file_that_speaks_as_purlis_with_any_other_sentence_is_still_dropped() {
     assert!(
         told.starts_with("⬢ **`check prod` reported: failed**"),
         "{told}"
+    );
+}
+
+#[test]
+fn a_row_is_never_drawn_for_a_chat_that_is_open_whatever_its_record_says() {
+    let (_d, root) = project();
+    // A task that ran, could not be started again, and was ended: its record names the chat
+    // it was by its id.
+    let was = ChatRef {
+        id: Some("01K6W0RKER000000000000000B".to_owned()),
+        ..a_task("check prod").worker.chat
+    };
+    let running = dispatchrecord::open(
+        &root,
+        Opening {
+            worker: Worker {
+                chat: was.clone(),
+                ..a_task("check prod").worker
+            },
+            ..a_task("check prod")
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    assert!(
+        not_put_back(
+            &root,
+            &running,
+            "the folder is gone",
+            None,
+            at("2026-10-08T09:00:00Z")
+        )
+        .unwrap()
+    );
+
+    // That chat open again (the app died between the two writes, or the file was edited): it
+    // is a chat, and no failed row stands beside it.
+    let it_is_open = |chat: &ChatRef| chat.id == was.id;
+    assert!(dispatchrecord::finished_for(&root, &steward(), it_is_open).is_empty());
+    assert_eq!(
+        dispatchrecord::finished_for(&root, &steward(), nobody_open).len(),
+        1
+    );
+}
+
+#[test]
+fn a_task_no_chat_ever_was_is_never_taken_for_the_chat_that_later_has_its_number() {
+    let (_d, root) = project();
+    let kept = record(
+        &root,
+        None,
+        a_task("check prod"),
+        "the folder is gone",
+        at("2026-10-08T09:00:00Z"),
+    )
+    .unwrap();
+    assert!(dispatchrecord::never_a_chat(&kept));
+    // A chat that has the number in some later launch, and no id of its own on record.
+    let later = ChatRef {
+        chat: TASK,
+        id: None,
+        name: "9".to_owned(),
+        persona: None,
+    };
+    assert_eq!(dispatchrecord::latest_for(&root, &later), None);
+    assert_eq!(dispatchrecord::running_for(&root, &later), None);
+    assert_eq!(
+        dispatchrecord::session_recorded(&root, &later, "sessions/x.md"),
+        0
+    );
+}
+
+#[test]
+fn a_task_tried_again_and_refused_again_is_one_row_with_a_count_and_the_latest_reason() {
+    let (_d, root) = project();
+    let first = record(
+        &root,
+        None,
+        a_task("check prod"),
+        "the folder is gone",
+        at("2026-10-08T09:00:00Z"),
+    )
+    .unwrap();
+    assert_eq!(first.attempts, 0, "one is not counted");
+    // Another task of the same chat's, which is its own row.
+    record(
+        &root,
+        None,
+        a_task("check staging"),
+        "the folder is gone",
+        at("2026-10-08T09:00:30Z"),
+    )
+    .unwrap();
+    for (at_, why) in [
+        ("2026-10-08T09:01:00Z", "the folder is still gone"),
+        ("2026-10-08T09:02:00Z", "no pseudo-terminal"),
+    ] {
+        record(&root, None, a_task("check prod"), why, at(at_)).unwrap();
+    }
+
+    let rows = dispatchrecord::finished_for(&root, &steward(), nobody_open);
+    let said: Vec<(Option<&str>, u32, Option<&str>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.task.as_deref(),
+                row.attempts,
+                reason(&row.report.as_ref().unwrap().text),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        vec![
+            (Some("check staging"), 0, Some("the folder is gone")),
+            (Some("check prod"), 3, Some("no pseudo-terminal")),
+        ]
+    );
+    // The earlier records stay, cleared: nothing is rewritten or lost.
+    assert!(dispatchrecord::read(&root, &first.id).unwrap().cleared);
+    // A row the person cleared is not counted into a later one.
+    assert_eq!(dispatchrecord::clear_for(&root, &steward()), 2);
+    let again = record(
+        &root,
+        None,
+        a_task("check prod"),
+        "the folder is gone",
+        at("2026-10-08T09:10:00Z"),
+    )
+    .unwrap();
+    assert_eq!(again.attempts, 0);
+}
+
+#[test]
+fn a_task_a_launch_could_not_start_again_is_answered_as_a_standing_and_not_a_report() {
+    assert_eq!(
+        waiting_on_the_person("the folder\nis gone"),
+        "waiting on the operator: it did not start again (the folder\\x0ais gone)"
     );
 }

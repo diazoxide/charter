@@ -292,12 +292,28 @@ pub struct Record {
     /// next launch. It is a finished row once it is closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub kept_open: bool,
-    /// Whether the task never started (#1497): it was let through, and no program was started
-    /// for it. Its report is then purlis's own sentence saying why ([`did_not_start`]), failed,
-    /// and its `worker` is the chat it would have been, which no chat ever was. Absent for
-    /// every dispatch that started.
+    /// Whether the task did not start (#1497): it was let through and no program was started
+    /// for it, or a launch could not start it again and the person ended it. Its report is
+    /// then purlis's own sentence saying why ([`did_not_start`]), failed. For one that never
+    /// ran, its `worker` is the chat it would have been: a number and no id, because no chat
+    /// ever had it ([`never_a_chat`]). Absent for every other dispatch.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub did_not_start: bool,
+    /// How many starts of this task were refused, where it was more than one: the asking chat
+    /// tried again and each try failed, and they are one row with the latest reason
+    /// ([`crate::didnotstart::record`]). Absent for one.
+    #[serde(default, skip_serializing_if = "one_or_none")]
+    pub attempts: u32,
+}
+
+fn one_or_none(attempts: &u32) -> bool {
+    *attempts <= 1
+}
+
+/// Whether `record` is of a task no chat ever was: it did not start, and its worker has a
+/// number and no id. That number is nobody's, so the record is never matched to a chat by it.
+pub fn never_a_chat(record: &Record) -> bool {
+    record.did_not_start && record.worker.chat.id.is_none()
 }
 
 /// Who ended a dispatch, where the app knows it was not the persona chat's own report alone.
@@ -400,6 +416,7 @@ pub fn open_as(
         ended_by: None,
         kept_open: false,
         did_not_start: false,
+        attempts: 0,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -500,12 +517,14 @@ pub fn ended_in(root: &Path, id: &str, conversation: &str) -> io::Result<bool> {
 /// for a record that is not there or has already ended: a dispatch ends once.
 ///
 /// A record opened a moment ago for a task whose start was refused, or the running record of
-/// a task a launch could not put back: either way the row that stays under the chat that
-/// asked is read from it, as every finished row is ([`finished_for`]).
+/// a task a launch could not start again that the person ended: either way the row that stays
+/// under the chat that asked is read from it, as every finished row is ([`finished_for`]).
+/// `attempts` is how many refused starts the row stands for ([`Record::attempts`]).
 pub fn did_not_start(
     root: &Path,
     id: &str,
     why: &str,
+    attempts: u32,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<bool> {
     let report = capped_report(&Report {
@@ -520,6 +539,7 @@ pub fn did_not_start(
         record.ended = Some(crate::dispatch::stamp(now));
         record.report = Some(report);
         record.did_not_start = true;
+        record.attempts = if attempts > 1 { attempts } else { 0 };
         true
     })
 }
@@ -612,9 +632,10 @@ pub fn finished(root: &Path, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
         .filter(|record| {
             !record.cleared
                 && Finished::of(record).is_some()
-                // A task that did not start has no chat to be open: the number it was dealt
-                // is all its record has of one, and is no chat's (#1497).
-                && (record.did_not_start || !open(&record.worker.chat))
+                // A task no chat ever was has no chat to be open: the number it was dealt
+                // is all its record has of one, and is nobody's (#1497). One a launch could
+                // not start again was a chat, and is held to the rule every row is.
+                && (never_a_chat(record) || !open(&record.worker.chat))
                 && sound(record)
         })
         .collect();
@@ -681,7 +702,10 @@ pub fn session_recorded(root: &Path, chat: &ChatRef, path: &str) -> usize {
             record.asker.session_record = Some(path.to_owned());
             touched = true;
         }
-        if same_chat(&record.worker.chat, chat) && record.worker.session_record.is_none() {
+        if !never_a_chat(&record)
+            && same_chat(&record.worker.chat, chat)
+            && record.worker.session_record.is_none()
+        {
             record.worker.session_record = Some(path.to_owned());
             touched = true;
         }
@@ -854,6 +878,7 @@ fn capped(record: &Record) -> Record {
         ended_by: record.ended_by,
         kept_open: record.kept_open,
         did_not_start: record.did_not_start,
+        attempts: record.attempts,
     }
 }
 
@@ -970,7 +995,7 @@ pub fn running_for(root: &Path, chat: &ChatRef) -> Option<Record> {
 pub fn latest_for(root: &Path, chat: &ChatRef) -> Option<Record> {
     list(root)
         .into_iter()
-        .find(|record| same_chat(&record.worker.chat, chat))
+        .find(|record| !never_a_chat(record) && same_chat(&record.worker.chat, chat))
 }
 
 /// **How many dispatches each persona was given**, by the records this machine keeps: every

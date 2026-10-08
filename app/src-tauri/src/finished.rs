@@ -60,9 +60,25 @@ pub(crate) struct FinishedTask {
     pub reopens: bool,
     /// Why the last Reopen of it did not hold, where one did not: said on its row.
     pub not_reopened: Option<String>,
-    /// Whether it never started (#1497): its report is then purlis's own sentence saying why,
+    /// Whether it did not start (#1497): its report is then purlis's own sentence saying why,
     /// which its row shows without a press.
     pub did_not_start: bool,
+    /// How many starts of it were refused, where the chat that asked tried more than once:
+    /// they are this one row, with the latest reason. 0 for one.
+    pub attempts: u32,
+    /// Set where this is not an ended task at all, but **one a launch could not start again**
+    /// (`crate::unstarted`): still a task, still recorded, tried again at the next launch.
+    /// `id` is then its chat's id, which Try to start again, Review and approve and End task
+    /// name it by; it has no Reopen and no Clear. Null for every ended task.
+    pub waits: Option<WaitsToStart>,
+}
+
+/// What a task waiting to start again offers beside trying again and ending it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct WaitsToStart {
+    /// The approval its profile needs before it can start, where it needs one (#1246): the
+    /// row offers Review and approve from this, never from the words of its reason.
+    pub approval: Option<crate::chats::NeedsApproval>,
 }
 
 /// How a finished task ended (`dispatchrecord::Finished`), as the window is sent it.
@@ -132,6 +148,8 @@ fn row(record: &Record, asker: u32, how: Finished) -> FinishedTask {
         reopens: record.conversation.is_some(),
         not_reopened: None,
         did_not_start: record.did_not_start,
+        attempts: record.attempts,
+        waits: None,
     }
 }
 
@@ -161,6 +179,9 @@ pub(crate) fn listed(held: &Held) -> Vec<FinishedTask> {
                 ..row(record, is(&record.asker.chat)?, Finished::of(record)?)
             })
         })
+        // Then the tasks a launch could not start again (#1497): not ended, and drawn here
+        // with the reason so they are found under the chat that asked.
+        .chain(crate::unstarted::rows(held))
         .collect()
 }
 
@@ -205,6 +226,10 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
                 .word()
                 .to_owned(),
             state: match how {
+                // It never ran, so it reported nothing (#1497).
+                Finished::Failed if record.did_not_start => {
+                    purlis_core::didnotstart::LISTED.to_owned()
+                }
                 Finished::Done | Finished::Cancelled | Finished::Blocked | Finished::Failed => {
                     format!("reported: {}", how.word())
                 }
@@ -226,6 +251,9 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
             finished: true,
         })
     })
+    // And the ones a launch could not start again, by the number each had: waiting on the
+    // person, and not somebody else's.
+    .chain(crate::unstarted::listed_for(held, asker))
     .collect()
 }
 
@@ -568,6 +596,7 @@ mod tests {
             ended_by: None,
             kept_open: false,
             did_not_start: false,
+            attempts: 0,
         }
     }
 
@@ -596,6 +625,8 @@ mod tests {
                 reopens: true,
                 not_reopened: None,
                 did_not_start: false,
+                attempts: 0,
+                waits: None,
             }
         );
     }

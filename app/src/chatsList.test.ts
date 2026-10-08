@@ -212,6 +212,9 @@ describe("the filter (V100-49)", () => {
       branch: null,
       reopens: false,
       not_reopened: null,
+      did_not_start: false,
+      attempts: 0,
+      waits: null,
     };
     for (const text of ["staging", "devops", "beta", "failed", "blocked", "BETA check"])
       expect(matchesFinished(ended, { text, ranks: [] }), text).toBe(true);
@@ -245,6 +248,9 @@ describe("what a folded session says of its finished tasks (V100-48)", () => {
     branch: null,
     reopens: false,
     not_reopened: null,
+    did_not_start: false,
+    attempts: 0,
+    waits: null,
   });
 
   it("counts them by how each ended, in the shape and the word a row says that state in", () => {

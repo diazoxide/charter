@@ -1502,21 +1502,35 @@ fn dispatch_it(
     wanted: &Wanted,
     size: Size,
 ) -> Result<Dispatched, String> {
-    dispatch_noting(held, plane, wanted, size, &mut None)
+    dispatch_noting(held, plane, wanted, size).map_err(|not| not.why)
 }
 
-/// [`dispatch_it`], noting in `row` the number of a task that was let through and then did
-/// not start (#1497): its failed row is written by then (`crate::unstarted::recorded`), under
-/// the chat that asked. Left as it was for every refusal before a start was tried, and for a
-/// handoff, which is not a task. The answer is the same either way: whoever is on the line
-/// for it is told why, once.
+/// Why a dispatch started nothing ([`dispatch_noting`]).
+struct NotDispatched {
+    /// The sentence for whoever is on the line for it.
+    why: String,
+    /// The number of a task that was let through and then did not start (#1497), where its
+    /// failed row is written (`crate::unstarted::recorded`). None for every refusal before a
+    /// start was tried, for a handoff, and for a start the person's stop refused.
+    row: Option<u32>,
+}
+
+impl From<String> for NotDispatched {
+    /// A refusal before a start was tried: a sentence, and no row.
+    fn from(why: String) -> Self {
+        Self { why, row: None }
+    }
+}
+
+/// [`dispatch_it`], saying beside a refusal whether a task that was let through did not start
+/// and has its failed row (#1497, [`NotDispatched::row`]). The answer is the same either
+/// way: whoever is on the line for it is told why, once.
 fn dispatch_noting(
     held: &Held,
     plane: &PlaneId,
     wanted: &Wanted,
     size: Size,
-    row: &mut Option<u32>,
-) -> Result<Dispatched, String> {
+) -> Result<Dispatched, NotDispatched> {
     use crate::dispatchgrants::Requested;
     use purlis_core::dispatchdecision::{By, Decision, Moment};
     use purlis_core::dispatchplace::{self, Ground};
@@ -1657,7 +1671,7 @@ fn dispatch_noting(
     // The command measured this already, with a name standing in for the one written here;
     // measured again because these bytes are about to become a harness's argv.
     if let Some(bad) = handoff::bad_message(&message) {
-        return Err(bad.say());
+        return Err(bad.say().into());
     }
     let attended = attendance(held, from, &asking, &on.launch.0);
     // **A chat nobody is at makes no workspace** (D-1444-13): its handoff goes into one that
@@ -1668,7 +1682,7 @@ fn dispatch_noting(
             .as_ref()
             .is_some_and(|moved| moved.create_vision.is_some())
     {
-        return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned());
+        return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned().into());
     }
     let asking_as = crate::dispatchgrants::asking_from(&asking, from, asker.clone(), root);
     // **A chat nobody is at crosses into another workspace only under a grant that already
@@ -1687,7 +1701,7 @@ fn dispatch_noting(
             &standing,
             name,
         ) {
-            return Err(refused.say());
+            return Err(refused.say().into());
         }
     }
 
@@ -1702,7 +1716,7 @@ fn dispatch_noting(
         // **A chat's own ask.** The person asking from that chat's tab is not that chat
         // starting one, and may still ask (D-T59-j4).
         if wanted.by == By::Chat && crate::stopping::refuses_a_start(held, from) {
-            return Err(crate::stopping::STARTS_NOTHING.to_owned());
+            return Err(crate::stopping::STARTS_NOTHING.to_owned().into());
         }
         // What the decision reads of grants only orders its answer: a limit before a question
         // to the person. A chat nobody is at has no grant of one chat read for it.
@@ -1740,7 +1754,8 @@ fn dispatch_noting(
             return Err(match wanted.by {
                 By::Chat => why.say(),
                 By::Person => said_to_the_person(why),
-            });
+            }
+            .into());
         }
         // The decision refused where no profile was chosen.
         let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
@@ -1749,7 +1764,7 @@ fn dispatch_noting(
         // (which a chat can write), or nobody, where it is the asking chat's own. Said now,
         // before the person is asked for anything.
         if let Some(refused) = asks_nobody(&on, chosen, asked.to.as_deref()) {
-            return Err(refused);
+            return Err(refused.into());
         }
         // **The grant**, where a chat asks for a persona. The person needs none, and a chat
         // on no persona dispatching to none has no pair to grant.
@@ -1772,9 +1787,9 @@ fn dispatch_noting(
                         });
                     }
                     Requested::Locked(why) => {
-                        return Err(dispatchdecision::Refused::Locked(why).say());
+                        return Err(dispatchdecision::Refused::Locked(why).say().into());
                     }
-                    Requested::Refused(why) => return Err(why),
+                    Requested::Refused(why) => return Err(why.into()),
                 }
             }
             (By::Person, Some(to)) => Some(dispatchgrant::grants_for_a_dispatched_chat(to)),
@@ -1850,6 +1865,8 @@ fn dispatch_noting(
             workspace: ground.workspace().map(str::to_owned).or(workspace.clone()),
             folder: None,
             id: named_for.as_ref().map(|(id, _, _, _)| id.clone()),
+            worktree: None,
+            was: None,
         });
     // **The worktree, cut now and by the app** (#1453): the dispatch is let through and its
     // grant stands, so this is the first moment anything is written for it. By the brokered
@@ -1860,13 +1877,13 @@ fn dispatch_noting(
             let isolation = crate::gitbroker::isolation();
             let cut = dispatchplace::cut(root, repo, task, id, &isolation)
                 .map_err(said_of_place)
-                .inspect_err(|why| {
-                    // A worktree that could not be cut is a start that did not happen.
-                    if let Some(task) = &unstarted
-                        && crate::unstarted::recorded(held, task, why)
-                    {
-                        *row = Some(number);
-                    }
+                // A worktree that could not be cut is a start that did not happen.
+                .map_err(|why| NotDispatched {
+                    row: unstarted
+                        .as_ref()
+                        .and_then(|task| crate::unstarted::recorded(held, task, &why))
+                        .map(|_| number),
+                    why,
                 })?;
             (Some(cut), Some(isolation))
         }
@@ -1949,6 +1966,15 @@ fn dispatch_noting(
         ),
         _ => why,
     });
+    // What is still on the disk of a worktree that could not be taken back whole (#1497): the
+    // record of a task that did not start names it, so the person can find it.
+    let mut left_behind = None;
+    let still_there = |cut: &purlis_core::chatpiece::Cut| dispatchrecord::Worktree {
+        repo: cut.repo.clone(),
+        piece: cut.piece.clone(),
+        branch: Some(cut.branch.clone()),
+        removed: None,
+    };
     let started = match (started, &cut, &isolation) {
         (Ok(arrived), _, _) => Ok(arrived),
         // **A start that did not happen takes its worktree back**: nothing has written to it,
@@ -1958,16 +1984,22 @@ fn dispatch_noting(
             use purlis_core::chatpiece::Undone;
             Err(match dispatchplace::take_back(root, cut, isolation) {
                 Ok(Undone::Gone) => refused,
-                Ok(Undone::BranchKept) => format!(
-                    "{refused} Its worktree's folder was taken back, and git kept the branch \
-                     {} in {}.",
-                    cut.branch, cut.repo
-                ),
-                Err(kept) => format!(
-                    "{refused} The worktree cut for it, on the branch {} in {}, could not be \
-                     taken back: {kept}",
-                    cut.branch, cut.repo
-                ),
+                Ok(Undone::BranchKept) => {
+                    left_behind = Some(still_there(cut));
+                    format!(
+                        "{refused} Its worktree's folder was taken back, and git kept the \
+                         branch {} in {}.",
+                        cut.branch, cut.repo
+                    )
+                }
+                Err(kept) => {
+                    left_behind = Some(still_there(cut));
+                    format!(
+                        "{refused} The worktree cut for it, on the branch {} in {}, could not \
+                         be taken back: {kept}",
+                        cut.branch, cut.repo
+                    )
+                }
             })
         }
         (Err(refused), _, _) => Err(refused),
@@ -1976,13 +2008,21 @@ fn dispatch_noting(
         Ok(arrived) => arrived,
         // **And a task that did not start is a failed row under the chat that asked**
         // (#1497), with the whole of why. The deciding lock was let go before the start.
+        //
+        // **A start the person's stop refused is not a failed start** (D-T59-j4, #1448): the
+        // stop says what happened to the chats below it, and one of the two places that
+        // answer it had started a program and ended it. No row is written for it.
         Err(why) => {
-            if let Some(task) = &unstarted
-                && crate::unstarted::recorded(held, task, &why)
-            {
-                *row = Some(number);
-            }
-            return Err(why);
+            let stopped = why.starts_with(crate::stopping::STARTS_NOTHING);
+            let row = unstarted
+                .filter(|_| !stopped)
+                .map(|task| crate::unstarted::Unstarted {
+                    worktree: left_behind,
+                    ..task
+                })
+                .and_then(|task| crate::unstarted::recorded(held, &task, &why))
+                .map(|_| number);
+            return Err(NotDispatched { why, row });
         }
     };
     debug_assert_eq!(arrived.persona, to);
@@ -2055,7 +2095,9 @@ fn dispatch_noting(
 /// decided again at this moment, under the lock, against the limits and the chats as they
 /// stand now. Kept blocked: nothing starts. Either way the asking chat's command returned
 /// long ago, so it is told on its next turn, as it is told a report
-/// ([`purlis_core::handback::Answered`]), and nothing is typed into it.
+/// ([`purlis_core::handback::Answered`]), and nothing is typed into it. **But a task that was
+/// allowed and did not start** is told as a task's failed report is (#1497,
+/// `crate::unstarted::allowed`): that one may be typed the line a landed report types.
 ///
 /// **Only what was held starts.** The brief is the one this app kept under the store's own
 /// number when the Notice was raised, never the store's shown copy and never a later ask's.
@@ -2085,7 +2127,7 @@ pub fn answered(
     let (how, detail) = if answer.allowed.is_none() {
         (Answered::KeptBlocked, pair)
     } else {
-        match dispatch_noting(held, plane, &wanted, STARTING, &mut row) {
+        match dispatch_noting(held, plane, &wanted, STARTING) {
             Ok(Dispatched::Started {
                 it, note, works, ..
             }) => {
@@ -2124,7 +2166,10 @@ pub fn answered(
                     ),
                 )
             }
-            Err(why) => (Answered::NotStarted, why),
+            Err(not) => {
+                row = not.row;
+                (Answered::NotStarted, not.why)
+            }
         }
     };
     // **A task the person allowed that did not start is a failed row under the chat that
@@ -2147,6 +2192,8 @@ pub fn answered(
             workspace: workspace_of_chat(held, wanted.chat),
             folder: None,
             id: None,
+            worktree: None,
+            was: None,
         };
         crate::unstarted::allowed(held, &task, row.is_some(), &detail);
         return;

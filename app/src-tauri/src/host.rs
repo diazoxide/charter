@@ -279,6 +279,8 @@ pub(crate) mod pretend {
         ends: Mutex<Option<Ends>>,
         /// Why it starts nothing, while a test has it refuse ([`Pretend::refuses`]).
         refusing: Mutex<Option<String>>,
+        /// The numbers it starts nothing under, and why ([`Pretend::refuses_number`]).
+        refusing_numbers: Mutex<Vec<(u32, String)>>,
     }
 
     impl Pretend {
@@ -296,6 +298,17 @@ pub(crate) mod pretend {
         /// does; `None` starts them again.
         pub fn refuses(&self, why: Option<&str>) {
             *lock(&self.seen.refusing) = why.map(str::to_owned);
+        }
+
+        /// Refuses a start asked for under `number` with `why`, and starts every other: what
+        /// a launch meets when one chat's program will not start and the rest do.
+        pub fn refuses_number(&self, number: u32, why: &str) {
+            lock(&self.seen.refusing_numbers).push((number, why.to_owned()));
+        }
+
+        /// Starts under `number` again.
+        pub fn starts_number(&self, number: u32) {
+            lock(&self.seen.refusing_numbers).retain(|(one, _)| *one != number);
         }
 
         /// Says its sessions report on `socket`.
@@ -329,6 +342,12 @@ pub(crate) mod pretend {
         ) -> Result<u32, String> {
             if let Some(why) = lock(&self.seen.refusing).clone() {
                 return Err(why);
+            }
+            if let Some((_, why)) = lock(&self.seen.refusing_numbers)
+                .iter()
+                .find(|(number, _)| wanted == Some(*number))
+            {
+                return Err(why.clone());
             }
             let id = wanted.unwrap_or_else(|| self.deal());
             self.seen.dealt.fetch_max(id, Ordering::SeqCst);

@@ -683,7 +683,18 @@ pub fn wait(held: &Weak<Held>, asked: &Asked, connection: u64) -> Answer {
             Err(why) => {
                 let ledger = tasks.ledger();
                 let Some(gone) = ledger.gone(asked.chat, of) else {
-                    return no(why);
+                    drop(ledger);
+                    // One a launch could not start again is still this chat's task (#1497):
+                    // it is told where it stands, at once, and not that the task is not its
+                    // own. Its report comes if the person ends it.
+                    return match crate::unstarted::standing(&held, asked.chat, of) {
+                        Some((name, state)) => task(Answered::Waited {
+                            of,
+                            name,
+                            what: Waited::Running { state },
+                        }),
+                        None => no(why),
+                    };
                 };
                 return task(Answered::Waited {
                     of,
