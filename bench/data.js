@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791497737429,
+  "lastUpdate": 1791500305714,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3696,6 +3696,48 @@ window.BENCHMARK_DATA = {
             "value": 101.68803150000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.488, 101.384, 101.688, 102.006, 102.565 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "50b34380602556a0601af3a5b95846d9aeab9b08",
+          "message": "The rust job runs the tests with cargo-nextest\n\ncargo test runs the workspace's test binaries one after another, so the run\nstep took 690 to 715 s on a job whose build step took 333 s. nextest runs every\nbinary's tests at once, each test in a process of its own. The floods of\nunread_answers, which a static lock ran one at a time, keep that order through\na nextest test group. nextest does not run doctests, so cargo test --doc does.\n\nLocally nothing changes: cargo test --workspace runs the same tests.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T02:39:32+04:00",
+          "tree_id": "25579888adb3851fc3e3f42877d7688b36143ab7",
+          "url": "https://github.com/purlis/purlis/commit/50b34380602556a0601af3a5b95846d9aeab9b08"
+        },
+        "date": 1791500304908,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.530486,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.519, 0.529, 0.530, 0.531, 0.545 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.919734000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.359, 16.847, 16.920, 16.955, 17.434 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.59214499999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.017, 103.469, 104.592, 105.076, 105.156 ms"
           }
         ]
       }
