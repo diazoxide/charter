@@ -303,7 +303,6 @@ import {
   below as chatsBelow,
   chatsTree,
   listedChat,
-  startedElsewhere,
   type ChatRow,
   type ListedChat,
 } from "./chatsTree";
@@ -5017,9 +5016,18 @@ export const PlaneView = memo(function PlaneView({
     const last = recalled.get(`${id}:${lead}:${task}`);
     return last?.path[last.path.length - 1].name;
   };
-  /** The chats each chat started that went to another workspace, which the explorer draws
-   *  under its row with that workspace named. */
-  const chatsStarted = useMemo(() => startedElsewhere(listedChats), [listedChats]);
+  /** The explorer's lines ask the Chats list for chats' own rows (#1490): the one line for a
+   *  session's tasks for the session's, and a line for the tasks working at a place for each
+   *  of theirs. The list opens them and puts the keyboard on the first (`revealTask.ts`). */
+  const revealChats = useCallback(
+    (sessions: readonly number[]) =>
+      setRevealed((was) =>
+        sessions.length === 0
+          ? was
+          : { asker: sessions[0], also: sessions.slice(1), at: (was?.at ?? 0) + 1 },
+      ),
+    [],
+  );
 
   /**
    * The focused workspace's worktrees, as the catalogue names them (charter-app#174).
@@ -6553,7 +6561,10 @@ export const PlaneView = memo(function PlaneView({
                 onFocus={setFocusedBranch}
                 cloning={cloning}
                 onReadAgain={rereadPanels}
-                started={chatsStarted}
+                listed={listedChats}
+                finished={finishedTasks}
+                below={tasksBelow}
+                onRevealChats={revealChats}
                 nameOf={nameOfListed}
               />
             </div>
