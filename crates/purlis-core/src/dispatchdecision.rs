@@ -178,6 +178,10 @@ pub enum Refused {
     /// above it in its chain. The whole sentence ([`crate::dispatchgrant::never_said`],
     /// [`crate::dispatchgrant::never_above_said`]). No grant covers it and nobody is asked.
     Never(String),
+    /// The asking chat, by its number, is not among the chats the app has open when the
+    /// decision is made (#1521): it closed or ended while its ask was on its way. Its chain and
+    /// depth are on its own record, so nothing is decided without it.
+    NotOpen(u32),
 }
 
 impl Refused {
@@ -206,6 +210,7 @@ impl Refused {
             Self::Profile(why) => why.say(),
             Self::Limit(why) => why.say(),
             Self::Never(said) => said.clone(),
+            Self::NotOpen(chat) => format!("chat {chat} is not one this app has open"),
         }
     }
 }
@@ -329,8 +334,9 @@ pub struct Asked {
     pub above: Option<Vec<Option<String>>>,
 }
 
-/// The decision for a dispatch the chat `number`, recorded as `asking`, asks for, naming
-/// `named` (or no persona, for its own), in the project at `root`.
+/// The decision for a dispatch the chat `number` asks for, naming `named` (or no persona, for
+/// its own), in the project at `root`. The chat is read from `moment.open`, under the lock the
+/// app decides under; one that is not there is refused ([`Refused::NotOpen`]).
 ///
 /// **The one place the parts are joined.** Every fact about the asker is read here from the
 /// app's record of it, so no caller builds a [`Request`] its own way: the persona it runs as,
@@ -350,10 +356,22 @@ pub struct Asked {
 pub fn asked_by_a_chat(
     root: &std::path::Path,
     number: u32,
-    asking: &crate::reopen::Chat,
     named: Option<&str>,
     moment: &Moment<'_>,
 ) -> Asked {
+    // **Its own record, as the app holds it now** (#1521): the chain and depth a new chat
+    // keeps are read from it under the lock the decision is made under. A chat that left
+    // since `asking` was read would otherwise read as having nobody above it, and that
+    // shorter chain would be written into the chat it starts.
+    let Some(asking) = record(number, moment.open) else {
+        return Asked {
+            decision: Decision::Refused(Refused::NotOpen(number)),
+            to: None,
+            depth: 0,
+            root: None,
+            above: None,
+        };
+    };
     let pair = pair_of(asking, named, moment.default);
     let workspace = asking
         .cwd
@@ -1250,11 +1268,9 @@ mod tests {
         by: By,
     ) -> Asked {
         let root = a_project(manifest);
-        let asking = record(number, open).expect("the asking chat is open");
         asked_by_a_chat(
             root.path(),
             number,
-            asking,
             named,
             &Moment {
                 open,
@@ -1276,7 +1292,6 @@ mod tests {
         asked_by_a_chat(
             root.path(),
             2,
-            asking,
             named,
             &Moment {
                 open: &[(2, asking)],
@@ -1498,7 +1513,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 Some("devops"),
                 &Moment {
                     open: &[(1, &asking)],
@@ -1542,7 +1556,6 @@ mod tests {
         let said = asked_by_a_chat(
             root.path(),
             1,
-            &asking,
             Some("devops"),
             &Moment {
                 open: &[(1, &asking)],
@@ -1572,7 +1585,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 None,
                 &Moment {
                     open: &[(1, &asking)],
@@ -1640,7 +1652,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 None,
                 &Moment {
                     open: &[(1, &asking)],
@@ -2848,6 +2859,29 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_that_left_before_its_ask_is_decided_starts_nothing_and_keeps_no_chain() {
+        // #1521: devops (2), under steward, asked; by the time the app decides, under its lock,
+        // chat 2 has ended. Read from the chats open then, it would have nobody above it, and
+        // a shorter chain would be written into the chat it starts. It is refused instead.
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let three = kept(1, &[Some("steward")], Some("qa"));
+        let grants = grant(&[("devops", "steward"), ("devops", "qa")]);
+        for to in ["steward", "qa"] {
+            for by in [By::Chat, By::Person] {
+                let said = asked_in("", 2, &[(3, &three)], Some(to), &grants, by);
+                assert_eq!(said.decision, Decision::Refused(Refused::NotOpen(2)));
+                assert_eq!((said.depth, said.above.clone()), (0, None));
+                assert_eq!(refusal(&said), "chat 2 is not one this app has open");
+            }
+        }
+        // While it is open, the same ask is decided over its own record.
+        assert_eq!(
+            asked_in("", 2, &[(2, &two)], Some("steward"), &grants, By::Chat).decision,
+            loop_to("steward")
+        );
+    }
+
+    #[test]
     fn the_record_s_chain_is_read_whatever_the_chats_still_open_say() {
         // The chat above is open, but under a number that is now another chat's: the walk
         // would read reviewer above it. What the asking chat's own record keeps is the chain.
@@ -2967,7 +3001,9 @@ mod tests {
                 Decision::Refused(Refused::Limit(unread.clone()))
             );
             assert!(
-                unread.say().contains("an older version"),
+                unread
+                    .say()
+                    .starts_with("this chat's chain began under an older version"),
                 "{}",
                 unread.say()
             );

@@ -955,8 +955,11 @@ task reopened as an ordinary chat names no asking chat and starts a new chain.
   open, as before. Where that walk meets a chat that has closed, purlis cannot say who was
   above, and refuses as if any persona were: every dispatch to another persona, and one to
   its own where the person said never to any persona dispatching there. The refusal says that
-  an older version kept no record of the chain. Such a chat's tasks keep no chain either, and
-  are held the same way.
+  the chat's chain began under an older version, which kept no record of it. Such a chat's
+  tasks keep no chain either, and are held the same way. Recovering such a chain from the
+  dispatch records first is #1548.
+- **The asking chat is read under the lock the decision is made under.** One that has closed
+  or ended by then is refused, so a chain read short is never written into a new chat.
 - A kept chain whose length is not the record's depth, or that names what cannot be a
   persona's name, reads as no chain kept: never as a shorter one.
 
@@ -969,4 +972,4 @@ Still open, and not decided here:
 - a history rewritten so that no commit this machine has took a grant out (item 14);
 - a task's request named with its whole path, and one question for several tasks at the same
   block (V100-56, V100-57; #1508), and boxes filtered by a never above the asking chat
-  (#1521): neither is in train 64.
+  (#1548): neither is in train 64.

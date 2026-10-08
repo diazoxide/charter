@@ -335,7 +335,7 @@ that says what to do:
 | a persona this project does not define, or one that does not load | there is nothing to run as |
 | a persona whose definition says `draft: true` | a draft runs no chat |
 | a persona that is above the asking chat in its own chain of dispatches, whether or not the chats in between are still open | a chain never loops back; the chain is the one purlis kept when it started each chat |
-| any persona but its own, from a chat an older version started whose chain was not kept and has a closed chat in it; and its own, there, where you said never to any persona dispatching to it | who was above it cannot be read, so it is refused as if the persona were; the refusal says so |
+| any persona but its own, from a chat whose chain began under an older version, which kept no record of it, and has a closed chat in it; and its own, there, where you said never to any persona dispatching to it | who was above it cannot be read, so it is refused as if the persona were; the refusal says so |
 | past a limit: how deep a chain may go (3), how many tasks one chat is still waiting on (6), how many chats one lineage holds that still owe work (16) | a runaway stops |
 | past a persona's own two limits, where the project sets them: how many tasks the chats running as it wait on between them, and how many chats run as it at once | the project said how much of that persona it wants at once |
 | where a limit is set to 0 | dispatch is off at the level that set it, and the refusal says where |

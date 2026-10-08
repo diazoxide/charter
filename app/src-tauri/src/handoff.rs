@@ -1736,7 +1736,6 @@ fn dispatch_it(
             dispatchdecision::asked_by_a_chat(
                 root,
                 from,
-                &asking,
                 wanted.to.as_deref(),
                 &Moment {
                     open,
@@ -2547,11 +2546,12 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
              never goes back to a persona above it. Ask from a chat that persona did not start.",
             short(name)
         ),
-        // An older version kept no chain for this chat, and a chat above it has closed
-        // (#1521): which personas are above it is not known.
+        // This chat's chain began under an older version, which kept no record of it, and a
+        // chat above it has closed (#1521): which personas are above it is not known.
         Refused::Limit(Limit::ChainUnread(name)) => format!(
-            "An older version of purlis started this chat and kept no record of the chats \
-             above it, and one of them has closed, so persona '{}' may already be above it. \
+            "This chat's chain began under an older version of purlis, which kept no record \
+             of the chats above it, and one of them has closed, so persona '{}' may already be \
+             above it. \
              A chain never goes back to a persona above it. Ask from a chat you started.",
             short(name)
         ),
@@ -2586,6 +2586,8 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
              finish, or raise the limit {IN_SETTINGS}.",
             short(persona)
         ),
+        // The chat whose tab it was closed while the ask was decided (#1521).
+        Refused::NotOpen(_) => format!("{}.", sentence(&why.say())),
         // Never the person's: a helper is not a tab, a held chat's tab may ask, the person's
         // ask always names a persona, it sends no message between chats, and their own
         // dispatch is not held to their never. Said as the chat is told, should one arise.
@@ -3753,6 +3755,9 @@ mod tests {
         );
         let from = held.chats().handed_from(chat).expect("its lineage");
         assert_eq!((from.chat, from.mode), (asking, Mode::Handoff));
+        // A handoff keeps the chain above it too, from the app's record of the asking chat
+        // (#1521, D-1521-7).
+        assert_eq!(from.above, Some(vec![Some("ops".to_owned())]));
     }
 
     #[test]
@@ -8600,6 +8605,14 @@ mod tests {
         let devops = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
             .expect("the devops chat starts")
             .session;
+        // The handoff road keeps the chain too (D-1521-7): a handoff to steward's own persona.
+        let (opened, _) = a_handoff(&held, &id, steward, None, Some("ship it"), INTO_ALPHA);
+        let Answer::Opened { chat: handed, .. } = opened else {
+            panic!("opened, not {opened:?}")
+        };
+        let from = held.chats().handed_from(handed).expect("its lineage");
+        assert_eq!(from.mode, Mode::Handoff);
+        assert_eq!(from.above, Some(vec![Some("steward".to_owned())]));
         held.chats().close(steward).unwrap();
         assert!(held.chats().recorded_chat(steward).is_none(), "it closed");
 
@@ -8844,6 +8857,7 @@ mod tests {
             Refused::Locked("Policy forbids one chat dispatching to another.".to_owned()),
             Refused::Limit(Limited::Loop("steward".to_owned())),
             Refused::Limit(Limited::ChainUnread("steward".to_owned())),
+            Refused::NotOpen(7),
             Refused::Limit(Limited::TooDeep { limit: 3, depth: 3 }),
             Refused::Limit(Limited::TooManyRunning {
                 limit: 6,

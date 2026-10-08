@@ -718,9 +718,9 @@ fn a_chain_purlis_cannot_read_whole_refuses_any_other_persona_and_says_why() {
     assert_eq!(limit_of(&refused), None);
     assert_eq!(
         sentence_of(&refused),
-        "purlis cannot read every persona above this chat in its chain: an older version \
-         dispatched it without keeping them, and a chat above it has closed. Persona 'devops' \
-         may be one of them, and a persona is never dispatched to from below itself, nor \
+        "this chat's chain began under an older version of purlis, which kept no record of \
+         the personas above it, and a chat above it has closed. Persona 'devops' may be one \
+         of them, and a persona is never dispatched to from below itself, nor \
          against the person's never for a chat above, so nothing was started. Send it what \
          you found in your report instead."
     );
