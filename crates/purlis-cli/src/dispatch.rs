@@ -102,7 +102,8 @@ pub enum DispatchCommand {
         timeout: Option<u32>,
     },
     /// List the tasks this chat dispatched: each one's chat number, name, persona, where it
-    /// works, its state and how long ago it started.
+    /// works, its state and how long ago it started. A task ends at its report, and stays
+    /// listed as finished until its row is cleared or this chat closes.
     List,
     /// Cancel a task this chat dispatched: its turn is ended and it is asked for one short
     /// report of what it did, which arrives with the outcome `cancelled`. Only a task this
@@ -522,8 +523,12 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
         &Ask::Report(Box::new(back)),
         crate::handoff::A_TICKET_TAKES_AT_MOST,
     ) {
+        // Delivered, so the task is over (#1485): the chat is told its program ends with this
+        // turn, so it starts nothing it would lose.
         Ok(Answer::Reported { to, kept_for: None }) => Ok(format!(
-            "{REPORT_SAYS} sent to '{}' ({}). It reaches that chat as context on its next turn.",
+            "{REPORT_SAYS} sent to '{}' ({}). It reaches that chat as context on its next turn. \
+             This task is finished: this chat's program is ended once this turn is over, so \
+             start nothing more.",
             purlis_core::personas::one_line(&to),
             outcome.word()
         )),

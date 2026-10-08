@@ -463,6 +463,8 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         needed_you: 0,
         messages: 0,
         usage: None,
+        conversation: None,
+        cleared: false,
     }
 }
 

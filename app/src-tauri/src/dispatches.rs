@@ -220,6 +220,30 @@ pub(crate) fn reported(
         usage: spent(held, session),
     };
     close(held, &record, ending);
+    ended_in(held, session, &record);
+}
+
+/// Dispatch `record` has ended, with its persona chat `session` in the conversation the app
+/// follows it in: kept on the record, which is what a Reopen of the finished task resumes
+/// (#1485). Asked while the app still knows the chat.
+fn ended_in(held: &Held, session: u32, record: &Record) {
+    let Some(conversation) = conversation_of(held, session) else {
+        return;
+    };
+    if let Err(why) = dispatchrecord::ended_in(held.root(), &record.id, &conversation) {
+        tracing::warn!("purlis: a dispatch's record was not given its conversation ({why})");
+    }
+}
+
+/// The conversation chat `session` is in: the one the board follows it in, else the one the
+/// app started it on.
+fn conversation_of(held: &Held, session: u32) -> Option<String> {
+    held.board().conversation(session).or_else(|| {
+        held.chats()
+            .recorded_chat(session)
+            .and_then(|chat| chat.resume)
+            .map(|id| id.as_str().to_owned())
+    })
 }
 
 /// The app is closing chat `session`: a dispatch it was still working on ends here, failed and
@@ -236,15 +260,7 @@ pub(crate) fn ended(held: &Held, session: u32) {
     let Some(me) = chat_ref(held, session) else {
         return;
     };
-    let carried_on = me.id.is_some()
-        && held.chats().open_now().iter().any(|open| {
-            open.session != session
-                && held
-                    .chats()
-                    .chat_at(open.session)
-                    .is_some_and(|other| other.id == me.id)
-        });
-    if carried_on {
+    if carried_on(held, session, &me) {
         return;
     }
     let Some(record) = dispatchrecord::running_for(held.root(), &me) else {
@@ -252,6 +268,20 @@ pub(crate) fn ended(held: &Held, session: u32) {
     };
     let ending = dispatchrecord::ended_unreported(&record, spent(held, session));
     close(held, &record, ending);
+    ended_in(held, session, &record);
+}
+
+/// Whether another open chat carries chat `session`, which is `me`, on: one started again in
+/// its place is the same chat (its ULID, ADR 0066), under another number.
+pub(crate) fn carried_on(held: &Held, session: u32, me: &ChatRef) -> bool {
+    me.id.is_some()
+        && held.chats().open_now().iter().any(|open| {
+            open.session != session
+                && held
+                    .chats()
+                    .chat_at(open.session)
+                    .is_some_and(|other| other.id == me.id)
+        })
 }
 
 /// The app wrote chat `session`'s session record at `path`: the dispatches it asked for are
@@ -334,14 +364,7 @@ fn close(held: &Held, record: &Record, ending: Ending) {
 
 /// What chat `session`'s harness says its conversation has cost, where it says.
 fn spent(held: &Held, session: u32) -> Option<dispatchrecord::Usage> {
-    // The conversation the board follows the chat in, else the one the app started it on.
-    let conversation = held.board().conversation(session).or_else(|| {
-        held.chats()
-            .recorded_chat(session)
-            .and_then(|chat| chat.resume)
-            .map(|id| id.as_str().to_owned())
-    })?;
-    purlis_core::usage::spent(held.root(), &conversation)
+    purlis_core::usage::spent(held.root(), &conversation_of(held, session)?)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -587,7 +610,7 @@ pub(crate) struct Dispatches {
 }
 
 /// The chats `held` has open now, as a row needs them.
-fn open_chats(held: &Held) -> Vec<OpenChat> {
+pub(crate) fn open_chats(held: &Held) -> Vec<OpenChat> {
     held.chats()
         .open_now()
         .into_iter()
@@ -917,6 +940,8 @@ mod tests {
             needed_you: 2,
             messages: 0,
             usage: None,
+            conversation: None,
+            cleared: false,
         }
     }
 

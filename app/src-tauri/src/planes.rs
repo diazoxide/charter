@@ -779,6 +779,9 @@ impl Held {
         // Before it is off the board, while its conversation is still known: a dispatch it
         // was working on ends with it (#1452), unless a chat started in its place carries it.
         crate::dispatches::ended(self, session);
+        // The rows of the finished tasks it asked for go with it (#1485, V100-10), unless a
+        // chat started again in its place carries on. Their records stay.
+        crate::finished::asker_closed(self, session);
         // And where that dispatch gave it a worktree, that is looked at once it has gone
         // (#1453): asked now, while the app still knows the chat.
         let worktree = crate::dispatches::worktree_to_look_at(self, session);

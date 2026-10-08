@@ -299,7 +299,8 @@ policy. They are read afresh for every dispatch, so a change applies to the next
 names the limit and the count it stands at.
 
 A limit counts chats that still owe work: ones that have not reported and whose program has
-not ended. A chat that has reported stays open for you to read and counts for nothing. One
+not ended. A chat that has reported counts for nothing: its program is ended once that turn
+is over. One
 whose program ended without a report has failed, and does not count either.
 
 **A lineage is everything descended from one chat you started.** Each chat a dispatch starts
@@ -589,8 +590,19 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   (`purlis: the operator stopped …`), and that is final too.
 - **Stopping every agent, quitting, closing the project and restarting a chat report
   nothing.** Those chats are kept, and each reports when it runs again.
-- **A persona chat stays open after it reports.** It is marked `reported` under the chat that
-  asked, and you can still open it and type in it, until you or the chat that asked closes it.
+- **A task ends at its report.** The report is delivered to the chat that asked, and then
+  purlis ends the task's program: once the turn that sent the report is over and has had a
+  moment to settle, or after a bounded wait for a turn that does not end or a harness purlis
+  cannot hear. Never while a task of its own is still at work. Its row stays under the chat
+  that asked as a finished entry, with how it ended and its report; done and cancelled fold
+  into one **Finished (n)** line with **Clear finished**, and every other end stays a row of
+  its own until cleared. The rows are read from the dispatch records, so they are there after
+  the app is restarted, and they go when the chat that asked closes. A wait on a finished
+  task still answers with its report; a cancel, a follow-up or an answer says it has
+  finished.
+- **Reopen makes a finished task an ordinary chat.** It resumes the task's conversation in a
+  tab of its own. It is no longer a task: a report from it is refused in plain words, and the
+  chat that asked is told nothing.
 - **Closing a chat asks you once about the chats at work below it**: its persona chats that
   have not reported, the chats it handed work to that are mid-turn, and the same below those,
   however deep. Keep them running, or stop them. Kept, they go on working, and a persona

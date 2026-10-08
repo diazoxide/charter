@@ -123,6 +123,14 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: ACTION,
   },
   "FindBar.tsx": { count: 1, why: "the find bar's match count, a live value" },
+  "FinishedTasks.tsx": {
+    count: 1,
+    why:
+      ACTION +
+      ": a finished task that could not be reopened, on its row beside Reopen. The core's " +
+      "sentence says why (its folder is gone, its harness named no conversation), and its " +
+      "report is still on the row to read (#1485)",
+  },
   "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
   "FirstTaskTab.tsx": {
     count: 1,

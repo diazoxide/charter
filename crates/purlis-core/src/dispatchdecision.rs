@@ -536,8 +536,8 @@ pub fn root_of(number: u32, open: &[(u32, &crate::reopen::Chat)]) -> Option<Stri
 /// is found by walking who dispatched whom, as before.
 ///
 /// **The counts are of chats that still owe work** (D-1436-18): one that has not reported and
-/// whose program has not ended. A chat that reported stays open for the person to read and
-/// costs nothing; one whose program ended without a report has failed, and is not running.
+/// whose program has not ended. A chat that reported is ended once that turn is over (#1485)
+/// and costs nothing; one whose program ended without a report has failed, and is not running.
 pub fn lineage_of(
     asking: u32,
     open: &[(u32, &crate::reopen::Chat)],
@@ -692,7 +692,7 @@ pub enum Standing {
     /// Stopped on something only the person can answer, in its own tab: a permission prompt,
     /// a question, a Notice. Its asking chat cannot answer for the person, and is told to wait.
     WaitingOnOperator,
-    /// It sent its report. It stays open, to be read or typed in, until it is closed.
+    /// It sent its report. Its program is ended once the turn that sent it is over (#1485).
     Reported,
     /// Its program ended before it reported, and the asking chat was told `failed`.
     Ended,
