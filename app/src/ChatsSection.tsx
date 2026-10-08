@@ -36,8 +36,10 @@ import { useChatsListPrefs } from "./chatsListPrefs";
 import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
+import { TaskCountShown } from "./TasksBelow";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
+import { useRevealedTask, type Reveal } from "./revealTask";
 import { useTabStop } from "./roving";
 import { stateClock, useStateSince, type StateClock } from "./stateClock";
 import { SHAPES } from "./StateShown";
@@ -163,6 +165,7 @@ export function ChatsSection({
   finished = NONE_FINISHED,
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
+  reveal,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -182,6 +185,9 @@ export function ChatsSection({
   onClearFinished?: (ids: string[]) => void;
   /** Reopens a finished task as an ordinary chat; answers why not, where it could not. */
   onReopen?: (task: FinishedTask) => Promise<string | undefined>;
+  /** A finished task to bring into view: one that failed, when the person goes to its
+   *  needs-you item (#1491). */
+  reveal?: Reveal;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -393,6 +399,8 @@ export function ChatsSection({
     },
     [offers, onPress],
   );
+  const section = useRef<HTMLElement>(null);
+  useRevealedTask(section, reveal, rows, fold);
   const stop = useTabStop(
     front === undefined ? undefined : rowId(front),
     drawn.map((row) => rowId(row.session)),
@@ -424,7 +432,12 @@ export function ChatsSection({
         .filter((one) => one !== "")
         .join(" ");
   return (
-    <section className="chats-section" data-testid="chats-section" aria-labelledby="chats-title">
+    <section
+      ref={section}
+      className="chats-section"
+      data-testid="chats-section"
+      aria-labelledby="chats-title"
+    >
       {/* The title and the filter stay at the top of the section while its rows scroll. */}
       <div className="chats-head">
         <h2 className="sidebar-title" id="chats-title">
@@ -850,6 +863,10 @@ const Row = memo(function Row({
                 harness={harness}
                 changed={changed}
               />
+              {/* How its tasks stand, where it has any (#1491): `2 working · 1 waiting ·
+                  3 done`. It reads its own tasks, so one that changes state redraws this and
+                  not the row. */}
+              <TaskCountShown session={session} />
               {counts.length > 0 && (
                 /* Folded over finished tasks: how they ended, in the marks a state has
                    (V100-48, "steward 4 · ✓5"). */

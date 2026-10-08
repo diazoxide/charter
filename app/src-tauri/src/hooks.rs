@@ -85,6 +85,34 @@ pub struct Moved {
     /// The child agents of this chat's current run, oldest first (FD-18, W8): each sub-agent
     /// or child its harness spawned, drawn under the chat. Empty for nearly every chat.
     pub children: Vec<ChildAgent>,
+    /// Whether this move is only what a chat it started did: a report that landed, or a stop
+    /// below it (#1491). The window is told as of any move; nothing interrupts the person for
+    /// it ([`Moved::interrupts`]). The app's own fact, and never sent.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub counts_only: bool,
+}
+
+impl Moved {
+    /// **Whether this move is one to interrupt the person for** (#1491, V100-15): the chat it
+    /// is about is a needs-you item, and the move is its own. A task that finished changes
+    /// what its asking chat's row counts, and is told as a move of that chat; it is no reason
+    /// to send a system notification, whether or not that chat is already an item for
+    /// something else. A task that failed is an item on the asking chat, raised as a move of
+    /// its own, and that one does interrupt.
+    ///
+    /// Whether the person is already looking at the chat is asked after this, and is not this
+    /// rule's.
+    pub fn interrupts(&self) -> bool {
+        self.needs_you && !self.counts_only
+    }
+
+    /// This move, as one that only changes what the chat's row counts.
+    #[must_use]
+    pub fn counting_only(mut self) -> Self {
+        self.counts_only = true;
+        self
+    }
 }
 
 /// Why a chat needs the person, as the window says it (`purlis_core::state::Need`, #1448). A
@@ -94,6 +122,25 @@ pub struct Moved {
 pub enum Need {
     /// Its report has nowhere to go: the chat that asked for it, `asker`, has gone.
     ReportUndelivered { asker: String },
+    /// A task it asked for, `task`, came to nothing (#1491): `how` is `failed`,
+    /// `unreported` (it ended without a report) or `did_not_start`, and `why` says why in a
+    /// few words, where anything does. Not emptied by the chat's next prompt: by the person's
+    /// look at it, their Ignore, or the task's row being cleared.
+    TaskFailed {
+        task: String,
+        how: String,
+        why: String,
+    },
+}
+
+impl From<purlis_core::state::FailedTask> for Need {
+    fn from(failed: purlis_core::state::FailedTask) -> Self {
+        Self::TaskFailed {
+            task: failed.task,
+            how: failed.how.word().to_owned(),
+            why: failed.why,
+        }
+    }
 }
 
 impl From<purlis_core::state::Need> for Need {
@@ -194,6 +241,11 @@ pub struct Hooks {
     /// turn's end waits on it (`crate::smartclose`): the `Stop` that ends a turn in which the
     /// chat asked a question moves nothing a reader sees, and is still the end of the turn.
     all_reports: Arc<Mutex<Option<Heard>>>,
+    /// Asked what a chat waits on as its turn's end is applied (#1491): the tasks below it and
+    /// the chat that dispatched it, which the project's records know and the board does not.
+    /// A slot filled after the fact, for `answering`'s reason; until it is, a chat waits on
+    /// nothing and every end of turn is the person's.
+    waits: Arc<Mutex<Option<WaitsOf>>>,
     /// Told each session record a chat's `charter session record` says it saved (ADR 0064) — a
     /// slot filled after the fact, for `answering`'s reason.
     saved: Arc<Mutex<Option<SavedHeard>>>,
@@ -560,6 +612,10 @@ pub type SavedHeard = Arc<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 /// What is told each report the board took.
 pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
 
+/// What chat `session` waits on that is not the person, by the project's own records
+/// (`purlis_core::state::Waits`, #1491): asked as a report that can end its turn is applied.
+pub type WaitsOf = Arc<dyn Fn(u32) -> purlis_core::state::Waits + Send + Sync + 'static>;
+
 /// What is told that chat `session` is now in conversation `id`: the id its own harness
 /// reported, that the board adopted or followed — and, where the move began a run (`/clear`,
 /// ADR 0066), that run's id, which is the chat's current run from now on.
@@ -687,6 +743,7 @@ impl Hooks {
             heard: Arc::new(Mutex::new(None)),
             following: Arc::new(Mutex::new(None)),
             all_reports: Arc::new(Mutex::new(None)),
+            waits: Arc::new(Mutex::new(None)),
             saved: Arc::new(Mutex::new(None)),
             events: Arc::new(Mutex::new(None)),
             asks: Arc::new(HookAsks::new(Arc::new(Asks::new()))),
@@ -716,6 +773,7 @@ impl Hooks {
         let heard: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
         let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
+        let waits: Arc<Mutex<Option<WaitsOf>>> = Arc::new(Mutex::new(None));
         let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
         let events: Arc<Mutex<Option<Events>>> = Arc::new(Mutex::new(None));
         let asks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
@@ -784,10 +842,11 @@ impl Hooks {
                 let heard = Arc::clone(&heard);
                 let following = Arc::clone(&following);
                 let all_reports = Arc::clone(&all_reports);
+                let waits = Arc::clone(&waits);
                 let moved = Arc::clone(&moved);
                 let events = Arc::clone(&events);
                 Box::new(move |report| {
-                    let applied = apply(&board, &plane, &report);
+                    let applied = apply(&board, &plane, &report, waits_at(&waits, &report));
                     let followed = applied.followed();
                     // The run a `/clear` begins is the host's, minted here, so the record
                     // names it whether or not this machine keeps an event log (ADR 0066).
@@ -926,6 +985,7 @@ impl Hooks {
             heard,
             following,
             all_reports,
+            waits,
             saved,
             events,
             asks,
@@ -1162,6 +1222,25 @@ impl Hooks {
         *self.heard.lock().unwrap_or_else(PoisonError::into_inner) = Some(heard);
     }
 
+    /// Who says, from now on, what a chat waits on as the end of its turn is applied (#1491).
+    pub fn waits_by(&self, waits: WaitsOf) {
+        *self.waits.lock().unwrap_or_else(PoisonError::into_inner) = Some(waits);
+    }
+
+    /// Applies `report` as the socket's listener does, with what its chat waits on read first,
+    /// and answers what the window must now be told. For a test that stands in for a chat's
+    /// hook without a socket: the listener's own path, less the event log and who listens.
+    #[cfg(test)]
+    pub(crate) fn hear(&self, report: &Report) -> Option<Moved> {
+        apply(
+            &self.board,
+            &self.plane,
+            report,
+            waits_at(&self.waits, report),
+        )
+        .moved
+    }
+
     /// Who is told every report on this socket from now on, after the board has had it, whether
     /// or not it moved anything.
     pub fn when_reported(&self, heard: Heard) {
@@ -1312,6 +1391,50 @@ impl ChatBoard for Hooks {
     fn reported_to_its_asker(&self, session: u32) {
         self.board().reported_to_its_asker(session);
     }
+
+    fn rested(&self, session: u32) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .rested(session)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
+    fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .task_failed(session, failed)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
+    fn failures_seen(&self, session: u32) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .failures_seen(session)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
+    fn failure_cleared(&self, session: u32, task: &str) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .failure_cleared(session, task)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+}
+
+/// What the chat `report` names waits on, asked only of a report that can end its turn or
+/// nudge it after one: a `Stop` or a `Notification` of the chat's own. Every other report
+/// raises no needs-you item this could hold back, so the project's records are not read for
+/// it. **Asked before the board is taken**, never under it: the answer reads the chats, the
+/// board and the tasks' ledger in turn.
+fn waits_at(waits: &Mutex<Option<WaitsOf>>, report: &Report) -> purlis_core::state::Waits {
+    use purlis_core::state::Event;
+    if report.agent.is_some() || !matches!(report.event, Event::Stop | Event::Notification) {
+        return purlis_core::state::Waits::default();
+    }
+    let asked = waits.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    asked.map_or_else(purlis_core::state::Waits::default, |asked| {
+        asked(report.chat)
+    })
 }
 
 /// What a reader sees for this chat right now.
@@ -1336,9 +1459,18 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         reports: board.reports(session),
         refusals: board.refusals(session),
         stopped: Some(board.stopped_of(session)).filter(|stopped| !stopped.is_empty()),
-        needs: Some(board.needs_of(session))
-            .filter(|needs| !needs.is_empty())
-            .map(|needs| needs.into_iter().map(Need::from).collect()),
+        // What the app found, then the tasks of its that came to nothing (#1491): the item
+        // says the latest, and a failure is the one the person has not been told of.
+        needs: Some(
+            board
+                .needs_of(session)
+                .into_iter()
+                .map(Need::from)
+                .chain(board.failed_tasks(session).into_iter().map(Need::from))
+                .collect::<Vec<Need>>(),
+        )
+        .filter(|needs| !needs.is_empty()),
+        counts_only: false,
         children: board
             .children(session)
             .into_iter()
@@ -1410,11 +1542,19 @@ impl Applied {
 /// [`Board::reported`] is the one place that decides whether a report is the chat's own
 /// harness speaking (ADR 0024), and a second reading of the report here would be a second
 /// answer to that question.
-fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
+///
+/// `waits` is what the chat waits on that is not the person ([`waits_at`], #1491), read
+/// before the board was taken.
+fn apply(
+    board: &Mutex<Board>,
+    plane: &PlaneId,
+    report: &Report,
+    waits: purlis_core::state::Waits,
+) -> Applied {
     let mut guard = held_board(board);
     let was = guard.conversation(report.chat).map(str::to_owned);
     let moved = guard
-        .reported(report)
+        .reported_while(report, waits)
         .then(|| seen_by(&guard, plane, report.chat));
     let now = guard.conversation(report.chat);
     let followed = now
@@ -1500,9 +1640,14 @@ mod tests {
         let hooks = Hooks::deaf(plane);
         hooks.board().opened(session, None, None);
         assert!(
-            apply(&hooks.board, &hooks.plane, &stop(session))
-                .moved
-                .is_some()
+            apply(
+                &hooks.board,
+                &hooks.plane,
+                &stop(session),
+                purlis_core::state::Waits::default()
+            )
+            .moved
+            .is_some()
         );
         hooks
     }
@@ -1524,11 +1669,22 @@ mod tests {
         // that read it, after the board is let go, so it can reach the window AFTER a close
         // that came later. The number is what lets the window tell which is newer.
         let hooks = asking(7);
-        let late = apply(&hooks.board, &hooks.plane, &stop(7)).moved;
+        let late = apply(
+            &hooks.board,
+            &hooks.plane,
+            &stop(7),
+            purlis_core::state::Waits::default(),
+        )
+        .moved;
         hooks.board().ignored(7);
-        let report = apply(&hooks.board, &hooks.plane, &stop(7))
-            .moved
-            .expect("a new request");
+        let report = apply(
+            &hooks.board,
+            &hooks.plane,
+            &stop(7),
+            purlis_core::state::Waits::default(),
+        )
+        .moved
+        .expect("a new request");
 
         let close = hooks.closed(7);
 
@@ -2299,7 +2455,13 @@ mod tests {
             pid,
             detail: purlis_core::state::Detail::default(),
         };
-        apply(&hooks.board, &hooks.plane, &report).followed
+        apply(
+            &hooks.board,
+            &hooks.plane,
+            &report,
+            purlis_core::state::Waits::default(),
+        )
+        .followed
     }
 
     fn named(id: &str) -> Conversation {

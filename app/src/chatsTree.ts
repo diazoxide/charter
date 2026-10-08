@@ -32,6 +32,9 @@ export type ListedChat = {
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
    *  it, in a folder of its own, and nothing merges it. */
   branch: string | null;
+  /** The most tasks it may have running at once, by the limits in force for it, where the
+   *  core said: only for a chat that has a task open (#1491, V100-26). */
+  tasksLimit?: number | null;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.
 } & RowFacts;
@@ -78,6 +81,7 @@ export function listedChat(
     from: chat.from?.name ?? null,
     tab,
     branch: ownBranch(chat),
+    tasksLimit: chat.tasks_limit ?? null,
     ...rowFactsOf(chat, nameOf),
   };
 }

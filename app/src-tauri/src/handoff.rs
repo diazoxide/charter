@@ -292,7 +292,9 @@ fn report_it(
     drop(deciding);
     let (answer, tell) = said?;
     if let Some(asker) = tell {
-        crate::dispatched::told(held, asker);
+        // Typed the line where it takes one. Where it does not, and this was the last task
+        // it waited on, its held end of turn is the person's from here (#1491).
+        crate::dispatched::told_or_rested(held, asker);
     }
     // **Delivered, and only then is the task's program to be ended** (#1485): the report is
     // kept for the chat that asked and its record says sent, both under the lock just let go.
@@ -565,6 +567,12 @@ pub(crate) fn deliver(
         );
     }
     if parent_open {
+        // **A task that came to nothing is a needs-you item on the chat that asked** (#1491,
+        // V100-15): it failed, was blocked, or ended without a report. One that finished as
+        // done or cancelled, and one the person stopped, change that chat's count and no more.
+        if let Some(failed) = came_to_nothing(held, chat, report.task.as_ref(), &report.summary) {
+            held.task_failed(from.chat, failed);
+        }
         if was_stopped {
             held.stopped_below(from.chat, &child_name);
         } else {
@@ -577,6 +585,37 @@ pub(crate) fn deliver(
         kept_for: (!parent_open).then(|| from.workspace.word().to_owned()),
         reached_the_chat: parent_open,
     })
+}
+
+/// What the chat that asked is flagged for when task `chat`'s report is `task`, saying
+/// `summary`: nothing for a task that finished as done or cancelled, and nothing for a
+/// handoff's report, which has no outcome.
+///
+/// The task is named as its finished row will name it (`crate::finished::task_name`), so the
+/// item leads to that row and is cleared with it. Why is the report's own first words for a
+/// task that said it failed or was blocked, and nothing for one purlis reported for: "ended
+/// without a report" is the whole of what is known.
+fn came_to_nothing(
+    held: &Held,
+    chat: u32,
+    task: Option<&purlis_core::handback::Task>,
+    summary: &str,
+) -> Option<purlis_core::state::FailedTask> {
+    use purlis_core::handback::Outcome;
+    use purlis_core::state::{FailedTask, HowFailed};
+
+    let task = task?;
+    let (how, why) = if task.unreported {
+        (HowFailed::Unreported, "")
+    } else if matches!(task.outcome, Outcome::Failed | Outcome::Blocked) {
+        (HowFailed::Failed, summary)
+    } else {
+        return None;
+    };
+    let name = crate::finished::task_name(held, chat)
+        .or_else(|| held.chats().shown_name(chat))
+        .unwrap_or_else(|| chat.to_string());
+    Some(FailedTask::new(&name, how, why))
 }
 
 /// The hold [`crate::chats::Chats::deciding`] gives: proof, to the functions below, that the
@@ -722,7 +761,7 @@ pub fn its_program_ended(held: &Held, chat: u32) {
             // Typed only once the lock is let go, as a chat's own report is (#1441).
             drop(deciding);
             if let Some(asker) = asker {
-                crate::dispatched::told(held, asker);
+                crate::dispatched::told_or_rested(held, asker);
             }
             // Its asking chat is told it failed, and its row is a finished one from here
             // (#1485): the chat whose program is gone is closed, off this thread.
@@ -867,6 +906,43 @@ fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
     }
     let mut found = Vec::new();
     // The ceiling no chain passes, and each chat once: a record that names a loop ends.
+    below(
+        held,
+        asker,
+        dispatchdecision::DEEPEST,
+        &mut vec![asker],
+        &mut found,
+    );
+    found
+}
+
+/// **The tasks below chat `asker`, at any depth, that still owe their report** (#1491):
+/// working, asking, or idle with the report still to come, and their program running. What
+/// `asker` waits on when its turn ends, and why that end is no needs-you item
+/// ([`crate::dispatched::waits`]).
+///
+/// **Down task links only**, through every task on the way whether or not that one has
+/// reported: a task that reported may have dispatched before it did, and what it started is
+/// still below `asker`. A handoff moved the work to a session of its own (V100-69), so what is
+/// below a handoff's chat is that chat's and not `asker`'s. A task whose program has ended
+/// owes nothing more: purlis reports for it.
+pub fn owing_below(held: &Held, asker: u32) -> Vec<u32> {
+    fn below(held: &Held, asker: u32, deeper: u32, seen: &mut Vec<u32>, found: &mut Vec<u32>) {
+        if deeper == 0 {
+            return;
+        }
+        for (chat, from) in held.chats().started_by(asker) {
+            if from.mode != Mode::Task || seen.contains(&chat) {
+                continue;
+            }
+            seen.push(chat);
+            below(held, chat, deeper - 1, seen, found);
+            if from.report == Owed::Due && still_working(held, chat) {
+                found.push(chat);
+            }
+        }
+    }
+    let mut found = Vec::new();
     below(
         held,
         asker,
@@ -2065,6 +2141,21 @@ pub fn answered(
         }
     };
     tell_the_asker(held, &wanted, how, &detail);
+    // **Allowed, and it still did not start**: the person said yes and nothing is running, so
+    // the chat that asked is flagged for it (#1491, V100-15). Kept blocked is the person's own
+    // answer and flags nothing.
+    if how == Answered::NotStarted
+        && let Some(task) = wanted.shown()
+    {
+        held.task_failed(
+            wanted.chat,
+            purlis_core::state::FailedTask::new(
+                &task,
+                purlis_core::state::HowFailed::DidNotStart,
+                &detail,
+            ),
+        );
+    }
 }
 
 /// **Chat `session` was started again as `started` while dispatches of its own waited on the
@@ -11318,4 +11409,8 @@ mod tests {
 
     /// A task ends at its report, stays as a finished row, and can be reopened (#1485).
     mod ends_at_report;
+
+    /// A session waiting on its tasks is not a needs-you item, and is flagged only for what
+    /// matters (#1491).
+    mod waiting_on_tasks;
 }

@@ -412,6 +412,58 @@ fn limits_between(held: &Held, asker: u32, task: u32) -> purlis_core::dispatchli
     )
 }
 
+/// **How many tasks each asking chat of one list of rows may have running at once** (#1491,
+/// V100-26): `running-per-chat`, as in force for the workspace the chat works in and the
+/// persona it runs as, by the limits function a dispatch is decided by
+/// (`purlis_core::dispatchlimits::of`). What a chat's row says it is at: `6 of 6 tasks`.
+///
+/// Asked only for a chat that has a task open, and the files are read once for each place and
+/// persona in the list: a sidebar with no task reads nothing.
+pub(crate) struct RunningLimits<'a> {
+    held: &'a Held,
+    /// The chats that have a task open.
+    askers: std::collections::BTreeSet<u32>,
+    read: std::collections::HashMap<(Option<String>, Option<String>), u32>,
+}
+
+impl<'a> RunningLimits<'a> {
+    pub(crate) fn of(held: &'a Held, open: &[crate::chats::Open]) -> Self {
+        Self {
+            held,
+            askers: open
+                .iter()
+                .filter_map(|one| one.from.as_ref())
+                .filter(|from| from.mode == Mode::Task)
+                .map(|from| from.chat)
+                .collect(),
+            read: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The limit in force for `chat`, where it has a task open.
+    pub(crate) fn of_chat(&mut self, chat: &crate::chats::Open) -> Option<u32> {
+        if !self.askers.contains(&chat.session) {
+            return None;
+        }
+        let held = self.held;
+        let key = (chat.workspace.clone(), chat.persona.clone());
+        Some(
+            *self
+                .read
+                .entry(key)
+                .or_insert_with_key(|(workspace, persona)| {
+                    purlis_core::dispatchlimits::of(
+                        held.root(),
+                        workspace.as_deref(),
+                        persona.as_deref(),
+                        None,
+                    )
+                    .running
+                }),
+        )
+    }
+}
+
 /// A follow-up from chat `asker` to task `to`: refused unless `asker` dispatched it and it is
 /// still working and not being cancelled, then left for its next turn.
 fn tell(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
@@ -554,7 +606,9 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
     // Answered: its row stops saying it is asking (#1484).
     held.rows_changed();
     held.tasks().changed();
-    tell_the_chat(held, to);
+    // Typed the line where it takes one; where it does not, its held end of turn is the
+    // person's from here (#1491).
+    told_or_rested(held, to);
     Ok(task(Answered::Sent {
         kind: Kind::Answer,
         to: name,
@@ -829,7 +883,8 @@ pub fn outcome_for(
 
 /// Task `task`'s report was delivered for the chat `asker`: left in `file` for its next turn
 /// where that chat is open. A command waiting on it has it now. **Nothing is typed here**: it
-/// is called under the lock a report is taken under, and [`told`] follows once that is let go.
+/// is called under the lock a report is taken under, and [`told_or_rested`] follows once that is let
+/// go.
 pub fn reported(
     held: &Held,
     task: u32,
@@ -845,6 +900,37 @@ pub fn reported(
 /// answered yet. What its row in the window says it is waiting on (#1484).
 pub fn asks_its_asker(held: &Held, task: u32) -> bool {
     held.tasks().ledger().talk.asks(task).is_some()
+}
+
+/// **What chat `chat` waits on that is not the person** (#1491), by this project's own
+/// records at this moment: how many tasks below it, at any depth, still owe their report
+/// ([`crate::handoff::owing_below`]), and whether it is a task paused on a question to the
+/// chat that dispatched it. What the board is told as the end of the chat's turn is applied
+/// (`purlis_core::state::Board::reported_while`), so that end raises no needs-you item while
+/// the next move is a task's or the asking chat's.
+///
+/// Takes the chats, the board and the ledger in turn and holds none across another: never
+/// called with the board held.
+pub fn waits(held: &Held, chat: u32) -> purlis_core::state::Waits {
+    let tasks = crate::handoff::owing_below(held, chat).len();
+    purlis_core::state::Waits {
+        tasks: u32::try_from(tasks).unwrap_or(u32::MAX),
+        // Only while it still owes its report: a question it asked and then reported past is
+        // nobody's to answer.
+        its_asker: held.chats().owed_task_report(chat).is_some() && asks_its_asker(held, chat),
+    }
+}
+
+/// **Chat `chat` may now be told what was left for its next turn**: typed purlis's one line,
+/// where it may be sent one. Never called under `Chats::deciding()`.
+///
+/// Where no line was typed into it, it is looked at as a chat that may have nothing left to
+/// wait on (`Held::rested`, #1491): one whose turn's end was held for its tasks, or for its
+/// asker's answer, is the person's once nothing will prompt it.
+pub fn told_or_rested(held: &Held, chat: u32) {
+    if !tell_the_chat(held, chat) {
+        held.rested(chat);
+    }
 }
 
 /// **Task `task`'s report is delivered: its program is now to be ended** (#1485). Called once
@@ -951,12 +1037,6 @@ fn end_look_after(held: &Held, task: u32, after: Duration, looked: Looked) {
                 end_look(&held, task, looked);
             }
         });
-}
-
-/// Chat `chat` may now be told what was left for its next turn: typed purlis's one line, where
-/// it may be sent one. Never called under `Chats::deciding()`.
-pub fn told(held: &Held, chat: u32) {
-    tell_the_chat(held, chat);
 }
 
 /// Types the line that says something was left for its next turn into chat `chat`, where

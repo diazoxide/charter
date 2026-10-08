@@ -19,6 +19,7 @@ import type { Token } from "./theme/theme";
 export type ShownKind =
   | "working"
   | "needs-you"
+  | "waiting-on-tasks"
   | "asking"
   | "done"
   | "failed"
@@ -30,7 +31,17 @@ export type ShownKind =
 
 /** The mark's shape, one per kind, so a state is told without its colour. */
 export type ShownShape =
-  "ring" | "hand" | "question" | "tick" | "cross" | "dash" | "triangle" | "dot" | "pause" | "dots";
+  | "ring"
+  | "hand"
+  | "hourglass"
+  | "question"
+  | "tick"
+  | "cross"
+  | "dash"
+  | "triangle"
+  | "dot"
+  | "pause"
+  | "dots";
 
 /** A chat's state as a row shows it. */
 export type Shown = {
@@ -68,6 +79,11 @@ export type Facts = {
   task: TaskFacts | null;
   /** Its harness, as the person calls it: named in what is not known. */
   harness: string | null;
+  /** How many tasks below it, at any depth, are working (#1491): the working bucket of its
+   *  count (`taskBuckets.ts`), which a task waiting on the person is not in. A chat whose turn
+   *  has ended with any is waiting on them, and says how many. None where a surface does not
+   *  say. */
+  tasksAtWork?: number;
 };
 
 const WORKING: Shown = { kind: "working", word: "working", shape: "ring", token: "state.running" };
@@ -106,6 +122,21 @@ const BY_OUTCOME: ReadonlyMap<string, Shown> = new Map([
   ["cancelled", CANCELLED],
 ]);
 
+/**
+ * **A chat whose turn has ended while tasks below it still work** (#1491, V100-16): it waits
+ * on them and not on the person, so it wears the working colour and a shape of its own, and
+ * says how many. The core keeps such a chat out of the needs-you queue, so this never stands
+ * where `needs you` would.
+ */
+export function waitingOnTasks(tasks: number): Shown {
+  return {
+    kind: "waiting-on-tasks",
+    word: tasks === 1 ? "waiting on 1 task" : `waiting on ${tasks} tasks`,
+    shape: "hourglass",
+    token: "state.running",
+  };
+}
+
 /** The record's word for a task the person stopped before it reported: purlis wrote the
  *  report in its place, so the task itself sent none, and it did not die either. */
 const STOPPED = "stopped";
@@ -122,8 +153,18 @@ const STOPPED = "stopped";
  * **Then a task's record, before its program's state.** A task that reported is done, failed
  * or cancelled however its turn then ends: that end is what made a finished task look like a
  * chat waiting on the person. One that is running again, on the person's word, is working.
+ *
+ * **The order, whole** (#1491): needs you; a sent report (working while a turn runs, else how
+ * it ended); a report written in its place; a program that ended; asking its asker; waiting on
+ * its tasks; idle; working; not known.
  */
-export function shownState({ board, needsYou, task, harness }: Facts): Shown | undefined {
+export function shownState({
+  board,
+  needsYou,
+  task,
+  harness,
+  tasksAtWork = 0,
+}: Facts): Shown | undefined {
   if (needsYou) return NEEDS_YOU;
   if (task?.report === "sent") {
     if (board === "running") return WORKING;
@@ -144,6 +185,10 @@ export function shownState({ board, needsYou, task, harness }: Facts): Shown | u
       token: "state.waiting",
     };
   }
+  // **Below needs you and above idle** (#1491): its turn has ended and tasks below it have
+  // not, so it is waiting on them. A task that is asking its own asker says that first: the
+  // answer is what it is paused on.
+  if (board === "waiting" && tasksAtWork > 0) return waitingOnTasks(tasksAtWork);
   // Its turn has ended and it is not asking for the person: the hand is not raised for it.
   if (board === "waiting") return IDLE;
   if (board === "running") return WORKING;

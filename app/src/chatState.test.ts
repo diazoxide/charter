@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   backSaid,
+  failedTasksOf,
   childrenOf,
   moved,
   movedAt,
   needSays,
+  taskFailedSaid,
   needsOf,
   nothingKnown,
   quietOnes,
@@ -381,6 +383,50 @@ describe("what the app found a chat needs you for (#1448)", () => {
     const again = moved(needed, { ...doing(3, "waiting", [3]), needs: [undelivered] });
 
     expect(again.needs).toBe(needed.needs);
+  });
+});
+
+describe("a task that came to nothing, on the chat that asked for it (#1491)", () => {
+  const failed = {
+    kind: "task_failed" as const,
+    task: "check prod",
+    how: "failed",
+    why: "the forge refused the push",
+  };
+  const unreported = { kind: "task_failed" as const, task: "lint", how: "unreported", why: "" };
+
+  it("says which task and why, in a few words", () => {
+    expect(needSays(failed)).toBe("check prod failed: the forge refused the push");
+    expect(needSays(unreported)).toBe("lint ended without a report");
+    expect(needSays({ ...failed, how: "did_not_start", why: "no profile runs devops" })).toBe(
+      "check prod did not start: no profile runs devops",
+    );
+    // Nothing said why, and a word this window does not know: the least each can mean.
+    expect(needSays({ ...failed, why: "" })).toBe("check prod failed");
+    expect(taskFailedSaid({ task: "build", how: "something new", why: "" })).toBe("build failed");
+  });
+
+  it("keeps which tasks they were by the chat that asked, so its item can go to their rows", () => {
+    const told = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [failed, unreported] });
+    expect(failedTasksOf(told, 3)).toEqual(["check prod", "lint"]);
+    expect(needsOf(told, 3)).toEqual([
+      "check prod failed: the forge refused the push",
+      "lint ended without a report",
+    ]);
+    expect(failedTasksOf(told, 4)).toEqual([]);
+  });
+
+  it("is not a task that failed when the chat needs you for something else", () => {
+    const undelivered = { kind: "report_undelivered" as const, asker: "steward 3" };
+    const told = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [undelivered] });
+    expect(failedTasksOf(told, 3)).toEqual([]);
+  });
+
+  it("goes when the core says the person has looked", () => {
+    const told = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [failed] });
+    const seen = moved(told, { ...doing(3, "running", []), needs: null });
+    expect(failedTasksOf(seen, 3)).toEqual([]);
+    expect(seen.needsYou).toEqual([]);
   });
 });
 

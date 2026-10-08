@@ -187,6 +187,70 @@ describe("every state", () => {
   });
 });
 
+describe("a chat whose turn has ended while tasks below it work (#1491)", () => {
+  it("says it is waiting on them, and how many, in the working colour and a shape of its own", () => {
+    const shown = shownState(of({ board: "waiting", tasksAtWork: 2 }));
+    expect(shown).toMatchObject({
+      kind: "waiting-on-tasks",
+      word: "waiting on 2 tasks",
+      shape: "hourglass",
+      token: "state.running",
+    });
+    expect(shownState(of({ board: "waiting", tasksAtWork: 1 }))?.word).toBe("waiting on 1 task");
+  });
+
+  it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {
+    const onTasks = shownState(of({ board: "waiting", tasksAtWork: 2 }));
+    const onYou = shownState(of({ board: "waiting", needsYou: true, tasksAtWork: 2 }));
+    expect(onYou?.word).toBe("needs you");
+    expect(onTasks?.word).not.toBe(onYou?.word);
+    expect(onTasks?.shape).not.toBe(onYou?.shape);
+  });
+
+  it("sits below needs you and above idle", () => {
+    // Needs you wins, whatever its tasks are doing: a prompt, or a task of its that failed.
+    expect(said({ board: "waiting", needsYou: true, tasksAtWork: 3 })).toBe("hand needs you");
+    expect(said({ board: "running", needsYou: true, tasksAtWork: 3 })).toBe("hand needs you");
+    // With none at work it is idle, as before.
+    expect(said({ board: "waiting", tasksAtWork: 0 })).toBe("pause idle");
+    expect(said({ board: "waiting" })).toBe("pause idle");
+  });
+
+  it("is working while its own turn runs, whatever is below it", () => {
+    expect(said({ board: "running", tasksAtWork: 2 })).toBe("ring working");
+  });
+
+  it("is a task's own state too, below how it reported and whom it is asking", () => {
+    expect(said({ board: "waiting", task: OWED, tasksAtWork: 1 })).toBe(
+      "hourglass waiting on 1 task",
+    );
+    // It reported: how it ended is said, though a task it started still works.
+    expect(said({ board: "waiting", task: sent("done"), tasksAtWork: 1 })).toBe("tick done");
+    // Paused on its asker's answer: that is what it waits on first.
+    expect(said({ board: "waiting", task: { ...OWED, asking: "steward 1" }, tasksAtWork: 1 })).toBe(
+      "question asking steward 1",
+    );
+  });
+
+  it("has a shape and a word no other state has", () => {
+    const others = [
+      of({ board: "running" }),
+      of({ board: "waiting", needsYou: true }),
+      of({ board: "waiting" }),
+      of({ board: "waiting", task: { ...OWED, asking: "steward 1" } }),
+      of({ board: "waiting", task: sent("done") }),
+      of({ board: "waiting", task: sent("failed") }),
+      of({ board: "waiting", task: sent("cancelled") }),
+      of({ board: "waiting", task: sent(null) }),
+      of({ board: "waiting", task: inItsPlace(null) }),
+      of({ board: "unknown" }),
+    ].map((facts) => shownState(facts));
+    const waiting = shownState(of({ board: "waiting", tasksAtWork: 2 }));
+    expect(others.map((one) => one?.shape)).not.toContain(waiting?.shape);
+    expect(others.map((one) => one?.kind)).not.toContain(waiting?.kind);
+  });
+});
+
 describe("what a task's record says of it", () => {
   const chat = (from: OpenChat["from"]): Pick<OpenChat, "from"> => ({ from });
   const from = {

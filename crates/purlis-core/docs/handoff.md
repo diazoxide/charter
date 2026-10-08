@@ -492,6 +492,34 @@ chat that asked then has three ways to get the report.
   this chat dispatched has reported (chat 9). …`. The line is purlis's sentence and a chat's
   number. The report is never typed: it arrives as the turn's context, quoted as data.
 
+### What waits on you while tasks work
+
+A chat that has dispatched tasks and then ends its turn is waiting on them, not on you. So:
+
+- **It is no needs-you item while any task below it, at any depth, is still working, asking
+  or owing its report.** Its row says `waiting on 2 tasks`, in the working colour, and counts
+  them: `2 working · 1 waiting · 3 done`, with `· 1 failed` when any did. Working is a task
+  at work or asking the chat that asked; waiting is one that needs you or is at rest. At the
+  most tasks it may have running, the row says `6 of 6 tasks`.
+- **It becomes one only when every task has reported or ended and it has then stopped with
+  nothing to do.** A report that lands types the chat its one line; it reads the report in a
+  turn of its own, and the end of that turn is the item. Where purlis types it no line (its
+  harness takes none, or you had keys in its pane), it is yours as soon as nothing is left
+  below it.
+- **A task paused on a question to the chat that asked is no needs-you item either.** Its row
+  says `asking <chat>`: that chat is the one who can answer.
+- **A real prompt always is one, whatever the tasks are doing**: a permission or a question a
+  chat shows you, a refused commit, a report with nowhere to go.
+- **A task that finishes as done, or is cancelled, changes the count and nothing else.** One
+  that failed, was blocked, ended without a report or did not start puts the hand on the chat
+  that asked: an item that says which task and why in a few words, and goes to that task's
+  row. It stays through that chat's own turns, and goes when you look at it, clear the row or
+  ignore it.
+- **A system notification is sent only when a chat itself becomes a needs-you item.** None is
+  sent for a task that finished.
+
+Ignoring a chat until it asks again works as it always did.
+
 ### When purlis types into a chat
 
 purlis types three things for a dispatch, and nothing else: the line above, the line that asks

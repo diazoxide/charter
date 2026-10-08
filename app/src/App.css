@@ -2475,6 +2475,20 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
+/* **How a session's tasks stand, on its row** (#1491): `2 working · 1 waiting · 3 done`.
+   Numbers that change under the eye, so they are tabular and the row does not shift as one
+   moves; muted, since the state's word beside it is what says whether the session is waiting
+   on them. It keeps to one line and gives way before the name does. */
+.chats-section .task-count {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .explorer .started-chat .elsewhere {
   padding: 0 0.3rem;
   color: var(--text-muted);

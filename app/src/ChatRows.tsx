@@ -16,6 +16,8 @@ import { ViewMark } from "./Views";
 import type { ListedChat } from "./chatsTree";
 import { shownState, type Shown, type TaskFacts } from "./shownState";
 import { StateShown } from "./StateShown";
+import { taskCountOf } from "./taskCounts";
+import { useTasksBelow } from "./TasksBelow";
 
 /*
  * **The rows that draw a chat** (SC-3): split out of `PlaneView`, whose rendering they no longer
@@ -57,6 +59,11 @@ function sameShown(one: Shown | undefined, other: Shown | undefined): boolean {
  * Subscribed to its own chat and to the queue's answer about it, and redrawn only when what it
  * shows changes: a move redraws the moved chat's state and no row. Held on plain values, so a
  * row redrawn for its own reasons does not redraw it.
+ *
+ * **A chat waiting on its tasks says so, and how many** (#1491): it reads its own tasks
+ * (`useTasksBelow`) and counts the ones that have not finished, by the one count
+ * (`taskCounts.taskCountOf`), so the word agrees with the count on its row. A task below it
+ * that finishes redraws this, and no other chat's.
  */
 export const ChatShownState = memo(function ChatShownState({
   session,
@@ -81,6 +88,7 @@ export const ChatShownState = memo(function ChatShownState({
   /** Its harness as the person calls it: named in what is not known of it. */
   harness: string | null;
 }) {
+  const below = useTasksBelow(session);
   const shown = useChatsSelect(
     useChatsHere(),
     (states) =>
@@ -89,6 +97,7 @@ export const ChatShownState = memo(function ChatShownState({
         needsYou: states.needsYou.includes(session),
         task: report === null ? null : { report, outcome, asking },
         harness,
+        tasksAtWork: taskCountOf(states, below).working,
       }),
     sameShown,
   );

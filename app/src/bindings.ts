@@ -523,6 +523,12 @@ export const commands = {
 	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
 	 */
 	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
+	/**
+	 *  The person looked at the tasks of chat `session` that failed, ended without a report or did
+	 *  not start (#1491): its needs-you item for them goes. Whatever else the chat needs the
+	 *  person for stays, and so do the tasks' rows and records.
+	 */
+	taskFailuresSeen: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("task_failures_seen", { plane, session })),
 	/**  The asks a project holds open now: what the window lists before any [`EVENT`] arrives. */
 	pendingAsks: (plane: PlaneId) => typedError<Asking, string>(__TAURI_INVOKE("pending_asks", { plane })),
 	/**
@@ -3977,7 +3983,14 @@ export type NearBranch = {
  */
 export type Need = 
 /**  Its report has nowhere to go: the chat that asked for it, `asker`, has gone. */
-{ kind: "report_undelivered"; asker: string };
+{ kind: "report_undelivered"; asker: string } | 
+/**
+ *  A task it asked for, `task`, came to nothing (#1491): `how` is `failed`,
+ *  `unreported` (it ended without a report) or `did_not_start`, and `why` says why in a
+ *  few words, where anything does. Not emptied by the chat's next prompt: by the person's
+ *  look at it, their Ignore, or the task's row being cleared.
+ */
+{ kind: "task_failed"; task: string; how: string; why: string };
 
 /**
  *  **A profile's command waiting on the operator's approval** (ADR 0022), as a waiting chat's
@@ -4101,6 +4114,12 @@ export type OpenChat = {
 	 *  this one.
 	 */
 	shows?: number | null,
+	/**
+	 *  How many tasks it may have running at once, by the limits in force for it now (#1491,
+	 *  V100-26): its row says `6 of 6 tasks` at that number. Only for a chat that has a task
+	 *  open, in a list of rows (`dispatched::RunningLimits`); `null` otherwise.
+	 */
+	tasks_limit?: number | null,
 	/**  The conversation it was resumed by, where it was. The UI says which happened. */
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */

@@ -281,6 +281,9 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
+import type { Reveal } from "./revealTask";
+import { tasksBelowOf, type TasksBelow } from "./taskCounts";
+import { TasksBelowLent } from "./TasksBelow";
 import { finishedOf, qualifierOf, shownOf, useFinishedTasks } from "./finished";
 import {
   below as chatsBelow,
@@ -476,6 +479,10 @@ export const PlaneView = memo(function PlaneView({
   const refusals = useChatsSelect(chats, (states) => states.refusals);
   const needs = useChatsSelect(chats, (states) => states.needs);
   const stoppedBelow = useChatsSelect(chats, (states) => states.stoppedBelow);
+  const failedTasks = useChatsSelect(chats, (states) => states.failedTasks);
+  /** The finished row the Chats list is asked to bring into view: a task that failed, when the
+   *  person goes to its needs-you item (#1491). */
+  const [revealed, setRevealed] = useState<Reveal>();
   /**
    * **What the last window action here refused, and which action** (NO-4): the picker's
    * options, or a shell. A Notice with Dismiss, and it clears itself when that same action next
@@ -2527,6 +2534,37 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
+   * **Go, on a needs-you item** (#1491, V100-15). An item that is there because a task failed,
+   * ended without a report or did not start **goes to that task's row**: the Chats list brings
+   * its finished row into view under the session that asked, where its report is, and the item
+   * has then been looked at, so the core is told and the hand goes. The session's pane is not
+   * brought forward for it: nothing there is asking. If the session needs the person for a
+   * reason of its own as well, its item stays, and the next Go is the chat.
+   *
+   * Every other item goes to its chat, as it always did.
+   */
+  const showNeeding = useCallback(
+    (session: number) => {
+      const failed = failedTasks[session] ?? [];
+      if (failed.length === 0) {
+        showChat(session);
+        return;
+      }
+      // The latest, which is the one the item says.
+      const task = failed[failed.length - 1];
+      // A task that reported blocked stays open as the chat it is: its row is a chat's, and
+      // going to it shows that chat. Every other one has ended, and its row is a finished one.
+      const open = chatsListed.current.find(
+        (chat) => chat.parent === session && chat.mode === "task" && chat.name === task,
+      );
+      if (open !== undefined) showChat(open.session);
+      else setRevealed((was) => ({ asker: session, task, at: (was?.at ?? 0) + 1 }));
+      void commands.taskFailuresSeen(plane, session).catch(() => undefined);
+    },
+    [failedTasks, plane, showChat],
+  );
+
+  /**
    * Opens a view in a tab of its own, **on the strip in front** — or brings forward the tab
    * already showing it, wherever that is, and its strip with it.
    *
@@ -4362,7 +4400,8 @@ export const PlaneView = memo(function PlaneView({
       focusWorkspace,
       createWorkspace,
       removeWorkspace,
-      showChat,
+      // The verb is only ever a needs-you item's Go, or the palette's row for one.
+      showChat: showNeeding,
       ignoreNeedsYou,
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
@@ -4452,7 +4491,7 @@ export const PlaneView = memo(function PlaneView({
       resumeSession,
       runAction,
       sendKey,
-      showChat,
+      showNeeding,
       showView,
       split,
       stoppedFor,
@@ -4534,6 +4573,15 @@ export const PlaneView = memo(function PlaneView({
     chatsListed.current = listedChats;
   }, [listedChats]);
   const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
+  /**
+   * **Each session's tasks** (#1491): the open tasks below it and the finished rows under it,
+   * from the two lists the Chats section draws. Lent to everything this view draws
+   * (`TasksBelowLent`), so a session's row, its state's word and its tab count the same rows.
+   */
+  const tasksBelow = useMemo(() => {
+    const limits = new Map(listedChats.map((chat) => [chat.session, chat.tasksLimit ?? null]));
+    return tasksBelowOf(listedChats, finishedTasks, (session) => limits.get(session) ?? null);
+  }, [finishedTasks, listedChats]);
   /**
    * **The breadcrumb of every pane that shows a task and can be drawn**, by tab, pane and
    * chat (#1486): the path read off the core's list, for the panes `shownLive` says are live.
@@ -5478,6 +5526,7 @@ export const PlaneView = memo(function PlaneView({
   return (
     <Lent
       chats={chats}
+      tasksBelow={tasksBelow}
       references={referenceChats}
       personas={personaMarks}
       askPersona={openAskPersona}
@@ -6153,6 +6202,7 @@ export const PlaneView = memo(function PlaneView({
                 finished={finishedTasks}
                 onClearFinished={clearFinished}
                 onReopen={reopenFinished}
+                reveal={revealed}
               />
               <Explorer
                 plane={plane}
@@ -6657,12 +6707,15 @@ export const PlaneView = memo(function PlaneView({
  */
 function Lent({
   chats,
+  tasksBelow,
   references,
   personas,
   askPersona,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
+  /** Each session's tasks, by its number (#1491). */
+  tasksBelow: ReadonlyMap<number, TasksBelow>;
   references: ChatsForReferences;
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
@@ -6671,13 +6724,15 @@ function Lent({
 }) {
   return (
     <ChatsHere.Provider value={chats}>
-      <ReferenceChats.Provider value={references}>
-        <PersonaMarks.Provider value={personas.marks}>
-          <ReloadPersonaMarks.Provider value={personas.reload}>
-            <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
-          </ReloadPersonaMarks.Provider>
-        </PersonaMarks.Provider>
-      </ReferenceChats.Provider>
+      <TasksBelowLent below={tasksBelow}>
+        <ReferenceChats.Provider value={references}>
+          <PersonaMarks.Provider value={personas.marks}>
+            <ReloadPersonaMarks.Provider value={personas.reload}>
+              <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
+            </ReloadPersonaMarks.Provider>
+          </PersonaMarks.Provider>
+        </ReferenceChats.Provider>
+      </TasksBelowLent>
     </ChatsHere.Provider>
   );
 }

@@ -955,16 +955,63 @@ impl Held {
     /// A chat `session` handed work to, shown as `from`, has reported back to it, and the
     /// window is told (charter-app#259). Nothing is typed into the chat, and it is no needs-you
     /// item: a report is the asking chat's to read (#1448).
+    ///
+    /// **It changes what the asking chat's row counts, and interrupts nobody** (#1491,
+    /// V100-15): the move is told as one that only counts (`Moved::interrupts`), so no system
+    /// notification is sent for a task that finished, whatever else that chat needs the
+    /// person for.
     pub fn reported_back(&self, session: u32, from: &str) {
         if let Some(moved) = self.board().reported_back(session, from) {
-            (self.tell)(moved);
+            (self.tell)(moved.counting_only());
         }
     }
 
     /// The operator stopped `from`, a chat `session` started, and the window is told (#1448):
     /// the row says so. Nothing is typed into the chat, and it is no needs-you item.
+    /// A count on its row and no interruption, as a report is ([`Self::reported_back`]).
     pub fn stopped_below(&self, session: u32, from: &str) {
         if let Some(moved) = self.board().stopped_below(session, from) {
+            (self.tell)(moved.counting_only());
+        }
+    }
+
+    /// **A task chat `session` asked for failed, ended without a report, or did not start**
+    /// (#1491, V100-15): a needs-you item on `session` that says which task and why, whatever
+    /// it and its other tasks are doing, and the window is told. The one place such an item is
+    /// raised: a failed or blocked report and a report purlis wrote for a task that died come
+    /// here from the one delivery (`crate::handoff::deliver`), and a dispatch that does not
+    /// start is to call it too (#1497).
+    pub fn task_failed(&self, session: u32, failed: purlis_core::state::FailedTask) {
+        if let Some(moved) = self.board().task_failed(session, failed) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// **The person looked at what failed below chat `session`** (#1491): the needs-you items
+    /// for its failed tasks go, and the window is told. Whatever else it needs them for stays.
+    pub fn task_failures_seen(&self, session: u32) {
+        if let Some(moved) = self.board().failures_seen(session) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// The person cleared the row of task `task`, which chat `session` asked for (#1491): the
+    /// needs-you item for it goes with the row, and the window is told.
+    pub fn task_failure_cleared(&self, session: u32, task: &str) {
+        if let Some(moved) = self.board().failure_cleared(session, task) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// **What chat `session` waited on is over, and no line was typed into it** (#1491): where
+    /// the end of its turn was held for its tasks, or for its asker's answer, and nothing is
+    /// left of either, it is the person's now, and the window is told. Asked again of the
+    /// project's records here, so a chat with a task still at work stays held.
+    pub fn rested(&self, session: u32) {
+        if crate::dispatched::waits(self, session).on_something() {
+            return;
+        }
+        if let Some(moved) = self.board().rested(session) {
             (self.tell)(moved);
         }
     }
@@ -1546,6 +1593,19 @@ impl Planes {
         // the socket's thread is where that report arrives. A person's typed `/smart-close` is
         // heard here too: only a report the board took, so a harness nested in the chat never
         // issues its chat a pass (#1332). Weak for the handoff's reason.
+        // What a chat waits on that is not the person, asked as the end of its turn is applied
+        // (#1491): the tasks below it and the chat that dispatched it are this project's
+        // records, which the board does not hold. Weak for the handoff's reason; a project
+        // that is going holds nothing back.
+        held.hooks.waits_by({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |chat| {
+                held.upgrade()
+                    .map_or_else(purlis_core::state::Waits::default, |held| {
+                        crate::dispatched::waits(&held, chat)
+                    })
+            })
+        });
         held.hooks.when_heard({
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
@@ -5979,10 +6039,11 @@ mod tests {
                 let board = held.hooks().board();
                 match event {
                     Event::UserPromptSubmit => board.turns(session) > turns,
+                    // In the queue, or held out of it for the tasks it waits on (#1491).
                     Event::Stop => {
                         board.state(session) == State::Waiting
                             && !board.asking(session)
-                            && board.needs_you().contains(&session)
+                            && (board.needs_you().contains(&session) || board.held(session))
                     }
                     Event::Notification => board.asking(session),
                     _ => board.state(session) == State::Waiting,

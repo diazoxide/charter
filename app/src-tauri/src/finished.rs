@@ -318,12 +318,28 @@ pub(crate) fn reopened_from(held: &Held, chat: u32) -> Option<String> {
 
 /// Clears the rows of the finished tasks `ids`, and answers how many it cleared. The rows and
 /// nothing else: each record stays (`dispatchrecord::clear`).
+///
+/// **A cleared row takes its needs-you item with it** (#1491): a task that failed is an item
+/// on the chat that asked until the person looks at it or clears its row, and this is the
+/// clearing.
 pub(crate) fn clear(held: &Held, ids: &[String]) -> u32 {
-    let cleared = ids
+    // Read before the rows go: which chat asked for each, and what its row is called.
+    let rows = listed(held);
+    let cleared: Vec<&String> = ids
         .iter()
         .filter(|id| dispatchrecord::clear(held.root(), id).unwrap_or(false))
-        .count();
-    u32::try_from(cleared).unwrap_or(u32::MAX)
+        .collect();
+    for row in rows.iter().filter(|row| cleared.contains(&&row.id)) {
+        held.task_failure_cleared(row.asker, &row.name);
+    }
+    u32::try_from(cleared.len()).unwrap_or(u32::MAX)
+}
+
+/// What task chat `chat`'s finished row will be called: its newest dispatch record's name for
+/// it, as [`listed`] says it. Nothing for a chat with no record.
+pub(crate) fn task_name(held: &Held, chat: u32) -> Option<String> {
+    let me = crate::dispatches::chat_ref(held, chat)?;
+    dispatchrecord::latest_for(held.root(), &me).map(|record| name_of(&record))
 }
 
 /// The chat a Reopen of the finished task `id` starts, and the launch the core worked out for

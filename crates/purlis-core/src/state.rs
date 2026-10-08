@@ -232,6 +232,92 @@ pub enum Need {
     ReportUndelivered { asker: String },
 }
 
+/// **What a chat whose turn has ended is waiting on that is not the person** (#1491), as the
+/// app's own records say at the moment its harness speaks: the tasks below it, and the chat
+/// that dispatched it. The board holds no lineage of its own, so whoever applies a report says
+/// ([`Board::reported_while`]); a report applied with nothing said waits on nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Waits {
+    /// How many tasks below it, at any depth, are still working, asking, or owing a report.
+    pub tasks: u32,
+    /// Whether it is a task paused on a question to the chat that dispatched it: that chat is
+    /// the one who can answer, and its row reads `asking <chat>`.
+    pub its_asker: bool,
+}
+
+impl Waits {
+    /// Whether the end of its turn leaves the next move with somebody other than the person.
+    pub fn on_something(self) -> bool {
+        self.tasks > 0 || self.its_asker
+    }
+}
+
+/// **A task that came to nothing, as the chat that asked for it is flagged for it** (#1491,
+/// V100-15): it failed, it ended without a report, or it did not start. A needs-you item on
+/// the asking chat that says which task and why, whatever that chat and its other tasks are
+/// doing. A task that finished as done, or was cancelled, is none: it changes a count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedTask {
+    /// The task, by the name the person sees it under.
+    pub task: String,
+    /// Which of the three it was.
+    pub how: HowFailed,
+    /// Why, in a few words ([`FailedTask::in_a_few_words`]): what its report said, or what
+    /// refused its start. Empty where nothing says.
+    pub why: String,
+}
+
+/// How a task came to nothing ([`FailedTask`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HowFailed {
+    /// It reported that it failed, or that it was blocked: it did not do the work.
+    Failed,
+    /// Its program ended while it still owed its report.
+    Unreported,
+    /// It was asked for and never started.
+    DidNotStart,
+}
+
+impl HowFailed {
+    /// The word the window is sent for it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::Unreported => "unreported",
+            Self::DidNotStart => "did_not_start",
+        }
+    }
+}
+
+impl FailedTask {
+    /// The most characters of a reason an item says: a few words, never a report.
+    pub const WHY_AT_MOST: usize = 60;
+
+    /// `task` came to nothing as `how`, for `why` cut to a few words.
+    pub fn new(task: &str, how: HowFailed, why: &str) -> Self {
+        Self {
+            task: task.to_owned(),
+            how,
+            why: Self::in_a_few_words(why),
+        }
+    }
+
+    /// `text` as a few words: its first line that says anything, on one line, cut at
+    /// [`Self::WHY_AT_MOST`] characters with an ellipsis where it was longer.
+    pub fn in_a_few_words(text: &str) -> String {
+        let line = text
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .find(|line| !line.is_empty())
+            .unwrap_or_default();
+        if line.chars().count() <= Self::WHY_AT_MOST {
+            return line;
+        }
+        let cut: String = line.chars().take(Self::WHY_AT_MOST - 1).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
 /// One chat's state, and everything that is allowed to move it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chat {
@@ -281,6 +367,17 @@ pub struct Chat {
     turns: u32,
     /// The child agents of its current run, shown under it (FD-18, W8).
     children: children::Children,
+    /// Whether its turn ended while it waited on something that is not the person ([`Waits`],
+    /// #1491): a task below it still at work, or the answer of the chat that dispatched it. No
+    /// needs-you item was raised for that end. Its next prompt clears it; [`Chat::rested`]
+    /// turns it into the item when what it waited on is over and nothing will prompt it.
+    held: bool,
+    /// The tasks it asked for that came to nothing and the person has not looked at yet
+    /// ([`FailedTask`], #1491), oldest first. **Each is a needs-you item of its own kind, and
+    /// its next prompt does not clear it**: the chat is typed a line when a report lands, so a
+    /// reason its next turn cleared would be gone before anybody saw it. The person's look
+    /// ([`Chat::failures_seen`]), their Ignore, a cleared row and the chat's end clear it.
+    failed: Vec<FailedTask>,
 }
 
 impl Chat {
@@ -298,6 +395,8 @@ impl Chat {
             asking: false,
             turns: 0,
             children: children::Children::default(),
+            held: false,
+            failed: Vec::new(),
         }
     }
 
@@ -349,8 +448,82 @@ impl Chat {
     }
 
     /// Whether this chat belongs in the "needs you" queue.
+    ///
+    /// **The queue's rules, in one place** (#1448, #1491):
+    ///
+    /// - **A turn that ends hands the chat to the person**, and so does the nudge of a chat
+    ///   left idle. That is the falling edge the queue is for.
+    /// - **Unless the next move is somebody else's.** A chat that reported to the chat that
+    ///   asked waits on that chat. A chat whose turn ended while a task below it, at any
+    ///   depth, is still working, asking or owing its report waits on its tasks, and its row
+    ///   says `waiting on n tasks`. A task paused on a question to the chat that dispatched it
+    ///   waits on that chat's answer, and its row says `asking <chat>`. None of the three is
+    ///   an item ([`Waits`], [`Chat::heard_while`]).
+    /// - **A chat that waited on its tasks becomes an item only once every one of them has
+    ///   reported or ended and it has then stopped with nothing to do**: it is typed a line
+    ///   when a report lands, reads it in a turn of its own, and that turn's end is the item.
+    ///   Where nothing will prompt it, the app says so ([`Chat::rested`]).
+    /// - **A real prompt always is an item, whatever its tasks are doing**: a permission or a
+    ///   question asked mid-turn ([`Chat::asking`]), a reason the app found ([`Need`]), a
+    ///   refused commit, and a task of its that failed, ended without a report or did not
+    ///   start ([`FailedTask`]). A task that finished as done, or was cancelled, is none.
+    /// - **The person's Ignore drops the item until the chat asks again** ([`Chat::ignored`]),
+    ///   and a chat whose program has ended asks for nobody.
     pub fn needs_you(&self) -> bool {
-        self.needs_you
+        self.needs_you || !self.failed.is_empty()
+    }
+
+    /// Whether its turn ended waiting on its tasks or on its asker, and no item was raised for
+    /// it ([`Waits`]).
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
+    /// The tasks it asked for that came to nothing and the person has not looked at, oldest
+    /// first.
+    pub fn failed_tasks(&self) -> &[FailedTask] {
+        &self.failed
+    }
+
+    /// A task this chat asked for failed, ended without a report, or did not start (#1491): a
+    /// needs-you item on this chat that says which and why, whatever it is doing, and its
+    /// state is not touched. Answers whether anything a reader can see changed: nothing does
+    /// for a failure it already says.
+    pub fn task_failed(&mut self, failed: FailedTask) -> bool {
+        if self.ended || self.failed.contains(&failed) {
+            return false;
+        }
+        self.failed.push(failed);
+        true
+    }
+
+    /// The person looked at what failed below this chat: the items for it go, and whatever
+    /// else the chat needs them for stays. Answers whether anything a reader can see changed.
+    pub fn failures_seen(&mut self) -> bool {
+        !std::mem::take(&mut self.failed).is_empty()
+    }
+
+    /// The person cleared the row of task `task`, which this chat asked for: its item goes
+    /// with it. Answers whether anything a reader can see changed.
+    pub fn failure_cleared(&mut self, task: &str) -> bool {
+        let was = self.failed.len();
+        self.failed.retain(|failed| failed.task != task);
+        was != self.failed.len()
+    }
+
+    /// **What this chat waited on is over, and nothing will prompt it** (#1491): every task
+    /// below it has reported or ended, or its asker answered, and the app typed it no line.
+    /// The end of turn that was held is the needs-you item now. Nothing for a chat no end was
+    /// held for, one that has begun a turn since, or one that reported to its asker. Answers
+    /// whether anything a reader can see changed.
+    pub fn rested(&mut self) -> bool {
+        if self.ended || !self.held || self.state != State::Waiting || self.reported {
+            return false;
+        }
+        let was = self.seen();
+        self.held = false;
+        self.needs_you = true;
+        was != self.seen()
     }
 
     /// The chats that reported back to this one and have not been read yet, oldest first.
@@ -360,14 +533,15 @@ impl Chat {
 
     /// What a reader of this chat is shown, so a move can be told from no move by comparing
     /// it before and after. [`Chat::asking`] and the turn count are not part of it.
-    fn seen(&self) -> (State, bool, usize, usize, usize, usize) {
+    fn seen(&self) -> (State, bool, usize, usize, usize, usize, usize) {
         (
             self.state,
-            self.needs_you,
+            self.needs_you(),
             self.reports.len(),
             self.refusals.len(),
             self.needs.len(),
             self.stopped.len(),
+            self.failed.len(),
         )
     }
 
@@ -462,6 +636,12 @@ impl Chat {
     /// The harness said `said`, in the neutral model (ADR 0073), at whatever level it runs.
     /// Answers whether anything a reader can see changed.
     pub fn heard(&mut self, said: &Said) -> bool {
+        self.heard_while(said, Waits::default())
+    }
+
+    /// [`Chat::heard`], while the chat waits on `waits`: what the end of its turn leaves the
+    /// next move with ([`Chat::needs_you`] has the rule).
+    pub fn heard_while(&mut self, said: &Said, waits: Waits) -> bool {
         if self.ended {
             return false;
         }
@@ -493,6 +673,7 @@ impl Chat {
                 self.needs.clear();
                 self.reported = false;
                 self.asking = false;
+                self.held = false;
                 self.turns = self.turns.saturating_add(1);
             }
             // The turn has not ended, but it cannot go on without an answer.
@@ -501,9 +682,12 @@ impl Chat {
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
                 // The nudge of a chat that reported to the chat that asked is not it waiting
-                // on the person (#1448). A question mid-turn always is.
-                if self.asking || !self.reported {
+                // on the person (#1448), and neither is the nudge of one that waits on its
+                // tasks or on its asker's answer (#1491). A question mid-turn always is.
+                if self.asking || !(self.reported || waits.on_something()) {
                     self.needs_you = true;
+                } else if !self.reported {
+                    self.held = true;
                 }
             }
             // The falling edge: the agent has nothing more to do, so the next move is the
@@ -520,10 +704,16 @@ impl Chat {
             // **But not for a chat that reported to the chat that asked, in this turn**
             // (#1448): the next move is that chat's. What it already needed the person for
             // stays.
+            //
+            // **And not for a chat that waits on its tasks, or on its asker's answer**
+            // (#1491): the end is held, and is the item only once what it waits on is over
+            // and it has stopped with nothing to do.
             Said::Turn(Turn::Ended) => {
                 self.state = State::Waiting;
-                if !self.reported {
-                    self.needs_you = true;
+                match (self.reported, waits.on_something()) {
+                    (true, _) => {}
+                    (false, true) => self.held = true,
+                    (false, false) => self.needs_you = true,
                 }
                 self.asking = false;
             }
@@ -565,7 +755,9 @@ impl Chat {
         let had_reports = !self.reports.is_empty()
             || !self.refusals.is_empty()
             || !self.needs.is_empty()
-            || !self.stopped.is_empty();
+            || !self.stopped.is_empty()
+            || !self.failed.is_empty();
+        self.failed.clear();
         self.stopped.clear();
         self.reports.clear();
         self.refusals.clear();
@@ -588,12 +780,14 @@ impl Chat {
         };
         self.needs_you = false;
         self.asking = false;
+        self.held = false;
         self.ended = true;
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
         self.stopped.clear();
         self.refusals.clear();
         self.needs.clear();
+        self.failed.clear();
         // A child still working ends with its parent, in the parent's end (ADR 0076 §6). It
         // shares the parent's process group, so the stop that ended the parent ended it.
         let children = self.children.end_with(self.state);
@@ -848,6 +1042,14 @@ impl Board {
     /// shell moves the chat. ADR 0024 concedes that class outright — "a `claude -p` in the
     /// chat's own shell carries them too" — and nothing in a report can distinguish it.
     pub fn reported(&mut self, report: &crate::hookwire::Report) -> bool {
+        self.reported_while(report, Waits::default())
+    }
+
+    /// [`Board::reported`], while the chat the report names waits on `waits` (#1491): what the
+    /// app's own records say is below it and above it at this moment. The board holds no
+    /// lineage, so the one who applies the report reads it and says. A sub-agent's report is
+    /// its chat's ask and never the end of its turn, so `waits` is not asked of it.
+    pub fn reported_while(&mut self, report: &crate::hookwire::Report, waits: Waits) -> bool {
         let Some(tracked) = self.chats.get_mut(&report.chat) else {
             // A report for a chat the app does not have: one that was closed a moment ago,
             // or a stale environment in a process that outlived it.
@@ -869,9 +1071,65 @@ impl Board {
         let said = report.event.said(report.detail);
         changed |= match &report.agent {
             Some(agent) => tracked.chat.child_said(agent, &said),
-            None => tracked.chat.heard(&said),
+            None => tracked.chat.heard_while(&said, waits),
         };
         self.stamp(report.chat, changed)
+    }
+
+    /// What chat `number` waited on is over, and nothing will prompt it ([`Chat::rested`]).
+    /// Answers whether anything a reader can see changed: nothing does for a chat the board
+    /// does not have, or one no end of turn was held for.
+    pub fn rested(&mut self, number: u32) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.rested());
+        self.stamp(number, changed)
+    }
+
+    /// Whether chat `number`'s turn ended waiting on its tasks or its asker ([`Chat::held`]).
+    pub fn held(&self, number: u32) -> bool {
+        self.chats
+            .get(&number)
+            .is_some_and(|tracked| tracked.chat.held())
+    }
+
+    /// A task chat `number` asked for came to nothing ([`Chat::task_failed`]). Answers whether
+    /// anything a reader can see changed: nothing does for a chat the board does not have, or
+    /// one whose program is gone.
+    pub fn task_failed(&mut self, number: u32, failed: FailedTask) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.task_failed(failed));
+        self.stamp(number, changed)
+    }
+
+    /// The tasks chat `number` asked for that came to nothing and the person has not looked
+    /// at, oldest first.
+    pub fn failed_tasks(&self, number: u32) -> Vec<FailedTask> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.failed_tasks().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// The person looked at what failed below chat `number` ([`Chat::failures_seen`]).
+    ///
+    /// **Not stamped as a move**, as an Ignore is not ([`Board::ignored`]): looking at a chat
+    /// is not something the chat did.
+    pub fn failures_seen(&mut self, number: u32) -> bool {
+        self.chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.failures_seen())
+    }
+
+    /// The person cleared the row of task `task`, which chat `number` asked for
+    /// ([`Chat::failure_cleared`]). Not stamped as a move, as an Ignore is not.
+    pub fn failure_cleared(&mut self, number: u32, task: &str) -> bool {
+        self.chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.failure_cleared(task))
     }
 
     /// A tool hook of child agent `agent` of chat `number` was heard: a Codex child's first
@@ -1110,7 +1368,8 @@ impl Board {
             .unwrap_or_default()
     }
 
-    /// Every chat waiting on the operator, in the order they were opened.
+    /// Every chat waiting on the operator, in the order they were opened. Which chats those
+    /// are is [`Chat::needs_you`]'s rule.
     pub fn needs_you(&self) -> Vec<u32> {
         self.chats
             .iter()
@@ -2791,5 +3050,339 @@ mod tests {
 
         assert!(!board.child_heard(4, "a1"));
         assert!(board.children(4).is_empty());
+    }
+
+    // ----- a chat waiting on its tasks, or on its asker (#1491) -----
+
+    /// A chat with `tasks` tasks below it still working, asking or owing a report.
+    fn with_tasks(tasks: u32) -> Waits {
+        Waits {
+            tasks,
+            its_asker: false,
+        }
+    }
+
+    /// A task paused on a question to the chat that dispatched it.
+    const ASKS_ITS_ASKER: Waits = Waits {
+        tasks: 0,
+        its_asker: true,
+    };
+
+    #[test]
+    fn a_session_whose_turn_ends_while_a_task_below_it_works_is_not_in_the_queue() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(
+            board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(2)),
+            "its state still moved: the turn is over"
+        );
+
+        assert_eq!(board.state(7), State::Waiting);
+        assert!(board.needs_you().is_empty(), "it waits on its tasks");
+        assert!(board.held(7));
+    }
+
+    #[test]
+    fn a_task_any_depth_below_holds_the_session_as_one_right_under_it_does() {
+        // The board is told a count and holds no lineage: a task two dispatches down is one
+        // task below, as the app's records count it, and it holds the end the same.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn the_nudge_of_a_session_left_idle_while_its_tasks_work_raises_nothing_either() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+
+        board.reported_while(&report(7, Event::Notification, Some(A)), with_tasks(1));
+
+        assert!(board.needs_you().is_empty());
+        assert!(!board.asking(7), "a nudge after the turn asks nothing");
+    }
+
+    #[test]
+    fn a_session_is_an_item_once_its_tasks_have_reported_and_it_has_then_stopped() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+        // The last report lands: the session is typed a line, reads it in a turn of its own,
+        // and stops with nothing below it.
+        board.reported_back(7, "talk");
+        assert!(
+            board.needs_you().is_empty(),
+            "a report landing is no item: the session has it to read"
+        );
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        assert!(!board.held(7));
+
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(0));
+
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn a_session_nothing_will_prompt_is_an_item_once_what_it_waited_on_is_over() {
+        // The app typed it no line (its harness takes none, or the person had keys in its
+        // pane), so no turn of its own follows the last report: the app says it is at rest.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+
+        assert!(board.rested(7), "the held end is the item now");
+
+        assert_eq!(board.needs_you(), vec![7]);
+        assert!(!board.held(7));
+        assert!(!board.rested(7), "and it is said once");
+    }
+
+    #[test]
+    fn a_chat_no_end_was_held_for_is_not_put_in_the_queue_by_being_at_rest() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        claude_chat(&mut board, 8, Some(B));
+        // 7 is mid-turn; 8 was held and has begun a turn since.
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&from_pid(8, Event::UserPromptSubmit, Some(B), 77));
+        board.reported_while(&from_pid(8, Event::Stop, Some(B), 77), with_tasks(1));
+        board.reported(&from_pid(8, Event::UserPromptSubmit, Some(B), 77));
+
+        assert!(!board.rested(7));
+        assert!(!board.rested(8));
+        assert!(!board.rested(99), "a chat the board does not have");
+
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_task_paused_on_a_question_to_its_asker_is_not_in_the_queue() {
+        // Its turn ended because it asked the chat that dispatched it, which is who can
+        // answer: the #1484 leftover, where its row read "needs you".
+        let mut board = Board::new();
+        claude_chat(&mut board, 9, Some(A));
+        board.reported(&report(9, Event::UserPromptSubmit, Some(A)));
+
+        board.reported_while(&report(9, Event::Stop, Some(A)), ASKS_ITS_ASKER);
+
+        assert_eq!(board.state(9), State::Waiting);
+        assert!(board.needs_you().is_empty());
+        // Answered, with no line typed into it: it is the person's to prompt.
+        assert!(board.rested(9));
+        assert_eq!(board.needs_you(), vec![9]);
+    }
+
+    #[test]
+    fn a_real_prompt_is_an_item_whatever_the_tasks_below_are_doing() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        // A permission or a question, mid-turn.
+        board.reported_while(&report(7, Event::Notification, Some(A)), with_tasks(3));
+        assert_eq!(board.needs_you(), vec![7], "a prompt mid-turn");
+        assert!(board.asking(7));
+
+        // A reason the app found, on a session held for its tasks.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(3));
+        board.needs(
+            7,
+            Need::ReportUndelivered {
+                asker: "steward 1".to_owned(),
+            },
+        );
+        assert_eq!(board.needs_you(), vec![7], "a Notice's reason");
+
+        // A refused commit.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(3));
+        board.commit_refused(7, "a key in app.env");
+        assert_eq!(board.needs_you(), vec![7], "a refused commit");
+
+        // A task paused on its asker that shows the person a prompt of its own.
+        let mut board = Board::new();
+        claude_chat(&mut board, 9, Some(A));
+        board.reported(&report(9, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(9, Event::Notification, Some(A)), ASKS_ITS_ASKER);
+        assert_eq!(board.needs_you(), vec![9], "its own prompt wins");
+    }
+
+    #[test]
+    fn what_a_session_already_asked_for_stays_when_its_turn_then_ends_held() {
+        // It asked mid-turn, was answered, and its turn then ended with a task at work: the
+        // item it had is the prompt's, which is still the person's until they prompt it.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Notification, Some(A)), with_tasks(1));
+
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+
+        assert_eq!(
+            board.needs_you(),
+            vec![7],
+            "what it already asked for stays"
+        );
+    }
+
+    #[test]
+    fn a_held_session_the_person_ignored_stays_out_until_it_asks_again() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        assert_eq!(board.needs_you(), vec![7]);
+        board.ignored(7);
+
+        // Ignored, then a task is at work below it at its next stop: still not an item.
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(1));
+        assert!(board.needs_you().is_empty());
+
+        // And the ignore's own rule holds: the next end with nothing below asks again.
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn a_task_that_failed_is_an_item_on_the_chat_that_asked_and_one_that_is_done_is_not() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_while(&report(7, Event::Stop, Some(A)), with_tasks(2));
+
+        // Done: the report is the session's to read, and no item.
+        assert!(board.reported_back(7, "talk"));
+        assert!(board.needs_you().is_empty());
+
+        // Failed: an item on the session, though another task still works below it.
+        assert!(board.task_failed(
+            7,
+            FailedTask::new("build", HowFailed::Failed, "the forge refused the push")
+        ));
+        assert_eq!(board.needs_you(), vec![7]);
+        assert_eq!(
+            board.failed_tasks(7),
+            vec![FailedTask {
+                task: "build".to_owned(),
+                how: HowFailed::Failed,
+                why: "the forge refused the push".to_owned(),
+            }]
+        );
+        assert!(
+            !board.task_failed(
+                7,
+                FailedTask::new("build", HowFailed::Failed, "the forge refused the push")
+            ),
+            "said once"
+        );
+    }
+
+    #[test]
+    fn a_failed_task_s_item_outlasts_the_turn_that_reads_its_report() {
+        // The session is typed a line when the report lands, so its next prompt is moments
+        // away: a reason that prompt cleared would be gone before anybody saw it.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.task_failed(7, FailedTask::new("build", HowFailed::Unreported, ""));
+
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert_eq!(board.state(7), State::Running);
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn a_failed_task_s_item_goes_when_the_person_looks_or_clears_its_row_or_ignores_it() {
+        let failed = || FailedTask::new("build", HowFailed::Unreported, "");
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        // Looked at: the item goes, and the session goes on working.
+        board.task_failed(7, failed());
+        assert!(board.failures_seen(7));
+        assert!(board.needs_you().is_empty());
+        assert!(board.failed_tasks(7).is_empty());
+        assert!(!board.failures_seen(7), "nothing left to look at");
+
+        // Its row cleared: that task's item, and no other's.
+        board.task_failed(7, failed());
+        board.task_failed(
+            7,
+            FailedTask::new("lint", HowFailed::DidNotStart, "no profile runs it"),
+        );
+        assert!(board.failure_cleared(7, "build"));
+        assert_eq!(
+            board.failed_tasks(7),
+            vec![FailedTask::new(
+                "lint",
+                HowFailed::DidNotStart,
+                "no profile runs it"
+            )]
+        );
+        assert_eq!(board.needs_you(), vec![7]);
+        assert!(!board.failure_cleared(7, "build"));
+
+        // Ignored: the person's dismissal takes it, as it takes every reason.
+        assert!(board.ignored(7));
+        assert!(board.needs_you().is_empty());
+
+        // And the end of the session's program takes it too.
+        board.task_failed(7, failed());
+        board.exited(7, Some(0));
+        assert!(board.needs_you().is_empty());
+        assert!(
+            !board.task_failed(7, failed()),
+            "an ended chat asks for nobody"
+        );
+    }
+
+    #[test]
+    fn looking_at_a_failure_leaves_what_else_the_session_needs_the_person_for() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        board.task_failed(7, FailedTask::new("build", HowFailed::Failed, ""));
+
+        board.failures_seen(7);
+
+        assert_eq!(board.needs_you(), vec![7], "its own end of turn still asks");
+    }
+
+    #[test]
+    fn why_a_task_failed_is_said_in_a_few_words() {
+        assert_eq!(
+            FailedTask::in_a_few_words("\n  the  build\tbroke \nand more"),
+            "the build broke"
+        );
+        assert_eq!(FailedTask::in_a_few_words(""), "");
+        let long = "word ".repeat(40);
+        let cut = FailedTask::in_a_few_words(&long);
+        assert!(cut.chars().count() <= FailedTask::WHY_AT_MOST, "{cut}");
+        assert!(cut.ends_with('…'), "{cut}");
+        // Cut by characters, never inside one.
+        let wide = "é".repeat(200);
+        assert_eq!(
+            FailedTask::in_a_few_words(&wide).chars().count(),
+            FailedTask::WHY_AT_MOST
+        );
     }
 }

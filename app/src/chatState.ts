@@ -78,6 +78,13 @@ export type ChatStates = {
    */
   readonly needs: Readonly<Record<number, readonly string[]>>;
   /**
+   * The tasks each chat asked for that came to nothing and you have not looked at, by name,
+   * oldest first (#1491): each is a needs-you item on that chat, whose sentence is among
+   * `needs`. Kept apart so the item can lead to the task's row. Under `heardAt`'s rule; **not
+   * emptied by the chat's next prompt**, only by your look, your Ignore or the row's Clear.
+   */
+  readonly failedTasks: Readonly<Record<number, readonly string[]>>;
+  /**
    * Each chat's child agents: the sub-agents and children its harness spawned, drawn under the
    * chat (FD-18, W8). Under `heardAt`'s rule, like `reports`: only the chat's own snapshots
    * change it.
@@ -95,6 +102,7 @@ export const nothingKnown: ChatStates = {
   refusals: {},
   stoppedBelow: {},
   needs: {},
+  failedTasks: {},
   children: {},
 };
 
@@ -183,7 +191,35 @@ export function needSays(need: Need): string {
     case "report_undelivered":
       // Closed, or still open with its program gone: either way nothing will read it.
       return `its report has nowhere to go because ${need.asker} has closed or its program has ended`;
+    case "task_failed":
+      return taskFailedSaid(need);
   }
+}
+
+/**
+ * **What a needs-you item says of a task that came to nothing** (#1491, V100-15): which task,
+ * and why in a few words. `how` is the core's word: `failed` (it reported failed or blocked),
+ * `unreported` (its program ended owing its report) or `did_not_start`. A word this window
+ * does not know reads as failed, which is the least it can mean.
+ */
+export function taskFailedSaid({
+  task,
+  how,
+  why,
+}: {
+  task: string;
+  how: string;
+  why: string;
+}): string {
+  if (how === "unreported") return `${task} ended without a report`;
+  const what = how === "did_not_start" ? "did not start" : "failed";
+  return why === "" ? `${task} ${what}` : `${task} ${what}: ${why}`;
+}
+
+/** The tasks `session` asked for that came to nothing and have not been looked at, by name,
+ *  oldest first. */
+export function failedTasksOf(states: ChatStates, session: number): readonly string[] {
+  return states.failedTasks[session] ?? [];
 }
 
 /** What `session`'s refused commits were refused for, oldest first. */
@@ -250,6 +286,13 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     needs: newerChat
       ? withLines(states.needs, move.session, move.needs?.map(needSays))
       : states.needs,
+    failedTasks: newerChat
+      ? withLines(
+          states.failedTasks,
+          move.session,
+          move.needs?.flatMap((need) => (need.kind === "task_failed" ? [need.task] : [])),
+        )
+      : states.failedTasks,
     children: newerChat
       ? withChildren(states.children, move.session, move.children)
       : states.children,
