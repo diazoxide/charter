@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import { SquareTerminal } from "lucide-react";
+import { Hand, SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
 import {
   childrenOf,
@@ -209,6 +209,15 @@ export const StartedElsewhere = memo(function StartedElsewhere({
   );
 });
 
+/** No names: what a tab with no hidden task that needs you is handed. */
+const NO_NAMES: readonly string[] = [];
+
+/** What a tab's hand says: the task that has waited longest, and how many more there are. */
+function needsSaid(names: readonly string[]): string {
+  const [first, ...more] = names;
+  return more.length === 0 ? `${first} needs you` : `${first} and ${more.length} more need you`;
+}
+
 /**
  * What a tab says about itself, on the strip and in the menu of what the strip has no room for.
  *
@@ -225,9 +234,17 @@ export function TabMarks({
   pin,
   wrapping,
   persona,
+  task,
+  needs = NO_NAMES,
 }: {
   tabs: Tabs;
   id: number;
+  /** The task the tab shows in place of its session's own chat, by name (#1486): the label
+   *  says it after the session's name, dimmer. Nothing while the tab shows its own chat. */
+  task?: string;
+  /** The tab's tasks that need you and are not on screen in it, by name, longest waiting
+   *  first (#1486): the tab wears the hand for them. */
+  needs?: readonly string[];
   /** The persona the tab's chat runs as, when it runs as one: its mark is the tab's. */
   persona?: string | null;
   /** The chats wrapping up — being smart-closed (ADR 0064). */
@@ -266,7 +283,31 @@ export function TabMarks({
         persona != null && <PersonaMark persona={persona} className="tab-mark" />
       )}
       <span className="tab-name">{tabs.byId[id].name}</span>
+      {/* **`steward 4 › talk`, while the tab shows a task** (#1486, V100-35). The tab is the
+          session's, so the session's name stays first and the task's is the dimmer one. */}
+      {task !== undefined && (
+        <>
+          <span className="tab-task-sep" aria-hidden="true">
+            {" › "}
+          </span>
+          <span className="tab-task">{task}</span>
+        </>
+      )}
       {pin}
+      {/* **A task of this tab needs you and is not on screen** (#1486, V100-37): the hand, as
+          a row of the Chats list wears it. A mark and no button: the tab's button is the tab,
+          and the ways to that task are its row, the hand above it and the title bar's list. */}
+      {needs.length > 0 && (
+        <span
+          className="needs-you-mark"
+          data-mark="needs-you"
+          role="img"
+          aria-label={needsSaid(needs)}
+          title={needsSaid(needs)}
+        >
+          <Hand aria-hidden="true" />
+        </span>
+      )}
       <PlaneUpdatedMark files={chat === undefined ? undefined : updates?.[chat]} />
       {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
           stays separate from what it is DOING — a tab whose text changed every time a turn

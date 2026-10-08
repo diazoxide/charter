@@ -208,11 +208,24 @@ import {
   type LastMoved,
   type Layout,
   sendToBackground,
+  focusedChat,
+  homeOf,
+  keepShown,
+  layoutShown,
+  restoreShown,
+  showOwn,
+  shownIn,
+  switchTabTo,
+  taskShownIn,
+  type AskedBy,
   type Backgrounded,
   type Pinned,
   type Tabs,
   type ViewRef,
 } from "./tabs";
+import { crumbsOf, hiddenNeeding, type Crumbs } from "./tabChats";
+import { PaneCrumbs } from "./PaneCrumbs";
+import { giveKeyboardTo } from "./paneKeyboard";
 import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
 import { ChatAsk, focusAfterNoticeGone } from "./ChatAsk";
@@ -819,15 +832,20 @@ export const PlaneView = memo(function PlaneView({
     (how: (tabs: Tabs) => Tabs): Tabs => {
       const next = how(now.current);
       const wasInFront = now.current.inFront;
+      const wasOnScreen = chatOnScreen(now.current);
       now.current = next;
       setTabs(next);
       // The core records which chat was in front, so it is told whenever that changes — and
       // only then, rather than on every split and every keystroke. The plane travels with it:
       // "chat 3 is in front" belongs to a plane, and every plane numbers its chats from one.
-      if (next.inFront !== wasInFront) {
+      //
+      // **The chat in front is the one the tab in front shows** (#1486): a task, while its
+      // session's tab shows it. The record then brings the window back on that task, in that
+      // tab, which is how what the front tab shows outlives a reload and a relaunch.
+      const chat = chatOnScreen(next);
+      if (next.inFront !== wasInFront || chat !== wasOnScreen) {
         // A tab showing a view has no chat of its own, so nothing is in front as far as the
         // record of chats is concerned; the view tab says it is in front itself (`windowViews`).
-        const chat = next.inFront === undefined ? undefined : chatOf(next, next.inFront);
         void commands.chatInFront(plane, chat ?? null).catch(() => undefined);
       }
       return next;
@@ -939,9 +957,16 @@ export const PlaneView = memo(function PlaneView({
           );
         const front = open.find((chat) => chat.in_front);
         const frontView = back.find((view) => view.active);
+        // **What the tab in front showed** (#1486): the chat the record says was in front is a
+        // task with no tab of its own, so it is put back in its session's tab, which is the
+        // tab that comes back in front.
+        const asked = new Map(open.map((chat) => [chat.session, chat.from?.chat]));
+        const askedBy: AskedBy = (session) => asked.get(session) ?? undefined;
+        const shownBack =
+          front === undefined ? drawn : restoreShown(drawn, [front.session], askedBy);
         const inFront =
           front !== undefined
-            ? drawn.order.find((id) => chatOf(drawn, id) === front.session)
+            ? homeOf(shownBack, front.session, askedBy)?.tab
             : frontView !== undefined
               ? drawn.order.find((id) => {
                   const lead = contentsOf(drawn, id)[0]?.content;
@@ -949,7 +974,7 @@ export const PlaneView = memo(function PlaneView({
                 })
               : undefined;
         if (drawn.order.length > 0)
-          change(() => (inFront === undefined ? drawn : selectTab(drawn, inFront)));
+          change(() => (inFront === undefined ? shownBack : selectTab(shownBack, inFront)));
         // Only now may the window say what view tabs it has: saying it before this point would
         // write an empty list over the record it is about to read.
         setViewsHeard(true);
@@ -1769,10 +1794,47 @@ export const PlaneView = memo(function PlaneView({
    * ending a chat is still two presses and never one from a menu under the cursor, which is
    * the rule this menu was built with and did not have to change.
    */
+  /** Every chat the core lists, by number: what names a task a tab shows or wears a mark for. */
+  const chatsByNumber = useMemo(
+    () =>
+      new Map(
+        [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
+          (chat) => [chat.session, chat],
+        ),
+      ),
+    [sidebar],
+  );
+  /**
+   * **Each tab's tasks that need you and are not on screen in it**, by name, longest waiting
+   * first (#1486, V100-37): what the tab wears the needs-you mark for. Nothing switches a tab
+   * to one of them; going to it does.
+   */
+  const hiddenByTab = useMemo(() => {
+    const askedBy: AskedBy = (session) => chatsByNumber.get(session)?.from?.chat ?? undefined;
+    return new Map(
+      tabs.order.map((id) => [
+        id,
+        hiddenNeeding(tabs, id, askedBy, needsYou).flatMap((session) => {
+          const chat = chatsByNumber.get(session);
+          return chat === undefined ? [] : [shownName(tabs, chat)];
+        }),
+      ]),
+    );
+  }, [chatsByNumber, needsYou, tabs]);
+  /** The task tab `id` shows in place of its session's own chat, by name (#1486): what its
+   *  label says after the session's name. Nothing while it shows its own chat. */
+  const taskNameOf = (id: number) => {
+    const task = taskShownIn(tabs, id);
+    const chat = task === undefined ? undefined : chatsByNumber.get(task);
+    return chat === undefined ? undefined : shownName(tabs, chat);
+  };
+
   /** How many of a tab's chats need you: every one of its panes' that is in the queue, split
    *  or not. Its share of the chat strip's show-more count when the strip is not drawing it. */
   const waitingOn = (id: number) =>
-    panesOf(tabs, id).filter((pane) => needsYou.includes(pane.session)).length;
+    panesOf(tabs, id).filter((pane) => needsYou.includes(pane.session)).length +
+    // And its tasks that need you and are not on screen in it (#1486): the tab wears them.
+    (hiddenByTab.get(id)?.length ?? 0);
 
   // Read as an order and redrawn only when the order changes: a move by a chat the strip is
   // drawing changes nothing in a menu of the ones it is not.
@@ -2295,6 +2357,9 @@ export const PlaneView = memo(function PlaneView({
   const closePane = useCallback(() => {
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
+    // A pane showing a task has no close (#1486): the catalogue says why, and nothing here
+    // ends the session under a task on the strength of a row built a moment earlier.
+    if (tab?.shows?.[tab.focused] !== undefined) return;
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
     change((tabs) => closeFocusedPane(tabs, filedIn, isPinned, isBackground));
     if (going) void commands.closeSession(plane, going.session);
@@ -2341,21 +2406,53 @@ export const PlaneView = memo(function PlaneView({
         (chat) => [chat.session, chat],
       ),
     );
-  }, [sidebar]);
+    // **A tab whose shown task is gone shows its session's own chat** (#1486): the core's list
+    // is what says a chat is open. Not before the list is read, which would drop what a launch
+    // has just put back.
+    if (sidebar === undefined) return;
+    const open = listedNow.current;
+    if (keepShown(now.current, (session) => open.has(session)) !== now.current)
+      change((tabs) => keepShown(tabs, (session) => open.has(session)));
+  }, [change, sidebar]);
 
-  /** Brings the tab holding a chat to the front. The queue and the palette both use it. A chat
-   *  listed because its Smart close stopped (SI-8f) has been looked at, so it leaves the list. */
+  /** Who asked whom, as the core lists it now: what says which tab a task is shown in. */
+  const askedByNow = useCallback<AskedBy>(
+    (session) => listedNow.current.get(session)?.from?.chat ?? undefined,
+    [],
+  );
+
+  /**
+   * **Goes to a chat: the one way** (#1486). Every surface that shows a chat comes through
+   * here: a row of the Chats list and of the explorer, the hand on a row above it, the title
+   * bar's list, the palette, a name in a pane's breadcrumb.
+   *
+   * **A chat is shown in its home** (`tabs.homeOf`). A session's own chat is its tab. A task is
+   * shown INSIDE the tab of the session that asked for it: that tab comes forward and is
+   * switched to the task (`tabs.switchTabTo`), no tab is added, and the keyboard goes into the
+   * task's terminal. The same press on the session's own chat switches the tab back.
+   *
+   * **A task whose session has no tab in this window** falls back to what a pressed task did
+   * before: an ordinary tab of its own, which the core is told of. The session that asked was
+   * closed and left it running, so there is no tab to show it in.
+   *
+   * A chat listed because its Smart close stopped (SI-8f) has been looked at, so it leaves
+   * the list.
+   */
   const showChat = useCallback(
     (session: number) => {
-      const holding = (tabs: Tabs) =>
-        tabs.order.find((id) => panesOf(tabs, id).some((pane) => pane.session === session));
-      let tab = holding(now.current);
-      // **A task chat listed with no tab gets an ordinary one, in front** (#1447). The core is
-      // told, so a reloaded window and the next launch draw it again.
-      const listed = tab === undefined ? listedNow.current.get(session) : undefined;
-      if (listed !== undefined) {
-        tab = holding(
-          change((tabs) =>
+      const home = homeOf(now.current, session, askedByNow);
+      if (home !== undefined) {
+        const was = shownIn(now.current, home.tab).find((one) => one.pane === home.pane)?.session;
+        change((tabs) => switchTabTo(tabs, session, askedByNow));
+        const workspace =
+          sidebar === undefined ? undefined : workspaceOf(now.current, home.tab, filedIn);
+        if (workspace !== undefined) setPicked(workspace);
+        // The pane shows another chat now: whoever pressed for it types next.
+        if (was !== session) giveKeyboardTo(plane, session);
+      } else {
+        const listed = listedNow.current.get(session);
+        if (listed !== undefined) {
+          const opened = change((tabs) =>
             alreadyShows(tabs, session)
               ? tabs
               : openTab(
@@ -2365,14 +2462,15 @@ export const PlaneView = memo(function PlaneView({
                   whoOf(listed.persona, listed.harness),
                   listed.label,
                 ),
-          ),
-        );
-        void commands.openChatTab(plane, session).catch(() => undefined);
+          );
+          void commands.openChatTab(plane, session).catch(() => undefined);
+          const tab = tabHolding(opened, session);
+          if (tab !== undefined) bringToFront(tab);
+        }
       }
-      if (tab !== undefined) bringToFront(tab);
       stoppedFor(session, undefined);
     },
-    [bringToFront, change, plane, stoppedFor],
+    [askedByNow, bringToFront, change, filedIn, plane, sidebar, stoppedFor],
   );
 
   /**
@@ -2689,9 +2787,8 @@ export const PlaneView = memo(function PlaneView({
   const frontTab = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
   // The session the next worktree question is about: the chat in the pane that has the
   // keyboard, which is the one "this chat's worktree" means.
-  const frontSession = frontTab
-    ? panesOf(tabs, frontTab.id).find((pane) => pane.pane === frontTab.focused)?.session
-    : undefined;
+  // The chat SHOWN there (#1486): while the tab shows a task, the task is what is typed into.
+  const frontSession = focusedChat(tabs);
   // Where that chat is working. The sidebar's chats carry it, and so does the record the
   // core put back at this launch; a chat the operator just opened is in the first.
   const frontCwd =
@@ -4313,6 +4410,11 @@ export const PlaneView = memo(function PlaneView({
     chatsListed.current = listedChats;
   }, [listedChats]);
   const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
+  /** The breadcrumb of each pane of the tab in front that shows a task, by pane (#1486). */
+  const frontCrumbs = useMemo(
+    () => (tabs.inFront === undefined ? NO_CRUMBS : crumbsOf(tabs, tabs.inFront, listedChats)),
+    [listedChats, tabs],
+  );
   /** The chats each chat started that went to another workspace, which the explorer draws
    *  under its row with that workspace named. */
   const chatsStarted = useMemo(() => startedElsewhere(listedChats), [listedChats]);
@@ -4718,6 +4820,26 @@ export const PlaneView = memo(function PlaneView({
       void run(offer);
     },
     [run],
+  );
+
+  /**
+   * **A tab on the strip was pressed.** One that is behind comes forward, on whatever it was
+   * left showing. **One already in front goes back to its session's own chat** (#1486,
+   * V100-36), which is the way out of a task that needs no reading: the tab is the session.
+   */
+  const pressTab = useCallback(
+    (id: number, select: Offer | undefined) => {
+      if (now.current.inFront !== id) {
+        if (select?.available) press(select);
+        return;
+      }
+      const tab = now.current.byId[id];
+      if (tab?.shows === undefined) return;
+      const own = panesOf(now.current, id).find((one) => one.pane === tab.focused)?.session;
+      change((tabs) => showOwn(tabs, id));
+      if (own !== undefined) giveKeyboardTo(plane, own);
+    },
+    [change, plane, press],
   );
 
   /**
@@ -5321,10 +5443,10 @@ export const PlaneView = memo(function PlaneView({
                                   // The catalogue's row, not a second copy of it. The tab already in front
                                   // has a row that says so and cannot run — a tab is never disabled, because
                                   // the selected tab is the one a keyboard has to be able to land on.
-                                  onClick={() => {
-                                    const offer = by(`tab.select:${id}`);
-                                    if (offer?.available) press(offer);
-                                  }}
+                                  //
+                                  // **Pressed while it is in front, a tab showing a task goes
+                                  // back to its session's own chat** (#1486, `pressTab`).
+                                  onClick={() => pressTab(id, by(`tab.select:${id}`))}
                                   // A double-click on the name renames it — the same row again.
                                   onDoubleClick={() => {
                                     // …and keeps a preview tab, VS Code's double-click (SI-9b).
@@ -5340,6 +5462,8 @@ export const PlaneView = memo(function PlaneView({
                                     persona={personaOf(chatOf(tabs, id))}
                                     shells={shells}
                                     wrapping={wrapping}
+                                    task={taskNameOf(id)}
+                                    needs={hiddenByTab.get(id)}
                                     pin={
                                       <Pin
                                         held={isPinned(id)}
@@ -5391,6 +5515,8 @@ export const PlaneView = memo(function PlaneView({
                   updates={planeUpdates}
                   shells={shells}
                   wrapping={wrapping}
+                  task={taskNameOf(id)}
+                  needs={hiddenByTab.get(id)}
                 />
               ),
             }))}
@@ -5640,7 +5766,8 @@ export const PlaneView = memo(function PlaneView({
             <div className="left-region">
               <ChatsSection
                 rows={chatRows}
-                front={frontTab === undefined ? undefined : chatOf(tabs, frontTab.id)}
+                // The chat on screen: a task, while its session's tab shows it (#1486).
+                front={chatOnScreen(tabs)}
                 onOpen={showChat}
                 offers={found}
                 onPress={press}
@@ -5707,7 +5834,11 @@ export const PlaneView = memo(function PlaneView({
               {frontTab ? (
                 <LayoutPanes
                   plane={plane}
-                  layout={frontTab.layout}
+                  // Each pane holding the chat it SHOWS (#1486): a task, in the pane of the
+                  // session that asked, while the tab is switched to it.
+                  layout={layoutShown(tabs, frontTab.id) ?? frontTab.layout}
+                  crumbs={frontCrumbs}
+                  onShowChat={showChat}
                   focused={frontTab.focused}
                   onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
                   offerFor={by}
@@ -6545,6 +6676,18 @@ function whoOf(persona: string | null, harness: string | null | undefined): stri
 /** Where a chat in no workspace works, in the words its handoff note uses (`plane root`). */
 const ROOT_WORD = "plane root";
 
+/**
+ * **The chat the tab in front shows** (#1486): the task its session's tab is switched to, and
+ * otherwise the tab's own chat. Nothing for a tab that opened on a view, or with none in front.
+ */
+function chatOnScreen(tabs: Tabs): number | undefined {
+  if (tabs.inFront === undefined) return undefined;
+  return taskShownIn(tabs, tabs.inFront) ?? chatOf(tabs, tabs.inFront);
+}
+
+/** No breadcrumbs: what a tab showing only its own chats draws. */
+const NO_CRUMBS: Readonly<Record<number, Crumbs>> = {};
+
 /** Whether any tab already shows `session`, in any of its panes. */
 function alreadyShows(tabs: Tabs, session: number): boolean {
   return tabs.order.some((id) => panesOf(tabs, id).some((pane) => pane.session === session));
@@ -6655,6 +6798,8 @@ function tabTip(from: string | undefined, workItem: string | undefined): string 
 function PaneFrame({
   plane,
   session,
+  crumbs,
+  onShowChat,
   from,
   harness,
   onOpenCard,
@@ -6675,6 +6820,10 @@ function PaneFrame({
 }: {
   plane: PlaneId;
   session: number;
+  /** While the pane shows a task of its tab's session: the path to it (#1486). */
+  crumbs?: Crumbs;
+  /** Goes to a chat: what a name in the breadcrumb does. */
+  onShowChat: (session: number) => void;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
   /** The harness the chat runs, at a glance, in the same corner (HP-19): none for a shell. */
@@ -6732,6 +6881,9 @@ function PaneFrame({
       <div className="pane-corner at-start">
         {/* The chat at a glance, on one row. */}
         <div className="pane-chips">
+          {/* **Which chat this is, while the tab shows a task** (#1486): first in the line, and
+              in no row of its own. */}
+          {crumbs && <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />}
           <ChatGauge usage={usage} />
           {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
           {from && <span className="pane-from">{from}</span>}
@@ -7180,6 +7332,8 @@ export function Gear({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer
 function LayoutPanes({
   plane,
   layout,
+  crumbs,
+  onShowChat,
   focused,
   onFocus,
   offerFor,
@@ -7210,7 +7364,12 @@ function LayoutPanes({
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
   plane: PlaneId;
+  /** The tab's layout as it is drawn: each pane holding the chat it shows (#1486). */
   layout: Layout;
+  /** The breadcrumb of each pane that shows a task, by pane (#1486). */
+  crumbs: Readonly<Record<number, Crumbs>>;
+  /** Goes to a chat: what a name in a breadcrumb does. */
+  onShowChat: (session: number) => void;
   focused: number;
   onFocus: (pane: number) => void;
   /** The catalogue, by row id. There is one list of actions and the panes read it too. */
@@ -7308,11 +7467,16 @@ function LayoutPanes({
         </div>
       );
     }
+    // **This pane shows a task of its tab's session** (#1486). The breadcrumb says where it
+    // came from, so the note of the chat that started it is not said a second time.
+    const crumb = crumbs[layout.pane];
     return (
       <PaneFrame
         plane={plane}
         session={content.session}
-        from={handedFrom[content.session]}
+        crumbs={crumb}
+        onShowChat={onShowChat}
+        from={crumb === undefined ? handedFrom[content.session] : undefined}
         harness={glances[content.session]}
         onOpenCard={(glance) => onOpenView(harnessCardView(glance.name), glance.label)}
         workItem={workItems[content.session]}
@@ -7327,7 +7491,16 @@ function LayoutPanes({
         onAllowed={() => onAllowed(content.session)}
         restartSaid={restartsSaid[content.session]}
         onRestartAnswer={(act) => onRestartAnswer(content.session, act)}
-        doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
+        doing={
+          <PaneDoing
+            pane={layout.pane}
+            offerFor={offerFor}
+            onPaneDoes={onPaneDoes}
+            // No close on a pane showing a task: nothing on screen ends the task, and the
+            // session's close is its tab's (#1486).
+            task={crumb !== undefined}
+          />
+        }
       >
         <SessionPane
           plane={plane}
@@ -7363,6 +7536,8 @@ function LayoutPanes({
             <LayoutPanes
               plane={plane}
               layout={child}
+              crumbs={crumbs}
+              onShowChat={onShowChat}
               focused={focused}
               onFocus={onFocus}
               offerFor={offerFor}
@@ -7426,12 +7601,18 @@ function PaneDoing({
   pane,
   offerFor,
   onPaneDoes,
+  task = false,
 }: {
   pane: number;
   offerFor: (id: string) => Offer | undefined;
   onPaneDoes: (pane: number, offer: Offer | undefined) => void;
+  /** The pane shows a task of its tab's session (#1486): it draws no close. A close here
+   *  would read as ending the task, and what it would end is the session under it. */
+  task?: boolean;
 }) {
-  const rows = ["pane.split.right", "pane.split.down", "pane.close"];
+  const rows = task
+    ? ["pane.split.right", "pane.split.down"]
+    : ["pane.split.right", "pane.split.down", "pane.close"];
   return (
     <div className="pane-doing">
       {rows.map((id) => {

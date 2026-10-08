@@ -2000,19 +2000,30 @@ export function catalogue(now: Now): Offer[] {
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   // A pane showing a view closes and ends nothing, so it says so and is not asked about.
+  //
+  // **A pane showing a task has no close** (#1486): its close would end the session under the
+  // task, which is not what is on screen, and ending a task is not a close. The tab's own
+  // close still ends the session, and says so.
+  const taskInFocus = front?.shows?.[front.focused] !== undefined;
   offers.push(
     focusedOn?.kind === "view"
       ? can("pane.close", "Close this view", { verb: "closePane", ends: false })
-      : front
-        ? {
-            ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
-            note: ENDS_IT,
-          }
-        : cannot(
+      : front && taskInFocus
+        ? cannot(
             "pane.close",
             "End this pane's chat",
-            "No chat is in front, so there is no pane to close.",
-          ),
+            `This pane shows a task of ${front.name}. Go back to ${front.name} to end its chat, or close the tab.`,
+          )
+        : front
+          ? {
+              ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
+              note: ENDS_IT,
+            }
+          : cannot(
+              "pane.close",
+              "End this pane's chat",
+              "No chat is in front, so there is no pane to close.",
+            ),
   );
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends

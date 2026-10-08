@@ -22,7 +22,8 @@ const NO_OFFERS: Catalogued = new Map();
  * what across all of them, and which chat started which.
  *
  * **A row is a way to the chat.** Pressing one brings its tab forward, on whichever workspace's
- * strip it is. A task has no tab: its row says so, and pressing it opens an ordinary tab.
+ * strip it is. A task has no tab of its own: pressing its row shows it inside the tab of the
+ * session that asked for it (#1486).
  *
  * **A row says its chat's state in a word beside a mark** (#1484): `ChatShownState`, which the
  * explorer's rows draw too.
@@ -50,7 +51,7 @@ export function ChatsSection({
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
   front?: number;
-  /** A row was pressed: bring that chat forward, opening its tab when it has none. */
+  /** A row was pressed: go to that chat. A task is shown inside its session's tab (#1486). */
   onOpen: (session: number) => void;
   /** The catalogue as it stands, by id: what each row's menu reads its rows from. */
   offers?: Catalogued;
@@ -238,7 +239,7 @@ const Row = memo(function Row({
                 : undefined
             }
             data-tab={tab}
-            title={tab ? undefined : "No tab yet. Press to open it as a tab."}
+            title={tab ? undefined : "No tab of its own. Press to show it in its session's tab."}
             onClick={() => onOpen(session)}
             onKeyDown={keys}
           >
