@@ -39,8 +39,15 @@
 //!
 //! A persona with no list of its own is held to the list of the persona it `extends:`, the
 //! nearest one up its chain that has a list ([`Listed::for_chain`]), as it inherits that
-//! persona's `profile:`. There is no list for every persona at once: a persona nobody listed,
-//! whose chain lists none, has none.
+//! persona's `profile:`.
+//!
+//! # A list for every persona
+//!
+//! **`"*" = ["work"]` is the list of every persona whose chain lists none** (#1522), one added
+//! later included: a persona a chat copies or makes, with no list of its own, is held to it
+//! rather than to none. A persona's own list, or the nearest one it extends, answers before it,
+//! as the most specific level of a dispatch limit does. Without one, a persona nobody listed,
+//! whose chain lists none, has none, as before.
 //!
 //! # A chat started again
 //!
@@ -60,11 +67,17 @@ pub const TABLE: &str = crate::dispatchlimits::TABLE;
 /// The key under [`TABLE`] the lists are kept under.
 pub const KEY: &str = "profiles";
 
+/// The name under [`KEY`] whose list is every persona's that has none of its own (#1522): the
+/// word a grant uses for "any persona" ([`crate::dispatchgrant::ANY`]).
+pub const EVERY: &str = crate::dispatchgrant::ANY;
+
 /// What `[dispatch.profiles]` of a project file holds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Listed {
     /// Each persona that has a list, with the profiles in it, in file order, once each.
     personas: BTreeMap<String, Vec<String>>,
+    /// The list under `"*"`, for every persona whose chain has none of its own.
+    every: Option<Vec<String>>,
     /// Whether the key is there and is not a table: nothing is listed for any persona.
     unreadable: bool,
     /// Each thing in it that is not read as written, as one sentence.
@@ -83,14 +96,17 @@ impl Listed {
     }
 
     /// The profiles a persona is held to, by `chain`, its `extends:` chain with itself first
-    /// ([`crate::personas::lineage`]): its own list, else the nearest one above it. `None`
-    /// where no persona of the chain has one, so every profile the project offers may be
-    /// chosen.
+    /// ([`crate::personas::lineage`]): its own list, else the nearest one above it, else the
+    /// list for every persona (`"*"`). `None` where there is none of these, so every profile
+    /// the project offers may be chosen.
     pub fn for_chain(&self, chain: &[String]) -> Option<Vec<String>> {
         if self.unreadable {
             return Some(Vec::new());
         }
-        chain.iter().find_map(|who| self.personas.get(who).cloned())
+        chain
+            .iter()
+            .find_map(|who| self.personas.get(who).cloned())
+            .or_else(|| self.every.clone())
     }
 
     /// What a project file that is there and could not be read at all lists: nothing, for
@@ -134,18 +150,32 @@ pub fn listed(text: Option<&str>) -> Listed {
     };
     for (persona, profiles) in table {
         let here = format!("{at}.{}", crate::shown::short(persona));
-        if !crate::personas::valid_name(persona) {
+        // Only the exact string, as for "any persona" in a grant: a pattern is no name.
+        let every = persona == EVERY;
+        if !every && !crate::personas::valid_name(persona) {
             out.refused.push(format!(
                 "{here} is not a persona's name, so it lists nothing"
             ));
             continue;
         }
-        let list = out.personas.entry(persona.clone()).or_default();
+        let list = if every {
+            out.every.get_or_insert_with(Vec::new)
+        } else {
+            out.personas.entry(persona.clone()).or_default()
+        };
         let Some(profiles) = profiles.as_array() else {
-            out.refused.push(format!(
-                "{here} is not a list of profiles, so no profile is listed for that persona \
-                 and no chat is dispatched to it until it is fixed"
-            ));
+            out.refused.push(if every {
+                format!(
+                    "{here} is not a list of profiles, so no profile is listed for a persona \
+                     that has no list of its own, and no chat is dispatched to one until it is \
+                     fixed"
+                )
+            } else {
+                format!(
+                    "{here} is not a list of profiles, so no profile is listed for that persona \
+                     and no chat is dispatched to it until it is fixed"
+                )
+            });
             continue;
         };
         for profile in profiles {
@@ -812,6 +842,47 @@ mod tests {
             ..dispatched
         };
         assert_eq!(may_start_again(root.path(), &plain), Ok(()));
+    }
+
+    #[test]
+    fn a_list_for_every_persona_holds_each_that_lists_none_of_its_own() {
+        let read = listed(Some(
+            "[dispatch.profiles]\n\"*\" = [\"work\", \"work\"]\nbase = [\"codex\"]\nown = []\n",
+        ));
+        let chain = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        assert_eq!(read.refused, Vec::<String>::new());
+        // A persona nobody listed, one added later included.
+        assert_eq!(read.for_chain(&chain(&["devops2"])), names(&["work"]));
+        // Its own list and the nearest it extends answer first, an empty one included.
+        assert_eq!(read.for_chain(&chain(&["base"])), names(&["codex"]));
+        assert_eq!(
+            read.for_chain(&chain(&["child", "base"])),
+            names(&["codex"])
+        );
+        assert_eq!(read.for_chain(&chain(&["own"])), names(&[]));
+        // "*" is no persona's own name.
+        assert_eq!(read.for_persona("*"), None);
+
+        // Empty, or not a list, it holds every such persona to nothing.
+        let empty = listed(Some("[dispatch.profiles]\n\"*\" = []\n"));
+        assert_eq!(empty.for_chain(&chain(&["devops"])), names(&[]));
+        let word = listed(Some("[dispatch.profiles]\n\"*\" = \"work\"\n"));
+        assert_eq!(word.for_chain(&chain(&["devops"])), names(&[]));
+        assert_eq!(
+            word.refused,
+            vec![
+                "dispatch.profiles.* is not a list of profiles, so no profile is listed for a \
+                 persona that has no list of its own, and no chat is dispatched to one until it \
+                 is fixed"
+                    .to_owned()
+            ]
+        );
+        // Only the exact string: a pattern is no persona's name and lists nothing.
+        let pattern = listed(Some("[dispatch.profiles]\n\"dev*\" = [\"work\"]\n"));
+        assert_eq!(pattern.for_chain(&chain(&["devops"])), None);
+        assert_eq!(pattern.refused.len(), 1);
     }
 
     #[test]

@@ -933,7 +933,10 @@ needs-you list says "`<persona>` wanted `<persona>` while you were away", with *
 `docs/plane-format.md` and `crates/purlis-core/docs/handoff.md`. A chat a dispatch started is
 held to it, and to the rule that a dispatched chat never runs with its harness's prompts off,
 each time it is started again: at a relaunch, a restart, and a Reopen of its finished task.
-The loop rule holds under every grant, "any persona" included.
+The loop rule holds under every grant, "any persona" included. A project may set one list for
+every persona that has none of its own, nor one up its `extends:` chain: `"*"` under
+`[dispatch.profiles]` (#1522), so a persona a chat copies or makes is held to a list rather
+than to none.
 
 **17. The commands of who may dispatch to whom are the window's alone** (the dispatcher's
 ruling as train 64 was joined, for the operator to confirm). Allow, Keep blocked and Never on
