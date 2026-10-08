@@ -2112,20 +2112,6 @@ impl Chats {
         (from.mode == Mode::Task && from.report == Owed::Due).then(|| from.clone())
     }
 
-    /// Every chat chat `asker` started that is still open, as a task or by a handoff, by
-    /// number, lowest first, each with its lineage record: what is below `asker`.
-    pub fn started_by(&self, asker: u32) -> Vec<(u32, purlis_core::reopen::HandedFrom)> {
-        let mut started: Vec<_> = lock(&self.open)
-            .iter()
-            .filter_map(|(number, one)| {
-                let from = one.chat.from.as_ref()?;
-                (from.chat == asker && *number != asker).then(|| (*number, from.clone()))
-            })
-            .collect();
-        started.sort_by_key(|(number, _)| *number);
-        started
-    }
-
     /// The deciding lock, where nobody holds it now ([`Self::deciding`]).
     pub fn try_deciding(&self) -> Option<MutexGuard<'_, ()>> {
         match self.dispatching.try_lock() {
@@ -2153,7 +2139,7 @@ impl Chats {
 
     /// The persona chats chat `asker` has open as tasks, by number, lowest first, each with
     /// its lineage record (#1443): what that chat's list of its dispatches is made from, and
-    /// what closing it asks about.
+    /// what closing it asks about. **What is below `asker`**: a handoff's chat is not (#1492).
     pub fn tasks_of(&self, asker: u32) -> Vec<(u32, purlis_core::reopen::HandedFrom)> {
         let mut tasks: Vec<_> = lock(&self.open)
             .iter()

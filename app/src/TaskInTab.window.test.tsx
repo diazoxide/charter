@@ -1569,6 +1569,36 @@ describe("a handoff is a session of its own (#1492, V100-69)", () => {
     expect(inFront()).toBe("steward 1");
   });
 
+  it("is gone to from the keyboard: the row's menu has a row for each chat the work went to", async () => {
+    const { tree } = await drawn([
+      ...moved(),
+      chat(5, "alpha", { label: "release notes", from: handoffFrom(1) }),
+    ]);
+
+    fireEvent.contextMenu(row(tree, "steward 1"));
+
+    // Every chat it went to, the newest first: the one the row names and the "1 more".
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+        .filter((said) => said?.includes("handed off to")),
+    ).toEqual([
+      "Go to release notes (handed off to by steward 1)",
+      "Go to drop commons (handed off to by steward 1)",
+    ]);
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+
+    await waitFor(() => expect(onScreen()).toEqual([3]));
+    expect(inFront()).toBe("drop commons");
+
+    // A chat that handed nothing off has no such row.
+    fireEvent.contextMenu(row(tree, "talk"));
+    const other = await screen.findByRole("menu");
+    expect(within(other).queryByText(/handed off to/)).toBeNull();
+  });
+
   it("gives the place to what the chat is doing while it works, and the row keeps its second line", async () => {
     const { tree, move } = await drawn(moved());
     expect(went(tree, "steward 1")?.textContent).toBe("handed off to drop commons");

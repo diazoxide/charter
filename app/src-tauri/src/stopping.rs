@@ -562,8 +562,33 @@ fn facts_of(held: &Held, session: u32) -> Facts {
     }
 }
 
-/// Every open chat with the chat that started it, as `held` records them.
+/// Every open chat with the chat it is **below**, as `held` records them: the chat that
+/// asked it for a task. **A handoff's chat is below no chat** (#1492, V100-69): the work
+/// moved, and it is a session of its own, so a stop of the chat it came from "and everything
+/// below it" does not take it, and it is not kept from starting chats by that stop. By the
+/// record's kind, so a handoff that owes a report is the task its record says it is.
 fn lineage_of(held: &Held) -> Vec<(u32, Option<u32>)> {
+    held.chats()
+        .open_now()
+        .iter()
+        .map(|chat| {
+            (
+                chat.session,
+                chat.from.as_ref().and_then(asked_for_as_a_task),
+            )
+        })
+        .collect()
+}
+
+/// The chat that asked for the chat `from` is the note of, where it asked for a task.
+fn asked_for_as_a_task(from: &purlis_core::reopen::HandedFrom) -> Option<u32> {
+    (from.mode == purlis_core::reopen::Mode::Task).then_some(from.chat)
+}
+
+/// Every open chat with the chat that started it, as a task or by a handoff: **who is told**
+/// when a stopped chat ends, which a handoff's chat stopped by itself still has. Never what
+/// is below what: that is [`lineage_of`].
+fn started_of(held: &Held) -> Vec<(u32, Option<u32>)> {
     held.chats()
         .open_now()
         .iter()
@@ -598,9 +623,10 @@ fn press(held: &Arc<Held>, session: u32, below: bool) -> Result<(), String> {
             return Err("That chat is not open any more.".to_owned());
         }
         let order = subtree(&lineage, session, below);
+        let started = started_of(held);
         let acts = held.stopping().stops().press(
             &order,
-            |chat| started_in(&lineage, chat),
+            |chat| started_in(&started, chat),
             |chat| facts_of(held, chat),
         );
         cancels_stand_down(held, &order);
@@ -622,10 +648,10 @@ pub(crate) fn press_below(held: &Held, order: &[u32], _deciding: &crate::handoff
     if order.is_empty() {
         return;
     }
-    let lineage = lineage_of(held);
+    let started = started_of(held);
     let acts = held.stopping().stops().press(
         order,
-        |chat| started_in(&lineage, chat),
+        |chat| started_in(&started, chat),
         |chat| facts_of(held, chat),
     );
     cancels_stand_down(held, order);

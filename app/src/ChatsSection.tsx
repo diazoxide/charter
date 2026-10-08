@@ -95,6 +95,9 @@ type Moving = {
 const sameAsked = (one: readonly number[] | null, other: readonly number[] | null) =>
   one === other || (one !== null && other !== null && sameList(one, other));
 
+/** The chats a chat that handed nothing off handed off to. */
+const NOT_HANDED_OFF: readonly number[] = [];
+
 /** No folds set by hand. */
 const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
 
@@ -394,6 +397,11 @@ export function ChatsSection({
   const byNumber = useMemo(() => new Map(rows.map((row) => [row.session, row])), [rows]);
   /** Where each chat's work went by a handoff, the newest first (#1492). */
   const went = useMemo(() => handedOff(rows), [rows]);
+  /** The same by number, for each row's menu: held, so a row is drawn again only for its own. */
+  const wentTo = useMemo(
+    () => new Map([...went].map(([from, chats]) => [from, chats.map((chat) => chat.session)])),
+    [went],
+  );
   /**
    * **The chats that need the person and that the filter hides**, longest waiting first
    * (#1499): their own rows and every row above them are filtered out, so no hand is drawn
@@ -673,6 +681,7 @@ export function ChatsSection({
                       handedTo={handed?.[0].session ?? null}
                       handedToName={handed?.[0].name ?? null}
                       handedMore={handed === undefined ? 0 : handed.length - 1}
+                      handedAll={wentTo.get(row.session) ?? NOT_HANDED_OFF}
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
@@ -780,6 +789,7 @@ const Row = memo(function Row({
   handedTo,
   handedToName,
   handedMore,
+  handedAll,
   tab,
   current,
   open,
@@ -825,6 +835,8 @@ const Row = memo(function Row({
   handedToName: string | null;
   /** How many other open chats it handed off to. */
   handedMore: number;
+  /** Every open chat it handed off to, the newest first: its menu has a row to go to each. */
+  handedAll: readonly number[];
   tab: boolean;
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
@@ -893,7 +905,7 @@ const Row = memo(function Row({
           {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
         </button>
       )}
-      <Menued on={{ on: "listed", session }} offers={offers} onPress={onPress}>
+      <Menued on={{ on: "listed", session, handed: handedAll }} offers={offers} onPress={onPress}>
         <RovingFocusGroup.Item asChild tabStopId={rowId(session)}>
           <button
             type="button"
