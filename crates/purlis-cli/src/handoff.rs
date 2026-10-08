@@ -1,7 +1,7 @@
 //! `charter handoff` — open a chat in a workspace you name, started on a brief.
 //!
 //! ```text
-//! charter handoff --name "<task>" <workspace> [--report] [--create --vision "<vision>"]
+//! charter handoff --name "<task>" <workspace> [--create --vision "<vision>"]
 //!     [--persona <name>] <<'BRIEF'
 //! <the brief>
 //! BRIEF
@@ -21,6 +21,12 @@
 //!    there is no frame has to carry it;
 //! 3. the first message's own shape — empty, a flag, one word, a NUL, past the byte bound;
 //! 4. the host: the app that started this chat, or — where there is none — the printed command.
+//!
+//! **A handoff is fire-and-forget** (#1515): the person's work moves to a chat they will read
+//! themselves. Work the asking chat needs an answer from is a task, and its one route is
+//! `purlis dispatch`. `--report` is still taken, because chats have learned it, and is
+//! carried out as that task ([`as_a_task`]): the ask a dispatch sends, into the workspace
+//! named, with a line saying which route to use from now on.
 //!
 //! # Where this charter opens a chat, and where it prints the command instead
 //!
@@ -72,7 +78,7 @@ pub struct Args {
     pub persona: Option<String>,
     /// `--name`: what the new chat is called (charter-app#258).
     pub name: Option<String>,
-    /// `--report`: the new chat owes this one a report (charter-app#259).
+    /// `--report`: this chat needs an answer, so the work is dispatched as a task (#1515).
     pub report: bool,
     /// The word after `report` in `charter handoff report "<summary>"`.
     pub summary: Option<String>,
@@ -129,6 +135,19 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         voice::err(&format!(
             "{HANDOFF_SAYS} --create needs --vision — a workspace with no vision is never \
              proposed as a target, so it would be created unfindable. Nothing was opened."
+        ));
+        return ExitCode::FAILURE;
+    }
+    // A handoff that reports back is a task (#1515), and a task works in a workspace the
+    // project already has: `purlis dispatch --in workspace:<name>` makes none. Said before
+    // anything is read or asked, with the two commands that do it.
+    if args.report && args.create {
+        voice::err(&format!(
+            "{HANDOFF_SAYS} --report makes this a task, and a task works in a workspace that \
+             exists, so --create cannot go with it — nothing was opened. Create '{ws}' first \
+             (purlis workspace create {ws}), then dispatch into it: purlis dispatch --name \
+             \"<task>\" --in workspace:{ws}. {}",
+            handoff::ONE_ROUTE
         ));
         return ExitCode::FAILURE;
     }
@@ -203,6 +222,10 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    if args.report {
+        return as_a_task(here, ws, persona, name.as_deref(), &brief);
+    }
+
     let source_chat = purlis_core::envvar::var("PURLIS_SESSION_ID")
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| handoff::NO_CHAT.to_string());
@@ -221,11 +244,11 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         &handoff::stamp(&source_chat, &source, now.naive_local()),
         &brief,
     );
-    // Measured as the chat will be sent it: with the report line when one is asked for, and
-    // with the stamp naming the chat that asks — which the app writes, by the name it shows.
-    // A name longer than this one's number can still take a message over the bound, and the
-    // app says so in that case; this is the refusal nearly every such brief gets.
-    let sent = handoff::delivered(&msg, &source_chat, args.report).unwrap_or_else(|| msg.clone());
+    // Measured as the chat will be sent it: with the stamp naming the chat that asks — which
+    // the app writes, by the name it shows. A name longer than this one's number can still
+    // take a message over the bound, and the app says so in that case; this is the refusal
+    // nearly every such brief gets. No report line: a handoff that asks for one went as a task.
+    let sent = handoff::delivered(&msg, &source_chat, false).unwrap_or_else(|| msg.clone());
     if let Some(bad) = handoff::bad_message(&sent) {
         let mut said = format!("{HANDOFF_SAYS} {}", bad.say());
         // Only the byte bound gets the note, and it is compared against the seam's own
@@ -241,7 +264,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
 
     // ---- the host: the app that started this chat, if one did ---------------------------
     let create_vision = vision.filter(|_| args.create);
-    let refused = match in_the_app(ws, &msg, create_vision, persona, name, args.report) {
+    let refused = match in_the_app(ws, &msg, create_vision, persona, name) {
         Host::Opened(chat, row, note) => {
             record_opened(&Opened {
                 here,
@@ -315,6 +338,49 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     }
     voice::err(&said);
     ExitCode::FAILURE
+}
+
+/// **A handoff that asks for a report is a task, and is dispatched as one** (#1515).
+///
+/// A handoff is the person's work moving to a chat they will read themselves. Work the asking
+/// chat needs an answer from is a task: listed under it, waited on, steered and cancelled.
+/// `--report` used to be a second route to the second thing, with none of a task's handles: its
+/// report waited for the asking chat's next turn and nothing started that turn, `purlis
+/// dispatch wait` refused its chat and `list` did not show it.
+///
+/// So this sends **the ask `purlis dispatch` sends** ([`crate::dispatch::send`]), with the
+/// workspace the handoff named as the place the task works (`--in workspace:<name>`), and the
+/// app cannot tell the two apart: it is a task in every respect because it is one. What the
+/// command adds is the line saying so, and the route from now on
+/// ([`handoff::reported_as_a_task`]), after a start, a hold and a refusal alike.
+///
+/// A task leaves no todo in the workspace it works in and no `handoff` row in the dispatch
+/// log: its dispatch record is the app's.
+fn as_a_task(
+    here: &crate::Here,
+    ws: &str,
+    persona: Option<&str>,
+    name: Option<&str>,
+    brief: &str,
+) -> ExitCode {
+    let task = name.map_or_else(|| handoff::task_name_of_a_handoff(ws), str::to_owned);
+    let place = format!("{}{ws}", purlis_core::dispatchplace::WORKSPACE);
+    let options = crate::dispatch::Options {
+        profile: None,
+        place: Some(&place),
+    };
+    match crate::dispatch::send(here, persona, &task, brief, &options, None) {
+        Ok(said) => {
+            println!("{said}");
+            println!("{}", handoff::reported_as_a_task());
+            ExitCode::SUCCESS
+        }
+        Err(why) => {
+            voice::err(&why);
+            voice::info(&handoff::reported_as_a_task());
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Who asks, as a held handoff's sentences say it.
@@ -518,7 +584,6 @@ fn in_the_app(
     create_vision: Option<&str>,
     persona: Option<&str>,
     name: Option<String>,
-    report: bool,
 ) -> Host {
     use purlis_core::hookwire::{Answer, Ask, OpenChat};
 
@@ -535,7 +600,9 @@ fn in_the_app(
         message: msg.to_owned(),
         ticket,
         name,
-        report,
+        // Never asked for here (#1515): a handoff that wants an answer is sent as a task
+        // ([`as_a_task`]), so what this opens owes no report.
+        report: false,
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat, row, note }) => Host::Opened(chat, row, note),

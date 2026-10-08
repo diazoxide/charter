@@ -278,6 +278,34 @@ pub const REPORT_ASK: &str = "⟨the chat that handed this off wants an answer: 
 done, finish with `charter handoff report \"<summary>\"` — a few lines on what you did and what \
 you found. It is sent once, and that chat reads it the next time it is prompted⟩";
 
+/// **The one route for work that reports back** (#1515), in the words every place that teaches
+/// it uses: the handoff skill, the persona skill, `purlis docs show handoff`, the handoff
+/// command's help, a chat's SessionStart briefing and the result of a handoff that asked for a
+/// report. Two routes for one job is how a chat told to dispatch to a persona ran a reporting
+/// handoff instead; `the_one_route_is_taught_in_the_same_words` holds the places to this text.
+pub const ONE_ROUTE: &str = "Work this chat needs an answer from, for its own persona or \
+another, is `purlis dispatch` (with `--in workspace:<name>` when it must run elsewhere). A \
+handoff is fire-and-forget: the person's work moves to a chat they will read themselves.";
+
+/// What a handoff that asked for a report (`--report`) is told beside its result (#1515): it
+/// was treated as a task, what a task gives the asking chat, and the route from now on. Said
+/// after a start, a hold and a refusal alike, so it claims nothing about which it was.
+pub fn reported_as_a_task() -> String {
+    format!(
+        "purlis handoff: --report asks for an answer, so purlis treated this as a task of this \
+         chat and not as a handoff. A task is in `purlis dispatch list`, and `purlis dispatch \
+         wait`, `tell`, `answer` and `cancel` work on it. From now on, run `purlis dispatch` \
+         yourself for this: purlis dispatch --name \"<task>\" [--to <persona>] [--in \
+         workspace:<name>]. {ONE_ROUTE}"
+    )
+}
+
+/// The name a reporting handoff's task is listed under where the handoff gave none: a task
+/// needs one, and a handoff may go without.
+pub fn task_name_of_a_handoff(workspace: &str) -> String {
+    format!("handoff to {workspace}")
+}
+
 /// **A brief is a request from another chat, never the person's word** (#1444, spec #1434
 /// decision 5). Nobody approves a handoff's brief, so the chat it opens is told what it is
 /// before it reads a word of it, in purlis's own line, which the brief cannot have written:

@@ -518,14 +518,18 @@ enum Command {
     /// heredoc on stdin. A handoff is a dispatch: to this chat's own persona it opens at
     /// once, and to another purlis asks you once for the pair, on this chat's tab.
     ///
+    /// Work this chat needs an answer from, for its own persona or another, is `purlis
+    /// dispatch` (with `--in workspace:<name>` when it must run elsewhere). A handoff is
+    /// fire-and-forget: the person's work moves to a chat they will read themselves.
+    ///
     /// **The app opens the chat.** Run from a chat the purlis app started, the new chat
     /// opens there as a tab in the workspace you name. With no app running, nothing is
     /// opened and purlis says to open the app. In front of that purlis refuses a handoff
     /// from a helper sub-agent, and one whose brief it cannot read as it is written
     /// (`purlis_core::handoff`).
     ///
-    /// `charter handoff report "<summary>"`, from a chat a `--report` handoff opened, sends
-    /// its one report back to the chat that opened it.
+    /// `charter handoff report "<summary>"` sends the one report of a chat an older handoff
+    /// opened owing one. A chat started as a task reports with `purlis dispatch report`.
     Handoff {
         /// Where the chat opens — an existing workspace, or a new one with --create. Always
         /// named, this workspace included. `report`, followed by a summary, is a report back.
@@ -536,8 +540,9 @@ enum Command {
         /// (`drop account-console-commons`). At most 64 characters.
         #[arg(long)]
         name: Option<String>,
-        /// Ask the new chat to report back when it is done, with `charter handoff report`.
-        /// The report reaches this chat as context on its next turn.
+        /// Kept for chats that learned it: the work is dispatched as a task of this chat, as
+        /// `purlis dispatch --in workspace:<name>` does it, and reports back. Use `purlis
+        /// dispatch` instead.
         #[arg(long)]
         report: bool,
         /// Make the workspace first (LOCAL, never LIVE). Needs --vision.
@@ -548,7 +553,8 @@ enum Command {
         #[arg(long)]
         vision: Option<String>,
         /// The persona the new chat runs as. Without it, this chat's own. Another persona
-        /// needs a dispatch grant, which purlis asks you for the first time.
+        /// needs a dispatch grant, which purlis asks you for the first time. To have another
+        /// persona do work this chat needs an answer from, use `purlis dispatch --to <persona>`.
         #[arg(long)]
         persona: Option<String>,
         /// Pin the clock the stamp, the todo and the dispatch row are written at, for tests
