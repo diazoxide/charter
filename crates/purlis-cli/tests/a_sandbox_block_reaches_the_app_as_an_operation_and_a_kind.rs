@@ -52,6 +52,7 @@ fn hook_in(word: &str, payload: &serde_json::Value, sandboxed: bool) -> Heard {
             tools.lock().unwrap().send(call).unwrap();
             Ok(())
         }),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         blocked: Box::new(move |blocked| blocks.lock().unwrap().send(blocked).unwrap()),
         permission: Box::new(|_| None),

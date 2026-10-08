@@ -47,6 +47,7 @@ fn hook(word: &str, payload: &serde_json::Value) -> Heard {
             Ok(())
         }),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(move |touching| touches.lock().unwrap().send(touching).unwrap()),
         permission: Box::new(|_| None),
     });

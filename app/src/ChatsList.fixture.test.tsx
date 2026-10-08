@@ -12,6 +12,7 @@ import {
   type ChatStates,
   type State,
 } from "./chatState";
+import { DoingsHere, fixedDoings } from "./chatDoing";
 import { chatsTree, type ListedChat } from "./chatsTree";
 import { forgetThisLaunch, SLOTS } from "./regions";
 import { MOST_TEXT } from "./textSize";
@@ -182,16 +183,36 @@ function states(): ChatStates {
   );
 }
 
+/** A file's name as long as a row shows one, and wider than a sidebar. */
+const LONG_FILE = "a_file_name_that_is_far_wider_than_a_sidebar.tsx";
+
+/**
+ * What three of the working chats are doing (#1493): a session's command that has come back, a
+ * task reading, and a task's edit of a file with a name longer than a sidebar. Chat 6 has a
+ * line held of it and nothing heard of its state: it wears none.
+ */
+const DOINGS = fixedDoings({
+  bySession: {
+    1: { kind: "command", name: "cargo", count: 0, over: true },
+    3: { kind: "reading", name: null, count: 3, over: false },
+    9: { kind: "editing", name: LONG_FILE, count: 0, over: false },
+    6: { kind: "thinking", name: null, count: 0, over: false },
+  },
+  heardAt: {},
+});
+
 function markup(): string {
   const { container } = render(
     <ChatsHere.Provider value={fixedChats(states())}>
-      <ChatsSection
-        rows={chatsTree(CHATS)}
-        front={1}
-        onOpen={() => {}}
-        stopping={new Set([6])}
-        finished={FINISHED}
-      />
+      <DoingsHere.Provider value={DOINGS}>
+        <ChatsSection
+          rows={chatsTree(CHATS)}
+          front={1}
+          onOpen={() => {}}
+          stopping={new Set([6])}
+          finished={FINISHED}
+        />
+      </DoingsHere.Provider>
     </ChatsHere.Provider>,
   );
   const section = container.querySelector(".chats-section");
@@ -219,6 +240,10 @@ describe("the Chats list the e2e measures", () => {
       "handed off to drop commons and 1 more",
       `from steward 8`,
       "asked by you",
+      "ran <bdi",
+      "reading 3 files",
+      LONG_FILE,
+      'class="doing-and-since"',
     ])
       expect(html, drawn).toContain(drawn);
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.two-lines.html");
@@ -229,6 +254,8 @@ describe("the Chats list the e2e measures", () => {
     const html = markup();
 
     expect(html).not.toContain('class="line two"');
+    // On one line there is no second line for it to stand in.
+    expect(html).not.toContain("chat-doing");
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.one-line.html");
   });
 

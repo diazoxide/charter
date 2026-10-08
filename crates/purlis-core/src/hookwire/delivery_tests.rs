@@ -25,6 +25,7 @@ fn hearing(tool: Tooled) -> Hearing {
     Hearing {
         secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| Answer::No { why: String::new() }),

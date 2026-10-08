@@ -557,6 +557,17 @@ fn a_chat_touches_a_file(run: &Path) {
         touching: file.clone(),
     };
 
+    // What the same hook says the chat is doing (#1493): the file's base name, on a line of
+    // its own that is held to the touch's rule, in memory only.
+    let doing = purlis_core::hookwire::Doing {
+        chat: 2,
+        doing: purlis_core::doing::Said::Began {
+            kind: purlis_core::doing::Kind::Reading,
+            name: Some(format!("{TOUCHED}.rs")),
+        },
+        agent: None,
+    };
+
     // No app listening: the tool call is spooled, the touch is lost.
     std::fs::create_dir_all(&root).expect("a project");
     let token = {
@@ -565,6 +576,7 @@ fn a_chat_touches_a_file(run: &Path) {
     };
     deliver_tool(&socket, Some(&token), &call).expect("spooled");
     assert!(touch(&socket, Some(&token), &touching).is_err());
+    assert!(purlis_core::hookwire::tell_doing(&socket, Some(&token), &doing).is_err());
 
     // An app listening: the tool call is recorded, the touch handed on in memory, and a touch
     // without the chat's token refused in the diagnostic log.
@@ -594,6 +606,7 @@ fn a_chat_touches_a_file(run: &Path) {
             })
         },
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(move |touching| tx.lock().unwrap().send(touching).unwrap()),
         permission: Box::new(|_| None),
     });
@@ -605,6 +618,8 @@ fn a_chat_touches_a_file(run: &Path) {
         "the app heard the touch"
     );
     touch(&socket, None, &touching).expect("written");
+    purlis_core::hookwire::tell_doing(&socket, Some(&token), &doing).expect("told");
+    purlis_core::hookwire::tell_doing(&socket, None, &doing).expect("written");
     // The refusal is said on the listener's thread; give it its moment before the reader goes.
     std::thread::sleep(std::time::Duration::from_millis(300));
     drop(reading);

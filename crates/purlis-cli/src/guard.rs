@@ -342,6 +342,15 @@ mod budget_tests {
                 "{}: {BUDGET:?} of {harness:?}",
                 hook.name
             );
+            // And with the app frozen: the tool call's line, then the two lines nothing
+            // records (the touched file, what the chat is doing), each with its own bound.
+            #[cfg(unix)]
+            assert!(
+                BUDGET + purlis_core::hookwire::A_TOOL_HOOK_TELLS_WITHIN <= harness,
+                "{}: {BUDGET:?} and {:?} of {harness:?}",
+                hook.name,
+                purlis_core::hookwire::A_TOOL_HOOK_TELLS_WITHIN
+            );
         }
     }
 }

@@ -303,6 +303,125 @@ describe("the Chats list in a narrow sidebar", () => {
     check("a row moved", JSON.stringify(after) === JSON.stringify(before), { before, after });
   });
 
+  it("moves no row when a working chat's line comes, changes and goes (#1493)", async () => {
+    check("there was no left region to draw in", await draw(TWO_LINES, "16rem"), "16rem");
+    const before = await tops();
+    check("no row was drawn", before.length >= 8, before);
+
+    // The fixture has rows that say what their chat is doing. Each second line is one line
+    // high whatever it holds.
+    const lines = await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      const two = [...(section?.querySelectorAll(".chat .line.two") ?? [])];
+      return {
+        doing: section?.querySelectorAll(".chat .line.two .chat-doing").length ?? 0,
+        heights: two.map((line) => Math.round(line.getBoundingClientRect().height)),
+      };
+    });
+    check("no row said what its chat is doing", lines.doing >= 1, lines);
+    check(
+      "a second line is not one line high",
+      new Set(lines.heights).size === 1 && lines.heights[0] > 0,
+      lines,
+    );
+
+    // On every row, the component's own markup with a name as long as a row shows one, and
+    // the time in the chat's state after it: the activity is cut short, the time is whole.
+    await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
+        const both = document.createElement("span");
+        both.className = "doing-and-since";
+        const doing = document.createElement("span");
+        doing.className = "chat-doing";
+        doing.append("editing ");
+        const named = document.createElement("bdi");
+        named.className = "named";
+        named.textContent = "a_file_name_that_is_far_wider_than_a_sidebar.tsx";
+        doing.append(named);
+        const since = document.createElement("span");
+        since.className = "since";
+        since.textContent = "12m";
+        both.append(doing, since);
+        line.replaceChildren(both);
+      }
+    });
+    const during = await tops();
+    check("a row moved when its line came", JSON.stringify(during) === JSON.stringify(before), {
+      before,
+      during,
+    });
+    const seen = await measured();
+    check("a line made the list scroll sideways", seen !== null && seen.overflow <= 1, seen);
+    const parts = await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      return [...(section?.querySelectorAll(".chat .line.two") ?? [])].map((line) => {
+        const doing = line.querySelector<HTMLElement>(".chat-doing");
+        const since = line.querySelector<HTMLElement>(".since");
+        const edge = line.getBoundingClientRect();
+        const time = since?.getBoundingClientRect();
+        return {
+          height: Math.round(edge.height),
+          doingCut: doing !== null && doing.scrollWidth > doing.clientWidth,
+          timeWhole:
+            since !== null &&
+            time !== undefined &&
+            since.scrollWidth <= since.clientWidth + 1 &&
+            time.right <= edge.right + 1 &&
+            time.width > 0,
+        };
+      });
+    });
+    check(
+      "a second line changed height for its line",
+      parts.every((one) => one.height === lines.heights[0]),
+      { parts, lines },
+    );
+    check(
+      "no activity was cut short at this width",
+      parts.some((one) => one.doingCut),
+      parts,
+    );
+    check(
+      "the time in a state was cut short",
+      parts.every((one) => one.timeWhole),
+      parts,
+    );
+
+    // Text drawn from a taller font (another script, marks stacked on a letter) is cut, and
+    // makes no room for itself: the line has a height, not a least height.
+    await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      for (const named of section?.querySelectorAll(".chat .line.two .named") ?? [])
+        named.textContent = "\u0e01\u0e34\u0e34\u0e34\u0e34 \u6587\u4ef6 \u0f67\u0f71\u0f74\u0f83";
+    });
+    const tall = await tops();
+    check(
+      "a row moved for text from a taller font",
+      JSON.stringify(tall) === JSON.stringify(before),
+      {
+        before,
+        tall,
+      },
+    );
+
+    // The turn ends: the line goes, and what was there comes back.
+    await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
+        const workspace = document.createElement("span");
+        workspace.className = "workspace";
+        workspace.textContent = "smart-ide";
+        line.replaceChildren(workspace);
+      }
+    });
+    const after = await tops();
+    check("a row moved when its line went", JSON.stringify(after) === JSON.stringify(before), {
+      before,
+      after,
+    });
+  });
+
   it("draws the state beside the name where there is room for both", async () => {
     check("there was no left region to draw in", await draw(TWO_LINES, "420px"), 420);
     const seen = whole(await measured(), 10);
