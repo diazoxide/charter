@@ -11,7 +11,14 @@ import {
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
-import { BESIDE_ID, taskStopId, type Catalogued, type Offer, type TaskEndWay } from "./actions";
+import {
+  besideId,
+  ONLY_A_TASK_OPENS_BESIDE,
+  taskStopId,
+  type Catalogued,
+  type Offer,
+  type TaskEndWay,
+} from "./actions";
 import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
@@ -123,8 +130,9 @@ function byKeyboard(target: Element): boolean {
  *
  * **A row is a way to the chat.** Pressing one, or Enter on it, shows its chat (`onOpen`, the
  * one way a row opens): a task has no tab of its own, and is shown inside the tab of the
- * session that asked for it (#1486). Space asks for it beside the chat in front, and Delete on a task asks
- * to stop it: both are rows of the window's catalogue, and one that cannot run says why here.
+ * session that asked for it (#1486). Space opens a task beside the session that asked for it,
+ * inside that session's tab (#1489), and Delete on a task asks to stop it: both are rows of the
+ * window's catalogue, and one that cannot run says why here.
  *
  * **At fifty chats** (#1499). The sessions that need you stand first, then the ones at work,
  * then the rest, and a session stands where the most urgent chat under it would; the chats
@@ -463,9 +471,15 @@ export function ChatsSection({
   const act = useCallback(
     (session: number, what: Asked) => {
       // Delete on a task asks to stop it and get its report (#1488, V100-17): the task's own
-      // row of the catalogue, which asks first where the task is mid-turn.
-      const offer = offers.get(what === "beside" ? BESIDE_ID : taskStopId(session));
-      if (offer === undefined) return;
+      // row of the catalogue, which asks first where the task is mid-turn. **Space opens the
+      // row's own task beside its session** (#1489): that task's row of the catalogue, so what
+      // opens is the row the key was pressed on. A chat that is not a task has neither row,
+      // and Space says why.
+      const offer = offers.get(what === "beside" ? besideId(session) : taskStopId(session));
+      if (offer === undefined) {
+        if (what === "beside") setSaid(ONLY_A_TASK_OPENS_BESIDE);
+        return;
+      }
       if (!offer.available) {
         setSaid(offer.reason);
         return;
@@ -914,8 +928,8 @@ const Row = memo(function Row({
   onPress: (offer: Offer) => void;
   onAct: (session: number, what: Asked) => void;
 }) {
-  // The keys of a row. Enter is the button's own press, which opens it. Space asks for it
-  // beside the chat in front, and Delete (Backspace on a Mac, `tabKeys.deletes`) asks to stop
+  // The keys of a row. Enter is the button's own press, which opens it. Space opens a task
+  // beside its session, and Delete (Backspace on a Mac, `tabKeys.deletes`) asks to stop
   // a task: the catalogue's rows, which ask
   // first or say why not. The tree's own (WAI-ARIA "Tree View"): Right opens a folded row,
   // Left folds an open one. Up and Down are the roving group's.

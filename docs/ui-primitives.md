@@ -975,6 +975,17 @@ and with Shift only `_` and `@` are turned into anything). So none of the chords
 byte, and plain `Ctrl+J` (newline), `Ctrl+H` (backspace), `Ctrl+[` (Escape) and `Ctrl+]` still
 reach the shell. `⌘H` alone stays the system's Hide: Shift is part of that chord.
 
+**Where a task is drawn has keys too, and each is on the thing it moves** (#1489). On a task's
+row in the Chats list, Space opens it beside the session that asked for it. On its line in its
+tab's task menu, Enter goes to it and Enter with a modifier opens it elsewhere, as a link is
+opened in a new tab: `⌘`/`Ctrl`+Enter gives it a tab of its own, and `Alt`+Enter opens it beside
+its session. On a task's own tab, the key that closes a tab (Delete; Backspace on a Mac) sends
+it back into its session's tab and ends nothing. None of these is a window-wide key: each is
+handled by the row, the menu line or the tab that has the keyboard, so no chat loses a key.
+The buttons at the end of a menu line are the pointer's way to the same, and are not in the
+accessibility tree, as a list row's fold is not: the keyboard's way is the line's own keys and
+the task's menu in the Chats list.
+
 **Down and Up on a Mac, because a tab's chats hang under it**: its menu lists them top to
 bottom and Down on a focused tab opens that menu. **`⌘⇧]` and `⌘⇧[` are not taken**: they are
 next and previous tab in every tabbed program on a Mac, and they are kept for the strip. Off a

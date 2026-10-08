@@ -1101,9 +1101,10 @@ pub fn stand_down(held: &Held, task: u32) {
     }
 }
 
-/// The chat the person is looking at changed (another chat was brought in front, or a tab was
-/// switched to another chat of its session): every task whose end was held is looked at
-/// again, since one of them may have been held because the person had it in front of them.
+/// What the person is looking at changed (another chat was brought in front, a tab was
+/// switched to another chat of its session, or a pane was added to or taken out of a tab):
+/// every task whose end was held is looked at again, since one of them may have been held
+/// because the person had it in front of them.
 pub fn front_moved(held: &Held) {
     let held_back = held.tasks().ledger().held_back();
     for task in held_back {
@@ -1128,9 +1129,16 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
     }
     let seen = seen(held, task);
     // Read before the ledger is taken: it asks the chats and the board. **Held back** while a
-    // chat it started is at work, and while it is the chat the person is looking at: the chat
-    // in front, or the task its session's tab shows (`Chats::looked_at`, #1486). It is not
-    // ended under them, and is ended when they move away from it ([`front_moved`]).
+    // chat it started is at work, and while the person is looking at it: it is on screen in
+    // the tab in front, as a pane's own chat or as the task a pane shows (`Chats::looked_at`,
+    // #1486, #1489). It is not ended under them, and is ended when they move away from it
+    // ([`front_moved`]).
+    //
+    // **The window's two words do not arrive together.** A task moved from a tab of its own
+    // to a pane beside its session is said as "the session is in front" and then "the task is
+    // beside it", and between the two nobody is looking at it here. That is safe only because
+    // a look for [`Looked::Moved`] answers at most "settle", and the look after the settle
+    // reads this again: by then the second word has landed.
     let held_back = is_held_back(held, task);
     let step = held
         .tasks()
@@ -1164,7 +1172,7 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
 /// Whether something that is not task `task`'s own turn holds its end back: a chat it started
 /// is at work, or it is the chat the person is looking at.
 fn is_held_back(held: &Held, task: u32) -> bool {
-    held.chats().looked_at() == Some(task) || !crate::handoff::running_below(held, task).is_empty()
+    held.chats().looks_at(task) || !crate::handoff::running_below(held, task).is_empty()
 }
 
 /// Ends task `task`'s program, its report delivered: the chat is closed as its tab's Close

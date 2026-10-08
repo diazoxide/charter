@@ -502,6 +502,7 @@ describe("a task chat", () => {
         plane: PLANE,
         session: 1,
         shown: 4,
+        beside: null,
       }),
     );
     first.unmount();
@@ -846,7 +847,8 @@ describe("stopping a chat (#1448)", () => {
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(4));
 
-    fireEvent.contextMenu(within(strip()).getByRole("tab", { name: /steward 1/ }));
+    // The session's own tab: a task's tab is named for its session too (#1489).
+    fireEvent.contextMenu(within(strip()).getByRole("tab", { name: /^steward 1/ }));
     expect(
       await screen.findByRole("menuitem", { name: "Stop chat steward 1 and everything below it" }),
     ).toBeTruthy();

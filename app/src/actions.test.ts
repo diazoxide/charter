@@ -27,7 +27,6 @@ import {
   taskEndIds,
   taskEndRows,
   taskStopId,
-  BACK_TO_THE_LIST,
   CLOSES_THE_TASK,
   STOPS_THE_TASK,
   STOPS_IT,
@@ -46,6 +45,8 @@ import {
   noteOf,
   restartNoteNoState,
   titleOf,
+  ownTabId,
+  besideId,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
@@ -97,6 +98,9 @@ function doing(): Doing & { calls: string[] } {
     removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
     showTabTasks: note("showTabTasks"),
+    ownTab: note("ownTab"),
+    beside: note("beside"),
+    sendBack: note("sendBack"),
     pickVault: note("pickVault"),
     createVault: note("createVault"),
     removeVault: note("removeVault"),
@@ -2779,7 +2783,12 @@ describe("stopping a chat (#1448)", () => {
 
     const row = menuRows({ on: "listed", session: 2 }, offers);
     expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
+    // Above the line, where a task is drawn (#1489): nothing there ends anything. 2 is a
+    // session of its own, with none; 3 is a task.
     expect(ids(row.above)).toEqual([]);
+    const task = menuRows({ on: "listed", session: 3 }, offers);
+    expect(ids(task.above)).toEqual(expect.arrayContaining([ownTabId(3), besideId(3)]));
+    expect(ids(task.below)).toEqual(taskEndIds(3));
 
     expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-4, -2)).toEqual([
       stopId(2),
@@ -2868,21 +2877,21 @@ describe("ending a task by hand (#1488)", () => {
     const offers = catalogue(now({ tabs, listed: tasks }));
     const [session, task] = tabs.order;
 
+    // The one row a task's tab has for it (#1489): it sends the task back, by the one command
+    // (`close_chat_tab`), and is no close at all.
     expect(by(offers, `tab.close:${task}`)).toMatchObject({
-      title: "Send chat 2 back to the Chats list",
       available: true,
-      note: BACK_TO_THE_LIST,
       // It ends nothing, so nothing is asked and it is not drawn as a row that ends a chat.
-      does: { verb: "closeTab", tab: task, ends: false },
+      does: { verb: "sendBack", session: 2 },
     });
+    expect(by(offers, `tab.close:${task}`)?.title).toMatch(/^Send .*2 back/);
     expect(by(offers, `tab.close:${session}`)).toMatchObject({
       title: "End chat chat 1",
       does: { verb: "closeTab", tab: session, ends: true },
     });
     // The pane's close of the tab in front (the task's) says the same.
     expect(by(offers, "pane.close")).toMatchObject({
-      title: "Send this pane's task back to the Chats list",
-      does: { verb: "closePane", ends: false },
+      does: { verb: "sendBack", session: 2 },
     });
   });
 
@@ -3041,11 +3050,23 @@ describe("the chats inside the tab in front (#1487)", () => {
     });
 
     const onFour = switchTabTo(own, 4, askedBy);
-    expect(by(rows(onFour), "tasks.next")?.does).toEqual({ verb: "showChat", session: 3 });
-    expect(by(rows(onFour), "tasks.previous")?.does).toEqual({ verb: "showChat", session: 2 });
+    expect(by(rows(onFour), "tasks.next")?.does).toEqual({
+      verb: "showChat",
+      session: 3,
+      inside: true,
+    });
+    expect(by(rows(onFour), "tasks.previous")?.does).toEqual({
+      verb: "showChat",
+      session: 2,
+      inside: true,
+    });
 
     const onThree = switchTabTo(own, 3, askedBy);
-    expect(by(rows(onThree), "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
+    expect(by(rows(onThree), "tasks.next")?.does).toEqual({
+      verb: "showChat",
+      session: 1,
+      inside: true,
+    });
   });
 
   it("goes back to the session's own chat only while the tab shows a task", () => {
@@ -3138,8 +3159,12 @@ describe("the chats inside the tab in front (#1487)", () => {
     const offers = catalogue(now({ tabs: onFour, listed: without, nameOf: String }));
 
     expect(by(offers, "tasks.menu")?.available).toBe(true);
-    expect(by(offers, "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
-    expect(by(offers, "tasks.previous")?.does).toEqual({ verb: "showChat", session: 3 });
+    expect(by(offers, "tasks.next")?.does).toEqual({ verb: "showChat", session: 1, inside: true });
+    expect(by(offers, "tasks.previous")?.does).toEqual({
+      verb: "showChat",
+      session: 3,
+      inside: true,
+    });
     expect(by(offers, "tasks.own")?.does).toEqual({ verb: "showChat", session: 1 });
   });
 });

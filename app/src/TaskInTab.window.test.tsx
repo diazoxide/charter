@@ -531,8 +531,8 @@ describe("a tab remembers which chat it shows", () => {
     await waitFor(() => expect(onScreen()).toEqual([5]));
     await waitFor(() =>
       expect(commandsOf(first.asked, "tab_shows")).toEqual([
-        { plane: PLANE, session: 2, shown: 8 },
-        { plane: PLANE, session: 1, shown: 5 },
+        { plane: PLANE, session: 2, shown: 8, beside: null },
+        { plane: PLANE, session: 1, shown: 5, beside: null },
       ]),
     );
     // The chat in front is the tab's own, as it always was: the task is not a tab.
@@ -567,6 +567,7 @@ describe("a tab remembers which chat it shows", () => {
         plane: PLANE,
         session: 1,
         shown: null,
+        beside: null,
       }),
     );
   });
@@ -597,8 +598,8 @@ describe("a tab remembers which chat it shows", () => {
 
     await waitFor(() =>
       expect(commandsOf(asked, "tab_shows")).toEqual([
-        { plane: PLANE, session: 1, shown: null },
-        { plane: PLANE, session: 2, shown: null },
+        { plane: PLANE, session: 1, shown: null, beside: null },
+        { plane: PLANE, session: 2, shown: null, beside: null },
       ]),
     );
     expect(open[0].shows).toBeNull();
@@ -628,8 +629,8 @@ describe("a tab remembers which chat it shows", () => {
 
     await waitFor(() =>
       expect(commandsOf(asked, "tab_shows")).toEqual([
-        { plane: PLANE, session: 1, shown: 5 },
-        { plane: PLANE, session: 1, shown: 5 },
+        { plane: PLANE, session: 1, shown: 5, beside: null },
+        { plane: PLANE, session: 1, shown: 5, beside: null },
       ]),
     );
     expect(open[0].shows).toBe(5);

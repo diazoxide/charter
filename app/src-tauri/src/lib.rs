@@ -345,9 +345,10 @@ fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
 ///
 /// **Three questions, and all three have to be yes.** The window is on screen and has the
 /// keyboard; the window has THIS chat's plane in front; and that plane has this chat on screen:
-/// the chat in front, or the task its tab shows in place of it (`Chats::looked_at`, #1486). So
-/// a task shown inside its session's tab is not notified about, and the session's own chat,
-/// hidden behind it, is.
+/// in any pane of the tab in front, as that pane's own chat or as the task it shows in place of
+/// it (`Chats::looked_at`, #1486, #1489). So a task shown inside its session's tab, beside it
+/// or in a tab of its own is not notified about, and a session's own chat, hidden behind a
+/// task, is.
 ///
 /// The middle one is the half #111 named as the opener's to close, and it was not pedantry:
 /// every plane numbers its chats from one, so "is session 3 in front" has as many answers as
@@ -382,7 +383,7 @@ fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
     }
     app.try_state::<Planes>()
         .and_then(|planes| planes.held(&moved.plane).ok())
-        .is_some_and(|held| held.chats().looked_at() == Some(moved.session))
+        .is_some_and(|held| held.chats().looks_at(moved.session))
 }
 
 /// The event a second launch sends the window: the directory it was run in, for the window to
@@ -591,6 +592,11 @@ struct OpenChat {
     /// the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
     #[specta(optional)]
     tasks_running: Option<u32>,
+    /// The chat whose tab it has a pane in, by session, where it is not its tab's own chat
+    /// (#1489). The window puts a task back beside the session that asked for it, where that
+    /// session has a tab; any other chat comes back as a tab of its own.
+    #[specta(optional)]
+    beside: Option<u32>,
     /// The conversation it was resumed by, where it was. The UI says which happened.
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
@@ -2061,8 +2067,9 @@ fn pin_chat(
     planes.held(&plane)?.chats().pin(session, pinned)
 }
 
-/// The person opened a task chat's tab from the Chats section (#1447): the record keeps it,
-/// so a reloaded window and the next launch draw the tab again.
+/// The person gave a task chat a tab of its own (#1447, #1489): the record keeps it, so a
+/// reloaded window and the next launch draw the tab again. Sending it back is
+/// `close_chat_tab`. Nothing ends by either.
 #[tauri::command]
 #[specta::specta]
 fn open_chat_tab(
@@ -2090,9 +2097,15 @@ fn close_chat_tab(
     Ok(())
 }
 
-/// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
-/// (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
-/// put each tab back on the chat it showed.
+/// **Where chat `session`'s pane is and what it shows**: chat `shown` in place of its own, or
+/// its own again with none (#1486); and the chat whose tab the pane is in, `beside`, or none
+/// for a chat that is its tab's own or has no pane (#1489). The record keeps both on that
+/// chat's entry, so a reloaded window and the next launch put each pane back.
+///
+/// **The one way the window says what is on screen** beside which chat is in front
+/// (`chat_in_front`): `Chats::looked_at` reads these, so a reported task is not ended under
+/// the person in any pane of the tab in front, and none of them is notified about. A window
+/// command only: no chat can call it.
 #[tauri::command]
 #[specta::specta]
 fn tab_shows(
@@ -2100,9 +2113,10 @@ fn tab_shows(
     plane: PlaneId,
     session: u32,
     shown: Option<u32>,
+    beside: Option<u32>,
 ) -> Result<(), String> {
     let held = planes.held(&plane)?;
-    held.chats().tab_shows(session, shown)?;
+    held.chats().tab_shows(session, shown, beside)?;
     // A reported task that was held because the person was reading it in this tab is looked
     // at again, as it is when another chat is brought in front (#1485).
     dispatched::front_moved(&held);
@@ -2203,6 +2217,7 @@ impl From<chats::Open> for OpenChat {
             shows: open.shows,
             tasks_limit: None,
             tasks_running: None,
+            beside: open.beside,
             pinned: open.pinned,
             label: open.label,
             from: open

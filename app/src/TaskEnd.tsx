@@ -47,6 +47,10 @@ export type TaskEndInline = {
   busy: boolean;
   /** The core's refusal of the answer, said where it was given. */
   trouble?: string;
+  /** Where the second step is not for an end but for a task's Restart chat (#1489): it ends
+   *  the task's program too, to start it again, so it is asked the same way, in the same
+   *  place. The answer restarts it and ends no task. */
+  act?: "restart";
 };
 
 /**

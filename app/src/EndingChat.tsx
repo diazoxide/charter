@@ -76,6 +76,7 @@ export function EndingChat({
   keeps = false,
   shows,
   back = [],
+  ownTabs = 0,
   onEnd,
   onSmartClose,
   onCancel,
@@ -103,6 +104,9 @@ export function EndingChat({
   /** The tasks among what is being closed, by name (#1488): a close ends no task. Their tabs
    *  go, they go back to the Chats list, and the dialog says so in one line. */
   back?: readonly string[];
+  /** How many tasks below the closing session have a tab of their own (#1489): the dialog
+   *  says so, since those tabs go with the answer about the tasks. */
+  ownTabs?: number;
   /** `stop` is the answer about the running persona chats: stop them, or keep them running. */
   onEnd: (stop: boolean) => void;
   onSmartClose: (stop: boolean) => void;
@@ -163,7 +167,11 @@ export function EndingChat({
             </p>
           )}
           {/* Tasks among them are not ended by a close: said, so the count is not a surprise. */}
-          {back.length > 0 && <p className="honest">{BACK_SAYS(back)}</p>}
+          {/* And its tasks in tabs of their own: no tab of theirs outlives the session's
+              (#1489). One line for both: they are the same thing, a task whose tab goes. */}
+          {(back.length > 0 || ownTabs > 0) && (
+            <p className="honest">{TASK_TABS_SAY(back, ownTabs)}</p>
+          )}
           {/* What else this close closes, said before it is answered. */}
           {closing.length > 0 && <p className="honest">{CLOSING_SAYS(closing)}</p>}
           {/* Several chats at once: nothing is asked about what each started, so it is said. */}
@@ -229,6 +237,32 @@ export function EndingChat({
 }
 
 /** What the dialog asks about the chats at work below a closing chat. */
+/**
+ * What a close says of the closing session's tasks that have a tab of their own (#1489,
+ * V100-39): how many, and that their tabs go either way. A task kept running is in the Chats
+ * list; one that is stopped ends.
+ */
+/**
+ * **What the dialog says of the tasks whose tabs go with this close, in one line** (#1488,
+ * #1489): the tasks among what is being closed, by name, and how many of the closing
+ * session's tasks have a tab of their own. Neither is ended by a close.
+ */
+export function TASK_TABS_SAY(back: readonly string[], ownTabs: number): string {
+  return [back.length > 0 ? BACK_SAYS(back) : "", ownTabs > 0 ? OWN_TABS_SAYS(ownTabs) : ""]
+    .filter((said) => said !== "")
+    .join(" ");
+}
+
+export function OWN_TABS_SAYS(count: number): string {
+  const tasks =
+    count === 1
+      ? "1 of its tasks has a tab of its own"
+      : `${count} of its tasks have tabs of their own`;
+  const those = count === 1 ? "That tab closes" : "Those tabs close";
+  const kept = count === 1 ? "a task that goes on working" : "tasks that go on working";
+  return `${tasks}. ${those} with this one: ${kept} stay in the Chats list.`;
+}
+
 export function RUNNING_SAYS(running: readonly string[]): string {
   const count = running.length === 1 ? "1 chat" : `${running.length} chats`;
   return `${count} it started ${running.length === 1 ? "is" : "are"} still at work: ${running.join(", ")}.`;
