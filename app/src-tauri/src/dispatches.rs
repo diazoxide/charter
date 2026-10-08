@@ -136,12 +136,34 @@ pub(crate) fn branch_of(held: &Held, session: u32) -> Option<purlis_core::handba
     })
 }
 
-/// How task `session` reported, in its dispatch record's word, where its newest dispatch ended
-/// with a report: what its row in the window says (#1484). The app's record, which a restart
-/// of the app keeps.
-pub(crate) fn outcome_of(held: &Held, session: u32) -> Option<&'static str> {
-    let record = dispatchrecord::latest_for(held.root(), &chat_ref(held, session)?)?;
-    Some(record.report?.outcome.word())
+/// **How each task ended, by its dispatch record, for one reading of the rows** (#1484).
+///
+/// The store is listed at most once, and only when a row asks: a sidebar with no settled task
+/// reads nothing, and one with twenty reads the store once, not twenty times.
+pub(crate) struct Outcomes<'a> {
+    held: &'a Held,
+    listed: Option<Vec<Record>>,
+}
+
+impl<'a> Outcomes<'a> {
+    pub(crate) fn of(held: &'a Held) -> Self {
+        Self { held, listed: None }
+    }
+
+    /// How task `session` ended, in its record's word, where its newest dispatch ended with a
+    /// report: its own, or the one the app wrote in its place. The app's record, which a
+    /// restart of the app keeps.
+    pub(crate) fn of_task(&mut self, session: u32) -> Option<&'static str> {
+        let me = chat_ref(self.held, session)?;
+        let root = self.held.root();
+        let listed = self
+            .listed
+            .get_or_insert_with(|| dispatchrecord::list(root));
+        let newest = listed
+            .iter()
+            .find(|record| dispatchrecord::same_chat(&record.worker.chat, &me))?;
+        Some(newest.report.as_ref()?.outcome.word())
+    }
 }
 
 /// What a chat's list of its tasks says of the branch task `session` was given, where it was
@@ -190,7 +212,22 @@ pub(crate) fn message(held: &Held, task: u32) {
 /// The app accepted chat `session`'s report: its dispatch ends with it. `outcome` and `text`
 /// are the report's, and `changed` is what it says changed, where it says; what it cost is
 /// read from the app's record of the chat.
+///
+/// **The window is told the rows changed, once the record is closed** (#1484): every caller has
+/// just settled what the chat owed, and its row says how it ended from the record this closes.
+/// Told after, so the read the window then makes finds the outcome.
 pub(crate) fn reported(
+    held: &Held,
+    session: u32,
+    outcome: Outcome,
+    text: &str,
+    changed: Option<&str>,
+) {
+    close_with_report(held, session, outcome, text, changed);
+    held.rows_changed();
+}
+
+fn close_with_report(
     held: &Held,
     session: u32,
     outcome: Outcome,

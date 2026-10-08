@@ -47,6 +47,9 @@ pub enum Kind {
     /// the tree — a fast-forward, a save's rebase — is told as not known instead, because the
     /// watcher does not see every file it moved.
     Git,
+    /// How the project's chats stand, and no file of its tree: something the app holds about a
+    /// chat that its row says has changed ([`chats`]). Never a path's kind.
+    Chats,
 }
 
 /// One changed path, and what it is part of.
@@ -119,6 +122,18 @@ pub fn of_batch<'a>(root: &Path, paths: impl IntoIterator<Item = &'a Path>) -> O
 pub fn saved() -> Change {
     Change {
         kind: Kind::Git,
+        workspace: None,
+        persona: None,
+        path: String::new(),
+    }
+}
+
+/// What the app holds about a chat has changed in a way its row says (#1484): a task's
+/// question to the chat that asked was opened or answered, or the report it owes was settled.
+/// The rows are part of the sidebar's answer and of no other, and nothing on disk says so.
+pub fn chats() -> Change {
+    Change {
+        kind: Kind::Chats,
         workspace: None,
         persona: None,
         path: String::new(),
@@ -216,6 +231,7 @@ fn answers_of(change: &Change) -> Vec<Answer> {
             Answer::Views,
         ],
         Kind::Git => vec![Answer::Git],
+        Kind::Chats => vec![Answer::Sidebar],
     }
 }
 
@@ -488,6 +504,11 @@ mod tests {
     #[test]
     fn a_save_concerns_the_git_standings_and_nothing_read_from_the_tree() {
         assert_eq!(answers_to(saved()), vec![Answer::Git]);
+    }
+
+    #[test]
+    fn how_the_chats_stand_concerns_the_sidebar_and_nothing_else() {
+        assert_eq!(answers_to(chats()), vec![Answer::Sidebar]);
     }
 
     #[test]

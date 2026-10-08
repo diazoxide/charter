@@ -2661,20 +2661,29 @@ export const PlaneView = memo(function PlaneView({
       .catch((err: unknown) => refusedBy("start-options", String(err)));
   }, [change, firstChatAsked, focusWorkspace, plane, refusedBy, sidebar, startOn, succeeded]);
 
-  /** What a chat is called here: the tab holding it; for a task chat with no tab yet (#1447),
-   *  what its tab would say, so its needs-you item names it as its row does (#1448); or its
-   *  session number. */
+  /** What each chat the project lists is called (`shownName`, #1484), by its number: the one
+   *  rule, asked once per chat, for every surface that names a chat by number. */
+  const chatNames = useMemo(
+    () =>
+      new Map(
+        [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
+          (chat) => [chat.session, shownName(tabs, chat)],
+        ),
+      ),
+    [sidebar, tabs],
+  );
+  /** What a chat the project lists is called now, or nothing for one it does not list. */
+  const nameOfListed = useCallback((session: number) => chatNames.get(session), [chatNames]);
+  /** What a chat is called here: as its row names it (`shownName`); for a chat the project
+   *  does not list yet, the tab holding it; or its session number. */
   const nameOf = useCallback(
     (session: number) => {
+      const listed = chatNames.get(session);
+      if (listed !== undefined) return listed;
       const held = tabHolding(tabs, session);
-      if (held !== undefined) return tabs.byId[held].name;
-      const listed = [
-        ...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []),
-        ...(sidebar?.unfiled ?? []),
-      ].find((chat) => chat.session === session);
-      return listed === undefined ? String(session) : untabbedName(listed);
+      return held !== undefined ? tabs.byId[held].name : String(session);
     },
-    [sidebar, tabs],
+    [chatNames, tabs],
   );
 
   const frontTab = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
@@ -4244,9 +4253,9 @@ export const PlaneView = memo(function PlaneView({
         ? quietOnes(
             [...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled],
             states,
-            // The name its tab carries, as everywhere else a chat is named; the plane's own
-            // name for a chat no tab here holds.
-            (chat) => (alreadyShows(tabs, chat.session) ? nameOf(chat.session) : chat.name),
+            // Named as its row names it (`shownName`, #1484): a task with no tab is never
+            // its number here either.
+            (chat) => shownName(tabs, chat),
           )
         : [],
     sameList,
@@ -4291,6 +4300,7 @@ export const PlaneView = memo(function PlaneView({
         workspace,
         shownName(tabs, chat),
         tabHolding(tabs, chat.session) !== undefined,
+        nameOfListed,
       );
     // By number, which is the order they were started in: the list arrives workspace by
     // workspace, and a chat's children are read in the order it asked for them.
@@ -4298,7 +4308,7 @@ export const PlaneView = memo(function PlaneView({
       ...sidebar.workspaces.flatMap((ws) => ws.chats.map((chat) => one(chat, ws.name))),
       ...sidebar.unfiled.map((chat) => one(chat, ROOT_WORD)),
     ].sort((a, b) => a.session - b.session);
-  }, [sidebar, tabs]);
+  }, [nameOfListed, sidebar, tabs]);
   useEffect(() => {
     chatsListed.current = listedChats;
   }, [listedChats]);
@@ -5656,6 +5666,7 @@ export const PlaneView = memo(function PlaneView({
                 cloning={cloning}
                 onReadAgain={rereadPanels}
                 started={chatsStarted}
+                nameOf={nameOfListed}
               />
             </div>
           ),

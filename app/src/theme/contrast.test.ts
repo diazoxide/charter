@@ -78,6 +78,16 @@ const PAIRS: [Token, Token, number][] = [
   ["state.failed", "surface.base", 3],
   ["state.success", "surface.base", 3],
   ["state.unreadable", "surface.base", 3],
+  // A chat's state on a row of a list (#1484): its mark in the state's colour and its word in
+  // secondary text, on the window and on a row that is current or under the pointer.
+  ["needs-you.base", "surface.base", 3],
+  ["text.muted", "surface.hover", 3],
+  ["state.running", "surface.hover", 3],
+  ["state.waiting", "surface.hover", 3],
+  ["state.failed", "surface.hover", 3],
+  ["state.unreadable", "surface.hover", 3],
+  ["needs-you.base", "surface.hover", 3],
+  ["text.secondary", "surface.hover", 4.5],
   ["danger.base", "surface.base", 3],
   // The alerts drawer's marks, on the drawer, and the status line's bell on its button.
   ["state.waiting", "surface.overlay", 3],

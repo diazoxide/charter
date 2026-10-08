@@ -2275,7 +2275,7 @@ export type ByHand = {
  *  What one changed path is part of, as the window's readers divide the plane
  *  ([`purlis_core::planechange::Kind`], which this mirrors for the bindings).
  */
-export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona" | "git";
+export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona" | "git" | "chats";
 
 /**
  *  Where one change's member list is in a changes view, sent with its blocks
@@ -3403,9 +3403,10 @@ export type HandedFromNote = {
 	 */
 	unreported: boolean,
 	/**
-	 *  How it reported, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
-	 *  `cancelled`, `stopped`): what its row says in place of what its program is doing
-	 *  (#1484). None for a task that has not reported, and where no record says how.
+	 *  How it ended, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
+	 *  `cancelled`, `stopped`): its own report's, or the one purlis wrote in its place, which
+	 *  is `stopped` for a task the person stopped (#1484). None for a task that still owes its
+	 *  report, and where no record says how.
 	 */
 	outcome?: string | null,
 	/**

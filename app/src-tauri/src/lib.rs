@@ -620,9 +620,10 @@ pub struct HandedFromNote {
     /// Whether, as a task, it ended without a report, and purlis told the chat that asked
     /// that it failed.
     pub unreported: bool,
-    /// How it reported, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
-    /// `cancelled`, `stopped`): what its row says in place of what its program is doing
-    /// (#1484). None for a task that has not reported, and where no record says how.
+    /// How it ended, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
+    /// `cancelled`, `stopped`): its own report's, or the one purlis wrote in its place, which
+    /// is `stopped` for a task the person stopped (#1484). None for a task that still owes its
+    /// report, and where no record says how.
     #[specta(optional)]
     pub outcome: Option<String>,
     /// Whether, as a task, it has a question open with the chat that dispatched it, and is
@@ -652,18 +653,23 @@ impl HandedFromNote {
     }
 }
 
-/// `drawn` with how it stands as a task beyond its own record (#1484): how it reported, by its
+/// `drawn` with how it stands as a task beyond its own record (#1484): how it ended, by its
 /// dispatch's record, and whether it has a question open with the chat that dispatched it, by
 /// what the app remembers of the messages between them. A chat that is not a task is as it was.
 ///
 /// For the rows a window lists, so the Chats list and the explorer say the same of a task. The
-/// record is read only for a task that has reported.
-fn with_task_standing(held: &planes::Held, mut drawn: OpenChat) -> OpenChat {
+/// records are asked only for a task whose report is settled: sent, or written in its place
+/// (a task the person stopped is told from one that died by its record's word).
+fn with_task_standing(
+    held: &planes::Held,
+    outcomes: &mut dispatches::Outcomes<'_>,
+    mut drawn: OpenChat,
+) -> OpenChat {
     let session = drawn.session;
     if let Some(from) = drawn.from.as_mut().filter(|from| from.task) {
-        if from.reported {
-            from.outcome = dispatches::outcome_of(held, session).map(str::to_owned);
-        } else if !from.unreported {
+        if from.reported || from.unreported {
+            from.outcome = outcomes.of_task(session).map(str::to_owned);
+        } else {
             from.asking = dispatched::asks_its_asker(held, session).then_some(true);
         }
     }
@@ -752,12 +758,10 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
         std::collections::HashMap::new();
     let mut unfiled = Vec::new();
-    for chat in held
-        .chats()
-        .open_now()
-        .into_iter()
-        .map(|open| with_task_standing(held, OpenChat::from(open)))
-    {
+    // The dispatch records, read at most once for the whole list (#1484).
+    let mut outcomes = dispatches::Outcomes::of(held);
+    for open in held.chats().open_now() {
+        let chat = with_task_standing(held, &mut outcomes, OpenChat::from(open));
         match chat
             .cwd
             .as_deref()

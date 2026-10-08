@@ -1,14 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { OpenChat } from "./bindings";
-import { shownState, taskFactsOf, type Facts, type TaskFacts } from "./shownState";
+import { rowFactsOf, shownState, taskFactsOf, type Facts, type TaskFacts } from "./shownState";
 import { TOKENS } from "./theme/theme";
 
 /**
  * **What a chat's row says it is doing** (#1484): one word and one shape, derived in one place
  * from the board's state, the needs-you queue and a task's own record.
+ *
+ * Every input here is one the core sends: the queue is its word for "the person has the next
+ * move", a task's `report` is `owed`, `sent` or `failed` (written in its place), and `outcome`
+ * is its dispatch record's word.
  */
 
 const OWED: TaskFacts = { report: "owed", outcome: null, asking: null };
+const sent = (outcome: string | null): TaskFacts => ({ report: "sent", outcome, asking: null });
+/** Purlis wrote the report in the task's place: it died (`failed`), or was stopped. */
+const inItsPlace = (outcome: string | null): TaskFacts => ({
+  report: "failed",
+  outcome,
+  asking: null,
+});
 
 /** A chat on Claude Code the person started, unless `more` says otherwise. */
 function of(more: Partial<Facts>): Facts {
@@ -44,70 +55,76 @@ describe("a chat the person started", () => {
   });
 });
 
+describe("a chat in the needs-you queue", () => {
+  it("needs you whatever else is true of it, as the title bar's list says", () => {
+    // A reported task the person typed in, whose new turn has ended or stopped on a prompt.
+    expect(said({ needsYou: true, board: "waiting", task: sent("done") })).toBe("hand needs you");
+    expect(said({ needsYou: true, board: "running", task: sent("failed") })).toBe("hand needs you");
+    // A task with a question open that has stopped on a permission prompt: the person is the
+    // one it waits on.
+    expect(said({ needsYou: true, task: { ...OWED, asking: "steward 4" } })).toBe("hand needs you");
+    // One that owes its report, and one purlis reported for.
+    expect(said({ needsYou: true, board: "waiting", task: OWED })).toBe("hand needs you");
+    expect(said({ needsYou: true, task: inItsPlace("failed") })).toBe("hand needs you");
+  });
+});
+
 describe("a task", () => {
-  it("is working, and needs you, as any chat", () => {
+  it("is working while its turn runs", () => {
     expect(said({ task: OWED })).toBe("ring working");
-    expect(said({ task: OWED, board: "waiting", needsYou: true })).toBe("hand needs you");
   });
 
   it("is asking the chat that dispatched it, by that chat's name, while its question is open", () => {
     expect(said({ task: { ...OWED, asking: "steward 4" } })).toBe("question asking steward 4");
-    // Its turn has ended on the question: it waits on that chat, and not on the person.
-    expect(said({ task: { ...OWED, asking: "steward 4" }, board: "waiting", needsYou: true })).toBe(
+    // Its turn has ended on the question, and the person ignored it: it waits on that chat.
+    expect(said({ task: { ...OWED, asking: "steward 4" }, board: "waiting" })).toBe(
       "question asking steward 4",
     );
   });
 
-  it("says how it reported, whatever its program is doing since", () => {
-    for (const board of ["running", "waiting", "done", "failed", "unknown"] as const) {
-      const sent = (outcome: string): Partial<Facts> => ({
-        board,
-        needsYou: board === "waiting",
-        task: { report: "sent", outcome, asking: null },
-      });
-      expect(said(sent("done"))).toBe("tick done");
-      expect(said(sent("failed"))).toBe("cross failed");
-      expect(said(sent("cancelled"))).toBe("dash cancelled");
+  it("says how it reported once its turn has ended, however that turn ended", () => {
+    for (const board of ["waiting", "done", "failed", "unknown"] as const) {
+      expect(said({ board, task: sent("done") })).toBe("tick done");
+      expect(said({ board, task: sent("failed") })).toBe("cross failed");
+      expect(said({ board, task: sent("cancelled") })).toBe("dash cancelled");
     }
   });
 
-  it("reads failed when it reported that it could not go on", () => {
-    expect(said({ task: { report: "sent", outcome: "blocked", asking: null } })).toBe(
-      "cross failed",
-    );
+  it("is working again when the person has it run another turn after its report", () => {
+    expect(said({ board: "running", task: sent("done") })).toBe("ring working");
+    expect(said({ board: "running", task: sent(null) })).toBe("ring working");
   });
 
-  it("reads cancelled when the person stopped it and it reported on its way out", () => {
-    expect(said({ task: { report: "sent", outcome: "stopped", asking: null } })).toBe(
-      "dash cancelled",
-    );
+  it("reads failed when it reported that it could not go on", () => {
+    expect(said({ board: "waiting", task: sent("blocked") })).toBe("cross failed");
   });
 
   it("says only that it reported when how is not known, and guesses no outcome", () => {
-    expect(said({ task: { report: "sent", outcome: null, asking: null } })).toBe("dot reported");
-    expect(said({ task: { report: "sent", outcome: "a word of later", asking: null } })).toBe(
-      "dot reported",
-    );
-    expect(said({ task: { report: "sent", outcome: "constructor", asking: null } })).toBe(
-      "dot reported",
-    );
+    expect(said({ board: "waiting", task: sent(null) })).toBe("dot reported");
+    expect(said({ board: "waiting", task: sent("a word of later") })).toBe("dot reported");
+    expect(said({ board: "waiting", task: sent("constructor") })).toBe("dot reported");
   });
 
   it("ended without a report: by its record, or by its program ending while it owed one", () => {
-    expect(said({ task: { report: "failed", outcome: null, asking: null } })).toBe(
-      "slash ended without a report",
-    );
-    expect(said({ task: OWED, board: "done" })).toBe("slash ended without a report");
-    expect(said({ task: OWED, board: "failed" })).toBe("slash ended without a report");
+    expect(said({ task: inItsPlace("failed") })).toBe("triangle ended without a report");
+    // No record says how: still not a guess that it was stopped.
+    expect(said({ task: inItsPlace(null) })).toBe("triangle ended without a report");
+    expect(said({ task: OWED, board: "done" })).toBe("triangle ended without a report");
+    expect(said({ task: OWED, board: "failed" })).toBe("triangle ended without a report");
+  });
+
+  it("reads cancelled when the person stopped it before it reported, not as one that died", () => {
+    // What the core sends for a stop: the report written in its place, the record `stopped`.
+    for (const board of ["running", "waiting", "done", "failed"] as const)
+      expect(said({ board, task: inItsPlace("stopped") })).toBe("dash cancelled");
   });
 
   it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {
     const waiting = shownState(of({ board: "waiting", needsYou: true }));
-    // Its turn ended after its report, so the board says of it what it says of a waiting chat.
+    // Its turn ended after its report: the board says `waiting` of it too, and the core keeps
+    // it out of the queue.
     for (const outcome of ["done", "failed", "cancelled"]) {
-      const finished = shownState(
-        of({ board: "waiting", needsYou: true, task: { report: "sent", outcome, asking: null } }),
-      );
+      const finished = shownState(of({ board: "waiting", task: sent(outcome) }));
       expect(finished?.word).not.toBe(waiting?.word);
       expect(finished?.shape).not.toBe(waiting?.shape);
     }
@@ -117,26 +134,22 @@ describe("a task", () => {
 describe("a harness purlis has heard nothing from", () => {
   it("says the program is running and what is not known, by the harness's name", () => {
     expect(said({ board: "unknown", harness: "opencode" })).toBe(
-      "broken-ring running (no detail from opencode)",
+      "dots running (no detail from opencode)",
     );
     expect(said({ board: "unknown", harness: "opencode", task: OWED })).toBe(
-      "broken-ring running (no detail from opencode)",
+      "dots running (no detail from opencode)",
     );
   });
 
   it("names no harness where none is known", () => {
-    expect(said({ board: "unknown", harness: null })).toBe("broken-ring running (no detail)");
+    expect(said({ board: "unknown", harness: null })).toBe("dots running (no detail)");
   });
 
   it("still says what the app itself knows", () => {
     expect(said({ board: "unknown", harness: "opencode", needsYou: true })).toBe("hand needs you");
-    expect(
-      said({
-        board: "unknown",
-        harness: "opencode",
-        task: { report: "failed", outcome: null, asking: null },
-      }),
-    ).toBe("slash ended without a report");
+    expect(said({ board: "unknown", harness: "opencode", task: inItsPlace("failed") })).toBe(
+      "triangle ended without a report",
+    );
   });
 });
 
@@ -151,17 +164,20 @@ describe("every state", () => {
     { board: "running" },
     { board: "waiting", needsYou: true },
     { task: { ...OWED, asking: "steward 4" } },
-    { task: { report: "sent", outcome: "done", asking: null } },
-    { task: { report: "sent", outcome: "failed", asking: null } },
-    { task: { report: "sent", outcome: "cancelled", asking: null } },
-    { task: { report: "failed", outcome: null, asking: null } },
+    { board: "waiting", task: sent("done") },
+    { board: "waiting", task: sent("failed") },
+    { board: "waiting", task: sent("cancelled") },
+    { task: inItsPlace("failed") },
     { board: "unknown" },
     { board: "waiting" },
+    { board: "waiting", task: sent(null) },
   ];
 
-  it("has a shape of its own", () => {
-    const shapes = each.map((facts) => shownState(of(facts))?.shape);
-    expect(new Set(shapes).size).toBe(each.length);
+  it("has a word and a shape of its own", () => {
+    const shown = each.map((facts) => shownState(of(facts)));
+    expect(new Set(shown.map((one) => one?.shape)).size).toBe(each.length);
+    expect(new Set(shown.map((one) => one?.word)).size).toBe(each.length);
+    expect(new Set(shown.map((one) => one?.kind)).size).toBe(each.length);
   });
 
   it("is coloured by a token of the theme, and finished ones are the muted grey", () => {
@@ -188,21 +204,29 @@ describe("what a task's record says of it", () => {
     expect(taskFactsOf(chat({ ...from, task: false, tab: true }))).toBeNull();
   });
 
-  it("is a report owed, sent with its outcome, or failed", () => {
+  it("is a report owed, sent with its outcome, or written in its place with the record's word", () => {
     expect(taskFactsOf(chat(from))).toEqual(OWED);
-    expect(taskFactsOf(chat({ ...from, reported: true, outcome: "cancelled" }))).toEqual({
-      report: "sent",
-      outcome: "cancelled",
-      asking: null,
-    });
-    expect(taskFactsOf(chat({ ...from, unreported: true }))).toEqual({
-      report: "failed",
-      outcome: null,
-      asking: null,
-    });
+    expect(taskFactsOf(chat({ ...from, reported: true, outcome: "cancelled" }))).toEqual(
+      sent("cancelled"),
+    );
+    expect(taskFactsOf(chat({ ...from, unreported: true, outcome: "stopped" }))).toEqual(
+      inItsPlace("stopped"),
+    );
+    expect(taskFactsOf(chat({ ...from, unreported: true }))).toEqual(inItsPlace(null));
   });
 
-  it("names the chat it is asking while its question is open", () => {
-    expect(taskFactsOf(chat({ ...from, asking: true }))?.asking).toBe("steward 4");
+  it("names the chat it is asking as that chat is called now, so a rename is followed", () => {
+    const asking = chat({ ...from, asking: true });
+    const renamed = (session: number) => (session === 4 ? "the release" : undefined);
+    expect(taskFactsOf(asking, renamed)?.asking).toBe("the release");
+    expect(rowFactsOf({ ...asking, harness: "claude", card: null }, renamed).asking).toBe(
+      "the release",
+    );
+  });
+
+  it("falls back to the name that chat had at the dispatch once it has closed", () => {
+    const asking = chat({ ...from, asking: true });
+    expect(taskFactsOf(asking, () => undefined)?.asking).toBe("steward 4");
+    expect(taskFactsOf(asking)?.asking).toBe("steward 4");
   });
 });

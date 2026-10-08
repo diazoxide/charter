@@ -64,6 +64,8 @@ export function listedChat(
   workspace: string,
   name: string,
   tab: boolean,
+  /** What a chat is called now, by its number (`taskFactsOf`). */
+  nameOf?: (session: number) => string | undefined,
 ): ListedChat {
   return {
     session: chat.session,
@@ -76,7 +78,7 @@ export function listedChat(
     from: chat.from?.name ?? null,
     tab,
     branch: ownBranch(chat),
-    ...rowFactsOf(chat),
+    ...rowFactsOf(chat, nameOf),
   };
 }
 

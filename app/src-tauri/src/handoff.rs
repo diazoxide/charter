@@ -2464,8 +2464,8 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
              chain goes here. Ask from a chat higher up, or raise the depth {IN_SETTINGS}."
         ),
         Refused::Limit(Limit::TooManyRunning { limit, .. }) => format!(
-            "This chat already has {limit} persona chats that have not reported, which is as \
-             many as it may have at once. Close one or wait for one to report, or raise the \
+            "This chat already has {limit} tasks that have not reported, which is as many as it \
+             may have at once. Close one or wait for one to report, or raise the \
              limit {IN_SETTINGS}."
         ),
         Refused::Limit(Limit::LineageFull { limit, .. }) => format!(
@@ -2474,8 +2474,8 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
              {IN_SETTINGS}."
         ),
         Refused::Limit(Limit::PersonaDispatches { persona, limit, .. }) => format!(
-            "Chats running as {} already have as many persona chats running between them as \
-             they may, which is {limit}. Wait for one to finish, or raise the limit \
+            "Chats running as {} already have as many tasks running between them as they may, \
+             which is {limit}. Wait for one to finish, or raise the limit \
              {IN_SETTINGS}.",
             short(persona)
         ),
@@ -8461,8 +8461,8 @@ mod tests {
         let said = ask_from_the_tab(&held, &id, steward, "devops", "one more").unwrap_err();
         assert_eq!(
             said,
-            "This chat already has 6 persona chats that have not reported, which is as many as \
-             it may have at once. Close one or wait for one to report, or raise the limit in \
+            "This chat already has 6 tasks that have not reported, which is as many as it may \
+             have at once. Close one or wait for one to report, or raise the limit in \
              Settings › Project › Dispatch."
         );
     }
@@ -8553,7 +8553,7 @@ mod tests {
         let said = ask_from_the_tab(&held, &id, steward, "devops", "one more").unwrap_err();
 
         assert!(
-            said.starts_with("This chat already has 1 persona chats that have not reported"),
+            said.starts_with("This chat already has 1 tasks that have not reported"),
             "{said}"
         );
     }
@@ -10658,7 +10658,11 @@ mod tests {
             (purlis_core::handback::Outcome::Failed, "failed"),
             (purlis_core::handback::Outcome::Blocked, "blocked"),
         ] {
-            let (_plane, _planes, id, held, _asking, task) = a_dispatched_task();
+            let plane = a_plane_with_personas();
+            let host = Pretend::default();
+            let (planes, id, steward) = a_steward_chat(&host, &plane);
+            let held = planes.held(&id).expect("held");
+            let task = a_task_of(&held, &id, steward, "check the queue");
             let working = listed_from(&held, task);
             assert_eq!(
                 (working.reported, working.outcome, working.asking),
@@ -10675,8 +10679,94 @@ mod tests {
     }
 
     #[test]
+    fn a_listed_task_the_person_stopped_says_so_and_one_that_died_says_it_failed() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let stopped = a_task_of(&held, &id, steward, "check prod");
+        let died = a_task_of(&held, &id, steward, "check staging");
+
+        // The person's stop, as the stop engine settles it before it closes the chat: the
+        // one function, under the lock a report is taken under.
+        {
+            let deciding = held.chats().deciding();
+            operator_stopped(&held, stopped, false, true, &deciding);
+        }
+        host.program_ends(died, KILLED());
+
+        // Neither reported, and the record's word tells them apart: the window says
+        // "cancelled" of the first and "ended without a report" of the second.
+        let listed = listed_from(&held, stopped);
+        assert!(listed.unreported && !listed.reported, "{listed:?}");
+        assert_eq!(listed.outcome.as_deref(), Some("stopped"));
+        let listed = listed_from(&held, died);
+        assert!(listed.unreported && !listed.reported, "{listed:?}");
+        assert_eq!(listed.outcome.as_deref(), Some("failed"));
+    }
+
+    #[test]
+    fn the_window_is_told_the_rows_changed_when_a_question_opens_is_answered_and_a_report_lands() {
+        use purlis_core::planechange::Kind as Changed;
+        let told: Arc<std::sync::Mutex<Vec<purlis_core::planechange::Change>>> = Arc::default();
+        // How many times the window has been told the rows changed: a change of the chats'
+        // own kind, which concerns the sidebar's answer and no other.
+        let rows_changed = {
+            let told = Arc::clone(&told);
+            move || {
+                let told = told.lock().expect("the changes told");
+                told.iter()
+                    .filter(|change| change.kind == Changed::Chats)
+                    .count()
+            }
+        };
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let planes = planes_on(&host).telling_changes({
+            let told = Arc::clone(&told);
+            Arc::new(move |_, what: crate::planewatch::What| {
+                told.lock()
+                    .expect("the changes told")
+                    .extend(what.unwrap_or_default());
+            })
+        });
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let task = a_task_of(&held, &id, asking, "check the queue");
+        let before = rows_changed();
+
+        asks(&held, &id, task, question("Which queue?"));
+        let asked = rows_changed();
+        assert!(asked > before, "a question opening is told");
+        assert_eq!(listed_from(&held, task).asking, Some(true));
+
+        asks(&held, &id, asking, the_answer(task, "The slow one."));
+        let answered = rows_changed();
+        assert!(answered > asked, "its answer is told");
+        assert_eq!(listed_from(&held, task).asking, None);
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        assert!(rows_changed() > answered, "a report landing is told");
+        // Told once the record is closed: the read the window then makes finds the outcome.
+        assert_eq!(listed_from(&held, task).outcome.as_deref(), Some("done"));
+    }
+
+    #[test]
     fn a_listed_task_says_it_is_asking_while_its_question_is_open_and_not_after() {
-        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, asking) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, asking, "check the queue");
 
         asks(&held, &id, task, question("Which queue?"));
         assert_eq!(listed_from(&held, task).asking, Some(true));

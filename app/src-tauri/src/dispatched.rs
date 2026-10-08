@@ -341,6 +341,8 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
     // Kept, so it counts on this task's dispatch record (#1452): a note as a question does.
     crate::dispatches::message(held, sender);
     if kind == Kind::Question {
+        // Its row says whom it is asking from now (#1484): no hook reports a question.
+        held.rows_changed();
         // A command of the asking chat's that waits on this task is answered with it; a chat
         // that is waiting for the person is typed the line. A note is neither: it is read on
         // the asking chat's next turn, and starts none.
@@ -392,6 +394,8 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
         ledger.landed(to, Landed::Answer);
     }
     crate::dispatches::message(held, to);
+    // Answered: its row stops saying it is asking (#1484).
+    held.rows_changed();
     held.tasks().changed();
     tell_the_chat(held, to);
     Ok(task(Answered::Sent {

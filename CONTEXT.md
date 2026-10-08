@@ -252,8 +252,9 @@ model source, device, sandbox and harness level stay the same. A chat has one or
 after another. A new one begins when the chat starts, on `/clear`, when the app reopens it, when
 it wakes, when it starts again without its conversation, or when any of those attributes
 changes. Compaction keeps the run. A **child run** is a sub-agent or teammate the harness
-spawns, with the run it came from as its parent: a **helper**, as the app shows it. The run is who an action is attributed to (W8's
-"agent run"), and budgets add up over a chat's runs (ADRs 0066, 0073).
+spawns, with the run it came from as its parent: a **helper**, as the app shows it. The run is
+who an action is attributed to (W8's "agent run"), and budgets add up over a chat's runs (ADRs
+0066, 0073).
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
 **Run state**:
