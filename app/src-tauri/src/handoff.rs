@@ -845,16 +845,21 @@ fn at_work(held: &Held, chat: u32, from: &HandedFrom) -> bool {
         || asks(held, chat)
 }
 
-/// Every chat below chat `asker` that is at work ([`at_work`]), deepest first: the chats it
-/// started, as tasks or by a handoff, and the chats they started, through every chat on the
-/// way whether or not that one is still at work. A chat that reported may have dispatched
-/// before it did, and what it started is still below `asker`.
+/// Every chat below chat `asker` that is at work ([`at_work`]), deepest first: the tasks it
+/// asked for, and the tasks they asked for, through every task on the way whether or not that
+/// one is still at work. A chat that reported may have dispatched before it did, and what it
+/// started is still below `asker`.
+///
+/// **Task links only** (#1492, V100-69), as [`crate::stopping`]'s lineage and the window's
+/// tree are: a handoff moved the work to a session of its own, which is below no chat. So
+/// closing `asker` does not ask about it, "Stop them" does not stop it, and a task that
+/// handed off is not held from ending by it.
 fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
     fn below(held: &Held, asker: u32, deeper: u32, seen: &mut Vec<u32>, found: &mut Vec<u32>) {
         if deeper == 0 {
             return;
         }
-        for (chat, from) in held.chats().started_by(asker) {
+        for (chat, from) in held.chats().tasks_of(asker) {
             if seen.contains(&chat) {
                 continue;
             }
@@ -5126,15 +5131,14 @@ mod tests {
 
     #[test]
     fn stopping_a_chat_and_everything_below_it_ends_the_subtree_and_nothing_else() {
-        let plane = Plane::new();
-        let planes = planes();
-        let id = planes.open(&plane.root);
+        // What is below a chat is the tasks it asked for (#1492): a handoff's chat is not.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, asking) = a_steward_chat(&host, &plane);
         let held = planes.held(&id).expect("held");
-        let asking = a_chat_on_work(&held, &plane.root);
-        let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
-        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, true).expect("opened");
-        let (sibling, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let child = a_task_of(&held, &id, asking, "check prod");
+        let grandchild = a_task_of(&held, &id, child, "read the logs");
+        let sibling = a_task_of(&held, &id, asking, "tidy up");
 
         crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
 
@@ -5317,21 +5321,23 @@ mod tests {
 
     #[test]
     fn a_chat_being_stopped_or_waiting_under_a_stop_is_refused_a_new_chat() {
-        let plane = Plane::new();
-        let planes = planes();
-        let id = planes.open(&plane.root);
+        // Below a chat is the tasks it asked for (#1492), so the chats here are tasks.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, asking) = a_steward_chat(&host, &plane);
         let held = planes.held(&id).expect("held");
-        let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
-        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, true).expect("opened");
+        let child = a_task_of(&held, &id, asking, "check prod");
+        let grandchild = a_task_of(&held, &id, child, "read the logs");
         // The grandchild is mid-turn, so its stop waits for the turn to end, and the chat above
         // it is held until the grandchild has ended.
-        mid_turn(&held, grandchild);
+        works(&held, grandchild);
         let before = ticket(&held, &id, &tickets, child);
 
         crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
-        assert_eq!(held.stopping().now(), vec![child, grandchild]);
+        let mut stopping = held.stopping().now();
+        stopping.sort_unstable();
+        assert_eq!(stopping, vec![child, grandchild]);
 
         // The chat writing under the held parent is given a ticket, which its last report is
         // sent on (D-T59-j9), and spending it on a new chat is refused.
@@ -5379,7 +5385,7 @@ mod tests {
             "nothing was started"
         );
         // A chat outside the stop starts chats as it always did.
-        assert!(hand_off(&held, &id, &tickets, asking, None, false).is_ok());
+        let _ = a_task_of(&held, &id, asking, "tidy up");
 
         // Pressed again, the subtree ends now, and nothing it started is left behind.
         crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
@@ -9246,13 +9252,15 @@ mod tests {
     }
 
     /// The tree "Stop them" is asked about: under the steward chat, a task that **reported**
-    /// and had dispatched one that is still running; a task still running; a handoff's chat
-    /// mid-turn, opened by that running task; and a handoff's chat at rest.
+    /// and had dispatched one that is still running; a task still running, with a task of its
+    /// own mid-turn. And two chats that are below nothing (#1492): a handoff's chat mid-turn,
+    /// opened by that running task, and a handoff's chat at rest.
     struct Tree {
         steward: u32,
         reported: u32,
         under_reported: u32,
         running: u32,
+        task_mid_turn: u32,
         handed_mid_turn: u32,
         handed_at_rest: u32,
     }
@@ -9281,6 +9289,8 @@ mod tests {
                 other => panic!("opened, not {other:?}"),
             }
         };
+        let task_mid_turn = a_task_of(held, id, running, "dig deeper");
+        works(held, task_mid_turn);
         let handed_mid_turn = hand_off(running);
         works(held, handed_mid_turn);
         let handed_at_rest = hand_off(steward);
@@ -9290,6 +9300,7 @@ mod tests {
             reported,
             under_reported,
             running,
+            task_mid_turn,
             handed_mid_turn,
             handed_at_rest,
         }
@@ -9303,13 +9314,20 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let tree = a_tree(&held, &id, steward);
 
-        // Deepest first: the task under the one that reported, the handoff's chat mid-turn
-        // under the running task, then that task. Never the reported one or the chat at rest.
+        // Deepest first: the task under the one that reported, the task mid-turn under the
+        // running task, then that task. Never the reported one. And never a handoff's chat,
+        // at work or at rest: the work moved, and it is below no chat (#1492).
         assert_eq!(
             at_work_below(&held, tree.steward),
-            [tree.under_reported, tree.handed_mid_turn, tree.running]
+            [tree.under_reported, tree.task_mid_turn, tree.running]
         );
-        assert_eq!(running_below(&held, tree.steward).len(), 3);
+        assert_eq!(
+            running_below(&held, tree.steward),
+            ["read the logs", "dig deeper", "check prod"],
+            "what the close asks about, by name: the chats a Stop them stops"
+        );
+        // Nor is it below the task that handed off to it.
+        assert_eq!(at_work_below(&held, tree.running), [tree.task_mid_turn]);
         // A chat whose own tasks have all reported is still asked about what runs below them.
         held.close_chat(tree.running).expect("closed");
         assert_eq!(
@@ -9334,23 +9352,30 @@ mod tests {
         // The asking chat closed in that step. The chats below end as their stops do.
         assert_eq!(closed, [tree.steward]);
         // A task purlis has heard nothing from has no last turn to write in: ended at once.
-        // The handoff's chat mid-turn is sent its one line when its turn ends, and the task
-        // that started it waits for it. Neither starts a chat meanwhile.
+        // The task mid-turn is sent its one line when its turn ends, and the task that
+        // started it waits for it. Neither starts a chat meanwhile.
         assert_eq!(
             open_chats(&held),
             [
                 tree.reported,
                 tree.running,
+                tree.task_mid_turn,
                 tree.handed_mid_turn,
                 tree.handed_at_rest
             ]
         );
         let mut stopping = held.stopping().now();
         stopping.sort_unstable();
-        assert_eq!(stopping, [tree.running, tree.handed_mid_turn]);
-        for chat in [tree.running, tree.handed_mid_turn] {
+        assert_eq!(stopping, [tree.running, tree.task_mid_turn]);
+        for chat in [tree.running, tree.task_mid_turn] {
             assert!(crate::stopping::refuses_a_start(&held, chat), "{chat}");
         }
+        // The chat the running task handed off to is not stopped, mid-turn as it is, and is
+        // not kept from starting chats: it is a session of its own (#1492).
+        assert!(!crate::stopping::refuses_a_start(
+            &held,
+            tree.handed_mid_turn
+        ));
         // The chat that asked for the one that ended is told, in the one word for a stop.
         assert_eq!(
             waiting(&held, For::Chat(tree.reported)),
@@ -9360,9 +9385,12 @@ mod tests {
         // Pressed again, on chats that are all stopping: they end now, deepest first.
         stops(&held, tree.running, true).expect("stopped");
 
-        // What is left is what was not at work: the reported task, which has no session
-        // record to close on, and the handoff's chat at rest.
-        assert_eq!(open_chats(&held), [tree.reported, tree.handed_at_rest]);
+        // What is left is what was not below at work: the reported task, which has no session
+        // record to close on, and both handoffs' chats, the one mid-turn too.
+        assert_eq!(
+            open_chats(&held),
+            [tree.reported, tree.handed_mid_turn, tree.handed_at_rest]
+        );
         // What was stopped is on record for the workspace the closed chat asked from, once:
         // the chat under the stopped task ended in the same stop, and is left no word.
         let alpha = Place::Workspace("alpha".to_owned());
@@ -9372,6 +9400,34 @@ mod tests {
             .collect();
         assert_eq!(stopped, [("check prod".to_owned(), false, true)]);
         // Each task is settled: nothing reports for it again.
+        assert_eq!(held.stopping().now(), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn stop_and_everything_below_leaves_a_chat_the_work_was_handed_off_to_running() {
+        // #1492, V100-69: the window says a handoff's chat is below no chat, and counts only
+        // tasks under a chat it asks to stop. The stop takes the same chats and no other.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let tree = a_tree(&held, &id, steward);
+
+        stops(&held, tree.steward, true).expect("stopped");
+
+        // Neither handoff's chat is in the stop, nor kept from starting a chat by it: not
+        // the one the steward handed off to, nor the one a task below it handed off to.
+        let stopping = held.stopping().now();
+        for chat in [tree.handed_mid_turn, tree.handed_at_rest] {
+            assert!(!stopping.contains(&chat), "{chat} in {stopping:?}");
+            assert!(!crate::stopping::refuses_a_start(&held, chat), "{chat}");
+        }
+        // Pressed again: everything in the stop ends now. Both are still running.
+        stops(&held, tree.steward, true).expect("stopped");
+        assert_eq!(
+            open_chats(&held),
+            [tree.handed_mid_turn, tree.handed_at_rest]
+        );
         assert_eq!(held.stopping().now(), Vec::<u32>::new());
     }
 

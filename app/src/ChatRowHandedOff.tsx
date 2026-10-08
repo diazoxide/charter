@@ -1,7 +1,8 @@
 import { memo } from "react";
-import { markOf, useChatsHere, useChatsSelect } from "./chatState";
+import { useChatsHere, useChatsSelect } from "./chatState";
+import { shownOfRow } from "./chatsList";
 import { handedOffSaid } from "./chatsTree";
-import { shownState, type TaskFacts } from "./shownState";
+import type { TaskFacts } from "./shownState";
 
 /** What a row's press reads off the text it landed on: the chat that text goes to. */
 export const GOES_TO = "data-goes-to";
@@ -19,7 +20,9 @@ export const GOES_TO = "data-goes-to";
  *
  * **A press on it goes to that chat**: the row is one button, so this is text in it that says
  * where a press on it leads ({@link GOES_TO}), and the row's own press reads that. The
- * keyboard's way to that chat is its own row, which stands at the top of the same list.
+ * keyboard's way is the row's menu and the palette, which have a row for each chat the work
+ * went to (`actions.handedOffRows`): those reach the "and 2 more" too, and work on one line,
+ * where these words are only the row's tooltip.
  *
  * It reads its own chat's state, as the state mark does, so a chat starting or ending a turn
  * redraws this and no row (SC-3). It draws nothing, and the line keeps its height, for a chat
@@ -52,13 +55,9 @@ export const ChatRowHandedOff = memo(function ChatRowHandedOff({
 }) {
   const working = useChatsSelect(
     useChatsHere(),
+    // The state its row says, by the function the list orders and filters its rows by.
     (states) =>
-      shownState({
-        board: markOf(states, session, shell),
-        needsYou: states.needsYou.includes(session),
-        task: report === null ? null : { report, outcome, asking },
-        harness,
-      })?.kind === "working",
+      shownOfRow(states, { session, shell, report, outcome, asking, harness })?.kind === "working",
   );
   if (working) return null;
   return (
