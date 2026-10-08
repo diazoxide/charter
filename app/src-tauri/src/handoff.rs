@@ -4822,7 +4822,8 @@ mod tests {
 
         let after = report(&held, &id, &tickets, child, "third");
         assert!(
-            matches!(&after, Answer::No { why } if why.contains("--report for another")),
+            matches!(&after, Answer::No { why }
+                if why.contains("already reported") && why.contains("Another answer needs a task")),
             "a prompt does not re-arm it: {after:?}"
         );
     }
@@ -6079,8 +6080,13 @@ mod tests {
             purlis_core::handback::Outcome::Done,
             None,
         );
+        // Handed to the chat, and kept for no workspace: a task whose report reaches an open
+        // asking chat is told it is finished (#1485), which is said only where it did.
         assert!(
-            matches!(&said, Answer::Reported { kept_for: None, .. }),
+            matches!(
+                &said,
+                Answer::Finished { .. } | Answer::Reported { kept_for: None, .. }
+            ),
             "{said:?}"
         );
     }
@@ -10575,8 +10581,18 @@ mod tests {
             ),
             not_yours(task)
         );
+        // Its own task, closed: a cancel says it has finished and that there is nothing to
+        // cancel (#1485), which is said to the chat that asked for it and to no other.
+        let cancelled = asks(&held, &id, asking, What::Cancel { of: task });
+        assert!(
+            matches!(&cancelled, Answer::No { why }
+                if why.contains("check the queue")
+                    && why.contains("has finished")
+                    && why.contains("nothing to cancel")),
+            "{cancelled:?}"
+        );
         assert_eq!(
-            asks(&held, &id, asking, What::Cancel { of: task }),
+            asks(&held, &id, other, What::Cancel { of: task }),
             not_yours(task)
         );
     }

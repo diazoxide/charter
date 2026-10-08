@@ -1222,6 +1222,12 @@ button.show-more:focus-visible {
 .pane-crumbs {
   display: flex;
   flex: 0 1 auto;
+  /* **It may be narrower than what it says.** As an item of the line it would otherwise be at
+     least as wide as its own content (a flex item's automatic least width), which is every
+     name in the path at full length, since a name does not wrap: nothing inside it would ever
+     give way, and the line's own clip would cut the END of it, the state first. With this it
+     takes the room the line has, and its names shrink by the rule above. */
+  min-width: 0;
   align-items: center;
   padding: 0 0.35rem;
   font-size: 0.72rem;

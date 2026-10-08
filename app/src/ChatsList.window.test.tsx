@@ -104,6 +104,7 @@ const HOW: Record<string, FinishedTask["how"]> = {
 function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): FinishedTask {
   return {
     how: HOW[more.outcome ?? "done"],
+    chat: null,
     not_reopened: null,
     id,
     asker,
@@ -501,19 +502,25 @@ describe("the order of the Chats list (V100-47)", () => {
 });
 
 describe("the folds the Chats list makes by itself (V100-48)", () => {
+  /** A task of chat 1 that has reported done: working while its turn runs, done once it is
+   *  over, and an open chat until purlis ends it. */
+  const reportedDone = () => ({ ...taskOf(1), reported: true, outcome: "done" });
   const twoTasks = () => [
     chat(1, "alpha"),
-    chat(2, "alpha", { persona: "devops", from: taskOf(1) }),
-    chat(3, "alpha", { persona: "devops", from: taskOf(1) }),
+    chat(2, "alpha", { persona: "devops", from: reportedDone() }),
+    chat(3, "alpha", { persona: "devops", from: reportedDone() }),
     chat(4, "alpha"),
   ];
   const up = async (ended: FinishedTask[] = []) => {
     const held = core(twoTasks(), ended);
     render(<App />);
     await section();
-    await waitFor(() => expect(shape()).toHaveLength(4));
+    // Both tasks have reported: until their turns are heard to run they read done, and the
+    // session is folded over them.
+    await waitFor(() => expect(shape()).toHaveLength(2));
     held.move(2, "running");
     held.move(3, "running");
+    await waitFor(() => expect(shape()).toHaveLength(4));
     return held;
   };
 
@@ -521,7 +528,7 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     const { move } = await up();
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
 
-    // One of them ends, owing its report: the other still works.
+    // One of them is over, its report sent: the other still works.
     move(2, "done");
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
     move(3, "done");
@@ -557,6 +564,47 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     // The task beside it is drawn again too, in the state it was folded away in: no motion
     // for a state nothing changed to.
     expect(row("devops 2").querySelector(".shown-state")).not.toHaveClass("arrived");
+  });
+
+  it("keeps a session open over an open task that is blocked, and counts it when folded by hand", async () => {
+    // A blocked task is not ended (#1485): it stays an open chat that reads failed, waiting
+    // on something. The list never folds it away by itself.
+    const { move } = core([
+      chat(1, "alpha"),
+      chat(2, "alpha", {
+        persona: "devops",
+        from: { ...taskOf(1), reported: true, outcome: "blocked" },
+      }),
+      chat(3, "alpha", { persona: "devops", from: reportedDone() }),
+    ]);
+    render(<App />);
+    await section();
+    await waitFor(() => expect(shape()).toHaveLength(3));
+    move(2, "waiting");
+    move(3, "waiting");
+
+    expect(word("devops 2")).toBe("failed");
+    expect(word("devops 3")).toBe("done");
+    expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
+    expect(shape()).toEqual(["1 steward 1", "2 devops 2", "2 devops 3"]);
+
+    // Folded by the person, the row says what it hides: both open tasks, by how each ended.
+    fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
+    expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
+    expect(
+      within(row("steward 1")).getByRole("img", { name: "1 done, 1 failed" }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts the open tasks that are done on the row it folds over them by itself", async () => {
+    // Done and not ended yet (the person is reading one): in no finished row, and still in
+    // the count.
+    const { move } = await up();
+    move(2, "done");
+    move(3, "done");
+
+    expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
+    expect(within(row("steward 1")).getByRole("img", { name: "2 done" })).toBeInTheDocument();
   });
 
   it("keeps a fold set by hand when it would have opened the session by itself", async () => {
@@ -622,18 +670,24 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
 });
 
 describe("the filter over the Chats list (V100-49)", () => {
-  const four = () => [
+  /** `reported`: the task has sent its report, done, so it is over once its turn is. */
+  const four = (reported = false) => [
     chat(1, "alpha"),
-    chat(2, "beta", { persona: "devops", label: "live check talk", from: taskOf(1) }),
+    chat(2, "beta", {
+      persona: "devops",
+      label: "live check talk",
+      from: reported ? { ...taskOf(1), reported: true, outcome: "done" } : taskOf(1),
+    }),
     chat(3, "alpha", { label: "release notes" }),
     chat(4, "alpha"),
   ];
-  const up = async () => {
-    const held = core(four());
+  const up = async (reported = false) => {
+    const held = core(four(reported));
     render(<App />);
     await section();
+    await waitFor(() => expect(shape()).toHaveLength(reported ? 3 : 4));
+    for (const session of [1, 2, 3, 4]) held.move(session, reported ? "running" : "waiting");
     await waitFor(() => expect(shape()).toHaveLength(4));
-    for (const session of [1, 2, 3, 4]) held.move(session, "waiting");
     return held;
   };
 
@@ -792,7 +846,8 @@ describe("the filter over the Chats list (V100-49)", () => {
   });
 
   it("opens a session it folded by itself over a task the filter asks for", async () => {
-    const { move } = await up();
+    const { move } = await up(true);
+    for (const session of [1, 3, 4]) move(session, "waiting");
     move(2, "done");
     expect(shape()).toEqual(["1 steward 1", "1 release notes", "1 steward 4"]);
 

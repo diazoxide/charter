@@ -903,14 +903,26 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
     // chat it started is at work, and while it is the chat the person is looking at: the chat
     // in front, or the task its session's tab shows (`Chats::looked_at`, #1486). It is not
     // ended under them, and is ended when they move away from it ([`front_moved`]).
-    let held_back = held.chats().looked_at() == Some(task)
-        || !crate::handoff::running_below(held, task).is_empty();
+    let held_back = is_held_back(held, task);
     let step = held
         .tasks()
         .ledger()
         .end_step(task, seen, held_back, looked);
     match step {
-        Ends::Nothing | Ends::Hold => {}
+        Ends::Nothing => {}
+        // Held, and the person may have looked away between the read above and the answer:
+        // the look their move made found nothing held yet. Read once more, and look as that
+        // move would have.
+        Ends::Hold => {
+            if held_back
+                && held.tasks().ledger().held_back().contains(&task)
+                && !is_held_back(held, task)
+            {
+                end_look(held, task, Looked::Moved);
+            }
+        }
+        // What held it has gone and its bound passed meanwhile: the bound is set again.
+        Ends::Bound => end_look_after(held, task, dispatched::ends_within(seen), Looked::WaitedOut),
         Ends::Settle => end_look_after(
             held,
             task,
@@ -919,6 +931,12 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
         ),
         Ends::End => end_it(held, task),
     }
+}
+
+/// Whether something that is not task `task`'s own turn holds its end back: a chat it started
+/// is at work, or it is the chat the person is looking at.
+fn is_held_back(held: &Held, task: u32) -> bool {
+    held.chats().looked_at() == Some(task) || !crate::handoff::running_below(held, task).is_empty()
 }
 
 /// Ends task `task`'s program, its report delivered: the chat is closed as its tab's Close

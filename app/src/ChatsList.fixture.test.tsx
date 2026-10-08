@@ -101,6 +101,7 @@ const HOW: Record<string, FinishedTask["how"]> = {
 function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): FinishedTask {
   return {
     how: HOW[more.outcome ?? "done"],
+    chat: null,
     not_reopened: null,
     id,
     asker,

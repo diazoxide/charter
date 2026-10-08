@@ -175,6 +175,8 @@ function core(open: Listed[]) {
   const refusals = new Map<number, VaultRefused[]>();
   /** The finished rows the core lists, as it reads them from its dispatch records (#1485). */
   const finished: FinishedTask[] = [];
+  /** How many of the next `tab_shows` the core refuses. */
+  const refusing = { shows: 0 };
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
@@ -195,6 +197,10 @@ function core(open: Listed[]) {
       return null;
     }
     if (cmd === "tab_shows") {
+      if (refusing.shows > 0) {
+        refusing.shows -= 1;
+        throw new Error("the record could not be written");
+      }
       const one = open.find((chat) => chat.session === a.session);
       if (one) one.shows = (a.shown as number | null) ?? null;
       return null;
@@ -282,6 +288,7 @@ function core(open: Listed[]) {
     asked,
     open,
     finished,
+    refusing,
     rowsChanged,
     /** The core says chat `session`'s stop has ended it: it is gone from what the core lists. */
     ended: async (session: number) => {
@@ -563,6 +570,55 @@ describe("a tab remembers which chat it shows", () => {
     expect(tab("steward 1").querySelector(".tab-task")).toBeNull();
     expect(tab("steward 2").querySelector(".tab-task")).toBeNull();
   });
+
+  it("tells the core a tab shows its own chat where what the record said it showed was not put back", async () => {
+    // The core takes the chat a tab shows for the one the person is looking at. A number
+    // left in the record for a chat that is gone would have it take them to be looking at
+    // nothing, and notify them about the session on their screen.
+    const open = withTasks().filter((one) => one.session !== 5);
+    open[0].shows = 5;
+    open[1].shows = 4;
+    const { asked } = await drawn(open);
+
+    await waitFor(() =>
+      expect(commandsOf(asked, "tab_shows")).toEqual([
+        { plane: PLANE, session: 1, shown: null },
+        { plane: PLANE, session: 2, shown: null },
+      ]),
+    );
+    expect(open[0].shows).toBeNull();
+    expect(open[1].shows).toBeNull();
+  });
+
+  it("says nothing to the core of a tab that came back on the task the record said it showed", async () => {
+    const open = withTasks();
+    open[0].shows = 5;
+    const { asked } = await drawn(open);
+
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+    expect(commandsOf(asked, "tab_shows")).toEqual([]);
+  });
+
+  it("says what a tab shows again where the core did not take it", async () => {
+    const { tree, asked, refusing, open } = await drawn(withTasks());
+    refusing.shows = 1;
+    await userEvent.click(row(tree, "sweep"));
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+    await waitFor(() => expect(commandsOf(asked, "tab_shows")).toHaveLength(1));
+    expect(open[0].shows ?? null).toBeNull();
+
+    // The next change to the tabs says it again, with what else changed.
+    await userEvent.click(tab("steward 2"));
+    await waitFor(() => expect(onScreen()).toEqual([2]));
+
+    await waitFor(() =>
+      expect(commandsOf(asked, "tab_shows")).toEqual([
+        { plane: PLANE, session: 1, shown: 5 },
+        { plane: PLANE, session: 1, shown: 5 },
+      ]),
+    );
+    expect(open[0].shows).toBe(5);
+  });
 });
 
 describe("a shown task that ends", () => {
@@ -621,6 +677,7 @@ describe("a shown task that ends", () => {
     branch: null,
     reopens: true,
     not_reopened: null,
+    chat: null,
     ...more,
   });
 
@@ -632,6 +689,7 @@ describe("a shown task that ends", () => {
 
     finished.push(
       finishedRow("sweep", {
+        chat: 5,
         how: "blocked",
         outcome: "blocked",
         folds: false,
@@ -665,23 +723,68 @@ describe("a shown task that ends", () => {
     expect(within(pane).getByRole("button", { name: "Back to steward 1" })).toBeTruthy();
   });
 
-  it("guesses at no report where two finished tasks of the session have the task's name", async () => {
+  it("never draws the report of another task of the same name, before its own row is read or after", async () => {
+    // steward 1 dispatched "sweep" before, and that one failed: its row is there already.
+    // The second "sweep" (chat 5) ends while a pane is left on it.
+    const { tree, ended, finished, rowsChanged } = await drawn(withTasks());
+    const earlier = finishedRow("sweep", {
+      id: "01K6EARLIER",
+      chat: 3,
+      how: "failed",
+      outcome: "failed",
+      folds: false,
+      report: "The earlier sweep failed.",
+    });
+    finished.push(earlier);
+    await rowsChanged();
+    const group = await screen.findByRole("group", { name: "Finished tasks of steward 1" });
+    await userEvent.click(row(tree, "sweep"));
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+
+    // It ends, and the core's finished rows do not hold it yet: one row is named sweep, and
+    // it is the other task's.
+    await ended(5);
+
+    const pane = await screen.findByTestId("task-away");
+    expect(pane.textContent).not.toContain("The earlier sweep failed.");
+    expect(within(pane).queryByRole("region", { name: "Report from sweep" })).toBeNull();
+    expect(pane.textContent).toContain("is on its row under steward 1 in the Chats list");
+    expect(crumbsSay()).toBe("steward 1 › sweep · ended without a report");
+
+    // Its own row arrives: its report, and how it ended.
+    finished.push(finishedRow("sweep", { id: "01K6THIS", chat: 5, report: "This sweep is done." }));
+    await rowsChanged();
+
+    const report = await within(pane).findByRole("region", { name: "Report from sweep" });
+    expect(report.textContent).toBe("This sweep is done.");
+    expect(crumbsSay()).toBe("steward 1 › sweep · done");
+
+    // Clear finished takes the folded rows, this task's among them. One row named sweep is
+    // left, the other task's, and the pane does not take it up.
+    finished.splice(0, finished.length, earlier);
+    await rowsChanged();
+
+    await waitFor(() =>
+      expect(within(pane).queryByRole("region", { name: "Report from sweep" })).toBeNull(),
+    );
+    expect(within(group).getAllByRole("button", { name: /sweep/ }).length).toBeGreaterThan(0);
+    expect(pane.textContent).not.toContain("The earlier sweep failed.");
+    expect(crumbsSay()).not.toContain("failed");
+  });
+
+  it("draws no report for a row that has no chat's number: one from before this launch, or one that is not an ended task", async () => {
     const { tree, ended, finished } = await drawn(withTasks());
     await userEvent.click(row(tree, "sweep"));
     await waitFor(() => expect(onScreen()).toEqual([5]));
 
-    finished.push(
-      finishedRow("sweep", { id: "01K6OLD", report: "An older sweep." }),
-      finishedRow("sweep", { id: "01K6NEW", report: "This sweep." }),
-    );
+    // Reopened, its own row is cleared; what is left under that name carries no number.
+    finished.push(finishedRow("sweep", { chat: null, report: "Not this pane's." }));
     await ended(5);
 
     const pane = await screen.findByTestId("task-away");
     await screen.findByRole("group", { name: "Finished tasks of steward 1" });
     expect(within(pane).queryByRole("region", { name: "Report from sweep" })).toBeNull();
-    expect(pane.textContent).toContain("is on its row under steward 1 in the Chats list");
-    // And it says what the task's own row last said of it.
-    expect(crumbsSay()).toBe("steward 1 › sweep · ended without a report");
+    expect(pane.textContent).not.toContain("Not this pane's.");
   });
 
   it("is still what its tab shows when the tab comes back from behind", async () => {

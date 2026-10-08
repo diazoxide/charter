@@ -273,26 +273,31 @@ describe("the Chats list in a narrow sidebar", () => {
     const before = await tops();
     check("no row was drawn", before.length >= 8, before);
 
-    // What a row says later: the time in its state on a second line that had nothing on it,
-    // why a key did nothing, and what the filter hides.
-    const filled = await browser.execute(() => {
+    // What a row's second line says changes while the row stands: the time in its state
+    // comes, and what a chat was doing goes. Every row has that line whether or not there is
+    // anything on it, so neither moves a row. Here every other row's line gains a thing to
+    // say and the rest lose all they said; and the line under the filter says why a key did
+    // nothing.
+    const changed = await browser.execute(() => {
       const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      const empty = [...(section?.querySelectorAll(".chat .line.two") ?? [])].filter(
-        (line) => line.textContent === "",
-      );
-      for (const line of empty) {
+      const lines = [...(section?.querySelectorAll(".chat .line.two") ?? [])];
+      lines.forEach((line, at) => {
+        if (at % 2 === 1) {
+          line.replaceChildren();
+          return;
+        }
         const since = document.createElement("span");
         since.className = "since";
         since.textContent = "just now";
         line.append(since);
-      }
+      });
       const said = section?.querySelector(".chats-said");
       if (said)
         said.textContent =
           "purlis cannot open a chat beside another yet. Press Enter to open it in front.";
-      return empty.length;
+      return lines.length;
     });
-    check("no row had an empty second line to fill", filled >= 1, filled);
+    check("no row had a second line to change", changed >= 2, changed);
 
     const after = await tops();
     check("a row moved", JSON.stringify(after) === JSON.stringify(before), { before, after });

@@ -1,7 +1,15 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, OpenChat } from "./bindings";
@@ -71,6 +79,7 @@ function finished(id: string, name: string, more: Partial<FinishedTask> = {}): F
     id,
     asker: 4,
     name,
+    chat: null,
     persona: "devops",
     how: "done",
     outcome: "done",
@@ -104,6 +113,8 @@ function core(rows: FinishedTask[], open: OpenChat[] = [STEWARD], refuses?: stri
   const asked: Asked[] = [];
   let listed = [...rows];
   const chats = [...open];
+  /** While set, a read of the finished rows is not answered until it is let go. */
+  let unanswered: Promise<void> | undefined;
   mockIPC(
     (cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
@@ -116,13 +127,15 @@ function core(rows: FinishedTask[], open: OpenChat[] = [STEWARD], refuses?: stri
           personas: ["devops", "steward"],
           persona: "steward",
           unfiled: [],
-          workspaces: [{ name: "alpha", path: ALPHA, vision: "", todos: [], chats }],
+          // A list of its own each time, as an answer over the wire is.
+          workspaces: [{ name: "alpha", path: ALPHA, vision: "", todos: [], chats: [...chats] }],
         };
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
       if (cmd === "stopping_chats") return [];
-      if (cmd === "finished_tasks") return listed;
+      if (cmd === "finished_tasks")
+        return unanswered === undefined ? listed : unanswered.then(() => listed);
       if (cmd === "clear_finished_tasks") {
         const ids = a.ids as string[];
         const before = listed.length;
@@ -152,6 +165,28 @@ function core(rows: FinishedTask[], open: OpenChat[] = [STEWARD], refuses?: stri
     { shouldMockEvents: true },
   );
   return {
+    /** Holds every read of the finished rows from now, and answers the way to let them go. */
+    holdFinished: () => {
+      let letGo = () => {};
+      unanswered = new Promise((resolve) => {
+        letGo = resolve;
+      });
+      return () => {
+        unanswered = undefined;
+        letGo();
+      };
+    },
+    /** purlis ends task chat `session`: it is no longer listed, and `row` is its finished row. */
+    end: (session: number, row: FinishedTask) => {
+      chats.splice(
+        chats.findIndex((chat) => chat.session === session),
+        1,
+      );
+      listed = [...listed, row];
+    },
+    /** The core says chat `session`'s end is done. */
+    stopped: (session: number) =>
+      act(() => emit("chat-stop", { plane: PLANE, session, phase: "stopped" })),
     asked: (cmd: string) => asked.filter((one) => one.cmd === cmd).map(({ args }) => args),
     /** Every command that ends, closes or stops a chat, in the order it was asked. */
     ended: () =>
@@ -321,6 +356,45 @@ describe("a chat's finished tasks", () => {
     // And the word is text, read as it is drawn: the mark beside it is decoration.
     expect(within(theRow(group, "counted")).getByText("done")).toBeVisible();
     expect(within(theRow(group, "counted")).queryByRole("img")).toBeNull();
+  });
+
+  it("keeps a task's row until its finished row is read, so the rows below move once", async () => {
+    const reported: OpenChat = {
+      ...WORKING,
+      label: "probe",
+      // Failed, so its session stays open over it and its row is on screen.
+      from: { ...WORKING.from, reported: true, outcome: "failed" } as OpenChat["from"],
+    };
+    const other: OpenChat = { ...STEWARD, session: 12, name: "12", in_front: false };
+    const held = core([], [STEWARD, reported, other]);
+    render(<App />);
+    const tree = await section();
+    const names = () =>
+      within(tree)
+        .getAllByRole("treeitem")
+        .map((one) => one.querySelector(".session")?.textContent);
+    await waitFor(() => expect(names()).toEqual(["steward 4", "probe", "steward 12"]));
+
+    // purlis ends the task: it leaves the list of chats, and its finished row is one read
+    // later. That read is not answered yet.
+    const answer = held.holdFinished();
+    held.end(
+      9,
+      finished("01K6PROBE", "probe", { chat: 9, how: "failed", outcome: "failed", folds: false }),
+    );
+    await held.stopped(9);
+
+    await waitFor(() => expect(held.asked("plane_sidebar").length).toBeGreaterThan(1));
+    expect(names()).toEqual(["steward 4", "probe", "steward 12"]);
+    expect(screen.queryByRole("group", { name: "Finished tasks of steward 4" })).toBeNull();
+
+    // The finished rows are read: the chat's row goes and the row that replaces it comes,
+    // together.
+    answer();
+
+    const group = await theirs();
+    expect(theRow(group, "probe")).toHaveTextContent("failed");
+    expect(names()).toEqual(["steward 4", "steward 12"]);
   });
 
   it("clears the finished rows and nothing else: the failure stays, and no chat is touched", async () => {

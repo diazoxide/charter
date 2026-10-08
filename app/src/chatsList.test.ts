@@ -7,6 +7,8 @@ import {
   found,
   isLive,
   liveBelow,
+  overBelow,
+  overOf,
   matches,
   matchesFinished,
   rankOf,
@@ -126,16 +128,24 @@ describe("rows put in an order", () => {
 describe("which sessions are open by themselves (V100-48)", () => {
   const rows = chatsTree([listed(1), listed(2, 1), listed(3, 1), listed(4), listed(5, 4)]);
 
-  it("is each one with a chat under it that is not over", () => {
-    expect(liveBelow(rows, doing({ 2: "done", 3: "working", 5: "failed" }))).toEqual([1]);
+  it("is each one with a chat under it that is not done and not cancelled", () => {
+    expect(liveBelow(rows, doing({ 2: "done", 3: "working", 5: "done" }))).toEqual([1]);
     expect(liveBelow(rows, doing({ 2: "done", 3: "cancelled", 5: "needs-you" }))).toEqual([4]);
   });
 
-  it("counts an idle chat as not over, and every end as over", () => {
+  it("keeps a session open over an open task that failed, went without a report or only reported", () => {
+    // A blocked task reads failed and is not ended (#1485): it is waiting on something, and
+    // is never folded away by the list itself.
+    for (const kind of ["failed", "unreported", "reported"] as const)
+      expect(liveBelow(rows, doing({ 2: "done", 3: "done", 5: kind })), kind).toEqual([4]);
+  });
+
+  it("folds an open chat away only when it is done or cancelled", () => {
     expect(isLive("idle")).toBe(true);
     expect(isLive(undefined)).toBe(true);
-    for (const kind of ["done", "failed", "cancelled", "unreported", "reported"] as const)
-      expect(isLive(kind), kind).toBe(false);
+    for (const kind of ["done", "cancelled"] as const) expect(isLive(kind), kind).toBe(false);
+    for (const kind of ["failed", "unreported", "reported"] as const)
+      expect(isLive(kind), kind).toBe(true);
   });
 });
 
@@ -212,6 +222,7 @@ describe("the filter (V100-49)", () => {
       branch: null,
       reopens: false,
       not_reopened: null,
+      chat: null,
     };
     for (const text of ["staging", "devops", "beta", "failed", "blocked", "BETA check"])
       expect(matchesFinished(ended, { text, ranks: [] }), text).toBe(true);
@@ -245,6 +256,7 @@ describe("what a folded session says of its finished tasks (V100-48)", () => {
     branch: null,
     reopens: false,
     not_reopened: null,
+    chat: null,
   });
 
   it("counts them by how each ended, in the shape and the word a row says that state in", () => {
@@ -261,6 +273,40 @@ describe("what a folded session says of its finished tasks (V100-48)", () => {
 
   it("says nothing for a session with none", () => {
     expect(summaryOf([])).toBeNull();
+  });
+
+  it("counts the open chats under it that are over with its finished tasks", () => {
+    const rows = chatsTree([listed(1), listed(2, 1), listed(3, 1), listed(4, 3), listed(5)]);
+    const shownAs = (kinds: Record<number, [ShownKind, string, string]>) => (row: ChatRow) => {
+      const one = kinds[row.session];
+      return one === undefined
+        ? undefined
+        : ({ kind: one[0], shape: one[1], word: one[2], token: "text.muted" } as Shown);
+    };
+    const over = overBelow(
+      rows,
+      shownAs({
+        2: ["done", "tick", "done"],
+        3: ["working", "ring", "working"],
+        4: ["failed", "cross", "failed"],
+      }),
+    );
+
+    // Each row with something over under it, at any depth; a chat at work is not counted.
+    const open = overOf(over);
+    expect([...open.keys()]).toEqual([1, 3]);
+    expect(open.get(1)?.map((shown) => shown.word)).toEqual(["done", "failed"]);
+    expect(open.get(3)?.map((shown) => shown.word)).toEqual(["failed"]);
+
+    // With one finished task of its own that came out done: two done, one failed.
+    expect(countsOf(summaryOf([task("done")], open.get(1)) ?? "")).toEqual([
+      { shape: "tick", count: 2, word: "done" },
+      { shape: "cross", count: 1, word: "failed" },
+    ]);
+    // And with no finished task at all, the open ones are still said.
+    expect(countsOf(summaryOf([], open.get(3)) ?? "")).toEqual([
+      { shape: "cross", count: 1, word: "failed" },
+    ]);
   });
 });
 
