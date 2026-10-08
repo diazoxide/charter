@@ -243,6 +243,8 @@ pub struct Held {
     stops: crate::stopping::Teller,
     /// The window, for a change in how a chat stands that no file and no hook says (#1484).
     changes: crate::planewatch::Changed,
+    /// The window, for each line of a dispatch as it is recorded (#1495).
+    activity: crate::activity::Teller,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
     /// The vaults each chat was refused for its persona, until the person answers (#1430).
@@ -496,6 +498,15 @@ impl Held {
             plane: self.id.clone(),
             session,
             phase,
+        });
+    }
+
+    /// Tells the window `line`, which the app has just recorded on a dispatch of this project
+    /// (#1495).
+    pub fn tell_activity(&self, line: crate::activity::ActivityLine) {
+        (self.activity)(crate::activity::ActivityHeard {
+            plane: self.id.clone(),
+            line,
         });
     }
 
@@ -1276,6 +1287,8 @@ pub struct Planes {
     smart: crate::smartclose::Teller,
     /// Told each step of a stop in any plane (#1448).
     stops: crate::stopping::Teller,
+    /// Told each line of a dispatch in any plane as it is recorded (#1495).
+    activity: crate::activity::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
     asks: crate::asking::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
@@ -1376,6 +1389,7 @@ impl Planes {
             vault_refused: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             stops: Arc::new(|_| {}),
+            activity: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
@@ -1501,6 +1515,13 @@ impl Planes {
         self
     }
 
+    /// Tells `activity` each line of a dispatch in a plane this registry holds as the app
+    /// records it, so an open Activity tab follows the work (#1495).
+    pub fn telling_activity(mut self, activity: crate::activity::Teller) -> Self {
+        self.activity = activity;
+        self
+    }
+
     /// Opens `root`: binds its hook socket and arms its board. Answers with the id every
     /// later call names it by.
     ///
@@ -1565,6 +1586,9 @@ impl Planes {
         }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
+        // And what the chats of a dispatch said to each other is kept for 30 days after it
+        // ended, whichever of them is still brought back (#1495, D-1495-12).
+        purlis_core::dispatchrecord::expire_talk(&root, chrono::Utc::now());
         // Then the worktrees of the dispatches that have ended are looked at, once (#1453):
         // one whose branch is merged, and that no chat coming back stands in, is taken away.
         // **Which chats come back is read here**, beside the settle above and before this
@@ -2526,6 +2550,7 @@ impl Planes {
             stopping: crate::stopping::Stopping::default(),
             stops: Arc::clone(&self.stops),
             changes: Arc::clone(&self.changes),
+            activity: Arc::clone(&self.activity),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),

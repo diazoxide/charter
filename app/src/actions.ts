@@ -37,6 +37,7 @@ import type {
   RowAction,
   SubjectCurations,
 } from "./bindings";
+import { activityTitle, activityView } from "./activity";
 import { DISPATCHES_TITLE, DISPATCHES_VIEW } from "./dispatches";
 import { backSaid } from "./chatState";
 import { handedOff, tasksOf, type ListedChat } from "./chatsTree";
@@ -1095,6 +1096,9 @@ function isPinned<T>(held: readonly T[], one: T): boolean {
   return held.includes(one);
 }
 
+/** The catalogue's id for the row that opens the Activity of `tab`'s chat (#1495). */
+export const activityId = (tab: number) => `tab.activity:${tab}`;
+
 /** The catalogue's id for the row that opens the project's Dispatches tab (#1452). */
 export const DISPATCHES_SHOW = "dispatches.show";
 
@@ -1324,6 +1328,24 @@ export function catalogue(now: Now): Offer[] {
     if (chatOf(now.tabs, tab) === undefined) continue;
     const name = now.tabs.byId[tab].name;
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
+  // **A chat's Activity** (#1495, V100-44): what it and its tasks said to each other, in a tab
+  // of its own. One row per chat, so the tab's menu and the palette are one surface; the words
+  // are the same on every tab, as a work link's are, so the note names the chat. It only reads,
+  // so it sits above the line.
+  for (const tab of now.tabs.order) {
+    const chat = chatOf(now.tabs, tab);
+    if (chat === undefined) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(activityId(tab), "Activity", {
+        verb: "openView",
+        view: activityView(chat),
+        title: activityTitle(name),
+      }),
+      note: `Chat ${name}: what it and its tasks said to each other, in a tab of its own.`,
+    });
   }
 
   // **Ask a persona from a chat's tab**: one row per chat per persona the project has
@@ -3484,6 +3506,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           ...(what.session === undefined ? [] : [besideId(what.session)]),
           // A task: its Brief (#1494). An id the catalogue lacks is not in the menu.
           ...(what.session === undefined ? [] : [briefId(what.session)]),
+          activityId(what.tab),
         ],
         below: [
           `tab.restart:${what.tab}`,

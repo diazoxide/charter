@@ -109,7 +109,10 @@ open in it, `purlis_core::retention::on_open` removes, from that plane's own `.c
   unless the chat that asked or the chat that worked is one the reopen record will bring back
   (#1452). The chat is matched by its id, never by its number where the record has an id: a
   number is dealt again in another launch, and a chat that only shares one keeps nothing. It
-  holds a brief and a report, so it is kept as session data is and no longer. A write of a
+  holds a brief, a report and what the two chats said to each other (#1495), so it is kept as
+  session data is and no longer. **What the two chats said goes sooner than the record
+  where the record lives on**: 30 days after the dispatch ended, whichever chat is still
+  brought back (`dispatchrecord::expire_talk`, below). A write of a
   record that was cut short leaves its temporary file beside it
   (`.purlis-generated.<id>.json.<pid>.<tag>.tmp`), holding the same brief; it is collected by
   the same rule, and no other temporary file is.
@@ -4909,9 +4912,11 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 ### `app/dispatches/<id>.json` — a dispatch's record
 - **What:** one file for each **dispatch**: one chat starting another, as a handoff today and
   as a task once chats dispatch tasks (#1452, spec #1434). It says who asked, which persona it
-  went to, in which mode, where it worked, the brief, the report, when it started and ended,
-  how often it needed the person, and what its harness said it cost. The window's Dispatches
-  tab lists them, and a session record's tab lists the ones its chat asked for.
+  went to, in which mode, where it worked, the brief, the report, **the messages the two chats
+  sent each other through purlis while it ran** (#1495: each follow-up, progress note,
+  question and answer, with its time), when it started and ended, how often it needed the
+  person, and what its harness said it cost. The window's Dispatches tab lists them, a session
+  record's tab lists the ones its chat asked for, and a chat's Activity tab is read from them.
 - **Format:** JSON, pretty-printed, trailing `\n`, mode 0600, replaced whole
   (`rewrite::replace`) under purlis's lock on the directory. `<id>` is a ULID minted when the
   record is opened, and the only names read or written here are `<ULID>.json`. A file that is
@@ -4943,7 +4948,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   operator`; neither is recorded as `failed`. A purlis from before the two words does not
   read such a record, and lists the others; `needed_you` — how many times the persona chat came to wait on the person;
   `messages` — how many messages passed between the two chats after the brief: each follow-up,
-  progress note, question and answer purlis took, counted as it is taken; `usage` —
+  progress note, question and answer purlis took, counted as it is taken; `talk` — those
+  messages, oldest first, as far as the record keeps them (#1495; see *The messages it keeps*
+  below), absent for a dispatch nothing was said in, which is every record written before the
+  key; `usage` —
   `{"input_tokens"?, "output_tokens"?, "cost_usd"?}`, what the persona chat's harness said the
   session cost (`sessions/<sid>.spend`). **`usage` is absent for a harness that reports none,
   and each part of it is absent where the harness did not say it: never a zero.** It is the
@@ -5045,6 +5053,49 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `app/reopen.json` with its dispatch record still running, and is tried again at the next
   launch. The window draws it under the chat that asked, from those two files and no third,
   until it starts or the person ends it.
+- **The messages it keeps** (#1495): `talk` is a list of
+  `{"at", "kind", "text"}`, one for each message purlis took between the two chats while the
+  dispatch ran. `at` is when the app took it (UTC, as `started`); `kind` is `"follow_up"` or
+  `"answer"`, which the asking chat sent, or `"note"` or `"question"`, which the persona chat
+  sent: **the kind says which of the record's two chats said it**, so a line names no chat;
+  `text` is the message as it was sent. It is appended in the write that counts the message
+  (`messages`), by the app, where it has already left the message for its reader. The message
+  itself waits under `handbacks/said-<chat>/` only until that chat reads it, which is why a
+  copy is kept here: the Activity tab is read afterwards. **Only what one chat sent another
+  through purlis is kept; nothing of either chat's conversation is.** A message's text is held
+  to 4 KiB, which is what a message may be, and a record keeps at most 500 messages and
+  256 KiB of their text together: **the first ones are kept, with no hole**. One past either
+  cap is counted in `messages` and its text is not kept, and after it no later message's is
+  either, however small, so `messages` above `talk`'s length is exactly the messages after the
+  last one kept, and a question is never dropped with its answer kept. A record written before
+  the key has `messages` and no `talk`, and keeps none while it runs on. A record that has
+  ended keeps no more. **The words are kept for 30 days after the dispatch ended** (D-1495-12,
+  `dispatchrecord::expire_talk`): then every `text` in `talk` is emptied, in place, and `at`
+  and `kind` stay, as do the brief and the report. It is counted from `ended`, not from the
+  record's last write, and it does not wait for either chat to go: a record is kept for as
+  long as one of its chats is brought back at launch, and what was said in it is not. A
+  message is never taken empty, so an empty `text` means its words were kept and are gone.
+  The app does this when it opens a project and before it reads a timeline. A dispatch that
+  has not ended keeps its words. `talk` is read back under the record's own check
+  (`dispatchrecord::sound`): a record whose `talk` holds text purlis will not draw, more
+  than 500 messages, or more than 256 KiB of their text is counted and never shown. **The
+  one writer of `talk` is `dispatchrecord::said`.**
+- **In a chat's Activity tab** (#1495): one timeline for a chat, oldest first, of every task
+  it dispatched and every task under those (`mode` `"task"`; a handoff is on none). A record
+  gives it the dispatch (`started`, `brief`, and `asker.by_person` for a task the person
+  dispatched themselves), each line of `talk`, one line for the messages `talk` does not hold
+  (`messages` above its length: sent before the key where `talk` is absent, else past the
+  500 or the 256 KiB), and the report (`ended`, `report.text`, `report.outcome`). A task's own
+  lines keep the order the record holds them in, whatever their times say. A report's line
+  also lists the files it says it changed: `report.changed.files`, then every word of
+  `report.changed.said` that reads as a file (its last part has an extension), so that a file
+  another task's report also names is marked. Two tasks mark each other only where they
+  worked in the same place (`place.workspace` and `place.folder`), so a task on a branch of
+  its own marks nothing. That is a reading of a chat's claim for a mark the person sees, and
+  decides nothing (`purlis_core::activity::paths_named`). Nothing else is stored for the tab.
+  **What the tab does not list:** a record that does not pass the check is counted on the
+  timeline of the chat that asked for it and shown on none; a file that does not parse as a
+  record of this version at all is skipped and counted nowhere, as in the Dispatches tab.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.
@@ -5084,16 +5135,19 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Who writes it:** the app, from its own record of the two chats
   (`purlis_core::dispatchrecord`, called from `app/src-tauri/src/dispatches.rs`): opened where
   the app starts the persona chat, counted where the board puts that chat in the needs-you
-  queue, closed where the app accepts its report or closes it. `conversation` is written by
-  the same hand as the record ends, and `cleared` by the window's Clear finished and Reopen
+  queue, given each message where the app takes one between the two chats, closed where the
+  app accepts its report or closes it. `conversation` is written by the same hand as the
+  record ends, and `cleared` by the window's Clear finished and Reopen
   (`app/src-tauri/src/finished.rs`), which only the person runs, and by the app as the asking
   chat closes. **No line on the hook channel
   names a record, an asker or a cost**, so no line a chat sends makes a record or points one
   at another dispatch. A task's report does say how the task ended (done, blocked or failed),
   which is the persona chat's to say, and that outcome is written to the record of the
-  dispatch that chat was started by. Three more things in it are a chat's: the brief and the report's text, which
-  are its words, stored as written (the brief passed the dispatch's own checks and the
-  report its summary's, and nothing scans them again at rest, D-1452-13), and `usage`, which
+  dispatch that chat was started by. Three more things in it are a chat's: the brief, the report's text and each
+  message in `talk`, which
+  are its words, stored as written (the brief passed the dispatch's own checks, the
+  report its summary's and a message the same rule as a report, and nothing scans them again
+  at rest, D-1452-13), and `usage`, which
   is its harness's report and which a chat can alter (above). A chat is matched to its
   record by its id; by its number only where the record has no id. A persona chat
   that ends owing a report is recorded as `failed`, "ended without a report". A sandboxed chat
@@ -5127,7 +5181,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **In the Dispatches tab:** a record that has not ended and whose persona chat this app does
   not have open (one the reopen record lists that was not brought back) is said to be `not
   open`, with no duration: it is not running, and runs again when its chat is opened.
-- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and nothing else.
+- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). What the two chats said to each other is kept in it for 30 days after the dispatch ended, and for no longer where the record lives on (`dispatchrecord::expire_talk`). Deleting one costs its row in the Dispatches tab and its lines in the Activity tab of the chat that asked (the dispatch, what was said, the report), and nothing else: a task still running loses its record and reports to its asking chat as before.
 - **Git:** gitignored (under `/.charter/`).
 
 ### `app/hooks.sock`

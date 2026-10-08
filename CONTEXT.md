@@ -556,6 +556,12 @@ chat has to say, and what changed. It is data to the asking chat, never instruct
 kept for the workspace when the asking chat is gone.
 _Avoid_: reply, result (for a handoff), handback (in UI text)
 
+**Activity** (of a chat):
+One read-only timeline of what a chat and its tasks said to each other through purlis, and the
+tasks of its tasks: each brief, follow-up, progress note, question, answer and report, oldest
+first. It holds what the chats sent each other, never either chat's conversation.
+_Avoid_: log, history, transcript (it is none), feed
+
 **Lineage** (of a chat):
 Everything descended from one chat the person started: that chat, the chats it dispatched, and
 the chats those dispatched. Messages between chats travel only along it, and every ask a chat
