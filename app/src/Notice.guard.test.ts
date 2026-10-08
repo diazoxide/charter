@@ -66,11 +66,26 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: READ_ONCE,
   },
+  "ActivityTab.tsx": {
+    count: 2,
+    why:
+      "on a question's line (#1496): that the chat to answer in could not be asked for, in the " +
+      "core's sentence beside Answer, which is the retry; and that the person's answer was " +
+      "sent, said once for whoever cannot see the Answer control go. Neither stands for " +
+      "something true now that has a way out of its own",
+  },
   "AlertsDrawer.tsx": {
     count: 2,
     why:
       "the Alerts drawer's own read refusals, in place of a project's rows; the rows themselves " +
       "are Notices with their ways out (NO-6)",
+  },
+  "AnswerQuestion.tsx": {
+    count: 2,
+    why:
+      "the refusal of the person's answer to a task's question (#1496), in the core's sentence " +
+      "under the box, with what was typed kept: Send is the retry. And, where the form was " +
+      "opened for a task that asks nothing now, the sentence that says so, beside Close",
   },
   "App.tsx": {
     count: 1,

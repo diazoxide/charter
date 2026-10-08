@@ -3,6 +3,8 @@ import type { Activity, ActivityLine } from "./bindings";
 import {
   activityView,
   alsoSaid,
+  answerable,
+  closedWhy,
   heard,
   namedByOthers,
   timelineOf,
@@ -22,6 +24,9 @@ function line(over: Partial<ActivityLine> & Pick<ActivityLine, "dispatch" | "n">
     to_key: "01K6STEWARD",
     text: "",
     by_person: false,
+    asks: null,
+    answers: null,
+    unread: false,
     by_purlis: false,
     expired: false,
     unkept: null,
@@ -200,5 +205,90 @@ describe("a chat that is restarted", () => {
     const tabs = openView(openTab(noTabs(), 3), activityView(4), "Activity · other", "alpha");
 
     expect(replaceSession(tabs, 9, 12)).toBe(tabs);
+  });
+});
+
+describe("the questions the person may answer (#1496)", () => {
+  /** A question the app says is open, with number `asks`; `null` for one it says is not. */
+  const question = (dispatch: string, n: number, asks: number | null = 5) =>
+    line({ dispatch, n, kind: "question", text: "Which host?", asks });
+
+  it("is the question the app says its task is paused on", () => {
+    const lines = drawn([
+      line({ dispatch: "01K6D1", n: 0, kind: "dispatched" }),
+      question("01K6D1", 1),
+      // Not open by the app's word: answered before the tab read it, or never held.
+      question("01K6D2", 1, null),
+      // A note is not a question, whatever the app says of it.
+      line({ dispatch: "01K6D3", n: 1, kind: "note", asks: 6 }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
+  });
+
+  it("is closed by an answer told for its number, whoever gave it, and by its task's ending", () => {
+    const answered = (over: Parameters<typeof line>[0]) =>
+      drawn([question("01K6D1", 1), line(over)]);
+    expect([
+      ...answerable(answered({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5 })),
+    ]).toEqual([]);
+    expect([
+      ...answerable(
+        answered({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, by_person: true }),
+      ),
+    ]).toEqual([]);
+    // The record kept none of the answer's words: the line that stands for it closes it too.
+    expect([
+      ...answerable(answered({ dispatch: "01K6D1", n: 2, kind: "not listed", answers: 5 })),
+    ]).toEqual([]);
+    for (const kind of ["report", "stopped"])
+      expect([...answerable(answered({ dispatch: "01K6D1", n: 2, kind }))], kind).toEqual([]);
+  });
+
+  it("is closed by number and never by where a line stands", () => {
+    // F8. The task had its first answer from its waiting command and asked again at once, so
+    // the second question was recorded before the first answer: the answer's line stands
+    // after the question it does not answer.
+    const lines = drawn([
+      question("01K6D1", 1, null),
+      question("01K6D1", 2, 6),
+      line({ dispatch: "01K6D1", n: 3, kind: "answer", answers: 5 }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:2"]);
+    expect(closedWhy(lines[1].line, lines)).toBeUndefined();
+  });
+
+  it("is still one after a note or a follow-up, and after another task's answer", () => {
+    const lines = drawn([
+      question("01K6D1", 1),
+      line({ dispatch: "01K6D1", n: 2, kind: "note" }),
+      line({ dispatch: "01K6D1", n: 3, kind: "follow-up" }),
+      line({ dispatch: "01K6D2", n: 4, kind: "answer", answers: 5 }),
+      // An answer that was read and not told says nothing of which question it closed.
+      line({ dispatch: "01K6D1", n: 5, kind: "answer" }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
+  });
+
+  it("says why a question can no longer be answered, in a sentence for who was answering", () => {
+    const asked = question("01K6D1", 1);
+    const closed = (over: Parameters<typeof line>[0]) =>
+      closedWhy(asked, drawn([asked, line(over)]));
+
+    expect(closedWhy(asked, drawn([asked]))).toBeUndefined();
+    expect(
+      closed({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, from: "steward 3" }),
+    ).toBe("The chat steward 3 answered this question first, so there is nothing left to send.");
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, by_person: true })).toBe(
+      "You have already answered this question, and one answer is final.",
+    );
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "not listed", answers: 5 })).toBe(
+      "This question was answered first, so there is nothing left to send.",
+    );
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "report" })).toBe(
+      "talk has ended, so an answer would reach no turn of its work.",
+    );
   });
 });

@@ -220,18 +220,59 @@ pub(crate) fn note(held: &Held, session: u32, event: Event) {
 /// the message is left for its reader, with the app's own record of which chat is the task: no
 /// line names a record.
 pub(crate) fn message(held: &Held, task: u32, said: &purlis_core::dispatchtalk::Message) {
+    kept(held, task, said.kind, None, &said.text, None);
+}
+
+/// [`message`], for the asking chat's answer to question `number` of `task` (#1496): the
+/// window is told which question the line answers, so an open Activity tab closes that one
+/// and no other.
+pub(crate) fn answered(
+    held: &Held,
+    task: u32,
+    said: &purlis_core::dispatchtalk::Message,
+    number: u32,
+) {
+    kept(held, task, said.kind, None, &said.text, Some(number));
+}
+
+/// One message on `task`'s running dispatch: counted, its text kept, and the window told.
+/// `by` is who said it where that is not the chat its kind names, and `answers` the number of
+/// the question it answered, where it is an answer.
+fn kept(
+    held: &Held,
+    task: u32,
+    kind: purlis_core::dispatchtalk::Kind,
+    by: Option<dispatchrecord::By>,
+    text: &str,
+    answers: Option<u32>,
+) {
     let Some(record) = running_for(held, task) else {
         return;
     };
     let now = chrono::Utc::now();
-    match dispatchrecord::said(held.root(), &record.id, said.kind, &said.text, now) {
-        Ok(Taken::Kept(kept)) => crate::activity::said(held, &kept),
+    match dispatchrecord::said_by(held.root(), &record.id, kind, by, text, now) {
+        Ok(Taken::Kept(kept)) => crate::activity::said(held, &kept, answers),
         // Counted, and past what a record keeps the text of: the tab is told how many, and
         // none of the message's words.
-        Ok(Taken::Counted(counted)) => crate::activity::unkept(held, &counted),
+        Ok(Taken::Counted(counted)) => crate::activity::unkept(held, &counted, answers),
         Ok(Taken::Nothing) => {}
         Err(why) => tracing::warn!("purlis: a dispatch's record was not updated ({why})"),
     }
+}
+
+/// The person answered the question persona chat `task` put to its asking chat (#1496), with
+/// `text`: its dispatch counts one more message and keeps the answer **with who said it**, so
+/// the session's Activity says it was the person's and not the asking chat's. Called only from
+/// the window's own command, once the answer is taken.
+pub(crate) fn person_answered(held: &Held, task: u32, text: &str, number: u32) {
+    kept(
+        held,
+        task,
+        purlis_core::dispatchtalk::Kind::Answer,
+        Some(dispatchrecord::By::Person),
+        text,
+        Some(number),
+    );
 }
 
 /// The app accepted chat `session`'s report: its dispatch ends with it. `outcome` and `text`
@@ -436,6 +477,17 @@ fn close(
     by: Option<dispatchrecord::EndedBy>,
     way: Option<dispatchrecord::EndedWay>,
 ) {
+    // **An answer of the person's the task never had** (#1496): where the app still holds
+    // one for this task as its dispatch ends, no turn of the task was handed it. The record
+    // says so on that answer, so the timeline does not read as if the task worked from it.
+    let task = crate::activity::session_of(&record.worker.chat, &open_chats(held));
+    if task.is_some_and(|task| held.tasks().ledger().talk.unread_answer(task)) {
+        match dispatchrecord::answer_unread(held.root(), &record.id) {
+            Ok(true) => crate::activity::answer_unread(held, &record.id),
+            Ok(false) => {}
+            Err(why) => tracing::warn!("purlis: a dispatch's record was not updated ({why})"),
+        }
+    }
     match dispatchrecord::close_as(held.root(), &record.id, ending, by, way, chrono::Utc::now()) {
         // An open Activity tab hears of the report it ended with (#1495).
         Ok(true) => crate::activity::ended(held, &record.id),

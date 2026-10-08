@@ -115,6 +115,11 @@ pub struct Server {
 /// **And every command that reads back what a task was sent** (#1494): `task_brief`. A brief
 /// is whatever the work held, and the store it is read from is kept from the project's chats,
 /// so the read is held to the window's own IPC too.
+///
+/// `answer_task_question` answers, as the person, a question a task put to its asking chat
+/// (#1496). What it sends reaches a chat marked as the person's own words, so it is held to
+/// what `answer_ask` is: the window's own IPC, and no link until the session protocol has a
+/// scoped message for it.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -150,6 +155,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "ask_chat_restart",
     // Reads what a task was sent.
     "task_brief",
+    // Answers as the person.
+    "answer_task_question",
 ];
 
 /// The commands that take a vault's sign-in from the person and use it (#1527, ADR 0052 as

@@ -110,7 +110,11 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         ),
         link::serve_any(b, session::speaks(), &HELD)
     );
-    let ui = ui::Server::new(BUILD, ["rename_chat", "answer_ask"], commands.clone());
+    let ui = ui::Server::new(
+        BUILD,
+        ["rename_chat", "answer_ask", "answer_task_question"],
+        commands.clone(),
+    );
     tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
     let client = Client::new(client.unwrap()).0;
     let ui = client.ui(BUILD).await.unwrap();
@@ -126,6 +130,20 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(refused.is_err(), "{refused:?}");
     assert!(commands.asked.lock().unwrap().is_empty());
     assert!(ui::WINDOW_ONLY.contains(&"answer_ask"));
+
+    // #1496: the person's answer to a question a task put to its asking chat reaches that
+    // task marked as the person's own words, and is held to the same.
+    let refused = ui
+        .call(
+            "answer_task_question",
+            json!({"plane": 1, "session": 3, "question": "Which queue?", "text": "The second."}),
+        )
+        .await
+        .unwrap();
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(commands.asked.lock().unwrap().is_empty());
+    assert!(ui::WINDOW_ONLY.contains(&"answer_task_question"));
     // Every command that ends, starts or restarts a chat on the person's word is the window's
     // too (#1488). None of these is served on a link.
     for command in [
@@ -160,9 +178,9 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
-    // And the list is that rule's, with what a task was sent (#1494): nothing else is kept
-    // from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 30);
+    // And the list is exactly that rule's, with what a task was sent (#1494) and the person's
+    // answer to a task (#1496): nothing else is kept from a link by it.
+    assert_eq!(ui::WINDOW_ONLY.len(), 31);
 }
 
 #[tokio::test]

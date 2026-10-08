@@ -674,6 +674,7 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
              back only from a chat a dispatch started."
         ));
     };
+    let asked_text = text.clone();
     let asker = match answered(
         &mut asking,
         chat,
@@ -703,7 +704,12 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
     );
     match replied {
         Ok(Answered::Replied {
-            what: Reply::Answered { from, text },
+            what:
+                Reply::Answered {
+                    from,
+                    text,
+                    by_person,
+                },
         }) => {
             // On the same connection, so the next turn is not handed the same answer again.
             let _ = answered(
@@ -712,6 +718,18 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
                 What::GotAnswer,
                 crate::handoff::A_TICKET_TAKES_AT_MOST,
             );
+            // The person answered it, in the purlis window (#1496): the app says so, on the
+            // connection this command asked on, and the sentence is the person's own.
+            if by_person {
+                return Ok(dispatchtalk::person_said(
+                    &dispatchtalk::PersonSaid::Answered {
+                        // The sentence for a task names no number: the question is its own, quoted.
+                        number: 0,
+                        question: asked_text,
+                        text,
+                    },
+                ));
+            }
             Ok(dispatchtalk::said(&Message {
                 kind: Kind::Answer,
                 from,
@@ -730,6 +748,70 @@ pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
         // where a wait that ran out does.
         Ok(_) | Err(_) => Ok(paused),
     }
+}
+
+/// How long a turn's hook waits on the app for what the person said, for each of the ask and
+/// the answer: it holds the turn, so an app that is slow costs the turn nothing, and what the
+/// person said is handed to the next one.
+const A_HOOK_WAITS: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// What the person said to this chat, as its turn is told it, and the means of saying the
+/// turn has it ([`from_the_person`]).
+pub struct FromThePerson {
+    /// purlis's sentences with the person's words quoted under each, as data.
+    pub told: String,
+    /// The question each is about, by number: what the turn says it has.
+    numbers: Vec<u32>,
+    chat: u32,
+    /// The connection they were read on, which the acknowledgement goes back on.
+    asking: purlis_core::hookwire::Asking,
+}
+
+impl FromThePerson {
+    /// **The turn has them**: said to the app, by each one's number, so they are handed to no
+    /// later turn. **Called once the hook has printed its context, and not before**: a hook
+    /// that is killed before it prints has said nothing here, and the next turn is handed
+    /// them again. Briefly: an acknowledgement the app is slow to take costs only that.
+    pub fn handed_over(mut self) {
+        let has = Ask::Task(Box::new(Asked {
+            chat: self.chat,
+            what: What::HasFromThePerson {
+                numbers: self.numbers,
+            },
+        }));
+        let _ = self.asking.ask(&has, A_HOOK_WAITS / 3);
+    }
+}
+
+/// **What the person said to this chat in the purlis window** since it last said it had any
+/// (#1496): their answer to a question this task asked its asking chat, or word that they
+/// answered a question one of this chat's tasks asked it. `None` for nothing, outside a chat
+/// the app started, and where the app does not answer.
+///
+/// **Asked of the app and read from no file.** That the person said it is the app's to say,
+/// on the connection it answers this chat on: a file is something another chat can write.
+///
+/// **Reading is not having.** The app keeps each one until the turn says it has it
+/// ([`FromThePerson::handed_over`]), which the hook does after it has printed.
+pub fn from_the_person() -> Option<FromThePerson> {
+    let (mut asking, chat) = the_app()?;
+    let asked = Ask::Task(Box::new(Asked {
+        chat,
+        what: What::FromThePerson,
+    }));
+    let Ok(Answer::Task(answered)) = asking.ask(&asked, A_HOOK_WAITS) else {
+        return None;
+    };
+    let Answered::FromThePerson { said } = *answered else {
+        return None;
+    };
+    let told = dispatchtalk::person_context(&said)?;
+    Some(FromThePerson {
+        told,
+        numbers: said.iter().map(dispatchtalk::PersonSaid::number).collect(),
+        chat,
+        asking,
+    })
 }
 
 /// How much longer than the wait itself the app has to answer one: it answers when the wait

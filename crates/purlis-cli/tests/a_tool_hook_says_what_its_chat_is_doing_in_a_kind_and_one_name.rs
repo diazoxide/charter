@@ -167,7 +167,11 @@ fn an_opencode_tool_purlis_has_no_word_for_is_a_tool_and_names_nothing() {
         }),
     );
     assert_eq!(said(&heard), [began(Kind::Tool, None)]);
-    for line in heard.doing.iter().map(|one| serde_json::to_string(one).unwrap()) {
+    for line in heard
+        .doing
+        .iter()
+        .map(|one| serde_json::to_string(one).unwrap())
+    {
         assert!(!line.contains("github"), "the line names the tool: {line}");
     }
 }

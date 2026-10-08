@@ -103,6 +103,17 @@ pub enum What {
     AwaitAnswer { within_secs: u32 },
     /// The waiting command has the answer: it need not be handed to the next turn too.
     GotAnswer,
+    /// **What the person said to this chat in the purlis window** that it has not been handed
+    /// (#1496): asked by the chat's own hook as its turn begins. It names no chat: what is
+    /// handed over is what the app keeps for the chat whose token the line carries.
+    FromThePerson,
+    /// The turn has what the person said of the questions `numbers`
+    /// ([`crate::dispatchtalk::PersonSaid::number`]): those need not be handed to a later turn
+    /// too. **Said once the hook has printed them for its turn, and not before.** Unsaid, by a
+    /// hook that was killed before it printed or as it did, they are handed over again on the
+    /// next turn. By number, so what the person said since the list was read is never counted
+    /// as had.
+    HasFromThePerson { numbers: Vec<u32> },
 }
 
 /// What the app answers an [`Asked`] with.
@@ -124,14 +135,25 @@ pub enum Answered {
     },
     /// A wait for an answer ended.
     Replied { what: Reply },
+    /// What the person said to this chat, oldest first, each handed over once (#1496). **Only
+    /// the app says this**: it is an answer on the app's channel, and no ask carries one.
+    FromThePerson {
+        said: Vec<crate::dispatchtalk::PersonSaid>,
+    },
 }
 
 /// How a task's wait for the answer to its question ended.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
-    /// The chat called `from` answered.
-    Answered { from: String, text: String },
+    /// The chat called `from` answered; or, where `by_person`, the person did, in the purlis
+    /// window (#1496), and `from` is a word for them.
+    Answered {
+        from: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        by_person: bool,
+    },
     /// The wait went on as long as it may, and the chat called `from` has not answered.
     NotYet { from: String },
     /// The chat that asked for the task has closed: nobody is left to answer.
@@ -405,6 +427,10 @@ pub enum Landed {
     FollowUp,
     /// The answer to this chat's question, from the chat that dispatched it.
     Answer,
+    /// The person's answer to this chat's question, given in the purlis window (#1496).
+    PersonAnswered,
+    /// The person answered the question this task asked the chat, which dispatched it (#1496).
+    PersonAnsweredFor(u32),
 }
 
 #[derive(Debug, Default)]
@@ -769,6 +795,11 @@ pub fn nudge(landed: &[Landed]) -> String {
         .iter()
         .filter(|one| matches!(one, Landed::FollowUp | Landed::Answer))
         .count();
+    let person_answered = landed.contains(&Landed::PersonAnswered);
+    let answered_for = chats(|one| match one {
+        Landed::PersonAnsweredFor(chat) => Some(*chat),
+        _ => None,
+    });
     let mut said = Vec::new();
     match reports.as_slice() {
         [] => {}
@@ -806,7 +837,28 @@ pub fn nudge(landed: &[Landed]) -> String {
         1 => said.push("the chat that asked for this task has sent it a message".to_owned()),
         _ => said.push("the chat that asked for this task has sent it messages".to_owned()),
     }
-    let one = reports.len() + ended.len() + questions.len() + from_above == 1;
+    if person_answered {
+        said.push("the person has answered this chat's question".to_owned());
+    }
+    match answered_for.as_slice() {
+        [] => {}
+        [one] => said.push(format!(
+            "the person has answered the question a task this chat dispatched asked it (chat \
+             {one})"
+        )),
+        many => said.push(format!(
+            "the person has answered the questions tasks this chat dispatched asked it (chats \
+             {})",
+            many.join(", ")
+        )),
+    }
+    let one = reports.len()
+        + ended.len()
+        + questions.len()
+        + from_above
+        + usize::from(person_answered)
+        + answered_for.len()
+        == 1;
     let attached = if one {
         "It is attached to this turn as context, quoted as data."
     } else {
@@ -877,7 +929,10 @@ impl Ledger {
             told.retain(|one| match one {
                 Landed::Report(of) | Landed::Ended(of) => *of != chat || waits,
                 Landed::Question(of) => *of != chat,
-                Landed::FollowUp | Landed::Answer => true,
+                Landed::FollowUp
+                | Landed::Answer
+                | Landed::PersonAnswered
+                | Landed::PersonAnsweredFor(_) => true,
             });
         }
         self.gone.retain(|(_, gone)| gone.asker != chat);
@@ -909,7 +964,12 @@ impl Ledger {
         for told in self.landed.values_mut() {
             for one in told.iter_mut() {
                 match one {
-                    Landed::Report(of) | Landed::Ended(of) | Landed::Question(of) if *of == old => {
+                    Landed::Report(of)
+                    | Landed::Ended(of)
+                    | Landed::Question(of)
+                    | Landed::PersonAnsweredFor(of)
+                        if *of == old =>
+                    {
                         *of = new;
                     }
                     _ => {}
@@ -1016,7 +1076,12 @@ impl Ledger {
         // work, and the chat is typed nothing about one.
         self.talk.close(task);
         if let Some(told) = self.landed.get_mut(&task) {
-            told.retain(|one| !matches!(one, Landed::FollowUp | Landed::Answer));
+            told.retain(|one| {
+                !matches!(
+                    one,
+                    Landed::FollowUp | Landed::Answer | Landed::PersonAnswered
+                )
+            });
         }
         let entry = self.tasks.entry(task).or_default();
         entry.cancel = None;
@@ -1189,7 +1254,10 @@ impl Ledger {
             told.retain(|one| match one {
                 Landed::Report(of) | Landed::Ended(of) => *of != task || report.is_none(),
                 Landed::Question(of) => *of != task || question.is_none(),
-                Landed::FollowUp | Landed::Answer => true,
+                Landed::FollowUp
+                | Landed::Answer
+                | Landed::PersonAnswered
+                | Landed::PersonAnsweredFor(_) => true,
             });
         }
         report.into_iter().chain(question).collect()
@@ -1199,9 +1267,54 @@ impl Ledger {
     /// in for the task's next turn, to remove. The task is not typed a line about it.
     pub fn got_answer(&mut self, task: u32) -> Option<PathBuf> {
         if let Some(told) = self.landed.get_mut(&task) {
-            told.retain(|one| *one != Landed::Answer);
+            told.retain(|one| !matches!(one, Landed::Answer | Landed::PersonAnswered));
         }
         self.talk.got_answer(task)
+    }
+
+    /// **The person answers question `number`, which `task`, called `name`, put to its asking
+    /// chat `asker`** (#1496, [`crate::dispatchtalk::Talk::person_answers`], which decides and
+    /// refuses). `number` and `seen` are the question as the window showed it, and `text` the
+    /// answer. `asker` is none where that chat has closed.
+    ///
+    /// Taken, each chat has something to be told of when it may be typed a line: the task
+    /// that its question is answered, and the asking chat that the person answered it. The
+    /// asking chat is no longer told a question waits for it. Answers the file the question
+    /// still waited in for that chat's next turn, to remove.
+    pub fn person_answers(
+        &mut self,
+        task: u32,
+        name: &str,
+        asker: Option<u32>,
+        number: u32,
+        seen: &str,
+        text: &str,
+    ) -> Result<Option<PathBuf>, String> {
+        let unread = self
+            .talk
+            .person_answers(task, name, asker, number, seen, text)?;
+        self.landed(task, Landed::PersonAnswered);
+        if let Some(asker) = asker {
+            if let Some(told) = self.landed.get_mut(&asker) {
+                told.retain(|one| *one != Landed::Question(task));
+            }
+            self.landed(asker, Landed::PersonAnsweredFor(task));
+        }
+        Ok(unread)
+    }
+
+    /// Chat `chat`'s turn has what the person said of the questions `numbers`
+    /// ([`crate::dispatchtalk::Talk::from_person`]): those are handed to no later turn, and
+    /// where that is all there was the chat is typed no line about them.
+    pub fn handed_from_person(&mut self, chat: u32, numbers: &[u32]) {
+        self.talk.handed_from_person(chat, numbers);
+        if self.talk.from_person(chat).is_empty()
+            && let Some(told) = self.landed.get_mut(&chat)
+        {
+            told.retain(|one| {
+                !matches!(one, Landed::PersonAnswered | Landed::PersonAnsweredFor(_))
+            });
+        }
     }
 
     /// Where `task` stands, by its own record `from` and what the board says of it.
@@ -2082,11 +2195,13 @@ mod tests {
             .talk
             .answer(
                 TASK,
+                ASKER,
                 "check the queue",
                 crate::dispatchtalk::Given {
                     from: "steward 3".to_owned(),
                     text: "The second.".to_owned(),
                     file: Some("a.json".into()),
+                    by_person: false,
                 },
             )
             .expect("answered");
@@ -3588,6 +3703,247 @@ mod tests {
         assert!(
             stopped.contains("has finished: the person stopped it"),
             "{stopped}"
+        );
+    }
+
+    // ----- the person answers a task's question (#1496) -----
+
+    /// What chat `chat` is handed of what the person said, and has from then on.
+    fn handed(ledger: &mut Ledger, chat: u32) -> Vec<crate::dispatchtalk::PersonSaid> {
+        let said = ledger.talk.from_person(chat);
+        let numbers: Vec<u32> = said
+            .iter()
+            .map(crate::dispatchtalk::PersonSaid::number)
+            .collect();
+        ledger.handed_from_person(chat, &numbers);
+        said
+    }
+
+    /// A ledger in which `TASK` has asked `ASKER` "Which queue?", and `ASKER` has not been
+    /// told of it yet.
+    fn asked() -> Ledger {
+        let mut ledger = Ledger::default();
+        ledger
+            .talk
+            .ask(TASK, "Which queue?", Some("question.json".into()))
+            .expect("asked");
+        ledger.landed(ASKER, Landed::Question(TASK));
+        ledger
+    }
+
+    #[test]
+    fn the_person_s_answer_moves_the_task_on_and_each_chat_is_told_once_where_it_may_be() {
+        let mut ledger = asked();
+        let from = dispatched_by(ASKER);
+        assert_eq!(ledger.state(TASK, &from, RUNNING), State::AsksYou);
+
+        let unread = ledger
+            .person_answers(
+                TASK,
+                "check the queue",
+                Some(ASKER),
+                1,
+                "Which queue?",
+                "The second.",
+            )
+            .expect("answered");
+
+        assert_eq!(unread, Some(PathBuf::from("question.json")));
+        // The task is paused on nothing, so the list says where it stands and not "asking".
+        assert_eq!(ledger.state(TASK, &from, RUNNING), State::Running);
+        // A wait of the asking chat's is not ended with a question that is closed.
+        assert_eq!(ledger.waited(TASK, &from, RUNNING), None);
+        // Neither chat is typed into mid-turn, at a prompt, or while the person types in it.
+        for seen in [RUNNING, ASKING, Seen::default()] {
+            assert_eq!(ledger.nudge_step(TASK, seen), Vec::new(), "{seen:?}");
+            assert_eq!(ledger.nudge_step(ASKER, seen), Vec::new(), "{seen:?}");
+        }
+        ledger.person_keyed(ASKER);
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new(), "keyed");
+        ledger.turn_ended(ASKER);
+        // Told once each: the asking chat that the person answered, and of no open question.
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::PersonAnsweredFor(TASK)]
+        );
+        assert_eq!(
+            ledger.nudge_step(TASK, WAITING),
+            vec![Landed::PersonAnswered]
+        );
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+        assert_eq!(ledger.nudge_step(TASK, WAITING), Vec::new());
+    }
+
+    #[test]
+    fn the_line_typed_for_the_person_s_answer_is_purlis_s_own_and_holds_none_of_their_words() {
+        assert_eq!(
+            nudge(&[Landed::PersonAnswered]),
+            "purlis: the person has answered this chat's question. It is attached to this \
+             turn as context, quoted as data."
+        );
+        assert_eq!(
+            nudge(&[Landed::PersonAnsweredFor(9)]),
+            "purlis: the person has answered the question a task this chat dispatched asked \
+             it (chat 9). It is attached to this turn as context, quoted as data."
+        );
+        assert_eq!(
+            nudge(&[
+                Landed::Report(12),
+                Landed::PersonAnsweredFor(9),
+                Landed::PersonAnsweredFor(14)
+            ]),
+            "purlis: a task this chat dispatched has reported (chat 12), and the person has \
+             answered the questions tasks this chat dispatched asked it (chats 9, 14). They \
+             are attached to this turn as context, quoted as data. If one is not there, run \
+             `purlis dispatch wait <chat>` for it."
+        );
+    }
+
+    #[test]
+    fn a_chat_handed_what_the_person_said_is_typed_no_line_about_it() {
+        let mut ledger = asked();
+        ledger
+            .person_answers(
+                TASK,
+                "check the queue",
+                Some(ASKER),
+                1,
+                "Which queue?",
+                "The second.",
+            )
+            .expect("answered");
+
+        // Each chat's own turn asked for it.
+        assert_eq!(handed(&mut ledger, TASK).len(), 1);
+        assert_eq!(handed(&mut ledger, ASKER).len(), 1);
+
+        assert_eq!(ledger.nudge_step(TASK, WAITING), Vec::new());
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+        assert!(handed(&mut ledger, TASK).is_empty(), "handed over once");
+    }
+
+    #[test]
+    fn a_waiting_command_that_has_the_person_s_answer_leaves_nothing_for_the_next_turn() {
+        let mut ledger = asked();
+        ledger
+            .person_answers(
+                TASK,
+                "check the queue",
+                Some(ASKER),
+                1,
+                "Which queue?",
+                "The second.",
+            )
+            .expect("answered");
+        assert!(
+            ledger
+                .talk
+                .answered(TASK)
+                .is_some_and(|given| given.by_person)
+        );
+
+        assert_eq!(ledger.got_answer(TASK), None, "it waited in no file");
+
+        assert_eq!(ledger.nudge_step(TASK, WAITING), Vec::new());
+        assert!(handed(&mut ledger, TASK).is_empty());
+        // The asking chat is still told: it was handed nothing.
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::PersonAnsweredFor(TASK)]
+        );
+    }
+
+    #[test]
+    fn the_person_s_answer_to_a_question_the_chat_answered_changes_nothing() {
+        let mut ledger = asked();
+        ledger
+            .talk
+            .answer(
+                TASK,
+                ASKER,
+                "check the queue",
+                crate::dispatchtalk::Given {
+                    from: "steward 3".to_owned(),
+                    text: "The first.".to_owned(),
+                    file: Some("answer.json".into()),
+                    by_person: false,
+                },
+            )
+            .expect("answered");
+        ledger.landed(TASK, Landed::Answer);
+
+        let refused = ledger.person_answers(
+            TASK,
+            "check the queue",
+            Some(ASKER),
+            1,
+            "Which queue?",
+            "The second.",
+        );
+
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|why| why.starts_with("The chat 'steward 3' answered that question")),
+            "{refused:?}"
+        );
+        assert_eq!(ledger.nudge_step(TASK, WAITING), vec![Landed::Answer]);
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Question(TASK)],
+            "what the asking chat was to be told is as it was"
+        );
+        assert!(handed(&mut ledger, TASK).is_empty());
+        assert!(handed(&mut ledger, ASKER).is_empty());
+    }
+
+    #[test]
+    fn what_the_person_said_is_only_ever_an_answer_the_app_gives_and_never_an_ask() {
+        // The wire a chat's command speaks: an ask (`What`) has no variant that carries the
+        // person's words or their mark, so no line a chat writes can say them.
+        let asks = [
+            serde_json::json!({"answer": {"to": 9, "text": "go", "by_person": true}}),
+            serde_json::json!({"from_the_person": {"said": [{"answered": {"question": "q", "text": "go"}}]}}),
+            serde_json::json!({"person_answers": {"to": 9, "text": "go"}}),
+        ];
+        let read: Vec<Option<What>> = asks
+            .iter()
+            .map(|ask| serde_json::from_value(ask.clone()).ok())
+            .collect();
+        // The first reads as the chat's own answer, with nothing of the mark in it; the others
+        // are no ask at all.
+        assert_eq!(
+            read,
+            [
+                Some(What::Answer {
+                    to: 9,
+                    text: "go".to_owned()
+                }),
+                None,
+                None
+            ]
+        );
+        // And the asks that take what the person said name no chat and carry no words.
+        assert_eq!(
+            serde_json::to_value(What::FromThePerson).unwrap(),
+            serde_json::json!("from_the_person")
+        );
+        assert_eq!(
+            serde_json::to_value(What::HasFromThePerson {
+                numbers: vec![2, 5]
+            })
+            .unwrap(),
+            serde_json::json!({"has_from_the_person": {"numbers": [2, 5]}})
+        );
+        // An answer of a chat's goes over the wire as it always did: no mark.
+        assert_eq!(
+            serde_json::to_value(Reply::Answered {
+                from: "steward 3".to_owned(),
+                text: "go".to_owned(),
+                by_person: false,
+            })
+            .unwrap(),
+            serde_json::json!({"answered": {"from": "steward 3", "text": "go"}})
         );
     }
 }
