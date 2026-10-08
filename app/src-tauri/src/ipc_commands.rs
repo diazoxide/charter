@@ -251,6 +251,8 @@ macro_rules! app_commands {
                 stopping::stopping_chats,
                 stopping::task_ending,
                 stopping::end_task,
+                stopping::all_tasks_ending,
+                stopping::stop_all_tasks,
                 extensions::project_extensions,
                 extensions::extensions_on,
                 extensions::extension_facts,

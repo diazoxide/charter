@@ -1846,6 +1846,21 @@ export type AlertWay =
 { kind: "saving" };
 
 /**
+ *  **What Stop all tasks on a session would end** (#1498, V100-53), as the window asks before
+ *  it does it: the one confirmation names the count.
+ */
+export type AllTasksEnding = {
+	/**  The session, as its row names it. */
+	name: string,
+	/**
+	 *  The tasks at work below it that the answer ends, by number, deepest first: those that
+	 *  have not reported, or are mid-turn or asking the person something, and are not being
+	 *  stopped already. The same chats the close of a session asks about ("Stop them").
+	 */
+	tasks: number[],
+};
+
+/**
  *  What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
  *  a restart on its conversation, which the window asks for once its turn has ended.
  */
@@ -1941,6 +1956,14 @@ export type AskOffer = {
 export type Asking = {
 	plane: PlaneId,
 	asks: Shown[],
+};
+
+/**  What a chat's row says while it is at its task limit. */
+export type AtLimit = {
+	/**  The limit that binds, as a number: what the row says it is at. */
+	limit: number,
+	/**  The whole sentence for the person: which limit, how many, and where it is changed. */
+	said: string,
 };
 
 /**
@@ -3948,6 +3971,12 @@ export type OpenChat = {
 	 *  the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
 	 */
 	tasks_running?: number | null,
+	/**
+	 *  Where its last dispatch was refused for a limit that a slot frees, and no slot has
+	 *  freed since (#1498, V100-54): the number that binds and the sentence that says which
+	 *  limit and where it is changed. Its row says "at its task limit" while it is set.
+	 */
+	at_limit?: AtLimit | null,
 	/**
 	 *  The chat whose tab it has a pane in, by session, where it is not its tab's own chat
 	 *  (#1489). The window puts a task back beside the session that asked for it, where that

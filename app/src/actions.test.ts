@@ -19,6 +19,8 @@ import {
   narrow,
   needsYouRows,
   stopBelowId,
+  stopAllId,
+  STOPS_ALL,
   stopId,
   handedOffId,
   handedOffRows,
@@ -132,6 +134,9 @@ function doing(): Doing & { calls: string[] } {
     }),
     stopChat: vi.fn((session: number, below: boolean) => {
       calls.push(`stopChat:${session}:${below}`);
+    }),
+    stopAllTasks: vi.fn((session: number) => {
+      calls.push(`stopAllTasks:${session}`);
     }),
     endTask: vi.fn((session: number, way: string) => {
       calls.push(`endTask:${session}:${way}`);
@@ -2782,7 +2787,8 @@ describe("stopping a chat (#1448)", () => {
     const offers = catalogued(catalogue(now({ listed: three })));
 
     const row = menuRows({ on: "listed", session: 2 }, offers);
-    expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
+    // And Stop all tasks beside them (#1498): 2 asked for task 3.
+    expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2), stopAllId(2)]);
     // Above the line, where a task is drawn (#1489): nothing there ends anything. 2 is a
     // session of its own, with none; 3 is a task.
     expect(ids(row.above)).toEqual([]);
@@ -2790,9 +2796,10 @@ describe("stopping a chat (#1448)", () => {
     expect(ids(task.above)).toEqual(expect.arrayContaining([ownTabId(3), besideId(3)]));
     expect(ids(task.below)).toEqual(taskEndIds(3));
 
-    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-4, -2)).toEqual([
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-5, -2)).toEqual([
       stopId(2),
       stopBelowId(2),
+      stopAllId(2),
     ]);
     // A tab that holds no chat has no chat to stop.
     expect(menuOn({ on: "chat", tab: 7 }).below).toEqual([
@@ -2804,6 +2811,47 @@ describe("stopping a chat (#1448)", () => {
 
   it("offers no stop for a chat that is not running", () => {
     expect(ids(catalogue(now())).filter((id) => id.startsWith("chat.stop"))).toEqual([]);
+  });
+});
+
+describe("stopping all of a session's tasks (#1498)", () => {
+  /** 1 handed work to 2, a session of its own, which asked for task 3. 4 asked for nothing. */
+  const four = [listed(1), handed(2, 1), listed(3, 2, false), listed(4)];
+
+  it("offers Stop all tasks to a session with a task open, and asks first", () => {
+    const offers = catalogue(now({ listed: four }));
+
+    expect(by(offers, stopAllId(2))).toMatchObject({
+      title: "Stop all tasks of chat 2",
+      available: true,
+      note: STOPS_ALL,
+      does: { verb: "stopAllTasks", session: 2 },
+    });
+    const hands = doing();
+    void run(offers, stopAllId(2), hands);
+    expect(hands.calls).toEqual(["stopAllTasks:2"]);
+  });
+
+  it("says why a chat with no task open has none to stop, and a handoff is no task of it", () => {
+    const offers = catalogue(now({ listed: four }));
+
+    expect(by(offers, stopAllId(4))).toMatchObject({
+      available: false,
+      reason: "chat 4 has no task open.",
+    });
+    // 1 handed its work to 2: that is no task of 1's.
+    expect(by(offers, stopAllId(1))?.available).toBe(false);
+    // A task is ended its own two ways, and has no Stop all tasks row.
+    expect(by(offers, stopAllId(3))).toBeUndefined();
+  });
+
+  it("is still offered while the session itself is being stopped alone", () => {
+    const rows = stopRows(four, [2]);
+
+    expect(rows.find((row) => row.id === stopAllId(2))).toMatchObject({
+      available: true,
+      does: { verb: "stopAllTasks", session: 2 },
+    });
   });
 });
 

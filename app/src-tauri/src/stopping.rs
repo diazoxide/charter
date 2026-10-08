@@ -722,6 +722,10 @@ pub struct Stopping {
     /// By the chat a stop was pressed on: the tasks ended with it, below it, by name, as the
     /// word to the chat that asked names them (#1488). Kept until that chat has ended.
     named: Mutex<HashMap<u32, Vec<String>>>,
+    /// By the session Stop all tasks was pressed on (#1498): the tasks that press ends. The
+    /// session is typed no line while any of them is still being stopped, and one line, for
+    /// all of their words, once the last has ended ([`Stopping::holds_word_for`]).
+    all: Mutex<HashMap<u32, Vec<u32>>>,
 }
 
 impl Stopping {
@@ -758,6 +762,26 @@ impl Stopping {
     /// name: what its word to the chat that asked names.
     pub fn ended_below(&self, session: u32) -> Vec<String> {
         self.named().get(&session).cloned().unwrap_or_default()
+    }
+
+    /// **Whether chat `chat` is typed no line yet** (#1498): the person pressed Stop all tasks
+    /// on it, and a task of that press is still being stopped. Each task's word is left for
+    /// it as it comes, and it is typed one line for all of them when the last has ended, so a
+    /// fan-out the person halts wakes it once and not once per task.
+    pub fn holds_word_for(&self, chat: u32) -> bool {
+        let mut all = self.all.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(tasks) = all.get_mut(&chat) else {
+            return false;
+        };
+        {
+            let stops = self.stops();
+            tasks.retain(|task| stops.stopping(*task));
+        }
+        if tasks.is_empty() {
+            all.remove(&chat);
+            return false;
+        }
+        true
     }
 
     /// Keeps `acts` for [`carry_pending`].
@@ -1310,6 +1334,126 @@ fn look_later(held: &Arc<Held>, session: u32, number: u64, after: Duration, cloc
     }
 }
 
+/// **What Stop all tasks on a session would end** (#1498, V100-53), as the window asks before
+/// it does it: the one confirmation names the count.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct AllTasksEnding {
+    /// The session, as its row names it.
+    pub name: String,
+    /// The tasks at work below it that the answer ends, by number, deepest first: those that
+    /// have not reported, or are mid-turn or asking the person something, and are not being
+    /// stopped already. The same chats the close of a session asks about ("Stop them").
+    pub tasks: Vec<u32>,
+}
+
+/// What Stop all tasks is refused with where no task below the session is at work.
+pub const NO_TASK_AT_WORK: &str =
+    "No task below that chat is at work any more, so there is nothing to stop.";
+
+/// The tasks at work below chat `session` that Stop all tasks ends: every one, at any depth,
+/// deepest first, but those being stopped already, which have their one short turn.
+fn all_tasks_below(held: &Held, session: u32) -> Vec<u32> {
+    crate::handoff::at_work_below(held, session)
+        .into_iter()
+        .filter(|task| !held.stopping().is_stopping(*task))
+        .collect()
+}
+
+/// [`AllTasksEnding`] for chat `session` of `held`.
+pub(crate) fn all_tasks_ending_of(held: &Held, session: u32) -> Result<AllTasksEnding, String> {
+    let name = held
+        .chats()
+        .shown_name(session)
+        .ok_or_else(|| "That chat is not open any more.".to_owned())?;
+    Ok(AllTasksEnding {
+        name,
+        tasks: all_tasks_below(held, session),
+    })
+}
+
+/// **Stop all tasks** (#1498, V100-53): the person stops every task at work below chat
+/// `session`, and the session keeps running. Answers how many it stops.
+///
+/// **The stop every chat is stopped by, the way Stop and get its report is** ([`Way::Report`]):
+/// each task gets its one short turn where purlis may type into it, and is ended as it stands
+/// where it may not, deepest first, and the chat that asked for each is told in purlis's own
+/// word. Nothing here ends a chat any other way.
+///
+/// **No more than the person agreed to**: only the tasks of `asked`, the ones the question
+/// named, and of those only the ones still at work below the session now. A task that started
+/// after the question was asked is not stopped by its answer.
+///
+/// **The session is typed one line, once** ([`Stopping::holds_word_for`]): each task's word is
+/// left for it as it comes, and the line goes when the last of them has ended.
+///
+/// Read and recorded in one hold of the lock a dispatch is decided and a report taken under,
+/// as [`record`] is.
+fn stop_all_tasks_of(held: &Arc<Held>, session: u32, asked: &[u32]) -> Result<u32, String> {
+    let (acts, count) = {
+        let _deciding = held.chats().deciding();
+        if held.chats().shown_name(session).is_none() {
+            return Err("That chat is not open any more.".to_owned());
+        }
+        let order: Vec<u32> = all_tasks_below(held, session)
+            .into_iter()
+            .filter(|task| asked.contains(task))
+            .collect();
+        if order.is_empty() {
+            return Err(NO_TASK_AT_WORK.to_owned());
+        }
+        // Each task's word names the tasks ended with it, below it, that still owed their
+        // report: what a press on that task alone would have named.
+        let lineage = lineage_of(held);
+        {
+            let mut named = held.stopping().named();
+            for task in &order {
+                let below: Vec<String> = subtree(&lineage, *task, true)
+                    .into_iter()
+                    .filter(|chat| chat != task && order.contains(chat))
+                    .filter(|chat| held.chats().owed_task_report(*chat).is_some())
+                    .filter_map(|chat| held.chats().shown_name(chat))
+                    .map(|name| purlis_core::handback::in_purlis_s_line(&name))
+                    .take(purlis_core::handback::MOST_NAMED_BELOW)
+                    .collect();
+                if !below.is_empty() {
+                    named.entry(*task).or_default().extend(below);
+                }
+            }
+        }
+        let started = started_of(held);
+        let acts = held.stopping().stops().press(
+            &order,
+            Way::Report,
+            |chat| started_in(&started, chat),
+            |chat| facts_of(held, chat),
+        );
+        cancels_stand_down(held, &order);
+        // After the press, so every task of it reads as stopping when the gate is asked.
+        held.stopping()
+            .all
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(session)
+            .or_default()
+            .extend(order.iter().copied());
+        (acts, u32::try_from(order.len()).unwrap_or(u32::MAX))
+    };
+    carry_out(held, acts);
+    // A task ended as it stood has ended already: the session is told now if all have.
+    crate::dispatched::told_or_settled(held, session);
+    Ok(count)
+}
+
+/// [`stop_all_tasks_of`], for a test in another file that holds a plane open. Not in the app.
+#[cfg(test)]
+pub(crate) fn stop_all_tasks_in_a_test(
+    held: &Arc<Held>,
+    session: u32,
+    asked: &[u32],
+) -> Result<u32, String> {
+    stop_all_tasks_of(held, session, asked)
+}
+
 /// What ending a task would do, as the window asks before it does it (#1488, V100-18): what
 /// decides whether the person is asked anything, and which of the two ways is offered.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -1415,6 +1559,42 @@ pub async fn end_task(
     tauri::async_runtime::spawn_blocking(move || end_a_task(&held, session, way, below))
         .await
         .map_err(|err| format!("purlis could not end that task: {err}"))?
+}
+
+/// What Stop all tasks on a chat would end: its name, and the tasks at work below it, by
+/// number, deepest first. The question names how many.
+// Its plane is a `PlaneId` the registry vouches for. **The window's alone, over Tauri's IPC**
+// (`purlis_session_protocol::ui::WINDOW_ONLY`), as the question before ending a task is.
+#[tauri::command]
+#[specta::specta]
+pub fn all_tasks_ending(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<AllTasksEnding, String> {
+    let held = planes.held(&plane)?;
+    all_tasks_ending_of(&held, session)
+}
+
+/// Stops every task at work below a chat, of those the question named, and keeps the chat
+/// running. Each gets one short turn to say what it did where it can be given one, deepest
+/// first, and the chat that asked for it is told it was stopped by the person. Answers how
+/// many were stopped.
+// Its plane is a `PlaneId` the registry vouches for. **The window's alone, over Tauri's IPC**
+// (`purlis_session_protocol::ui::WINDOW_ONLY`): it writes a sentence in the person's name to
+// the chat that asked, as `end_task` does. On a blocking thread: ending a program waits.
+#[tauri::command]
+#[specta::specta]
+pub async fn stop_all_tasks(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    tasks: Vec<u32>,
+) -> Result<u32, String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || stop_all_tasks_of(&held, session, &tasks))
+        .await
+        .map_err(|err| format!("purlis could not stop those tasks: {err}"))?
 }
 
 /// Stops a chat, or a chat and every chat below it. A chat another chat started gets one short
