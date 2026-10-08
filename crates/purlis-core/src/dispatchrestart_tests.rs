@@ -269,7 +269,7 @@ fn a_task_that_has_reported_or_was_handed_its_work_is_not_told_to_carry_on() {
 }
 
 #[test]
-fn a_task_whose_asker_is_gone_carries_on_and_one_the_person_started_is_never_left_out() {
+fn a_task_whose_asker_is_gone_carries_on_or_ends_and_one_the_person_started_is_never_left_out() {
     let (_d, root) = project();
     dispatched(&root);
     let running = dispatchrecord::list(&root);
@@ -277,13 +277,15 @@ fn a_task_whose_asker_is_gone_carries_on_and_one_the_person_started_is_never_lef
     let launch = at_launch(&recorded(vec![the_task()]), &running);
     assert_eq!(launch.told(&the_task()), Some(CARRY_ON));
     assert!(!launch.is_a_listed_task(TASK_ID));
-    // With no conversation it still comes back as the chat it was: nobody to list it under.
+    // With no conversation it would come back blank, owing a report it could not know of: it
+    // has ended by itself, as one listed under its asker has (F3).
     let lost = Chat {
         resume: None,
         ..the_task()
     };
     let launch = at_launch(&recorded(vec![lost.clone()]), &running);
-    assert_eq!(launch.back.chats, [lost]);
+    assert!(launch.back.chats.is_empty());
+    assert_eq!(launch.not_resumed, std::slice::from_ref(&lost));
 
     // A task the person started from the steward chat's tab is their conversation.
     let mut theirs = the_task();
@@ -305,9 +307,15 @@ fn a_task_that_cannot_be_resumed_has_ended_by_itself_and_its_asker_is_told_once(
         ..the_task()
     };
 
-    let ended = end_at_launch(&root, &lost, true, None, at("2026-10-09T09:00:00Z"))
-        .unwrap()
-        .expect("it is settled");
+    let ended = end_at_launch(
+        &root,
+        &lost,
+        Some(STEWARD_ID),
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap()
+    .expect("it is settled");
 
     assert_eq!((ended.asker, ended.task), (STEWARD, Some(TASK)));
     assert_eq!(ended.name, "check prod");
@@ -336,21 +344,28 @@ fn a_task_that_cannot_be_resumed_has_ended_by_itself_and_its_asker_is_told_once(
     assert!(dispatchrecord::sound(&record));
 
     // A second look at the same task tells nobody a second time.
-    let again = end_at_launch(&root, &lost, true, None, at("2026-10-09T09:00:01Z")).unwrap();
+    let again = end_at_launch(
+        &root,
+        &lost,
+        Some(STEWARD_ID),
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:01Z"),
+    )
+    .unwrap();
     assert_eq!(again, None);
     assert!(handback::take(&root, For::Chat(STEWARD)).is_empty());
 }
 
 #[test]
-fn a_task_whose_start_was_refused_keeps_its_conversation_for_a_reopen_and_says_why() {
+fn a_task_the_person_let_go_keeps_its_conversation_for_a_reopen_and_says_why() {
     let (_d, root) = project();
     let made = dispatched(&root);
 
     let ended = end_at_launch(
         &root,
         &the_task(),
-        true,
-        Some("the profile 'work' is not declared on this machine"),
+        Some(STEWARD_ID),
+        NotBack::LetGo,
         at("2026-10-09T09:00:00Z"),
     )
     .unwrap();
@@ -360,8 +375,8 @@ fn a_task_whose_start_was_refused_keeps_its_conversation_for_a_reopen_and_says_w
     assert_eq!(record.conversation.as_deref(), Some("conv-7"));
     assert_eq!(
         record.report.as_ref().unwrap().text,
-        "ended without a report: purlis was restarted and could not start it again (the \
-         profile 'work' is not declared on this machine)"
+        "ended without a report: purlis was restarted, it could not be started again, and the \
+         person let it go"
     );
 }
 
@@ -370,9 +385,15 @@ fn a_task_that_cannot_be_resumed_while_its_asker_is_not_open_is_kept_for_the_wor
     let (_d, root) = project();
     let made = dispatched(&root);
 
-    let ended = end_at_launch(&root, &the_task(), false, None, at("2026-10-09T09:00:00Z"))
-        .unwrap()
-        .expect("it is settled");
+    let ended = end_at_launch(
+        &root,
+        &the_task(),
+        None,
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap()
+    .expect("it is settled");
 
     assert_eq!(ended.file, None);
     assert!(handback::take(&root, For::Chat(STEWARD)).is_empty());
@@ -390,7 +411,14 @@ fn a_task_that_cannot_be_resumed_while_its_asker_is_not_open_is_kept_for_the_wor
 fn nothing_is_reported_for_an_entry_with_no_running_dispatch_of_its_own() {
     let (_d, root) = project();
     // The store has no record of it: the entry's word alone ends nothing and tells nobody.
-    let said = end_at_launch(&root, &the_task(), true, None, at("2026-10-09T09:00:00Z")).unwrap();
+    let said = end_at_launch(
+        &root,
+        &the_task(),
+        Some(STEWARD_ID),
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap();
     assert_eq!(said, None);
     assert!(handback::take(&root, For::Chat(STEWARD)).is_empty());
 
@@ -400,7 +428,14 @@ fn nothing_is_reported_for_an_entry_with_no_running_dispatch_of_its_own() {
         identity: Identity::default(),
         ..the_task()
     };
-    let said = end_at_launch(&root, &no_id, true, None, at("2026-10-09T09:00:00Z")).unwrap();
+    let said = end_at_launch(
+        &root,
+        &no_id,
+        Some(STEWARD_ID),
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap();
     assert_eq!(said, None);
     assert!(dispatchrecord::list(&root)[0].running());
 }
@@ -432,6 +467,12 @@ fn the_brief_a_restored_task_is_working_on_is_not_dispatched_again() {
         "{said}"
     );
     assert!(said.contains(" wait 7`"), "{said}");
+    // It names every way a chat's run begins again, a /clear among them (F1), not only a
+    // restart of purlis.
+    assert!(
+        said.contains("before it was last started again or cleared"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -505,8 +546,8 @@ fn reported_to_nobody(root: &Path) -> (dispatchrecord::Record, Handback) {
     (dispatchrecord::read(root, &made.id).unwrap(), report)
 }
 
-fn by_the_steward(asker: &Asker) -> bool {
-    asker.chat.id.as_deref() == Some(STEWARD_ID)
+fn by_the_steward(record: &dispatchrecord::Record) -> bool {
+    record.asker.chat.id.as_deref() == Some(STEWARD_ID)
 }
 
 #[test]
@@ -560,7 +601,9 @@ fn another_chat_reopened_is_handed_nothing_of_it() {
     let (_d, root) = project();
     let (record, _report) = reported_to_nobody(&root);
 
-    let owing = take_back(&root, |asker| asker.chat.id.as_deref() == Some(OTHER_ID));
+    let owing = take_back(&root, |record| {
+        record.asker.chat.id.as_deref() == Some(OTHER_ID)
+    });
 
     assert!(owing.is_empty());
     assert_eq!(handback::take(&root, For::Place(&alpha())).len(), 1);
@@ -629,7 +672,14 @@ fn a_kept_name_off_disk_that_is_not_one_purlis_gives_takes_nothing() {
 fn what_purlis_said_in_a_task_s_place_is_rebuilt_in_purlis_s_shape() {
     let (_d, root) = project();
     let made = dispatched(&root);
-    end_at_launch(&root, &the_task(), false, None, at("2026-10-09T09:00:00Z")).unwrap();
+    end_at_launch(
+        &root,
+        &the_task(),
+        None,
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap();
     let record = dispatchrecord::read(&root, &made.id).unwrap();
 
     let told = report_of(&record).expect("a report");
@@ -835,4 +885,139 @@ fn only_what_a_chat_dispatched_before_its_run_began_is_looked_among() {
     // Nor another chat's run, nor one that is not a run's id.
     assert!(made_before_its_run(all(), &other, &minted_at("2026-10-09T08:10:00Z")).is_empty());
     assert!(made_before_its_run(all(), &steward, "not a run").is_empty());
+}
+
+// ---- what the store vouches for (review of #1513) ---------------------------------------------
+
+#[test]
+fn a_second_entry_with_a_task_s_id_is_vouched_for_in_nothing_and_ends_nothing() {
+    let (_d, root) = project();
+    let made = dispatched(&root);
+    // Two entries share the task's id; the second has no conversation.
+    let copy = Chat {
+        number: Some(9),
+        resume: None,
+        ..the_task()
+    };
+
+    let launch = at_launch(
+        &recorded(vec![the_steward(), the_task(), copy.clone()]),
+        &dispatchrecord::list(&root),
+    );
+
+    assert_eq!(launch.told(&the_task()), Some(CARRY_ON));
+    assert!(launch.not_resumed.is_empty(), "the copy ends no dispatch");
+    assert_eq!(numbers(&launch.back.chats), [STEWARD, TASK, 9]);
+    assert!(dispatchrecord::read(&root, &made.id).unwrap().running());
+}
+
+#[test]
+fn an_entry_that_runs_as_another_persona_than_its_dispatch_is_told_nothing() {
+    let (_d, root) = project();
+    dispatched(&root);
+    let bent = Chat {
+        persona: Some("steward".to_owned()),
+        ..the_task()
+    };
+
+    let launch = at_launch(
+        &recorded(vec![the_steward(), bent.clone()]),
+        &dispatchrecord::list(&root),
+    );
+
+    assert_eq!(launch.told(&bent), None);
+    assert!(launch.not_resumed.is_empty());
+}
+
+#[test]
+fn a_task_on_no_profile_cannot_be_told_to_carry_on_and_has_ended() {
+    // F5: a first message travels only with a profile's start.
+    let (_d, root) = project();
+    dispatched(&root);
+    let bare = Chat {
+        profile: None,
+        ..the_task()
+    };
+
+    let launch = at_launch(
+        &recorded(vec![the_steward(), bare.clone()]),
+        &dispatchrecord::list(&root),
+    );
+
+    assert_eq!(launch.not_resumed, std::slice::from_ref(&bare));
+    assert_eq!(numbers(&launch.back.chats), [STEWARD]);
+}
+
+#[test]
+fn a_chat_under_the_asker_s_number_that_is_not_the_store_s_asker_is_not_told() {
+    let (_d, root) = project();
+    let made = dispatched(&root);
+
+    let ended = end_at_launch(
+        &root,
+        &the_task(),
+        Some(OTHER_ID),
+        NotBack::NoConversation,
+        at("2026-10-09T09:00:00Z"),
+    )
+    .unwrap()
+    .expect("it is settled");
+
+    // Nothing for the chat under that number: kept for the store's asker, by its own words.
+    assert_eq!(ended.file, None);
+    assert!(handback::take(&root, For::Chat(STEWARD)).is_empty());
+    assert_eq!(ended.report.to, "steward 3");
+    assert!(
+        dispatchrecord::read(&root, &made.id)
+            .unwrap()
+            .undelivered
+            .is_some()
+    );
+}
+
+#[test]
+fn two_reopens_at_once_hand_a_report_over_once_between_them() {
+    // F6: the claim is under the store's lock, so two threads racing take it once.
+    let (_d, root) = project();
+    reported_to_nobody(&root);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let racers: Vec<_> = (0..2)
+        .map(|_| {
+            let (root, barrier) = (root.clone(), std::sync::Arc::clone(&barrier));
+            std::thread::spawn(move || {
+                barrier.wait();
+                take_back(&root, by_the_steward).len()
+            })
+        })
+        .collect();
+
+    let taken: usize = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("it ran"))
+        .sum();
+
+    assert_eq!(taken, 1);
+}
+
+#[test]
+fn a_task_settled_as_the_project_opens_is_kept_for_the_chat_that_asked() {
+    // The record of open chats does not bring the task back: it has ended, and the chat that
+    // asked is told when it comes back, as after a launch.
+    let (_d, root) = project();
+    let made = dispatched(&root);
+
+    assert_eq!(
+        dispatchrecord::settle_on_open(&root, at("2026-10-09T09:00:00Z")),
+        1
+    );
+
+    assert!(
+        dispatchrecord::read(&root, &made.id)
+            .unwrap()
+            .undelivered
+            .is_some()
+    );
+    let owing = take_back(&root, by_the_steward);
+    assert_eq!(owing.len(), 1);
+    assert!(owing[0].report.task.as_ref().unwrap().unreported);
 }

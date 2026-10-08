@@ -27,6 +27,9 @@ export type ListedChat = {
   mode: "handoff" | "task" | null;
   /** That chat's name as the person saw it then: what is said once it has closed. */
   from: string | null;
+  /** That chat is not open because a launch could not start it, and it waits to: it has not
+   *  closed (#1513). */
+  askerWaiting?: boolean;
   /** Whether it has a tab. A task has none until its row is clicked. */
   tab: boolean;
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
@@ -49,11 +52,13 @@ export function ownBranch(chat: OpenChat): string | null {
 }
 
 /**
- * What a row at the top says of the closed chat it came from: a task was asked by it (V100-64,
- * #1513), and the work a handoff moved came from it.
+ * What a row at the top says of the chat it came from, which is not open: a task was asked by
+ * it (V100-64, #1513), and the work a handoff moved came from it. "(closed)" only where it has
+ * closed: one a launch could not start waits to, and is "(not open)".
  */
-export function cameFromSaid(from: string, task: boolean): string {
-  return task ? `asked by ${from} (closed)` : `from ${from}`;
+export function cameFromSaid(from: string, task: boolean, waiting = false): string {
+  if (!task) return `from ${from}`;
+  return waiting ? `asked by ${from} (not open)` : `asked by ${from} (closed)`;
 }
 
 /** A listed chat at its place in the tree. */
@@ -84,6 +89,7 @@ export function listedChat(
     parent: chat.from?.chat ?? null,
     mode: chat.from ? (chat.from.task ? "task" : "handoff") : null,
     from: chat.from?.name ?? null,
+    askerWaiting: chat.from?.asker_waiting === true,
     tab,
     branch: ownBranch(chat),
     ...rowFactsOf(chat, nameOf),
@@ -129,6 +135,7 @@ export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
   const children = startedBy(chats);
   const rows: ChatRow[] = [];
   const seen = new Set<number>();
+  const open = new Set(chats.map((chat) => chat.session));
   const walk = (level: number, among: readonly ListedChat[], orphans: boolean) => {
     const fresh = among.filter((chat) => !seen.has(chat.session));
     fresh.forEach((chat, at) => {
@@ -139,12 +146,12 @@ export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
         level,
         posinset: at + 1,
         setsize: fresh.length,
-        orphaned: orphans && chat.parent !== null,
+        // Only where its parent is not open: a loop in the lineage stands at the top too.
+        orphaned: orphans && chat.parent !== null && !open.has(chat.parent),
       });
       walk(level + 1, children.get(chat.session) ?? [], false);
     });
   };
-  const open = new Set(chats.map((chat) => chat.session));
   walk(
     1,
     chats.filter(

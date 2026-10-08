@@ -271,6 +271,9 @@ pub(crate) mod pretend {
 
     #[derive(Default)]
     struct Seen {
+        /// The switch that stops every agent, where one was handed over: a start is refused
+        /// while it is thrown, as the real host refuses it.
+        switch: Mutex<Option<Arc<crate::killswitch::KillSwitch>>>,
         asked: Mutex<Vec<(u32, String)>>,
         openings: Mutex<Vec<Opening>>,
         socket: Mutex<Option<std::path::PathBuf>>,
@@ -319,6 +322,12 @@ pub(crate) mod pretend {
             opening: &Opening,
             announce: &dyn Fn(u32),
         ) -> Result<u32, String> {
+            let stopped = lock(&self.seen.switch)
+                .as_ref()
+                .is_some_and(|switch| switch.is_stopped());
+            if !opening.operator_shell && stopped {
+                return Err(crate::sessions::STOPPED.to_owned());
+            }
             let id = wanted.unwrap_or_else(|| self.deal());
             self.seen.dealt.fetch_max(id, Ordering::SeqCst);
             announce(id);
@@ -358,7 +367,9 @@ pub(crate) mod pretend {
         fn stop_every_program(&self) -> usize {
             lock(&self.seen.running).len()
         }
-        fn stopped_by(&mut self, _switch: Arc<crate::killswitch::KillSwitch>) {}
+        fn stopped_by(&mut self, switch: Arc<crate::killswitch::KillSwitch>) {
+            *lock(&self.seen.switch) = Some(switch);
+        }
         fn when_one_ends(&self, tell: Ends) {
             *lock(&self.seen.ends) = Some(tell);
         }

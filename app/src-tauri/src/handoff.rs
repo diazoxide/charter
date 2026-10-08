@@ -3881,6 +3881,7 @@ mod tests {
                     unreported: false,
                     outcome: None,
                     asking: None,
+                    asker_waiting: None,
                 }),
                 workspace: Some("alpha".to_owned()),
                 persona: None,
@@ -4708,6 +4709,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                asker_waiting: None,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
@@ -5595,6 +5597,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                asker_waiting: None,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.

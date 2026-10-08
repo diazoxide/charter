@@ -227,6 +227,8 @@ pub(crate) fn reported(
     by: Option<dispatchrecord::EndedBy>,
 ) {
     close_with_report(held, session, outcome, text, changed, by);
+    // A report that reached no chat goes to the chat that resumed the one that asked (#1513).
+    crate::restored::to_a_resumed_asker(held, session);
     held.rows_changed();
 }
 
@@ -992,6 +994,7 @@ mod tests {
             ended_by: None,
             kept_open: false,
             undelivered: None,
+            asker_last_record: None,
         }
     }
 

@@ -641,6 +641,11 @@ pub struct HandedFromNote {
     /// paused until that chat answers (#1484): its row says whom it is asking.
     #[specta(optional)]
     pub asking: Option<bool>,
+    /// Whether the chat it came from is one a launch could not start, which waits in the list
+    /// of chats that did not start (#1513): it has not closed, and its row says so. Absent for
+    /// a chat whose asker is open, or closed.
+    #[specta(optional)]
+    pub asker_waiting: Option<bool>,
 }
 
 impl HandedFromNote {
@@ -660,6 +665,7 @@ impl HandedFromNote {
             // ([`with_task_standing`]): not the chat's record, so not read here.
             outcome: None,
             asking: None,
+            asker_waiting: None,
         }
     }
 }
@@ -677,6 +683,10 @@ fn with_task_standing(
     mut drawn: OpenChat,
 ) -> OpenChat {
     let session = drawn.session;
+    // Its asker waits to start, and has not closed (#1513).
+    if let Some(from) = drawn.from.as_mut() {
+        from.asker_waiting = held.chats().waits_to_start(from.chat).then_some(true);
+    }
     if let Some(from) = drawn.from.as_mut().filter(|from| from.task) {
         if from.reported || from.unreported {
             from.outcome = outcomes.of_task(session).map(str::to_owned);
@@ -931,8 +941,8 @@ fn resume_session(
         // The reports of the tasks the chat this record is of asked for, kept because it had
         // closed, are handed to the chat that resumes it (#1513, V100-64). Not on a start
         // again after a failed resume: that chat was handed them already.
-        None => restored::resuming(&held, &path, || {
-            held.chats().start_ready(&chat, &resumed.ready, size)
+        None => restored::resuming(&held, &path, chat, |chat| {
+            held.chats().start_ready(chat, &resumed.ready, size)
         })?,
     };
     let open = held
@@ -1667,7 +1677,10 @@ fn forget_chat_that_did_not_start(
     plane: PlaneId,
     id: String,
 ) -> Result<(), String> {
-    planes.held(&plane)?.chats().forget(&id)
+    let held = planes.held(&plane)?;
+    // A task still owing its report has ended by itself once it is let go, and the chat that
+    // asked is told (#1513).
+    restored::forgetting(&held, &id, || held.chats().forget(&id))
 }
 
 /// Start fresh (NO-3): chat `session` started again on the plane's instructions as they are

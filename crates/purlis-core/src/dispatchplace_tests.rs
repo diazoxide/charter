@@ -468,6 +468,7 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         ended_by: None,
         kept_open: false,
         undelivered: None,
+        asker_last_record: None,
     }
 }
 

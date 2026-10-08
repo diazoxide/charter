@@ -7,7 +7,7 @@
 
 use purlis_core::dispatchrecord;
 use purlis_core::dispatchrestart::CARRY_ON;
-use purlis_core::reopen::Record;
+use purlis_core::reopen::{Choice, Record};
 
 use super::*;
 
@@ -35,20 +35,74 @@ fn quits(held: &Held) -> Record {
 }
 
 /// The app that quit is let go of, and the next one opens the project and puts `at_quit` back
-/// the way a launch does. Answers the new host, the project, and the chats that came back.
+/// the way a launch does (`Held::reopen`). Answers the new host, the project, and the chats
+/// that came back.
 fn launches_again(
     plane: &Plane,
     quit: (Pretend, Planes, Arc<Held>),
     at_quit: &Record,
 ) -> (Pretend, Planes, PlaneId, Arc<Held>, Vec<crate::chats::Open>) {
-    bounded("the app that quit, closing its project", move || drop(quit));
     let relaunched = Pretend::default();
     let planes = planes_on(&relaunched);
+    let (again, held, opened) =
+        reopens(plane, quit, &planes, Ok(at_quit.clone()), Choice::ReopenAll);
+    (relaunched, planes, again, held, opened)
+}
+
+/// The app that quit is let go of, and `planes` opens the project and puts `read` back as
+/// `choice` asks, through the launch's own path.
+fn reopens(
+    plane: &Plane,
+    quit: (Pretend, Planes, Arc<Held>),
+    planes: &Planes,
+    read: Result<Record, std::io::Error>,
+    choice: Choice,
+) -> (PlaneId, Arc<Held>, Vec<crate::chats::Open>) {
+    bounded("the app that quit, closing its project", move || drop(quit));
     let again = planes.open(&plane.root);
     let held = planes.held(&again).expect("held");
-    let back = crate::finished::put_back_without_the_finished(held.root(), at_quit);
-    let opened = crate::restored::put_back(&held, &back, A_SIZE);
-    (relaunched, planes, again, held, opened)
+    held.reopen(A_SIZE, read, choice);
+    let opened = held.chats().open_now();
+    (again, held, opened)
+}
+
+/// Planes on `host` whose kill switch is kept in `config`, as the app's are.
+fn planes_kept_in(host: &Pretend, config: &Path) -> Planes {
+    let host = host.clone();
+    Planes::telling(
+        Arc::new(|_| {}),
+        crate::Shipped::default(),
+        Some(config.to_path_buf()),
+    )
+    .running_sessions_on(Arc::new(move |_| Box::new(host.clone())))
+}
+
+/// The steward chat is resumed from its session record at `path`, as Resume does: a new chat,
+/// with what `restored::resuming` gives it.
+fn resumes_the_steward(held: &Held, path: &str) -> Result<u32, String> {
+    let alpha = held.root().join("workspaces").join("alpha");
+    let ready = purlis_core::start::ready(
+        &purlis_core::start::Start {
+            profile: Some("work".to_owned()),
+            persona: Some("steward".to_owned()),
+            name: "1".to_owned(),
+            cwd: Some(alpha),
+            ..Default::default()
+        },
+        held.root(),
+    )?;
+    let chat = Chat {
+        program: ready.program.clone(),
+        cwd: ready.cwd.clone(),
+        name: "1".to_owned(),
+        resume: ready.session.clone(),
+        profile: Some("work".to_owned()),
+        persona: Some("steward".to_owned()),
+        ..Default::default()
+    };
+    crate::restored::resuming(held, path, chat, |chat| {
+        held.chats().start_ready(chat, &ready, A_SIZE)
+    })
 }
 
 /// What chat `chat` was started with, by the host that started it.
@@ -263,11 +317,7 @@ fn an_orphaned_task_s_report_is_not_lost_and_is_delivered_when_its_asker_is_reop
 
     // The person resumes the steward chat from its session record: it is handed the report,
     // once, and the workspace is not handed it as well.
-    let alpha = held.root().join("workspaces").join("alpha");
-    let resumed = crate::restored::resuming(&held, &path, || {
-        Ok(a_chat_as(&held, held.root(), Some("steward"), &alpha))
-    })
-    .expect("it resumes");
+    let resumed = resumes_the_steward(&held, &path).expect("it resumes");
     assert_eq!(
         waiting(&held, For::Chat(resumed)),
         vec![("check prod".to_owned(), false, false)]
@@ -276,10 +326,7 @@ fn an_orphaned_task_s_report_is_not_lost_and_is_delivered_when_its_asker_is_reop
     assert!(record_of(&held, task).undelivered.is_none());
 
     // A second resume of the same record is handed nothing.
-    let again = crate::restored::resuming(&held, &path, || {
-        Ok(a_chat_as(&held, held.root(), Some("steward"), &alpha))
-    })
-    .expect("it resumes");
+    let again = resumes_the_steward(&held, &path).expect("it resumes");
     assert!(waiting(&held, For::Chat(again)).is_empty());
 }
 
@@ -291,11 +338,7 @@ fn a_report_its_asker_closed_without_reading_reaches_it_reopened() {
     // The steward chat closes before its next turn ever read the report.
     closes(&held, steward).expect("closed");
 
-    let alpha = held.root().join("workspaces").join("alpha");
-    let resumed = crate::restored::resuming(&held, &path, || {
-        Ok(a_chat_as(&held, held.root(), Some("steward"), &alpha))
-    })
-    .expect("it resumes");
+    let resumed = resumes_the_steward(&held, &path).expect("it resumes");
 
     assert_eq!(
         waiting(&held, For::Chat(resumed)),
@@ -312,7 +355,9 @@ fn a_resume_that_does_not_start_leaves_the_report_where_it_was() {
     works(&held, task);
     reports(&held, &id, task);
 
-    let refused = crate::restored::resuming(&held, &path, || Err("no profile".to_owned()));
+    let refused = crate::restored::resuming(&held, &path, Chat::default(), |_| {
+        Err("no profile".to_owned())
+    });
 
     assert_eq!(refused, Err("no profile".to_owned()));
     assert!(record_of(&held, task).undelivered.is_some());
@@ -361,5 +406,218 @@ fn a_task_s_report_after_a_restart_names_the_session_record_it_wrote_before_it()
     assert_eq!(
         told[0].task.as_ref().and_then(|task| task.record.clone()),
         Some(path)
+    );
+}
+
+// ---- review of #1513: an unread record, a stop of every agent, resume then report ---------------
+
+#[test]
+fn a_record_that_could_not_be_read_ends_no_dispatch_and_start_fresh_ends_them() {
+    let (plane, host, planes, _id, held, _steward, task) = a_steward_and_a_working_task();
+    quits(&held);
+    let record = record_of(&held, task);
+
+    // M1: the launch could not read the record of open chats. It says nothing about which
+    // chats are gone, so nothing is ended.
+    let relaunched = Pretend::default();
+    let next = planes_on(&relaunched);
+    let unread = Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "garbled",
+    ));
+    let (_again, held, opened) = reopens(
+        &plane,
+        (host.clone(), planes, held),
+        &next,
+        unread,
+        Choice::ReopenAll,
+    );
+    assert!(opened.is_empty());
+    let still = dispatchrecord::read(held.root(), &record.id).expect("its record");
+    assert!(still.running(), "an unreadable record ended a dispatch");
+    assert!(still.undelivered.is_none());
+
+    // The person chose to start fresh: that is a word on which chats are gone.
+    let at_quit = held.chats().record();
+    let again = Pretend::default();
+    let fresh = planes_on(&again);
+    let mut whole = at_quit;
+    whole.chats = Vec::new();
+    let (_again, held, _opened) = reopens(
+        &plane,
+        (relaunched, next, held),
+        &fresh,
+        Ok(whole),
+        Choice::StartFresh,
+    );
+    let ended = dispatchrecord::read(held.root(), &record.id).expect("its record");
+    assert!(!ended.running());
+    assert!(ended.undelivered.is_some(), "kept for the chat that asked");
+}
+
+#[test]
+fn a_stop_of_every_agent_then_a_relaunch_keeps_every_task_and_retry_carries_it_on() {
+    // M2: a refused start is not an end.
+    let plane = a_plane_with_personas();
+    let config = tempfile::tempdir().expect("a config home");
+    let host = Pretend::default();
+    let planes = planes_kept_in(&host, config.path());
+    let id = planes.open(&plane.root);
+    let held = planes.held(&id).expect("held");
+    let alpha = plane.root.join("workspaces").join("alpha");
+    let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+    let task = a_task_of(&held, &id, steward, "check prod");
+    works(&held, task);
+    let at_quit = quits(&held);
+    let record = record_of(&held, task);
+    let task_id = held
+        .chats()
+        .chat_at(task)
+        .and_then(|at| at.id)
+        .expect("an id");
+    let steward_id = held
+        .chats()
+        .chat_at(steward)
+        .and_then(|at| at.id)
+        .expect("an id");
+    planes
+        .stop_every_agent(purlis_core::halt::Actor::Window)
+        .expect("kept");
+
+    let relaunched = Pretend::default();
+    let next = planes_kept_in(&relaunched, config.path());
+    let (_again, held, opened) = reopens(
+        &plane,
+        (host.clone(), planes, held),
+        &next,
+        Ok(at_quit),
+        Choice::ReopenAll,
+    );
+
+    // Nothing started, both wait, the task's dispatch runs on, and nobody was told it failed.
+    assert!(opened.is_empty());
+    assert!(relaunched.asked().is_empty());
+    assert_eq!(held.chats().would_not_start().len(), 2);
+    assert!(
+        dispatchrecord::read(held.root(), &record.id)
+            .unwrap()
+            .running()
+    );
+    assert!(waiting(&held, For::Chat(steward)).is_empty());
+    assert!(waiting(&held, For::Place(&Place::Workspace("alpha".to_owned()))).is_empty());
+
+    // The person lets agents run again and retries both: the task is told to carry on.
+    next.rearm().expect("re-armed");
+    for id in [&steward_id, &task_id] {
+        crate::restored::retrying(&held, id, || held.chats().retry(id, A_SIZE)).expect("it starts");
+    }
+    assert_eq!(
+        started_with(&relaunched, task).last().map(String::as_str),
+        Some(CARRY_ON)
+    );
+    assert!(
+        !started_with(&relaunched, steward)
+            .iter()
+            .any(|arg| arg == CARRY_ON)
+    );
+    assert_eq!(
+        held.chats().handed_from(task).map(|from| from.chat),
+        Some(steward)
+    );
+}
+
+#[test]
+fn forgetting_a_task_that_did_not_start_ends_it_and_its_asker_retried_is_told() {
+    let plane = a_plane_with_personas();
+    let config = tempfile::tempdir().expect("a config home");
+    let host = Pretend::default();
+    let planes = planes_kept_in(&host, config.path());
+    let id = planes.open(&plane.root);
+    let held = planes.held(&id).expect("held");
+    let alpha = plane.root.join("workspaces").join("alpha");
+    let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+    let task = a_task_of(&held, &id, steward, "check prod");
+    let at_quit = quits(&held);
+    let record = record_of(&held, task);
+    let task_id = held
+        .chats()
+        .chat_at(task)
+        .and_then(|at| at.id)
+        .expect("an id");
+    let steward_id = held
+        .chats()
+        .chat_at(steward)
+        .and_then(|at| at.id)
+        .expect("an id");
+    planes
+        .stop_every_agent(purlis_core::halt::Actor::Window)
+        .expect("kept");
+    let relaunched = Pretend::default();
+    let next = planes_kept_in(&relaunched, config.path());
+    let (_again, held, _opened) = reopens(
+        &plane,
+        (host.clone(), planes, held),
+        &next,
+        Ok(at_quit),
+        Choice::ReopenAll,
+    );
+
+    crate::restored::forgetting(&held, &task_id, || held.chats().forget(&task_id))
+        .expect("forgotten");
+
+    let ended = dispatchrecord::read(held.root(), &record.id).unwrap();
+    assert_eq!(
+        dispatchrecord::Finished::of(&ended),
+        Some(dispatchrecord::Finished::EndedWithoutAReport)
+    );
+    // The steward chat waits too, so the word is kept for it, and handed over when it starts.
+    next.rearm().expect("re-armed");
+    let back = crate::restored::retrying(&held, &steward_id, || {
+        held.chats().retry(&steward_id, A_SIZE)
+    })
+    .expect("it starts");
+    assert_eq!(
+        waiting(&held, For::Chat(back)),
+        vec![("check prod".to_owned(), true, false)]
+    );
+    assert!(waiting(&held, For::Place(&Place::Workspace("alpha".to_owned()))).is_empty());
+}
+
+#[test]
+fn a_report_that_lands_after_its_asker_was_resumed_reaches_the_resumed_chat() {
+    // M3: the person closes the session while a long task runs, resumes it, and the task
+    // finishes afterwards.
+    let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_a_working_task();
+    let path = writes_its_record(&held, steward);
+    closes(&held, steward).expect("closed, and the task kept running");
+    let resumed = resumes_the_steward(&held, &path).expect("it resumes");
+    assert!(waiting(&held, For::Chat(resumed)).is_empty(), "nothing yet");
+
+    works(&held, task);
+    reports(&held, &id, task);
+
+    assert_eq!(
+        waiting(&held, For::Chat(resumed)),
+        vec![("check prod".to_owned(), false, false)]
+    );
+    assert!(waiting(&held, For::Place(&Place::Workspace("alpha".to_owned()))).is_empty());
+    assert!(record_of(&held, task).undelivered.is_none());
+}
+
+#[test]
+fn a_later_session_record_of_the_asker_resumes_it_too() {
+    // F2: any record the asking chat wrote, not only the first one after the dispatch.
+    let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_a_working_task();
+    writes_its_record(&held, steward);
+    let later = writes_its_record(&held, steward);
+    closes(&held, steward).expect("closed");
+    works(&held, task);
+    reports(&held, &id, task);
+
+    let resumed = resumes_the_steward(&held, &later).expect("it resumes");
+
+    assert_eq!(
+        waiting(&held, For::Chat(resumed)),
+        vec![("check prod".to_owned(), false, false)]
     );
 }

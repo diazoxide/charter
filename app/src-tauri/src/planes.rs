@@ -624,8 +624,12 @@ impl Held {
     /// always did. A fresh start writes the cleared record at once — the choice is the moment
     /// the old one stops being wanted, and a record left as it was would ask again at the next
     /// launch about chats the operator already declined.
-    fn reopen(&self, size: Size, record: Read, choice: Choice) {
+    pub(crate) fn reopen(&self, size: Size, record: Read, choice: Choice) {
         self.records.allow();
+        // Whether the record was read: only then, or where the person chose to start fresh,
+        // does a dispatch nothing brings back end (#1513). A record that could not be read
+        // says nothing about which chats are gone.
+        let read = record.is_ok();
         // A record another clone or device wrote is a copy's or a move's (V43): a copy's chats
         // get ids of their own before any of them starts, and are written with them once
         // they are back, so no two clones ever hold one chat's id.
@@ -667,8 +671,10 @@ impl Held {
         let record = crate::finished::put_back_without_the_finished(&self.root, &record);
         let wanted = record.chats.len();
         // A task that had not reported comes back on its conversation, told to carry on, and
-        // one that cannot has ended by itself (#1513).
-        let back = crate::restored::put_back(self, &record, size).len();
+        // one that cannot has ended by itself (#1513). **It reads the dispatch records as they
+        // are now**: a conversion of those records (#1519) runs when the project is opened
+        // (`Planes::open`), before this, and must stay there.
+        let back = crate::restored::put_back(self, &record, size, read).len();
         if wanted > 0 {
             tracing::info!(
                 "purlis: plane {}, {back} of {wanted} chats back",

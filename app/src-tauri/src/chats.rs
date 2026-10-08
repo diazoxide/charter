@@ -311,6 +311,9 @@ struct Waiting {
     chat: Chat,
     why: String,
     approval: Option<NeedsApproval>,
+    /// What the launch would have told it as it started (#1513): a task still owing its
+    /// report is told to carry on, and Retry now tells it the same.
+    told: Option<&'static str>,
 }
 
 /// Every chat the app has open, and which of them is in front.
@@ -2658,6 +2661,7 @@ impl Chats {
                 why: format!("more than {most} chats were recorded"),
                 // Never tried, so nothing was refused: Retry now reads it.
                 approval: None,
+                told: told(chat),
             });
         }
         let mut front = None;
@@ -2680,6 +2684,7 @@ impl Chats {
                         approval,
                         chat: chat.clone(),
                         why,
+                        told: told(chat),
                     });
                 }
             }
@@ -2771,12 +2776,13 @@ impl Chats {
     /// is open, so one written after the start has it once, as running. It leaves the list only
     /// once it has started, and if it fails again it stays with the new reason.
     pub fn retry(&self, id: &str, size: Size) -> Result<u32, String> {
-        let chat = lock(&self.would_not_start)
+        let (chat, told) = lock(&self.would_not_start)
             .iter()
             .find(|one| one.chat.identity.id.as_deref() == Some(id))
-            .map(|one| one.chat.clone())
+            .map(|one| (one.chat.clone(), one.told))
             .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
-        let started = self.start_recorded(&chat, size, Why::Relaunch);
+        // Told what the launch would have told it: a task is told to carry on (#1513).
+        let started = self.start_recorded_told(&chat, size, Why::Relaunch, told, None);
         // Read again at every refusal, outside the lock: what the profile needs now, and not
         // what it needed at the launch (#1246).
         let approval = started
@@ -2799,6 +2805,22 @@ impl Chats {
         }
         self.write_it_down();
         started
+    }
+
+    /// The chat with id `id` that a launch could not start, as its record holds it (#1513):
+    /// what a Forget of a task ends by.
+    pub fn waiting_chat(&self, id: &str) -> Option<Chat> {
+        lock(&self.would_not_start)
+            .iter()
+            .find(|one| one.chat.identity.id.as_deref() == Some(id))
+            .map(|one| one.chat.clone())
+    }
+
+    /// Whether the chat numbered `number` is one a launch could not start, and still waits.
+    pub fn waits_to_start(&self, number: u32) -> bool {
+        lock(&self.would_not_start)
+            .iter()
+            .any(|one| one.chat.number == Some(number))
     }
 
     /// **Forget this chat** (NO-3): drops a chat a launch could not start from the record, by

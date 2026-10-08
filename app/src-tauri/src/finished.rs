@@ -577,6 +577,7 @@ mod tests {
             ended_by: None,
             kept_open: false,
             undelivered: None,
+            asker_last_record: None,
         }
     }
 

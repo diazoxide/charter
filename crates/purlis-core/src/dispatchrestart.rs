@@ -12,21 +12,25 @@
 //! - **It is brought back on its conversation and told to carry on** ([`CARRY_ON`]): one fixed
 //!   sentence of purlis's, as its first message. **Never its brief**: the brief is in the
 //!   conversation it resumes, and is sent once.
-//! - **One with no conversation to resume is not started.** A fresh chat would need the brief
-//!   a second time. It has ended by itself: the chat that asked is told so, in the words a
-//!   task whose program ended is reported for, and its dispatch record ends
-//!   ([`end_at_launch`]). So does one whose start is refused at the launch.
+//! - **One that cannot be told so is not started.** With no conversation to resume, or no
+//!   profile to be started on, a fresh chat would need the brief a second time. It has ended by
+//!   itself: the chat that asked is told so, in the words a task whose program ended is
+//!   reported for, and its dispatch record ends ([`end_at_launch`]).
+//! - **One whose start is refused waits, as any chat does.** A refusal is not an end: the
+//!   switch that stopped every agent, a profile to approve again, a folder that moved. It stays
+//!   in the list of chats that did not start, and **Retry now** starts it told to carry on.
+//!   Only **Forget** ends it, and then its asking chat is told ([`NotBack::LetGo`]).
 //! - **A brief is not dispatched a second time** ([`dispatched_before`]). A chat cut off in the
 //!   middle of `purlis dispatch` never read its answer, and asks again when it carries on:
-//!   the same brief, to the same persona, while the task that brief started before the restart
-//!   is still its own and still at work, is refused with that task's number.
+//!   the same brief, to the same persona, while the task that brief started before the chat's
+//!   current run is still its own and still at work, is refused with that task's number.
 //!
 //! # What a launch believes
 //!
 //! **The record of open chats is a file, and a chat may have written to it.** A task is told
 //! to carry on, or reported for, only where the app's own dispatch record of it agrees
-//! ([`Vouched`]): a running task that owes a report, worked by that chat's id and asked for by
-//! the id of the chat the entry names. The dispatch store is the one a sandboxed chat can
+//! ([`Vouched`]): a running task that owes a report, worked by that chat's id as the persona
+//! the dispatch went to, and asked for by the id of the chat the entry names. The dispatch store is the one a sandboxed chat can
 //! neither read nor write ([`crate::dispatchrecord`]). An entry the store does not vouch for
 //! comes back as the chat it was and is told nothing. Nothing here grants anything: a chat is
 //! started by the launch as every recorded chat is, on its own profile read again, and a
@@ -39,7 +43,9 @@
 //! nowhere to go always was ([`crate::handback`]). The record says it reached no chat
 //! ([`crate::dispatchrecord::Undelivered`]). **When the person reopens the chat that asked**,
 //! every such report is handed to it, once: taken back from the workspace before the chat
-//! starts, so it is not read there a second time, and left for the chat's own next turn.
+//! starts, so it is not read there a second time, and left for the chat's own next turn. **And
+//! when the report lands after it was reopened**, it goes to the open chat that resumed the
+//! one that asked ([`crate::reopen::Identity::resumed_from`]) at once.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -96,16 +102,19 @@ impl AtLaunch {
 enum Vouched {
     /// Not a task that owes a report, or the store does not agree that it is.
     No,
-    /// A running task that owes a report, and its asking chat is not in the record: nobody
-    /// to list it under.
+    /// A running task that owes a chat a report, and its asking chat is not in the record.
     Alone,
     /// The same, asked for by a chat the record brings back.
     Under,
+    /// A task the person started from a chat's tab: their conversation, which comes back as
+    /// the chat it was whatever it can resume.
+    Persons,
 }
 
 /// What the store says of `chat`, one of `record`'s. **Both sides are matched by id**: the
-/// chat that worked, and the chat its entry names as the one that asked. An entry that names
-/// an asking chat the dispatch was not made by is vouched for in nothing.
+/// chat that worked, and the chat its entry names as the one that asked; and the persona its
+/// entry runs as is the one the dispatch went to. An entry that disagrees with the store in
+/// any of these is vouched for in nothing.
 fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &Chat) -> Vouched {
     let Some(from) = chat.from.as_ref() else {
         return Vouched::No;
@@ -121,9 +130,13 @@ fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &C
             && one.mode == dispatchrecord::Mode::Task
             && one.report_owed
             && one.worker.chat.id.as_deref() == Some(id)
+            && one.persona == chat.persona
     }) else {
         return Vouched::No;
     };
+    if dispatch.asker.by_person || from.by_person {
+        return Vouched::Persons;
+    }
     let asker = record
         .chats
         .iter()
@@ -133,11 +146,7 @@ fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &C
         Some(asker)
             if asker.identity.id.is_some() && asker.identity.id == dispatch.asker.chat.id =>
         {
-            if from.by_person {
-                Vouched::Alone
-            } else {
-                Vouched::Under
-            }
+            Vouched::Under
         }
         Some(_) => Vouched::No,
     }
@@ -146,11 +155,16 @@ fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &C
 /// **What a launch does with the tasks of `record` that had not reported** (#1513): `running`
 /// is the app's own dispatch store ([`dispatchrecord::list`]), read once.
 ///
-/// A task the store vouches for is told to carry on where it has a conversation to resume.
-/// One with none, listed under a chat the record brings back, is left out and reported for.
-/// A task with nobody to list it under, or one the person started from a tab, comes back as
-/// the chat it was whatever it can resume, as a finished one does
-/// ([`crate::dispatched::left_out_at_launch`]).
+/// A task the store vouches for is told to carry on where it can be: it has a conversation to
+/// resume and a profile to be started on, which is the road a first message travels. **One
+/// that cannot be is left out and has ended by itself** ([`end_at_launch`]), whether or not
+/// its asking chat comes back: started blank, it would owe a report it could not know of. A
+/// task the person started from a tab is their conversation, and comes back as the chat it
+/// was, as a finished one does ([`crate::dispatched::left_out_at_launch`]).
+///
+/// **One chat id is one chat**: a second entry with an id an earlier one has is vouched for in
+/// nothing, so it can neither be told to carry on nor end the first one's dispatch. The
+/// put-back gives it an id of its own.
 ///
 /// Every chat that stays keeps its entry whole: its lineage ([`reopen::HandedFrom`]) is
 /// neither read into anything new nor written again here, so what a later change adds to it
@@ -160,12 +174,23 @@ pub fn at_launch(record: &reopen::Record, running: &[dispatchrecord::Record]) ->
     let mut listed = Vec::new();
     let mut not_resumed = Vec::new();
     let mut back = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for chat in &record.chats {
-        let stands = vouched(record, running, chat);
+        let first = chat
+            .identity
+            .id
+            .as_ref()
+            .is_some_and(|id| seen.insert(id.clone()));
+        let stands = if first {
+            vouched(record, running, chat)
+        } else {
+            Vouched::No
+        };
         let id = chat.identity.id.clone().unwrap_or_default();
-        match (stands, chat.resume.is_some()) {
-            (Vouched::No, _) => {}
-            (Vouched::Under, false) => {
+        let told = chat.resume.is_some() && chat.profile.is_some();
+        match (stands, told) {
+            (Vouched::No | Vouched::Persons, _) => {}
+            (Vouched::Under | Vouched::Alone, false) => {
                 not_resumed.push(chat.clone());
                 continue;
             }
@@ -174,7 +199,6 @@ pub fn at_launch(record: &reopen::Record, running: &[dispatchrecord::Record]) ->
                 carry_on.push(id);
             }
             (Vouched::Alone, true) => carry_on.push(id),
-            (Vouched::Alone, false) => {}
         }
         back.push(chat.clone());
     }
@@ -199,7 +223,7 @@ pub fn at_launch(record: &reopen::Record, running: &[dispatchrecord::Record]) ->
 /// A task a launch could not bring back, as [`end_at_launch`] settled it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ended {
-    /// The chat that asked, by the number its entry names.
+    /// The chat that asked, by the number its entry names: where `file` waits.
     pub asker: u32,
     /// The number the task's chat had, where its entry says.
     pub task: Option<u32>,
@@ -211,40 +235,53 @@ pub struct Ended {
     pub file: Option<PathBuf>,
 }
 
-/// What a dispatch record says of a task a launch could not bring back: purlis's own words,
-/// with the reason the start gave where one was refused.
-pub fn not_brought_back(why: Option<&str>) -> String {
-    match why {
-        Some(why) => format!(
-            "{}: purlis was restarted and could not start it again ({why})",
-            dispatchrecord::ENDED_WITHOUT_A_REPORT
-        ),
-        None => format!(
-            "{}: purlis was restarted, and its harness had named no conversation to bring back",
-            dispatchrecord::ENDED_WITHOUT_A_REPORT
-        ),
-    }
+/// Why a task the launch had has ended without coming back ([`end_at_launch`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotBack {
+    /// Its harness named no conversation to bring it back on.
+    NoConversation,
+    /// It runs on no profile, and so could not be told to carry on.
+    NoProfile,
+    /// Its start was refused at the launch, and the person let it go (Forget).
+    LetGo,
 }
 
-/// **The task `chat` could not be brought back at a launch: it has ended by itself** (#1513,
-/// V100-63). `why` is the refusal its start gave, or none for a task with no conversation to
-/// resume. `asker_open` says whether the chat that asked is open now.
+/// What a dispatch record says of a task a launch did not bring back: purlis's own words.
+pub fn not_brought_back(why: NotBack) -> String {
+    let said = match why {
+        NotBack::NoConversation => {
+            "purlis was restarted, and its harness had named no conversation to bring back"
+        }
+        NotBack::NoProfile => {
+            "purlis was restarted, and it ran on no profile it could be brought back on"
+        }
+        NotBack::LetGo => {
+            "purlis was restarted, it could not be started again, and the person let it go"
+        }
+    };
+    format!("{}: {said}", dispatchrecord::ENDED_WITHOUT_A_REPORT)
+}
+
+/// **The task `chat` did not come back after a launch: it has ended by itself** (#1513,
+/// V100-63). `asker` is the id of the open chat the entry names as the one that asked, where
+/// one is open under that number.
 ///
 /// The chat that asked is told as it is told of a task whose program ended before it
-/// reported ([`handback::Task::unreported`]): left for its own next turn where it is open,
-/// and kept for the workspace it asked from where it is not. The dispatch's record ends in
-/// purlis's own word ([`EndedBy::Unreported`]) and keeps the conversation the task had, which
-/// is what a Reopen of its row resumes. What waited for the task itself goes where a closed
-/// chat's goes.
+/// reported ([`handback::Task::unreported`]): left for its own next turn where it is open, and
+/// otherwise kept for the workspace it asked from and marked on the record, so it is handed
+/// over when that chat comes back ([`take_back`]). **Who asked, by name and place, is the
+/// store's word**; the entry's number is used only where the open chat under it is the one
+/// the store names. The dispatch's record ends in purlis's own word ([`EndedBy::Unreported`])
+/// and keeps the conversation the task had, which is what a Reopen of its row resumes. What
+/// waited for the task itself goes where a closed chat's goes.
 ///
-/// `None` for an entry that names no asking chat. Nothing is told twice: the record is closed
-/// once ([`dispatchrecord::close_by`]), and a second call for the same task finds it ended
-/// and says nothing.
+/// `None` for an entry that names no asking chat, or whose own dispatch is not running.
+/// Nothing is told twice: the record is closed once ([`dispatchrecord::close_by`]).
 pub fn end_at_launch(
     root: &Path,
     chat: &Chat,
-    asker_open: bool,
-    why: Option<&str>,
+    asker: Option<&str>,
+    why: NotBack,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<Option<Ended>> {
     let Some(from) = chat.from.as_ref() else {
@@ -280,13 +317,19 @@ pub fn end_at_launch(
         dispatchrecord::ended_in(root, &dispatch.id, conversation.as_str())?;
     }
     let name = reopen::shown_name(chat, dispatch.worker.harness.as_deref());
+    let by_person = dispatch.asker.by_person;
+    let asked_from = dispatch
+        .asker
+        .workspace
+        .clone()
+        .map_or(Place::PlaneRoot, Place::Workspace);
     let task = handback::Task::unreported(
         dispatch
             .worker
             .session_record
             .as_deref()
             .and_then(handback::record_path),
-        from.by_person,
+        by_person,
     )
     .on_branch(branch_of(&dispatch));
     let report = Handback {
@@ -295,22 +338,23 @@ pub fn end_at_launch(
             .cwd
             .as_deref()
             .and_then(|cwd| crate::active::workspace_of_tree(root, cwd))
-            .map_or_else(|| from.workspace.clone(), Place::Workspace),
-        to: from.name.clone(),
-        to_workspace: from.workspace.clone(),
+            .map_or_else(|| asked_from.clone(), Place::Workspace),
+        to: dispatch.asker.chat.name.clone(),
+        to_workspace: asked_from.clone(),
         summary: handback::UNREPORTED.to_owned(),
         task: Some(task),
         answered: None,
         stopped: None,
     };
+    let asker_open = asker.is_some() && asker == dispatch.asker.chat.id.as_deref();
     let file = if asker_open {
         Some(handback::leave_at(root, For::Chat(from.chat), &report)?)
-    } else if from.by_person {
+    } else if by_person {
         // The person's own task, whose tab chat is gone: the report is theirs, on its record,
         // and no chat's (D-1443-9).
         None
     } else {
-        let kept = handback::leave_at(root, For::Place(&from.workspace), &report)?;
+        let kept = handback::leave_at(root, For::Place(&asked_from), &report)?;
         let kept = handback::kept_name(root, &kept);
         dispatchrecord::kept_undelivered(root, &dispatch.id, kept.as_deref())?;
         None
@@ -383,12 +427,13 @@ pub fn made_before_its_run(
 }
 
 /// What a chat is told when it dispatches a brief that is already running as the task called
-/// `name`, in chat `task`, from before the restart.
+/// `name`, in chat `task`, from before its current run: purlis restarted it, a restart gave it
+/// a grant, it was started fresh, or it was cleared.
 pub fn not_again(name: &str, task: u32) -> String {
     format!(
         "purlis did not dispatch this a second time: the same brief is already running as \
-         '{name}' (chat {task}). This chat dispatched it before purlis was restarted, and it \
-         is still at work. Wait for its report with `purlis dispatch wait {task}`. To run it \
+         '{name}' (chat {task}). This chat dispatched it before it was last started again or \
+         cleared, and it is still at work. Wait for its report with `purlis dispatch wait {task}`. To run it \
          twice on purpose, give the second one a brief of its own."
     )
 }
@@ -407,24 +452,7 @@ pub fn settle_after_launch(
     live: impl Fn(&ChatRef) -> bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> usize {
-    dispatchrecord::list(root)
-        .into_iter()
-        .filter(|record| record.running() && !live(&record.worker.chat))
-        .filter(|record| {
-            let by = record.report_owed.then_some(EndedBy::Unreported);
-            let ending = dispatchrecord::ended_unreported(record, None);
-            let ended =
-                dispatchrecord::close_by(root, &record.id, ending, by, now).unwrap_or(false);
-            if ended
-                && record.mode == dispatchrecord::Mode::Task
-                && record.report_owed
-                && !record.asker.by_person
-            {
-                let _ = dispatchrecord::kept_undelivered(root, &record.id, None);
-            }
-            ended
-        })
-        .count()
+    dispatchrecord::settle(root, live, now)
 }
 
 /// **Chat `asker` closed with reports still waiting for its next turn** (#1513): each was moved
@@ -595,12 +623,12 @@ pub fn report_of(record: &dispatchrecord::Record) -> Option<Handback> {
 /// **Takes back every report that reached no chat and that `asked` answers for** (#1513,
 /// V100-64), oldest first: called before the chat that asked is started again, so the copy
 /// kept for its workspace is gone before that chat's start reads the workspace's reports.
-/// `asked` is given each record's asking side.
+/// `asked` is given each record, and answers for its asking chat.
 ///
 /// Each record is claimed as it is taken ([`dispatchrecord::delivered_late`]), under the
 /// store's lock: two reopens of one chat take a report once between them. One that cannot be
 /// told as a report is left as it is.
-pub fn take_back(root: &Path, asked: impl Fn(&dispatchrecord::Asker) -> bool) -> Vec<Owing> {
+pub fn take_back(root: &Path, asked: impl Fn(&dispatchrecord::Record) -> bool) -> Vec<Owing> {
     dispatchrecord::undelivered_to(root, asked)
         .into_iter()
         .filter_map(|record| {

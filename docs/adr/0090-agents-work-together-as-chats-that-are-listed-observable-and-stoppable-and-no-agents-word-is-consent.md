@@ -613,20 +613,27 @@ The operator's rulings V100-63 and V100-64 (spec #1483, built in #1513).
   its conversation, by the lineage its own entry in the record of open chats already keeps. It
   is told one fixed sentence of purlis's to carry on, never its brief, and only where the
   app's own dispatch record of it agrees that it is that chat's running task.
-- **One that cannot come back has ended by itself.** A task with no conversation to resume is
-  not started (a fresh chat would need its brief again), and one whose start is refused is
-  not left to be retried as a task. Its record ends as "ended without a report", keeps its
-  conversation for a Reopen, and the chat that asked is told once.
+- **One that cannot be told to carry on has ended by itself.** A task with no conversation to
+  resume, or no profile to start on, is not started (a fresh chat would need its brief
+  again). Its record ends as "ended without a report", keeps its conversation for a Reopen,
+  and the chat that asked is told once.
+- **A refused start is not an end.** A task the launch could not start (every agent stopped,
+  a profile to approve again, a folder that moved) waits with the other chats that did not
+  start, its dispatch still running; Retry now starts it told to carry on, and only Forget
+  ends it and tells the chat that asked. A record of open chats that could not be read ends
+  no dispatch.
 - **Nothing is dispatched twice.** Besides the brief never being sent again, a chat started
   again since it dispatched a task, which sends the same brief to the same persona while that
   task still works, is refused with the task's number.
 - **A task whose asking chat has gone works on to its report**, as a top-level row that says
   "asked by <chat> (closed)". Its report is kept on its dispatch record, where the person reads
   it, and for the workspace, as before. When the chat that asked comes back (a launch, Retry
-  now, or Resume from its session record) it is handed every such report once, and the copy
-  kept for the workspace is taken back first. A report it never read before it closed is
-  handled the same way. A task the person started from a tab is not: its report is theirs.
+  now, or Resume from any of its session records) it is handed every such report once, and
+  the copy kept for the workspace is taken back first; one that lands after the Resume goes to
+  the chat that resumed it. A report it never read before it closed is handled the same way.
+  A task the person started from a tab is not: its report is theirs.
 
-Not decided here: whether a task whose asker has gone should end at its report as other tasks
-do. It stays open and asks for the person, as #1448 had it, until Past tasks (#1510) gives its
-report a place in the window.
+**Interim, owned by #1510** (accepted by the operator, 2026-10-09): a task whose asker has gone
+does not yet end at its report as other tasks do. It stays open and asks for the person, as
+#1448 had it, until Past tasks (#1510) gives its report a place in the window; "an orphaned
+task ends at its report" is an acceptance line of #1510.

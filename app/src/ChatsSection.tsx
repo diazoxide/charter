@@ -620,6 +620,7 @@ export function ChatsSection({
                       posinset={row.posinset}
                       setsize={row.setsize}
                       from={row.orphaned ? row.from : null}
+                      askerWaiting={row.askerWaiting === true}
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
@@ -721,6 +722,7 @@ const Row = memo(function Row({
   posinset,
   setsize,
   from,
+  askerWaiting,
   tab,
   current,
   open,
@@ -757,6 +759,8 @@ const Row = memo(function Row({
   setsize: number;
   /** The closed chat it came from, by name; nothing for a chat drawn under its parent. */
   from: string | null;
+  /** That chat waits to start after a launch, and has not closed (#1513). */
+  askerWaiting: boolean;
   tab: boolean;
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
@@ -795,7 +799,7 @@ const Row = memo(function Row({
   const [changed] = useState(() => clock.missed(session));
   const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
-  const cameFrom = from === null ? null : cameFromSaid(from, task);
+  const cameFrom = from === null ? null : cameFromSaid(from, task, askerWaiting);
   /** What the second line says that does not change by itself: one line's tooltip. */
   const second = [elsewhere ? workspace : null, ownBranch, cameFrom].filter(
     (one): one is string => one !== null,
