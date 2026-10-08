@@ -159,6 +159,7 @@ pub mod standings;
 pub mod start;
 pub mod state;
 pub(crate) mod steer;
+pub mod taskchanges;
 pub mod template;
 #[cfg(test)]
 mod testgit;

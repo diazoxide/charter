@@ -20,16 +20,20 @@
 //! The app cuts it, never the chat, and by the brokered route
 //! ([`crate::gitbroker::in_a_checked_clone`]): a sandboxed chat may not write a clone's
 //! `.git`, and git run for it reads no configuration it could have shaped. The persona chat
-//! starts in it and commits on its branch. **Nothing is ever merged for it.** The report names
-//! the branch from the dispatch's record, which the app wrote.
+//! starts in it and commits on its branch. **purlis merges nothing for it by itself, and no
+//! chat can have it merged.** The report names the branch from the dispatch's record, which
+//! the app wrote.
 //!
-//! It goes one of two ways. The person discards its folder, from the window, after being
-//! shown what goes with it ([`at_risk`], [`discard`]); its branch stays unless git finds it
-//! merged, so no commit is lost by a discard (ADR 0072 §4: deleting a branch that holds work
-//! is never purlis's act). Or purlis finds its branch merged and takes it away itself
-//! ([`tidy`]): asked when its chat closes and when the project is opened, never on a timer,
-//! and only by git's own safe removal, which leaves a folder holding anything uncommitted
-//! exactly where it is.
+//! It goes one of three ways, and the first two are the person's own acts, from the window
+//! (#1511). The person merges its branch into the branch it was cut from ([`merge_asked`],
+//! [`merge`]): a fast-forward or nothing, of the commit they were shown, so a merge that does
+//! not apply cleanly changes nothing and says why. The person discards its folder, after
+//! being shown what goes with it ([`at_risk`], [`discard`]); its branch stays unless git finds
+//! it merged, so no commit is lost by a discard (ADR 0072 §4: deleting a branch that holds
+//! work is never purlis's act). Or purlis finds its branch merged and takes it away itself
+//! ([`tidy`]): asked when its chat closes, when the project is opened and after the person's
+//! merge, never on a timer, and only by git's safe removal, which leaves a folder holding
+//! anything uncommitted exactly where it is.
 
 use std::path::{Path, PathBuf};
 
@@ -522,6 +526,11 @@ pub fn starts_sandboxed(root: &Path) -> bool {
 /// refused (#1055): the app commits for it.
 pub const COMMITS_WITH: &str = "purlis worktree commit";
 
+/// Who merges a task's own branch, as both chats are told (#1511, V100-67): a chat may ask for
+/// a merge, and only the person performs one, from the window.
+pub const MERGED_BY: &str = "only the person merges it, from the task's Changes in the window (a \
+                             chat may ask them to)";
+
 /// What the persona chat is told under its stamp: where it works and that nothing merges.
 ///
 /// **Where it starts `sandboxed` it is told how it commits** (#1453 review, M3; #1055): a
@@ -536,15 +545,13 @@ pub fn told_the_chat(repo: &str, piece: &str, sandboxed: bool) -> String {
              data is outside the folder it may write, so `git add` and `git commit` are \
              refused here: commit your work with `{COMMITS_WITH} -m \"<message>\" --all` (or \
              paths in place of `--all`; a new file must be named). It only commits. Nothing \
-             is merged for you: your report names the branch, and merging it is the asking \
-             chat's or the person's decision"
+             is merged for you: your report names the branch, and {MERGED_BY}"
         );
     }
     format!(
         "you work in a worktree of {repo} that purlis cut for this task, on the branch \
          `{piece}`, which is yours alone. Commit your work on it. Nothing is merged for you: \
-         your report names the branch, and merging it is the asking chat's or the person's \
-         decision"
+         your report names the branch, and {MERGED_BY}"
     )
 }
 
@@ -579,12 +586,10 @@ pub fn said_to_the_asker(ground: &Ground, cut: Option<&Cut>, sandboxed: bool) ->
                 format!(
                     "It is sandboxed, so it commits there with `{COMMITS_WITH}`, which the \
                      app runs for it. Nothing is merged for it: its report names the branch, \
-                     and merging is yours or the person's decision"
+                     and {MERGED_BY}"
                 )
             } else {
-                "Nothing is merged for it: its report names the branch, and merging is yours \
-                 or the person's decision"
-                    .to_owned()
+                format!("Nothing is merged for it: its report names the branch, and {MERGED_BY}")
             };
             format!(
                 "in a worktree of its own, on the branch `{}` in {}, cut from {from}. {leaves}",
@@ -840,6 +845,164 @@ pub fn discard(root: &Path, tree: &Tree, isolation: &git::Isolated) -> Result<Di
         })
     })?
     .map_err(|refusal| NotDone::Git(refusal.in_window()))
+}
+
+// ---------------------------------------------------------------------------------------
+// the person's merge
+// ---------------------------------------------------------------------------------------
+
+/// What a merge of a task's own branch would land, read before the person is asked and
+/// handed back with their answer: **what is merged is the commit they were shown, or nothing
+/// is.**
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeAsk {
+    /// The branch purlis cut for the task, which its folder is still on.
+    pub branch: String,
+    /// The commit that branch is at, by its full id.
+    pub tip: String,
+    /// The uncommitted paths in its folder, as git prints them. A merge is refused while
+    /// there are any, and the question says so before it is asked.
+    pub uncommitted: Vec<String>,
+}
+
+/// Why a task's branch was not merged. Nothing was changed by any of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotMerged {
+    /// Git was not run in the repo, or would not answer ([`NotDone`]).
+    Route(NotDone),
+    /// The branch's folder is not there.
+    Gone,
+    /// The folder is no longer on the branch purlis cut for the task: on another, or on none.
+    OffItsBranch { on: Option<String> },
+    /// The branch is not at the commit the person was shown.
+    Moved,
+    /// git would not say what the folder holds.
+    Unread,
+    /// The merge itself was refused, in the window's words: the folder or the repo holds
+    /// uncommitted changes, the repo is not on the branch the task's was cut from, or that
+    /// branch has moved on and the task's no longer fast-forwards into it.
+    Refused(String),
+}
+
+impl NotMerged {
+    /// The sentence the person reads in the window, of the task's `branch` in `repo`.
+    pub fn in_window(&self, repo: &str, branch: &str) -> String {
+        let branch = crate::shown::short(branch);
+        match self {
+            Self::Route(not_done) => not_done.in_window(repo),
+            Self::Gone => format!(
+                "The folder of '{branch}' is gone, so purlis has nothing to merge from. \
+                 Nothing was merged."
+            ),
+            Self::OffItsBranch { on: Some(on) } => format!(
+                "That folder is on '{}' now, not on '{branch}', the branch purlis cut for the \
+                 task. purlis merges only the branch it cut. Nothing was merged.",
+                crate::shown::short(on)
+            ),
+            Self::OffItsBranch { on: None } => format!(
+                "That folder is on no branch now, not on '{branch}', the branch purlis cut for \
+                 the task. purlis merges only the branch it cut. Nothing was merged."
+            ),
+            Self::Moved => format!(
+                "'{branch}' has a commit you were not shown, so nothing was merged. Press \
+                 Merge again to see what would land now."
+            ),
+            Self::Unread => format!(
+                "purlis could not read what the folder of '{branch}' holds, so it will not \
+                 merge it. Nothing was merged."
+            ),
+            Self::Refused(why) => why.clone(),
+        }
+    }
+}
+
+/// What the folder of `tree` holds that a merge reads, with the brokered route's pins already
+/// in force: the branch it is on, which must be the one purlis cut, that branch's commit and
+/// what is not committed.
+fn read_for_merge(root: &Path, tree: &Tree, folder: &Path) -> Result<MergeAsk, NotMerged> {
+    let cut = tree
+        .branch
+        .as_deref()
+        .ok_or(NotMerged::OffItsBranch { on: None })?;
+    let risk = standing::at_risk(root, &tree.workspace, &tree.repo, &tree.piece)
+        .map_err(|refusal| NotMerged::Route(NotDone::Git(refusal.in_window())))?
+        .ok_or(NotMerged::Gone)?;
+    if risk.branch.as_deref() != Some(cut) {
+        return Err(NotMerged::OffItsBranch { on: risk.branch });
+    }
+    let tip = git::run(
+        folder,
+        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        git::READ,
+    )
+    .ok()
+    .filter(git::Run::ok)
+    .map(|run| run.line().to_owned())
+    .filter(|tip| !tip.is_empty())
+    .ok_or(NotMerged::Unread)?;
+    Ok(MergeAsk {
+        branch: cut.to_owned(),
+        tip,
+        uncommitted: risk.changes.ok_or(NotMerged::Unread)?,
+    })
+}
+
+/// The folder of `tree`, where it is there.
+fn folder_there(root: &Path, tree: &Tree) -> Result<PathBuf, NotMerged> {
+    tree.folder(root)
+        .filter(|folder| folder.symlink_metadata().is_ok())
+        .ok_or(NotMerged::Gone)
+}
+
+/// What merging `tree`'s branch would land, read under the brokered route's rules and nothing
+/// changed: the question the window asks before the person merges.
+pub fn merge_asked(
+    root: &Path,
+    tree: &Tree,
+    isolation: &git::Isolated,
+) -> Result<MergeAsk, NotMerged> {
+    let folder = folder_there(root, tree)?;
+    let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
+    crate::gitbroker::in_a_checked_folder(root, ws, repo, piece, isolation, || {
+        read_for_merge(root, tree, &folder)
+    })
+    .map_err(|not_run| NotMerged::Route(NotDone::from(not_run)))?
+}
+
+/// **Merges `tree`'s branch into the branch it was cut from**, where that branch is still at
+/// `seen`, the commit the person was shown. The person's own act, from the window, and
+/// nothing else in purlis calls it: no line a chat sends reaches it.
+///
+/// **A fast-forward or nothing** ([`worktree::merge`]): never a forced merge, never a merge
+/// commit purlis writes, never a conflict left in a folder. A branch that does not apply
+/// cleanly, a folder or a repo holding uncommitted changes, a repo that is not on the branch
+/// the task's was cut from: each is a refusal that names its reason, and changes nothing.
+///
+/// **Only the branch purlis cut.** The folder is where a chat wrote, and a chat can switch it
+/// to another branch: one that is on anything else is refused before git merges anything. By
+/// the brokered route, so git reads no configuration the task could have shaped and runs no
+/// hook of the repo's.
+///
+/// The moment between the last read and git's merge is not covered: a commit made on the
+/// branch in it lands unseen. The task has ended by then and no chat stands in its folder,
+/// which is the caller's to hold.
+pub fn merge(
+    root: &Path,
+    tree: &Tree,
+    seen: &str,
+    isolation: &git::Isolated,
+) -> Result<worktree::Merged, NotMerged> {
+    let folder = folder_there(root, tree)?;
+    let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
+    crate::gitbroker::in_a_checked_folder(root, ws, repo, piece, isolation, || {
+        let now = read_for_merge(root, tree, &folder)?;
+        if now.tip != seen {
+            return Err(NotMerged::Moved);
+        }
+        worktree::merge(root, ws, repo, piece)
+            .map_err(|refusal| NotMerged::Refused(refusal.in_window()))
+    })
+    .map_err(|not_run| NotMerged::Route(NotDone::from(not_run)))?
 }
 
 /// What a look at a finished worktree did.

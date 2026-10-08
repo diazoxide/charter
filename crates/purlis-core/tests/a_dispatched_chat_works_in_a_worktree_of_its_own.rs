@@ -2,7 +2,8 @@
 //!
 //! These hold the core's half against real git: what the worktree is called and where it is
 //! cut, that two tasks never share a folder or a branch, what the brokered route refuses, that
-//! nothing is ever merged, what a discard takes and that it never takes a commit, and when
+//! purlis merges nothing by itself, what the person's own merge lands and what it refuses
+//! (#1511), what a discard takes and that it never takes a commit, and when
 //! purlis takes a merged worktree away by itself. The app's half, which chat it starts there and what its record
 //! and report say, is `app/src-tauri/src/handoff.rs`'s tests.
 
@@ -11,7 +12,7 @@ mod support;
 use std::path::Path;
 
 use purlis_core::dispatchplace::{
-    self, Discarded, Ground, NotDone, Refused, Repo, Tidied, Tree, Where,
+    self, Discarded, Ground, NotDone, NotMerged, Refused, Repo, Tidied, Tree, Where,
 };
 use purlis_core::dispatchrecord::{self, Removed};
 use purlis_core::worktree::{self, git::Isolated, standing};
@@ -863,4 +864,172 @@ fn opening_the_project_takes_away_only_the_merged_worktrees_of_dispatches_that_e
         dispatchplace::tidy_all(&f.plane, |record| record.worker.chat.chat == 9, &iso),
         0
     );
+}
+
+// ----- the person's merge (#1511) ---------------------------------------------------------
+
+/// What `branch` points at in the clone.
+fn branch_at(f: &support::Fixture, branch: &str) -> String {
+    let named = format!("refs/heads/{branch}");
+    String::from_utf8_lossy(&support::git(&f.clone, &["rev-parse", &named]).stdout)
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn the_person_s_merge_lands_a_task_s_branch_in_the_branch_it_was_cut_from() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let cut = cut(&f, "check the queue");
+    f.commit(&cut.path, "fix");
+    let tip = branch_at(&f, &cut.branch);
+
+    // What the person is shown before they are asked: the branch purlis cut, and its commit.
+    let asked = dispatchplace::merge_asked(&f.plane, &tree(&cut), &iso).expect("read");
+    assert_eq!(asked.branch, cut.branch);
+    assert_eq!(asked.tip, tip);
+    assert_eq!(asked.uncommitted, Vec::<String>::new());
+    assert_ne!(main_at(&f), tip, "asking merged nothing");
+
+    let merged = dispatchplace::merge(&f.plane, &tree(&cut), &asked.tip, &iso).expect("merged");
+
+    assert_eq!(merged.branch, cut.branch);
+    assert_eq!(merged.now, tip);
+    assert_eq!(main_at(&f), tip, "main is at the task's commit");
+    assert!(f.clone.join("fix").is_file(), "the work is in the clone");
+    // Merged and clean, so the look that follows takes its folder and branch away.
+    assert_eq!(
+        dispatchplace::tidy(&f.plane, &tree(&cut), &iso),
+        Tidied::Removed
+    );
+    assert!(cut.path.symlink_metadata().is_err());
+}
+
+#[test]
+fn a_merge_that_does_not_apply_cleanly_changes_nothing_and_says_why() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let cut = cut(&f, "check the queue");
+    // The task and the branch it was cut from each change the same file.
+    std::fs::write(cut.path.join("README.md"), "the task's\n").unwrap();
+    f.commit(&cut.path, "the task's line");
+    std::fs::write(f.clone.join("README.md"), "the person's\n").unwrap();
+    f.commit(&f.clone, "the person's line");
+    let before = main_at(&f);
+    let tip = branch_at(&f, &cut.branch);
+    let asked = dispatchplace::merge_asked(&f.plane, &tree(&cut), &iso).expect("read");
+
+    let refused = dispatchplace::merge(&f.plane, &tree(&cut), &asked.tip, &iso)
+        .expect_err("it does not apply cleanly");
+
+    let said = refused.in_window(&f.repo, &cut.branch);
+    assert_eq!(
+        said,
+        format!(
+            "'{branch}' does not fast-forward into main: main has moved on. Merge main into \
+             '{branch}' where its conflicts belong, then merge again. Nothing was merged.",
+            branch = cut.branch
+        )
+    );
+    // Nothing changed: not the branch it was cut from, not the task's, not a file of either,
+    // and no merge is left half done in the clone.
+    assert_eq!(main_at(&f), before);
+    assert_eq!(branch_at(&f, &cut.branch), tip);
+    assert_eq!(
+        std::fs::read_to_string(f.clone.join("README.md")).unwrap(),
+        "the person's\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cut.path.join("README.md")).unwrap(),
+        "the task's\n"
+    );
+    assert_eq!(f.status(&f.clone), "");
+    assert!(!f.clone.join(".git/MERGE_HEAD").exists());
+    assert!(cut.path.is_dir(), "its folder is kept");
+}
+
+#[test]
+fn a_merge_is_of_the_commit_the_person_was_shown_or_of_nothing() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let cut = cut(&f, "check the queue");
+    f.commit(&cut.path, "shown");
+    let before = main_at(&f);
+    let asked = dispatchplace::merge_asked(&f.plane, &tree(&cut), &iso).expect("read");
+    // A commit lands on the branch between the question and the answer.
+    f.commit(&cut.path, "not-shown");
+
+    let refused = dispatchplace::merge(&f.plane, &tree(&cut), &asked.tip, &iso).err();
+
+    assert_eq!(refused, Some(NotMerged::Moved));
+    assert_eq!(main_at(&f), before, "nothing was merged");
+    assert!(!f.clone.join("shown").exists());
+}
+
+#[test]
+fn only_the_branch_purlis_cut_is_merged_and_only_from_a_clean_folder() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let before = main_at(&f);
+
+    // Something uncommitted in the folder: the question names it, and the merge is refused.
+    let dirty = cut(&f, "left a file");
+    f.commit(&dirty.path, "fix");
+    std::fs::write(dirty.path.join("scratch.txt"), "not committed\n").unwrap();
+    let asked = dispatchplace::merge_asked(&f.plane, &tree(&dirty), &iso).expect("read");
+    assert_eq!(asked.uncommitted, ["?? scratch.txt"]);
+    let refused = dispatchplace::merge(&f.plane, &tree(&dirty), &asked.tip, &iso)
+        .expect_err("a folder holding uncommitted changes");
+    assert_eq!(
+        refused.in_window(&f.repo, &dirty.branch),
+        format!(
+            "'{}' has uncommitted changes, so purlis did not merge it. Commit or stash them \
+             first.",
+            dirty.piece
+        )
+    );
+    assert_eq!(main_at(&f), before);
+
+    // The chat switched its folder to a branch of its own making: that one is not merged.
+    let switched = cut(&f, "switched away");
+    support::git(&switched.path, &["switch", "-q", "-c", "its-own-idea"]);
+    f.commit(&switched.path, "elsewhere");
+    let off = NotMerged::OffItsBranch {
+        on: Some("its-own-idea".to_owned()),
+    };
+    assert_eq!(
+        dispatchplace::merge_asked(&f.plane, &tree(&switched), &iso),
+        Err(off.clone())
+    );
+    assert_eq!(
+        dispatchplace::merge(&f.plane, &tree(&switched), "anything", &iso).err(),
+        Some(off)
+    );
+    assert_eq!(main_at(&f), before, "nothing was merged");
+    assert!(!f.clone.join("elsewhere").exists());
+}
+
+#[test]
+fn a_merge_is_refused_by_the_broker_where_the_repo_s_own_config_names_a_program() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let cut = cut(&f, "check the queue");
+    f.commit(&cut.path, "fix");
+    let before = main_at(&f);
+    let tip = branch_at(&f, &cut.branch);
+    // What a task that is not sandboxed can write: a driver git would run for the merge.
+    support::git(&f.clone, &["config", "merge.ours.driver", "true"]);
+
+    let refused = dispatchplace::merge(&f.plane, &tree(&cut), &tip, &iso).err();
+
+    assert!(
+        matches!(refused, Some(NotMerged::Route(NotDone::Repo(_)))),
+        "{refused:?}"
+    );
+    assert_eq!(main_at(&f), before, "no git ran for the merge");
 }

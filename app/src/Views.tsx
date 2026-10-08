@@ -79,6 +79,8 @@ import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
 import { DispatchesTab } from "./DispatchesTab";
+import { TaskChangesTab } from "./TaskChangesTab";
+import { TASK_CHANGES_VIEW, taskChangesOf } from "./taskChanges";
 import { DISPATCHES_VIEW, isDispatches } from "./dispatches";
 import {
   SAVING_VIEW,
@@ -260,6 +262,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   "piece-file": FileCode,
   /** One file against its branch's base (FM-11). */
   "piece-diff": GitCompare,
+  /** What one task changed (#1511, `taskChanges.ts`). */
+  [TASK_CHANGES_VIEW]: GitCompare,
   [SEARCH]: Search,
 };
 
@@ -396,6 +400,7 @@ export function ViewPane({
   const archiveAt = archiveOf(view);
   const piece = pieceOf(view);
   const pieceDiff = pieceDiffOf(view);
+  const taskChanges = taskChangesOf(view);
   return (
     <section
       className="view-pane"
@@ -516,6 +521,16 @@ export function ViewPane({
               path={pieceDiff.path}
             />
           </Suspense>
+        ) : taskChanges !== undefined ? (
+          /* What one task changed (#1511): its files, its diffs, and for a task on its own
+             branch the person's Merge and Discard. Keyed by the dispatch's id alone. */
+          <TaskChangesTab
+            key={`${plane}\u0000${taskChanges}`}
+            plane={plane}
+            id={taskChanges}
+            changed={changed + onDisk}
+            onOpenView={onOpenView}
+          />
         ) : isDispatches(view) ? (
           /* The project's dispatches (#1452), read from the app's own records. A row opens its
              chat through the catalogue's verb, or its session record as any record opens. */

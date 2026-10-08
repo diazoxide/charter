@@ -391,9 +391,10 @@ moves into, where a limit set to 0 switches it off whatever a persona's own limi
 standing grant a chat nobody is at needs to cross workspaces is a task's rule: such a chat
 still hands off to its own persona, into a workspace that exists.
 
-**Nothing is merged for a worktree task, ever.** Its report names the branch, in a line
-purlis writes from its own record of what it cut, whatever the chat says; merging is the
-asking chat's decision or yours. The chat's sandbox is the one the project gives its persona
+**purlis merges nothing for a worktree task by itself, and no chat can have it merged.** Its
+report names the branch, in a line purlis writes from its own record of what it cut, whatever
+the chat says. Only you merge it, from the task's Changes tab in the window; the asking chat
+may ask you to. The chat's sandbox is the one the project gives its persona
 in that folder, as for any chat of that persona started in a worktree: it gains nothing of
 the asking chat's tree.
 
@@ -429,6 +430,31 @@ The worktree is listed on its dispatch's row in the Dispatches tab, as the task'
   not delete the merged branch (the repo is on another branch than the one it landed in), the
   folder goes and the row says the branch was kept.
 - **folder discarded**, or **folder removed** for one removed from the explorer or by hand.
+
+**What a task changed** (#1511) is a tab of its own: **Changes** on a finished task's row
+under the chat that asked (**Review changes** for a task on its own branch), and the line of
+its report about what changed. It shows that task's files and no other task's:
+
+- **A task on its own branch** lists everything the branch changed since it was cut, and each
+  file opens its diff from where the branch started. Once the task has ended, the tab offers
+  **Merge…** and **Discard branch…**, each asked first. Merge lands the branch in the branch
+  it was cut from as a fast-forward, of the commit you were shown, and nothing else: where it
+  does not apply cleanly (the other branch moved on), where either folder holds uncommitted
+  changes, or where the folder is no longer on the branch purlis cut, nothing changes and the
+  tab says why. A merged branch whose folder holds nothing else is then taken away, as above.
+  Both are commands of the window alone: no link to the app serves them, and nothing a chat
+  sends reaches them.
+- **A task that worked in a folder other chats work in** lists the files its own file tools
+  named while it ran that git finds changed there, each marked where another task of the same
+  chat named it too. Those names are kept in memory only, so after the app is started again,
+  or for a harness that reports no file tool (Codex), the tab says it cannot tell and lists
+  nothing: the folder's changes are never shown as the task's.
+
+**Two tasks of one chat in one folder are named.** There are no file locks between tasks.
+When a chat dispatches a task into a folder where another of its tasks still works, with no
+branch of its own, the dispatch's answer names both and says how to keep them apart (`--in
+worktree`), and the asking chat's tab says it to you, by every task's name, for as long as
+they share the folder.
 - A repo whose own git settings name a program (a filter, a diff or merge driver, an
   include) gets no worktree task and no Discard: purlis runs no git there for a chat or for
   its own account. Remove such a folder from its branch's row in the explorer.

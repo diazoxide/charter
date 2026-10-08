@@ -1948,9 +1948,17 @@ fn dispatch_it(
         }
         _ => None,
     };
+    // A second task of the asking chat in the same folder, with no branch of its own, is
+    // named beside the first (#1511, V100-68): there are no file locks. The person who chose
+    // the place in the window reads it on the asking chat's tab instead.
+    let sharing = match (&wanted.moved, wanted.by) {
+        (None, By::Chat) => crate::taskchanges::shares_a_folder(held, from, arrived.session, false),
+        _ => None,
+    };
     let noted: Vec<String> = note
         .into_iter()
         .chain(fell_back)
+        .chain(sharing)
         .chain(cut.iter().flat_map(|cut| {
             cut.notes
                 .iter()
@@ -6762,8 +6770,8 @@ mod tests {
             works,
             Some(format!(
                 "in a worktree of its own, on the branch `{branch}` in api, cut from main. \
-                 Nothing is merged for it: its report names the branch, and merging is yours \
-                 or the person's decision"
+                 Nothing is merged for it: its report names the branch, and only the person \
+                 merges it, from the task's Changes in the window (a chat may ask them to)"
             ))
         );
         let first = tasks_first_message(&plane);

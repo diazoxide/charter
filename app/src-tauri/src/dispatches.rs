@@ -761,6 +761,16 @@ fn in_the_way(
         .task
         .clone()
         .unwrap_or_else(|| record.worker.chat.name.clone());
+    chat_in_the_way(held, record, tree).then(|| still_open(&task))
+}
+
+/// Whether the task of `record` still runs, its chat is open, or any other open chat stands in
+/// the folder of its own branch: what a discard and a merge (#1511) are both refused over.
+pub(crate) fn chat_in_the_way(
+    held: &Held,
+    record: &Record,
+    tree: &purlis_core::dispatchplace::Tree,
+) -> bool {
     let open = held.chats().open_now();
     let its_chat = open.iter().any(|chat| {
         let id = held.chats().chat_at(chat.session).and_then(|at| at.id);
@@ -771,7 +781,7 @@ fn in_the_way(
             .as_deref()
             .is_some_and(|cwd| tree.holds(held.root(), cwd))
     });
-    (record.running() || its_chat || stood_in).then(|| still_open(&task))
+    record.running() || its_chat || stood_in
 }
 
 /// The dispatch `id` and its worktree, where it has one that is still kept and no chat stands

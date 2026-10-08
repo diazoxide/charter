@@ -85,7 +85,16 @@ pub struct Server {
 /// `answer_ask` answers a chat's ask as the operator (HP-6). Only a human scope answers one (V16,
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
-pub const WINDOW_ONLY: &[&str] = &["answer_ask"];
+///
+/// `task_branch_merge` and `dispatch_worktree_discard` are the person's acts on what a task
+/// left on a branch of its own (#1511, V100-67): a merge into the branch it was cut from, and
+/// a folder removed for good. Each is asked first, in the window, and no chat may cause
+/// either, so neither has a form on a link.
+pub const WINDOW_ONLY: &[&str] = &[
+    "answer_ask",
+    "task_branch_merge",
+    "dispatch_worktree_discard",
+];
 
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host

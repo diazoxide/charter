@@ -165,6 +165,7 @@ export function ChatsSection({
   finished = NONE_FINISHED,
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
+  onChanges,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -184,6 +185,8 @@ export function ChatsSection({
   onClearFinished?: (ids: string[]) => void;
   /** Reopens a finished task as an ordinary chat; answers why not, where it could not. */
   onReopen?: (task: FinishedTask) => Promise<string | undefined>;
+  /** Opens what a finished task changed, in a tab of its own (#1511). */
+  onChanges?: (task: FinishedTask) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -654,6 +657,7 @@ export function ChatsSection({
                         }
                         onClear={onClearFinished}
                         onReopen={onReopen}
+                        onChanges={onChanges}
                       />
                     )),
                   ];

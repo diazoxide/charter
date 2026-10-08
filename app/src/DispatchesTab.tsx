@@ -370,7 +370,7 @@ export function DispatchesTab({
 /** What goes with a discarded folder, as the core read it: every uncommitted file by its path,
  *  every ignored path of the task's own, the commits made on no branch (the one thing a discard
  *  loses for good), then what becomes of the branch. */
-function Loss({ loss }: { loss: WorktreeLoss }) {
+export function Loss({ loss }: { loss: WorktreeLoss }) {
   const lost = lostSaid(loss);
   return (
     <div className="dispatch-loss" data-testid="discard-loses">

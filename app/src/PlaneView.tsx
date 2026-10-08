@@ -151,6 +151,8 @@ import { VaultRefusedNotice } from "./VaultRefusedNotice";
 import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
 import { PersonaMarks, ReloadPersonaMarks, usePersonaMarks } from "./PersonaMark";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
+import { TasksSharingNotice } from "./TasksSharingNotice";
+import { taskChangesTitle, taskChangesView } from "./taskChanges";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -6188,6 +6190,9 @@ export const PlaneView = memo(function PlaneView({
                 finished={finishedTasks}
                 onClearFinished={clearFinished}
                 onReopen={reopenFinished}
+                onChanges={(task) =>
+                  showView(taskChangesView(task.id), taskChangesTitle(task.name))
+                }
               />
               <Explorer
                 plane={plane}
@@ -7452,6 +7457,8 @@ function ChatNotices({
     <>
       {/* A dispatch to another persona that no grant covers (#1437): asked once, here. */}
       <DispatchGrantNotice plane={plane} session={session} />
+      {/* Two of this chat's tasks in one folder with no branch of their own (#1511). */}
+      <TasksSharingNotice plane={plane} session={session} />
       {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
       {startNotes && (
         <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />

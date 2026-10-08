@@ -282,8 +282,8 @@ fn what_the_chats_are_told_names_the_branch_and_says_nothing_merges() {
         told_the_chat("api", "check-the-queue-b5rc0def", false),
         "you work in a worktree of api that purlis cut for this task, on the branch \
          `check-the-queue-b5rc0def`, which is yours alone. Commit your work on it. Nothing is \
-         merged for you: your report names the branch, and merging it is the asking chat's or \
-         the person's decision"
+         merged for you: your report names the branch, and only the person merges it, \
+         from the task's Changes in the window (a chat may ask them to)"
     );
     let cut = Cut {
         workspace: "alpha".to_owned(),
@@ -301,8 +301,8 @@ fn what_the_chats_are_told_names_the_branch_and_says_nothing_merges() {
     assert_eq!(
         said_to_the_asker(&ground, Some(&cut), false),
         "in a worktree of its own, on the branch `check-the-queue-b5rc0def` in api, cut from \
-         main. Nothing is merged for it: its report names the branch, and merging is yours or \
-         the person's decision"
+         main. Nothing is merged for it: its report names the branch, and only the person merges it, \
+         from the task's Changes in the window (a chat may ask them to)"
     );
     // #1453 review, M3, and #1055. A sandboxed chat writes its own folder and nothing of its
     // repo's `.git`, where a worktree's git data is: it is told the command that commits for
@@ -315,16 +315,16 @@ fn what_the_chats_are_told_names_the_branch_and_says_nothing_merges() {
          worktree's git data is outside the folder it may write, so `git add` and `git commit` \
          are refused here: commit your work with `purlis worktree commit -m \"<message>\" \
          --all` (or paths in place of `--all`; a new file must be named). It only commits. \
-         Nothing is merged for you: your report names the branch, and merging it is the asking \
-         chat's or the person's decision"
+         Nothing is merged for you: your report names the branch, and only the person merges it, \
+         from the task's Changes in the window (a chat may ask them to)"
     );
     assert!(!told.contains("Commit your work"), "{told}");
     assert_eq!(
         said_to_the_asker(&ground, Some(&cut), true),
         "in a worktree of its own, on the branch `check-the-queue-b5rc0def` in api, cut from \
          main. It is sandboxed, so it commits there with `purlis worktree commit`, which the \
-         app runs for it. Nothing is merged for it: its report names the branch, and merging \
-         is yours or the person's decision"
+         app runs for it. Nothing is merged for it: its report names the branch, and only the person merges it, \
+         from the task's Changes in the window (a chat may ask them to)"
     );
     assert_eq!(
         fell_back_note("web"),
@@ -742,5 +742,73 @@ fn a_running_dispatch_s_worktree_is_never_looked_at() {
     assert!(
         root.join("workspaces/alpha/.worktrees/api/check-b5rc0def")
             .is_dir()
+    );
+}
+
+// ----- the person's merge (#1511) ---------------------------------------------------------
+
+#[test]
+fn a_merge_that_is_refused_says_why_and_that_nothing_was_merged() {
+    let branch = "check-the-queue-b5rc0def";
+    for (refused, said) in [
+        (
+            NotMerged::Gone,
+            "The folder of 'check-the-queue-b5rc0def' is gone, so purlis has nothing to merge \
+             from. Nothing was merged.",
+        ),
+        (
+            NotMerged::OffItsBranch {
+                on: Some("main-copy".to_owned()),
+            },
+            "That folder is on 'main-copy' now, not on 'check-the-queue-b5rc0def', the branch \
+             purlis cut for the task. purlis merges only the branch it cut. Nothing was merged.",
+        ),
+        (
+            NotMerged::OffItsBranch { on: None },
+            "That folder is on no branch now, not on 'check-the-queue-b5rc0def', the branch \
+             purlis cut for the task. purlis merges only the branch it cut. Nothing was merged.",
+        ),
+        (
+            NotMerged::Moved,
+            "'check-the-queue-b5rc0def' has a commit you were not shown, so nothing was \
+             merged. Press Merge again to see what would land now.",
+        ),
+        (
+            NotMerged::Unread,
+            "purlis could not read what the folder of 'check-the-queue-b5rc0def' holds, so it \
+             will not merge it. Nothing was merged.",
+        ),
+        // git's own refusal is the merge's sentence, as it is.
+        (
+            NotMerged::Refused("'x' does not fast-forward. Nothing was merged.".to_owned()),
+            "'x' does not fast-forward. Nothing was merged.",
+        ),
+    ] {
+        assert_eq!(refused.in_window("api", branch), said);
+    }
+    // The repo's own settings stand in the way: the broker's refusal, in the window's words.
+    let route = NotMerged::Route(NotDone::Repo("sets `filter.x.clean`".to_owned()));
+    assert!(
+        route
+            .in_window("api", branch)
+            .starts_with("purlis will not run git in api for this"),
+    );
+}
+
+#[test]
+fn a_task_with_no_folder_has_nothing_to_merge_and_git_is_never_asked() {
+    let (_dir, root) = project();
+    let tree = Tree {
+        workspace: "alpha".to_owned(),
+        repo: "api".to_owned(),
+        piece: "check-the-queue-b5rc0def".to_owned(),
+        branch: Some("check-the-queue-b5rc0def".to_owned()),
+    };
+    let isolation = git::Isolated::default();
+
+    assert_eq!(merge_asked(&root, &tree, &isolation), Err(NotMerged::Gone));
+    assert_eq!(
+        merge(&root, &tree, "the commit shown", &isolation).err(),
+        Some(NotMerged::Gone)
     );
 }

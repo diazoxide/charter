@@ -18,6 +18,10 @@ import { StateShown } from "./StateShown";
  * ever read as markup. **Reopen** resumes its conversation as an ordinary chat with a tab; it
  * is then no longer a task, and the chat that asked is told nothing.
  *
+ * **Changes** opens what the task changed, and no other task's, in a tab of its own (#1511,
+ * V100-66); **Review changes** for a task that worked on its own branch, whose tab offers the
+ * person's Merge and Discard. The report's line about what changed opens the same tab.
+ *
  * Not rows of the tree: there is no chat behind one to bring forward, so the arrows stop on the
  * chats and Tab reaches these, each a button of its own.
  */
@@ -27,6 +31,7 @@ export const FinishedTasks = memo(function FinishedTasks({
   tasks,
   onClear,
   onReopen,
+  onChanges,
 }: {
   /** The chat that asked for them, by the name its row has. */
   asker: string;
@@ -37,6 +42,8 @@ export const FinishedTasks = memo(function FinishedTasks({
   onClear: (ids: string[]) => void;
   /** Reopens one as an ordinary chat; answers why not, where it could not. */
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
+  /** Opens what a task changed, in a tab of its own; no Changes is offered without it. */
+  onChanges?: (task: FinishedTask) => void;
 }) {
   /** Whether the folded rows are drawn. This window's own, and folded to start with. */
   const [open, setOpen] = useState(false);
@@ -46,7 +53,13 @@ export const FinishedTasks = memo(function FinishedTasks({
     <li role="none" className="finished-tasks" data-level={level}>
       <div role="group" aria-label={`Finished tasks of ${asker}`}>
         {alone.map((task) => (
-          <FinishedRow key={task.id} task={task} onClear={onClear} onReopen={onReopen} />
+          <FinishedRow
+            key={task.id}
+            task={task}
+            onClear={onClear}
+            onReopen={onReopen}
+            onChanges={onChanges}
+          />
         ))}
         {folded.length > 0 && (
           <div className="finished-fold">
@@ -73,7 +86,9 @@ export const FinishedTasks = memo(function FinishedTasks({
           </div>
         )}
         {open &&
-          folded.map((task) => <FinishedRow key={task.id} task={task} onReopen={onReopen} />)}
+          folded.map((task) => (
+            <FinishedRow key={task.id} task={task} onReopen={onReopen} onChanges={onChanges} />
+          ))}
       </div>
     </li>
   );
@@ -88,10 +103,12 @@ function FinishedRow({
   task,
   onClear,
   onReopen,
+  onChanges,
 }: {
   task: FinishedTask;
   onClear?: (ids: string[]) => void;
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
+  onChanges?: (task: FinishedTask) => void;
 }) {
   const [shown, setShown] = useState(false);
   const [refused, setRefused] = useState<string>();
@@ -152,6 +169,22 @@ function FinishedRow({
         >
           Reopen
         </button>
+        {onChanges !== undefined && (
+          <button
+            type="button"
+            className="finished-changes"
+            tabIndex={0}
+            aria-label={`${task.branch === null ? "Changes" : "Review changes"} of ${task.name}`}
+            title={
+              task.branch === null
+                ? "Opens the files this task changed, and no other task's."
+                : "Opens what its own branch changed, with Merge and Discard."
+            }
+            onClick={() => onChanges(task)}
+          >
+            {task.branch === null ? "Changes" : "Review changes"}
+          </button>
+        )}
         {onClear !== undefined && (
           <button
             type="button"
@@ -177,9 +210,25 @@ function FinishedRow({
         <div className="finished-report" role="region" aria-label={`Report of ${task.name}`}>
           {/* Text nodes, every one: a report is a chat's words, and is never markup here. */}
           <p className="report-text">{task.report}</p>
-          {task.changed !== null && (
-            <p className="report-text report-changed">Changed: {task.changed}</p>
-          )}
+          {/* The task's own words for what it changed, as text; the line opens what purlis
+              found it changed (#1511). */}
+          {task.changed !== null &&
+            (onChanges === undefined ? (
+              <p className="report-text report-changed">Changed: {task.changed}</p>
+            ) : (
+              <p className="report-text report-changed">
+                <button
+                  type="button"
+                  className="report-changed-link"
+                  tabIndex={0}
+                  title="Opens the files this task changed"
+                  onClick={() => onChanges(task)}
+                >
+                  Changed:
+                </button>{" "}
+                {task.changed}
+              </p>
+            ))}
           <p className="report-where">
             {task.place}
             {task.branch !== null && ` · own branch ${task.branch}`}
