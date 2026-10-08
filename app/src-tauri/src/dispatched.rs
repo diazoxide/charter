@@ -52,6 +52,25 @@
 //! **The person's words in a task's pane are remembered as one bit** ([`person_typed`]), which
 //! its report carries as "the operator stepped in". Nothing they typed is kept.
 //!
+//! # A task ends at its report (#1485)
+//!
+//! Once a task's report is delivered, purlis ends its program ([`delivered`], [`end_look`]):
+//! by the chat's own close, so everything a close settles is settled the one way. **The
+//! report first, the end after**: a task becomes one to end only where its report was kept for
+//! the chat that asked (`Ledger::reported`), and the end is made on a thread of its own, which
+//! takes `Chats::deciding()` as any close does. So a report in flight and the end are ordered
+//! by the lock that already orders a report against an exit, and the exit that follows finds
+//! nothing owed and says nothing.
+//!
+//! **When** is the core's rule (`Ledger::end_step`): after the turn that reported has ended,
+//! by the harness's `Stop`, and had a moment for the harness to finish writing its
+//! conversation down; and after a bounded wait for a turn that does not end, or a harness
+//! purlis hears nothing from. Never while a task of its own is at work, never while the person
+//! is stopping it (the stop ends it), and never as the app quits.
+//!
+//! What is left is its dispatch record, which its finished row is read from
+//! ([`crate::finished`]), and the ledger's memory of how it ended, which answers a wait.
+//!
 //! # A wait holds a thread, never the listener (D-1441-14)
 //!
 //! [`wait`] runs on the thread the hook channel gives each connection, so the listener and
@@ -66,7 +85,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use purlis_core::active::Place;
 use purlis_core::dispatched::{
-    self, Answered, Asked, Landed, Ledger, Reply, Row, Seen, Step, Waited, What,
+    self, Answered, Asked, Ends, Landed, Ledger, Looked, Reply, Row, Seen, Step, Waited, What,
 };
 use purlis_core::dispatchtalk::{self, Kind, Message};
 use purlis_core::hookwire::{Answer, Report};
@@ -83,6 +102,9 @@ pub struct Tasks {
     moved: Condvar,
     /// By chat: how many waits of its are parked on a thread now.
     parked: Mutex<HashMap<u32, usize>>,
+    /// Whether a reported task's end runs on the clock in a test ([`Tasks::on_the_clock`]).
+    #[cfg(test)]
+    clocked: std::sync::atomic::AtomicBool,
 }
 
 /// The most waits one chat may have parked at once, as it may hold that many live tickets
@@ -96,6 +118,16 @@ impl Tasks {
 
     fn changed(&self) {
         self.moved.notify_all();
+    }
+
+    /// In a test, a reported task's end waits on no clock unless the test says so here: the
+    /// test looks for it ([`end_look`]) when it means the time to have passed. The hundreds of
+    /// tests that go on using a task's chat after its report are then not in a race with a
+    /// thread that would close it two seconds later.
+    #[cfg(test)]
+    pub(crate) fn on_the_clock(&self) {
+        self.clocked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// How many waits of chat `chat`'s are parked now, for a test that has to know.
@@ -194,6 +226,17 @@ fn owned(held: &Held, asker: u32, of: u32) -> Result<(HandedFrom, String), Strin
     Ok((from, name))
 }
 
+/// `why`, the refusal for a chat that is not the asker's own open task; or, where `of` is a
+/// task of its own that has finished and whose program purlis ended (#1485), the sentence that
+/// says so: `asked` is what it wanted of it. Only of its own: the memory asked is keyed by the
+/// asking chat, so the refusal still says nothing of any other chat.
+fn or_finished(held: &Held, asker: u32, of: u32, why: String, asked: &str) -> String {
+    match held.tasks().ledger().gone(asker, of) {
+        Some(gone) => dispatched::finished_already(&gone.name, of, gone.report.as_ref(), asked),
+        None => why,
+    }
+}
+
 /// Answers one ask after a dispatched task. `connection` is the listener's number for the
 /// connection it came on, which a wait asks after.
 pub fn answer(held: &Held, asked: &Asked, connection: u64) -> Answer {
@@ -260,7 +303,8 @@ fn limits_between(held: &Held, asker: u32, task: u32) -> purlis_core::dispatchli
 /// A follow-up from chat `asker` to task `to`: refused unless `asker` dispatched it and it is
 /// still working and not being cancelled, then left for its next turn.
 fn tell(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
-    let (from, name) = owned(held, asker, to)?;
+    let (from, name) = owned(held, asker, to)
+        .map_err(|why| or_finished(held, asker, to, why, "no turn left to read a message in"))?;
     let seen = seen(held, to);
     let state = held.tasks().ledger().state(to, &from, seen);
     if seen.ended || state == dispatched::State::Cancelling {
@@ -363,7 +407,8 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
 /// left for its next turn, and handed to the command of its that waits. A prompt the task is
 /// showing the person is not a question held here, so it cannot be answered this way.
 fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
-    let (from, name) = owned(held, asker, to)?;
+    let (from, name) = owned(held, asker, to)
+        .map_err(|why| or_finished(held, asker, to, why, "no question left to answer"))?;
     if from.report != Owed::Due || held.tasks().ledger().talk.asks(to).is_none() {
         return Err(dispatchtalk::no_question(&name, to));
     }
@@ -559,7 +604,8 @@ pub fn wait(held: &Weak<Held>, asked: &Asked, connection: u64) -> Answer {
     }
 }
 
-/// The tasks under chat `asker` that are still open, in the order they were started.
+/// The tasks under chat `asker`: the ones still open, in the order they were started, then
+/// the ones that have finished and are still listed.
 ///
 /// **One list, read from the one place that says which chats those are and where each stands**
 /// ([`crate::handoff::persona_chats`], #1443, D-T59-j2): what closing the chat asks about, what
@@ -573,7 +619,7 @@ fn list(held: &Held, asker: u32) -> Vec<Row> {
 
     let now = SystemTime::now();
     let open = held.chats().open_now();
-    crate::handoff::persona_chats(held, asker)
+    let mut rows: Vec<Row> = crate::handoff::persona_chats(held, asker)
         .into_iter()
         .filter_map(|listed| {
             let open = open.iter().find(|open| open.session == listed.session)?;
@@ -614,9 +660,14 @@ fn list(held: &Held, asker: u32) -> Vec<Row> {
                 by_person: !own,
                 branch: branch.as_ref().map(|(branch, _)| branch.clone()),
                 branch_stands: branch.map(|(_, stands)| stands),
+                finished: false,
             })
         })
-        .collect()
+        .collect();
+    // Then the ones that have finished, whose programs purlis ended (#1485): from their
+    // dispatch records, until their rows are cleared or this chat closes.
+    rows.extend(crate::finished::listed_for(held, asker));
+    rows
 }
 
 /// Cancels task `of` for the chat that dispatched it: the cancel is recorded, and its turn is
@@ -627,7 +678,8 @@ fn cancel(held: &Held, asker: u32, of: u32) -> Result<Answer, String> {
         // one order: either the task has reported and the cancel is refused, or the cancel is
         // recorded first and the report is delivered as cancelled.
         let _deciding = held.chats().deciding();
-        let (from, name) = owned(held, asker, of)?;
+        let (from, name) = owned(held, asker, of)
+            .map_err(|why| or_finished(held, asker, of, why, "nothing to cancel"))?;
         // The person is stopping it already: that ends it and tells this chat, and a chat in
         // a stop is not cancelled as well (D-T59-j3).
         if held.stopping().is_stopping(of) {
@@ -673,6 +725,89 @@ pub fn reported(
 /// answered yet. What its row in the window says it is waiting on (#1484).
 pub fn asks_its_asker(held: &Held, task: u32) -> bool {
     held.tasks().ledger().talk.asks(task).is_some()
+}
+
+/// **Task `task`'s report is delivered: its program is now to be ended** (#1485). Called once
+/// the lock the report was taken under is let go, by whoever took it. It ends nothing itself:
+/// it looks once, for a task whose turn is already over, and sets the bound on how long the
+/// rest may take ([`dispatched::ends_within`]).
+pub fn delivered(held: &Held, task: u32) {
+    if !held.tasks().ledger().ending(task) {
+        return;
+    }
+    end_look_after(
+        held,
+        task,
+        dispatched::ends_within(seen(held, task)),
+        Looked::WaitedOut,
+    );
+    end_look(held, task, Looked::Moved);
+}
+
+/// Looks at task `task`, which has reported, and does the next thing toward ending its
+/// program (`Ledger::end_step`). `looked` says why it is looked at.
+///
+/// **The end is only ever made here on a thread this module started**
+/// ([`end_look_after`]): a look for [`Looked::Moved`] answers at most "settle", so the thread
+/// that heard a hook or a program's end never closes a chat.
+pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
+    if !held.tasks().ledger().ending(task) {
+        return;
+    }
+    // The person's stop ends it, and says so in its own word; and a quit ends nothing here:
+    // the chats it leaves are the ones the next launch reads.
+    if held.stopping().is_stopping(task) || held.chats().ending() {
+        return;
+    }
+    let seen = seen(held, task);
+    // Read before the ledger is taken: it asks the chats and the board.
+    let below_at_work = !crate::handoff::running_below(held, task).is_empty();
+    let step = held
+        .tasks()
+        .ledger()
+        .end_step(task, seen, below_at_work, looked);
+    match step {
+        Ends::Nothing | Ends::Hold => {}
+        Ends::Settle => end_look_after(
+            held,
+            task,
+            dispatched::A_TURN_SETTLES_WITHIN,
+            Looked::Settled,
+        ),
+        Ends::End => end_it(held, task),
+    }
+}
+
+/// Ends task `task`'s program, its report delivered: the chat is closed as its tab's Close
+/// closes it, under the lock a report is taken under, and the window takes its tab away where
+/// it had one. Its finished row is its dispatch record's ([`crate::finished`]).
+fn end_it(held: &Held, task: u32) {
+    if let Err(why) = held.close_chat(task) {
+        tracing::warn!("purlis: task chat {task}, reported, did not end cleanly ({why})");
+    }
+    held.tell_stop(task, crate::stopping::StopPhase::Stopped);
+}
+
+/// Looks at task `task`'s end again in `after`, as `looked`. On a thread of its own, holding
+/// the project weakly: a closed project is not kept open by it.
+fn end_look_after(held: &Held, task: u32, after: Duration, looked: Looked) {
+    #[cfg(test)]
+    if !held
+        .tasks()
+        .clocked
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    let held = held.weak();
+    let _ = std::thread::Builder::new()
+        .name("purlis-task-end".into())
+        .spawn(move || {
+            std::thread::sleep(after);
+            if let Some(held) = held.upgrade() {
+                end_look(&held, task, looked);
+            }
+        });
 }
 
 /// Chat `chat` may now be told what was left for its next turn: typed purlis's one line, where
@@ -821,6 +956,8 @@ pub fn moved(held: &Held, chat: u32) {
         if !advance_cancel(held, chat, false) {
             tell_the_chat(held, chat);
         }
+        // A task that has reported: its turn's end is when its program is ended (#1485).
+        end_look(held, chat, Looked::Moved);
     }
     held.tasks().changed();
 }
@@ -837,6 +974,11 @@ pub fn closed(held: &Held, chat: u32, task_of: Option<(u32, String)>) {
     );
     // A message is for one chat's turn, and this chat will have no more.
     dispatchtalk::forget(held.root(), chat);
+    // The chat that asked for it may have been waiting for it to go before its own program
+    // is ended (#1485). A look only: called under a close's lock, it ends nothing here.
+    if let Some((asker, _)) = task_of {
+        end_look(held, asker, Looked::Moved);
+    }
     held.tasks().changed();
 }
 
@@ -845,5 +987,7 @@ pub fn closed(held: &Held, chat: u32, task_of: Option<(u32, String)>) {
 pub fn followed(held: &Held, old: u32, new: u32) {
     held.tasks().ledger().followed(old, new);
     dispatchtalk::moved(held.root(), old, new);
+    // A task that had reported is still to be ended, under its new number (#1485).
+    delivered(held, new);
     held.tasks().changed();
 }

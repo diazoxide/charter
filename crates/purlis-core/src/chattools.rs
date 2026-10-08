@@ -439,7 +439,9 @@ pub static TOOLS: [Tool; 15] = [
     Tool {
         name: DISPATCH_LIST,
         description: "List the tasks this chat dispatched: each one's chat number, name, \
-                      persona, where it works, its state and how long ago it started.",
+                      persona, where it works, its state and how long ago it started. A task \
+                      ends at its report, and stays listed as finished until its row is cleared \
+                      or this chat closes.",
         schema: || json!({"type": "object", "properties": {}, "additionalProperties": false}),
         read_only: true,
     },

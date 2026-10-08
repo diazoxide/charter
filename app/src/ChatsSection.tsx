@@ -2,9 +2,11 @@ import { memo, useCallback, useMemo, useState, type KeyboardEvent } from "react"
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
 import type { Catalogued, Offer } from "./actions";
+import type { FinishedTask } from "./bindings";
 import { ChatShownState } from "./ChatRows";
 import { useChatsHere, useChatsSelect } from "./chatState";
 import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
+import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
@@ -15,6 +17,12 @@ const rowId = (session: number) => `chats:${session}`;
 
 /** No rows of the catalogue: what a section drawn on its own, in a test, offers. */
 const NO_OFFERS: Catalogued = new Map();
+
+/** No finished tasks: what a section drawn without them lists. */
+const NONE_FINISHED: ReadonlyMap<number, FinishedTask[]> = new Map();
+const NO_TASKS: readonly FinishedTask[] = [];
+const NOT_REOPENED = () => Promise.resolve<string | undefined>(undefined);
+const NOT_CLEARED = () => undefined;
 
 /**
  * **Every running chat of the project, in one tree** (#1447), in the left region above the
@@ -32,6 +40,10 @@ const NO_OFFERS: Catalogued = new Map();
  * with chats under it folds, and a folded row still wears the hand for what it hides, so a
  * fold never hides a chat that needs you.
  *
+ * **A task that has finished stays under the chat that asked** (#1485), as a finished entry
+ * and not a chat: its program has ended (`FinishedTasks`). They are drawn under their chat's
+ * row, after the chats still running under it, and are hidden with them when the row is folded.
+ *
  * **A row's menu stops its chat** (#1448): Stop, and Stop with everything below it, from the
  * window's one catalogue, as a tab's menu has them.
  *
@@ -46,6 +58,9 @@ export function ChatsSection({
   offers = NO_OFFERS,
   onPress,
   stopping,
+  finished = NONE_FINISHED,
+  onClearFinished = NOT_CLEARED,
+  onReopen = NOT_REOPENED,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -58,6 +73,12 @@ export function ChatsSection({
   onPress?: (offer: Offer) => void;
   /** The chats being stopped, whose rows say so. */
   stopping?: ReadonlySet<number>;
+  /** Each chat's finished tasks, by its number (#1485). */
+  finished?: ReadonlyMap<number, FinishedTask[]>;
+  /** Clear finished: takes those rows away, and nothing else. */
+  onClearFinished?: (ids: string[]) => void;
+  /** Reopens a finished task as an ordinary chat; answers why not, where it could not. */
+  onReopen?: (task: FinishedTask) => Promise<string | undefined>;
 }) {
   /** The chats whose rows are folded. This window's own, and forgotten with it. */
   const [folded, setFolded] = useState<ReadonlySet<number>>(() => new Set());
@@ -91,9 +112,9 @@ export function ChatsSection({
       ) : (
         <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
           <ul role="tree" aria-label="Chats of this project">
-            {drawn.map((row) => {
+            {drawn.map((row, at) => {
               const lead = leads.get(row.session);
-              return (
+              return [
                 <Row
                   key={row.session}
                   session={row.session}
@@ -122,14 +143,47 @@ export function ChatsSection({
                   onOpen={onOpen}
                   onFold={fold}
                   onPress={press}
-                />
-              );
+                />,
+                // The finished tasks of each chat whose rows end here (#1485): this row's
+                // own, where no chat is drawn under it, then those of every chat above it
+                // that this row is the last one under.
+                ...endingAt(drawn, at, folded).map((one) => (
+                  <FinishedTasks
+                    key={`finished:${one.session}`}
+                    asker={one.name}
+                    level={one.level + 1}
+                    tasks={finished.get(one.session) ?? NO_TASKS}
+                    onClear={onClearFinished}
+                    onReopen={onReopen}
+                  />
+                )),
+              ];
             })}
           </ul>
         </RovingFocusGroup.Root>
       )}
     </section>
   );
+}
+
+/**
+ * The chats whose last drawn row is row `at`, deepest first: row `at` itself, then each chat
+ * above it that has no later row under it. Where a chat's finished tasks are drawn: after the
+ * chats still running under it. A folded chat is left out: what is under it is folded away.
+ */
+function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<number>): ChatRow[] {
+  const next = drawn[at + 1]?.level ?? 0;
+  const ending: ChatRow[] = [];
+  let level = drawn[at].level + 1;
+  for (let up = at; up >= 0 && level > next; up -= 1) {
+    const row = drawn[up];
+    if (row.level >= level) continue;
+    // `row` is the nearest row above at a shallower level: an ancestor, or row `at` itself.
+    level = row.level;
+    if (level < next) break;
+    if (!folded.has(row.session)) ending.push(row);
+  }
+  return ending;
 }
 
 /** One chat's row. Held on plain values, so only a row whose own facts changed is drawn again. */

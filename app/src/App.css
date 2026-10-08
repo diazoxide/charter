@@ -2419,6 +2419,93 @@ h2.sidebar-title .node-icon {
   cursor: default;
 }
 
+/* **A chat's finished tasks, under its row** (#1485): the rows that stand alone, then the one
+   "Finished (n)" line. A finished task is quieter than a chat: it is over. */
+.chats-section li.finished-tasks {
+  display: block;
+  margin-inline-start: 1.15rem;
+  color: var(--text-muted);
+}
+
+.chats-section .finished-line,
+.chats-section .finished-fold {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  min-width: max-content;
+}
+
+.chats-section .finished-name,
+.chats-section .finished-count,
+.chats-section .finished-reopen,
+.chats-section .finished-clear {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.1rem 0.2rem;
+  border: none;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.chats-section .finished-name:hover,
+.chats-section .finished-count:hover,
+.chats-section .finished-reopen:hover:not(:disabled),
+.chats-section .finished-clear:hover {
+  background: var(--surface-hover);
+}
+
+.chats-section .finished-reopen,
+.chats-section .finished-clear {
+  border: 1px solid var(--border-subtle);
+  font-size: 0.9em;
+}
+
+.chats-section .finished-count svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.chats-section .finished-task .outcome {
+  font-size: 0.9em;
+}
+
+/* Its state's word is as quiet as the row it is on: a finished task is over. */
+.chats-section .finished-task .shown-state .word {
+  color: inherit;
+}
+
+/* The report, as the task wrote it: plain text that keeps its own line breaks. */
+.chats-section .finished-report {
+  max-width: 28rem;
+  max-height: 14rem;
+  margin: 0.15rem 0 0.3rem;
+  padding: 0.3rem 0.4rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+}
+
+.chats-section .finished-report p {
+  margin: 0 0 0.25rem;
+}
+
+.chats-section .finished-report .report-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chats-section .finished-report .report-where {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
 .chats-section .needs-you-mark.rolled-up:hover {
   background: var(--surface-hover);
 }

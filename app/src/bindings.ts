@@ -879,6 +879,24 @@ export const commands = {
 	 */
 	dispatchWorktreeDiscard: (plane: PlaneId, id: string, seen: WorktreeLoss) => typedError<null, string>(__TAURI_INVOKE("dispatch_worktree_discard", { plane, id, seen })),
 	/**
+	 *  The finished tasks of the project's open chats, oldest first, for the rows under each
+	 *  (#1485). On a blocking thread, as it reads every record.
+	 */
+	finishedTasks: (plane: PlaneId) => typedError<FinishedTask[], string>(__TAURI_INVOKE("finished_tasks", { plane })),
+	/**
+	 *  **Clear finished** (#1485): takes the rows of the finished tasks `ids` off their chat's
+	 *  list, and answers how many. Nothing else changes: each task's dispatch record stays, with
+	 *  its report.
+	 */
+	clearFinishedTasks: (plane: PlaneId, ids: string[]) => typedError<number, string>(__TAURI_INVOKE("clear_finished_tasks", { plane, ids })),
+	/**
+	 *  **Reopen** on a finished task's row (#1485): a NEW chat on the conversation the task ended
+	 *  in, as an ordinary chat with a tab ([`finished::reopen`]). It is no longer a task: it owes
+	 *  nobody a report, and the chat that asked is told nothing. The answer is the chat as the
+	 *  window draws it. The task's row goes; its dispatch record stays.
+	 */
+	reopenFinishedTask: (plane: PlaneId, id: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("reopen_finished_task", { plane, id, columns, rows })),
+	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
 	 *  (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
@@ -3148,6 +3166,42 @@ export type FinishedMoving = {
 	failed: number,
 };
 
+/**  One finished task, as its row under the chat that asked draws it. */
+export type FinishedTask = {
+	/**  Its dispatch record's id: what clearing and reopening name it by. */
+	id: string,
+	/**  The chat that asked, by this app's number for it now. */
+	asker: number,
+	/**  The task's name, as its row had it while it worked. */
+	name: string,
+	persona: string | null,
+	/**
+	 *  How it ended: `done`, `cancelled`, `blocked`, `failed`, `ended without a report` or
+	 *  `closed by the person`.
+	 */
+	outcome: string,
+	/**
+	 *  Whether it folds into the one "Finished (n)" line: done and cancelled do, and every
+	 *  other end stays a row of its own until it is cleared (V100-9).
+	 */
+	folds: boolean,
+	/**
+	 *  Its report, as written: the task's words, or purlis's for one that sent none. Text,
+	 *  and drawn as text.
+	 */
+	report: string,
+	/**  What the report says changed, in the task's words, where it said. */
+	changed: string | null,
+	/**  When it ended, as the record keeps it (UTC, RFC 3339). */
+	ended: string | null,
+	/**  Where it worked: the workspace's name, or `project root`. */
+	place: string,
+	/**  The branch purlis cut for it, where its dispatch gave it one. */
+	branch: string | null,
+	/**  Whether it can be reopened: its record names the conversation it ended in. */
+	reopens: boolean,
+};
+
 /**  What the first-run screen shows about this machine. */
 export type FirstRunFound = {
 	harnesses: HarnessRow[],
@@ -4330,7 +4384,10 @@ export type PersonaChatState =
  *  question.
  */
 "waiting_on_operator" | 
-/**  It sent its report, and stays open until it is closed. */
+/**
+ *  It sent its report. Its program is ended once the turn that sent it is over (#1485),
+ *  and it is listed from then as a finished task.
+ */
 "reported" | 
 /**  Its program ended before it reported, and the chat that asked was told it failed. */
 "ended";

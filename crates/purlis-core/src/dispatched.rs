@@ -39,6 +39,18 @@
 //! answer. Whatever the chat then says of its outcome, the report is delivered as `cancelled`,
 //! because that is the app's own record of what happened; and a chat that ends its turn, or
 //! ends altogether, without one has a report written for it.
+//!
+//! # Ending at the report (#1485)
+//!
+//! **A task ends at its report.** Once the report is delivered, the app ends the task's program
+//! ([`Ledger::end_step`]): when the turn that sent it has ended, by the harness's own word, and
+//! has had a moment to settle ([`A_TURN_SETTLES_WITHIN`]); or, for a harness purlis hears
+//! nothing from and for a turn that does not end, when it has waited as long as it will
+//! ([`ends_within`]). Never before the report is delivered, and never while a task of its own
+//! is still at work. What is left is the finished task's row, read from its dispatch record
+//! ([`crate::dispatchrecord::finished_for`]), and what the asking chat may still ask of it:
+//! a wait is answered with its report, and a cancel, a follow-up and an answer are refused in
+//! one sentence that says it has finished ([`finished_already`]).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -170,6 +182,12 @@ pub struct Row {
     /// How that branch's worktree stands ([`crate::dispatchplace::Standing::said`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_stands: Option<String>,
+    /// It has finished and its program has ended (#1485): listed from its dispatch record
+    /// until its row is cleared or the asking chat closes. `chat` is then the number its chat
+    /// had, which `wait` still reads its report by; or 0 for a task that finished before this
+    /// app was started, whose number may be another chat's by now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
 }
 
 // ---- how long a wait may be -------------------------------------------------------------------
@@ -338,6 +356,9 @@ pub struct Gone {
     pub asker: u32,
     pub name: String,
     pub report: Option<Handback>,
+    /// The file its report still waits in for the asking chat's next turn, until a wait has
+    /// read it: a task ends at its report (#1485), which is before most reports are read.
+    pub file: Option<PathBuf>,
 }
 
 /// Something left for a chat's next turn, which it is typed a line about when it may be.
@@ -364,6 +385,8 @@ struct Task {
     /// How far the cancel has got, while one is under way.
     cancel: Option<Cancel>,
     report: Option<Kept>,
+    /// How far ending it has got, from its report on (#1485).
+    end: Option<End>,
 }
 
 /// A report the app delivered, kept so a wait can answer with it.
@@ -387,6 +410,92 @@ enum Cancel {
     Prompted,
     /// Its harness said that line began a turn.
     Heard,
+}
+
+/// How far ending a task that has reported has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    /// Its report is delivered, and the turn that sent it has not ended.
+    Reported,
+    /// It is to be ended, and a task of its own is still at work: when that one has gone.
+    Due,
+    /// Its turn has ended, and it is having its moment to settle.
+    Settling,
+}
+
+/// Why the app looks at a task that is to be ended ([`Ledger::end_step`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Looked {
+    /// Its chat moved, or a chat below it did: a turn ended, a program ended, a chat closed.
+    Moved,
+    /// The moment it was given to settle ([`A_TURN_SETTLES_WITHIN`]) has passed.
+    Settled,
+    /// It has had as long as a task is given from its report ([`ends_within`]).
+    WaitedOut,
+}
+
+/// What the app does next for a task that has reported ([`Ledger::end_step`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ends {
+    /// It is not one to end.
+    Nothing,
+    /// Not now. Asked again when its chat next moves, or a chat below it does.
+    Hold,
+    /// Its turn has ended: ask again, as [`Looked::Settled`], in [`A_TURN_SETTLES_WITHIN`].
+    Settle,
+    /// End its program now.
+    End,
+}
+
+/// How long a task's program is left after the turn that reported has ended, before purlis
+/// ends it: room for its harness to finish writing the conversation down, which is what a
+/// Reopen resumes, and for its last hook to return.
+pub const A_TURN_SETTLES_WITHIN: Duration = Duration::from_secs(2);
+
+/// How long the turn that sent a report is given to end, on a harness purlis hears from. A
+/// last message after the report takes seconds; this is room for a slow one, and short enough
+/// that a task that goes on working after its report does not hold its program for good.
+pub const A_REPORTED_TURN_ENDS_WITHIN: Duration = Duration::from_secs(120);
+
+/// How long a task on a harness purlis hears nothing from is left after its report. Nothing
+/// says when its turn ends, so it is given this and ended.
+pub const AN_UNHEARD_TASK_ENDS_AFTER: Duration = Duration::from_secs(20);
+
+/// How long a task that has reported is given before its program is ended whatever it is
+/// doing, by what the app knows of its chat as the report lands.
+pub fn ends_within(seen: Seen) -> Duration {
+    if seen.heard {
+        A_REPORTED_TURN_ENDS_WITHIN
+    } else {
+        AN_UNHEARD_TASK_ENDS_AFTER
+    }
+}
+
+/// What a chat is told when it asks something of a task that has finished, which only a
+/// working task takes (#1485): `asked` is what it wanted, as "nothing to cancel" reads.
+/// `report` is the task's, where it sent one.
+pub fn finished_already(name: &str, of: u32, report: Option<&Handback>, asked: &str) -> String {
+    let how = match report.and_then(|report| report.task.as_ref()) {
+        Some(task) => format!("it reported ({})", task.outcome.word()),
+        None if report.is_some() => "it reported".to_owned(),
+        None => "it ended without a report".to_owned(),
+    };
+    format!(
+        "'{}' (chat {of}) has finished: {how}, and its program has ended, so there is {asked}. \
+         `purlis dispatch wait {of}` reads its report again. Dispatch a new task for more.",
+        crate::personas::one_line(name)
+    )
+}
+
+/// What a report from a chat that was reopened from a finished task is refused with (#1485,
+/// V100-8): it is an ordinary chat now, and no chat is told anything by it.
+pub fn reopened_reports_nothing(task: &str) -> String {
+    format!(
+        "this chat was reopened from the finished task '{}'. That task has already reported, \
+         and a reopened chat is an ordinary chat: no chat is waiting on a report from it, and \
+         none is told. Say what you found to the person instead",
+        crate::personas::one_line(task)
+    )
 }
 
 /// What the app does next for a cancel ([`Ledger::cancel_step`]).
@@ -533,25 +642,38 @@ impl Ledger {
     /// remembered of it, as a task or as an asking chat.
     pub fn forget(&mut self, chat: u32, task_of: Option<(u32, &str)>) {
         let entry = self.tasks.remove(&chat);
+        // **A report that still waits for the asking chat's next turn is still told of**
+        // (#1485): a task ends at its report, which is before the asking chat has been typed
+        // its line where it was busy, and the line is how a chat waiting for nothing learns a
+        // report landed. A wait on the closed task still reads it ([`Self::gone`]).
+        let mut waits = false;
         if let Some((asker, name)) = task_of {
             if self.gone.len() >= MOST_GONE {
                 self.gone.pop_front();
             }
+            let (report, file) = match entry.and_then(|entry| entry.report) {
+                Some(kept) => (Some(kept.report), kept.file),
+                None => (None, None),
+            };
+            waits = file.is_some();
             self.gone.push_back((
                 chat,
                 Gone {
                     asker,
                     name: name.to_owned(),
-                    report: entry.and_then(|entry| entry.report).map(|kept| kept.report),
+                    report,
+                    file,
                 },
             ));
         }
         self.landed.remove(&chat);
         self.keyed.remove(&chat);
         for told in self.landed.values_mut() {
-            told.retain(
-                |one| !matches!(one, Landed::Report(of) | Landed::Question(of) if *of == chat),
-            );
+            told.retain(|one| match one {
+                Landed::Report(of) => *of != chat || waits,
+                Landed::Question(of) => *of != chat,
+                Landed::FollowUp | Landed::Answer => true,
+            });
         }
         self.gone.retain(|(_, gone)| gone.asker != chat);
         self.talk.forget(chat);
@@ -629,7 +751,7 @@ impl Ledger {
     pub fn waits_on(&self, chat: u32) -> bool {
         self.tasks
             .get(&chat)
-            .is_some_and(|task| task.cancel.is_some())
+            .is_some_and(|task| task.cancel.is_some() || task.end.is_some())
             || self.landed.get(&chat).is_some_and(|told| !told.is_empty())
     }
 
@@ -654,7 +776,8 @@ impl Ledger {
     /// next turn where that chat is open (`file` is none for one kept for a workspace). A
     /// cancel of it is over.
     pub fn reported(&mut self, task: u32, asker: u32, report: Handback, file: Option<PathBuf>) {
-        if file.is_some() {
+        let has_reader = file.is_some();
+        if has_reader {
             self.landed(asker, Landed::Report(task));
         }
         // A question it had open is closed with it: an answer now would reach no turn of the
@@ -666,6 +789,72 @@ impl Ledger {
         let entry = self.tasks.entry(task).or_default();
         entry.cancel = None;
         entry.report = Some(Kept { report, file });
+        // And from here its program is to be ended (#1485): the report is delivered to the
+        // chat that asked. **One kept for a workspace is not**: the chat that asked has gone,
+        // and the chat that wrote it stays open, which is where the person is told a report
+        // had nowhere to go.
+        if has_reader && entry.end.is_none() {
+            entry.end = Some(End::Reported);
+        }
+    }
+
+    /// Whether task `task` has reported and its program is still to be ended.
+    pub fn ending(&self, task: u32) -> bool {
+        self.tasks.get(&task).is_some_and(|task| task.end.is_some())
+    }
+
+    /// **What the app does next for task `task`, which has reported** (#1485): its program is
+    /// ended once its report is delivered and the turn that sent it is over.
+    ///
+    /// `seen` is what the app knows of its chat, `below_at_work` whether a chat it started is
+    /// still at work, and `looked` why the app looks.
+    ///
+    /// - **Never before the report is delivered**: only [`Self::reported`] makes a task one to
+    ///   end, and that is called once the report is kept for the chat that asked.
+    /// - **When its turn has ended, by its harness's own word**, it is given a moment
+    ///   ([`Ends::Settle`], [`A_TURN_SETTLES_WITHIN`]) and then ended: the harness has
+    ///   finished its turn, and has that moment to finish writing the conversation down. A
+    ///   program that has ended already is treated the same, so the end is never made on the
+    ///   thread that heard it move.
+    /// - **A turn that does not end, and a harness purlis hears nothing from**, are ended
+    ///   when [`Looked::WaitedOut`] says the task has had as long as it is given
+    ///   ([`ends_within`]).
+    /// - **Not while a task of its own is at work.** Ending it would leave that one's report
+    ///   with nobody to read it. It is ended when the last of them has gone.
+    pub fn end_step(&mut self, task: u32, seen: Seen, below_at_work: bool, looked: Looked) -> Ends {
+        let Some(entry) = self.tasks.get_mut(&task) else {
+            return Ends::Nothing;
+        };
+        let Some(stage) = entry.end else {
+            return Ends::Nothing;
+        };
+        let over = seen.ended || seen.turn_ended();
+        match (looked, stage) {
+            (Looked::WaitedOut, _) | (Looked::Settled, End::Settling) if below_at_work => {
+                entry.end = Some(End::Due);
+                Ends::Hold
+            }
+            (Looked::WaitedOut, _) | (Looked::Settled, End::Settling) => {
+                entry.end = None;
+                Ends::End
+            }
+            // A settle that was overtaken: it is waiting on a chat below it, or was not begun.
+            (Looked::Settled, _) => Ends::Hold,
+            (Looked::Moved, End::Settling) => Ends::Hold,
+            (Looked::Moved, End::Due) if !below_at_work => {
+                entry.end = Some(End::Settling);
+                Ends::Settle
+            }
+            (Looked::Moved, End::Reported) if over && !below_at_work => {
+                entry.end = Some(End::Settling);
+                Ends::Settle
+            }
+            (Looked::Moved, End::Reported) if over => {
+                entry.end = Some(End::Due);
+                Ends::Hold
+            }
+            (Looked::Moved, _) => Ends::Hold,
+        }
     }
 
     /// The report `task` sent, where the app still has it.
@@ -681,7 +870,14 @@ impl Ledger {
             .tasks
             .get_mut(&task)
             .and_then(|entry| entry.report.as_mut())
-            .and_then(|kept| kept.file.take());
+            .and_then(|kept| kept.file.take())
+            // A task that ended at its report (#1485): its report waits as it did.
+            .or_else(|| {
+                self.gone
+                    .iter_mut()
+                    .find(|(of, _)| *of == task)
+                    .and_then(|(_, gone)| gone.file.take())
+            });
         let question = self.talk.read(task);
         for told in self.landed.values_mut() {
             told.retain(|one| match one {
@@ -950,8 +1146,8 @@ pub const STARTED_BY_THE_PERSON: &str = " · started by the person from this cha
 /// task, where, state and age, one task a line.
 pub fn list_text(rows: &[Row]) -> String {
     if rows.is_empty() {
-        return "This chat has no dispatched tasks open. A task is listed from its dispatch until \
-                its chat is closed."
+        return "This chat has no dispatched tasks to list. A task is listed from its dispatch \
+                until its finished row is cleared or this chat closes."
             .to_owned();
     }
     // A task the person started from this chat's tab is listed, and said to be theirs.
@@ -990,9 +1186,19 @@ pub fn list_text(rows: &[Row]) -> String {
             ),
             (None, _) => place,
         };
+        // A finished task's program has ended, and that is said: nothing can be sent to it.
+        // One that finished before this app was started has no number to be asked after by.
+        let chat = match (row.finished, row.chat) {
+            (true, 0) => "finished before this app started".to_owned(),
+            (_, chat) => format!("chat {chat}"),
+        };
+        let age = if row.finished {
+            format!("{age} · finished, its program has ended")
+        } else {
+            age
+        };
         said.push_str(&format!(
-            "\n- chat {} · '{}' · {} · {place} · {} · {age}{}",
-            row.chat,
+            "\n- {chat} · '{}' · {} · {place} · {} · {age}{}",
             crate::personas::one_line(&row.name),
             match &row.persona {
                 Some(persona) => crate::personas::one_line(persona),
@@ -1156,6 +1362,7 @@ mod tests {
             by_person,
             branch: None,
             branch_stands: None,
+            finished: false,
         };
         let listed = list_text(&[row(8, false), row(9, true)]);
         assert_eq!(
@@ -1525,6 +1732,7 @@ mod tests {
                 by_person: false,
                 branch: None,
                 branch_stands: None,
+                finished: false,
             },
             Row {
                 chat: 12,
@@ -1536,6 +1744,7 @@ mod tests {
                 by_person: false,
                 branch: None,
                 branch_stands: None,
+                finished: false,
             },
         ];
 
@@ -1550,7 +1759,11 @@ mod tests {
                 Place::PlaneRoot.said()
             )
         );
-        assert!(list_text(&[]).starts_with("This chat has no dispatched tasks open."));
+        assert_eq!(
+            list_text(&[]),
+            "This chat has no dispatched tasks to list. A task is listed from its dispatch until \
+             its finished row is cleared or this chat closes."
+        );
 
         // #1453: a task given a worktree of its own is listed with the branch purlis cut and
         // how it stands, from the dispatch's record.
@@ -1564,6 +1777,7 @@ mod tests {
             by_person: false,
             branch: Some("fix-the-queue-b5rc0def".to_owned()),
             branch_stands: Some(crate::dispatchplace::Standing::Kept.said().to_owned()),
+            finished: false,
         };
         let listed = list_text(std::slice::from_ref(&on_a_branch));
         assert!(
@@ -1892,6 +2106,7 @@ mod tests {
                 asker: ASKER,
                 name: "check the queue".to_owned(),
                 report: Some(a_report(Outcome::Done)),
+                file: None,
             })
         );
         assert_eq!(
@@ -1998,5 +2213,287 @@ mod tests {
 
         assert_eq!(ledger.report(TASK), None);
         assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+    }
+
+    // ----- a task ends at its report (#1485) -------------------------------------------------
+
+    /// A harness purlis hears nothing from: no hook has reported for the chat.
+    const UNHEARD: Seen = Seen {
+        ended: false,
+        heard: false,
+        running: false,
+        waiting: false,
+        asking: false,
+        measured: false,
+    };
+
+    #[test]
+    fn a_task_is_not_one_to_end_until_its_report_is_delivered() {
+        // The order: the report reaches the asking chat first. Nothing ends a task that has
+        // not reported, however its chat moves and however long it has been.
+        let mut ledger = Ledger::default();
+        ledger.started(TASK, SystemTime::UNIX_EPOCH);
+        for looked in [Looked::Moved, Looked::Settled, Looked::WaitedOut] {
+            for seen in [RUNNING, WAITING, ENDED, UNHEARD] {
+                assert_eq!(
+                    ledger.end_step(TASK, seen, false, looked),
+                    Ends::Nothing,
+                    "{looked:?} {seen:?}"
+                );
+            }
+        }
+        assert!(!ledger.ending(TASK));
+        assert!(!ledger.waits_on(TASK));
+
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        assert!(ledger.ending(TASK));
+        // And from then a move of its chat is one the app looks at.
+        assert!(ledger.waits_on(TASK));
+
+        // A report kept for a workspace reached no chat: the chat that asked has gone, and the
+        // chat that wrote it stays open, where the person is told it had nowhere to go.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
+        assert!(!ledger.ending(TASK));
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::WaitedOut),
+            Ends::Nothing
+        );
+    }
+
+    #[test]
+    fn a_reported_task_is_ended_once_its_turn_has_ended_and_had_a_moment_to_settle() {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        // The report was sent mid-turn: the turn goes on, and so does the program.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        // A prompt it shows the person mid-turn is not its turn's end either.
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::Moved),
+            Ends::Hold
+        );
+        // Its harness says the turn ended: a moment for it to write the conversation down.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        // Whatever moves meanwhile, one settle is one end.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+        // Ended once.
+        assert!(!ledger.ending(TASK));
+        assert_eq!(
+            ledger.end_step(TASK, ENDED, false, Looked::Moved),
+            Ends::Nothing
+        );
+        assert_eq!(
+            ledger.end_step(TASK, ENDED, false, Looked::WaitedOut),
+            Ends::Nothing
+        );
+        // The report is still the asking chat's to read and to be told of.
+        assert!(ledger.report(TASK).is_some());
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Report(TASK)]
+        );
+    }
+
+    #[test]
+    fn a_task_on_a_harness_purlis_hears_nothing_from_is_ended_after_a_bounded_wait() {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        // Nothing says when its turn ends, so no move ends it.
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, false, Looked::WaitedOut),
+            Ends::End
+        );
+        // It is given less than a turn purlis can hear the end of, and both are bounded.
+        assert_eq!(ends_within(UNHEARD), AN_UNHEARD_TASK_ENDS_AFTER);
+        assert_eq!(ends_within(RUNNING), A_REPORTED_TURN_ENDS_WITHIN);
+        assert!(AN_UNHEARD_TASK_ENDS_AFTER < A_REPORTED_TURN_ENDS_WITHIN);
+
+        // A turn that never ends is ended at the bound too, whatever it is doing.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn a_program_that_ended_after_its_report_is_closed_off_the_thread_that_heard_it() {
+        // The exit is heard on the thread the operating system's word arrives on. The end is
+        // never made there: it settles first, as a turn's end does, and nothing here marks
+        // the task failed or unreported.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        assert_eq!(
+            ledger.end_step(TASK, ENDED, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, ENDED, false, Looked::Settled),
+            Ends::End
+        );
+        assert_eq!(
+            ledger
+                .report(TASK)
+                .and_then(|kept| kept.report.task.clone())
+                .map(|task| task.outcome),
+            Some(Outcome::Done)
+        );
+    }
+
+    #[test]
+    fn a_reported_task_is_not_ended_while_a_task_of_its_own_is_at_work() {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        // Its turn ended, and a chat it started is still working: its report would have nobody
+        // to read it.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        // Not at the bound either.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        // The last of them has gone: it settles, and ends.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        // One that began below it during the settle holds it again.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Settled),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn a_task_ended_at_its_report_still_has_it_read_and_told_of() {
+        // Its program is ended before most reports are read. The asking chat is still typed
+        // its line, a wait still answers with the report, and the waiting command still takes
+        // the file back so the next turn is not handed it twice.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+
+        ledger.forget(TASK, Some((ASKER, "check the queue")));
+
+        let gone = ledger.gone(ASKER, TASK).expect("remembered");
+        assert_eq!(gone.report, Some(a_report(Outcome::Done)));
+        assert_eq!(gone.file, Some(PathBuf::from("a.json")));
+        // The asking chat was busy when it landed: it is told when it may be.
+        assert_eq!(ledger.nudge_step(ASKER, RUNNING), Vec::new());
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Report(TASK)]
+        );
+
+        // A waiting command took it instead: the file is its to remove, once, and no line
+        // follows.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
+        ledger.forget(TASK, Some((ASKER, "check the queue")));
+        assert_eq!(ledger.read(TASK), vec![PathBuf::from("a.json")]);
+        assert_eq!(ledger.read(TASK), Vec::<PathBuf>::new());
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+        // A closed task that sent no report is told of by nothing.
+        ledger.landed(ASKER, Landed::Report(12));
+        ledger.forget(12, Some((ASKER, "read the logs")));
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+    }
+
+    #[test]
+    fn what_is_asked_of_a_finished_task_is_answered_in_plain_words() {
+        assert_eq!(
+            finished_already(
+                "check the queue",
+                TASK,
+                Some(&a_report(Outcome::Done)),
+                "nothing to cancel"
+            ),
+            "'check the queue' (chat 9) has finished: it reported (done), and its program has \
+             ended, so there is nothing to cancel. `purlis dispatch wait 9` reads its report \
+             again. Dispatch a new task for more."
+        );
+        assert!(
+            finished_already(
+                "check the queue",
+                TASK,
+                None,
+                "no turn left to read a message in"
+            )
+            .contains("has finished: it ended without a report, and its program has ended")
+        );
+        // A chat reopened from a finished task is an ordinary chat.
+        assert_eq!(
+            reopened_reports_nothing("check the queue"),
+            "this chat was reopened from the finished task 'check the queue'. That task has \
+             already reported, and a reopened chat is an ordinary chat: no chat is waiting on a \
+             report from it, and none is told. Say what you found to the person instead"
+        );
+    }
+
+    #[test]
+    fn a_finished_task_is_listed_as_finished_with_or_without_a_number() {
+        let finished = |chat: u32| Row {
+            chat,
+            name: "check the queue".to_owned(),
+            persona: Some("devops".to_owned()),
+            place: "alpha".to_owned(),
+            state: State::Reported(Some(Outcome::Done)).say(),
+            age_secs: Some(185),
+            by_person: false,
+            branch: None,
+            branch_stands: None,
+            finished: true,
+        };
+        assert_eq!(
+            list_text(&[finished(9), finished(0)]),
+            format!(
+                "2 tasks dispatched by this chat:\n\
+                 - chat 9 · 'check the queue' · devops · {place} · reported: done · started 3m \
+                 ago · finished, its program has ended\n\
+                 - finished before this app started · 'check the queue' · devops · {place} · \
+                 reported: done · started 3m ago · finished, its program has ended",
+                place = Place::Workspace("alpha".to_owned()).said()
+            )
+        );
+        // On the wire only where it is so.
+        assert!(
+            serde_json::to_string(&finished(9))
+                .unwrap()
+                .contains("\"finished\":true")
+        );
     }
 }

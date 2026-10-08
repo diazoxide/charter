@@ -271,6 +271,16 @@ pub struct Record {
     /// What the harness said it cost; absent for a harness that reports none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// The conversation the persona chat was in when the dispatch ended, by its harness's id
+    /// for it (#1485): what **Reopen** on a finished task resumes. Absent while it runs, and
+    /// for a chat whose harness named none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<String>,
+    /// Whether the finished task's row was taken off its asking chat's list (#1485): by
+    /// Clear finished, by Reopen, or because the asking chat closed. The record itself stays,
+    /// and is collected as any record is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleared: bool,
 }
 
 impl Record {
@@ -357,6 +367,8 @@ pub fn open_as(
         needed_you: 0,
         messages: 0,
         usage: None,
+        conversation: None,
+        cleared: false,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -422,6 +434,144 @@ pub fn close(
         record.report = ending.report.as_ref().map(capped_report);
         record.usage = ending.usage.filter(|usage| !usage.is_empty());
         true
+    })
+}
+
+/// Dispatch `id` ended with its persona chat in `conversation` (#1485): kept, so the finished
+/// task can be reopened on it. `false` for a record that is not there, is still running, or
+/// already names the same one. Held to a name's cap, as every id a record keeps is.
+pub fn ended_in(root: &Path, id: &str, conversation: &str) -> io::Result<bool> {
+    let conversation = cut(conversation, MOST_NAME_BYTES);
+    change(root, id, |record| {
+        if record.running() || record.conversation.as_deref() == Some(conversation.as_str()) {
+            return false;
+        }
+        record.conversation = Some(conversation);
+        true
+    })
+}
+
+/// How a finished task ended, as its row says it (#1485, V100-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Finished {
+    Done,
+    Cancelled,
+    Blocked,
+    Failed,
+    /// Its program ended before it reported, and purlis said so in its place.
+    EndedWithoutAReport,
+    /// The person stopped or closed it before it reported.
+    ClosedByThePerson,
+}
+
+impl Finished {
+    /// How `record`'s task finished; `None` for a handoff, a dispatch still running, and one
+    /// that ended owing no report.
+    pub fn of(record: &Record) -> Option<Self> {
+        if record.mode != Mode::Task {
+            return None;
+        }
+        let report = record.report.as_ref()?;
+        Some(match report.outcome {
+            Outcome::Done => Self::Done,
+            Outcome::Cancelled => Self::Cancelled,
+            Outcome::Blocked => Self::Blocked,
+            Outcome::Stopped => Self::ClosedByThePerson,
+            // purlis's own sentence for a chat that went without reporting, by either hand
+            // that writes it: the record's settle, and the report written in the chat's place.
+            Outcome::Failed
+                if report.text == ENDED_WITHOUT_A_REPORT
+                    || report.text == crate::handback::UNREPORTED =>
+            {
+                Self::EndedWithoutAReport
+            }
+            Outcome::Failed => Self::Failed,
+        })
+    }
+
+    /// The word on its row.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::EndedWithoutAReport => ENDED_WITHOUT_A_REPORT,
+            Self::ClosedByThePerson => "closed by the person",
+        }
+    }
+
+    /// Whether its row folds into the one "Finished (n)" line: a task that came out done, or
+    /// that its asking chat cancelled. **Every other end stays a row of its own until it is
+    /// cleared** (V100-9), so a failure is never hidden behind a count. A task that reported
+    /// itself blocked is one of those: it is waiting on something, and says what.
+    pub fn folds(self) -> bool {
+        matches!(self, Self::Done | Self::Cancelled)
+    }
+}
+
+/// **The finished tasks listed under the chat `asker`** (#1485), oldest first: every task it
+/// asked for whose dispatch has ended with a report and whose row has not been cleared, of the
+/// records purlis draws ([`sound`]). Read from the store, so the list is the same after the
+/// app is started again.
+///
+/// A task whose chat is still open is not finished yet, whatever its record says: `open`
+/// answers for the persona chats the app has open now, and those are left out. Its report is
+/// in, and purlis is about to end its program.
+pub fn finished_for(root: &Path, asker: &ChatRef, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
+    finished(root, open)
+        .into_iter()
+        .filter(|record| same_chat(&record.asker.chat, asker))
+        .collect()
+}
+
+/// [`finished_for`], for every asking chat at once: one read of the store.
+pub fn finished(root: &Path, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
+    let mut finished: Vec<Record> = list(root)
+        .into_iter()
+        .filter(|record| {
+            !record.cleared
+                && Finished::of(record).is_some()
+                && !open(&record.worker.chat)
+                && sound(record)
+        })
+        .collect();
+    finished.reverse();
+    finished
+}
+
+/// Takes the finished task `id`'s row off its asking chat's list. **The row and nothing
+/// else**: the record stays as it is but for the mark. `false` for a record that is not there,
+/// is not a finished task's, or is cleared already.
+pub fn clear(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.cleared || Finished::of(record).is_none() {
+            return false;
+        }
+        record.cleared = true;
+        true
+    })
+}
+
+/// The chat `asker` closed: the rows of the finished tasks it asked for go with it (V100-10).
+/// How many were cleared. Their records stay.
+pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
+    list(root)
+        .into_iter()
+        .filter(|record| {
+            !record.cleared
+                && Finished::of(record).is_some()
+                && same_chat(&record.asker.chat, asker)
+        })
+        .filter(|record| clear(root, &record.id).unwrap_or(false))
+        .count()
+}
+
+/// The newest task whose persona chat had the id `worker`, where a record names one: what a
+/// chat reopened from a finished task is told it was ([`crate::dispatched`]).
+pub fn task_worked_by(root: &Path, worker: &str) -> Option<Record> {
+    list(root).into_iter().find(|record| {
+        record.mode == Mode::Task && record.worker.chat.id.as_deref() == Some(worker)
     })
 }
 
@@ -606,6 +756,8 @@ fn capped(record: &Record) -> Record {
         needed_you: record.needed_you,
         messages: record.messages,
         usage: record.usage,
+        conversation: record.conversation.as_deref().map(name),
+        cleared: record.cleared,
     }
 }
 
@@ -679,6 +831,7 @@ pub fn sound(record: &Record) -> bool {
         && prose(&record.brief, MOST_BRIEF_BYTES)
         && name(&record.started)
         && maybe(&record.ended, &name)
+        && maybe(&record.conversation, &name)
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
                 && report

@@ -46,6 +46,7 @@ import {
   type HarnessGlance,
   type NeedsApproval,
   type NotStarted,
+  type FinishedTask,
   type OpenChat,
   type PlaneId,
   type TheirAgentsMd,
@@ -260,6 +261,7 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
+import { useFinishedTasks } from "./finished";
 import {
   below as chatsBelow,
   chatsTree,
@@ -3573,6 +3575,43 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
+   * **Each chat's finished tasks** (#1485), read again whenever the sidebar is: that is when a
+   * chat started, ended or closed, which is when a task finishes or its asking chat goes.
+   */
+  const { finished: finishedTasks, read: rereadFinished } = useFinishedTasks(plane, sidebar);
+  /** Clear finished: the rows go, and nothing else does. */
+  const clearFinished = useCallback(
+    (ids: string[]) => {
+      void commands
+        .clearFinishedTasks(plane, ids)
+        .catch(() => undefined)
+        .then(rereadFinished);
+    },
+    [plane, rereadFinished],
+  );
+  /**
+   * **Reopen a finished task** (#1485): the core starts a new chat on the task's conversation,
+   * and its tab opens in front as any chat's does. It is an ordinary chat from then on. A
+   * refusal is the row's to say.
+   */
+  const reopenFinished = useCallback(
+    async (task: FinishedTask): Promise<string | undefined> => {
+      const said = await commands
+        .reopenFinishedTask(plane, task.id, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return said.error;
+      const chat = said.data;
+      noteStarted(chat);
+      change((tabs) =>
+        openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
+      );
+      rereadFinished();
+      return undefined;
+    },
+    [change, noteStarted, plane, rereadFinished],
+  );
+
+  /**
    * **A chat restarted** (#1342, #1428): the same chat on its conversation, in a new session,
    * which takes the old one's place as Start fresh's does.
    */
@@ -5635,6 +5674,9 @@ export const PlaneView = memo(function PlaneView({
                 offers={found}
                 onPress={press}
                 stopping={stopping}
+                finished={finishedTasks}
+                onClearFinished={clearFinished}
+                onReopen={reopenFinished}
               />
               <Explorer
                 plane={plane}

@@ -850,7 +850,8 @@ fn a_task_s_report_goes_to_the_app_on_one_ticket_with_its_outcome_and_names_no_r
     assert_eq!(
         text(&out.stdout),
         "purlis dispatch report: sent to 'steward 1' (blocked). It reaches that chat as \
-         context on its next turn.\n"
+         context on its next turn. This task is finished: this chat's program is ended once \
+         this turn is over, so start nothing more.\n"
     );
     let all = asked.lock().unwrap().clone();
     assert_eq!(all.len(), 2, "a ticket, then the report: {all:?}");
@@ -1225,7 +1226,8 @@ fn a_task_goes_end_to_end() {
     assert_eq!(
         text(&reported.stdout),
         "purlis dispatch report: sent to 'steward 1' (done). It reaches that chat as context \
-         on its next turn.\n"
+         on its next turn. This task is finished: this chat's program is ended once this \
+         turn is over, so start nothing more.\n"
     );
 
     // And the asking chat's next turn is handed it: marked as data from another chat, every
@@ -1565,6 +1567,7 @@ fn the_list_prints_each_task_s_persona_name_place_state_and_age() {
                 by_person: false,
                 branch: None,
                 branch_stands: None,
+                finished: false,
             }],
         }))
     });
