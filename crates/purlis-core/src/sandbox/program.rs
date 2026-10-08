@@ -153,8 +153,10 @@ pub fn checked(
     Ok(words)
 }
 
-/// Whether `path` lies in one of `places`, each given as written and as its real path.
-fn writable(path: &Path, places: &[(PathBuf, PathBuf)]) -> bool {
+/// Whether `path` lies in one of `places`, each given as written and as its real path. The one
+/// test of "where a chat can write", for a harness here and for a provider's program
+/// ([`crate::secrets::program`]).
+pub(crate) fn writable(path: &Path, places: &[(PathBuf, PathBuf)]) -> bool {
     places
         .iter()
         .any(|(dir, real_dir)| path.starts_with(dir) || path.starts_with(real_dir))

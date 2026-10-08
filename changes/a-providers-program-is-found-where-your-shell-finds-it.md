@@ -8,12 +8,15 @@
   CLI: its own `PATH`, then `~/.local/bin` and the other directories installers use under your
   home, then Homebrew's and the system's. The refusal names every directory it searched, and
   `purlis doctor` has a row for each such program a project's vaults use, saying where it was
-  found and whether only this `PATH` finds it (#1516).
+  found and warning where only this `PATH` finds it (#1516).
 
 ### Security
 
-- **A chat's environment does not choose a provider's program.** The directories searched are
-  those of the process that reads the vault, which for a sandboxed chat is the app; a directory
-  a chat may write (the project, a temp directory, a harness's own home) is searched after every
-  other, wherever `PATH` names it; and the program is run by its absolute path, so the child's
-  `PATH` chooses nothing (#1516).
+- **A provider's program a chat could have written is never run.** `op` and `vault` are handed
+  a vault's identity, so purlis now refuses one that lies where a chat may write: the project, a
+  folder you let chats write, the project's cache home, a harness's own folders, a temp
+  directory, or the asking chat's own folder. The file is judged by where it really is, so a
+  link to such a file is refused too. A copy elsewhere in the search is used; with none, the
+  refusal names the file, nothing is run, and no pin is stored for it. The directories searched
+  are those of the process that reads the vault, which for a sandboxed chat is the app, never
+  the chat's (#1516).

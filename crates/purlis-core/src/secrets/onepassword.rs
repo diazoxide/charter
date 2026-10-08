@@ -173,18 +173,19 @@ fn op_run(
     checked(vault)?;
     // A keyring-held identity runs exactly the `op` pinned when its token was stored — never one
     // the caller's PATH resolves, which a chat controls (#271 review, U1). Any other vault runs
-    // the `op` the one lookup finds (#1516), by its absolute path, so the child's own `PATH`
-    // chooses nothing.
+    // the `op` the one lookup finds (#1516): never one where a chat may write, and by the path
+    // the disk names it by, so the child's own `PATH` chooses nothing.
     let mut argv = argv.to_vec();
     match super::identity::pinned_op(ctx, vault)? {
         Some(path) => argv[0] = path.display().to_string(),
         None => match ctx.program("op") {
             Ok(found) => argv[0] = found.path.display().to_string(),
-            Err(not) => {
-                return Err(VaultError::new(format!(
-                    "purlis could not find the 1Password CLI ('op'). Install it and sign in \
-                     (https://developer.1password.com/docs/cli/), then retry. {}",
-                    ctx.looked_in(&not)
+            Err(why) => {
+                return Err(VaultError::new(ctx.not_run(
+                    "the 1Password CLI ('op')",
+                    "Install it and sign in (https://developer.1password.com/docs/cli/), then \
+                     retry.",
+                    &why,
                 )));
             }
         },

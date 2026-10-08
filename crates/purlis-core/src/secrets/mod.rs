@@ -202,6 +202,10 @@ pub struct Ctx {
     pub root: PathBuf,
     pub state: PathBuf,
     pub env: Env,
+    /// What the chat this context reads for may write, beyond what every chat of the project
+    /// may: empty but for a read the app makes for one chat ([`Ctx::chat`]). No provider's
+    /// program is run from any of it ([`program`]).
+    pub(crate) chat_writes: Vec<PathBuf>,
 }
 
 impl Ctx {
@@ -215,6 +219,7 @@ impl Ctx {
             root: root.to_path_buf(),
             state,
             env,
+            chat_writes: Vec::new(),
         }
     }
 

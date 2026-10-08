@@ -219,6 +219,36 @@ fn harness_temp() -> &'static [&'static str] {
     TEST_HARNESS_TEMP.with(std::cell::Cell::get)
 }
 
+/// Every harness's own home and temp folders on `machine`, which a chat of that harness may
+/// write: Codex's home and `homes.codex_project`, opencode's and Claude Code's folders under
+/// each base directory and under the home, and `$CLAUDE_CODE_TMPDIR`. One list, asked by
+/// [`Ground::of`] (no such folder is granted to a chat) and by the lookup of a provider's
+/// program (no program is run from one, [`crate::secrets::program`]).
+pub fn harness_homes(machine: &super::Machine, homes: &super::Homes) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = homes.codex.iter().cloned().collect();
+    out.extend(homes.codex_project.iter().cloned());
+    for base in [&homes.config, &homes.data, &homes.state, &homes.cache]
+        .into_iter()
+        .flatten()
+    {
+        out.push(base.join("opencode"));
+        out.push(base.join("claude"));
+    }
+    if let Some(home) = &machine.home {
+        out.push(home.join(".claude"));
+        out.push(home.join("Library/Caches/opencode"));
+        out.push(home.join("Library/Caches/claude"));
+    }
+    out.extend(
+        machine
+            .env
+            .get("CLAUDE_CODE_TMPDIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path.parent().is_some()),
+    );
+    out
+}
+
 impl Ground {
     /// The ground for a chat in `chat` of the project at `root` on `machine`: its denials with
     /// the keychain files; the folders you listed for this project that still resolve to
@@ -228,11 +258,6 @@ impl Ground {
         let mut denied = super::Denied::of(root, machine).paths;
         denied.extend(super::seatbelt::keychains(machine.home.as_deref()));
         let homes = super::Homes::of(machine);
-        let absolute = |value: Option<&str>| {
-            value
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute() && path.parent().is_some())
-        };
         let mut refused: Vec<PathBuf> = machine
             .env
             .get("PATH")
@@ -242,21 +267,7 @@ impl Ground {
                     .collect()
             })
             .unwrap_or_default();
-        refused.extend(homes.codex.iter().cloned());
-        refused.extend(homes.codex_project.iter().cloned());
-        for base in [&homes.config, &homes.data, &homes.state, &homes.cache]
-            .into_iter()
-            .flatten()
-        {
-            refused.push(base.join("opencode"));
-            refused.push(base.join("claude"));
-        }
-        if let Some(home) = &machine.home {
-            refused.push(home.join(".claude"));
-            refused.push(home.join("Library/Caches/opencode"));
-            refused.push(home.join("Library/Caches/claude"));
-        }
-        refused.extend(absolute(machine.env.get("CLAUDE_CODE_TMPDIR").as_deref()));
+        refused.extend(harness_homes(machine, &homes));
         Self {
             root: root.to_path_buf(),
             chat: chat.to_path_buf(),

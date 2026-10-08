@@ -26,6 +26,7 @@ fn chmod(p: &Path, mode: u32) {
 /// `stand_in::program`, since one is run the moment it is written (charter-app#81).
 #[cfg(unix)]
 fn cli_dir(names: &[&str], out: &str, code: i32) -> tempfile::TempDir {
+    crate::secrets::program::stand_ins_live_in_temp_folders();
     let dir = tempfile::tempdir().unwrap();
     for name in names {
         stand_in::program(
@@ -118,11 +119,11 @@ fn a_context_finds_a_cli_on_its_own_path_and_not_elsewhere() {
     let path = bin.path().to_string_lossy().into_owned();
     let ctx = Ctx::new(Path::new("/plane"), Env::of(&[("PATH", &path)]));
     assert_eq!(
-        ctx.program("op").map(|found| found.path),
+        ctx.program("op").map(|found| found.found),
         Ok(bin.path().join("op"))
     );
     assert_eq!(
-        ctx.program("vault").map_err(|not| not.looked),
+        ctx.program("vault").map_err(|not| not.looked().to_vec()),
         Err(vec![bin.path().to_path_buf()])
     );
 }
@@ -825,6 +826,7 @@ fn a_reference_resolves_to_what_its_cli_printed() {
 #[cfg(unix)]
 #[test]
 fn a_reference_resolves_through_a_cli_installed_only_where_a_login_shell_looks() {
+    crate::secrets::program::stand_ins_live_in_temp_folders();
     let tmp = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let local = home.path().join(".local/bin");
@@ -845,8 +847,8 @@ fn a_reference_resolves_through_a_cli_installed_only_where_a_login_shell_looks()
     let e = reference::get(&ctx, &v, "A").unwrap_err();
     assert!(
         e.message.starts_with(
-            "'A' needs the 'op' CLI to resolve it, and purlis could not find it. Install it and \
-             authenticate, then retry. It looked in: /usr/bin, /bin, /usr/sbin, /sbin, "
+            "'A' needs the 'op' CLI to resolve it. purlis could not find the 'op' CLI. Install it \
+             and authenticate, then retry. It looked in: /usr/bin, /bin, /usr/sbin, /sbin, "
         ),
         "{}",
         e.message

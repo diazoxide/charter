@@ -164,12 +164,19 @@ fn cli_of(scheme: &str) -> &'static str {
 }
 
 /// The CLIs `vault`'s references resolve through, sorted and each once: what `purlis doctor`
-/// looks for. None for a file that cannot be read, which `health` reports.
+/// looks for. Only the schemes this version reads: a `browser://` reference is refused when
+/// read, so no program is asked for on its account. None for a file that cannot be read, which
+/// `health` reports.
 pub fn clis(ctx: &Ctx, vault: &Vault) -> Vec<&'static str> {
     let Ok(data) = plain_file::load(ctx, vault, "reference") else {
         return Vec::new();
     };
-    let mut clis: Vec<&'static str> = data.values().filter_map(scheme_of).map(cli_of).collect();
+    let mut clis: Vec<&'static str> = data
+        .values()
+        .filter_map(scheme_of)
+        .filter(|scheme| matches!(*scheme, "op" | "vault"))
+        .map(cli_of)
+        .collect();
     clis.sort();
     clis.dedup();
     clis
@@ -226,11 +233,14 @@ pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
         }
         None => match ctx.program(cli) {
             Ok(found) => argv[0] = found.path.display().to_string(),
-            Err(not) => {
+            Err(why) => {
                 return Err(VaultError::new(format!(
-                    "'{key}' needs the '{cli}' CLI to resolve it, and purlis could not find it. \
-                     Install it and authenticate, then retry. {}",
-                    ctx.looked_in(&not)
+                    "'{key}' needs the '{cli}' CLI to resolve it. {}",
+                    ctx.not_run(
+                        &format!("the '{cli}' CLI"),
+                        "Install it and authenticate, then retry.",
+                        &why
+                    )
                 )));
             }
         },

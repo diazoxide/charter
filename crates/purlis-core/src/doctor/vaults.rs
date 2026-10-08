@@ -7,14 +7,15 @@
 //!
 //! The `<program> for vaults` rows (#1516): for each program a registered vault's provider runs
 //! (`op`, `vault`), whether purlis finds it and by which route. Printed only for a project with
-//! such a vault. The lookup is the providers' own ([`Ctx::program`]), asked of this process's
+//! such a vault. A warning where it is not found, where only this process's `PATH` finds it,
+//! and where the only one found is where a chat may write, which is never run. The lookup is the providers' own ([`Ctx::program`]), asked of this process's
 //! environment: the Doctor the app opens answers for the app, which is what resolves a
 //! sandboxed chat's `secret exec`.
 
 use std::collections::BTreeMap;
 
 use super::{Doctor, Row};
-use crate::secrets::program::Route;
+use crate::secrets::program::{NotRun, Route};
 use crate::secrets::registry::{self, Vault};
 use crate::secrets::vaultcmd::Misplaced;
 use crate::secrets::{Ctx, Env};
@@ -142,25 +143,61 @@ fn program_row(ctx: &Ctx, program: &str, vaults: &[Vault]) -> Row {
     if !looked_up.is_empty() {
         let used = format!("Used by {}", looked_up.join(", "));
         match ctx.program(program) {
-            Ok(found) => said.insert(
+            Ok(found) if found.route == Route::Always => said.insert(
                 0,
                 format!(
-                    "{}, found {}. {used}",
-                    shown(&found.path),
-                    match found.route {
-                        Route::Always => "in a directory purlis always searches",
-                        Route::Path =>
-                            "on PATH only, so a purlis started with another PATH does not find it",
-                    }
+                    "{}, found in a directory purlis always searches. {used}",
+                    shown(&found.path)
                 ),
             ),
-            Err(not) => {
+            // The issue's own failure, seen from the process that does find it.
+            Ok(found) => {
+                said.insert(
+                    0,
+                    format!(
+                        "{}, found on PATH only, so a purlis started with another PATH does \
+                         not find it. {used}",
+                        shown(&found.path)
+                    ),
+                );
+                hints.insert(
+                    0,
+                    match ctx.env.get("HOME").filter(|home| home.starts_with('/')) {
+                        Some(home) => format!(
+                            "Put a link to it in {home}/{}, which purlis searches however it \
+                             is started.",
+                            crate::programs::USER_BIN[0]
+                        ),
+                        None => {
+                            "Start purlis with this PATH whenever it reads these vaults.".to_owned()
+                        }
+                    },
+                );
+            }
+            Err(NotRun::NotFound(not)) => {
                 said.insert(0, format!("not found. {used}"));
                 hints.insert(
                     0,
                     format!(
                         "Install {program}, then run `purlis doctor` again. {}",
-                        ctx.looked_in(&not)
+                        ctx.looked_in(&not.looked)
+                    ),
+                );
+            }
+            Err(NotRun::Writable { path, looked }) => {
+                said.insert(
+                    0,
+                    format!(
+                        "found only where a chat can write, {}, and never run. {used}",
+                        shown(&path)
+                    ),
+                );
+                hints.insert(
+                    0,
+                    format!(
+                        "Keep {program} outside the project and outside what a chat may write. \
+                         {}",
+                        ctx.looked_in(&looked)
                     ),
                 );
             }
@@ -251,6 +288,7 @@ mod tests {
     /// A project with a 1Password vault `prod` and a plain-file one, read by a process whose
     /// `PATH` is `path` and whose home is `home`.
     fn on_1password(path: &str, home: &std::path::Path) -> Plane {
+        crate::secrets::program::stand_ins_live_in_temp_folders();
         let plane = Plane::new(&[("PATH", path), ("HOME", &home.to_string_lossy())]);
         plane.plain("files", json!({"K": "never-printed-1516"}));
         plane.register("prod", "1password", json!({"op-vault": "Prod"}), None);
@@ -275,14 +313,14 @@ mod tests {
             rows[0].detail,
             format!(
                 "{}, found in a directory purlis always searches. Used by 'prod'",
-                local.join("op").display()
+                local.join("op").canonicalize().unwrap().display()
             )
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_program_found_only_on_this_processs_path_says_another_purlis_does_not_find_it() {
+    fn a_program_found_only_on_this_processs_path_warns_that_another_purlis_does_not_find_it() {
         let home = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
         stand_in::program(bin.path(), "op", "#!/bin/sh\n");
@@ -290,15 +328,81 @@ mod tests {
 
         let rows = program_rows(&plane.ctx);
 
-        assert_eq!(rows[0].status, super::super::Status::Ok);
+        assert_eq!(rows[0].status, super::super::Status::Warn);
         assert_eq!(
             rows[0].detail,
             format!(
                 "{}, found on PATH only, so a purlis started with another PATH does not find \
                  it. Used by 'prod'",
-                bin.path().join("op").display()
+                bin.path().join("op").canonicalize().unwrap().display()
             )
         );
+        assert_eq!(
+            rows[0].hint,
+            format!(
+                "Put a link to it in {}/.local/bin, which purlis searches however it is started.",
+                home.path().display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_found_only_where_a_chat_can_write_warns_and_is_not_called_found() {
+        let home = tempfile::tempdir().unwrap();
+        let plane = on_1password("/usr/bin:/bin", home.path());
+        let planted = plane.root().join("tools");
+        std::fs::create_dir_all(&planted).unwrap();
+        stand_in::program(&planted, "op", "#!/bin/sh\n");
+        let ctx = Ctx::new(
+            plane.root(),
+            Env::of(&[
+                ("PATH", &format!("{}:/usr/bin:/bin", planted.display())),
+                ("HOME", &home.path().to_string_lossy()),
+            ]),
+        );
+
+        let rows = program_rows(&ctx);
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].status, super::super::Status::Warn);
+        assert_eq!(
+            rows[0].detail,
+            format!(
+                "found only where a chat can write, {}, and never run. Used by 'prod'",
+                planted.join("op").display()
+            )
+        );
+        assert!(
+            rows[0].hint.starts_with(
+                "Keep op outside the project and outside what a chat may write. It looked in: "
+            ),
+            "{}",
+            rows[0].hint
+        );
+    }
+
+    #[test]
+    fn a_reference_this_version_cannot_read_asks_for_no_program() {
+        let home = tempfile::tempdir().unwrap();
+        let plane = Plane::new(&[
+            ("PATH", "/usr/bin:/bin"),
+            ("HOME", &home.path().to_string_lossy()),
+        ]);
+        let file = plane.ctx.vaults_dir().join("refs.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            json!({"A": "browser://example.com/login#password"}).to_string(),
+        )
+        .unwrap();
+        plane.register(
+            "refs",
+            "reference",
+            json!({"file": file.to_string_lossy()}),
+            None,
+        );
+        assert_eq!(program_rows(&plane.ctx), Vec::new());
     }
 
     #[test]

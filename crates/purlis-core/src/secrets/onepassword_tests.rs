@@ -29,7 +29,8 @@ if [ -f "$d/$k.err" ]; then cat "$d/$k.err" >&2; fi
 exit "$(cat "$d/$k.code" 2>/dev/null || echo 0)"
 "#;
 
-/// A plane and a fake `op` in one temp directory.
+/// A plane and a fake `op` in one temp directory: the plane in `plane/`, the `op` in `bin/`
+/// beside it, since no provider's program is run from inside a project.
 struct Fake {
     dir: tempfile::TempDir,
     ctx: Ctx,
@@ -37,9 +38,11 @@ struct Fake {
 
 impl Fake {
     fn new(extra_env: &[(&str, &str)]) -> Self {
+        crate::secrets::program::stand_ins_live_in_temp_folders();
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(dir.path().join("plane")).unwrap();
         // Written by `stand_in`, never here: a descriptor this process held on the script would
         // be copied by any other test's fork, and Linux then refuses to run it (`ETXTBSY`).
         stand_in::program(&bin, "op", FAKE_OP);
@@ -47,7 +50,7 @@ impl Fake {
         let d = dir.path().to_string_lossy().into_owned();
         let mut vars = vec![("PATH", path.as_str()), ("FAKE_OP_DIR", d.as_str())];
         vars.extend_from_slice(extra_env);
-        let ctx = Ctx::new(dir.path(), Env::of(&vars));
+        let ctx = Ctx::new(&dir.path().join("plane"), Env::of(&vars));
         Self { dir, ctx }
     }
 
@@ -526,6 +529,7 @@ struct Elsewhere {
 
 impl Elsewhere {
     fn new() -> Self {
+        crate::secrets::program::stand_ins_live_in_temp_folders();
         let plane = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join(".local/bin");

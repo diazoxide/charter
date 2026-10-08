@@ -385,16 +385,19 @@ fn new_id() -> Result<String, VaultError> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// `op` as the one lookup finds it now ([`Ctx::program`]), absolute, with its Team id — the trusted
-/// resolution recorded at move/put time. `("", "")` when `op` is not on PATH here: the record is
-/// still written (the token is stored), and [`pinned_op`] then refuses every read until the token
-/// is put again from a shell where the real `op` is found, rather than resolving it from the
-/// caller's PATH. Best effort here, strict there.
+/// `op` as the one lookup finds it now ([`Ctx::program`]), absolute, with its Team id — the
+/// trusted resolution recorded at move/put time. `("", "")` when the lookup runs none here,
+/// because there is none or because the only one is where a chat may write: the record is
+/// still written (the token is stored), and [`pinned_op`] then refuses every read until the
+/// token is put again where a real `op` is found, rather than resolving it from the caller's
+/// PATH. Best effort here, strict there.
 fn resolve_op_now(ctx: &Ctx) -> (String, String) {
     match ctx.program("op") {
+        // Where it was found, not the file behind an installer's link: the link keeps its
+        // name across an upgrade. The lookup has already refused one a chat may write.
         Ok(found) => {
-            let team = op_team_id(&found.path).unwrap_or_default();
-            (found.path.display().to_string(), team)
+            let team = op_team_id(&found.found).unwrap_or_default();
+            (found.found.display().to_string(), team)
         }
         Err(_) => (String::new(), String::new()),
     }
