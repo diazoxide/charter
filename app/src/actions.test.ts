@@ -1838,7 +1838,7 @@ describe("the palette at fifty chats", () => {
       // One more under both since #1487: `Previous chat in this tab`, a row about the tab in
       // front, before the branch's two in the catalogue.
       expect(at("re", loaded())).toBe(8);
-      expect(at("r", loaded())).toBe(13);
+      expect(at("r", loaded())).toBe(14);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -2849,12 +2849,13 @@ describe("the chats inside the tab in front (#1487)", () => {
     expect(by(rows(own), "tasks.next")).toMatchObject({
       available: true,
       does: { verb: "showChat", session: 2 },
-      note: "Ctrl+Shift+].",
+      // The key, and that a keyboard whose ] needs AltGr has it where a US keyboard does.
+      note: "Ctrl+Shift+]. Where ] needs AltGr, it is the key in its place on a US keyboard.",
     });
     expect(by(rows(own), "tasks.previous")).toMatchObject({
       available: true,
       does: { verb: "showChat", session: 3 },
-      note: "Ctrl+Shift+[.",
+      note: "Ctrl+Shift+[. Where [ needs AltGr, it is the key in its place on a US keyboard.",
     });
 
     const onFour = switchTabTo(own, 4, askedBy);
@@ -2892,6 +2893,49 @@ describe("the chats inside the tab in front (#1487)", () => {
     for (const id of ["tasks.menu", "tasks.next", "tasks.previous"])
       expect(by(offers, id)).toMatchObject({ available: false, reason: why });
     expect(by(offers, "tasks.own")?.available).toBe(false);
+  });
+
+  it("offers the menu of a tab whose tasks have all finished, and no next chat to go to", () => {
+    const tabs = selectTab(two(), 2);
+    const offers = catalogue(
+      now({
+        tabs,
+        listed: chats,
+        nameOf: String,
+        finished: new Map([
+          [
+            9,
+            [
+              {
+                id: "01K6",
+                asker: 9,
+                name: "old",
+                persona: null,
+                how: "done",
+                outcome: "done",
+                folds: true,
+                report: "",
+                changed: null,
+                ended: null,
+                place: "alpha",
+                branch: null,
+                reopens: false,
+                not_reopened: null,
+              },
+            ],
+          ],
+        ]),
+      }),
+    );
+
+    expect(by(offers, "tasks.menu")).toMatchObject({
+      available: true,
+      does: { verb: "showTabTasks", tab: 2 },
+    });
+    expect(by(offers, "tasks.next")).toMatchObject({
+      available: false,
+      reason: `${tabs.byId[2].name} is the only chat in this tab.`,
+    });
   });
 
   it("lists all four with no chat in front, and says so", () => {

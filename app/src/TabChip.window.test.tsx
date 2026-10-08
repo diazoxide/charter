@@ -12,7 +12,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { Moved, OpenChat } from "./bindings";
+import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
@@ -123,7 +123,28 @@ function asListed(one: Listed): OpenChat {
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
-function core(open: Listed[]) {
+/** A finished task of chat `asker`, as the core lists one. */
+function finishedTask(asker: number, name: string, more: Partial<FinishedTask> = {}): FinishedTask {
+  return {
+    id: `${asker}-${name}`,
+    asker,
+    name,
+    persona: "devops",
+    how: "done",
+    outcome: "done",
+    folds: true,
+    report: `What ${name} found.`,
+    changed: null,
+    ended: null,
+    place: "alpha",
+    branch: null,
+    reopens: false,
+    not_reopened: null,
+    ...more,
+  };
+}
+
+function core(open: Listed[], finished: FinishedTask[] = []) {
   const asked: Asked[] = [];
   const listeners = new Map<string, number[]>();
   mockIPC((cmd, args) => {
@@ -144,6 +165,7 @@ function core(open: Listed[]) {
     if (cmd === "dispatch_grants_needed") return [];
     if (cmd === "vault_refusals") return [];
     if (cmd === "owed_restarts") return [];
+    if (cmd === "finished_tasks") return [...finished];
     if (cmd === "stopping_chats") return [];
     if (cmd === "plane_sidebar")
       return {
@@ -206,6 +228,17 @@ function core(open: Listed[]) {
       const one = open.find((chat) => chat.session === session);
       if (!one?.from) throw new Error(`chat ${session} is no task`);
       one.from = { ...one.from, reported: true, outcome };
+      await rowsChanged();
+    },
+    /** Task `session` ended at its report: its chat is gone from the list, and `row` is its
+     *  finished row under the chat that asked. */
+    finishes: async (session: number, row: FinishedTask) => {
+      open.splice(
+        open.findIndex((chat) => chat.session === session),
+        1,
+      );
+      finished.push(row);
+      await said("chat-stop", { plane: PLANE, session, phase: "stopped" });
       await rowsChanged();
     },
     /** The core says chat `session`'s stop has ended it: it is gone from what the core lists. */
@@ -283,6 +316,15 @@ const hand = (name: string) => within(cell(name)).queryByRole("button", { name: 
 /** The menu that is open, if one is. */
 const menu = () => screen.queryByRole("menu", { name: /^Tasks of / });
 
+/** Every menu that is open, by the session whose chip it is named by. */
+const menus = () =>
+  screen.queryAllByRole("menu").map((one) =>
+    document
+      .getElementById(one.getAttribute("aria-labelledby") ?? "")
+      ?.getAttribute("aria-label")
+      ?.replace(/:.*$/, ""),
+  );
+
 /** The open menu's rows, as a person reads each. */
 const lines = () =>
   within(menu() as HTMLElement)
@@ -324,8 +366,8 @@ const withTasks = () => [
 ];
 
 /** The window, drawn, with every chat of `open` listed. */
-async function drawn(open: Listed[]) {
-  const held = core(open);
+async function drawn(open: Listed[], finished: FinishedTask[] = []) {
+  const held = core(open, finished);
   render(<App />);
   const tree = await section();
   await waitFor(() => expect(treeRows(tree)).toHaveLength(open.length));
@@ -342,16 +384,21 @@ const chord = (key: string, code?: string) =>
   });
 
 /** Only the clocks a rest and a grace run on, so the window's own promises still settle. */
-const fakeClocks = () =>
+const fakeClocks = (more: { shouldAdvanceTime?: boolean } = {}) =>
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    ...more,
   });
 
 const pass = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
-/** The pointer comes onto `on`, as a mouse does. */
-const over = (on: Element, at = { clientX: 10, clientY: 10 }) =>
+/** The pointer comes onto `on` and moves a little, as a hand brings a mouse onto a thing. A
+ *  rest is counted from that move: coming on alone is what the engine also sends when the
+ *  thing moved under a pointer that did not. */
+const over = (on: Element, at = { clientX: 10, clientY: 10 }) => {
   fireEvent.pointerEnter(on, { pointerType: "mouse", ...at });
+  fireEvent.pointerMove(on, { pointerType: "mouse", ...at, clientX: at.clientX + 2 });
+};
 const off = (on: Element) => fireEvent.pointerLeave(on, { pointerType: "mouse" });
 
 beforeEach(() => {
@@ -401,6 +448,26 @@ describe("the chip on a session's tab", () => {
         (count) => `${count.getAttribute("data-count")} ${count.textContent}`,
       ),
     ).toEqual(["working 2", "failed 1", "done 1"]);
+  });
+
+  it("counts a task that is idle or needs you as waiting, and never as working", async () => {
+    const { move } = await drawn(withTasks());
+    await move(4, "running", 1);
+    await move(5, "waiting", 2);
+    await move(6, "waiting", 3, [6]);
+
+    const worn = theChip("steward 1");
+    // talk works, deep has said nothing yet (its program runs); sweep is idle, probe needs you.
+    expect(worn.getAttribute("aria-label")).toBe("Tasks of steward 1: 2 working, 2 waiting");
+    expect(
+      [...worn.querySelectorAll("[data-count]")].map((count) => count.getAttribute("data-count")),
+    ).toEqual(["working", "waiting"]);
+
+    // And when every task is waiting, no ring is drawn at all.
+    await move(4, "waiting", 4, [6]);
+    await move(7, "waiting", 5, [6]);
+    expect(theChip("steward 1").getAttribute("aria-label")).toBe("Tasks of steward 1: 4 waiting");
+    expect(theChip("steward 1").querySelector('[data-count="working"]')).toBeNull();
   });
 
   it("draws nothing for a count of none", async () => {
@@ -488,7 +555,7 @@ describe("the chip on a session's tab", () => {
       "steward 1 running (no detail from claude)",
       "talk, shown now ended without a report",
     ]);
-    expect(line("talk").getAttribute("aria-current")).toBe("true");
+    expect(line("talk").hasAttribute("data-current")).toBe(true);
   });
 });
 
@@ -503,7 +570,7 @@ describe("the menu a chip opens", () => {
     expect(lines()).toEqual([
       "steward 1, shown now idle",
       "talk working",
-      "deep running (no detail from claude)",
+      "deep, asked by talk running (no detail from claude)",
       "sweep running (no detail from claude)",
       "probe in beta running (no detail from claude)",
     ]);
@@ -512,25 +579,31 @@ describe("the menu a chip opens", () => {
       .map((item) => item.getAttribute("data-level"));
     expect(levels).toEqual(["1", "2", "3", "2", "2"]);
     // Each wears its persona's mark, and the chat the tab shows now is marked.
-    expect(line("steward 1").getAttribute("aria-current")).toBe("true");
-    expect(line("talk").getAttribute("aria-current")).toBeNull();
+    expect(line("steward 1").hasAttribute("data-current")).toBe(true);
+    expect(line("talk").hasAttribute("data-current")).toBe(false);
     expect(line("talk").querySelector(".shown-state .word")?.textContent).toBe("working");
   });
 
   it("says how long a chat has been in its state, only where the window saw it begin", async () => {
-    const { move } = await drawn(withTasks());
+    // The clocks are pretended from the start, and run on while the window is drawn: the one
+    // tick every row's time is read on has to be one of them.
+    fakeClocks({ shouldAdvanceTime: true });
+    const { tree, move } = await drawn(withTasks());
     await move(4, "running", 1);
     await move(5, "running", 2);
-    fakeClocks();
     // The first word about talk told the window nothing of when it began. Its next does.
     await move(4, "waiting", 3);
-    pass(125_000);
+    // A row's time is read on one tick for every row, twice a minute: two and a half minutes
+    // on, the last tick was at two minutes or later.
+    pass(150_000);
 
     press(theChip("steward 1"));
 
     expect(line("talk").querySelector(".since")?.textContent).toBe("2m");
     expect(line("sweep").querySelector(".since")).toBeNull();
     expect(line("probe").querySelector(".since")).toBeNull();
+    // One clock: the Chats list's own row says the same time of the same chat.
+    expect(treeRow(tree, "talk").querySelector(".since")?.textContent).toBe("2m");
   });
 
   it("switches the tab to the row picked, closes, and puts the keyboard in that chat", async () => {
@@ -548,8 +621,8 @@ describe("the menu a chip opens", () => {
 
     // And the menu marks where the tab is now.
     press(theChip("steward 1"));
-    expect(line("sweep").getAttribute("aria-current")).toBe("true");
-    expect(line("steward 1").getAttribute("aria-current")).toBeNull();
+    expect(line("sweep").hasAttribute("data-current")).toBe(true);
+    expect(line("steward 1").hasAttribute("data-current")).toBe(false);
   });
 
   it("goes back to the session's own chat from its row", async () => {
@@ -575,7 +648,7 @@ describe("the menu a chip opens", () => {
     expect(lines()).toEqual([
       "steward 1, shown now running (no detail from claude)",
       "talk running (no detail from claude)",
-      "deep failed",
+      "deep, asked by talk failed",
       "Finished (2)",
     ]);
     const fold = within(menu() as HTMLElement).getByRole("menuitem", { name: "Finished (2)" });
@@ -586,7 +659,7 @@ describe("the menu a chip opens", () => {
     expect(lines()).toEqual([
       "steward 1, shown now running (no detail from claude)",
       "talk running (no detail from claude)",
-      "deep failed",
+      "deep, asked by talk failed",
       "Finished (2)",
       "sweep done",
       "probe in beta cancelled",
@@ -603,7 +676,7 @@ describe("the menu a chip opens", () => {
 
     press(theChip("steward 1"));
 
-    expect(line("sweep").getAttribute("aria-current")).toBe("true");
+    expect(line("sweep").hasAttribute("data-current")).toBe(true);
   });
 });
 
@@ -720,6 +793,62 @@ describe("opening and closing the menu", () => {
     expect(menu()).not.toBeNull();
     // It has the keyboard now: its rows are walked with the arrows.
     expect(menu()?.contains(document.activeElement)).toBe(true);
+    // And it is a pressed menu from here on: the pointer going away does not close it.
+    off(theChip("steward 1"));
+    pass(5_000);
+    expect(menu()).not.toBeNull();
+  });
+
+  it("keeps a menu a press opened when the pointer drifts off it, so the next keys find it", async () => {
+    await drawn(withTasks());
+    pane(1).focus();
+    fakeClocks();
+    over(theChip("steward 1"));
+    press(theChip("steward 1"));
+    expect(menu()).not.toBeNull();
+
+    off(theChip("steward 1"));
+    pass(5_000);
+    over(menu() as HTMLElement);
+    off(menu() as HTMLElement);
+    pass(5_000);
+
+    expect(menu()).not.toBeNull();
+    // Nothing gave the keyboard back to the terminal meanwhile.
+    expect(menu()?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps a menu the keyboard opened when the pointer crosses it and leaves", async () => {
+    await drawn(withTasks());
+    pane(1).focus();
+    chord("J");
+    await waitFor(() => expect(menu()).not.toBeNull());
+    fakeClocks();
+
+    over(menu() as HTMLElement);
+    off(menu() as HTMLElement);
+    pass(5_000);
+
+    expect(menu()).not.toBeNull();
+  });
+
+  it("opens nothing for a chip that comes under a pointer that has not moved", async () => {
+    await drawn(withTasks());
+    fakeClocks();
+    const on = theChip("steward 1");
+
+    // What the engine sends when a count appears or the strip shifts under a parked pointer:
+    // the pointer "came on", and then is "still" at the very same point.
+    fireEvent.pointerEnter(on, { pointerType: "mouse", clientX: 10, clientY: 10 });
+    pass(5_000);
+    fireEvent.pointerMove(on, { pointerType: "mouse", clientX: 10, clientY: 10 });
+    pass(5_000);
+    expect(menu()).toBeNull();
+
+    // With a button held it is a selection or a drag passing over, and not a rest either.
+    fireEvent.pointerMove(on, { pointerType: "mouse", clientX: 20, clientY: 10, buttons: 1 });
+    pass(5_000);
+    expect(menu()).toBeNull();
   });
 
   it("closes on Escape, and the keyboard goes back to where it was", async () => {
@@ -821,6 +950,156 @@ describe("the keys for the chats inside a tab", () => {
     expect(menu()).toBeNull();
   });
 
+  it("says on the tab that it has tasks, and that a menu opens from it", async () => {
+    await drawn(withTasks());
+
+    const one = tab("steward 1");
+    expect(one.getAttribute("aria-haspopup")).toBe("menu");
+    const described = (one.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(described).toContain(theChip("steward 1").id);
+    expect(document.getElementById(theChip("steward 1").id)?.getAttribute("aria-label")).toBe(
+      "Tasks of steward 1: 4 working",
+    );
+    // A tab with no tasks says neither.
+    const two = tab("steward 2");
+    expect(two.getAttribute("aria-haspopup")).toBeNull();
+    expect(two.getAttribute("aria-describedby") ?? "").not.toMatch(/-tasks-/);
+  });
+
+  describe("asked for from the keyboard", () => {
+    /** Two sessions with tasks: steward 2 asked for notes (8). */
+    const twoWithTasks = () => [
+      ...withTasks(),
+      chat(8, "alpha", { persona: "devops", label: "notes", from: taskOf(2) }),
+    ];
+
+    it("opens the menu of the tab asked, and never another tab's beside it", async () => {
+      await drawn(twoWithTasks());
+      tab("steward 1").focus();
+      await userEvent.keyboard("{ArrowDown}");
+      await waitFor(() => expect(menus()).toEqual(["Tasks of steward 1"]));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(menus()).toEqual([]));
+
+      tab("steward 2").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      await waitFor(() => expect(menus()).toEqual(["Tasks of steward 2"]));
+      // And back: the first tab's menu, and the second's is gone. One menu at a time.
+      tab("steward 1").focus();
+      fireEvent.keyDown(tab("steward 1"), { key: "ArrowDown" });
+      await waitFor(() => expect(menus()).toEqual(["Tasks of steward 1"]));
+    });
+
+    it("opens the menu of the tab in front each time its key is pressed on another tab", async () => {
+      await drawn(twoWithTasks());
+      pane(1).focus();
+      chord("J");
+      await waitFor(() => expect(menus()).toEqual(["Tasks of steward 1"]));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(menus()).toEqual([]));
+
+      await userEvent.click(tab("steward 2"));
+      await waitFor(() => expect(onScreen()).toEqual([2]));
+      pane(2).focus();
+      chord("J");
+
+      await waitFor(() => expect(menus()).toEqual(["Tasks of steward 2"]));
+    });
+
+    it("closes it when asked again while it is open, and the keyboard is back where it was", async () => {
+      await drawn(twoWithTasks());
+      pane(1).focus();
+      chord("J");
+      await waitFor(() => expect(document.activeElement).toBe(line("steward 1")));
+
+      chord("J");
+
+      await waitFor(() => expect(menus()).toEqual([]));
+      await waitFor(() => expect(document.activeElement).toBe(pane(1)));
+      // And a third ask opens it again, with Escape still knowing the way back.
+      chord("J");
+      await waitFor(() => expect(document.activeElement).toBe(line("steward 1")));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(document.activeElement).toBe(pane(1)));
+    });
+  });
+
+  it("stays, with the keyboard on the line, when Enter is pressed on a task that has ended", async () => {
+    const { tree, ended } = await drawn([
+      chat(1, "alpha"),
+      chat(4, "alpha", { persona: "devops", label: "talk", from: taskOf(1) }),
+    ]);
+    await userEvent.click(treeRow(tree, "talk"));
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+    await ended(4);
+    const back = await screen.findByRole("button", { name: /^Back to/ });
+    await waitFor(() => expect(document.activeElement).toBe(back));
+
+    // The key lands the keyboard on the chat the tab shows, which is the ended task's line.
+    chord("J");
+    await waitFor(() => expect(document.activeElement).toBe(line("talk")));
+    await userEvent.keyboard("{Enter}");
+
+    expect(menu()).not.toBeNull();
+    expect(document.activeElement).toBe(line("talk"));
+    // And Escape still gives the keyboard back to where it was.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(menu()).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(back));
+  });
+
+  describe("where the window's keys are not the window's", () => {
+    /** Something on the page that the keyboard is in, taken away after the test. */
+    function typingIn(html: string): HTMLElement {
+      const holder = document.createElement("div");
+      holder.innerHTML = html;
+      document.body.append(holder);
+      const field = holder.querySelector("input") as HTMLElement;
+      field.focus();
+      return field;
+    }
+
+    afterEach(() => {
+      for (const one of document.querySelectorAll("[data-typing-in]")) one.parentElement?.remove();
+    });
+
+    it("leaves every chord alone while a dialog has the keyboard", async () => {
+      await drawn(withTasks());
+      const field = typingIn('<div role="dialog" data-typing-in><input /></div>');
+
+      for (const [key, code] of [["J"], ["}", "BracketRight"], ["H"]]) {
+        const reached = fireEvent.keyDown(field, { key, code, ctrlKey: true, shiftKey: true });
+        expect(reached).toBe(true);
+      }
+
+      expect(menu()).toBeNull();
+      expect(onScreen()).toEqual([1]);
+    });
+
+    it("leaves a chord whose row cannot run to the text field it was typed in", async () => {
+      await drawn(withTasks());
+      await userEvent.click(tab("steward 2"));
+      await waitFor(() => expect(onScreen()).toEqual([2]));
+      const field = typingIn("<input data-typing-in />");
+
+      // steward 2 has no tasks: none of the four rows can run.
+      const reached = fireEvent.keyDown(field, { key: "J", ctrlKey: true, shiftKey: true });
+
+      expect(reached).toBe(true);
+    });
+
+    it("still takes a chord whose row can run, wherever it was typed", async () => {
+      await drawn(withTasks());
+      const field = typingIn("<input data-typing-in />");
+
+      const reached = fireEvent.keyDown(field, { key: "J", ctrlKey: true, shiftKey: true });
+
+      expect(reached).toBe(false);
+      await waitFor(() => expect(menu()).not.toBeNull());
+    });
+  });
+
   it("goes to the next and the previous chat in the tab, round its ends, and back to its own", async () => {
     await drawn(withTasks());
     pane(1).focus();
@@ -874,6 +1153,138 @@ describe("the keys for the chats inside a tab", () => {
     expect(menu()).toBeNull();
     expect(onScreen()).toEqual([2]);
     expect(commandsOf(asked, "send_input")).toEqual([]);
+  });
+});
+
+describe("tasks that have finished", () => {
+  /** steward 1 with one open task, talk (4), and steward 2 with none. */
+  const some = () => [
+    chat(1, "alpha"),
+    chat(2, "alpha"),
+    chat(4, "alpha", { persona: "devops", label: "talk", from: taskOf(1) }),
+  ];
+  const failed = { how: "failed", outcome: "failed", folds: false } as const;
+  const closed = {
+    how: "stopped_by_person",
+    outcome: "closed by the person",
+    folds: false,
+  } as const;
+
+  it("are counted on the chip as the core folds them, on a tab with no task still open", async () => {
+    await drawn(some(), [
+      finishedTask(2, "old"),
+      finishedTask(2, "older", { how: "cancelled", outcome: "cancelled" }),
+      finishedTask(2, "probe", failed),
+      // Closed by the person: it reads cancelled, the core does not fold it, it is not done.
+      finishedTask(2, "halt", closed),
+    ]);
+
+    await waitFor(() =>
+      expect(chip("steward 2")?.getAttribute("aria-label")).toBe(
+        "Tasks of steward 2: 2 failed, 2 done",
+      ),
+    );
+    // And the tab says so, and Down on it opens the menu.
+    expect(tab("steward 2").getAttribute("aria-haspopup")).toBe("menu");
+  });
+
+  it("each have a line in the menu: a failure and one the person closed alone, the rest in the fold", async () => {
+    await drawn(some(), [
+      finishedTask(1, "old"),
+      finishedTask(1, "probe", { ...failed, place: "beta" }),
+      finishedTask(1, "halt", closed),
+    ]);
+    await waitFor(() =>
+      expect(theChip("steward 1").getAttribute("aria-label")).toBe(
+        "Tasks of steward 1: 1 working, 2 failed, 1 done",
+      ),
+    );
+
+    press(theChip("steward 1"));
+
+    expect(lines()).toEqual([
+      "steward 1, shown now running (no detail from claude)",
+      "talk running (no detail from claude)",
+      "probe in beta failed",
+      "halt cancelled closed by the person",
+      "Finished (1)",
+    ]);
+  });
+
+  it("are reached with the arrows, and Enter opens a finished task's report in place", async () => {
+    await drawn(some(), [
+      finishedTask(1, "probe", { ...failed, report: "The deploy is red: the image is missing." }),
+    ]);
+    await waitFor(() => expect(chip("steward 1")?.getAttribute("aria-label")).toContain("failed"));
+    pane(1).focus();
+    chord("J");
+    await waitFor(() => expect(document.activeElement).toBe(line("steward 1")));
+
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(line("probe"));
+    await userEvent.keyboard("{Enter}");
+
+    expect(menu()).not.toBeNull();
+    expect(document.activeElement).toBe(line("probe"));
+    expect(screen.getByRole("region", { name: "Report of probe" }).textContent).toBe(
+      "The deploy is red: the image is missing.",
+    );
+    // Nothing was gone to: a finished task has no chat.
+    expect(onScreen()).toEqual([1]);
+  });
+
+  it("stand under the task that asked for them", async () => {
+    await drawn(
+      [...some(), chat(7, "alpha", { persona: "devops", label: "deep", from: taskOf(4) })],
+      [finishedTask(4, "dig", failed)],
+    );
+    await waitFor(() => expect(chip("steward 1")?.getAttribute("aria-label")).toContain("failed"));
+
+    press(theChip("steward 1"));
+
+    expect(lines()).toEqual([
+      "steward 1, shown now running (no detail from claude)",
+      "talk running (no detail from claude)",
+      "deep, asked by talk running (no detail from claude)",
+      "dig, asked by talk failed",
+    ]);
+    expect(line("dig").getAttribute("data-level")).toBe("3");
+  });
+
+  it("move from the open rows to the finished ones as a task ends at its report", async () => {
+    const { finishes } = await drawn(some());
+    expect(theChip("steward 1").getAttribute("aria-label")).toBe("Tasks of steward 1: 1 working");
+
+    await finishes(4, finishedTask(1, "talk"));
+
+    await waitFor(() =>
+      expect(theChip("steward 1").getAttribute("aria-label")).toBe("Tasks of steward 1: 1 done"),
+    );
+    press(theChip("steward 1"));
+    expect(lines()).toEqual([
+      "steward 1, shown now running (no detail from claude)",
+      "Finished (1)",
+    ]);
+  });
+
+  it("are one line, marked as shown, for the task the tab was left on", async () => {
+    const { tree, finishes } = await drawn(some());
+    await userEvent.click(treeRow(tree, "talk"));
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+
+    await finishes(4, finishedTask(1, "talk", failed));
+    await waitFor(() => expect(screen.queryByTestId("task-away")).not.toBeNull());
+
+    await waitFor(() =>
+      expect(theChip("steward 1").getAttribute("aria-label")).toBe("Tasks of steward 1: 1 failed"),
+    );
+    press(theChip("steward 1"));
+    // Not two lines for one task: the finished row is the line of what the tab shows.
+    expect(lines()).toEqual([
+      "steward 1 running (no detail from claude)",
+      "talk, shown now failed",
+    ]);
+    expect(line("talk").hasAttribute("data-current")).toBe(true);
   });
 });
 

@@ -16,6 +16,7 @@ import { ViewMark } from "./Views";
 import type { ListedChat } from "./chatsTree";
 import { shownState, type Shown, type TaskFacts } from "./shownState";
 import { StateShown } from "./StateShown";
+import { needsSaid } from "./tabTasks";
 
 /*
  * **The rows that draw a chat** (SC-3): split out of `PlaneView`, whose rendering they no longer
@@ -214,12 +215,6 @@ export const StartedElsewhere = memo(function StartedElsewhere({
 
 /** No names: what a tab with no hidden task that needs you is handed. */
 const NO_NAMES: readonly string[] = [];
-
-/** What a tab's hand says: the task that has waited longest, and how many more there are. */
-function needsSaid(names: readonly string[]): string {
-  const [first, ...more] = names;
-  return more.length === 0 ? `${first} needs you` : `${first} and ${more.length} more need you`;
-}
 
 /**
  * What a tab says about itself, on the strip and in the menu of what the strip has no room for.

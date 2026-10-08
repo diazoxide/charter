@@ -1382,23 +1382,24 @@ button.show-more:focus-visible {
    **What gives way, in order, as a tab narrows**:
    1. the name, to an ellipsis, as a tab's name always has, down to a floor of `2rem` for the
       tab's button (its mark and the start of its name);
-   2. then the counts, whole and from the end: finished first, then failed, so the count of
-      what is still working is the last one standing;
-   3. where the tab also wears the hand, the counts go together and the hand stays: a chat
-      waiting for the person is said before a number is.
-   Nothing is cut through: a count that does not fit wraps onto a second line, and the chip
-   is one line tall and shows no second. */
+   2. then the counts, whole and from the end: finished first, then failed, then waiting, so
+      the count of what is still working is the last one standing;
+   3. only in a cell too narrow for the hand and one count beside the floor (under `7.5rem`,
+      the narrowest a tab is drawn), the counts go and the hand stays: a chat waiting for the
+      person is said before a number is.
+   Nothing is cut through: a count that does not fit wraps onto a second line of the counts'
+   own box, which is one line tall and shows no second. */
 .tabs .tab > .tab-tasks {
   display: flex;
   flex: 0 1 auto;
-  flex-wrap: wrap;
-  gap: 0 0.15rem;
-  align-content: flex-start;
+  gap: 0.15rem;
   align-items: center;
   align-self: center;
   min-width: min-content;
   height: 1.35rem;
-  overflow: hidden;
+  /* Clear of the tab's close, whose press ends the chat: a press a pixel off a count must
+     not be one. */
+  margin-inline-end: 0.25rem;
 }
 
 /* The name gives way a thousand times sooner than the chip, and stops at its floor. */
@@ -1424,7 +1425,7 @@ button.show-more:focus-visible {
   cursor: pointer;
 }
 
-/* The counts are themselves one line that wraps: what does not fit is not drawn. */
+/* The counts are one line that wraps: what does not fit is not drawn. */
 .tabs .tab-tasks button.tab-tasks-counts {
   flex: 0 1 auto;
   flex-wrap: wrap;
@@ -1460,8 +1461,24 @@ button.show-more:focus-visible {
   height: 0.75rem;
 }
 
+/* The hand is pressed, so it is as wide as a thing to press. */
 .tabs .tab-tasks button.tab-tasks-hand {
+  justify-content: center;
+  min-width: 1.5rem;
   padding: 0 0.15rem;
+}
+
+/* The narrowest tab that also wears the hand has no room for a count beside it (the third
+   step above). Asked of the tab's own cell, and only of a cell that wears the hand, so no
+   other tab is measured any differently than it was. */
+.tabs .tab:has(> .tab-tasks > .tab-tasks-hand) {
+  container: tab-with-hand / inline-size;
+}
+
+@container tab-with-hand (max-width: 7.5rem) {
+  .tab-tasks > .tab-tasks-hand ~ .tab-tasks-counts {
+    display: none;
+  }
 }
 
 /* **The menu a chip opens** (#1487, V100-33): the chats that live in the tab, the session's
@@ -1552,8 +1569,36 @@ button.show-more:focus-visible {
   text-overflow: ellipsis;
 }
 
-.tasks-menu-row[aria-current="true"] .name {
+.tasks-menu-row[data-current] .name {
   font-weight: 600;
+}
+
+/* Who asked for a task, drawn where its line stands in the fold and no indent says it. */
+.tasks-menu-row .asked {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+/* **An ended task's report, opened under its line**: text, as its finished row in the Chats
+   list draws it, wrapped and no taller than a few lines before it scrolls. */
+.tasks-menu-report {
+  max-height: 10rem;
+  margin: 0 0.45rem 0.2rem 1.35rem;
+  padding: 0.3rem 0.5rem;
+  overflow-y: auto;
+  border-inline-start: 2px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tasks-menu-report .report-text {
+  margin: 0;
 }
 
 .tasks-menu-row .where,

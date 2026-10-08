@@ -31,6 +31,7 @@ import type {
   Curations,
   ExtensionCommand,
   ExtensionView,
+  FinishedTask,
   MemoryScope,
   PanelBlock,
   RowAction,
@@ -60,7 +61,7 @@ import { shellKeySaid } from "./shellKey";
 import { switcherKeySaid } from "./switcherKey";
 import { chatsOfTab } from "./tabChats";
 import { neighbour } from "./tabTasks";
-import { taskKeySaid } from "./taskKeys";
+import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
 import {
@@ -646,6 +647,9 @@ export type Now = {
   listed?: readonly ListedChat[];
   /** The chats being stopped (#1448): each one's Stop row ends it now. */
   stopping?: readonly number[];
+  /** Each chat's finished tasks, by its number (#1485): a tab whose tasks have all finished
+   *  still has a task menu to open (#1487). */
+  finished?: ReadonlyMap<number, readonly FinishedTask[]>;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -2844,13 +2848,18 @@ function tabChatRows(now: Now): Offer[] {
   const rows = chatsOfTab(now.tabs, front.id, now.listed ?? []);
   const shown = focusedChat(now.tabs);
   const showsTask = front.shows?.[pane.pane] !== undefined;
-  const hasTasks = rows.some((row) => row.level > 1) || front.shows !== undefined;
+  const hasTasks =
+    rows.some((row) => row.level > 1 || (now.finished?.get(row.session)?.length ?? 0) > 0) ||
+    front.shows !== undefined;
   const none = `${front.name} has no tasks.`;
   const step = (id: string, title: string, by: 1 | -1, key: "next" | "previous"): Offer => {
     const to = hasTasks ? neighbour(rows, shown, by) : undefined;
     return to === undefined || to === shown
       ? cannot(id, title, hasTasks ? `${front.name} is the only chat in this tab.` : none)
-      : { ...can(id, title, { verb: "showChat", session: to }), note: `${taskKeySaid(key, mac)}.` };
+      : {
+          ...can(id, title, { verb: "showChat", session: to }),
+          note: `${taskKeySaid(key, mac)}.${taskKeyNote(key, mac)}`,
+        };
   };
   return [
     hasTasks

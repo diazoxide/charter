@@ -235,12 +235,14 @@ import {
   hiddenNeeding,
   type Crumbs,
 } from "./tabChats";
-import { TabTasks, useSinceClock } from "./TabChip";
-import type { Ended, Needing } from "./tabTasks";
-import { TASK_KEY_ROW, taskKeyOf, taskKeySaid } from "./taskKeys";
+import { TabTasks } from "./TabChip";
+import { hasTasks, type Ended, type Needing } from "./tabTasks";
+import { taskBucketOf } from "./taskCounts";
+import { stateClock } from "./stateClock";
+import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { PaneCrumbs } from "./PaneCrumbs";
-import { giveKeyboardTo } from "./paneKeyboard";
+import { giveKeyboardTo, inADialog } from "./paneKeyboard";
 import { endedState, TaskAway, type Away } from "./TaskAway";
 import { StateShown } from "./StateShown";
 import { useHeldAmong } from "./dispatchesHeld";
@@ -1863,6 +1865,8 @@ export const PlaneView = memo(function PlaneView({
   /** Unique to this view, so two projects' tabs never name each other's fresh marks. */
   const freshMarks = useId();
   const freshMarkOf = (tab: number) => `${freshMarks}-fresh-${tab}`;
+  /** The id of the counts on a tab's chip (#1487), which the tab is described by. */
+  const tasksIdOf = (tab: number) => `${freshMarks}-tasks-${tab}`;
   const strip = useCallback(
     (element: HTMLElement | null) => {
       chatStrip.current = element;
@@ -4554,14 +4558,33 @@ export const PlaneView = memo(function PlaneView({
       ...pretended.map(({ chat, workspace }) => one(chat, workspace)),
     ].sort((a, b) => a.session - b.session);
   }, [nameOfListed, pretended, sidebar, tabs]);
-  /** How long each chat has been in its state, as this window saw it: a tab's menu says it. */
-  const sinceClock = useSinceClock(chats, listedChats);
   /** The chats of each tab, as its chip counts them and its menu lists them (#1487). */
   const chatsByTab = useMemo(() => chatsOfTabs(tabs, listedChats), [listedChats, tabs]);
   useEffect(() => {
     chatsListed.current = listedChats;
   }, [listedChats]);
   const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
+  /**
+   * **How long each chat has been in its state, as this window saw it** (`stateClock.ts`): one
+   * clock for the project, held here so it runs whether or not the Chats list is drawn, and
+   * read by that list's rows and by a tab's menu alike (#1487). The list says which rows are
+   * on screen, which is what the clock calls a change somebody saw.
+   */
+  const chatClock = useMemo(() => {
+    void plane;
+    return stateClock();
+  }, [plane]);
+  const rowsOnScreen = useRef<ReadonlySet<number>>(NO_ROWS_DRAWN);
+  const rowsDrawn = useCallback((drawn: ReadonlySet<number>) => {
+    rowsOnScreen.current = drawn;
+  }, []);
+  const { store: chatStore, plane: chatsOf } = chats;
+  useEffect(() => {
+    const read = () =>
+      chatClock.read(chatStore.statesFor(chatsOf), chatRows, Date.now(), rowsOnScreen.current);
+    read();
+    return chatStore.subscribe(read);
+  }, [chatClock, chatRows, chatStore, chatsOf]);
   /**
    * **The breadcrumb of every pane that shows a task and can be drawn**, by tab, pane and
    * chat (#1486): the path read off the core's list, for the panes `shownLive` says are live.
@@ -4729,37 +4752,78 @@ export const PlaneView = memo(function PlaneView({
     [askedBy, chatsByNumber, tabs, waitingForYou],
   );
   /**
-   * **Each tab's tasks that have ended and that it still shows** (#1487): a task that ended is
-   * not in the list of open chats, and its tab stays on it until the person goes back
-   * (`shownLive`, `TaskAway`), so the tab's menu has a line for it, said as its pane says it.
+   * **Each tab's tasks that have ended and still have a line** (#1487): they are not in the
+   * list of open chats, so they are handed to the tab's chip beside its rows.
+   *
+   * - **The finished rows of every chat of the tab**, at every level, since a task's own tasks
+   *   finish under it (`finished.ts`, #1485): each as its row in the Chats list says it, and
+   *   folding as the core says it folds.
+   * - **The task the tab still shows**, which stays on screen until the person goes back
+   *   (`shownLive`, `TaskAway`): the same line as its finished row where it has one, found as
+   *   the pane finds it (`finishedOf`), and a line of its own until that row is read.
    */
   const endedByTab = useMemo(() => {
     const ended = new Map<number, Ended[]>();
     if (sidebar === undefined) return ended;
     const open = (session: number) => chatsByNumber.has(session);
     for (const id of tabs.order) {
-      if (tabs.byId[id].shows === undefined) continue;
-      const gone = shownLive(tabs, id, askedBy, open).flatMap((one): Ended[] => {
-        if (one.live || one.session === one.own || open(one.session)) return [];
-        const last = recalled.get(`${id}:${one.pane}:${one.session}`);
-        const shown = last === undefined ? undefined : endedState(last);
-        if (last === undefined || shown === undefined) return [];
-        const task = last.path[last.path.length - 1];
-        return [
-          {
-            key: `ended:${one.session}`,
-            session: one.session,
-            asker: last.path[last.path.length - 2]?.session ?? one.own,
+      const lines: Ended[] = [];
+      let home: string | undefined;
+      for (const row of chatsByTab.get(id) ?? NO_ROWS) {
+        if (row.level === 1) home = row.workspace;
+        for (const task of finishedTasks.get(row.session) ?? []) {
+          const shown = shownOf(task);
+          if (shown === undefined) continue;
+          // The core's word for the root and this window's, as one.
+          const place = task.place === CORE_ROOT_WORD ? ROOT_WORD : task.place;
+          lines.push({
+            key: `finished:${task.id}`,
+            asker: task.asker,
             name: task.name,
             persona: task.persona,
             shown,
-          },
-        ];
-      });
-      if (gone.length > 0) ended.set(id, gone);
+            qualifier: qualifierOf(task),
+            folds: task.folds,
+            elsewhere: place === home ? null : place,
+            report: task.report,
+          });
+        }
+      }
+      if (tabs.byId[id].shows !== undefined)
+        for (const one of shownLive(tabs, id, askedBy, open)) {
+          if (one.live || one.session === one.own || open(one.session)) continue;
+          const last = recalled.get(`${id}:${one.pane}:${one.session}`);
+          if (last === undefined) continue;
+          const task = last.path[last.path.length - 1];
+          const asker = last.path[last.path.length - 2]?.session ?? one.own;
+          const row = finishedOf(finishedTasks, asker, task.name);
+          const at =
+            row === undefined ? -1 : lines.findIndex((line) => line.key === `finished:${row.id}`);
+          if (at >= 0) {
+            lines[at] = { ...lines[at], session: one.session };
+            continue;
+          }
+          const shown = endedState(last);
+          if (shown === undefined) continue;
+          lines.push({
+            key: `ended:${one.session}`,
+            session: one.session,
+            asker,
+            name: task.name,
+            persona: task.persona,
+            shown,
+            folds: taskBucketOf(shown.kind) === "done",
+            elsewhere: last.elsewhere,
+          });
+        }
+      if (lines.length > 0) ended.set(id, lines);
     }
     return ended;
-  }, [askedBy, chatsByNumber, recalled, sidebar, tabs]);
+  }, [askedBy, chatsByNumber, chatsByTab, finishedTasks, recalled, sidebar, tabs]);
+  /** Whether tab `id` has tasks its chip counts: what Down on the tab opens the menu of, and
+   *  what the tab says it has. The chip's own answer (`tabTasks.hasTasks`). */
+  const tabHasTasks = (id: number) =>
+    hasTasks(chatsByTab.get(id) ?? NO_ROWS, endedByTab.get(id) ?? NO_ENDED);
   /** Goes to a chat from a tab's chip or its menu (#1487): the tab is switched to it, and its
    *  terminal takes the keyboard whether or not the tab was already on it. */
   //
@@ -4932,6 +4996,7 @@ export const PlaneView = memo(function PlaneView({
             neededFor: (session) => needs[session] ?? [],
             stoppedBelow: (session) => stoppedBelow[session] ?? [],
             listed: listedChats,
+            finished: finishedTasks,
             stopping: [...stopping],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
@@ -4981,6 +5046,7 @@ export const PlaneView = memo(function PlaneView({
       needs,
       stoppedBelow,
       listedChats,
+      finishedTasks,
       stopping,
       strips,
       tabs,
@@ -5280,20 +5346,25 @@ export const PlaneView = memo(function PlaneView({
    * **The keys for the chats inside the tab in front** (`taskKeys.ts`, #1487): its task menu,
    * the next and the previous chat in it, and back to its session's own chat. Each presses the
    * catalogue's row, as the palette would. Claimed on the window, capture-phase, by the
-   * project in front, as the shell's key is. **The key is the window's whether or not its row
-   * can run**: none of the four is a byte to a terminal, so nothing is kept from a chat, and a
-   * key that did something on one tab and reached the program on the next would be worse.
+   * project in front, as the shell's key is.
+   *
+   * **Not under a dialog**: a question the person is answering keeps every key. **Over a
+   * terminal the chord is the window's whether or not its row can run**: none of the four is a
+   * byte to a terminal, so nothing is kept from a chat, and a key that did something on one tab
+   * and reached the program on the next would be worse. **In a text field or an editor a chord
+   * whose row cannot run is left alone**: there it may be the field's own.
    */
   useEffect(() => {
     if (!inFront) return;
     const key = (e: KeyboardEvent) => {
       const which = taskKeyOf(e, onAMac());
-      if (which === undefined) return;
+      if (which === undefined || inADialog()) return;
+      const offer = by(TASK_KEY_ROW[which]);
+      if (offer?.available !== true && typedInto(e.target)) return;
       e.preventDefault();
       e.stopPropagation();
-      if (e.repeat) return;
-      const offer = by(TASK_KEY_ROW[which]);
-      if (offer?.available) press(offer);
+      if (e.repeat || offer?.available !== true) return;
+      press(offer);
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
@@ -5882,6 +5953,8 @@ export const PlaneView = memo(function PlaneView({
                                       ? `Press to go back to ${tabs.byId[id].name}`
                                       : undefined
                                   }
+                                  // Down opens the menu of its tasks, where it has any (#1487).
+                                  aria-haspopup={tabHasTasks(id) ? "menu" : undefined}
                                   // The fresh mark beside it as well (#1246): it is outside the tab.
                                   aria-describedby={
                                     [
@@ -5892,6 +5965,9 @@ export const PlaneView = memo(function PlaneView({
                                       )
                                         ? freshMarkOf(id)
                                         : undefined,
+                                      // And its tasks' counts, which are beside it too
+                                      // (#1487): "Tasks of steward 4: 2 working".
+                                      tabHasTasks(id) ? tasksIdOf(id) : undefined,
                                     ]
                                       .filter(Boolean)
                                       .join(" ") || undefined
@@ -5923,7 +5999,7 @@ export const PlaneView = memo(function PlaneView({
                                       event.key === "ArrowDown" &&
                                       !(event.altKey || event.ctrlKey || event.metaKey) &&
                                       !event.shiftKey &&
-                                      (chatsByTab.get(id) ?? NO_ROWS).some((row) => row.level > 1)
+                                      tabHasTasks(id)
                                     ) {
                                       event.preventDefault();
                                       showTabTasks(id);
@@ -5971,6 +6047,7 @@ export const PlaneView = memo(function PlaneView({
                                 between them. Beside the tab's button: a button holds no
                                 button. Nothing for a tab with no tasks. */}
                             <TabTasks
+                              id={tasksIdOf(id)}
                               name={tabs.byId[id].name}
                               rows={chatsByTab.get(id) ?? NO_ROWS}
                               ended={endedByTab.get(id) ?? NO_ENDED}
@@ -5980,8 +6057,7 @@ export const PlaneView = memo(function PlaneView({
                               }
                               needs={hiddenByTab.get(id) ?? NO_NEEDS}
                               asked={tasksAsked?.tab === id ? tasksAsked.count : 0}
-                              keySaid={taskKeySaid("menu", onAMac())}
-                              clock={sinceClock}
+                              clock={chatClock}
                               dragging={isDragging}
                               onShow={showFromChip}
                             />
@@ -6286,6 +6362,8 @@ export const PlaneView = memo(function PlaneView({
                 finished={finishedTasks}
                 onClearFinished={clearFinished}
                 onReopen={reopenFinished}
+                clock={chatClock}
+                onDrawn={rowsDrawn}
               />
               <Explorer
                 plane={plane}
@@ -7195,6 +7273,24 @@ function whoOf(persona: string | null, harness: string | null | undefined): stri
 
 /** Where a chat in no workspace works, in the words its handoff note uses (`plane root`). */
 const ROOT_WORD = "plane root";
+
+/** The core's word for the same place, where a finished task worked there
+ *  (`FinishedTask.place`). */
+const CORE_ROOT_WORD = "project root";
+
+/** No row of the Chats list is on screen: what the clock is read with until the list says. */
+const NO_ROWS_DRAWN: ReadonlySet<number> = new Set();
+
+/**
+ * Whether a key landed where the person types text that is not a chat's: a field, a text box
+ * or an editor. A terminal reads from a text box of its own, inside a pane that says the chat
+ * has the keyboard there (`CHAT_KEYBOARD`), and is not one of these.
+ */
+function typedInto(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(`[${CHAT_KEYBOARD}]`) !== null) return false;
+  return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+}
 
 /** What a tab with no tasks hands its chip, the same lists every time. */
 const NO_ROWS: readonly ChatRow[] = [];

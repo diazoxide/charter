@@ -214,6 +214,8 @@ async function cross(dwell: number): Promise<{ over: number; chips: number }> {
       for (const stop of stops) {
         if (last === null) send(stop, "pointerover", null);
         else send(last, "pointerout", stop);
+        // A move at its own point on each thing: the pointer is moving, which is what would
+        // start a rest on a chip if it then stayed.
         send(stop, "pointermove", null);
         last = stop;
         await wait(stay);
@@ -239,7 +241,7 @@ async function pointer(name: string, what: "on" | "off"): Promise<boolean> {
       const counts = cell?.querySelector<HTMLElement>(".tab-tasks-counts");
       if (!counts) return false;
       const at = counts.getBoundingClientRect();
-      const send = (type: string) =>
+      const send = (type: string, dx = 0) =>
         counts.dispatchEvent(
           new PointerEvent(type, {
             bubbles: true,
@@ -247,14 +249,16 @@ async function pointer(name: string, what: "on" | "off"): Promise<boolean> {
             pointerId: 1,
             pointerType: "mouse",
             isPrimary: true,
-            clientX: at.left + at.width / 2,
+            clientX: at.left + at.width / 2 + dx,
             clientY: at.top + at.height / 2,
             relatedTarget: null,
           }),
         );
       if (how === "on") {
+        // Onto it, and then a move to another point: a rest is counted from a move the
+        // person made, never from the pointer merely being found there.
         send("pointerover");
-        send("pointermove");
+        send("pointermove", 2);
       } else send("pointerout");
       return true;
     },
@@ -386,6 +390,36 @@ describe("the chip a session's tab wears for its tasks", () => {
       await browser.pause(900);
       expect(await menus()).toBe(0);
     }
+  });
+
+  it("opens no menu for a chip that appears under a pointer that is not moving", async () => {
+    // The pointer is parked where the chip will be drawn, and then the session gets tasks:
+    // the engine finds the pointer on the new chip, and nobody's hand moved.
+    await pretend(asker, ["working"]);
+    await untilChip(mine[0], true);
+    const parked = await browser.execute((strip: string) => {
+      const counts = document.querySelector<HTMLElement>(`${strip} .tab-tasks-counts`);
+      if (!counts) return false;
+      const at = counts.getBoundingClientRect();
+      const here = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        clientX: at.left + at.width / 2,
+        clientY: at.top + at.height / 2,
+      };
+      counts.dispatchEvent(new PointerEvent("pointerover", { ...here, relatedTarget: null }));
+      // The same point again, as an engine says "still here" after a layout.
+      counts.dispatchEvent(new PointerEvent("pointermove", here));
+      counts.dispatchEvent(new PointerEvent("pointermove", here));
+      return true;
+    }, STRIP);
+    expect(parked).toBe(true);
+
+    await browser.pause(1_200);
+    expect(await menus()).toBe(0);
   });
 
   it("opens the menu once the pointer has rested on the chip, and closes it once it has gone", async () => {

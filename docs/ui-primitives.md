@@ -958,22 +958,42 @@ chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in
 opens a Search tab. It is a capture listener on the window, held by the project in front, as the
 new-shell key is.
 
-**The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`): `⌘⇧`
-on a Mac and `Ctrl+Shift` elsewhere, with `J` for the tab's task menu, `]` and `[` for the next
-and the previous chat in the tab, and `H` for the session's own chat. xterm.js 6.0.0 sends
-nothing for a `⌘` chord, and encodes `Ctrl` with a letter, `[` or `]` only when Shift is not
-held (`common/input/Keyboard.ts`: the branch is `ctrlKey && !shiftKey`, and with Shift held
-only `_` and `@` are turned into anything). So none of the four was ever a byte, and plain
-`Ctrl+J` (newline), `Ctrl+H` (backspace), `Ctrl+[` (Escape) and `Ctrl+]` still reach the shell.
-`⌘H` alone stays the system's Hide: Shift is part of each chord. The brackets are read by where
-the key is as well as by what it types, since Shift makes them `{` and `}` on one layout and
-something else on another. They are one capture listener on the window, held by the project in
-front, and each presses its catalogue row (`tasks.menu`, `tasks.next`, `tasks.previous`,
-`tasks.own`), which the palette lists with its key. **The key is the window's whether or not
-its row can run**: on a tab with no tasks it does nothing and reaches no program, so the same
-chord never means two things from one tab to the next. `⌘⇧]` and `⌘⇧[` move between the chats
-of ONE tab; no key moves between the tabs of the strip yet, and one that does should not take
-these.
+**The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
+
+|                                                               | On a Mac      | Everywhere else                 |
+| ------------------------------------------------------------- | ------------- | ------------------------------- |
+| The tab's task menu                                           | `⌘⇧J`         | `Ctrl+Shift+J`                  |
+| The next / previous chat in the tab                           | `⌘⌥↓` / `⌘⌥↑` | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
+| Back to the session's own chat                                | `⌘⇧H`         | `Ctrl+Shift+H`                  |
+| **Reserved, not built**: the next / previous tab on the strip | `⌘⇧]` / `⌘⇧[` | `Ctrl+PageDown` / `Ctrl+PageUp` |
+
+Read in xterm.js 6.0.0 (`common/input/Keyboard.ts`): a `⌘` chord with a letter sends nothing
+but `⌘A`; each arrow's case breaks on `metaKey` before it builds anything, so `⌘⌥↓` and `⌘⌥↑`
+send nothing, while `⌥↓` without `⌘` is `ESC [1;3B` and stays the terminal's; and `Ctrl` with a
+letter, `[` or `]` is encoded only when Shift is not held (the branch is `ctrlKey && !shiftKey`,
+and with Shift only `_` and `@` are turned into anything). So none of the chords was ever a
+byte, and plain `Ctrl+J` (newline), `Ctrl+H` (backspace), `Ctrl+[` (Escape) and `Ctrl+]` still
+reach the shell. `⌘H` alone stays the system's Hide: Shift is part of that chord.
+
+**Down and Up on a Mac, because a tab's chats hang under it**: its menu lists them top to
+bottom and Down on a focused tab opens that menu. **`⌘⇧]` and `⌘⇧[` are not taken**: they are
+next and previous tab in every tabbed program on a Mac, and they are kept for the strip. Off a
+Mac the brackets have no such meaning (tabs there are `Ctrl+PageUp` and `Ctrl+PageDown`) and
+`Ctrl+Alt` with an arrow is the desktop's.
+
+**A key is matched by what it types, not by where it is**, so a layout that puts another
+character on a key never fires two of the window's actions at once: on Dvorak the key in `]`'s
+place types `=` and `+`, which with the same modifier is the text size's. Only where a layout
+has no `[` or `]` without AltGr (German, Nordic, French) is the key in their place taken, and
+then never when it types a letter or a digit or is another of the window's keys. The palette's
+rows for the two say so.
+
+They are one capture listener on the window, held by the project in front, and each presses
+its catalogue row (`tasks.menu`, `tasks.next`, `tasks.previous`, `tasks.own`), which the
+palette lists with its key. **Nothing is taken while a dialog has the keyboard.** Over a
+terminal the chord is the window's whether or not its row can run, so the same chord never
+means two things from one tab to the next; in a text field or an editor a chord whose row
+cannot run is left to the field.
 
 **A menu that opens under a resting pointer takes no keyboard** (#1487, `TabChip.tsx`). The
 task menu on a tab's chip is Radix's dropdown menu, opened three ways: a press, the key above,
@@ -981,8 +1001,16 @@ and the pointer resting on the chip. Radix moves the focus into a menu as it ope
 each row the pointer crosses, which is right for the first two and would take the keyboard out
 of a terminal for the third. So a rest-opened menu refuses both (the menu's `onOpenAutoFocus`,
 and each row's pointer handlers), the stylesheet's hover says which row the pointer is on, and
-an Escape that closes it stops there instead of also reaching the chat. However it was opened,
-a menu closed without a pick puts the keyboard back where it was before it opened.
+an Escape that closes it stops there instead of also reaching the chat. Only that menu closes
+when the pointer leaves: a pressed or key-opened menu has the keyboard and stays until Escape,
+a pick, a press outside or the same ask again. However it was opened, a menu closed without a
+pick puts the keyboard back where it was before it opened.
+
+**A rest is a move the person made, then stillness.** Both WebKits hit-test again after a
+layout and say "the pointer came onto this" of a pointer that has not moved, so a chip that
+appears, widens or slides under a parked pointer would open its menu by itself. Coming onto
+the chip therefore arms nothing: the 350 ms start at the first pointer move to a new point,
+with no button held.
 
 **Shift+Enter in a harness's pane is the harness's newline** (SI-4, `Harness::newline`). A
 terminal has no Shift+Enter: xterm.js 6.0.0 sends a bare CR for it, the byte Enter sends, so every

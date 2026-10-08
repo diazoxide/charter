@@ -50,6 +50,9 @@ const rowId = (session: number) => `chats:${session}`;
 const NO_OFFERS: Catalogued = new Map();
 
 /** No finished tasks: what a section drawn without them lists. */
+/** No row is on screen: what the clock's reader is told once the list is gone. */
+const NOTHING_DRAWN: ReadonlySet<number> = new Set();
+
 const NONE_FINISHED: ReadonlyMap<number, FinishedTask[]> = new Map();
 const NO_TASKS: readonly FinishedTask[] = [];
 const NOT_REOPENED = () => Promise.resolve<string | undefined>(undefined);
@@ -163,6 +166,8 @@ export function ChatsSection({
   finished = NONE_FINISHED,
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
+  clock: given,
+  onDrawn,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -182,6 +187,15 @@ export function ChatsSection({
   onClearFinished?: (ids: string[]) => void;
   /** Reopens a finished task as an ordinary chat; answers why not, where it could not. */
   onReopen?: (task: FinishedTask) => Promise<string | undefined>;
+  /**
+   * The project's clock of how long each chat has been in its state, where the window holds
+   * one (#1487): the window reads it, so it runs while this list is not drawn, and a tab's
+   * menu says the same times. Left out, the list keeps a clock of its own.
+   */
+  clock?: StateClock;
+  /** Tells whoever reads that clock which chats' rows are on screen (`StateClock.read`): this
+   *  list's rows as they are drawn, and none once it is gone. */
+  onDrawn?: (drawn: ReadonlySet<number>) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -358,16 +372,24 @@ export function ChatsSection({
   // or not, so a row that was folded away says the same time when it is drawn again. One clock
   // per project: chats are numbered per project.
   const { store, plane } = chats;
-  const clock = useMemo(() => {
+  const own = useMemo(() => {
     void plane;
     return stateClock();
   }, [plane]);
+  const clock = given ?? own;
   const onScreen = useMemo(() => new Set(drawn.map((row) => row.session)), [drawn]);
   useEffect(() => {
+    // The window's clock is read by the window, which is told what is on screen here.
+    if (given !== undefined) return;
     const read = () => clock.read(store.statesFor(plane), rows, Date.now(), onScreen);
     read();
     return store.subscribe(read);
-  }, [store, plane, clock, rows, onScreen]);
+  }, [store, plane, clock, given, rows, onScreen]);
+  useEffect(() => {
+    if (given === undefined || onDrawn === undefined) return;
+    onDrawn(onScreen);
+    return () => onDrawn(NOTHING_DRAWN);
+  }, [given, onDrawn, onScreen]);
 
   const fold = useCallback(
     (session: number, shut: boolean) => {
