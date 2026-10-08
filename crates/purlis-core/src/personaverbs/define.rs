@@ -193,8 +193,11 @@ pub fn create(root: &Path, ask: &Create, register_vault: Option<RegisterVault>, 
 
     // A name that defines nothing yet is about to be taken: whatever dispatch grant still
     // names it was an earlier persona's, and the new one does not inherit it (#1504).
-    if !existing.exists() {
-        set_aside_dispatch_grants(root, name, &mut *say);
+    if !existing.exists()
+        && let Err(refused) = set_aside_before_creating(root, name, &mut *say)
+    {
+        say(Say::Fail(refused));
+        return 1;
     }
 
     // Counted before anything is written, and only for a name that defines nothing yet: a
@@ -332,26 +335,81 @@ fn dependents_of(root: &Path, name: &str) -> Vec<String> {
     out
 }
 
-/// **Sets aside the dispatch grants on this machine that name `name`** (#1504,
-/// [`crate::dispatchdormant`]): a persona that is removed leaves none in force, and one made
-/// under a name an earlier persona had inherits none. Says so where there were any. Never
-/// fails the command: a record that could not be written is said, and Settings sets the same
-/// grants aside the next time it reads them.
-fn set_aside_dispatch_grants(root: &Path, name: &str, say: Sink) {
-    match crate::dispatchdormant::persona_gone(root, name) {
-        Ok(moved) if moved.is_empty() => {}
-        Ok(moved) => say(Say::Info(format!(
-            "Set aside {} dispatch {} on this machine that named '{name}': in force for no \
-             chat until you give each back or remove it, in {}.",
-            moved.len(),
-            if moved.len() == 1 { "grant" } else { "grants" },
+/// How many pairs the person said never to name `name`, as asking persona or as target.
+fn nevers_naming(root: &Path, name: &str) -> usize {
+    crate::dispatchgrant::nevers(root)
+        .iter()
+        .filter(|(asking, target)| asking == name || target == name)
+        .count()
+}
+
+/// What is said of the nevers that name `name`, where there are any: a never is not set
+/// aside, so it holds for whichever persona has the name.
+fn say_nevers_hold(root: &Path, name: &str, say: Sink) {
+    let held = nevers_naming(root, name);
+    if held > 0 {
+        say(Say::Info(format!(
+            "{held} {} you said never to on this machine {} '{name}', said of an earlier \
+             persona of this name. A never still holds for this one; lift it in {}.",
+            if held == 1 { "pair" } else { "pairs" },
+            if held == 1 { "names" } else { "name" },
+            crate::dispatchgrant::SETTINGS
+        )));
+    }
+}
+
+/// **Before a persona is made under `name`, which is no persona now** (#1504,
+/// [`crate::dispatchdormant`]): the dispatch grants on this machine that name it are set
+/// aside, with what this machine accepted of the project's, so the new persona inherits none.
+/// Says so where there were any. **`Err` where they could not be set aside: the persona is
+/// then not made**, since it would have them.
+fn set_aside_before_creating(root: &Path, name: &str, say: Sink) -> Result<(), String> {
+    let aside = crate::dispatchdormant::persona_gone(root, name).map_err(|why| {
+        format!(
+            "Dispatch grants on this machine name '{name}', and purlis could not set them \
+             aside ({why}), so it did not create the persona: a new persona must not inherit \
+             them. Create it from the purlis window, or first remove those grants in {}.",
+            crate::dispatchgrant::SETTINGS
+        )
+    })?;
+    if !aside.is_empty() {
+        let held = aside.grants.len() + aside.accepted.len();
+        say(Say::Info(format!(
+            "Set aside {held} dispatch {} on this machine that named an earlier '{name}': in \
+             force for no chat until you give them back to this one, or remove them, in {}.",
+            if held == 1 { "grant" } else { "grants" },
+            crate::dispatchgrant::SETTINGS
+        )));
+    }
+    say_nevers_hold(root, name, say);
+    Ok(())
+}
+
+/// **After the persona `name` is removed** (#1504): the dispatch grants on this machine that
+/// name it are not in force while it is no persona, and it is marked gone so a persona made
+/// later under the name does not get them unasked. Nothing is moved. Says so where any grant
+/// or never names it. Never fails the removal: a mark that could not be written is written by
+/// the next dispatch that is judged.
+fn mark_gone_after_removing(root: &Path, name: &str, say: Sink) {
+    match crate::dispatchdormant::persona_removed(root, name) {
+        Ok(false) => {}
+        Ok(true) => say(Say::Info(format!(
+            "Dispatch grants on this machine name '{name}'. They are in force for no chat \
+             while it is not a persona, and a persona made later under this name gets them \
+             only if you give them back, in {}.",
             crate::dispatchgrant::SETTINGS
         ))),
         Err(why) => say(Say::Info(format!(
-            "purlis could not set aside the dispatch grants that name '{name}' ({why}). Open \
-             {} to do it.",
-            crate::dispatchgrant::SETTINGS
+            "Dispatch grants on this machine name '{name}', and purlis could not record that \
+             it is gone ({why}). They are in force for no chat while it is not a persona."
         ))),
+    }
+    if nevers_naming(root, name) > 0 {
+        say(Say::Info(format!(
+            "What you said never to for '{name}' still holds, and will hold for a persona made \
+             under this name, until you lift it in {}.",
+            crate::dispatchgrant::SETTINGS
+        )));
     }
 }
 
@@ -436,7 +494,7 @@ pub fn remove(
             "  also removed generated .claude/agents/{name}.md."
         )));
     }
-    set_aside_dispatch_grants(root, name, &mut *say);
+    mark_gone_after_removing(root, name, &mut *say);
     say(Say::Info(
         "Its local vault (if any) is left untouched — remove with `purlis vault remove \
          <vault>`."

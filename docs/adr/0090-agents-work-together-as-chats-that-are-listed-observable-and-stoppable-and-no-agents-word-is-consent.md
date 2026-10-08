@@ -625,17 +625,36 @@ cleared. Taking a grant back stops new dispatches only: a task already running i
 is. A project grant can be removed for everyone, which edits the committed file, or stopped on
 one machine (**Not on my machine**), which does not. #1504 builds it.
 
-**7. A persona removed, made again, or renamed (V100-61).** A grant is kept by name, so a name
-that changes hands carries nothing with it.
+**7. A persona that goes away, and a persona of that name there again (V100-61).** A grant is
+kept by name, so a name that changes hands must not carry what the person allowed the persona
+that had it. Two rules, as #1504 builds them:
 
-- When a persona is removed, the person's grants on that machine that name it are set aside,
-  out of the records in force, and that machine's acceptance of the project's grants for the
-  name is dropped. They are shown greyed with Remove.
-- A persona made later under the same name gets none of them unless the person gives each
-  back in Settings.
+- **A grant is in force only while both personas exist.** It is checked where a dispatch is
+  judged, and nothing is moved: a dispatch to a name that is no persona is refused, and so is
+  one from a chat whose persona is no persona of the project now, whatever is granted its
+  name. A named pair, "any persona" and the project's grants obey it alike. A branch without
+  the persona therefore changes no record: the grants are not in force while it is away and
+  are back when it is.
+- **Away, then there again, asks once.** A name a grant holds that is seen to be no persona is
+  marked, by a judged dispatch, by a read of Settings, or by purlis's own `persona remove`.
+  When a marked name is a persona again with the very definition that was known of it, the
+  mark is lifted and nobody is asked (a branch switched away and back). When it is a persona
+  again with another definition, or purlis itself creates a persona under a name grants hold,
+  the person's grants for the name are set aside, with what that machine had accepted of the
+  project's, and are shown greyed with Remove. One **Give back** for the name returns them.
 - **A never is not set aside.** It is the one deny, so it keeps holding for whichever persona
-  has the name, until the person lifts it.
-- A rename through purlis rewrites the name in every record and in `[dispatch.grants]`.
+  has the name, until the person lifts it. Settings says where it was said of an earlier
+  persona.
+- **Reading Settings moves nothing.** The one thing a read writes is the mark.
+
+**What this does not catch, stated so nobody takes it for more.** An absence nothing observed
+still inherits: a persona removed and another made under its name, by hand or in one pull,
+with no dispatch judged and no read of Settings in between, leaves no mark, and the new
+persona has the old one's grants. Only an identity recorded in the persona's definition closes
+that. purlis records none today; recording one is a change to a public format and is not
+decided here. Nor is any of this a boundary against a chat: a chat that may write the
+project's `personas/` can edit a persona in place. **purlis has no persona rename**: a persona
+whose folder is moved is, to these rules, one that went away and another that appeared.
 
 Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
 (#1506).

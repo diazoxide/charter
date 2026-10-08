@@ -6473,10 +6473,13 @@ h2.sidebar-title .node-icon {
 }
 
 /* Settings › Project › Dispatch (#1504): the one table of who may dispatch to whom. A row group
-   per persona; under it each target, with a row for every grant that covers the pair. Every
-   cell wraps, so the table holds in a narrow settings tab without scrolling sideways. */
+   per persona; under it each target, with a row for every grant that covers the pair.
+   The columns are fixed shares of the width, so nothing a cell says moves another column; a
+   question is a row of its own across the whole table, under the row it is about; and words
+   break between words, a name only where it is longer than its column. */
 .dispatch-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   margin: 0 0 0.4rem;
 }
@@ -6493,11 +6496,27 @@ h2.sidebar-title .node-icon {
   text-align: left;
   font-weight: normal;
   vertical-align: top;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .dispatch-table thead th {
   color: var(--text-secondary);
+}
+
+.dispatch-table thead th:nth-child(1) {
+  width: 18%;
+}
+
+.dispatch-table thead th:nth-child(2) {
+  width: 40%;
+}
+
+.dispatch-table thead th:nth-child(3) {
+  width: 17%;
+}
+
+.dispatch-table thead th:nth-child(4) {
+  width: 25%;
 }
 
 .dispatch-table .dispatch-persona {
@@ -6507,6 +6526,11 @@ h2.sidebar-title .node-icon {
 }
 
 .dispatch-table .dispatch-persona .granted-note {
+  font-weight: normal;
+}
+
+.dispatch-table .dispatch-persona .dispatch-actions {
+  margin-top: 0.3rem;
   font-weight: normal;
 }
 
@@ -6522,6 +6546,11 @@ h2.sidebar-title .node-icon {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.4rem;
+}
+
+.dispatch-confirm-row td {
+  padding: 0.3rem 0 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .dispatch-confirm p {

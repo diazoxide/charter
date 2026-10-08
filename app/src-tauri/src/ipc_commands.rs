@@ -79,7 +79,7 @@ macro_rules! app_commands {
                 dispatchgrants::revoke_dispatch_to_any,
                 dispatchgrants::accept_project_dispatch,
                 dispatchgrants::decline_project_dispatch,
-                dispatchgrants::revive_dormant_dispatch,
+                dispatchgrants::give_back_dispatch,
                 dispatchgrants::remove_dormant_dispatch,
                 dispatchgrants::dispatch_grants,
                 dispatchgrants::revoke_dispatch_grant,

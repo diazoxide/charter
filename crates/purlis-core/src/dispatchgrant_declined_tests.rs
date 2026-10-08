@@ -139,3 +139,49 @@ fn a_decline_is_audited_as_its_own_kind_at_the_project_s_level() {
     assert_eq!(audited.kind(), "trust.dispatch.decline");
     assert_eq!(audited.body()["level"], "project");
 }
+
+#[test]
+fn a_grant_purlis_set_aside_is_a_revoke_by_the_host_and_never_by_a_person() {
+    let aside = Audited {
+        act: Act::SetAside,
+        asking: Some("steward"),
+        target: "devops",
+        level: Level::You,
+    };
+    assert_eq!(aside.kind(), "trust.dispatch.revoke");
+    assert_eq!(aside.body()["actor_kind"], "host");
+    assert_eq!(aside.body()["actor"], "purlis");
+    let revoke = Audited {
+        act: Act::Revoke,
+        ..aside
+    };
+    assert_eq!(revoke.body()["actor_kind"], "human");
+    let back = Audited {
+        act: Act::GiveBack,
+        asking: Some("devops"),
+        target: "devops",
+        level: Level::You,
+    };
+    assert_eq!(back.kind(), "trust.dispatch.give_back");
+    assert_eq!(back.body()["actor_kind"], "human");
+}
+
+#[test]
+fn accepting_any_persona_of_the_project_s_never_writes_the_project_s_file() {
+    let dir = project();
+    let root = dir.path();
+    accept_any_of_the_project(root, "steward").expect("accepted");
+    assert_eq!(any_of_the_project(root), ["steward"]);
+    assert_eq!(file(root), PROJECT);
+
+    // The file lost the grant: accepting it is refused, and does not put it back.
+    let without = "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+    std::fs::write(crate::names::manifest(root), without).expect("a pull");
+    for asking in ["steward", "qa", "*", ""] {
+        assert_eq!(
+            accept_any_of_the_project(root, asking),
+            Err("purlis changed nothing: the project no longer has that grant.".to_owned())
+        );
+    }
+    assert_eq!(file(root), without);
+}

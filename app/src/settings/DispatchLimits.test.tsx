@@ -534,7 +534,7 @@ describe("Settings › Project › Dispatch", () => {
 
     const table = await screen.findByRole("table", { name: /Who may dispatch to whom/ });
     const revoke = within(table).getByRole("button", {
-      name: "Revoke my grant for steward to devops",
+      name: "Revoke: my grant for steward to devops",
     });
     expect(revoke.closest("tr")).toHaveTextContent("Me on this machine");
     // What policy locks is the next row's, not said twice.

@@ -6,6 +6,7 @@ import type { DispatchGrant, DispatchGrants, DispatchStanding } from "../binding
 import { DispatchGrantsList, dispatchSourceSaid } from "./DispatchGrants";
 import { grantedGroup } from "./GrantedList";
 import type { LiveSetting } from "./groups";
+import { forgetGroups, settingsPlace, useShownGroup } from "./links";
 
 /**
  * **The one table of dispatch grants in Settings** (#1504): a row group per persona, each pair
@@ -63,6 +64,8 @@ const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   personas: ["devops", "qa", "steward"],
   kept_blocked: [],
   dormant: [],
+  returned: [],
+  back: [],
   ...over,
 });
 
@@ -102,6 +105,7 @@ function core(now: { grants?: DispatchGrant[]; standing?: Partial<DispatchStandi
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetGroups();
 });
 
 const Table = () => (
@@ -143,7 +147,7 @@ describe("the table of who may dispatch to whom", () => {
 
     // steward to devops is covered twice: both sources are rows under the one target.
     const mine = rowOf(
-      screen.getByRole("button", { name: "Revoke my grant for steward to devops" }),
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
     );
     expect(within(mine).getByRole("rowheader")).toHaveTextContent("devops");
     expect(within(mine).getByRole("rowheader")).toHaveAttribute("rowspan", "2");
@@ -151,31 +155,31 @@ describe("the table of who may dispatch to whom", () => {
     expect(mine).toHaveTextContent("Any workspace");
     const ours = rowOf(
       screen.getByRole("button", {
-        name: "Remove the project's grant for steward to devops for everyone",
+        name: "Remove for everyone: the project's grant for steward to devops",
       }),
     );
     expect(ours).toHaveTextContent("The project, committed by Dana");
     expect(
       within(ours).getByRole("button", {
-        name: "Do not follow the project's grant for steward to devops on this machine",
+        name: "Not on my machine: stop following the project's grant for steward to devops",
       }),
     ).toBeInTheDocument();
     expect(within(ours).queryByRole("rowheader")).toBeNull();
 
     // A grant for one chat says which chat.
     const chat = rowOf(
-      screen.getByRole("button", { name: "Revoke this chat's grant for steward to qa" }),
+      screen.getByRole("button", { name: "Revoke: this chat's grant for steward to qa" }),
     );
     expect(chat).toHaveTextContent("This chat only: steward 3");
 
     // A teammate's grant nobody here accepted is drawn waiting, with Accept.
     const theirs = rowOf(
       screen.getByRole("button", {
-        name: "Accept the project's grant for qa to devops on this machine",
+        name: "Accept: the project's grant for qa to devops, on this machine",
       }),
     );
     expect(theirs).toHaveTextContent(
-      "Waiting for you: a teammate added it, and it allows nothing on this machine until you accept it.",
+      "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
     );
   });
 
@@ -207,14 +211,14 @@ describe("taking a grant back", () => {
     });
     render(<Table />);
 
-    const said = await press("Revoke my grant for steward to devops", "Revoke");
+    const said = await press("Revoke: my grant for steward to devops", "Revoke");
 
     expect(said).toContain(
       "The next dispatch from steward to devops asks you again. Tasks already running are left as they are.",
     );
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Revoke my grant for steward to devops" }),
+        screen.queryByRole("button", { name: "Revoke: my grant for steward to devops" }),
       ).toBeNull(),
     );
     expect(fake.sent("revoke_dispatch_grant")).toEqual([{ plane: PLANE, id: MINE.id }]);
@@ -225,7 +229,7 @@ describe("taking a grant back", () => {
     ).toBeInTheDocument();
     // The other grant was not touched.
     expect(
-      screen.getByRole("button", { name: "Revoke this chat's grant for steward to qa" }),
+      screen.getByRole("button", { name: "Revoke: this chat's grant for steward to qa" }),
     ).toBeInTheDocument();
   });
 
@@ -235,7 +239,7 @@ describe("taking a grant back", () => {
     const user = userEvent.setup();
 
     await user.click(
-      await screen.findByRole("button", { name: "Revoke my grant for steward to devops" }),
+      await screen.findByRole("button", { name: "Revoke: my grant for steward to devops" }),
     );
     expect(fake.wrote()).toEqual([]);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -243,7 +247,7 @@ describe("taking a grant back", () => {
     expect(fake.wrote()).toEqual([]);
     expect(screen.queryByRole("group", { name: "Confirm" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Revoke my grant for steward to devops" }),
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
     ).toHaveFocus();
   });
 
@@ -257,7 +261,7 @@ describe("taking a grant back", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "Remove the project's grant for steward to devops for everyone",
+        name: "Remove for everyone: the project's grant for steward to devops",
       }),
     );
     const question = screen.getByRole("group", { name: "Confirm" });
@@ -282,7 +286,7 @@ describe("taking a grant back", () => {
     render(<Table />);
 
     const said = await press(
-      "Do not follow the project's grant for steward to devops on this machine",
+      "Not on my machine: stop following the project's grant for steward to devops",
       "Not on my machine",
     );
 
@@ -297,7 +301,7 @@ describe("taking a grant back", () => {
     // It is still the project's, drawn as not followed here, and Accept brings it back.
     const row = rowOf(
       await screen.findByRole("button", {
-        name: "Accept the project's grant for steward to devops on this machine",
+        name: "Accept: the project's grant for steward to devops, on this machine",
       }),
     );
     expect(row).toHaveTextContent(
@@ -313,7 +317,7 @@ describe("taking a grant back", () => {
     render(<Table />);
 
     const said = await press(
-      "Accept the project's grant for qa to devops on this machine",
+      "Accept: the project's grant for qa to devops, on this machine",
       "Accept",
     );
 
@@ -335,14 +339,14 @@ describe("taking a grant back", () => {
     });
     render(<Table />);
 
-    await press("Revoke my grant for steward to devops", "Revoke");
+    await press("Revoke: my grant for steward to devops", "Revoke");
 
     expect(
       await screen.findByText("purlis did not revoke it: that grant is no longer there."),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Revoke my grant for steward to devops" }),
+        screen.queryByRole("button", { name: "Revoke: my grant for steward to devops" }),
       ).toBeNull(),
     );
     expect(fake.sent("dispatch_grants").length).toBeGreaterThan(1);
@@ -363,17 +367,14 @@ describe("any persona", () => {
     await table();
     // Each persona has its own, for me and for the project.
     for (const persona of ["devops", "qa", "steward"])
-      for (const whom of ["for me on this machine", "for everyone in this project"])
+      for (const whom of ["Allow for me", "Allow for everyone"])
         expect(
           screen.getByRole("button", {
-            name: `Allow ${persona} to dispatch to any persona, ${whom}`,
+            name: `${whom}: ${persona} may dispatch to any persona`,
           }),
         ).toBeInTheDocument();
 
-    const said = await press(
-      "Allow steward to dispatch to any persona, for me on this machine",
-      "Allow for me",
-    );
+    const said = await press("Allow for me: steward may dispatch to any persona", "Allow for me");
 
     expect(said).toBe(
       "Let steward dispatch to any persona, for you on this machine? steward chats will dispatch to every persona of this project without asking you, and to any persona added later.Allow for meCancel",
@@ -385,7 +386,7 @@ describe("any persona", () => {
     );
     const row = rowOf(
       await screen.findByRole("button", {
-        name: "Clear any persona for steward, for me on this machine",
+        name: "Clear: any persona for steward, for me on this machine",
       }),
     );
     expect(row).toHaveTextContent("Me on this machine: allowed");
@@ -403,7 +404,7 @@ describe("any persona", () => {
     render(<Table />);
 
     const said = await press(
-      "Allow steward to dispatch to any persona, for everyone in this project",
+      "Allow for everyone: steward may dispatch to any persona",
       "Allow for everyone",
     );
     expect(said).toContain("This changes purlis.toml, the project's committed file.");
@@ -414,7 +415,7 @@ describe("any persona", () => {
       ]),
     );
 
-    const cleared = await press("Clear any persona for qa, for me on this machine", "Clear");
+    const cleared = await press("Clear: any persona for qa, for me on this machine", "Clear");
     expect(cleared).toContain("Grants that name a persona stay.");
     expect(cleared).toContain("Tasks already running are left as they are.");
     await waitFor(() =>
@@ -424,7 +425,7 @@ describe("any persona", () => {
     );
     expect(
       await screen.findByRole("button", {
-        name: "Allow qa to dispatch to any persona, for me on this machine",
+        name: "Allow for me: qa may dispatch to any persona",
       }),
     ).toBeInTheDocument();
   });
@@ -442,14 +443,17 @@ describe("any persona", () => {
     render(<Table />);
 
     const accept = await screen.findByRole("button", {
-      name: "Accept any persona for steward on this machine",
+      name: "Accept: the project's any persona for steward, on this machine",
     });
     expect(rowOf(accept)).toHaveTextContent("The project: allowed");
     expect(rowOf(accept)).toHaveTextContent(
-      "Waiting for you: a teammate added it, and it allows nothing on this machine until you accept it.",
+      "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
     );
 
-    const said = await press("Accept any persona for steward on this machine", "Accept");
+    const said = await press(
+      "Accept: the project's any persona for steward, on this machine",
+      "Accept",
+    );
     expect(said).toContain("and to any persona added later.");
     await waitFor(() =>
       expect(fake.sent("accept_project_dispatch")).toEqual([
@@ -457,7 +461,10 @@ describe("any persona", () => {
       ]),
     );
 
-    await press("Do not follow any persona for steward on this machine", "Not on my machine");
+    await press(
+      "Not on my machine: stop following the project's any persona for steward",
+      "Not on my machine",
+    );
     await waitFor(() =>
       expect(fake.sent("decline_project_dispatch")).toEqual([
         { plane: PLANE, asking: "steward", target: "*" },
@@ -487,19 +494,19 @@ describe("the pairs said never to, and the ones kept blocked for a chat", () => 
     render(<Table />);
 
     const lift = await screen.findByRole("button", {
-      name: "Lift never for steward dispatching to devops",
+      name: "Lift: never for steward dispatching to devops",
     });
     expect(rowOf(lift)).toHaveTextContent("Never");
     expect(rowOf(lift)).toHaveTextContent(
       "You said so on this machine. No grant covers it, and no steward chat is asked. It also holds for a chain that starts from steward: a chat working for a steward chat does not dispatch to devops either.",
     );
 
-    const said = await press("Lift never for steward dispatching to devops", "Lift");
+    const said = await press("Lift: never for steward dispatching to devops", "Lift");
 
     expect(said).toContain("where none does the next dispatch asks you.");
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Lift never for steward dispatching to devops" }),
+        screen.queryByRole("button", { name: "Lift: never for steward dispatching to devops" }),
       ).toBeNull(),
     );
     expect(fake.sent("lift_dispatch_never")).toEqual([
@@ -507,11 +514,11 @@ describe("the pairs said never to, and the ones kept blocked for a chat", () => 
     ]);
     // The other never, and the grant the lifted one was beating, are as they were.
     expect(
-      screen.getByRole("button", { name: "Lift never for qa dispatching to devops" }),
+      screen.getByRole("button", { name: "Lift: never for qa dispatching to devops" }),
     ).toBeInTheDocument();
     expect(fake.sent("revoke_dispatch_grant")).toEqual([]);
     expect(
-      screen.getByRole("button", { name: "Revoke my grant for steward to devops" }),
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
     ).toBeInTheDocument();
   });
 
@@ -522,7 +529,7 @@ describe("the pairs said never to, and the ones kept blocked for a chat", () => 
     });
     render(<Table />);
 
-    await press("Lift never for steward dispatching to devops", "Lift");
+    await press("Lift: never for steward dispatching to devops", "Lift");
 
     expect(
       await screen.findByText(
@@ -530,7 +537,7 @@ describe("the pairs said never to, and the ones kept blocked for a chat", () => 
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Lift never for steward dispatching to devops" }),
+      screen.getByRole("button", { name: "Lift: never for steward dispatching to devops" }),
     ).toBeInTheDocument();
   });
 
@@ -574,11 +581,11 @@ describe("where the list of nevers does not read", () => {
     const whole = await table();
     // The top of the section: before the table.
     expect(alert.compareDocumentPosition(whole) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^Lift never/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Lift: never/ })).toBeNull();
     expect(whole).not.toHaveTextContent("Never");
     for (const name of [
-      "Revoke my grant for steward to devops",
-      "Remove the project's grant for steward to devops for everyone",
+      "Revoke: my grant for steward to devops",
+      "Remove for everyone: the project's grant for steward to devops",
     ])
       expect(rowOf(screen.getByRole("button", { name }))).toHaveTextContent(
         "Does not count until the list above reads.",
@@ -588,105 +595,224 @@ describe("where the list of nevers does not read", () => {
     fake.held.standing = stands({ nevers: [{ asking: "steward", target: "qa" }] });
     await userEvent.setup().click(within(alert).getByRole("button", { name: "Read again" }));
     expect(
-      await screen.findByRole("button", { name: "Lift never for steward dispatching to qa" }),
+      await screen.findByRole("button", { name: "Lift: never for steward dispatching to qa" }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^purlis could not read the list/)).toBeNull();
   });
 });
 
-describe("what a removed persona left", () => {
-  it("draws its grants set aside and greyed, with Remove, and Give back only once the name is a persona again", async () => {
+describe("a persona that is away, and another under its name", () => {
+  const AWAY =
+    "Not in force while devops is not a persona of this project. Nothing was moved: it counts again when devops is back.";
+
+  it("draws a grant naming a persona the project does not have as not in force, and moves nothing", async () => {
     const fake = core({
+      grants: [MINE, OURS],
       standing: {
         personas: ["qa", "steward"],
-        dormant: [
-          { asking: "steward", target: "devops", any: false, was: "devops", revivable: false },
-          { asking: "qa", target: "*", any: true, was: "qa", revivable: true },
-        ],
+        any: [{ asking: "devops", level: "you", waiting: false, declined: false }],
+        nevers: [{ asking: "steward", target: "devops" }],
       },
-    });
-    fake.on("remove_dormant_dispatch", () => {
-      fake.held.standing = stands({ personas: ["qa", "steward"] });
-    });
-    fake.on("revive_dormant_dispatch", () => {});
-    render(<Table />);
-
-    const remove = await screen.findByRole("button", {
-      name: "Remove the grant set aside for steward to devops",
-    });
-    const gone = rowOf(remove);
-    expect(gone).toHaveClass("dispatch-dormant");
-    expect(gone).toHaveTextContent("Set aside. It was yours on this machine.");
-    expect(gone).toHaveTextContent("devops is not a persona of this project. This allows nothing.");
-    expect(within(gone).queryByRole("button", { name: /^Give back/ })).toBeNull();
-
-    // A persona has the name again: it gets the grant only if the person gives it back.
-    const back = rowOf(
-      screen.getByRole("button", { name: "Give back the grant for qa to any persona" }),
-    );
-    expect(back).toHaveTextContent(
-      "qa was removed, and a persona has that name again. It does not get this grant unless you give it back.",
-    );
-    const said = await press("Give back the grant for qa to any persona", "Give back");
-    expect(said).toContain("and to any persona added later.");
-    await waitFor(() =>
-      expect(fake.sent("revive_dormant_dispatch")).toEqual([
-        { plane: PLANE, asking: "qa", target: "*" },
-      ]),
-    );
-
-    await press("Remove the grant set aside for steward to devops", "Remove");
-    await waitFor(() =>
-      expect(fake.sent("remove_dormant_dispatch")).toEqual([
-        { plane: PLANE, asking: "steward", target: "devops" },
-      ]),
-    );
-    await waitFor(() => expect(screen.queryByText("Set aside")).toBeNull());
-  });
-
-  it("draws a project grant that names no persona as allowing nothing, with its removal only", async () => {
-    core({
-      grants: [
-        grant({
-          id: "project\u001fsteward\u001fghost",
-          target: "ghost",
-          level: "project",
-          waiting: true,
-        }),
-        grant({
-          id: "project\u001fghost\u001fqa",
-          asking: "ghost",
-          target: "qa",
-          level: "project",
-          waiting: true,
-        }),
-      ],
-      standing: { any: [{ asking: "ghost", level: "project", waiting: true, declined: false }] },
     });
     render(<Table />);
 
     const whole = await table();
-    for (const name of [
-      "Remove the project's grant for steward to ghost for everyone",
-      "Remove the project's grant for ghost to qa for everyone",
-    ]) {
-      const row = rowOf(within(whole).getByRole("button", { name }));
-      expect(row).toHaveTextContent(
-        "It names something that is not a persona of this project, so it allows nothing.",
-      );
-      expect(within(row).getAllByRole("button")).toHaveLength(1);
-    }
-    expect(whole).toHaveTextContent(
-      "ghost Not a persona of this project, so nothing here allows anything.",
+    const mine = rowOf(
+      within(whole).getByRole("button", { name: "Revoke: my grant for steward to devops" }),
     );
-    // Nothing is accepted, and "any persona" is not offered, for a name that is no persona.
-    expect(within(whole).queryByRole("button", { name: /^Accept .* ghost/ })).toBeNull();
-    expect(within(whole).queryByRole("button", { name: /^Allow ghost/ })).toBeNull();
-    expect(
+    expect(mine).toHaveClass("dispatch-dormant");
+    expect(mine).toHaveTextContent(AWAY);
+    // The project's: it can be taken back, and is not offered to be accepted.
+    const ours = rowOf(
       within(whole).getByRole("button", {
-        name: "Remove any persona for ghost for everyone in this project",
+        name: "Remove for everyone: the project's grant for steward to devops",
       }),
+    );
+    expect(ours).toHaveTextContent(
+      "It names devops, which is not a persona of this project now, so it allows nothing.",
+    );
+    expect(within(whole).queryByRole("button", { name: /^Accept/ })).toBeNull();
+    // Its own group says so, offers no "any persona", and still lets what is there be cleared.
+    expect(whole).toHaveTextContent(
+      "devops Not a persona of this project now, so nothing here allows anything.",
+    );
+    expect(
+      within(whole).queryByRole("button", { name: /devops may dispatch to any persona/ }),
+    ).toBeNull();
+    const any = rowOf(
+      within(whole).getByRole("button", {
+        name: "Clear: any persona for devops, for me on this machine",
+      }),
+    );
+    expect(any).toHaveTextContent("Not in force while devops is not a persona of this project.");
+    // A never keeps holding, and says whose name it is waiting on.
+    expect(
+      rowOf(
+        within(whole).getByRole("button", {
+          name: "Lift: never for steward dispatching to devops",
+        }),
+      ),
+    ).toHaveTextContent(
+      "devops is not a persona of this project now: the never still holds, and will hold for a persona made under that name.",
+    );
+    // Nothing is set aside, nothing to give back, and drawing it sent no write.
+    expect(whole).not.toHaveTextContent("Set aside");
+    expect(within(whole).queryByRole("button", { name: /^Give back/ })).toBeNull();
+    expect(fake.wrote()).toEqual([]);
+  });
+
+  it("gives back to a persona that has the name of one that was gone, with one press for the name", async () => {
+    const fake = core({
+      grants: [grant({ id: "you\u001fdevops\u001fqa", asking: "devops", target: "qa" })],
+      standing: {
+        returned: ["devops"],
+        back: ["devops"],
+        nevers: [{ asking: "steward", target: "devops" }],
+        dormant: [
+          { asking: "steward", target: "devops", any: false, was: "devops" },
+          { asking: "devops", target: "*", any: true, was: "devops" },
+        ],
+      },
+    });
+    fake.on("give_back_dispatch", () => {
+      fake.held.standing = stands({ nevers: [{ asking: "steward", target: "devops" }] });
+    });
+    render(<Table />);
+
+    const whole = await table();
+    // A grant never moved is not in force either, and says what to do.
+    expect(
+      rowOf(within(whole).getByRole("button", { name: "Revoke: my grant for devops to qa" })),
+    ).toHaveTextContent(
+      "Not in force: devops was gone, and the persona of that name now is not the one that left. Give back to devops, or take this back.",
+    );
+    // What was set aside is listed, greyed, each with its own Remove and no Give back of its own.
+    const aside = rowOf(
+      within(whole).getByRole("button", {
+        name: "Remove: the grant set aside for steward to devops",
+      }),
+    );
+    expect(aside).toHaveClass("dispatch-dormant");
+    expect(aside).toHaveTextContent(
+      "It was an earlier devops's. It allows nothing unless you give it back, with Give back to devops.",
+    );
+    expect(within(whole).getAllByRole("button", { name: /^Give back/ })).toHaveLength(1);
+    // The never is said to be an earlier persona's.
+    expect(
+      rowOf(
+        within(whole).getByRole("button", {
+          name: "Lift: never for steward dispatching to devops",
+        }),
+      ),
+    ).toHaveTextContent(
+      "It was said of an earlier persona named devops, and still holds for this one.",
+    );
+
+    const said = await press(
+      "Give back to devops: what an earlier persona of this name was allowed",
+      "Give back to devops",
+    );
+
+    expect(said).toContain(
+      "Let the devops this project has now have what an earlier persona named devops was allowed? 2 grants set aside for it come back where the other persona exists",
+    );
+    await waitFor(() =>
+      expect(fake.sent("give_back_dispatch")).toEqual([{ plane: PLANE, name: "devops" }]),
+    );
+    expect(await screen.findByText("Given back to devops.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Give back/ })).toBeNull());
+    expect(screen.queryByText("Set aside")).toBeNull();
+  });
+
+  it("removes the one entry pressed, telling any persona from a pair that reads like it", async () => {
+    const fake = core({
+      standing: {
+        personas: ["qa", "steward"],
+        dormant: [
+          { asking: "steward", target: "*", any: true, was: "steward" },
+          { asking: "steward", target: "*", any: false, was: "steward" },
+          { asking: "qa", target: "devops", any: false, was: "devops" },
+        ],
+      },
+    });
+    fake.on("remove_dormant_dispatch", () => {});
+    render(<Table />);
+
+    const whole = await table();
+    expect(
+      rowOf(
+        within(whole).getByRole("button", { name: "Remove: the grant set aside for qa to devops" }),
+      ),
+    ).toHaveTextContent(
+      "It was an earlier devops's, and devops is not a persona of this project now. It allows nothing.",
+    );
+    await press("Remove: the grant set aside for steward to any persona", "Remove");
+    await press("Remove: the grant set aside for steward to *", "Remove");
+
+    expect(fake.sent("remove_dormant_dispatch")).toEqual([
+      { plane: PLANE, asking: "steward", target: "*", any: true },
+      { plane: PLANE, asking: "steward", target: "*", any: false },
+    ]);
+  });
+});
+
+describe("what a press says once it is done", () => {
+  it("does not say a grant counts while a never covers the pair or the list of nevers does not read", async () => {
+    const fake = core({
+      grants: [THEIRS],
+      standing: { nevers: [{ asking: "qa", target: "devops" }] },
+    });
+    fake.on("accept_project_dispatch", () => {});
+    fake.on("allow_dispatch_to_any", () => {});
+    render(<Table />);
+
+    await press("Accept: the project's grant for qa to devops, on this machine", "Accept");
+    expect(
+      await screen.findByText(
+        "Accepted on this machine: the project's grant for qa to devops. You said never to this pair, so it does not count until you lift that.",
+      ),
     ).toBeInTheDocument();
+
+    await press("Allow for me: qa may dispatch to any persona", "Allow for me");
+    expect(
+      await screen.findByText(
+        "Allowed for you on this machine: qa to any persona. It covers personas added later. Where you said never for qa, the never still holds.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("where what stands could not be read", () => {
+  it("says so, draws no table as if nothing stood, and reads again on a press", async () => {
+    let fails = true;
+    mockIPC((cmd) => {
+      if (cmd === "dispatch_grants") return state({ grants: [MINE] });
+      if (cmd === "dispatch_standing") {
+        if (fails) throw "the project is not open";
+        return stands();
+      }
+      return null;
+    });
+    render(<Table />);
+
+    const notice = (
+      await screen.findByText(/^purlis could not read what stands of dispatch here/)
+    ).closest("[data-cause]") as HTMLElement;
+    expect(notice).toHaveTextContent("(the project is not open)");
+    expect(notice).toHaveTextContent(
+      "The table is not drawn, since it could not say which grants count. Nothing was changed.",
+    );
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Revoke/ })).toBeNull();
+
+    fails = false;
+    await userEvent.setup().click(within(notice).getByRole("button", { name: "Read again" }));
+
+    expect(await table()).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^purlis could not read what stands/)).toBeNull();
   });
 });
 
@@ -699,7 +825,7 @@ describe("with the keyboard, and to a screen reader", () => {
     render(<Table />);
     const user = userEvent.setup();
     const revoke = await screen.findByRole("button", {
-      name: "Revoke my grant for steward to devops",
+      name: "Revoke: my grant for steward to devops",
     });
 
     revoke.focus();
@@ -714,15 +840,99 @@ describe("with the keyboard, and to a screen reader", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("group", { name: "Confirm" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Revoke my grant for steward to devops" }),
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
     ).toHaveFocus();
     expect(fake.wrote()).toEqual([]);
 
     await user.keyboard("{Enter}");
     await user.keyboard("{Enter}");
     await waitFor(() => expect(fake.sent("revoke_dispatch_grant")).toHaveLength(1));
-    // The row is gone: the focus is on the table's own region, never lost to the page.
-    await waitFor(() => expect(document.getElementById("d")).toHaveFocus());
+    // The row is gone: the focus is on the button now at its place, never lost to the page
+    // and never sent back to the top of the table.
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAccessibleName(
+        "Allow for me: steward may dispatch to any persona",
+      ),
+    );
+  });
+
+  it("draws the question as a row of its own under the row it is about, the table's whole width", async () => {
+    core({ grants: [MINE, OURS] });
+    render(<Table />);
+    const user = userEvent.setup();
+    const revoke = await screen.findByRole("button", {
+      name: "Revoke: my grant for steward to devops",
+    });
+    const row = rowOf(revoke);
+    expect(within(row).getByRole("rowheader")).toHaveAttribute("rowspan", "2");
+
+    await user.click(revoke);
+
+    const question = screen.getByRole("group", { name: "Confirm" });
+    const own = question.closest("tr") as HTMLElement;
+    expect(own).not.toBe(row);
+    expect(row.nextElementSibling).toBe(own);
+    expect(within(own).getAllByRole("cell")).toHaveLength(1);
+    expect(within(own).getByRole("cell")).toHaveAttribute("colspan", "4");
+    // The target's name still runs down the side of all its rows, the question's included.
+    expect(within(row).getByRole("rowheader")).toHaveAttribute("rowspan", "3");
+    // The buttons of the row stay where they were, and say a question is open under them.
+    expect(revoke).toHaveAttribute("aria-expanded", "true");
+    expect(row).not.toContainElement(question);
+  });
+
+  it("puts the focus back on the row acted on where it is still there", async () => {
+    const fake = core({ grants: [OURS] });
+    fake.on("decline_project_dispatch", () => {
+      fake.held.grants = [{ ...OURS, waiting: true, declined: true }];
+    });
+    render(<Table />);
+
+    await press(
+      "Not on my machine: stop following the project's grant for steward to devops",
+      "Not on my machine",
+    );
+
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAccessibleName(
+        "Accept: the project's grant for steward to devops, on this machine",
+      ),
+    );
+  });
+
+  it("names every button with the words it shows first, so saying them picks it", async () => {
+    core({
+      grants: [MINE, OURS, THEIRS],
+      standing: {
+        any: [{ asking: "qa", level: "project", waiting: true, declined: false }],
+        nevers: [{ asking: "qa", target: "steward" }],
+        back: ["devops"],
+        dormant: [{ asking: "qa", target: "devops", any: false, was: "devops" }],
+      },
+    });
+    render(<Table />);
+    await table();
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.length).toBeGreaterThan(12);
+    for (const button of buttons) {
+      const shown = button.textContent ?? "";
+      expect(shown).not.toBe("");
+      expect(button.getAttribute("aria-label")?.startsWith(`${shown}: `)).toBe(true);
+    }
+    const shown = new Set(buttons.map((one) => one.textContent));
+    for (const words of [
+      "Not on my machine",
+      "Remove for everyone",
+      "Allow for me",
+      "Allow for everyone",
+      "Accept",
+      "Revoke",
+      "Lift",
+      "Remove",
+      "Give back to devops",
+    ])
+      expect(shown).toContain(words);
   });
 
   it("reaches every button by Tab, each with a name that says whose grant it is", async () => {
@@ -789,7 +999,7 @@ describe("what policy locks", () => {
 });
 
 describe("Settings' Granted page", () => {
-  it("says where the dispatch grants are, and lists and changes none itself", async () => {
+  it("says where the dispatch grants are with a link there, and lists and changes none itself", async () => {
     const fake = core({ grants: [MINE] });
     const setting = grantedGroup(PLANE, FILE).settings.find(
       (one) => one.id === "project.sandbox.granted.dispatch",
@@ -797,16 +1007,26 @@ describe("Settings' Granted page", () => {
     expect(setting.label).toBe("Who may dispatch to whom");
     function Row() {
       const { control } = setting.useControl();
-      return <>{control({ id: "g", labelledBy: "g-label" })}</>;
+      const shown = useShownGroup(settingsPlace("project", PLANE));
+      return (
+        <>
+          {control({ id: "g", labelledBy: "g-label" })}
+          <output>{shown?.group ?? "nowhere yet"}</output>
+        </>
+      );
     }
     render(<Row />);
 
     expect(
-      screen.getByText(
-        "Dispatch grants are listed, revoked and lifted under Settings › Project › Dispatch.",
-      ),
+      screen.getByText(/Dispatch grants are listed, revoked and lifted on the Dispatch page\./),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("nowhere yet");
+    expect(screen.queryByRole("table")).toBeNull();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open that page" }));
+
+    // The Settings tab of this project is taken to its Dispatch page.
+    expect(screen.getByRole("status")).toHaveTextContent("project.dispatch");
     expect(fake.asked).toEqual([]);
   });
 });

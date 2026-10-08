@@ -73,16 +73,19 @@
 //! place "any persona" is set and cleared. Its commands are the window's alone, each on a
 //! person's press: [`revoke_dispatch_grant`], [`lift_dispatch_never`],
 //! [`allow_dispatch_to_any`], [`revoke_dispatch_to_any`], [`accept_project_dispatch`],
-//! [`decline_project_dispatch`], [`revive_dormant_dispatch`], [`remove_dormant_dispatch`].
+//! [`decline_project_dispatch`], [`give_back_dispatch`], [`remove_dormant_dispatch`].
 //! **Each reads the record it changes again before it writes**: what the window sends is a
 //! name, never a view of the table, and a row that is no longer there is refused with a
 //! sentence and nothing audited. **Revoking stops new dispatches only**: none of them holds a
 //! chat, so a task already running is left as it is.
 //!
-//! **A persona that is gone leaves nothing in force** ([`purlis_core::dispatchdormant`]): its
-//! grants are set aside when purlis removes it, and again each time the table is read
-//! ([`standing_read`]); the ones made for one chat end ([`Store::persona_gone`]). A persona
-//! made under the same name gets them only by the person's Give back.
+//! **A grant is in force only while both personas exist** ([`purlis_core::dispatchdormant`]):
+//! [`requested`] refuses a dispatch to a name that is no persona, and one from a chat whose
+//! persona is no persona of the project now, before any grant is read. Nothing is moved for
+//! a persona that is away. A name seen gone that is another persona's now has its grants set
+//! aside as the next dispatch is judged ([`bring_up_to_date`]), recorded in the event log as
+//! taken back by purlis, and gets them back only by the person's Give back, once for the
+//! name. **Reading the table moves nothing** ([`standing_read`]).
 //!
 //! **A "this chat" grant ends with the chat** ([`Store::chat_closed`]), as its sandbox grants
 //! do, and stays through a restart, which starts the new run before the old one ends
@@ -727,10 +730,10 @@ impl Store {
         out
     }
 
-    /// **The persona `name` is no longer this project's, or its name is about to be a new
-    /// persona's** (#1504): every grant made for one chat that names it ends now, as asking
-    /// persona or as target, so a chat still running as a removed persona keeps none and a
-    /// persona made under the name inherits none. Answers how many ended.
+    /// **The name `name` changed hands** (#1504): purlis removed the persona or is about to
+    /// make one under the name, or it was seen gone and is another persona's now. Every grant
+    /// made for one chat that names it ends, as asking persona or as target. Answers how many
+    /// ended.
     pub fn persona_gone(&self, name: &str) -> usize {
         let mut ended = 0;
         for made in lock(&self.chat).values_mut() {
@@ -741,14 +744,23 @@ impl Store {
         ended
     }
 
-    /// [`Store::persona_gone`], for every name a chat's grant holds that `known` says is no
-    /// persona of the project now: what Settings does as it reads the table.
-    fn keep_only_personas(&self, known: &dyn Fn(&str) -> bool) {
-        for made in lock(&self.chat).values_mut() {
-            made.retain(|one| {
-                one.pair.asking.as_deref().is_none_or(known) && known(&one.pair.target)
-            });
+    /// Every persona's name a grant made for one chat holds: what the core is told beside
+    /// this machine's own records, so a name only such a grant holds is seen gone too.
+    fn chat_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for one in lock(&self.chat).values().flatten() {
+            for name in one
+                .pair
+                .asking
+                .iter()
+                .chain(std::iter::once(&one.pair.target))
+            {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
         }
+        names
     }
 
     /// Whether the person kept `asking`'s dispatch to `target` blocked on its tab.
@@ -1062,6 +1074,64 @@ pub fn request_dispatch_grant_or_refuse(
     requested(held, session, target, brief, Uncovered::Refuse)
 }
 
+/// What a chat is told when it asks to dispatch while the persona it runs as is no persona
+/// of the project.
+pub fn gone_persona_said(persona: &str) -> String {
+    let persona = purlis_core::shown::short(persona);
+    format!(
+        "this chat runs as {persona}, which is not a persona of this project now, so no \
+         dispatch grant counts for it and it dispatches to no one. Nothing was started and \
+         the person was not asked. Tell the person: they make the persona again, or start a \
+         chat as another."
+    )
+}
+
+/// **Brings the records of dispatch up to what the project's personas are now**, before a
+/// dispatch is judged ([`purlis_core::dispatchdormant::judged`]): a name seen gone is marked,
+/// and a marked name that is another persona's now has its grants set aside. Each grant set
+/// aside is recorded in the event log as taken back by purlis, and the grants made for one
+/// chat that name it end. A record that could not be written is said in the log and stops
+/// nothing: what is not written is not in force either, while the name is no persona.
+fn bring_up_to_date(root: &Path, store: &Store, audit: Audit<'_>) {
+    let judged = match purlis_core::dispatchdormant::judged(root, &store.chat_names()) {
+        Ok(judged) => judged,
+        Err(why) => {
+            tracing::warn!("purlis: the records of dispatch were not brought up to date ({why})");
+            return;
+        }
+    };
+    record_set_aside(&judged.aside, audit);
+    for name in &judged.changed_hands {
+        store.persona_gone(name);
+    }
+}
+
+/// Records each of `aside` in the event log as a grant purlis took back
+/// ([`dispatchgrant::Act::SetAside`]). Best effort: they are out of force already.
+fn record_set_aside(aside: &purlis_core::dispatchdormant::SetAside, audit: Audit<'_>) {
+    let grants = aside
+        .grants
+        .iter()
+        .map(|one| (one.asking.as_str(), one.target.as_str(), Level::You));
+    let accepted = aside.accepted.iter().filter_map(|one| {
+        let (asking, target) = one.said.split_once(" -> ")?;
+        Some((asking, target, Level::Project))
+    });
+    for (asking, target, level) in grants.chain(accepted) {
+        if let Err(unsaid) = audit(
+            None,
+            &dispatchgrant::Audited {
+                act: dispatchgrant::Act::SetAside,
+                asking: Some(asking),
+                target,
+                level,
+            },
+        ) {
+            tracing::warn!("purlis: a dispatch grant set aside is not in the event log ({unsaid})");
+        }
+    }
+}
+
 /// Both entry points.
 fn requested(
     held: &crate::planes::Held,
@@ -1074,10 +1144,28 @@ fn requested(
     let Some(asking) = asking_of(held.chats(), root, session) else {
         return Requested::Refused(format!("chat {session} is not one this app has open"));
     };
-    let known = purlis_core::workspaces::Plane::open(root.to_path_buf())
-        .personas()
-        .is_ok_and(|personas| personas.iter().any(|one| one == target));
-    if !known {
+    let audit: Audit<'_> =
+        &|number, audited| held.hooks().record_dispatch_grant(root, number, audited);
+    // Before any grant is read: the records are brought up to what the project's personas
+    // are now, so nothing an earlier persona of a name was allowed covers this dispatch.
+    bring_up_to_date(root, held.dispatch_grants(), audit);
+    let personas = purlis_core::dispatchdormant::personas_of(root);
+    let is_persona = |name: &str| {
+        personas
+            .as_ref()
+            .is_some_and(|all| all.iter().any(|one| one == name))
+    };
+    // **A grant is in force only while both personas exist** (#1504). A chat that still runs
+    // as a persona the project no longer has is covered by nothing, whatever is granted its
+    // name: not a named pair, not "any persona", not the project's. A chat that runs on
+    // another chat's grants is refused with its own sentence below.
+    if !asking.held
+        && let Some(persona) = asking.persona.as_deref()
+        && !is_persona(persona)
+    {
+        return Requested::Refused(gone_persona_said(persona));
+    }
+    if !is_persona(target) {
         return Requested::Refused(format!(
             "this project has no persona named {}, so there is nothing to dispatch to.",
             purlis_core::shown::short(target)
@@ -1090,7 +1178,7 @@ fn requested(
             locks: &locks,
             is_open: &|session| held.chats().recorded_chat(session).is_some(),
             sandboxed: &|session| held.chats().confines_of(session).is_some(),
-            audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
+            audit,
             at: now_secs(),
         },
         asking,
@@ -1240,10 +1328,9 @@ pub struct DispatchDormant {
     pub target: String,
     /// Whether it was "any persona". Never read from `target`.
     pub any: bool,
-    /// The name that was no persona's when it was set aside.
+    /// The name that changed hands: the persona it is given back to, with one press for
+    /// everything set aside for that name.
     pub was: String,
-    /// Whether every name in it is a persona of the project now, so it can be given back.
-    pub revivable: bool,
 }
 
 /// What stands beside the named grants (#1503): the pairs the person said never to on this
@@ -1261,8 +1348,14 @@ pub struct DispatchStanding {
     pub personas: Option<Vec<String>>,
     /// The pairs kept blocked for one chat's life, read-only.
     pub kept_blocked: Vec<DispatchKeptBlocked>,
-    /// Your grants set aside because a persona they named was removed.
+    /// Your grants set aside because a name in them came to be another persona's.
     pub dormant: Vec<DispatchDormant>,
+    /// Names that were seen gone and are a persona again with another definition: every grant
+    /// that names one is in force for no chat until the person gives it back (#1504).
+    pub returned: Vec<String>,
+    /// Names the person can give something back to: each of `returned`, and each persona that
+    /// has grants or acceptances set aside for it.
+    pub back: Vec<String>,
 }
 
 /// What stands in the project at `root`.
@@ -1289,12 +1382,7 @@ fn standing_of(root: &Path) -> DispatchStanding {
                 level: GrantLevel::Project,
             }),
     );
-    let personas = purlis_core::dispatchdormant::personas_of(root);
-    let known = |name: &str| {
-        personas
-            .as_ref()
-            .is_some_and(|all| all.iter().any(|one| one == name))
-    };
+    let state = purlis_core::dispatchdormant::state(root, &[]).unwrap_or_default();
     DispatchStanding {
         nevers: dispatchgrant::nevers(root)
             .into_iter()
@@ -1305,30 +1393,29 @@ fn standing_of(root: &Path) -> DispatchStanding {
         dormant: purlis_core::dispatchdormant::list(root)
             .into_iter()
             .map(|one| DispatchDormant {
-                revivable: known(&one.asking) && (one.any || known(&one.target)),
                 asking: one.asking,
                 target: one.target,
                 any: one.any,
                 was: one.was,
             })
             .collect(),
-        personas,
+        personas: purlis_core::dispatchdormant::personas_of(root),
         kept_blocked: Vec::new(),
+        returned: state.returned,
+        back: state.back,
     }
 }
 
-/// **What stands, as Settings reads it** (#1504): first every grant that names no persona of
-/// the project now is set aside ([`purlis_core::dispatchdormant::sweep`]), the ones made for
-/// one chat ended, so a persona removed by hand or by a pull leaves nothing in force once the
-/// person has looked; then [`standing_of`], with the pairs chats are kept blocked for.
+/// **What stands, as Settings reads it** (#1504): [`standing_of`], with the pairs chats are
+/// kept blocked for. **Reading moves nothing and drops nothing.** The one thing it writes is
+/// the absence mark of a name a grant holds that is no persona now
+/// ([`purlis_core::dispatchdormant::noticed`]): no grant leaves its record, nothing this
+/// machine accepted is forgotten, and no grant made for one chat ends.
 fn standing_read(root: &Path, store: &Store) -> DispatchStanding {
-    if let Err(why) = purlis_core::dispatchdormant::sweep(root) {
-        tracing::warn!("purlis: grants naming a removed persona were not set aside ({why})");
+    if let Err(why) = purlis_core::dispatchdormant::noticed(root, &store.chat_names()) {
+        tracing::warn!("purlis: a persona that is gone was not marked so ({why})");
     }
     let mut standing = standing_of(root);
-    if let Some(personas) = &standing.personas {
-        store.keep_only_personas(&|name| personas.iter().any(|one| one == name));
-    }
     standing.kept_blocked = store.kept_blocked();
     standing
 }
@@ -1349,14 +1436,31 @@ fn decline(root: &Path, asking: &str, target: &str, audit: Audit<'_>) -> Result<
             level: Level::Project,
         },
     )?;
-    dispatchgrant::decline(root, asking, target)
+    dispatchgrant::decline(root, asking, target).inspect_err(|_| {
+        // Recorded as followed again, so the log never ends on a grant this machine stopped
+        // following when it still follows it.
+        if let Err(unsaid) = audit(
+            None,
+            &dispatchgrant::Audited {
+                act: dispatchgrant::Act::Grant,
+                asking: Some(asking),
+                target,
+                level: Level::Project,
+            },
+        ) {
+            tracing::warn!(
+                "purlis: a decline that was not kept is still recorded as made ({unsaid})"
+            );
+        }
+    })
 }
 
 /// **Accept**, for the project's grant of `asking` to `target` (a persona's name, or `*`):
 /// Settings' yes to a teammate's grant, or to one declined here. Both names must be personas
 /// of the project now, so nothing is accepted for a persona that is not there yet. A pair goes
-/// through what the project's Notice goes through ([`Store::acknowledge`]); any persona goes
-/// through [`allow_any`]. Each is audited before it is in force.
+/// through what the project's Notice goes through ([`Store::acknowledge`]); any persona is
+/// acknowledged on this machine and no more. Each is audited before it is in force, and
+/// neither can write the committed file.
 fn accept(
     store: &Store,
     ground: &Ground<'_>,
@@ -1381,7 +1485,29 @@ fn accept(
         return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
     }
     if any {
-        allow_any(ground.root, known, asking, Level::Project, ground.audit)?;
+        // **Accepting is this machine's act**: it records the acceptance and nothing else.
+        // It never goes through the writer of the committed file, so a grant the file lost a
+        // moment ago is not written back into it by a press that says "on this machine".
+        let audited = dispatchgrant::Audited {
+            act: dispatchgrant::Act::Grant,
+            asking: Some(asking),
+            target: dispatchgrant::ANY,
+            level: Level::Project,
+        };
+        (ground.audit)(None, &audited)?;
+        dispatchgrant::accept_any_of_the_project(ground.root, asking).inspect_err(|_| {
+            if let Err(unsaid) = (ground.audit)(
+                None,
+                &dispatchgrant::Audited {
+                    act: dispatchgrant::Act::Revoke,
+                    ..audited
+                },
+            ) {
+                tracing::warn!(
+                    "purlis: an acceptance that was not kept is still recorded as made ({unsaid})"
+                );
+            }
+        })?;
         store.start_what_is_covered(ground);
         return Ok(());
     }
@@ -1389,32 +1515,52 @@ fn accept(
     store.acknowledge(ground, &[pair.to_string()])
 }
 
-/// **Give back** a grant that was set aside: checked, audited as a grant for you on this
-/// machine, then put back in force. The person's acknowledgement that the persona of that
-/// name today may have what an earlier one had.
-fn revive(root: &Path, asking: &str, target: &str, audit: Audit<'_>) -> Result<(), String> {
-    purlis_core::dispatchdormant::can_revive(root, asking, target)?;
-    let audited = dispatchgrant::Audited {
-        act: dispatchgrant::Act::Grant,
-        asking: Some(asking),
-        target,
-        level: Level::You,
-    };
-    audit(None, &audited)?;
-    purlis_core::dispatchdormant::revive(root, asking, target).inspect_err(|_| {
-        // Recorded as taken back, so the log never ends on a grant that is not there.
-        if let Err(unsaid) = audit(
+/// **Give back to `name`**: the person's one acknowledgement that the persona of that name
+/// today may have what an earlier persona of the name had. Checked first, then the
+/// acknowledgement itself is recorded ([`dispatchgrant::Act::GiveBack`]), so nothing is given
+/// back that the log would not take. Then the grants set aside for the name are in force
+/// again, what this machine had accepted of the project's grants for it is accepted again,
+/// and its absence mark is lifted. Each grant that came back is recorded after it as a grant,
+/// for me or of the project's, as it is kept: which ones come back is only known once the one
+/// write has chosen them.
+fn give_back(root: &Path, name: &str, audit: Audit<'_>) -> Result<(), String> {
+    purlis_core::dispatchdormant::can_give_back(root, name)?;
+    audit(
+        None,
+        &dispatchgrant::Audited {
+            act: dispatchgrant::Act::GiveBack,
+            asking: Some(name),
+            target: name,
+            level: Level::You,
+        },
+    )?;
+    let back = purlis_core::dispatchdormant::give_back(root, name)?;
+    let grants = back
+        .grants
+        .iter()
+        .map(|one| (one.asking.as_str(), one.target.as_str(), Level::You));
+    let accepted = back.accepted.iter().filter_map(|one| {
+        let (asking, target) = one.said.split_once(" -> ")?;
+        Some((asking, target, Level::Project))
+    });
+    for (asking, target, level) in grants.chain(accepted) {
+        audit(
             None,
             &dispatchgrant::Audited {
-                act: dispatchgrant::Act::Revoke,
-                ..audited
+                act: dispatchgrant::Act::Grant,
+                asking: Some(asking),
+                target,
+                level,
             },
-        ) {
-            tracing::warn!(
-                "purlis: a dispatch grant that was not kept is still recorded as made ({unsaid})"
-            );
-        }
-    })
+        )
+        .map_err(|unsaid| {
+            format!(
+                "The grants are back in force, and purlis's event log did not take the \
+                 record of {asking} to {target} ({unsaid})."
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// **Lifts the never for `asking` to `target`** in the project at `root`: checked to be
@@ -1638,29 +1784,30 @@ pub fn accept_project_dispatch(
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
-/// **Give back** on a grant Settings shows set aside (#1504): a grant of yours that named a
-/// persona which was removed is in force again, for the persona of that name now. Refused
-/// while a name in it is no persona. Audited first. Answers what stands now.
+/// **Give back** on Settings' table (#1504): the person's one acknowledgement for the persona
+/// `name`, which has the name of a persona that was seen gone. What was set aside for it is
+/// in force again, and what was held back while it waited counts again. Refused while the
+/// name is no persona. Recorded first. Answers what stands now.
 #[tauri::command]
 #[specta::specta]
-pub fn revive_dormant_dispatch(
+pub fn give_back_dispatch(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
-    asking: String,
-    target: String,
+    name: String,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
     let root = held.root();
     with_ground(&held, |ground| {
-        revive(root, &asking, &target, ground.audit)?;
+        give_back(root, &name, ground.audit)?;
         held.dispatch_grants().start_what_is_covered(ground);
         Ok::<(), String>(())
     })?;
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
-/// **Remove** on a grant Settings shows set aside (#1504): it is taken out for good. It was in
-/// force for no chat, so nothing changes for any. Answers what stands now.
+/// **Remove** on a grant Settings shows set aside (#1504): that one entry is taken out for
+/// good, the one set aside as "any persona" where `any`, else the pair. It was in force for
+/// no chat, so nothing changes for any. Answers what stands now.
 #[tauri::command]
 #[specta::specta]
 pub fn remove_dormant_dispatch(
@@ -1668,10 +1815,11 @@ pub fn remove_dormant_dispatch(
     plane: PlaneId,
     asking: String,
     target: String,
+    any: bool,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
     let root = held.root();
-    if !purlis_core::dispatchdormant::remove(root, &asking, &target)? {
+    if !purlis_core::dispatchdormant::remove(root, &asking, &target, any)? {
         return Err("purlis removed nothing: that grant is no longer there.".to_owned());
     }
     Ok(standing_read(root, held.dispatch_grants()))

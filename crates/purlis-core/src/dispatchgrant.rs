@@ -75,10 +75,11 @@
 //! this machine's acceptance, which is what puts a project grant in force here, and remembers
 //! the grant as declined so it is not told as new again.
 //!
-//! **A removed persona's grants are set aside** ([`crate::dispatchdormant`]): out of the
-//! records read here, until the person removes each or gives it back in Settings. A persona
-//! made later under the same name inherits none of them. A rename through purlis rewrites
-//! every record.
+//! **A grant is in force only while both personas exist**, and a name that was seen gone and
+//! is another persona's now has its grants set aside until the person gives them back
+//! ([`crate::dispatchdormant`], which also says what that does not catch). The existence
+//! check is the app's, where a dispatch is judged, before [`covers`] is asked. purlis has no
+//! persona rename.
 //!
 //! # Policy
 //!
@@ -684,6 +685,17 @@ pub fn declined(root: &Path) -> Vec<String> {
     crate::sandbox::local::dispatch_declined(root)
 }
 
+/// **Accepts the project's "any persona" for `asking` on this machine**: Settings' Accept.
+/// It records the acceptance and nothing else, and never writes the committed file: refused
+/// where the file does not hold the grant now.
+pub fn accept_any_of_the_project(root: &Path, asking: &str) -> Result<(), String> {
+    if !crate::personas::valid_name(asking) || !project_grants(root, asking, ANY) {
+        return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
+    }
+    crate::sandbox::local::acknowledge_dispatch_any(root, asking)
+        .map_err(|why| format!("purlis could not record it as allowed on this machine: {why}"))
+}
+
 /// A project grant as [`declined`] spells it: `target` is a persona's name or [`ANY`]. `None`
 /// for names no project grant could have.
 pub fn project_grant_said(asking: &str, target: &str) -> Option<String> {
@@ -791,6 +803,14 @@ pub enum Act {
     /// machine. Always at [`Level::Project`], which is whose grant it is; the project's file
     /// is not changed.
     Decline,
+    /// A grant purlis took out of force itself (#1504): a name in it was seen gone and is
+    /// another persona's now ([`crate::dispatchdormant`]). Recorded as a revoke whose actor
+    /// is the host, never a person.
+    SetAside,
+    /// The person's one acknowledgement that the persona of a name today may have what an
+    /// earlier persona of the name had (#1504): `asking` and `target` are both that name.
+    /// Each grant it puts back in force is a [`Act::Grant`] after it.
+    GiveBack,
 }
 
 impl Audited<'_> {
@@ -802,15 +822,22 @@ impl Audited<'_> {
             Act::Never => "trust.dispatch.never",
             Act::LiftNever => "trust.dispatch.never.lift",
             Act::Decline => "trust.dispatch.decline",
+            Act::SetAside => "trust.dispatch.revoke",
+            Act::GiveBack => "trust.dispatch.give_back",
         }
     }
 
     /// The event's body.
     pub fn body(&self) -> serde_json::Value {
+        // Who did it: the person, in the window; or, for a grant set aside, purlis itself.
+        let (actor_kind, actor, scope) = match self.act {
+            Act::SetAside => ("host", "purlis", "persona-changed-hands"),
+            _ => ("human", "operator", "local-ui"),
+        };
         serde_json::json!({
-            "actor_kind": "human",
-            "actor": "operator",
-            "scope": "local-ui",
+            "actor_kind": actor_kind,
+            "actor": actor,
+            "scope": scope,
             "level": self.level.word(),
             "asking": self.asking,
             "target": self.target,

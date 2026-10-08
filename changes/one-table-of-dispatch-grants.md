@@ -14,10 +14,16 @@
 
 ### Security
 
-- **A removed persona leaves no dispatch grant behind, and a new one of the same name inherits
-  none.** When a persona is removed, your grants that name it are set aside: they allow
-  nothing, and Settings shows them greyed with **Remove**. The project's grants for that name
-  wait for your yes again. A persona created later under the same name gets one back only if
-  you press **Give back**. A never you said keeps holding for the name. Accepting a project
-  grant, declining it, and giving a grant back are each recorded in purlis's event log, and
-  each is a press in the window: no command and nothing a chat sends reaches them (#1504).
+- **A dispatch grant counts only while both personas exist, and a new persona under an old
+  name is asked about once.** A grant that names a persona the project does not have now
+  allows nothing: a chat still running as a removed persona dispatches to no one, and nothing
+  is dispatched to a name that is no persona. Nothing is moved while a persona is away, so
+  switching to a branch without it and back changes no grant. When a persona that purlis saw
+  gone is there again with a different definition, or when you create a persona under a name
+  your grants still hold, those grants are set aside: Settings shows them greyed, and one
+  **Give back** for the name returns them. A never you said keeps holding for the name.
+  **What this does not catch:** a persona removed and another made under its name, by hand or
+  in one pull, with no dispatch and no look at Settings in between, is not noticed, and the
+  new one has the old one's grants. Accepting a project grant, declining it and giving grants
+  back are each recorded in purlis's event log, and each is a press in the window: no command
+  and nothing a chat sends reaches them (#1504).

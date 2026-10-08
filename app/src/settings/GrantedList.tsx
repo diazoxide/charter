@@ -3,6 +3,8 @@ import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
 import { sandboxCommandReturned } from "../sandboxAsked";
 import type { RowIds } from "./components";
+import { DISPATCH } from "./dispatch";
+import { linkToGroup, settingsPlace } from "./links";
 import type { SettingsGroup } from "./groups";
 
 /** The address of the Granted list (#1348): a sub-page of Sandbox. */
@@ -320,7 +322,16 @@ export function grantedGroup(
                 aria-labelledby={ids.labelledBy}
                 aria-describedby={ids.describedBy}
               >
-                Dispatch grants are listed, revoked and lifted under Settings › Project › Dispatch.
+                Dispatch grants are listed, revoked and lifted on the Dispatch page.
+                <button
+                  type="button"
+                  className="ui-setting-reset"
+                  tabIndex={0}
+                  // The same Settings tab, at its Dispatch page (`links.ts`).
+                  onClick={() => linkToGroup(settingsPlace("project", plane), DISPATCH)}
+                >
+                  Open that page
+                </button>
               </p>
             ),
           };

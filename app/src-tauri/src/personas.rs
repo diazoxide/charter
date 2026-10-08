@@ -115,8 +115,8 @@ pub async fn persona_remove(
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
         let said = remove_in(held.root(), &name);
-        // A removed persona leaves no dispatch grant in force (#1504): the core set aside the
-        // ones this machine keeps, and the ones made for one chat are this app's to end.
+        // A removed persona's grants are in force for no chat (#1504): the core marked the
+        // name gone, and the grants made for one chat that name it are this app's to end.
         if said.is_ok() {
             held.dispatch_grants().persona_gone(&name);
         }

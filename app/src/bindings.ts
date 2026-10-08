@@ -482,16 +482,18 @@ export const commands = {
 	 */
 	declineProjectDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("decline_project_dispatch", { plane, asking, target })),
 	/**
-	 *  **Give back** on a grant Settings shows set aside (#1504): a grant of yours that named a
-	 *  persona which was removed is in force again, for the persona of that name now. Refused
-	 *  while a name in it is no persona. Audited first. Answers what stands now.
+	 *  **Give back** on Settings' table (#1504): the person's one acknowledgement for the persona
+	 *  `name`, which has the name of a persona that was seen gone. What was set aside for it is
+	 *  in force again, and what was held back while it waited counts again. Refused while the
+	 *  name is no persona. Recorded first. Answers what stands now.
 	 */
-	reviveDormantDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("revive_dormant_dispatch", { plane, asking, target })),
+	giveBackDispatch: (plane: PlaneId, name: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("give_back_dispatch", { plane, name })),
 	/**
-	 *  **Remove** on a grant Settings shows set aside (#1504): it is taken out for good. It was in
-	 *  force for no chat, so nothing changes for any. Answers what stands now.
+	 *  **Remove** on a grant Settings shows set aside (#1504): that one entry is taken out for
+	 *  good, the one set aside as "any persona" where `any`, else the pair. It was in force for
+	 *  no chat, so nothing changes for any. Answers what stands now.
 	 */
-	removeDormantDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target })),
+	removeDormantDispatch: (plane: PlaneId, asking: string, target: string, any: boolean) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target, any })),
 	/**
 	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
 	 *  for Settings' list and the project's Notice.
@@ -2586,10 +2588,11 @@ export type DispatchDormant = {
 	target: string,
 	/**  Whether it was "any persona". Never read from `target`. */
 	any: boolean,
-	/**  The name that was no persona's when it was set aside. */
+	/**
+	 *  The name that changed hands: the persona it is given back to, with one press for
+	 *  everything set aside for that name.
+	 */
 	was: string,
-	/**  Whether every name in it is a persona of the project now, so it can be given back. */
-	revivable: boolean,
 };
 
 /**  One dispatch grant, as Settings lists it. */
@@ -2879,8 +2882,18 @@ export type DispatchStanding = {
 	personas: string[] | null,
 	/**  The pairs kept blocked for one chat's life, read-only. */
 	kept_blocked: DispatchKeptBlocked[],
-	/**  Your grants set aside because a persona they named was removed. */
+	/**  Your grants set aside because a name in them came to be another persona's. */
 	dormant: DispatchDormant[],
+	/**
+	 *  Names that were seen gone and are a persona again with another definition: every grant
+	 *  that names one is in force for no chat until the person gives it back (#1504).
+	 */
+	returned: string[],
+	/**
+	 *  Names the person can give something back to: each of `returned`, and each persona that
+	 *  has grants or acceptances set aside for it.
+	 */
+	back: string[],
 };
 
 /**  What the Dispatches tab is handed. */
