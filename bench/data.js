@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791433706068,
+  "lastUpdate": 1791439814254,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3444,6 +3444,48 @@ window.BENCHMARK_DATA = {
             "value": 104.508757,
             "unit": "ms",
             "extra": "median of 5 runs: 103.008, 103.317, 104.509, 104.531, 106.128 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "1d70fbf15c11344b85fbfeedc868afcd4dedabac",
+          "message": "A Notice in a pane's corner wraps, and what it opens is drawn under it\n\nReported by the operator from the dev build, 2026-10-08: \"ui is broken for\nquestions modals\". With two panes side by side, a refused vault's Notice had\nits sentence one word wide and fourteen lines tall, its three buttons broken\nover up to five lines beside it, and the block a button opened drawn to the\nright of the Notice and off the window. The dispatch-grant Notice in the other\npane had its brief over the middle of the pane, its buttons far below, and no\nsentence in view. The Notice was drawn over the Ask devops dialog, that\ndialog's \"What to ask\" box was a third of its width with its buttons below the\nwindow, and the band and the sidebar were cut at the left.\n\nCause. `Notice at=\"pane\"` was made for one short line (ADR 0062). `.notice-pane`\nwas one flex row that did not wrap, and the pane's corner was itself one row\nthat did not wrap, so a Notice's `under` was the next ITEM of the corner's row:\nbeside the Notice. Nothing bounded any of it by the pane. A button that\noverflowed was then focused, and the window (`overflow: hidden`, which a focus\ncan still scroll) was scrolled sideways to show it: that is what cut the band\nand the sidebar. The corner's `z-index: 2` sat in the page's root stacking\ncontext, where a dialog portaled to the body has no number, so the corner was\nover every dialog.\n\nWhat changed, as properties of the shared pane Notice and the pane's corner:\n\n- `Notice at=\"pane\"` draws one box (`notice-pane-box`): the line, and under it\n  what a way out opened. The band and the drawer are drawn as before.\n- The corner is a column: the chat at a glance (`pane-chips`), then the pane's\n  Notices one under another (`pane-notices`), never wider or taller than the\n  pane, scrolling when together they are taller. The pane's frame clips.\n- The sentence has the row. The ways out stand beside it only when all of it\n  fits unwrapped, and otherwise go under it; a button is not broken unless it\n  alone is wider than the Notice.\n- `#root` is one stacking context, so nothing in the window is over a dialog\n  or a menu. The terminal is one too, so its own layers stay under the corner.\n- Ask {persona}: the box you write in takes the row, the dialog fits the\n  window, and its answers stay at its bottom edge.\n\nBehaviour, the answer to \"is dispatching a manual job?\": it is the chat's own.\nThe chat had dispatched already and its request was held for the person; the\nbroken layout hid it, and the vault's Notice offered a second, manual, empty\nway beside it.\n\n- The dispatch-grant Notice is the pane's first, and reads sentence, answers,\n  then the brief in a box of about eight lines.\n- A refused vault whose persona this chat has already asked says so and offers\n  Show the request, which goes to that Notice, in place of Dispatch to\n  {persona}…. With nothing held, Dispatch to {persona}… is offered as before.\n- Ask {persona} opened from a chat's Notice says the chat's words are not\n  copied into it. It is still empty: nothing a chat produced is typed for the\n  person.\n\nDecided in implementation:\n\n- D-PN-1 The line and what it opened are one bordered box in a pane, and stay\n  siblings under the strip and in the drawer, where the band moves them.\n- D-PN-2 The sentence is as wide as it reads (`flex: 0 1 auto`) with no fixed\n  minimum: a minimum would widen a short one-liner, and without one the\n  sentence is never narrower than the Notice unless everything fits on a row.\n- D-PN-3 A way out is `flex: none; max-width: 100%` and wraps normally, not\n  `white-space: nowrap`: it is never broken while it fits, and wraps instead\n  of being cut off when it alone is wider than the Notice.\n- D-PN-4 40rem is the cap, on the stack. A Notice that has opened something\n  takes that width whole.\n- D-PN-5 `overflow: clip` on the pane's frame, not `hidden`: a hidden box can\n  be scrolled by a focus, which is the defect.\n- D-PN-6 The corner takes no pointer events of its own; its two rows do. It\n  can be as wide as the pane now, and the terminal is under the empty part.\n- D-PN-7 The stacking order is by `isolation: isolate` on `#root` and on the\n  terminal's holder. The stylesheet has no layer scale, and this adds no\n  number to it.\n- D-PN-8 The order in a pane is written, not ranked: the Notice that waits for\n  an answer before anything starts is first, the rest as they were.\n- D-PN-9 No label is shortened. \"Allow steward to use this vault\" is a verb\n  and what it acts on, as docs/ui-copy.md asks, and it now fits a row.\n- D-PN-10 The Notice's sentence stays purlis's own words. The chat's name for\n  its task is the chat's text, and is not put into it.\n- D-PN-11 Show the request puts the focus on the request's line, never on one\n  of its Allow buttons, so the next key cannot answer it.\n- D-PN-12 Both Notices read the held dispatches from one store\n  (`dispatchesHeld.ts`), so neither says one is waiting after it is answered.\n- D-PN-13 The persona's mark is the sentence's first word in a pane, so it is\n  not left alone on a row above a sentence that takes the next one whole.\n- D-PN-14 The dialog's rules are scoped to Ask {persona} (`ask-persona`), not\n  to every dialog or every settings row.\n- D-PN-15 The e2e case draws the shapes the components draw into real panes\n  and measures the built stylesheet: the suite's fake harness cannot make a\n  vault refusal or a held dispatch. Vitest holds the components to the shapes.\n\nTests: `Notice.pane.test.tsx` (the shape, and the rules as written),\n`VaultRefusedNotice.test.tsx` and `AskPersona.window.test.tsx` (the pointer,\nthe order, the dialog's line), `pane-notices.e2e.ts` (the measuring).\n\nCloses #1481\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-08T10:08:34+04:00",
+          "tree_id": "305a9ac7f6bc1b56342dc504b8097acde367b5bd",
+          "url": "https://github.com/purlis/purlis/commit/1d70fbf15c11344b85fbfeedc868afcd4dedabac"
+        },
+        "date": 1791439813592,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.6147245,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.595, 0.604, 0.615, 0.615, 0.617 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.468757,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.072, 16.217, 16.469, 16.568, 16.599 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.4769505,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.449, 101.615, 102.477, 102.526, 103.143 ms"
           }
         ]
       }
