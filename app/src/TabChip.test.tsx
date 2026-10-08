@@ -351,7 +351,7 @@ describe("a tab's chip", () => {
     expect(foot.querySelector(".tasks-menu-limits")?.textContent).toBe("4 of 6 running");
     await waitFor(() =>
       expect(foot.querySelector(".tasks-menu-totals")?.textContent).toBe(
-        "2 tasks · 310k tokens · 6m",
+        "2 tasks · at least 70k tokens · 6m",
       ),
     );
     expect(foot.querySelector(".tasks-menu-totals")?.getAttribute("title")).toBe(
@@ -366,14 +366,14 @@ describe("a tab's chip", () => {
 /** What the core answers for the tab of `ROWS` and one finished task. */
 const USED: TasksUsed = {
   chats: [
-    { session: 1, tokens: "100k in, 20k out" },
-    { session: 2, tokens: "60k in, 10k out" },
+    { session: 1, tokens: "100k in, 20k out", unsaid: null },
+    { session: 2, tokens: "60k in, 10k out", unsaid: null },
   ],
-  finished: [{ id: "report", tokens: null }],
+  finished: [{ id: "report", tokens: null, unsaid: "nothing" }],
   total: {
     tasks: 2,
-    said: "2 tasks · 310k tokens · 6m",
-    explained: "Tokens, as each harness reported them: 120k by the session's own chat.",
+    said: "2 tasks · at least 70k tokens · 6m",
+    explained: "Tokens the tasks used, as each harness reported them: 70k.",
   },
 };
 
@@ -393,7 +393,7 @@ describe("what a session's tasks used (#1500)", () => {
     expect(read.mock.calls[0][0]).toEqual({ own: 1, chats: [2], finished: ["report"] });
   });
 
-  it("says each task's tokens on its line's hover, and a dash where its harness reported none", async () => {
+  it("says each task's tokens on its line's hover, and a dash and why where there are none", async () => {
     chip({
       used: reader(USED),
       ended: [finished("report", { folds: false, shown: FAILED })],
@@ -403,7 +403,7 @@ describe("what a session's tasks used (#1500)", () => {
     const talk = await screen.findByRole("menuitem", { name: /^talk/ });
     await waitFor(() => expect(talk.getAttribute("title")).toBe("Tokens: 60k in, 10k out"));
     const report = screen.getByRole("menuitem", { name: /^report/ });
-    expect(report.getAttribute("title")).toBe("Tokens: — (its harness reported none)");
+    expect(report.getAttribute("title")).toBe("Tokens: — (nothing reported)");
     expect(report.getAttribute("title")).not.toContain("0");
   });
 

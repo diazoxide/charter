@@ -163,6 +163,7 @@ function FinishedRow({
           aria-expanded={shown}
           title={hover || undefined}
           onPointerEnter={waits === null ? used.onPointerEnter : undefined}
+          onPointerLeave={waits === null ? used.onPointerLeave : undefined}
           onClick={() => {
             // Opened to be read: looked at.
             if (!shown) onLook?.(task);

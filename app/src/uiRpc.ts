@@ -1714,13 +1714,13 @@ export const commands = {
 	cold: number | null,
 } | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
 	/**
-	 *  **What the chats of a tab used** (#1500): `own` is the session's own chat, counted in the
-	 *  tokens and not as a task; `chats` its open tasks, and any it still shows that has ended;
-	 *  `finished` the dispatch records of its ended tasks. Asked as the tab's menu opens, and as
-	 *  the pointer comes onto a task's row, never on a timer. On a blocking thread, as it reads
-	 *  the dispatch records.
+	 *  **What the chats of a tab used** (#1500). `scope` says what for: a row's hover reads its
+	 *  one figure; a tab's menu reads every line, each task's time and the total. `own` is the
+	 *  session's own chat, said beside the total and not in it; `chats` its open tasks, and any it
+	 *  still shows that has ended; `finished` the dispatch records of its ended tasks. Never on a
+	 *  timer. On a blocking thread, as it reads files.
 	 */
-	tasksUsed: (plane: PlaneId, own: number | null, chats: number[], finished: string[]) => typedError<TasksUsed, string>(__TAURI_INVOKE("tasks_used", { plane, own, chats, finished })),
+	tasksUsed: (plane: PlaneId, scope: Scope, own: number | null, chats: number[], finished: string[]) => typedError<TasksUsed, string>(__TAURI_INVOKE("tasks_used", { plane, scope, own, chats, finished })),
 	/**  The pin report for this plane. */
 	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
 	/**
@@ -2224,11 +2224,10 @@ export type ChatUsage = {
 /**  One open chat's tokens, by its number. */
 export type ChatUsed = {
 	session: number,
-	/**
-	 *  Its tokens in and out as its harness counted them (`15k in, 4k out`); `null` where its
-	 *  harness said none.
-	 */
+	/**  Its tokens in and out as its harness counted them (`15k in, 4k out`); `null` where none. */
 	tokens: string | null,
+	/**  Why there are none, where there are none. */
+	unsaid: Unsaid | null,
 };
 
 /**  Where a chat is working, when it is working in a piece. */
@@ -3045,8 +3044,9 @@ export type FinishedTask = {
 /**  One ended task's tokens, by its dispatch record's id. */
 export type FinishedUsed = {
 	id: string,
-	/**  What it used, as kept when it ended; `null` where its harness said none. */
+	/**  What it used, as kept when it ended; `null` where none. */
 	tokens: string | null,
+	unsaid: Unsaid | null,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -5336,6 +5336,13 @@ export type SavingInForce = {
 	repos_left_out: string | null,
 };
 
+/**  What an ask is for. */
+export type Scope = 
+/**  A row's hover: its figure only. No time is looked for and no total is made. */
+"hover" | 
+/**  A tab's menu: every line's figure, each task's time, and the total. */
+"menu";
+
 /**  Why a page of a search ended. */
 export type SearchEnd = 
 /**  The whole scope is searched. */
@@ -5742,7 +5749,7 @@ export type TaskEnding = {
 export type TasksUsed = {
 	chats: ChatUsed[],
 	finished: FinishedUsed[],
-	/**  `null` where the ask named no task. */
+	/**  `null` for a hover's ask, and where the ask named no task. */
 	total: UsedTotal | null,
 };
 
@@ -5832,6 +5839,21 @@ export type TodoView = {
 	body: string,
 };
 
+/**  Why a chat's tokens are a dash: true in every case that leads to it. */
+export type Unsaid = 
+/**
+ *  An open chat whose conversation is known and whose harness has said nothing so far:
+ *  no turn has ended yet, or its harness reports none.
+ */
+"not_yet" | 
+/**  A task that ended with no figure kept: its harness said nothing. */
+"nothing" | 
+/**
+ *  purlis cannot tell: it does not know the chat's conversation, or the record could not
+ *  be read.
+ */
+"not_known";
+
 /**  One turn of the trend. */
 export type UsageTurn = {
 	/**  The share of that turn's input served from cache, in its tone. */
@@ -5848,7 +5870,7 @@ export type UsedTotal = {
 	tasks: number,
 	/**  The line as drawn: `5 tasks · 310k tokens · 6m`. */
 	said: string,
-	/**  What the line adds up, in a sentence: its title. */
+	/**  What the line adds up and what it leaves out, in sentences: its title. */
 	explained: string,
 };
 

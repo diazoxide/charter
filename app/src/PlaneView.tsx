@@ -5927,7 +5927,7 @@ export const PlaneView = memo(function PlaneView({
     [],
   );
   /** What a tab's chats used, for its menu (#1500): read only as the window asks. */
-  const usedFromChip = useCallback((ask: UsedAsk) => readUsed(plane, ask), [plane]);
+  const usedFromChip = useCallback((ask: UsedAsk) => readUsed(plane, "menu", ask), [plane]);
 
   /**
    * **A tab on the strip was pressed.** One that is behind comes forward, on whatever it was

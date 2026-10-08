@@ -1010,6 +1010,7 @@ const Row = memo(function Row({
             data-session={session}
             title={hover || undefined}
             onPointerEnter={task ? used.onPointerEnter : undefined}
+            onPointerLeave={task ? used.onPointerLeave : undefined}
             // The row goes to its chat, and the words that name another chat go to that one
             // (`ChatRowHandedOff`). Enter is a press on the row itself.
             onClick={(event) => onOpen(goesTo(event.target, event.currentTarget) ?? session)}

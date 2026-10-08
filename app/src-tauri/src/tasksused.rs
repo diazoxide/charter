@@ -9,41 +9,66 @@
 //! that has ended keeps what its record kept when it ended (`dispatchrecord::Record::usage`),
 //! so what it used does not move after its end and survives a restart.
 //!
-//! **A harness that says nothing has a dash, never a zero** (V100-71): a figure is `None` where
-//! nothing was said, the window draws `—` for it, and the total says it counts only what was
-//! said ("at least 310k tokens"). A harness's own helpers are inside its figure, as its harness
-//! counts them; they are never added a second time.
+//! **The total is the tasks' own** (the ticket's acceptance line): the sum of the figures its
+//! task lines show. The session's own chat is said beside it in the title and is not in it.
 //!
-//! # When it is read
+//! **Nothing is guessed** (V100-71). A figure that is missing is a dash, never a zero, and says
+//! why ([`Unsaid`]): nothing reported yet, nothing reported, or not known. A total that misses
+//! any task's figure, or has only half of one, says `at least`; so does a time that misses any
+//! task's time. A harness's own helpers are inside its figure, as its harness counts them; they
+//! are never added a second time.
+//!
+//! # When it is read, and what one read costs
 //!
 //! Only when the window asks: as the tab's menu opens and when a chat of it changes state while
-//! it is open, and as the pointer comes onto a task's row. Nothing polls.
+//! it is open, and as the pointer comes to rest on a task's row. Nothing polls. **A hover asks
+//! for its one figure and nothing else** ([`Scope::Hover`]): one usage file or one record, no
+//! time and no total. The menu's time needs each open task's record, which is found once per
+//! chat and then kept by its id ([`Starts`]), so no read walks the whole store again.
 //!
 //! **A reported figure, which a chat can alter** (D-1452-12): it is shown as said, and nothing
 //! decides anything by it.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
-use purlis_core::dispatchrecord::{self, Record};
+use purlis_core::dispatchrecord::{self, ChatRef, Record};
 use purlis_core::usage::{self, Spent};
 
 use crate::planes::{Held, PlaneId, Planes};
+
+/// Why a chat's tokens are a dash: true in every case that leads to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Unsaid {
+    /// An open chat whose conversation is known and whose harness has said nothing so far:
+    /// no turn has ended yet, or its harness reports none.
+    NotYet,
+    /// A task that ended with no figure kept: its harness said nothing.
+    Nothing,
+    /// purlis cannot tell: it does not know the chat's conversation, or the record could not
+    /// be read.
+    NotKnown,
+}
 
 /// One open chat's tokens, by its number.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct ChatUsed {
     pub session: u32,
-    /// Its tokens in and out as its harness counted them (`15k in, 4k out`); `null` where its
-    /// harness said none.
+    /// Its tokens in and out as its harness counted them (`15k in, 4k out`); `null` where none.
     pub tokens: Option<String>,
+    /// Why there are none, where there are none.
+    pub unsaid: Option<Unsaid>,
 }
 
 /// One ended task's tokens, by its dispatch record's id.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct FinishedUsed {
     pub id: String,
-    /// What it used, as kept when it ended; `null` where its harness said none.
+    /// What it used, as kept when it ended; `null` where none.
     pub tokens: Option<String>,
+    pub unsaid: Option<Unsaid>,
 }
 
 /// The menu's total line, and what it adds up.
@@ -53,7 +78,7 @@ pub(crate) struct UsedTotal {
     pub tasks: u32,
     /// The line as drawn: `5 tasks · 310k tokens · 6m`.
     pub said: String,
-    /// What the line adds up, in a sentence: its title.
+    /// What the line adds up and what it leaves out, in sentences: its title.
     pub explained: String,
 }
 
@@ -62,31 +87,68 @@ pub(crate) struct UsedTotal {
 pub(crate) struct TasksUsed {
     pub chats: Vec<ChatUsed>,
     pub finished: Vec<FinishedUsed>,
-    /// `null` where the ask named no task.
+    /// `null` for a hover's ask, and where the ask named no task.
     pub total: Option<UsedTotal>,
+}
+
+/// What an ask is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Scope {
+    /// A row's hover: its figure only. No time is looked for and no total is made.
+    Hover,
+    /// A tab's menu: every line's figure, each task's time, and the total.
+    Menu,
+}
+
+/// What one chat's tokens are, as read.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) enum Tokens {
+    /// What its harness said.
+    Said(Spent),
+    /// Its source was read and holds nothing.
+    Unsaid(Unsaid),
+    /// Its source could not be read or named.
+    #[default]
+    NotKnown,
 }
 
 /// What one chat's figures are, as read: its tokens, and for a task how long it has worked.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct Figure {
-    pub spent: Option<Spent>,
-    /// Seconds it worked, from its dispatch to its end or to now.
+    pub tokens: Tokens,
+    /// Seconds it worked, from its dispatch to its end or to now; `None` where not known.
     pub ran: Option<i64>,
 }
 
-/// Its tokens in and out, added: `None` where neither was said.
-fn tokens_of(spent: Option<&Spent>) -> Option<u64> {
-    let spent = spent?;
-    match (spent.input_tokens, spent.output_tokens) {
-        (None, None) => None,
-        (input, output) => Some(input.unwrap_or(0).saturating_add(output.unwrap_or(0))),
+impl Figure {
+    /// Its tokens added, and whether that is the whole figure: `None` where nothing was said,
+    /// and `false` where only one side of it was.
+    fn counted(&self) -> Option<(u64, bool)> {
+        let Tokens::Said(spent) = self.tokens else {
+            return None;
+        };
+        match (spent.input_tokens, spent.output_tokens) {
+            (None, None) => None,
+            (Some(input), Some(output)) => Some((input.saturating_add(output), true)),
+            (one, other) => Some((one.or(other).unwrap_or(0), false)),
+        }
     }
-}
 
-/// A chat's tokens as a row says them, or `None` where its harness said none.
-fn line_of(spent: Option<&Spent>) -> Option<String> {
-    let spent = spent?;
-    crate::dispatches::counted(spent.input_tokens, spent.output_tokens)
+    /// Its tokens as a row says them (`15k in, 4k out`), or why there are none.
+    fn line(&self) -> (Option<String>, Option<Unsaid>) {
+        match self.tokens {
+            Tokens::Said(spent) => {
+                match crate::dispatches::counted(spent.input_tokens, spent.output_tokens) {
+                    Some(line) => (Some(line), None),
+                    // A cost and no tokens is no token figure.
+                    None => (None, Some(Unsaid::Nothing)),
+                }
+            }
+            Tokens::Unsaid(why) => (None, Some(why)),
+            Tokens::NotKnown => (None, Some(Unsaid::NotKnown)),
+        }
+    }
 }
 
 /// A count of tokens as purlis spells it everywhere (`310k`, `1.2M`).
@@ -107,86 +169,113 @@ fn time_said(seconds: i64) -> String {
     }
 }
 
-/// **The menu's total**: the session's own chat (`own`) and every task, open (`chats`) and
-/// ended (`finished`). Its tokens are the sum of the lines' own figures, so the total is never
-/// a number the lines do not add up to; its time is the tasks' own times, added. `None` where
-/// there is no task to total.
+/// `1 task` or `n tasks`.
+fn tasks_said(n: usize) -> String {
+    if n == 1 {
+        "1 task".to_owned()
+    } else {
+        format!("{n} tasks")
+    }
+}
+
+/// The session's own chat, as the title says it beside the total.
+fn own_said(own: &Figure) -> String {
+    match (own.counted(), own.line().1) {
+        (Some((n, true)), _) => spelled(n),
+        (Some((n, false)), _) => format!("{} (only part reported)", spelled(n)),
+        (None, Some(Unsaid::NotYet)) => "— (nothing reported yet)".to_owned(),
+        (None, Some(Unsaid::Nothing)) => "— (nothing reported)".to_owned(),
+        (None, _) => "— (not known)".to_owned(),
+    }
+}
+
+/// **The menu's total**: the tasks' own figures, open (`chats`) and ended (`finished`), and
+/// the session's own chat (`own`) said beside it in the title, not in it. Its tokens are the
+/// sum of what the task lines show; its time is the tasks' own times, added. Either says
+/// `at least` where any task's part of it is missing. `None` where there is no task.
 pub(crate) fn total(own: Option<Figure>, tasks: &[Figure]) -> Option<UsedTotal> {
     if tasks.is_empty() {
         return None;
     }
-    let count = u32::try_from(tasks.len()).unwrap_or(u32::MAX);
-    let own_tokens = own.as_ref().and_then(|own| tokens_of(own.spent.as_ref()));
-    let task_tokens: Vec<Option<u64>> = tasks
-        .iter()
-        .map(|task| tokens_of(task.spent.as_ref()))
-        .collect();
-    let said_by_tasks: Option<u64> = task_tokens
+    let counted: Vec<Option<(u64, bool)>> = tasks.iter().map(Figure::counted).collect();
+    let tokens: Option<u64> = counted
         .iter()
         .flatten()
-        .copied()
+        .map(|(n, _)| *n)
         .reduce(u64::saturating_add);
-    let unreported = task_tokens.iter().filter(|one| one.is_none()).count()
-        + usize::from(own.is_some() && own_tokens.is_none());
-    let all: Option<u64> = [own_tokens, said_by_tasks]
-        .into_iter()
-        .flatten()
-        .reduce(u64::saturating_add);
+    let missing = counted.iter().filter(|one| one.is_none()).count();
+    let halves = counted
+        .iter()
+        .filter(|one| matches!(one, Some((_, false))))
+        .count();
     let ran: Option<i64> = tasks
         .iter()
         .filter_map(|task| task.ran)
         .reduce(i64::saturating_add);
+    let untimed = tasks.iter().filter(|task| task.ran.is_none()).count();
 
-    let tasks_said = if count == 1 {
-        "1 task".to_owned()
-    } else {
-        format!("{count} tasks")
-    };
-    let tokens_said = match all {
+    let tokens_said = match tokens {
         None => "— tokens".to_owned(),
-        Some(n) if unreported > 0 => format!("at least {} tokens", spelled(n)),
+        Some(n) if missing + halves > 0 => format!("at least {} tokens", spelled(n)),
         Some(n) => format!("{} tokens", spelled(n)),
     };
-    let said = [Some(tasks_said), Some(tokens_said), ran.map(time_said)]
+    let time = ran.map(|ran| {
+        if untimed > 0 {
+            format!("at least {}", time_said(ran))
+        } else {
+            time_said(ran)
+        }
+    });
+    let said = [Some(tasks_said(tasks.len())), Some(tokens_said), time]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(" · ");
 
-    let or_dash = |n: Option<u64>| n.map_or_else(|| "—".to_owned(), spelled);
     let mut explained = Vec::new();
-    if all.is_none() {
-        explained.push("No harness here reported its tokens.".to_owned());
-    } else if own.is_some() {
+    match tokens {
+        None => explained.push("No task has a token figure yet.".to_owned()),
+        Some(n) => explained.push(format!(
+            "Tokens the tasks used, as each harness reported them: {}.",
+            spelled(n)
+        )),
+    }
+    if missing > 0 && tokens.is_some() {
         explained.push(format!(
-            "Tokens, as each harness reported them: {} by the session's own chat, {} by its tasks.",
-            or_dash(own_tokens),
-            or_dash(said_by_tasks),
-        ));
-    } else {
-        explained.push(format!(
-            "Tokens, as each harness reported them: {} by the tasks.",
-            or_dash(said_by_tasks),
+            "Left out: {} with no figure (nothing reported, or not known).",
+            tasks_said(missing)
         ));
     }
-    if unreported > 0 && all.is_some() {
+    if halves > 0 {
         explained.push(format!(
-            "{unreported} {} reported none, so the total counts only what was reported.",
-            if unreported == 1 {
-                "chat's harness"
-            } else {
-                "chats' harnesses"
+            "Left out: half of the figure of {}, whose harness reported only tokens in or only \
+             tokens out.",
+            tasks_said(halves)
+        ));
+    }
+    match ran {
+        Some(ran) => {
+            explained.push(format!(
+                "{}: how long the tasks worked, added up.",
+                time_said(ran)
+            ));
+            if untimed > 0 {
+                explained.push(format!(
+                    "Left out: the time of {}, which is not known.",
+                    tasks_said(untimed)
+                ));
             }
-        ));
+        }
+        None => explained.push("How long the tasks worked is not known.".to_owned()),
     }
-    if let Some(ran) = ran {
+    if let Some(own) = own {
         explained.push(format!(
-            "{}: how long the tasks worked, added up.",
-            time_said(ran)
+            "The session's own chat: {}, not in this total.",
+            own_said(&own)
         ));
     }
     Some(UsedTotal {
-        tasks: count,
+        tasks: u32::try_from(tasks.len()).unwrap_or(u32::MAX),
         said,
         explained: explained.join(" "),
     })
@@ -218,50 +307,106 @@ fn ran_between(
     Some((ended - started).num_seconds().max(0))
 }
 
-/// A task that has ended: what its record kept.
-pub(crate) fn of_record(record: &Record, now: chrono::DateTime<chrono::Utc>) -> Figure {
+/// A task that has ended: what its record kept, or not known where it could not be read.
+pub(crate) fn of_record(record: Option<&Record>, now: chrono::DateTime<chrono::Utc>) -> Figure {
+    let Some(record) = record else {
+        return Figure::default();
+    };
     Figure {
-        spent: record.usage.filter(|spent| !spent.is_empty()),
+        tokens: match record.usage {
+            Some(spent) if !spent.is_empty() => Tokens::Said(spent),
+            _ => Tokens::Unsaid(Unsaid::Nothing),
+        },
         ran: ran(record, now),
     }
 }
 
-/// Every figure of one ask, read from the project at `root`. `conversation` and `chat` say what
-/// the app knows of an open chat: the conversation it is in, and how a record names it.
-pub(crate) fn read(
+/// **Which record is each open task's** (fold-in of the #1500 review): the newest dispatch of
+/// a chat, by the chat's id, found once with one walk of the store and then read by its id, so
+/// the menu's time costs one small read per task. A record that no longer reads, or no longer
+/// names the chat, is looked for again.
+#[derive(Default)]
+pub(crate) struct Starts(Mutex<HashMap<(PathBuf, String), String>>);
+
+impl Starts {
+    /// The newest record of chat `me` in the project at `root`.
+    fn of(&self, root: &Path, me: &ChatRef) -> Option<Record> {
+        // A chat with no id is named only by a number a launch deals again: never kept.
+        let Some(id) = me.id.clone() else {
+            return dispatchrecord::latest_for(root, me);
+        };
+        let key = (root.to_path_buf(), id);
+        let kept = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .cloned();
+        if let Some(record) = kept
+            .and_then(|record| dispatchrecord::read(root, &record))
+            .filter(|record| dispatchrecord::same_chat(&record.worker.chat, me))
+        {
+            return Some(record);
+        }
+        let found = dispatchrecord::latest_for(root, me)?;
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, found.id.clone());
+        Some(found)
+    }
+}
+
+/// The one [`Starts`] of this app.
+fn starts() -> &'static Starts {
+    static STARTS: std::sync::OnceLock<Starts> = std::sync::OnceLock::new();
+    STARTS.get_or_init(Starts::default)
+}
+
+/// What the app knows of its open chats, for [`read`].
+pub(crate) struct Known<'a, C, R> {
+    /// The conversation an open chat is in.
+    pub conversation: C,
+    /// How a record names an open chat.
+    pub chat: R,
+    /// Which record is each open task's.
+    pub records: &'a Starts,
+}
+
+/// Every figure of one ask, read from the project at `root`.
+pub(crate) fn read<C, R>(
     root: &Path,
+    scope: Scope,
     own: Option<u32>,
     chats: &[u32],
     finished: &[String],
-    conversation: impl Fn(u32) -> Option<String>,
-    chat: impl Fn(u32) -> Option<dispatchrecord::ChatRef>,
+    known: &Known<'_, C, R>,
     now: chrono::DateTime<chrono::Utc>,
-) -> TasksUsed {
-    let spent_of = |session: u32| {
-        conversation(session).and_then(|conversation| usage::spent(root, &conversation))
-    };
-    // One read of the store for every open task's start, however many there are.
-    let running: Vec<Record> = if chats.is_empty() {
-        Vec::new()
-    } else {
-        dispatchrecord::list(root)
-            .into_iter()
-            .filter(Record::running)
-            .collect()
+) -> TasksUsed
+where
+    C: Fn(u32) -> Option<String>,
+    R: Fn(u32) -> Option<ChatRef>,
+{
+    let tokens_of = |session: u32| match (known.conversation)(session) {
+        None => Tokens::NotKnown,
+        Some(conversation) => {
+            usage::spent(root, &conversation).map_or(Tokens::Unsaid(Unsaid::NotYet), Tokens::Said)
+        }
     };
     let open: Vec<(u32, Figure)> = chats
         .iter()
         .map(|&session| {
-            let started = chat(session).and_then(|me| {
-                running
-                    .iter()
-                    .find(|record| dispatchrecord::same_chat(&record.worker.chat, &me))
-            });
+            let ran = match scope {
+                Scope::Hover => None,
+                Scope::Menu => (known.chat)(session)
+                    .and_then(|me| known.records.of(root, &me))
+                    .and_then(|record| ran(&record, now)),
+            };
             (
                 session,
                 Figure {
-                    spent: spent_of(session),
-                    ran: started.and_then(|record| ran(record, now)),
+                    tokens: tokens_of(session),
+                    ran,
                 },
             )
         })
@@ -269,17 +414,15 @@ pub(crate) fn read(
     let ended: Vec<(String, Figure)> = finished
         .iter()
         .map(|id| {
-            let figure = dispatchrecord::read(root, id)
-                .map(|record| of_record(&record, now))
-                .unwrap_or_default();
-            (id.clone(), figure)
+            let record = dispatchrecord::read(root, id);
+            (id.clone(), of_record(record.as_ref(), now))
         })
         .collect();
     let own = own.map(|session| {
         (
             session,
             Figure {
-                spent: spent_of(session),
+                tokens: tokens_of(session),
                 ran: None,
             },
         )
@@ -290,20 +433,31 @@ pub(crate) fn read(
         .chain(ended.iter().map(|(_, figure)| *figure))
         .collect();
     TasksUsed {
-        total: total(own.map(|(_, figure)| figure), &tasks),
+        total: match scope {
+            Scope::Hover => None,
+            Scope::Menu => total(own.map(|(_, figure)| figure), &tasks),
+        },
         chats: own
             .into_iter()
             .chain(open.iter().copied())
-            .map(|(session, figure)| ChatUsed {
-                session,
-                tokens: line_of(figure.spent.as_ref()),
+            .map(|(session, figure)| {
+                let (tokens, unsaid) = figure.line();
+                ChatUsed {
+                    session,
+                    tokens,
+                    unsaid,
+                }
             })
             .collect(),
         finished: ended
             .iter()
-            .map(|(id, figure)| FinishedUsed {
-                id: id.clone(),
-                tokens: line_of(figure.spent.as_ref()),
+            .map(|(id, figure)| {
+                let (tokens, unsaid) = figure.line();
+                FinishedUsed {
+                    id: id.clone(),
+                    tokens,
+                    unsaid,
+                }
             })
             .collect(),
     }
@@ -313,16 +467,17 @@ pub(crate) fn read(
 /// not one the window makes.
 const MOST: usize = 256;
 
-/// **What the chats of a tab used** (#1500): `own` is the session's own chat, counted in the
-/// tokens and not as a task; `chats` its open tasks, and any it still shows that has ended;
-/// `finished` the dispatch records of its ended tasks. Asked as the tab's menu opens, and as
-/// the pointer comes onto a task's row, never on a timer. On a blocking thread, as it reads
-/// the dispatch records.
+/// **What the chats of a tab used** (#1500). `scope` says what for: a row's hover reads its
+/// one figure; a tab's menu reads every line, each task's time and the total. `own` is the
+/// session's own chat, said beside the total and not in it; `chats` its open tasks, and any it
+/// still shows that has ended; `finished` the dispatch records of its ended tasks. Never on a
+/// timer. On a blocking thread, as it reads files.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn tasks_used(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
+    scope: Scope,
     own: Option<u32>,
     chats: Vec<u32>,
     finished: Vec<String>,
@@ -332,20 +487,31 @@ pub(crate) async fn tasks_used(
     }
     let held = planes.held(&plane)?;
     crate::off_the_window("reading what a tab's tasks used", move || {
-        Ok(of_held(&held, own, &chats, &finished))
+        Ok(of_held(&held, scope, own, &chats, &finished))
     })
     .await
 }
 
 /// [`read`], with what the app knows of its open chats.
-fn of_held(held: &Held, own: Option<u32>, chats: &[u32], finished: &[String]) -> TasksUsed {
+fn of_held(
+    held: &Held,
+    scope: Scope,
+    own: Option<u32>,
+    chats: &[u32],
+    finished: &[String],
+) -> TasksUsed {
+    let known = Known {
+        conversation: |session| crate::dispatches::conversation_of(held, session),
+        chat: |session| crate::dispatches::chat_ref(held, session),
+        records: starts(),
+    };
     read(
         held.root(),
+        scope,
         own,
         chats,
         finished,
-        |session| crate::dispatches::conversation_of(held, session),
-        |session| crate::dispatches::chat_ref(held, session),
+        &known,
         chrono::Utc::now(),
     )
 }
@@ -356,7 +522,7 @@ mod tests {
 
     fn said(input: u64, output: u64) -> Figure {
         Figure {
-            spent: Some(Spent {
+            tokens: Tokens::Said(Spent {
                 input_tokens: Some(input),
                 output_tokens: Some(output),
                 cost_usd: Some(1.25),
@@ -371,12 +537,12 @@ mod tests {
     }
 
     const SILENT: Figure = Figure {
-        spent: None,
+        tokens: Tokens::Unsaid(Unsaid::NotYet),
         ran: None,
     };
 
     #[test]
-    fn the_total_is_the_sum_of_the_figures_its_lines_show() {
+    fn the_total_is_the_sum_of_the_tasks_own_figures_and_says_the_session_beside_it() {
         let own = said(100_000, 20_000);
         let tasks = [
             worked(said(60_000, 10_000), 120),
@@ -385,28 +551,60 @@ mod tests {
 
         let total = total(Some(own), &tasks).expect("a total");
 
-        // 120k + 70k + 120k: the session's own chat and both tasks, as each line says them.
-        assert_eq!(total.said, "2 tasks · 310k tokens · 6m");
+        // 70k + 120k: the tasks' own figures, as their lines say them. Not the session's 120k.
+        assert_eq!(total.said, "2 tasks · 190k tokens · 6m");
         assert_eq!(total.tasks, 2);
         assert!(
             total
                 .explained
-                .contains("120k by the session's own chat, 190k by its tasks"),
+                .contains("The session's own chat: 120k, not in this total."),
             "{}",
             total.explained
         );
+        assert!(!total.explained.contains("Left out"), "{}", total.explained);
         assert!(!total.said.contains('$') && !total.explained.contains('$'));
     }
 
     #[test]
-    fn a_harness_that_reports_nothing_is_a_dash_and_the_total_says_it_counts_only_what_was_said() {
+    fn a_task_with_no_figure_makes_the_total_at_least_and_never_a_zero() {
         let tasks = [worked(said(200_000, 10_000), 30), worked(SILENT, 30)];
 
         let total = total(None, &tasks).expect("a total");
 
         assert_eq!(total.said, "2 tasks · at least 210k tokens · 1m");
-        assert!(total.explained.contains("1 chat's harness reported none"));
-        assert_eq!(line_of(None), None);
+        assert!(total.explained.contains("Left out: 1 task with no figure"));
+    }
+
+    #[test]
+    fn a_figure_with_only_one_side_counts_as_partial() {
+        let half = Figure {
+            tokens: Tokens::Said(Spent {
+                input_tokens: Some(40_000),
+                ..Spent::default()
+            }),
+            ran: Some(60),
+        };
+
+        let total = total(None, &[worked(said(10_000, 0), 60), half]).expect("a total");
+
+        assert_eq!(total.said, "2 tasks · at least 50k tokens · 2m");
+        assert!(total.explained.contains("half of the figure of 1 task"));
+        assert_eq!(half.line().0.as_deref(), Some("40k in"));
+    }
+
+    #[test]
+    fn a_task_whose_time_is_not_known_makes_the_time_at_least_and_the_title_says_so() {
+        let total =
+            total(None, &[worked(said(1_000, 1_000), 400), said(1_000, 1_000)]).expect("a total");
+
+        assert_eq!(total.said, "2 tasks · 4k tokens · at least 6m");
+        assert!(
+            total
+                .explained
+                .contains("Left out: the time of 1 task, which is not known."),
+            "{}",
+            total.explained
+        );
     }
 
     #[test]
@@ -415,6 +613,7 @@ mod tests {
 
         assert_eq!(total.said, "1 task · — tokens");
         assert!(!total.said.contains('0'));
+        assert!(total.explained.contains("nothing reported yet"));
     }
 
     #[test]
@@ -424,17 +623,19 @@ mod tests {
 
     #[test]
     fn a_line_says_its_tokens_in_and_out_and_never_its_cost() {
-        let figure = said(15_234, 4_521);
         assert_eq!(
-            line_of(figure.spent.as_ref()).as_deref(),
-            Some("15k in, 4k out")
+            said(15_234, 4_521).line(),
+            (Some("15k in, 4k out".to_owned()), None)
         );
-        let only_cost = Spent {
-            cost_usd: Some(0.5),
-            ..Spent::default()
+        let only_cost = Figure {
+            tokens: Tokens::Said(Spent {
+                cost_usd: Some(0.5),
+                ..Spent::default()
+            }),
+            ran: None,
         };
-        assert_eq!(line_of(Some(&only_cost)), None);
-        assert_eq!(tokens_of(Some(&only_cost)), None);
+        assert_eq!(only_cost.line(), (None, Some(Unsaid::Nothing)));
+        assert_eq!(only_cost.counted(), None);
     }
 
     #[test]
@@ -444,57 +645,94 @@ mod tests {
         assert_eq!(time_said(2 * 3600 + 5 * 60), "2h 5m");
     }
 
-    #[test]
-    fn an_ended_task_keeps_what_its_record_kept_and_an_open_one_is_read_from_its_conversation() {
+    const CONVERSATION: &str = "11111111-2222-4333-8444-555555555555";
+
+    fn project_with_a_spend() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = std::fs::canonicalize(dir.path()).expect("it resolves");
-        let conversation = "11111111-2222-4333-8444-555555555555";
         assert!(usage::record_spend(
             &root,
             &serde_json::json!({
-                "session_id": conversation,
+                "session_id": CONVERSATION,
                 "context_window": { "total_input_tokens": 50_000, "total_output_tokens": 2_000 },
             })
         ));
+        (dir, root)
+    }
+
+    #[test]
+    fn each_dash_says_why_truly_no_turn_yet_unknown_conversation_unreadable_record() {
+        let (_dir, root) = project_with_a_spend();
+        let known = Known {
+            // Chat 2 has a figure; chat 3's conversation is known and holds none; chat 1's
+            // conversation is not known.
+            conversation: |session: u32| match session {
+                2 => Some(CONVERSATION.to_owned()),
+                3 => Some("22222222-2222-4333-8444-555555555555".to_owned()),
+                _ => None,
+            },
+            chat: |_: u32| None,
+            records: &Starts::default(),
+        };
 
         let used = read(
             &root,
+            Scope::Menu,
             Some(1),
             &[2, 3],
             &["no-such-record".to_owned()],
-            |session| (session == 2).then(|| conversation.to_owned()),
-            |_| None,
+            &known,
             chrono::Utc::now(),
         );
 
-        assert_eq!(
-            used.chats,
-            vec![
-                ChatUsed {
-                    session: 1,
-                    tokens: None
-                },
-                ChatUsed {
-                    session: 2,
-                    tokens: Some("50k in, 2k out".to_owned())
-                },
-                ChatUsed {
-                    session: 3,
-                    tokens: None
-                },
-            ]
-        );
+        let line = |session: u32| {
+            let one = used.chats.iter().find(|one| one.session == session);
+            one.map(|one| (one.tokens.clone(), one.unsaid))
+        };
+        assert_eq!(line(1), Some((None, Some(Unsaid::NotKnown))));
+        assert_eq!(line(2), Some((Some("50k in, 2k out".to_owned()), None)));
+        assert_eq!(line(3), Some((None, Some(Unsaid::NotYet))));
         assert_eq!(
             used.finished,
             vec![FinishedUsed {
                 id: "no-such-record".to_owned(),
-                tokens: None
+                tokens: None,
+                unsaid: Some(Unsaid::NotKnown),
             }]
         );
-        assert_eq!(
-            used.total.expect("a total").said,
-            "3 tasks · at least 52k tokens"
+        let total = used.total.expect("a total");
+        // The session's own chat is not in it, and no time is known.
+        assert_eq!(total.said, "3 tasks · at least 52k tokens");
+        assert!(total.explained.contains("— (not known), not in this total"));
+    }
+
+    #[test]
+    fn a_hover_reads_its_one_figure_and_no_time_and_no_total() {
+        let (_dir, root) = project_with_a_spend();
+        let looked = std::cell::Cell::new(0);
+        let known = Known {
+            conversation: |_: u32| Some(CONVERSATION.to_owned()),
+            // Asked only to find a record for the time: a hover never asks.
+            chat: |_: u32| {
+                looked.set(looked.get() + 1);
+                None
+            },
+            records: &Starts::default(),
+        };
+
+        let used = read(
+            &root,
+            Scope::Hover,
+            None,
+            &[2],
+            &[],
+            &known,
+            chrono::Utc::now(),
         );
+
+        assert_eq!(used.total, None);
+        assert_eq!(used.chats[0].tokens.as_deref(), Some("50k in, 2k out"));
+        assert_eq!(looked.get(), 0);
     }
 
     #[test]
