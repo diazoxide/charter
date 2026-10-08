@@ -270,8 +270,13 @@ has it; nothing reads the key after that.
   this field one project at a time, under the file's lock, and a layout write from a window
   never changes it, so two windows keep each other's. It takes at most half the file: past
   that, the projects opened longest ago lose theirs first. It is here and not in a project
-  because what you have already seen is yours on this machine. Delete it to see every Notice
-  again.
+  because what you have already seen is yours on this machine. Under the key
+  **`"on this machine"`**, in place of a project's path, are the Notices shown once per
+  machine whatever the project: `chip-explained`, the Notice the first dispatch shows to explain
+  a tab's chip of tasks (#1501). The core keeps only those causes there, whoever writes the
+  key and whatever was hand-edited into it, adds one under the file's lock so two windows keep
+  it once, and the window asks the file again before it shows such a Notice. Nothing lets them
+  go, and the projects' dismissals never push them out. Delete it to see every Notice again.
 - **The file is read once, as the window is created.** Edit it while purlis is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or

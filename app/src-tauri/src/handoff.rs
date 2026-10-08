@@ -1652,6 +1652,32 @@ fn attendance(
     mark.attendance()
 }
 
+/// **Whether a person is at chat `session`** (#1501): judged as a dispatch from it is, by
+/// [`attendance`] on the profiles a launch offers ([`launch_profiles`], which [`profile_for`]
+/// reads too), so the window says nothing on the tab of a chat that runs with its prompts off
+/// and the two can never disagree. A chat this app does not have open is nobody's.
+pub fn attended(held: &Held, session: u32) -> bool {
+    let Some(asking) = held.chats().recorded_chat(session) else {
+        return false;
+    };
+    let root = held.root();
+    let launch = launch_profiles(root, &purlis_core::harness_declaration::read(root));
+    attendance(held, session, &asking, &launch.0)
+        == purlis_core::dispatchunattended::Attendance::Attended
+}
+
+/// The profiles a launch in `root` offers, with `declared` already read: what a dispatch
+/// chooses its profile from and judges its asker's attendance by, and what [`attended`] asks.
+fn launch_profiles(
+    root: &std::path::Path,
+    declared: &purlis_core::harness_declaration::Declarations,
+) -> (
+    purlis_core::profiles::ProfileSet,
+    purlis_core::profiles::IgnoreCheck,
+) {
+    purlis_core::profiles::for_launch_in(root, declared)
+}
+
 /// Dispatches what `wanted` describes, a task or a handoff, or says why not in a sentence the
 /// asking chat reads (#1436, #1444).
 ///
@@ -2538,7 +2564,7 @@ fn profile_for(
 ) -> On {
     use purlis_core::personaprofile;
     let declared = purlis_core::harness_declaration::read(root);
-    let launch = purlis_core::profiles::for_launch_in(root, &declared);
+    let launch = launch_profiles(root, &declared);
     let chosen = personaprofile::for_dispatch(
         &persona
             .map(|who| personaprofile::named_by(root, who))
@@ -3855,6 +3881,24 @@ mod tests {
         // The next handoff across the pair starts without asking.
         let (again, _) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
         assert!(matches!(again, Answer::Opened { .. }), "{again:?}");
+    }
+
+    /// #1501: the window asks this before it explains the chip on a chat's tab, and a chat
+    /// nobody is at is told nothing.
+    #[test]
+    fn a_person_is_at_a_chat_until_its_harness_says_its_prompts_are_off() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        assert!(attended(&held, asking));
+        held.unattended().heard(asking, true);
+        assert!(!attended(&held, asking));
+        assert!(
+            !attended(&held, asking + 1000),
+            "a chat not open is nobody's"
+        );
     }
 
     #[test]

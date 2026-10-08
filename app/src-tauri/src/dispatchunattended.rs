@@ -56,6 +56,24 @@ pub fn request_dispatch(
     }
 }
 
+/// **Whether a person is at chat `session`** (#1501): not where its harness ever reported its
+/// prompts off or it was started with them off, and not for a chat this app does not have
+/// open. What the window asks before it explains anything on that chat's tab: a chat nobody is
+/// at is told nothing, as it is told of no dispatch. It only reads.
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_attended(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    session: u32,
+) -> Result<bool, String> {
+    let held = planes.held(&plane)?;
+    // The profiles are read from the project's files: off the thread the window waits on.
+    tauri::async_runtime::spawn_blocking(move || crate::handoff::attended(&held, session))
+        .await
+        .map_err(|err| format!("asking who is at the chat did not finish: {err}"))
+}
+
 /// How an asking chat runs, as this app started and records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Runs {

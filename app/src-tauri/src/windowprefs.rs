@@ -115,6 +115,38 @@ pub async fn set_dismissed(
     .map_err(|err| err.to_string())
 }
 
+/// **Keeps `cause` as seen once on this machine** (#1501): added, under the layout file's lock,
+/// to what is kept under no project (`windowprefs::ON_THIS_MACHINE`), so two windows each
+/// seeing it keep it once. Only a cause `windowprefs::ONCE_ON_THIS_MACHINE` lists is kept.
+///
+/// The window asks it on the person's press. It is not one of the window-only commands
+/// (`session_protocol::ui::WINDOW_ONLY`): like `set_dismissed`, it is also served to a
+/// connection that holds the window's own credential (a `local-ui` peer of the same build),
+/// and to no chat.
+#[tauri::command]
+#[specta::specta]
+pub async fn see_on_this_machine(cause: String) -> Result<(), String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || windowprefs::see_on_this_machine(&root, &cause))
+        .await
+        .map_err(|err| format!("keeping what you have seen did not finish: {err}"))?
+        .map_err(|err| err.to_string())
+}
+
+/// **Whether `cause` was seen once on this machine**, as the layout file says now (#1501): what
+/// the window asks before it shows such a Notice, since another window may have seen it after
+/// this one launched. No, where purlis keeps no layout or cannot read it.
+#[tauri::command]
+#[specta::specta]
+pub async fn seen_on_this_machine(cause: String) -> Result<bool, String> {
+    let Ok(root) = config_root() else {
+        return Ok(false);
+    };
+    tauri::async_runtime::spawn_blocking(move || windowprefs::seen_on_this_machine(&root, &cause))
+        .await
+        .map_err(|err| format!("reading what you have seen did not finish: {err}"))
+}
+
 /// The config home, or the reason charter keeps no layout on this machine.
 fn config_root() -> Result<std::path::PathBuf, String> {
     purlis_core::machine::config_root().ok_or_else(|| {
