@@ -6,6 +6,7 @@
  * it was started in and whether it has a tab (`OpenChat.from`). This file only shapes it, so
  * the Chats section and the explorer draw the same parent for the same chat.
  */
+import type { Placed } from "./tabs";
 import type { OpenChat } from "./bindings";
 import { isShell } from "./chatState";
 import { rowFactsOf, type RowFacts } from "./shownState";
@@ -56,6 +57,12 @@ export type ChatRow = ListedChat & {
   setsize: number;
   /** Its parent has closed, so it stands at the top and says where it came from. */
   orphaned: boolean;
+  /**
+   * Where it is, for a task listed among the chats of its session's tab though it has a pane
+   * of its own (#1489, `tabs.Placed`): in a tab of its own, or beside its session. Only a
+   * tab's own list says it (`tabChats.chatsOfTab`); the Chats list's rows never do.
+   */
+  placed?: Placed;
 };
 
 /** One of the core's open chats as the section lists it. `tab` is the window's own answer. */

@@ -144,6 +144,9 @@ pub struct Open {
     /// The chat its tab shows in place of it, where the person switched the tab to one
     /// (#1486): [`purlis_core::reopen::Chat::shows`].
     pub shows: Option<u32>,
+    /// The chat whose tab it has a pane in, where it is not its tab's own chat (#1489):
+    /// [`purlis_core::reopen::Chat::beside`].
+    pub beside: Option<u32>,
 }
 
 /// Who an open chat is beyond this launch, and the directory it works in.
@@ -1886,19 +1889,41 @@ impl Chats {
         *lock(&self.front)
     }
 
-    /// **The chat the person is looking at**, or none: the chat in front, or the chat its tab
-    /// shows in place of it, where the tab was switched to one ([`Self::tab_shows`], #1486).
-    /// A tab is its session's, so "in front" names the session's own chat whatever its pane
-    /// draws; this is the chat on screen.
+    /// **The chats the person is looking at**: every chat on screen in the tab in front, in
+    /// the order of their numbers, and none when no chat's tab is in front.
+    ///
+    /// A tab is its session's, so "in front" names the tab's own chat whatever its panes
+    /// draw. On screen with it is every chat that has a pane in that tab ([`Self::tab_shows`]
+    /// says which, #1489), and each pane draws its own chat or the chat it was switched to
+    /// (#1486). So this is: the chat in front, or the task its pane shows in place of it; and
+    /// for every chat beside it, the same. A task in a tab of its own is in front itself.
     ///
     /// The one answer for both things that turn on it: a reported task is not ended under the
-    /// person reading it (#1485), and no notification is sent about the chat already on
-    /// screen. The session's own chat, while its tab shows a task, is not the one looked at.
-    /// Whether the window has the keyboard is not asked here.
-    pub fn looked_at(&self) -> Option<u32> {
-        let front = self.front()?;
-        let shown = lock(&self.open).get(&front).and_then(|one| one.chat.shows);
-        Some(shown.unwrap_or(front))
+    /// person reading it (#1485), and no notification is sent about a chat already on screen.
+    /// A chat hidden behind a task its pane shows is not looked at. Whether the window has the
+    /// keyboard is not asked here.
+    pub fn looked_at(&self) -> Vec<u32> {
+        let Some(front) = self.front() else {
+            return Vec::new();
+        };
+        let open = lock(&self.open);
+        let mut seen: Vec<u32> = open
+            .iter()
+            .filter(|(number, one)| **number == front || one.chat.beside == Some(front))
+            .map(|(number, one)| one.chat.shows.unwrap_or(*number))
+            .collect();
+        // In front and not open: nothing more is known of it, and it is what is in front.
+        if !open.contains_key(&front) {
+            seen.push(front);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    }
+
+    /// Whether chat `session` is on screen in the tab in front ([`Self::looked_at`]).
+    pub fn looks_at(&self, session: u32) -> bool {
+        self.looked_at().contains(&session)
     }
 
     /// Pins or unpins one chat, and writes the record so the pin outlives the app.
@@ -1926,45 +1951,56 @@ impl Chats {
         Ok(())
     }
 
-    /// The person opened chat `session`'s tab (#1447): a task chat, listed until now, has a
-    /// tab from here on, across a reload and a relaunch. Written only when it changes, for
-    /// [`Self::pin`]'s reason, and only for a chat that had none.
-    pub fn open_tab(&self, session: u32) -> Result<(), String> {
+    /// The person gave chat `session` a tab of its own, or with `open` false sent it back out
+    /// of one (#1447, #1489): a task chat, listed until then, has a tab from here on, across a
+    /// reload and a relaunch, until it is sent back. Written only when it changes, for
+    /// [`Self::pin`]'s reason. Only a task chat's answer is read
+    /// ([`purlis_core::reopen::Chat::has_tab`]): every other chat has a tab whatever is said.
+    pub fn open_tab(&self, session: u32, opened: bool) -> Result<(), String> {
         let mut open = lock(&self.open);
         let Some(one) = open.get_mut(&session) else {
             return Err(format!("purlis has no chat {session} open to show."));
         };
-        if one.chat.has_tab() {
+        if opened == one.chat.tab_opened || (opened && one.chat.has_tab()) {
             return Ok(());
         }
-        one.chat.tab_opened = true;
+        one.chat.tab_opened = opened;
         drop(open);
         self.write_it_down();
         Ok(())
     }
 
-    /// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with
-    /// `None` (#1486): the record keeps it, so a reloaded window and the next launch put each
-    /// tab back on the chat it showed. Written only when it changes, for [`Self::pin`]'s reason.
+    /// **Where chat `session`'s pane is and what it shows** (#1486, #1489): chat `shown` in
+    /// place of its own, or its own again with `None`; and the chat whose tab the pane is in,
+    /// `beside`, or `None` for a chat that is its tab's own or has no pane. The record keeps
+    /// both, so a reloaded window and the next launch put each pane back. Written only when
+    /// one changes, for [`Self::pin`]'s reason.
     ///
     /// **What is kept is the window's word, and it says only where the person is looking**
-    /// ([`Self::looked_at`]): the core starts and allows nothing by this number. A reported
-    /// task's end, already due, is held while this says the person is reading it, and no
-    /// notification is sent about a chat this says is on screen. The window shows it only
-    /// where the chat it names is open and below this one. A chat is never said to show
-    /// itself.
-    pub fn tab_shows(&self, session: u32, shown: Option<u32>) -> Result<(), String> {
+    /// ([`Self::looked_at`]): the core starts and allows nothing by these numbers. A reported
+    /// task's end, already due, is held while they say the person is reading it, and no
+    /// notification is sent about a chat they say is on screen. The window shows a chat only
+    /// where the chat named is open and below this one. A chat is never said to show itself,
+    /// or to be beside itself.
+    pub fn tab_shows(
+        &self,
+        session: u32,
+        shown: Option<u32>,
+        beside: Option<u32>,
+    ) -> Result<(), String> {
         let shown = shown.filter(|other| *other != session);
+        let beside = beside.filter(|other| *other != session);
         let mut open = lock(&self.open);
         let Some(one) = open.get_mut(&session) else {
             return Err(format!(
                 "purlis has no chat {session} open to show another in."
             ));
         };
-        if one.chat.shows == shown {
+        if one.chat.shows == shown && one.chat.beside == beside {
             return Ok(());
         }
         one.chat.shows = shown;
+        one.chat.beside = beside;
         drop(open);
         self.write_it_down();
         Ok(())
@@ -2268,6 +2304,11 @@ impl Chats {
                 one.chat.shows = Some(started);
                 moved = true;
             }
+            // And a chat with a pane in its tab is beside it still (#1489).
+            if one.chat.beside == Some(session) {
+                one.chat.beside = Some(started);
+                moved = true;
+            }
         }
         for starting in lock(&self.reserved).values_mut() {
             if let Some(from) = starting.from.as_mut()
@@ -2505,6 +2546,7 @@ impl Chats {
                     from: chat.from.clone(),
                     tab: chat.has_tab(),
                     shows: chat.shows,
+                    beside: chat.beside,
                 })
             })
             .collect()
@@ -6151,12 +6193,12 @@ pub(crate) mod tests {
             .unwrap();
 
         chats
-            .tab_shows(session, Some(41))
+            .tab_shows(session, Some(41), None)
             .expect("the chat is open");
         assert_eq!(chats.record().chats[0].shows, Some(41));
         assert_eq!(chats.open_now()[0].shows, Some(41));
 
-        chats.tab_shows(session, None).unwrap();
+        chats.tab_shows(session, None, None).unwrap();
         assert_eq!(chats.record().chats[0].shows, None);
         let _ = chats.close(session);
     }
@@ -6169,9 +6211,9 @@ pub(crate) mod tests {
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
 
-        chats.tab_shows(session, Some(session)).unwrap();
+        chats.tab_shows(session, Some(session), None).unwrap();
         assert_eq!(chats.record().chats[0].shows, None);
-        assert!(chats.tab_shows(session + 100, Some(3)).is_err());
+        assert!(chats.tab_shows(session + 100, Some(3), None).is_err());
         let _ = chats.close(session);
     }
 
@@ -6182,7 +6224,7 @@ pub(crate) mod tests {
         let session = chats
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
-        chats.tab_shows(session, Some(41)).unwrap();
+        chats.tab_shows(session, Some(41), None).unwrap();
 
         chats.followed(41, 52);
 
@@ -6201,10 +6243,10 @@ pub(crate) mod tests {
         let session = chats
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
-        chats.tab_shows(session, Some(41)).unwrap();
+        chats.tab_shows(session, Some(41), None).unwrap();
         let before = written.load(std::sync::atomic::Ordering::SeqCst);
 
-        chats.tab_shows(session, Some(41)).unwrap();
+        chats.tab_shows(session, Some(41), None).unwrap();
 
         assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), before);
         let _ = chats.close(session);
@@ -6303,10 +6345,52 @@ pub(crate) mod tests {
             )
             .unwrap();
 
-        chats.open_tab(session).expect("the chat is open");
+        chats.open_tab(session, true).expect("the chat is open");
 
         assert!(chats.record().chats[0].has_tab());
         assert!(chats.open_now()[0].tab);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_task_chat_sent_back_out_of_its_tab_has_none_in_the_record_and_is_still_open() {
+        // #1489: the minimise. Nothing ends: the chat is open, and listed with no tab again.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(
+                &started_by(dir.path(), "ide.7", purlis_core::reopen::Mode::Task),
+                SIZE,
+            )
+            .unwrap();
+        chats.open_tab(session, true).unwrap();
+
+        chats.open_tab(session, false).expect("the chat is open");
+
+        assert!(!chats.record().chats[0].has_tab());
+        assert_eq!(chats.open_now().len(), 1, "sending it back ends nothing");
+        assert!(!chats.open_now()[0].tab);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn the_tab_a_chat_has_a_pane_in_is_written_into_the_record_and_follows_a_restart() {
+        // #1489: what puts a task back beside its session, and says what is on screen.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.tab_shows(session, None, Some(41)).unwrap();
+        assert_eq!(chats.record().chats[0].beside, Some(41));
+        assert_eq!(chats.open_now()[0].beside, Some(41));
+        chats.followed(41, 52);
+        assert_eq!(chats.record().chats[0].beside, Some(52));
+
+        // Never beside itself, and its own tab's chat again with none.
+        chats.tab_shows(session, None, Some(session)).unwrap();
+        assert_eq!(chats.record().chats[0].beside, None);
         let _ = chats.close(session);
     }
 
@@ -6323,10 +6407,13 @@ pub(crate) mod tests {
             .unwrap();
         let before = written.load(std::sync::atomic::Ordering::SeqCst);
 
-        chats.open_tab(session).unwrap();
+        chats.open_tab(session, true).unwrap();
 
         assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), before);
-        assert!(chats.open_tab(session + 40).is_err(), "no chat, no tab");
+        assert!(
+            chats.open_tab(session + 40, true).is_err(),
+            "no chat, no tab"
+        );
         let _ = chats.close(session);
     }
 

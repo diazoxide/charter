@@ -28,11 +28,14 @@ import {
   FolderPlus,
   FolderRoot,
   MessageSquarePlus,
+  Minus,
+  PanelRight,
   Pin as PinMark,
   Plus,
   Settings as SettingsMark,
   SquareSplitHorizontal,
   SquareSplitVertical,
+  SquareArrowOutUpRight,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -62,6 +65,9 @@ import {
   dismissId,
   ignoreId,
   needsYouRows,
+  besideId,
+  menuOn,
+  ownTabId,
   paneCloseOf,
   OUTSIDE,
   OUTSIDE_TITLE,
@@ -78,6 +84,7 @@ import {
   type Clone,
   type Cut,
   type Doing,
+  type Catalogued,
   type Offer,
   type Project,
   type Ran,
@@ -212,9 +219,13 @@ import {
   sendToBackground,
   focusedChat,
   homeOf,
-  keepShown,
   layoutShown,
+  moveToOwnTab,
+  openBeside,
+  placeBeside,
   restoreShown,
+  sendBack,
+  tasksPlacedBelow,
   showOwn,
   showOwnIn,
   shownIn,
@@ -233,9 +244,11 @@ import {
   chatsOfTabs,
   crumbsOf,
   hiddenNeeding,
+  placedCrumbsOf,
   type Crumbs,
 } from "./tabChats";
-import { TabTasks } from "./TabChip";
+import { chatsListPrefs } from "./chatsListPrefs";
+import { placeRowId, TabTasks, type Place as TaskPlace } from "./TabChip";
 import { hasTasks, type Ended, type Needing } from "./tabTasks";
 import { taskBucketOf } from "./taskCounts";
 import { stateClock } from "./stateClock";
@@ -897,6 +910,8 @@ export const PlaneView = memo(function PlaneView({
   // so a project that is closed and opened again is a fresh one and asks again — which it
   // must, because the core still holds whatever it put back.
   const adopted = useRef(false);
+  /** What the core was last told of each chat's pane (`tab_shows`), by the pane's own chat. */
+  const lastShownSaid = useRef<ReadonlyMap<number, PaneSaid>>(new Map());
   /** Settles the notes a relaunch says about its chats (`resumed`, `guessed`, `fresh`) against
    *  the chats the core put back. */
   const settleChatNotes = useCallback(
@@ -992,19 +1007,40 @@ export const PlaneView = memo(function PlaneView({
           );
         const front = open.find((chat) => chat.in_front);
         const frontView = back.find((view) => view.active);
-        // **What each session's tab showed** (#1486): the record keeps it on the session's
-        // own entry, and it is put back only where the chat it names is open and is a task
-        // below that session. Anything else shows the session's own chat.
         const tasks = new Map(
           open.map((chat) => [chat.session, chat.from?.task ? chat.from.chat : undefined]),
         );
         const askedBy: AskedBy = (session) => tasks.get(session);
+        // **A task that was open beside its session is put back beside it** (#1489), where
+        // that session came back with a tab; otherwise it is in the Chats list, as a task
+        // nobody opened is. A task in a tab of its own came back as that tab, above.
+        const besideBack = open.reduce(
+          (tabs, chat) =>
+            chat.from?.task && (chat.beside ?? undefined) !== undefined
+              ? placeBeside(tabs, chat.session, askedBy, chat.name)
+              : tabs,
+          drawn,
+        );
+        // **What each session's tab showed** (#1486): the record keeps it on the session's
+        // own entry, and it is put back only where the chat it names is open and is a task
+        // below that session. Anything else shows the session's own chat.
         const shownBack = open.reduce((tabs, chat) => {
           const shown = chat.shows ?? undefined;
           if (shown === undefined || homeOf(tabs, shown, askedBy)?.own !== chat.session)
             return tabs;
           return restoreShown(tabs, [shown], askedBy);
-        }, drawn);
+        }, besideBack);
+        // What the core's record says of each pane, so whatever was not put back (a task that
+        // is gone, a session that did not come back) is said to it as gone, below.
+        lastShownSaid.current = new Map(
+          open.flatMap((chat) => {
+            const shown = chat.shows ?? null;
+            const beside = chat.beside ?? null;
+            return shown === null && beside === null
+              ? []
+              : [[chat.session, { shown, beside }] as const];
+          }),
+        );
         const inFront =
           front !== undefined
             ? homeOf(shownBack, front.session, askedBy)?.tab
@@ -1014,7 +1050,7 @@ export const PlaneView = memo(function PlaneView({
                   return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
                 })
               : undefined;
-        if (drawn.order.length > 0)
+        if (shownBack.order.length > 0)
           change(() => (inFront === undefined ? shownBack : selectTab(shownBack, inFront)));
         // Only now may the window say what view tabs it has: saying it before this point would
         // write an empty list over the record it is about to read.
@@ -1080,28 +1116,37 @@ export const PlaneView = memo(function PlaneView({
   }, [plane, tabs, viewsHeard]);
 
   /**
-   * **What each session's tab shows, told to the core whenever it changes** (#1486), so the
-   * record keeps it on that session's entry and the next launch, and a reloaded window, put
-   * each tab back on the chat it showed. After the record is heard, and only what differs, for
-   * the order's reasons above. A tab back on its own chat says so, with nothing.
+   * **Where each chat's pane is and what it shows, told to the core whenever it changes**
+   * (#1486, #1489): the chat a pane shows in place of its own, and the chat whose tab a pane is
+   * in where it is not that tab's own. The record keeps both, so the next launch, and a
+   * reloaded window, put each pane back; and they are how the core knows every chat on screen
+   * in the tab in front (`Chats::looked_at`). After the record is heard, and only what
+   * differs, for the order's reasons above. A pane back on its own chat, and a chat whose pane
+   * is gone, say so, with nothing.
+   *
+   * **The one command for it**: nothing else says to the core what a pane shows.
    */
-  const lastShownSaid = useRef<ReadonlyMap<number, number>>(new Map());
   useEffect(() => {
     if (!viewsHeard) return;
-    const said = new Map(
-      tabs.order.flatMap((id) =>
-        shownIn(tabs, id)
-          .filter((one) => one.session !== one.own)
-          .map((one) => [one.own, one.session] as const),
-      ),
-    );
+    const said = new Map<number, PaneSaid>();
+    for (const id of tabs.order) {
+      const lead = chatOf(tabs, id);
+      for (const one of shownIn(tabs, id)) {
+        const shown = one.session === one.own ? null : one.session;
+        const beside = lead === undefined || lead === one.own ? null : lead;
+        if (shown !== null || beside !== null) said.set(one.own, { shown, beside });
+      }
+    }
     const was = lastShownSaid.current;
     lastShownSaid.current = said;
-    for (const [own, shown] of said)
-      if (was.get(own) !== shown) void commands.tabShows(plane, own, shown).catch(() => undefined);
+    for (const [own, now] of said) {
+      const before = was.get(own);
+      if (before?.shown !== now.shown || before.beside !== now.beside)
+        void commands.tabShows(plane, own, now.shown, now.beside).catch(() => undefined);
+    }
+    // A chat that has ended is not open to be told of: the core says so, and it is nothing.
     for (const own of was.keys())
-      if (!said.has(own) && tabHolding(tabs, own) !== undefined)
-        void commands.tabShows(plane, own, null).catch(() => undefined);
+      if (!said.has(own)) void commands.tabShows(plane, own, null, null).catch(() => undefined);
   }, [plane, tabs, viewsHeard]);
 
   // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
@@ -1302,14 +1347,20 @@ export const PlaneView = memo(function PlaneView({
   );
   const filedIn = useCallback<FiledIn>(
     (session) => {
-      const workspace = sidebar?.workspaces.find((ws) =>
-        ws.chats.some((chat) => chat.session === session),
-      );
-      if (workspace) return workspace.name;
-      if (sidebar?.unfiled.some((chat) => chat.session === session)) return OUTSIDE;
-      return startedIn[session] ?? OUTSIDE;
+      const at = (chat: number) => {
+        const workspace = sidebar?.workspaces.find((ws) =>
+          ws.chats.some((one) => one.session === chat),
+        );
+        if (workspace) return workspace.name;
+        if (sidebar?.unfiled.some((one) => one.session === chat)) return OUTSIDE;
+        return startedIn[chat];
+      };
+      // A task a scenario spec pretends (`e2eTasks.ts`, none in a shipped build) is in no
+      // list of the core's: it is filed where the chat that asked for it is.
+      const asker = pretended.find((one) => one.chat.session === session)?.chat.from?.chat;
+      return at(session) ?? (asker === undefined ? undefined : at(asker)) ?? OUTSIDE;
     },
-    [sidebar, startedIn],
+    [pretended, sidebar, startedIn],
   );
 
   /** Whether a tab is pinned: its own chat is, which is its first pane's. */
@@ -1744,11 +1795,14 @@ export const PlaneView = memo(function PlaneView({
   const chatsByNumber = useMemo(
     () =>
       new Map(
-        [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
-          (chat) => [chat.session, chat],
-        ),
+        [
+          ...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []),
+          ...(sidebar?.unfiled ?? []),
+          // Tasks a scenario spec pretends (`e2eTasks.ts`): none in a shipped build.
+          ...pretended.map((one) => one.chat),
+        ].map((chat) => [chat.session, chat]),
       ),
-    [sidebar],
+    [pretended, sidebar],
   );
   /**
    * **Which chat a task is a task of**, as the core lists it (#1486). Task links only: a
@@ -2435,6 +2489,21 @@ export const PlaneView = memo(function PlaneView({
 
   const split = useCallback((direction: Direction) => void ask({ split: direction }), [ask]);
 
+  /** Every chat the core lists, by session, as of the last read: what {@link showChat} opens a
+   *  tab from for a chat that has none. A ref, so a read of the list does not make a new
+   *  `showChat` for every row and catalogue entry holding one. */
+  const listedNow = useRef<ReadonlyMap<number, OpenChat>>(new Map());
+  useEffect(() => {
+    listedNow.current = chatsByNumber;
+  }, [chatsByNumber]);
+
+  /** Which chat a task is a task of, as the core lists it now: what says which tab a task is
+   *  shown in. Task links only (V100-69). */
+  const askedByNow = useCallback<AskedBy>((session) => {
+    const from = listedNow.current.get(session)?.from;
+    return from?.task ? from.chat : undefined;
+  }, []);
+
   const closePane = useCallback(() => {
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
@@ -2442,17 +2511,40 @@ export const PlaneView = memo(function PlaneView({
     // ends the session under a task on the strength of a row built a moment earlier.
     if (tab?.shows?.[tab.focused] !== undefined) return;
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
+    // Nor is a task's own pane ever closed (#1489): its control is the minimise, which is
+    // another verb and ends nothing.
+    if (going !== undefined && askedByNow(going.session) !== undefined) return;
     change((tabs) => closeFocusedPane(tabs, filedIn, isPinned, isBackground));
     if (going) void commands.closeSession(plane, going.session);
-  }, [change, filedIn, isBackground, isPinned, plane]);
+  }, [askedByNow, change, filedIn, isBackground, isPinned, plane]);
 
+  /**
+   * **Closes a session's tab: the only close on the strip** (#1489, V100-39). Its chats end.
+   * **A task never ends by a close**: one beside its session goes with the tab's panes and
+   * goes on working, and every task below the session that has a tab of its own is sent back
+   * to the list (`tabs.sendBack`), since the tab it would go back into is the one closing.
+   * Stopping them instead is the dialog's other answer, which the core carries out
+   * (`closeStopping`).
+   */
   const close = useCallback(
     (id: number) => {
-      const ending = panesOf(now.current, id);
-      change((tabs) => closeTab(tabs, id, filedIn, isPinned, isBackground));
+      const before = now.current;
+      const ending = panesOf(before, id).filter((one) => askedByNow(one.session) === undefined);
+      const back = [
+        ...panesOf(before, id).filter((one) => askedByNow(one.session) !== undefined),
+        ...ending.flatMap((one) => tasksPlacedBelow(before, one.session, askedByNow)),
+      ].map((one) => one.session);
+      change((tabs) =>
+        back.reduce(
+          (left, task) => sendBack(left, task, filedIn, isPinned, isBackground),
+          closeTab(tabs, id, filedIn, isPinned, isBackground),
+        ),
+      );
+      for (const task of new Set(back))
+        void commands.openChatTab(plane, task, false).catch(() => undefined);
       for (const pane of ending) void commands.closeSession(plane, pane.session);
     },
-    [change, filedIn, isBackground, isPinned, plane],
+    [askedByNow, change, filedIn, isBackground, isPinned, plane],
   );
 
   /**
@@ -2477,24 +2569,82 @@ export const PlaneView = memo(function PlaneView({
     [change, filedIn, sidebar],
   );
 
-  /** Every chat the core lists, by session, as of the last read: what {@link showChat} opens a
-   *  tab from for a chat that has none. A ref, so a read of the list does not make a new
-   *  `showChat` for every row and catalogue entry holding one. */
-  const listedNow = useRef<ReadonlyMap<number, OpenChat>>(new Map());
-  useEffect(() => {
-    listedNow.current = new Map(
-      [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
-        (chat) => [chat.session, chat],
-      ),
-    );
-  }, [sidebar]);
+  /**
+   * **Gives a task a tab of its own** (#1489, V100-38): on the strip of the workspace it works
+   * in, in front, with the keyboard in it. Asked for by the person: its row's menu, its line
+   * in its tab's menu, its pane's controls, the palette; or by pressing it at all, where the
+   * person set tasks to open that way (`chatsListPrefs`, V100-74). Also what a pressed task
+   * falls back to when the session that asked has no tab here. **Nothing ends**, and the
+   * session's tab is left on what it showed. The core is told, so the tab comes back at the
+   * next launch.
+   */
+  const ownTab = useCallback(
+    (session: number) => {
+      const listed = listedNow.current.get(session);
+      if (listed === undefined) return;
+      const opened = change((tabs) =>
+        moveToOwnTab(
+          tabs,
+          session,
+          listed.name,
+          whoOf(listed.persona, listed.harness),
+          listed.label,
+        ),
+      );
+      void commands.openChatTab(plane, session, true).catch(() => undefined);
+      const tab = tabHolding(opened, session);
+      if (tab !== undefined) bringToFront(tab);
+      giveKeyboardTo(plane, session);
+      stoppedFor(session, undefined);
+    },
+    [bringToFront, change, plane, stoppedFor],
+  );
 
-  /** Which chat a task is a task of, as the core lists it now: what says which tab a task is
-   *  shown in. Task links only (V100-69). */
-  const askedByNow = useCallback<AskedBy>((session) => {
-    const from = listedNow.current.get(session)?.from;
-    return from?.task ? from.chat : undefined;
-  }, []);
+  /**
+   * **Opens a task beside its session, inside the session's tab** (#1489, V100-38): the
+   * session's chat on one side and the task on the other, with the keyboard in the task. A
+   * tab it had of its own goes. Nothing for a task whose session has no tab here: its row
+   * says why (`actions.placeRows`).
+   */
+  const besideOf = useCallback(
+    (session: number) => {
+      const before = now.current;
+      const next = change((tabs) =>
+        openBeside(tabs, session, askedByNow, listedNow.current.get(session)?.name),
+      );
+      if (next === before) return;
+      // It is a pane of its session's tab now, and no tab of its own.
+      void commands.openChatTab(plane, session, false).catch(() => undefined);
+      const tab = tabHolding(next, session);
+      const workspace =
+        sidebar === undefined || tab === undefined ? undefined : workspaceOf(next, tab, filedIn);
+      if (workspace !== undefined) setPicked(workspace);
+      giveKeyboardTo(plane, session);
+      stoppedFor(session, undefined);
+    },
+    [askedByNow, change, filedIn, plane, sidebar, stoppedFor],
+  );
+
+  /**
+   * **Sends a task back out of its own tab or its pane** (#1489): the minimise. The tab leaves
+   * the strip, or the pane leaves the split; **the task goes on**, at home in its session's
+   * tab again, whose chip lists it. No command that ends a chat is sent, and nothing is asked.
+   * The front goes where closing that tab would send it; a split's other pane takes the room
+   * and the keyboard.
+   */
+  const sendBackOf = useCallback(
+    (session: number) => {
+      const before = now.current;
+      const from = tabHolding(before, session);
+      const next = change((tabs) => sendBack(tabs, session, filedIn, isPinned, isBackground));
+      if (next === before) return;
+      void commands.openChatTab(plane, session, false).catch(() => undefined);
+      // What shared its split has the room now, and the keyboard with it.
+      const beside = from !== undefined && next.inFront === from ? focusedChat(next) : undefined;
+      if (beside !== undefined) giveKeyboardTo(plane, beside);
+    },
+    [change, filedIn, isBackground, isPinned, plane],
+  );
 
   /**
    * **Goes to a chat: the one way** (#1486). Every surface that shows a chat comes through
@@ -2504,11 +2654,14 @@ export const PlaneView = memo(function PlaneView({
    * **A chat is shown in its home** (`tabs.homeOf`). A session's own chat is its tab. A task is
    * shown INSIDE the tab of the session that asked for it: that tab comes forward and is
    * switched to the task (`tabs.switchTabTo`), no tab is added, and the keyboard goes into the
-   * task's terminal. The same press on the session's own chat switches the tab back.
+   * task's terminal. The same press on the session's own chat switches the tab back. A task
+   * with a tab or a pane of its own (#1489) is at home there, and that comes forward.
    *
-   * **A task whose session has no tab in this window** falls back to what a pressed task did
-   * before: an ordinary tab of its own, which the core is told of. The session that asked was
-   * closed and left it running, so there is no tab to show it in.
+   * **Where the person set tasks to open in their own tabs** (V100-74), a task shown inside
+   * its session's tab is given its tab instead ({@link ownTab}).
+   *
+   * **A task whose session has no tab in this window** gets a tab of its own too, since there
+   * is no tab to show it in: the session that asked was closed and left it running.
    *
    * A chat listed because its Smart close stopped (SI-8f) has been looked at, so it leaves
    * the list.
@@ -2516,38 +2669,23 @@ export const PlaneView = memo(function PlaneView({
   const showChat = useCallback(
     (session: number) => {
       const home = homeOf(now.current, session, askedByNow);
-      if (home !== undefined) {
-        const was = shownIn(now.current, home.tab).find((one) => one.pane === home.pane)?.session;
-        change((tabs) => switchTabTo(tabs, session, askedByNow));
-        const workspace =
-          sidebar === undefined ? undefined : workspaceOf(now.current, home.tab, filedIn);
-        if (workspace !== undefined) setPicked(workspace);
-        // The pane shows another chat now: whoever pressed for it types next.
-        if (was !== session) giveKeyboardTo(plane, session);
-      } else {
-        const listed = listedNow.current.get(session);
-        if (listed !== undefined) {
-          // It is a tab of its own from here on, so no other tab goes on showing it: one chat,
-          // one place (`keepShown`). The person pressed for this, so nothing moved by itself.
-          const opened = change((tabs) =>
-            alreadyShows(tabs, session)
-              ? tabs
-              : openTab(
-                  keepShown(tabs, (shown) => shown !== session),
-                  session,
-                  listed.name,
-                  whoOf(listed.persona, listed.harness),
-                  listed.label,
-                ),
-          );
-          void commands.openChatTab(plane, session).catch(() => undefined);
-          const tab = tabHolding(opened, session);
-          if (tab !== undefined) bringToFront(tab);
-        }
+      const task = askedByNow(session) !== undefined;
+      if (home === undefined || (task && home.own !== session && chatsListPrefs().tabbed)) {
+        // A tab of its own from here on. The person pressed for this, so nothing moved by
+        // itself.
+        ownTab(session);
+        return;
       }
+      const was = shownIn(now.current, home.tab).find((one) => one.pane === home.pane)?.session;
+      change((tabs) => switchTabTo(tabs, session, askedByNow));
+      const workspace =
+        sidebar === undefined ? undefined : workspaceOf(now.current, home.tab, filedIn);
+      if (workspace !== undefined) setPicked(workspace);
+      // The pane shows another chat now: whoever pressed for it types next.
+      if (was !== session) giveKeyboardTo(plane, session);
       stoppedFor(session, undefined);
     },
-    [askedByNow, bringToFront, change, filedIn, plane, sidebar, stoppedFor],
+    [askedByNow, change, filedIn, ownTab, plane, sidebar, stoppedFor],
   );
 
   /**
@@ -4387,6 +4525,9 @@ export const PlaneView = memo(function PlaneView({
       createWorkspace,
       removeWorkspace,
       showChat,
+      ownTab,
+      beside: besideOf,
+      sendBack: sendBackOf,
       showTabTasks,
       ignoreNeedsYou,
       cancelSmartClose,
@@ -4478,6 +4619,9 @@ export const PlaneView = memo(function PlaneView({
       runAction,
       sendKey,
       showChat,
+      ownTab,
+      besideOf,
+      sendBackOf,
       showTabTasks,
       showView,
       split,
@@ -4669,6 +4813,14 @@ export const PlaneView = memo(function PlaneView({
     }
     return rows;
   }, [finishedTasks, frontAway]);
+  /**
+   * **The breadcrumb of each pane of the tab in front that shows its own chat and has a path
+   * to say** (#1489): a task in a pane of its own, and the session it is beside.
+   */
+  const frontPlaced = useMemo(
+    () => (tabs.inFront === undefined ? {} : placedCrumbsOf(tabs, tabs.inFront, listedChats)),
+    [listedChats, tabs],
+  );
   // A pane that could not draw its task and can again (a restart caught up) gives the
   // keyboard back to the task's terminal, where the pane has the keyboard.
   const wasAway = useRef<ReadonlySet<number>>(new Set());
@@ -4771,6 +4923,8 @@ export const PlaneView = memo(function PlaneView({
       let home: string | undefined;
       for (const row of chatsByTab.get(id) ?? NO_ROWS) {
         if (row.level === 1) home = row.workspace;
+        // What finished under a task in a tab of its own is that tab's to list (#1489).
+        if (row.placed === "tab") continue;
         for (const task of finishedTasks.get(row.session) ?? []) {
           const shown = shownOf(task);
           if (shown === undefined) continue;
@@ -4853,6 +5007,18 @@ export const PlaneView = memo(function PlaneView({
     const lead = contentsOf(tabs, id)[0]?.pane;
     const last = recalled.get(`${id}:${lead}:${task}`);
     return last?.path[last.path.length - 1].name;
+  };
+  /**
+   * **Whether tab `id` is a task's own** (#1489), and then the name of the chat that asked for
+   * it, where that chat is still listed: what the tab says after its own name. Nothing for a
+   * session's tab and for a view's.
+   */
+  const taskTabOf = (id: number) => {
+    const own = chatOf(tabs, id);
+    const from = own === undefined ? undefined : chatsByNumber.get(own)?.from;
+    if (!from?.task) return undefined;
+    const asker = chatsByNumber.get(from.chat);
+    return { asker: asker === undefined ? undefined : shownName(tabs, asker) };
   };
   /** The chats each chat started that went to another workspace, which the explorer draws
    *  under its row with that workspace named. */
@@ -5122,6 +5288,8 @@ export const PlaneView = memo(function PlaneView({
     keeps?: boolean;
     /** The task the tab being closed shows, and the session that ends (#1486). */
     shows?: { task: string; session: string };
+    /** How many tasks below the closing session have a tab of their own (#1489). */
+    ownTabs?: number;
   }>();
 
   /**
@@ -5144,7 +5312,7 @@ export const PlaneView = memo(function PlaneView({
   const run = useCallback(
     async (offer: Offer): Promise<Ran> => {
       if (offer.available && endsAChat(offer.does)) {
-        const ending = chatsEndedBy(offer.does, now.current);
+        const ending = chatsEndedBy(offer.does, now.current, askedByNow);
         /** What closing chat `session` would do with the chats below it, as the core says. A
          *  core that answers nothing (an older one) has none below it. */
         const below = async (session: number) => {
@@ -5197,12 +5365,17 @@ export const PlaneView = memo(function PlaneView({
                 task: nameOfNow.current(task),
                 session: now.current.byId[does.tab]?.name ?? "",
               };
-        setEndingChat({ offer, session, smart, running, closing, shows });
+        // **Its tasks that have a tab of their own** (#1489): the dialog says how many, since
+        // they go back to the list or go with it by the answer given here.
+        const ownTabs = tasksPlacedBelow(now.current, session, askedByNow).filter(
+          (one) => one.placed === "tab",
+        ).length;
+        setEndingChat({ offer, session, smart, running, closing, shows, ownTabs });
         return { ok: true };
       }
       return carryOut(offer);
     },
-    [carryOut, plane, setEndingChat],
+    [askedByNow, carryOut, plane, setEndingChat],
   );
 
   /**
@@ -5274,6 +5447,21 @@ export const PlaneView = memo(function PlaneView({
       void run(offer);
     },
     [run],
+  );
+
+  /** Moves a task from its line in a tab's menu (#1489): to a tab of its own, beside its
+   *  session, or back. The catalogue's own rows, read as they stand when pressed, and held
+   *  as one function for the window's life, as {@link showFromChip} is. */
+  const placeNow = useRef<(session: number, where: TaskPlace) => void>(() => undefined);
+  useEffect(() => {
+    placeNow.current = (session, where) => {
+      const offer = by(placeRowId(session, where));
+      if (offer?.available) press(offer);
+    };
+  });
+  const placeFromChip = useCallback(
+    (session: number, where: TaskPlace) => placeNow.current(session, where),
+    [],
   );
 
   /**
@@ -5409,8 +5597,8 @@ export const PlaneView = memo(function PlaneView({
    */
   /** The close of pane `pane` of the tab in front, decided for that pane (`paneCloseOf`). */
   const closeOfPane = useCallback(
-    (pane: number) => paneCloseOf(tabs, pane, nameOf),
-    [nameOf, tabs],
+    (pane: number) => paneCloseOf(tabs, pane, nameOf, askedBy),
+    [askedBy, nameOf, tabs],
   );
   /** Pane `pane` of the tab in front goes back to its session's own chat (#1486): the person's
    *  way out of a task that has ended. Its terminal takes the keyboard. */
@@ -5909,6 +6097,8 @@ export const PlaneView = memo(function PlaneView({
                             ref={sortable.setNodeRef}
                             style={style}
                             data-dragging={sortable.isDragging || undefined}
+                            // A task's own tab (#1489): what its look is hung on.
+                            data-task-tab={taskTabOf(id) === undefined ? undefined : ""}
                             // A file, a folder, lines or a search hit dropped on a chat's tab is
                             // typed into that chat as a reference, unsent (FM-9).
                             // **Into the chat the tab shows** (#1486): the tab reads
@@ -6032,6 +6222,7 @@ export const PlaneView = memo(function PlaneView({
                                     shells={shells}
                                     wrapping={wrapping}
                                     task={taskNameOf(id)}
+                                    taskOf={taskTabOf(id)}
                                     pin={
                                       <Pin
                                         held={isPinned(id)}
@@ -6060,6 +6251,7 @@ export const PlaneView = memo(function PlaneView({
                               clock={chatClock}
                               dragging={isDragging}
                               onShow={showFromChip}
+                              onPlace={placeFromChip}
                             />
                             <FreshMark
                               id={freshMarkOf(id)}
@@ -6103,6 +6295,7 @@ export const PlaneView = memo(function PlaneView({
                   shells={shells}
                   wrapping={wrapping}
                   task={taskNameOf(id)}
+                  taskOf={taskTabOf(id)}
                   needs={hiddenByTab.get(id)?.map((chat) => chat.name)}
                 />
               ),
@@ -6430,6 +6623,7 @@ export const PlaneView = memo(function PlaneView({
                   // session that asked, while the tab is switched to it.
                   layout={layoutShown(tabs, frontTab.id) ?? frontTab.layout}
                   crumbs={frontCrumbs}
+                  placed={frontPlaced}
                   away={frontAway}
                   finished={frontFinished}
                   others={frontOthers}
@@ -6797,6 +6991,7 @@ export const PlaneView = memo(function PlaneView({
           closing={endingChat.closing}
           keeps={endingChat.keeps}
           shows={endingChat.shows}
+          ownTabs={endingChat.ownTabs}
           onEnd={(stop) => {
             const { offer: ending, session } = endingChat;
             setEndingChat(undefined);
@@ -7278,6 +7473,10 @@ const ROOT_WORD = "plane root";
  *  (`FinishedTask.place`). */
 const CORE_ROOT_WORD = "project root";
 
+/** What the core is told of one chat's pane (`tab_shows`): the chat it shows in place of its
+ *  own, and the chat whose tab it is in where it is not that tab's own. */
+type PaneSaid = { shown: number | null; beside: number | null };
+
 /** No row of the Chats list is on screen: what the clock is read with until the list says. */
 const NO_ROWS_DRAWN: ReadonlySet<number> = new Set();
 
@@ -7290,6 +7489,21 @@ function typedInto(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.closest(`[${CHAT_KEYBOARD}]`) !== null) return false;
   return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+}
+
+/**
+ * **The rows of a task's menu in the Chats list, for a pane to open the same menu on its
+ * breadcrumb** (#1489): the catalogue's own rows, picked out by the ids that menu lists
+ * (`actions.menuOn`), so the two cannot differ.
+ */
+function listedMenuOf(session: number, offerFor: (id: string) => Offer | undefined): Catalogued {
+  const { above, below } = menuOn({ on: "listed", session });
+  return new Map(
+    [...above, ...below].flatMap((id) => {
+      const offer = offerFor(id);
+      return offer === undefined ? [] : [[id, offer] as const];
+    }),
+  );
 }
 
 /** What a tab with no tasks hands its chip, the same lists every time. */
@@ -7364,11 +7578,16 @@ function endsAChat(does: Offer["does"]): boolean {
 }
 
 /**
- * The chats a close row would end: a tab's every chat, or the focused pane's one. Smart close
+ * The chats a close row would end: a tab's every session, or the focused pane's one. Smart close
  * is offered only where this is exactly one (ADR 0064) — a record is one chat's.
  */
-function chatsEndedBy(does: Offer["does"], tabs: Tabs): number[] {
-  if (does.verb === "closeTab") return panesOf(tabs, does.tab).map((one) => one.session);
+function chatsEndedBy(does: Offer["does"], tabs: Tabs, askedBy: AskedBy): number[] {
+  // **A task is never one of them** (#1489): one beside its session goes on working when the
+  // session's tab closes, unless the person answers that the session's tasks stop.
+  if (does.verb === "closeTab")
+    return panesOf(tabs, does.tab)
+      .map((one) => one.session)
+      .filter((session) => askedBy(session) === undefined);
   if (does.verb !== "closePane" || tabs.inFront === undefined) return [];
   const tab = tabs.byId[tabs.inFront];
   const going = panesOf(tabs, tab.id).find((one) => one.pane === tab.focused);
@@ -7388,6 +7607,8 @@ const MORE_THAN_ONE_CHAT =
  * wrong thing about the day it is available.
  */
 function closesOnly(does: Offer["does"]): boolean {
+  // A task sent back out of its tab or pane ends nothing either (#1489).
+  if (does.verb === "sendBack") return true;
   return (does.verb === "closeTab" || does.verb === "closePane") && !does.ends;
 }
 
@@ -7455,6 +7676,7 @@ function PaneFrame({
   plane,
   session,
   crumbs,
+  crumbMenu,
   onShowChat,
   from,
   harness,
@@ -7467,8 +7689,11 @@ function PaneFrame({
 }: {
   plane: PlaneId;
   session: number;
-  /** While the pane shows a task of its tab's session: the path to it (#1486). */
+  /** While the pane shows a task of its tab's session: the path to it (#1486). Also for a task
+   *  in a pane of its own, and the session it is beside (#1489). */
   crumbs?: Crumbs;
+  /** The menu a right-click on a task's breadcrumb opens: its row's in the Chats list. */
+  crumbMenu?: { session: number; offers: Catalogued; onPress: (offer: Offer) => void };
   /** Goes to a chat: what a name in the breadcrumb does, and a hidden chat's Notice. */
   onShowChat: (session: number) => void;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
@@ -7515,7 +7740,18 @@ function PaneFrame({
         <div className="pane-chips">
           {/* **Which chat this is, while the tab shows a task** (#1486): first in the line, and
               in no row of its own. */}
-          {crumbs && <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />}
+          {crumbs &&
+            (crumbMenu === undefined ? (
+              <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
+            ) : (
+              <Menued
+                on={{ on: "listed", session: crumbMenu.session }}
+                offers={crumbMenu.offers}
+                onPress={crumbMenu.onPress}
+              >
+                <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
+              </Menued>
+            ))}
           <ChatGauge usage={usage} />
           {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
           {from && <span className="pane-from">{from}</span>}
@@ -7976,7 +8212,11 @@ function tabHolding(tabs: Tabs, session: number): number | undefined {
  */
 function shownName(tabs: Tabs, chat: OpenChat): string {
   const held = tabHolding(tabs, chat.session);
-  return held !== undefined ? tabs.byId[held].name : untabbedName(chat);
+  // **A task beside its session is not called what the session's tab is** (#1489): the tab's
+  // name is its own chat's. A task says its own name wherever it is drawn.
+  const beside =
+    held !== undefined && chat.from?.task === true && chatOf(tabs, held) !== chat.session;
+  return held !== undefined && !beside ? tabs.byId[held].name : untabbedName(chat);
 }
 
 /**
@@ -8025,11 +8265,15 @@ export function Pin({ held, what }: { held: boolean; what: string }) {
  *  `End chat 3 steward`, and the tooltip a pointer gets says what that costs. */
 export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
   if (!offer) return null;
+  // **A task's own tab has a minimise where a session's has its close** (#1489, V100-38): `−`,
+  // named for what it does, "Send talk back into steward 4's tab". It ends nothing.
+  const minimise = offer.does.verb === "sendBack";
   return (
     <button
       // A tab showing only a view closes and ends nothing, so its `×` does not wear the danger
       // hover a chat's does — the look may not say more than the act does, either way.
-      className={clsx("closer", closesOnly(offer.does) && "keeps")}
+      className={clsx("closer", closesOnly(offer.does) && "keeps", minimise && "minimise")}
+      data-minimise={minimise ? "" : undefined}
       // **Not a Tab stop, and deliberately** (charter-app#189). The strip it sits on is ONE
       // stop, the WAI-ARIA "Tabs" pattern; a `×` per tab in the sequence would be fifty stops
       // again. A keyboard ends a chat from the palette's row for it, or from the tab's own menu
@@ -8040,7 +8284,7 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}
       onClick={() => onPress(offer)}
     >
-      <X />
+      {minimise ? <Minus /> : <X />}
     </button>
   );
 }
@@ -8081,6 +8325,7 @@ function LayoutPanes({
   plane,
   layout,
   crumbs,
+  placed,
   away,
   finished,
   others,
@@ -8121,6 +8366,9 @@ function LayoutPanes({
   layout: Layout;
   /** The breadcrumb of each pane that shows a task, by pane (#1486). */
   crumbs: Readonly<Record<number, Crumbs>>;
+  /** The breadcrumb of each pane that shows its own chat and still has a path to say (#1489):
+   *  a task in a pane of its own, and the session it is beside. */
+  placed: Readonly<Record<number, Crumbs>>;
   /** The panes that show a task they cannot draw, by pane, and why (`TaskAway`). */
   away: Readonly<Record<number, Away>>;
   /** The finished row of each task a pane was left on when it ended, by pane (#1485). */
@@ -8262,6 +8510,9 @@ function LayoutPanes({
     // **This pane shows a task of its tab's session** (#1486). The breadcrumb says where it
     // came from, so the note of the chat that started it is not said a second time.
     const crumb = crumbs[layout.pane];
+    // **Or its own chat, with a path to say** (#1489): a task in a pane of its own, and the
+    // session it is beside. The same line, so each side of a split says which chat it is.
+    const path = crumb ?? placed[layout.pane];
     const doing = (
       <PaneDoing
         pane={layout.pane}
@@ -8271,6 +8522,9 @@ function LayoutPanes({
         // No close on a pane showing a task: nothing on screen ends the task, and the
         // session's close is its tab's (#1486).
         task={crumb !== undefined || away[layout.pane] !== undefined}
+        // The task it shows inside its session's tab, which can be given a tab of its own or
+        // opened beside its session from here (#1489).
+        shows={crumb === undefined ? undefined : content.session}
       />
     );
     const gone = away[layout.pane];
@@ -8316,9 +8570,19 @@ function LayoutPanes({
       <PaneFrame
         plane={plane}
         session={content.session}
-        crumbs={crumb}
+        crumbs={path}
+        // Right-click on a task's breadcrumb is its row's menu in the Chats list (#1489).
+        crumbMenu={
+          path !== undefined && path.path[path.path.length - 1].mode === "task"
+            ? {
+                session: path.path[path.path.length - 1].session,
+                offers: listedMenuOf(path.path[path.path.length - 1].session, offerFor),
+                onPress: (offer) => onPaneDoes(layout.pane, offer),
+              }
+            : undefined
+        }
         onShowChat={onShowChat}
-        from={crumb === undefined ? handedFrom[content.session] : undefined}
+        from={path === undefined ? handedFrom[content.session] : undefined}
         harness={glances[content.session]}
         onOpenCard={(glance) => onOpenView(harnessCardView(glance.name), glance.label)}
         workItem={workItems[content.session]}
@@ -8361,6 +8625,7 @@ function LayoutPanes({
               plane={plane}
               layout={child}
               crumbs={crumbs}
+              placed={placed}
               away={away}
               finished={finished}
               others={others}
@@ -8432,20 +8697,28 @@ function PaneDoing({
   closeOf,
   onPaneDoes,
   task = false,
+  shows,
 }: {
   pane: number;
   offerFor: (id: string) => Offer | undefined;
   /** This pane's close, which is not the focused pane's where the two differ (#1486): a pane
-   *  beside one that shows a task still closes. */
+   *  beside one that shows a task still closes. For a task's own pane it is the minimise
+   *  (#1489), which sends the task back and ends nothing. */
   closeOf: (pane: number) => Offer | undefined;
   onPaneDoes: (pane: number, offer: Offer | undefined) => void;
   /** The pane shows a task of its tab's session (#1486): it draws no close. A close here
    *  would read as ending the task, and what it would end is the session under it. */
   task?: boolean;
+  /** That task, where the pane can draw it: the pane offers it a tab of its own, and a pane
+   *  beside its session (#1489). The task's own rows, not the focused pane's. */
+  shows?: number;
 }) {
-  const rows = task
-    ? ["pane.split.right", "pane.split.down"]
-    : ["pane.split.right", "pane.split.down", "pane.close"];
+  const rows = [
+    ...(shows === undefined ? [] : [ownTabId(shows), besideId(shows)]),
+    "pane.split.right",
+    "pane.split.down",
+    ...(task ? [] : ["pane.close"]),
+  ];
   // **The pane's top line ends before these controls, whatever their number** (#1486): their
   // width is measured and said to the pane's frame (`--pane-controls`, `App.css`), so the line
   // reserves the room the controls drawn here take, not a count somebody remembered.
@@ -8470,13 +8743,15 @@ function PaneDoing({
       {rows.map((id) => {
         const offer = id === "pane.close" ? closeOf(pane) : offerFor(id);
         if (!offer) return null;
-        const Mark = MARKS[offer.id];
+        const Mark = markOf(offer);
         return (
           <button
             key={id}
             className={
               offer.id === "pane.close" && !closesOnly(offer.does) ? "ends-a-chat" : undefined
             }
+            // A task's minimise, as its own tab draws it (#1489): never the close's look.
+            data-minimise={offer.does.verb === "sendBack" ? "" : undefined}
             // WebKit leaves a `<button>` out of the tab sequence unless this is written down
             // (`docs/ui-primitives.md`). Only the focused pane's are drawn (`App.css`), so only
             // they are stops: a hidden control is not one.
@@ -8492,6 +8767,28 @@ function PaneDoing({
       })}
     </div>
   );
+}
+
+/**
+ * The glyph a row is drawn as where it is drawn as one: by what it does for the rows about
+ * where a task is (#1489), which are one per task, and by its id otherwise ({@link MARKS}).
+ * **A minimise is `−`, whatever id it has**: a task's own tab and its own pane keep the close's
+ * id, so its key and its menu reach it, and must never draw the close's `×`.
+ */
+function markOf(offer: Offer): typeof Plus | undefined {
+  switch (offer.does.verb) {
+    case "sendBack":
+      return Minus;
+    case "ownTab":
+      return SquareArrowOutUpRight;
+    case "beside":
+      return PanelRight;
+    default:
+      break;
+  }
+  if (offer.id.startsWith("chat.own:")) return SquareArrowOutUpRight;
+  if (offer.id.startsWith("chat.beside:")) return PanelRight;
+  return MARKS[offer.id];
 }
 
 /** The waiting chat's Notice's way out that asks first (NO-3), and where a Cancel goes back to. */

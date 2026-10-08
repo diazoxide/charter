@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ComponentProps, type ReactNode } from "react";
 import { ChatShownState } from "./ChatRows";
 import type { Crumbs } from "./tabChats";
 
@@ -23,12 +23,19 @@ import type { Crumbs } from "./tabChats";
  * or the text it is, and the one on screen is `aria-current`. The whole path is the tooltip.
  *
  * Drawn only while a pane shows a task. A session with no tasks has the top line it had.
+ *
+ * **Also for a task in a pane of its own** (#1489): its own tab, where it is why that tab is
+ * not mistaken for a session's, and beside its session, where each side of the split says which
+ * chat it is (the session's side by its name alone). A right-click on a task's breadcrumb is
+ * its row's menu in the Chats list: whatever else is handed in goes on the list's element, so
+ * a menu can make it its trigger.
  */
 export function PaneCrumbs({
   crumbs,
   onShow,
   state,
   gone,
+  ...rest
 }: {
   crumbs: Crumbs;
   /** Switches the tab to that chat. */
@@ -38,12 +45,13 @@ export function PaneCrumbs({
   state?: ReactNode;
   /** The chats of the path that are not open any more: each is a name and no way. */
   gone?: (session: number) => boolean;
-}) {
+} & Omit<ComponentProps<"nav">, "children" | "className" | "title" | "aria-label">) {
   const last = crumbs.path.length - 1;
   const shown = crumbs.path[last];
   const said = crumbs.path.map((chat) => chat.name).join(" › ");
   return (
     <nav
+      {...rest}
       className="pane-crumbs"
       aria-label="Chat path"
       // The whole path, for a pane too narrow to draw it.

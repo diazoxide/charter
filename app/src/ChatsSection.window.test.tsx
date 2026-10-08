@@ -143,7 +143,7 @@ function core(open: (OpenChat & { workspace: string })[]) {
     if (cmd === "opened_chats") return now();
     if (cmd === "open_chat_tab") {
       const one = open.find((chat) => chat.session === a.session);
-      if (one?.from) one.from = { ...one.from, tab: true };
+      if (one?.from) one.from = { ...one.from, tab: a.opened !== false };
       return null;
     }
     if (cmd === "tab_shows") {
@@ -500,6 +500,7 @@ describe("a task chat", () => {
         plane: PLANE,
         session: 1,
         shown: 4,
+        beside: null,
       }),
     );
     first.unmount();

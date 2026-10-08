@@ -187,7 +187,7 @@ function core(open: Listed[]) {
     if (cmd === "opened_chats") return open.map(asListed);
     if (cmd === "open_chat_tab") {
       const one = open.find((chat) => chat.session === a.session);
-      if (one?.from) one.from = { ...one.from, tab: true };
+      if (one?.from) one.from = { ...one.from, tab: a.opened !== false };
       return null;
     }
     if (cmd === "chat_in_front") {
@@ -467,7 +467,9 @@ describe("pressing a task", () => {
 
     await waitFor(() => expect(tabNames()).toEqual(["steward 1", "left behind"]));
     expect(onScreen()).toEqual([12]);
-    expect(commandsOf(asked, "open_chat_tab")).toEqual([{ plane: PLANE, session: 12 }]);
+    expect(commandsOf(asked, "open_chat_tab")).toEqual([
+      { plane: PLANE, session: 12, opened: true },
+    ]);
     expect(crumbs()).toBeNull();
   });
 
@@ -486,7 +488,9 @@ describe("pressing a task", () => {
 
     await waitFor(() => expect(tabNames()).toEqual(["steward 1", "moved work"]));
     expect(crumbs()).toBeNull();
-    expect(commandsOf(asked, "open_chat_tab")).toEqual([{ plane: PLANE, session: 3 }]);
+    expect(commandsOf(asked, "open_chat_tab")).toEqual([
+      { plane: PLANE, session: 3, opened: true },
+    ]);
   });
 });
 
@@ -517,8 +521,8 @@ describe("a tab remembers which chat it shows", () => {
     await waitFor(() => expect(onScreen()).toEqual([5]));
     await waitFor(() =>
       expect(commandsOf(first.asked, "tab_shows")).toEqual([
-        { plane: PLANE, session: 2, shown: 8 },
-        { plane: PLANE, session: 1, shown: 5 },
+        { plane: PLANE, session: 2, shown: 8, beside: null },
+        { plane: PLANE, session: 1, shown: 5, beside: null },
       ]),
     );
     // The chat in front is the tab's own, as it always was: the task is not a tab.
@@ -553,6 +557,7 @@ describe("a tab remembers which chat it shows", () => {
         plane: PLANE,
         session: 1,
         shown: null,
+        beside: null,
       }),
     );
   });

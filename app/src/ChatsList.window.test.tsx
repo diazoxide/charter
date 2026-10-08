@@ -147,7 +147,7 @@ function core(open: Filed[], ended: FinishedTask[] = []) {
     if (cmd === "opened_chats") return open.map(asListed);
     if (cmd === "open_chat_tab") {
       const one = open.find((chat) => chat.session === a.session);
-      if (one?.from) one.from = { ...one.from, tab: true };
+      if (one?.from) one.from = { ...one.from, tab: a.opened !== false };
       return null;
     }
     if (cmd === "stopping_chats") return [];
@@ -945,14 +945,30 @@ describe("the keys of a row (#1499)", () => {
     await waitFor(() => expect(shownInFront()).toBe("session 2"));
   });
 
-  it("asks for a row beside the chat in front on Space, and says why that cannot be done yet", async () => {
+  it("opens a task beside the session that asked for it on Space (#1489)", async () => {
     await up();
 
     act(() => row("devops 2").focus());
     await userEvent.keyboard(" ");
 
+    // Inside the session's tab: its chat on one side, the task on the other.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("pane").map((pane) => pane.textContent)).toEqual([
+        "session 1",
+        "session 2",
+      ]),
+    );
+    expect(said()).toBe("");
+  });
+
+  it("says why Space does nothing on a chat that is not a task", async () => {
+    await up();
+
+    act(() => row("steward 1").focus());
+    await userEvent.keyboard(" ");
+
     expect(said()).toBe(
-      "purlis cannot open a chat beside another yet. Press Enter to open it in front.",
+      "Only a task opens beside the chat that asked for it. Press Enter to show this chat.",
     );
     // Space did not press the row: nothing was opened.
     expect(shownInFront()).toBe("session 1");
@@ -994,7 +1010,7 @@ describe("the keys of a row (#1499)", () => {
 
   it("takes down what a key said at the next key that is not Space", async () => {
     await up();
-    act(() => row("devops 2").focus());
+    act(() => row("steward 1").focus());
     await userEvent.keyboard(" ");
     expect(said()).not.toBe("");
 

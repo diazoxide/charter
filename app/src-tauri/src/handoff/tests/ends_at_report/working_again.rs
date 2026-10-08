@@ -169,8 +169,10 @@ fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not
     // The session's tab is in front, switched to its task (#1486): "in front" is the
     // session's own chat, and the task is the one on screen.
     held.chats().bring_to_front(Some(steward));
-    held.chats().tab_shows(steward, Some(task)).expect("shown");
-    assert_eq!(held.chats().looked_at(), Some(task));
+    held.chats()
+        .tab_shows(steward, Some(task), None)
+        .expect("shown");
+    assert_eq!(held.chats().looked_at(), vec![task]);
     works(&held, task);
     reports(&held, &id, task);
     its_turn_ends(&held, task);
@@ -183,8 +185,10 @@ fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not
     );
 
     // They go back to the session's own chat: it is ended then.
-    held.chats().tab_shows(steward, None).expect("its own chat");
-    assert_eq!(held.chats().looked_at(), Some(steward));
+    held.chats()
+        .tab_shows(steward, None, None)
+        .expect("its own chat");
+    assert_eq!(held.chats().looked_at(), vec![steward]);
     crate::dispatched::front_moved(&held);
     ends_within_moments(&held, task);
     assert_eq!(finished_under(&held, steward).len(), 1);
@@ -194,7 +198,9 @@ fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not
 fn a_task_shown_in_a_tab_that_is_no_longer_in_front_is_ended() {
     let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
     held.chats().bring_to_front(Some(steward));
-    held.chats().tab_shows(steward, Some(task)).expect("shown");
+    held.chats()
+        .tab_shows(steward, Some(task), None)
+        .expect("shown");
     works(&held, task);
     reports(&held, &id, task);
     its_turn_ends(&held, task);
@@ -203,7 +209,7 @@ fn a_task_shown_in_a_tab_that_is_no_longer_in_front_is_ended() {
 
     // Its tab still shows it, and is no longer the tab in front: nobody is reading it.
     held.chats().bring_to_front(None);
-    assert_eq!(held.chats().looked_at(), None);
+    assert_eq!(held.chats().looked_at(), Vec::<u32>::new());
     crate::dispatched::front_moved(&held);
     ends_within_moments(&held, task);
 }
@@ -214,17 +220,133 @@ fn the_chat_looked_at_is_the_one_a_tab_shows_and_not_the_session_hidden_behind_i
     // screen is not notified about, and the session's own chat behind it is.
     let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();
     held.chats().bring_to_front(Some(steward));
-    assert_eq!(held.chats().looked_at(), Some(steward));
+    assert_eq!(held.chats().looked_at(), vec![steward]);
 
-    held.chats().tab_shows(steward, Some(task)).expect("shown");
-    assert_eq!(held.chats().looked_at(), Some(task));
-    assert_ne!(held.chats().looked_at(), Some(steward));
+    held.chats()
+        .tab_shows(steward, Some(task), None)
+        .expect("shown");
+    assert_eq!(held.chats().looked_at(), vec![task]);
+    assert!(!held.chats().looks_at(steward));
     // "In front" is still the session's own chat: the tab is its.
     assert_eq!(held.chats().front(), Some(steward));
 
     // A task brought in front in a tab of its own is looked at as any chat in front is.
     held.chats().bring_to_front(Some(task));
-    assert_eq!(held.chats().looked_at(), Some(task));
+    assert_eq!(held.chats().looked_at(), vec![task]);
+}
+
+#[test]
+fn a_task_opened_beside_its_session_is_ended_when_its_pane_goes_and_not_before() {
+    // #1489, closing J1's limit: the task has a pane of its own in the session's tab, which is
+    // the tab in front. "In front" is the session; the task is on screen beside it.
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats()
+        .tab_shows(task, None, Some(steward))
+        .expect("beside");
+    assert_eq!(held.chats().looked_at(), vec![steward, task]);
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+
+    assert!(
+        open_chats(&held).contains(&task),
+        "ended under the person who was reading it beside its session"
+    );
+
+    // Its pane is sent back to the list: nobody is reading it, and it is ended then.
+    held.chats().tab_shows(task, None, None).expect("no pane");
+    assert_eq!(held.chats().looked_at(), vec![steward]);
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_task_beside_its_session_is_not_held_once_another_tab_is_in_front() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats()
+        .tab_shows(task, None, Some(steward))
+        .expect("beside");
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    assert!(open_chats(&held).contains(&task));
+
+    // The split is still as it was, behind another tab: no pane of it is on screen.
+    held.chats().bring_to_front(None);
+    assert!(!held.chats().looks_at(task));
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+}
+
+#[test]
+fn a_task_in_a_tab_of_its_own_is_held_while_that_tab_is_in_front_and_ended_when_sent_back() {
+    // #1489: Move to its own tab, then the minimise. The minimise ends nothing by itself: it
+    // only stops the person looking, and a task that had reported is ended as any other is.
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().open_tab(task, true).expect("its own tab");
+    held.chats().bring_to_front(Some(task));
+    assert_eq!(held.chats().looked_at(), vec![task]);
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task), "ended under the person");
+
+    held.chats().open_tab(task, false).expect("sent back");
+    held.chats().bring_to_front(Some(steward));
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+}
+
+#[test]
+fn a_working_task_sent_back_out_of_its_tab_goes_on_working() {
+    // The minimise never ends a task: one that has not reported is as open after it as before.
+    let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();
+    held.chats().open_tab(task, true).expect("its own tab");
+    held.chats().bring_to_front(Some(task));
+    works(&held, task);
+
+    held.chats().open_tab(task, false).expect("sent back");
+    held.chats().tab_shows(task, None, None).expect("no pane");
+    held.chats().bring_to_front(Some(steward));
+    crate::dispatched::front_moved(&held);
+    past_the_settle();
+
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(held.operator_input(task, b"still here\r"), Ok(()));
+}
+
+#[test]
+fn every_pane_of_the_tab_in_front_is_looked_at_each_as_the_chat_it_shows() {
+    // What the notification's "already looking at it" asks, in a split: the session's pane
+    // switched to one task, and another task in a pane of its own beside it.
+    let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats()
+        .tab_shows(task, None, Some(steward))
+        .expect("beside");
+    assert!(held.chats().looks_at(steward) && held.chats().looks_at(task));
+
+    // The session's own pane shows a chat in place of it: that one is on screen, and the
+    // session's own chat, hidden behind it, is not.
+    held.chats()
+        .tab_shows(steward, Some(900), None)
+        .expect("shown");
+    assert_eq!(held.chats().looked_at(), vec![task, 900]);
+    assert!(!held.chats().looks_at(steward));
+
+    // A chat beside another tab's chat is not on screen with this one.
+    held.chats()
+        .tab_shows(task, None, Some(901))
+        .expect("moved");
+    assert!(!held.chats().looks_at(task));
 }
 
 #[test]

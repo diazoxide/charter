@@ -69,6 +69,7 @@ export function EndingChat({
   closing = [],
   keeps = false,
   shows,
+  ownTabs = 0,
   onEnd,
   onSmartClose,
   onCancel,
@@ -93,6 +94,9 @@ export function EndingChat({
   /** The task the tab shows in place of its session's own chat, where it shows one (#1486):
    *  the dialog says the close is the session's, since the task is what is on screen. */
   shows?: { task: string; session: string };
+  /** How many tasks below the closing session have a tab of their own (#1489): the dialog
+   *  says so, since those tabs go with the answer about the tasks. */
+  ownTabs?: number;
   /** `stop` is the answer about the running persona chats: stop them, or keep them running. */
   onEnd: (stop: boolean) => void;
   onSmartClose: (stop: boolean) => void;
@@ -152,6 +156,8 @@ export function EndingChat({
               {shows.session}, not {shows.task}.
             </p>
           )}
+          {/* Its tasks in tabs of their own: no tab of theirs outlives the session's (#1489). */}
+          {ownTabs > 0 && <p className="honest">{OWN_TABS_SAYS(ownTabs)}</p>}
           {/* What else this close closes, said before it is answered. */}
           {closing.length > 0 && <p className="honest">{CLOSING_SAYS(closing)}</p>}
           {/* Several chats at once: nothing is asked about what each started, so it is said. */}
@@ -217,6 +223,21 @@ export function EndingChat({
 }
 
 /** What the dialog asks about the chats at work below a closing chat. */
+/**
+ * What a close says of the closing session's tasks that have a tab of their own (#1489,
+ * V100-39): how many, and that their tabs go either way. A task kept running is in the Chats
+ * list; one that is stopped ends.
+ */
+export function OWN_TABS_SAYS(count: number): string {
+  const tasks =
+    count === 1
+      ? "1 of its tasks has a tab of its own"
+      : `${count} of its tasks have tabs of their own`;
+  const those = count === 1 ? "That tab closes" : "Those tabs close";
+  const kept = count === 1 ? "a task that goes on working" : "tasks that go on working";
+  return `${tasks}. ${those} with this one: ${kept} stay in the Chats list.`;
+}
+
 export function RUNNING_SAYS(running: readonly string[]): string {
   const count = running.length === 1 ? "1 chat" : `${running.length} chats`;
   return `${count} it started ${running.length === 1 ? "is" : "are"} still at work: ${running.join(", ")}.`;

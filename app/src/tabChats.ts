@@ -6,7 +6,16 @@
  * breadcrumb and a tab's menu cannot disagree about which chats are a tab's.
  */
 import { chatsTree, type ChatRow, type ListedChat } from "./chatsTree";
-import { homeOf, panesOf, shownIn, type AskedBy, type Tabs } from "./tabs";
+import {
+  homeOf,
+  panesOf,
+  placedOf,
+  sessionOf,
+  shownIn,
+  type AskedBy,
+  type Placed,
+  type Tabs,
+} from "./tabs";
 
 /** Who asked whom, as the tabs are asked it (`tabs.AskedBy`), read off the core's list. */
 export function askedByOf(chats: readonly ListedChat[]): AskedBy {
@@ -20,18 +29,23 @@ export function askedByOf(chats: readonly ListedChat[]): AskedBy {
 
 /**
  * **The chats of tab `id`, as a tree**: each of its panes' own chats, then every chat below it
- * whose home is that pane (`tabs.homeOf`), nested by who asked. A chat with a tab of its own
- * is not one of them, and neither is anything below it: those are that tab's.
+ * whose home is that pane (`tabs.homeOf`), nested by who asked.
+ *
+ * **A task with a pane of its own is still its session's** (#1489, V100-38): it is listed
+ * under the chat that asked for it, marked with where it is (`ChatRow.placed`). One in a tab
+ * of its own is listed alone, since what is below it is that tab's; one beside its session, in
+ * this tab, is listed with what is below it, and its pane is not listed a second time.
  *
  * The one selector for "which chats does this tab hold": a tab's menu lists these rows, and
  * its count of working and finished tasks is a count over them.
  */
 export function chatsOfTab(tabs: Tabs, id: number, chats: readonly ListedChat[]): ChatRow[] {
-  return panesOf(tabs, id).flatMap(({ pane }) => chatsOfPane(tabs, id, pane, chats));
+  return chatsOfTabs(tabs, chats).get(id) ?? [];
 }
 
-/** The chats of one pane of tab `id`, as {@link chatsOfTab} lists a tab's: the pane's own chat
- *  first, then the tasks at home in it. */
+/** The chats of one pane of tab `id`: the pane's own chat first, then the tasks at home in
+ *  it (`tabs.homeOf`). **Strictly the pane's**: a task with a pane of its own is that pane's,
+ *  and its Notices are drawn there. */
 export function chatsOfPane(
   tabs: Tabs,
   id: number,
@@ -58,21 +72,69 @@ export function chatsOfTabs(
   chats: readonly ListedChat[],
 ): ReadonlyMap<number, ChatRow[]> {
   const askedBy = askedByOf(chats);
+  const key = (at: { tab: number; pane: number }) => `${at.tab}:${at.pane}`;
+  /**
+   * The pane a chat is listed under: its home, and for a task beside its session, in the
+   * session's own tab, the session's pane, however many such steps there are.
+   */
+  const listedAt = (home: { tab: number; pane: number; own: number }) => {
+    let at = home;
+    const seen = new Set<number>();
+    while (!seen.has(at.own)) {
+      seen.add(at.own);
+      const session = sessionOf(tabs, at.own, askedBy);
+      if (session === undefined || session.tab !== at.tab) break;
+      at = session;
+    }
+    return at;
+  };
   const here = new Map<string, ListedChat[]>();
+  /** Where each task with a pane of its own is, by the pane it is listed under. */
+  const placed = new Map<string, Map<number, Placed>>();
+  const add = (under: string, chat: ListedChat) => {
+    const among = here.get(under);
+    if (among === undefined) here.set(under, [chat]);
+    else among.push(chat);
+  };
+  /** The panes whose own chat is listed under another pane of the same tab. */
+  const folded = new Set<string>();
   for (const chat of chats) {
     const home = homeOf(tabs, chat.session, askedBy);
     if (home === undefined) continue;
-    const key = `${home.tab}:${home.pane}`;
-    const among = here.get(key);
-    if (among === undefined) here.set(key, [chat]);
-    else among.push(chat);
+    const under = listedAt(home);
+    add(key(under), chat);
+    if (home.own !== chat.session) continue;
+    const where = placedOf(tabs, chat.session, askedBy);
+    if (where === undefined) continue;
+    if (under.pane !== home.pane || under.tab !== home.tab) {
+      // Beside its session, in this tab: under it, with everything below.
+      folded.add(key(home));
+      const marks = placed.get(key(under)) ?? new Map<number, Placed>();
+      placed.set(key(under), marks.set(chat.session, "beside"));
+      continue;
+    }
+    // In another tab than its session's: listed there too, alone.
+    const session = sessionOf(tabs, chat.session, askedBy);
+    if (session === undefined) continue;
+    const there = key(listedAt(session));
+    add(there, chat);
+    const marks = placed.get(there) ?? new Map<number, Placed>();
+    placed.set(there, marks.set(chat.session, where));
   }
   return new Map(
     tabs.order.map((id) => [
       id,
-      panesOf(tabs, id).flatMap(({ pane }) =>
-        chatsTree(here.get(`${id}:${pane}`) ?? []).map((row) => ({ ...row, orphaned: false })),
-      ),
+      panesOf(tabs, id).flatMap(({ pane }) => {
+        const at = `${id}:${pane}`;
+        if (folded.has(at)) return [];
+        const marks = placed.get(at);
+        return chatsTree(here.get(at) ?? []).map((row): ChatRow => {
+          const where = marks?.get(row.session);
+          return where === undefined
+            ? { ...row, orphaned: false }
+            : { ...row, orphaned: false, placed: where };
+        });
+      }),
     ]),
   );
 }
@@ -115,6 +177,52 @@ export function crumbsOf(
     crumbs[pane] = {
       path,
       elsewhere: shown.workspace === top.workspace ? null : shown.workspace,
+    };
+  }
+  return crumbs;
+}
+
+/**
+ * **The breadcrumb of each pane of tab `id` that shows its own chat and still has a path to
+ * say** (#1489), by pane. A task in a pane of its own says the path down to it, from the
+ * session at the top, as a pane switched to it would: it is why a task's own tab is not
+ * mistaken for a session's. And where a task is beside a session, in one tab, the session's
+ * pane says its own name, so each side of the split says which chat it is.
+ *
+ * A session with no task beside it has none, and its top line is the one it had. Neither has
+ * a task whose asker is not listed any more: its own name is no path, and its tab says it.
+ */
+export function placedCrumbsOf(
+  tabs: Tabs,
+  id: number,
+  chats: readonly ListedChat[],
+): Record<number, Crumbs> {
+  const byNumber = new Map(chats.map((chat) => [chat.session, chat]));
+  const crumbs: Record<number, Crumbs> = {};
+  const shown = shownIn(tabs, id);
+  const isTask = (session: number) => byNumber.get(session)?.mode === "task";
+  const split = shown.some((one) => isTask(one.own));
+  for (const { pane, own, session } of shown) {
+    if (session !== own) continue;
+    const chat = byNumber.get(own);
+    if (chat === undefined) continue;
+    if (chat.mode !== "task") {
+      if (split && shown.length > 1) crumbs[pane] = { path: [chat], elsewhere: null };
+      continue;
+    }
+    const path: ListedChat[] = [];
+    const seen = new Set<number>();
+    let at: ListedChat | undefined = chat;
+    while (at !== undefined && !seen.has(at.session)) {
+      seen.add(at.session);
+      path.unshift(at);
+      at = at.parent === null || at.mode !== "task" ? undefined : byNumber.get(at.parent);
+    }
+    // Its own name alone is no path: the tab already says it.
+    if (path.length < 2) continue;
+    crumbs[pane] = {
+      path,
+      elsewhere: chat.workspace === path[0].workspace ? null : chat.workspace,
     };
   }
   return crumbs;

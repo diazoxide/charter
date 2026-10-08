@@ -1364,6 +1364,13 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* **A task's own tab** (#1489, V100-38): the task mark before its name, whose task it is after
+   it, dimmer (`talk · steward 4`), and a minimise where a session's tab has its close. The
+   minimise ends nothing, so it never wears the close's danger look (`.closer.keeps`). */
+.tab[data-task-tab] .tab-mark[data-mark="task"] {
+  color: var(--text-secondary);
+}
+
 /* The hand a session's tab wears for a task of its own that needs you and is not on screen
    (#1486): the mark the Chats list's rows wear, at the tab's size. */
 .tabs .tab .needs-you-mark,
@@ -1616,6 +1623,44 @@ button.show-more:focus-visible {
 
 .tasks-menu-fold {
   color: var(--text-secondary);
+}
+
+/* **The buttons at the end of a task's line, which move it** (#1489): to a tab of its own,
+   beside its session, back. Drawn only while the pointer is on the line, and taking no room
+   when they are not, so a line reads as it did and the menu is no wider. */
+.tasks-menu-places {
+  display: none;
+  flex: none;
+  gap: 0.15rem;
+  align-items: center;
+}
+
+.tasks-menu-row:hover .tasks-menu-places {
+  display: inline-flex;
+}
+
+.tasks-menu-place {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tasks-menu-place:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.tasks-menu-place svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 /* The menu's last line, for what binds and what was used (#1498, #1500). */

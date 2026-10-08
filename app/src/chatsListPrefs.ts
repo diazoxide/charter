@@ -3,7 +3,8 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
  * **How the Chats list is drawn** (#1499, V100-73): whether a row is two lines or one, and
- * whether the sessions of one workspace stand together.
+ * whether the sessions of one workspace stand together. **And what pressing a task in it does**
+ * (#1489, V100-74): shows it inside its session's tab, or opens it in a tab of its own.
  *
  * **Kept in the layout file, beside the text sizes and your editor** (`layout.json`,
  * `regions.ts`), under `chats`. It is how one person likes their window, on this machine: a
@@ -15,9 +16,12 @@ export type ChatsListPrefs = {
   lines: 1 | 2;
   /** Whether the sessions are grouped by the workspace they work in. */
   grouped: boolean;
+  /** Whether a pressed task opens in a tab of its own (V100-74, "Open tasks in their own
+   *  tabs"), where otherwise its session's tab is switched to it. */
+  tabbed: boolean;
 };
 
-export const DEFAULT_CHATS_LIST: ChatsListPrefs = { lines: 2, grouped: false };
+export const DEFAULT_CHATS_LIST: ChatsListPrefs = { lines: 2, grouped: false, tabbed: false };
 
 /** The preferences as a layout document holds them, and what had to be put right. */
 export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: string[] } {
@@ -44,12 +48,20 @@ export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: stri
     said.push(
       `"chats.grouped" ${JSON.stringify(from.grouped)} is not true or false, so it is false`,
     );
-  return { prefs: { lines, grouped }, said };
+  let tabbed = DEFAULT_CHATS_LIST.tabbed;
+  if (typeof from.tabbed === "boolean") tabbed = from.tabbed;
+  else if (from.tabbed !== undefined)
+    said.push(`"chats.tabbed" ${JSON.stringify(from.tabbed)} is not true or false, so it is false`);
+  return { prefs: { lines, grouped, tabbed }, said };
 }
 
 /** Whether `prefs` are the defaults, which the layout file leaves out. */
 export function isDefaultChatsList(prefs: ChatsListPrefs): boolean {
-  return prefs.lines === DEFAULT_CHATS_LIST.lines && prefs.grouped === DEFAULT_CHATS_LIST.grouped;
+  return (
+    prefs.lines === DEFAULT_CHATS_LIST.lines &&
+    prefs.grouped === DEFAULT_CHATS_LIST.grouped &&
+    prefs.tabbed === DEFAULT_CHATS_LIST.tabbed
+  );
 }
 
 /** What this launch changed them to, if anything. */
@@ -87,7 +99,7 @@ export function chatsListPrefs(): ChatsListPrefs {
 export function setChatsListPrefs(to: Partial<ChatsListPrefs>): void {
   const was = chatsListPrefs();
   const now = { ...was, ...to };
-  if (now.lines === was.lines && now.grouped === was.grouped) return;
+  if (now.lines === was.lines && now.grouped === was.grouped && now.tabbed === was.tabbed) return;
   changed = now;
   sayAboutThisMachine("chats", undefined);
   for (const listener of listeners) listener(now);

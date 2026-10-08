@@ -15,11 +15,15 @@ import {
   ChevronRight,
   Circle,
   Hand,
+  Minus,
+  PanelRight,
   Pause,
+  SquareArrowOutUpRight,
   SquareTerminal,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { backId, besideId, ownTabId } from "./actions";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect } from "./chatState";
 import { sinceSaid } from "./chatsList";
@@ -76,11 +80,26 @@ type Props = {
   dragging: () => boolean;
   /** Goes to a chat: the tab is switched to it, and its terminal takes the keyboard. */
   onShow: (session: number) => void;
+  /** Moves a task (#1489): to a tab of its own, beside its session, or back out of either.
+   *  Left out, a task's line offers none of them. */
+  onPlace?: (session: number, where: Place) => void;
   /** The menu's footer, for what later says it: the limits that bind (#1498) and what the
    *  tasks used (#1500). Nothing is drawn for a slot nobody fills. */
   limits?: ReactNode;
   totals?: ReactNode;
 };
+
+/** Where a task's line in a tab's menu offers to move it (#1489). */
+export type Place = "own" | "beside" | "back";
+
+/** The catalogue's row for moving task `session` to `where`: the one its line presses. */
+export function placeRowId(session: number, where: Place): string {
+  return where === "own"
+    ? ownTabId(session)
+    : where === "beside"
+      ? besideId(session)
+      : backId(session);
+}
 
 const ROW_FACTS = [
   "session",
@@ -88,6 +107,7 @@ const ROW_FACTS = [
   "persona",
   "workspace",
   "level",
+  "placed",
   "shell",
   "report",
   "outcome",
@@ -149,6 +169,7 @@ function sameChip(was: Props, now: Props): boolean {
     was.clock === now.clock &&
     was.dragging === now.dragging &&
     was.onShow === now.onShow &&
+    was.onPlace === now.onPlace &&
     was.limits === now.limits &&
     was.totals === now.totals &&
     sameRows(was.rows, now.rows) &&
@@ -207,6 +228,7 @@ function Chip({
   clock,
   dragging,
   onShow,
+  onPlace,
   limits,
   totals,
 }: Props) {
@@ -355,6 +377,16 @@ function Chip({
       quiet={quiet}
       reportOpen={reports.has(one.key)}
       onPick={pick}
+      onPlace={
+        onPlace === undefined
+          ? undefined
+          : (session, where) => {
+              // The task is gone to where it was sent, with the keyboard: the menu is done.
+              picked.current = true;
+              onPlace(session, where);
+              hide();
+            }
+      }
     />
   );
 
@@ -574,6 +606,7 @@ function TaskLine({
   quiet,
   reportOpen,
   onPick,
+  onPlace,
 }: {
   line: Line;
   clock: StateClock;
@@ -582,8 +615,13 @@ function TaskLine({
   reportOpen: boolean;
   /** Answers whether the menu is done with: it went to a chat. */
   onPick: (line: Line) => boolean;
+  /** Moves the line's task, where it is an open task and the menu was handed the way. */
+  onPlace?: (session: number, where: Place) => void;
 }) {
   const { row } = line;
+  // **Where a task is drawn, from its own line** (#1489, V100-38): an open task only. The
+  // session's own chat is its tab, and an ended task is nowhere.
+  const moves = onPlace !== undefined && row !== undefined && row.mode === "task" ? row : undefined;
   return (
     <>
       <Menu.Item
@@ -597,6 +635,18 @@ function TaskLine({
         textValue={line.name}
         onPointerMove={quiet ? keepsNoKeyboard : undefined}
         onPointerLeave={quiet ? keepsNoKeyboard : undefined}
+        // **The keyboard's way to move a task from its line** (#1489): Enter goes to it, and
+        // Enter with a modifier opens it elsewhere, as a link is opened in a new tab. ⌘ or
+        // Ctrl is a tab of its own; Alt is beside its session. Before Radix's own Enter.
+        aria-keyshortcuts={moves === undefined ? undefined : "Control+Enter Meta+Enter Alt+Enter"}
+        onKeyDown={(event: ReactKeyboardEvent) => {
+          if (moves === undefined || onPlace === undefined || event.key !== "Enter") return;
+          const where: Place | undefined =
+            event.metaKey || event.ctrlKey ? "own" : event.altKey ? "beside" : undefined;
+          if (where === undefined) return;
+          event.preventDefault();
+          if (!event.repeat) onPlace(moves.session, where);
+        }}
         onSelect={(event) => {
           // Not a pick of a chat: the menu stays, with the keyboard on this line.
           if (!onPick(line)) event.preventDefault();
@@ -623,7 +673,14 @@ function TaskLine({
             , asked by {line.askedBy}
           </span>
         )}
-        {line.elsewhere !== null && <span className="where"> in {line.elsewhere}</span>}{" "}
+        {line.elsewhere !== null && <span className="where"> in {line.elsewhere}</span>}
+        {/* A task with a pane of its own is still this tab's (V100-38), and says where it is:
+            picking it brings that forward. */}
+        {line.placed !== undefined && (
+          <span className="where placed" data-placed={line.placed}>
+            {line.placed === "tab" ? ", in its own tab" : ", beside it"}
+          </span>
+        )}{" "}
         {row !== undefined ? (
           <ChatShownState
             session={row.session}
@@ -638,6 +695,40 @@ function TaskLine({
         )}
         {line.qualifier !== undefined && <span className="where"> {line.qualifier}</span>}
         {row !== undefined && <Since clock={clock} session={row.session} />}
+        {moves !== undefined && onPlace !== undefined && (
+          /* **The pointer's way to move a task from its line** (#1489), drawn at the line's
+             end while the pointer is on it: to a tab of its own and beside its session, or
+             back for one that has a pane of its own. **Not in the accessibility tree**, as a
+             list row's fold is not: a button inside a menu's item is reached by no arrow, so
+             the keyboard's way is the line's own keys above, and the task's menu in the Chats
+             list. */
+          <span className="tasks-menu-places" aria-hidden="true">
+            {line.placed !== "tab" && (
+              <PlaceButton
+                says={`Move ${line.name} to its own tab`}
+                onPress={() => onPlace(moves.session, "own")}
+              >
+                <SquareArrowOutUpRight />
+              </PlaceButton>
+            )}
+            {line.placed !== "beside" && (
+              <PlaceButton
+                says={`Open ${line.name} beside its session`}
+                onPress={() => onPlace(moves.session, "beside")}
+              >
+                <PanelRight />
+              </PlaceButton>
+            )}
+            {line.placed !== undefined && (
+              <PlaceButton
+                says={`Send ${line.name} back into this tab`}
+                onPress={() => onPlace(moves.session, "back")}
+              >
+                <Minus />
+              </PlaceButton>
+            )}
+          </span>
+        )}
       </Menu.Item>
       {reportOpen && line.report !== undefined && (
         <div
@@ -651,6 +742,41 @@ function TaskLine({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * One of the buttons at the end of a task's line. Its press is its own: it never reaches the
+ * line, which would go to the task (Radix's item presses itself on a click and on a pointer
+ * coming up over it).
+ */
+function PlaceButton({
+  says,
+  onPress,
+  children,
+}: {
+  says: string;
+  onPress: () => void;
+  children: ReactNode;
+}) {
+  const own = (event: { stopPropagation: () => void }) => event.stopPropagation();
+  return (
+    <button
+      type="button"
+      className="tasks-menu-place"
+      tabIndex={-1}
+      title={says}
+      data-says={says}
+      onPointerDown={own}
+      onPointerUp={own}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        onPress();
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

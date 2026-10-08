@@ -37,6 +37,8 @@ import {
   noteOf,
   restartNoteNoState,
   titleOf,
+  ownTabId,
+  besideId,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
@@ -88,6 +90,9 @@ function doing(): Doing & { calls: string[] } {
     removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
     showTabTasks: note("showTabTasks"),
+    ownTab: note("ownTab"),
+    beside: note("beside"),
+    sendBack: note("sendBack"),
     pickVault: note("pickVault"),
     createVault: note("createVault"),
     removeVault: note("removeVault"),
@@ -2708,7 +2713,8 @@ describe("stopping a chat (#1448)", () => {
 
     const row = menuRows({ on: "listed", session: 2 }, offers);
     expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
-    expect(ids(row.above)).toEqual([]);
+    // Above the line, where a task is drawn (#1489): nothing there ends anything.
+    expect(ids(row.above)).toEqual([ownTabId(2), besideId(2)]);
 
     expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-2)).toEqual([
       stopId(2),

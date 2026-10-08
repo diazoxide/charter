@@ -166,6 +166,18 @@ pub struct Chat {
     /// is every record written before this field, and every tab that shows its own chat — not
     /// a format change, for [`Self::pinned`]'s reason.
     pub shows: Option<u32>,
+    /// The chat whose tab this chat has a pane in, by that chat's [`Self::number`], where it is
+    /// not its tab's own chat (#1489): a task the person opened beside the session that asked
+    /// for it, or any chat started in a split.
+    ///
+    /// **The window's state, kept for it**, as [`Self::shows`] is. Two things read it. A
+    /// launch puts a task back beside its session, where that session came back with a tab,
+    /// and in the Chats list otherwise; every other chat comes back as a tab of its own, as it
+    /// always has. And it says which chats are on screen with the chat in front: every pane of
+    /// the tab in front is looked at, not only its first. The core starts, ends and allows
+    /// nothing by it. `None` is every record written before this field, and every chat that is
+    /// its tab's own or has no pane — not a format change, for [`Self::pinned`]'s reason.
+    pub beside: Option<u32>,
     /// The workspace this chat's directory was renamed away from, where a rename left it with
     /// no conversation its harness can find (charter#367, D10).
     ///
@@ -1312,6 +1324,11 @@ struct ChatOnDisk {
     /// task writes the record it always wrote.
     #[serde(default, skip_serializing_if = "is_zero")]
     shows: u32,
+    /// The chat whose tab this chat has a pane in, by number — see [`Chat::beside`]. Absent
+    /// (zero) for a chat that is its tab's own or has no pane, so a project with no split
+    /// writes the record it always wrote.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    beside: u32,
     /// The workspace a rename moved this chat away from, or absent — see
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1467,6 +1484,7 @@ impl From<&Record> for OnDisk {
                     }),
                     tab_opened: chat.tab_opened,
                     shows: chat.shows.unwrap_or_default(),
+                    beside: chat.beside.unwrap_or_default(),
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
                     sandbox: if chat.unsandboxed {
                         SANDBOX_OFF.to_owned()
@@ -1539,6 +1557,7 @@ impl From<ChatOnDisk> for Chat {
             tab_opened: chat.tab_opened,
             // Zero is "its own chat", as it is "this record does not say" for `number`.
             shows: (chat.shows > 0).then_some(chat.shows),
+            beside: (chat.beside > 0).then_some(chat.beside),
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
             unsandboxed: chat.sandbox == SANDBOX_OFF,
@@ -3420,6 +3439,34 @@ pub(crate) mod tests {
         let back = read(plane.path()).chats;
         assert_eq!(back[0].shows, Some(9));
         assert_eq!(back[1].shows, None);
+    }
+
+    #[test]
+    fn the_tab_a_chat_has_a_pane_in_comes_back_and_a_chat_in_no_split_writes_nothing_of_it() {
+        // #1489: a task opened beside its session is put back beside it, and the core reads
+        // the same number for which chats are on screen with the one in front.
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![
+                Chat {
+                    number: Some(4),
+                    ..claude("4", None)
+                },
+                Chat {
+                    number: Some(9),
+                    beside: Some(4),
+                    ..claude("9", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches(r#""beside""#).count(), 1, "{text}");
+        let back = read(plane.path()).chats;
+        assert_eq!(back[0].beside, None);
+        assert_eq!(back[1].beside, Some(4));
     }
 
     #[test]

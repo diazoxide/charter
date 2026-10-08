@@ -9,6 +9,7 @@ import type { ChatStates } from "./chatState";
 import { shownOfRow } from "./chatsList";
 import type { ChatRow } from "./chatsTree";
 import type { Shown, ShownKind } from "./shownState";
+import type { Placed } from "./tabs";
 import { taskBucketOf, taskCounts, taskCountsSaid, type TaskCounts } from "./taskCounts";
 
 /** Each row's state, in the rows' order: what a chip and a menu are held on, so a chat that
@@ -79,6 +80,9 @@ export type Line = {
   elsewhere: string | null;
   /** Whether it is the chat the tab shows now. */
   current: boolean;
+  /** Where it is, for a task that has a pane of its own and is still this tab's (#1489): in a
+   *  tab of its own, or beside its session. A pick brings that forward. */
+  placed?: Placed;
   /** The open chat it is, whose state its line reads live. A press goes to it. */
   row?: ChatRow;
   /** How it ended, for a task that has: its line says this and reads nothing. */
@@ -158,6 +162,7 @@ export function menuOf(
       askedBy: askerOf(at),
       elsewhere: row.workspace === homeOf(at) ? null : row.workspace,
       current: row.session === current,
+      ...(row.placed === undefined ? {} : { placed: row.placed }),
       row,
     };
   };
