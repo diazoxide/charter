@@ -14,6 +14,8 @@ import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
 import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
 import type { ListedChat } from "./chatsTree";
+import { shownState, type Shown, type TaskFacts } from "./shownState";
+import { StateShown } from "./StateShown";
 
 /*
  * **The rows that draw a chat** (SC-3): split out of `PlaneView`, whose rendering they no longer
@@ -42,26 +44,76 @@ export const ChatStateMark = memo(function ChatStateMark({
   return <ChatMark state={state} />;
 });
 
-/** How many characters of a harness's id for a child agent its row shows: enough to tell
+/** Whether two shown states say the same thing. */
+function sameShown(one: Shown | undefined, other: Shown | undefined): boolean {
+  return one === other || (one?.kind === other?.kind && one?.word === other?.word);
+}
+
+/**
+ * **One chat's state as a row says it, a mark and a word, which reads that chat's state
+ * itself** (#1484, SC-3). The Chats list's row and the explorer's both draw this, from the same
+ * facts through the one function (`shownState`), so they say the same of a chat.
+ *
+ * Subscribed to its own chat and to the queue's answer about it, and redrawn only when what it
+ * shows changes: a move redraws the moved chat's state and no row. Held on plain values, so a
+ * row redrawn for its own reasons does not redraw it.
+ */
+export const ChatShownState = memo(function ChatShownState({
+  session,
+  shell,
+  report = null,
+  outcome = null,
+  asking = null,
+  harness,
+}: {
+  session: number;
+  /** A shell tab, which shows no state until something reports one. */
+  shell: boolean;
+  /** As a task, the report it owes (`TaskFacts`); nothing for a chat that is not one. */
+  report?: TaskFacts["report"] | null;
+  /** How it reported, where it has and the app knows. */
+  outcome?: string | null;
+  /** The chat it has a question open with, by name. */
+  asking?: string | null;
+  /** Its harness as the person calls it: named in what is not known of it. */
+  harness: string | null;
+}) {
+  const shown = useChatsSelect(
+    useChatsHere(),
+    (states) =>
+      shownState({
+        board: markOf(states, session, shell),
+        needsYou: states.needsYou.includes(session),
+        task: report === null ? null : { report, outcome, asking },
+        harness,
+      }),
+    sameShown,
+  );
+  return shown === undefined ? null : <StateShown shown={shown} />;
+});
+
+/** How many characters of a harness's id for a helper its row shows: enough to tell
  *  apart two ids that differ late (`thread-1`, `thread-10`). The whole id is its tooltip. */
 const AGENT_ID_SHOWN = 16;
 
-/** A child agent's id as its row shows it: whole when it fits, cut with an ellipsis when not. */
+/** A helper's id as its row shows it: whole when it fits, cut with an ellipsis when not. */
 function shownId(agent: string): string {
   return agent.length > AGENT_ID_SHOWN ? `${agent.slice(0, AGENT_ID_SHOWN)}…` : agent;
 }
 
-/** The id of chat `session`'s list of sub-agents, which the chat's row is described by. */
+/** The id of chat `session`'s list of helpers, which the chat's row is described by. The id
+ *  keeps its first spelling: it is never shown. */
 export function childAgentsId(session: number): string {
   return `sub-agents-of-${session}`;
 }
 
-/** The words a child agent's state can be, as `ChatMark` draws them. */
+/** The words a helper's state can be, as `ChatMark` draws them. */
 const CHILD_STATES: readonly string[] = ["running", "waiting", "done", "failed"];
 
 /**
- * **A chat's child agents, under its row** (FD-18, W8): each sub-agent or child its harness
- * spawned, by the harness's id for it, with what it is doing. Reads its own chat's children off
+ * **A chat's helpers, under its row** (FD-18, W8): each sub-agent or child its harness
+ * spawned, by the harness's id for it, with what it is doing. The word shown is **helper**
+ * (#1484): a sub-agent is the harness's word, and a row says the app's. Reads its own chat's children off
  * the project's store, as the state mark does (SC-3), and draws nothing for a chat with none.
  *
  * Not rows of the tree: a child is not something to bring forward or start in, so the arrows
@@ -86,12 +138,12 @@ export const ChildAgents = memo(function ChildAgents({
       id={childAgentsId(session)}
       className="child-agents"
       role="list"
-      aria-label={`Sub-agents of ${name}`}
+      aria-label={`Helpers of ${name}`}
     >
       {children.map((child) => (
         <li key={child.agent} className="child-agent">
           <span className="agent" title={child.agent}>
-            sub-agent {shownId(child.agent)}
+            helper {shownId(child.agent)}
           </span>
           <ChatMark
             state={CHILD_STATES.includes(child.state) ? (child.state as State) : "unknown"}
@@ -139,7 +191,14 @@ export const StartedElsewhere = memo(function StartedElsewhere({
               <PersonaMark persona={chat.persona} />
             )}
             <span className="session">{chat.name}</span>
-            <ChatStateMark session={chat.session} shell={chat.shell} />
+            <ChatShownState
+              session={chat.session}
+              shell={chat.shell}
+              report={chat.report}
+              outcome={chat.outcome}
+              asking={chat.asking}
+              harness={chat.harness}
+            />
             <span className="elsewhere" title={`Works in ${chat.workspace}`}>
               {chat.workspace}
             </span>

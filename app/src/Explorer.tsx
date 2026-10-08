@@ -49,7 +49,8 @@ import { Menued } from "./Menus";
 import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
 import { isShell } from "./chatState";
-import { ChatStateMark, ChildAgents, StartedElsewhere, childAgentsId } from "./ChatRows";
+import { ChatShownState, ChildAgents, StartedElsewhere, childAgentsId } from "./ChatRows";
+import { rowFactsOf } from "./shownState";
 import type { ListedChat } from "./chatsTree";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
@@ -905,7 +906,7 @@ function ChatList({
               data-wrapping-up={wrapping.has(chat.session) || undefined}
               title={wrapping.has(chat.session) ? WRAPPING_UP : undefined}
               // What it spawned, read as its description: an id that names no element, for a
-              // chat with no sub-agents, describes it with nothing.
+              // chat with no helpers, describes it with nothing.
               aria-describedby={childAgentsId(chat.session)}
               {...treeitem(chatRow(chat.session))}
               onClick={() => onShow(chat.session)}
@@ -921,18 +922,11 @@ function ChatList({
                 <SquareTerminal className="node-icon" />
               )}
               <span className="session">{chat.name}</span>
-              {/* Its own chat's state, read by the mark itself (SC-3). */}
-              <ChatStateMark session={chat.session} shell={isShell(chat)} />
+              {/* Its own chat's state, a mark and a word, read by the mark itself (SC-3): the
+                value the Chats list's row draws (#1484). A task that has reported says how,
+                and one that ended without a report says that. */}
+              <ChatShownState session={chat.session} shell={isShell(chat)} {...rowFactsOf(chat)} />
               <WrappingUp held={wrapping.has(chat.session)} />
-              {/* A task that has made its one report stays open, and says so, until you or
-                the chat that asked for it closes it. One that ended without reporting says
-                that instead: purlis told the chat that asked. */}
-              {chat.from?.task && chat.from.reported && (
-                <span className="harness reported">reported</span>
-              )}
-              {chat.from?.task && chat.from.unreported && (
-                <span className="harness reported">ended without a report</span>
-              )}
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
                 plane calls the harness. Showing the profile alone would hide which harness
@@ -952,7 +946,7 @@ function ChatList({
               reads `unknown` until its first prompt and never says it is waiting on an
               approval; without this it looks like purlis is broken. */}
           {chat.unreported && <p className="unreported">{chat.unreported}</p>}
-          {/* What it spawned, under it (FD-18): its sub-agents, each with its state. */}
+          {/* What it spawned, under it (FD-18): its helpers, each with its state. */}
           <ChildAgents session={chat.session} name={chat.name} />
           {/* The chats it started that went to another workspace (#1447), each naming it. */}
           <StartedElsewhere chats={started.get(chat.session)} name={chat.name} onShow={onShow} />

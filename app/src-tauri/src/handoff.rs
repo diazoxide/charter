@@ -3849,6 +3849,8 @@ mod tests {
                     tab: true,
                     reported: false,
                     unreported: false,
+                    outcome: None,
+                    asking: None,
                 }),
                 workspace: Some("alpha".to_owned()),
                 persona: None,
@@ -4665,6 +4667,8 @@ mod tests {
                 tab: true,
                 reported: false,
                 unreported: false,
+                outcome: None,
+                asking: None,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
@@ -5549,6 +5553,8 @@ mod tests {
                 tab: false,
                 reported: false,
                 unreported: false,
+                outcome: None,
+                asking: None,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.
@@ -10630,6 +10636,61 @@ mod tests {
                 _ => self.clone(),
             }
         }
+    }
+
+    /// Task `task` as the window's lists are sent it: its row in the sidebar's answer.
+    fn listed_from(held: &Held, task: u32) -> crate::HandedFromNote {
+        let sidebar = crate::sidebar_of(held).expect("the sidebar");
+        sidebar
+            .workspaces
+            .into_iter()
+            .flat_map(|workspace| workspace.chats)
+            .chain(sidebar.unfiled)
+            .find(|chat| chat.session == task)
+            .and_then(|chat| chat.from)
+            .expect("the task is listed, with where it came from")
+    }
+
+    #[test]
+    fn a_listed_task_says_how_it_reported_in_its_dispatch_records_word() {
+        for (said, word) in [
+            (purlis_core::handback::Outcome::Done, "done"),
+            (purlis_core::handback::Outcome::Failed, "failed"),
+            (purlis_core::handback::Outcome::Blocked, "blocked"),
+        ] {
+            let (_plane, _planes, id, held, _asking, task) = a_dispatched_task();
+            let working = listed_from(&held, task);
+            assert_eq!(
+                (working.reported, working.outcome, working.asking),
+                (false, None, None),
+                "a working task has no outcome, and asks nothing"
+            );
+
+            tasks_report(&held, &id, &Tickets::default(), task, said, None);
+
+            let reported = listed_from(&held, task);
+            assert!(reported.reported);
+            assert_eq!(reported.outcome.as_deref(), Some(word));
+        }
+    }
+
+    #[test]
+    fn a_listed_task_says_it_is_asking_while_its_question_is_open_and_not_after() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+
+        asks(&held, &id, task, question("Which queue?"));
+        assert_eq!(listed_from(&held, task).asking, Some(true));
+
+        asks(
+            &held,
+            &id,
+            asking,
+            What::Answer {
+                to: task,
+                text: "The slow one.".to_owned(),
+            },
+        );
+        assert_eq!(listed_from(&held, task).asking, None);
     }
 
     #[test]

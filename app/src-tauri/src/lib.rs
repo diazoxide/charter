@@ -620,6 +620,15 @@ pub struct HandedFromNote {
     /// Whether, as a task, it ended without a report, and purlis told the chat that asked
     /// that it failed.
     pub unreported: bool,
+    /// How it reported, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
+    /// `cancelled`, `stopped`): what its row says in place of what its program is doing
+    /// (#1484). None for a task that has not reported, and where no record says how.
+    #[specta(optional)]
+    pub outcome: Option<String>,
+    /// Whether, as a task, it has a question open with the chat that dispatched it, and is
+    /// paused until that chat answers (#1484): its row says whom it is asking.
+    #[specta(optional)]
+    pub asking: Option<bool>,
 }
 
 impl HandedFromNote {
@@ -635,8 +644,30 @@ impl HandedFromNote {
                 && from.report == purlis_core::reopen::Owed::Sent,
             unreported: from.mode == purlis_core::reopen::Mode::Task
                 && from.report == purlis_core::reopen::Owed::Failed,
+            // What the project's own records say of it, which a list of rows asks for
+            // ([`with_task_standing`]): not the chat's record, so not read here.
+            outcome: None,
+            asking: None,
         }
     }
+}
+
+/// `drawn` with how it stands as a task beyond its own record (#1484): how it reported, by its
+/// dispatch's record, and whether it has a question open with the chat that dispatched it, by
+/// what the app remembers of the messages between them. A chat that is not a task is as it was.
+///
+/// For the rows a window lists, so the Chats list and the explorer say the same of a task. The
+/// record is read only for a task that has reported.
+fn with_task_standing(held: &planes::Held, mut drawn: OpenChat) -> OpenChat {
+    let session = drawn.session;
+    if let Some(from) = drawn.from.as_mut().filter(|from| from.task) {
+        if from.reported {
+            from.outcome = dispatches::outcome_of(held, session).map(str::to_owned);
+        } else if !from.unreported {
+            from.asking = dispatched::asks_its_asker(held, session).then_some(true);
+        }
+    }
+    drawn
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -721,7 +752,12 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
         std::collections::HashMap::new();
     let mut unfiled = Vec::new();
-    for chat in held.chats().open_now().into_iter().map(OpenChat::from) {
+    for chat in held
+        .chats()
+        .open_now()
+        .into_iter()
+        .map(|open| with_task_standing(held, OpenChat::from(open)))
+    {
         match chat
             .cwd
             .as_deref()

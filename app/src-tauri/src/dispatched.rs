@@ -669,6 +669,12 @@ pub fn reported(
     held.tasks().changed();
 }
 
+/// Whether task `task` has a question open with the chat that dispatched it: asked, and not
+/// answered yet. What its row in the window says it is waiting on (#1484).
+pub fn asks_its_asker(held: &Held, task: u32) -> bool {
+    held.tasks().ledger().talk.asks(task).is_some()
+}
+
 /// Chat `chat` may now be told what was left for its next turn: typed purlis's one line, where
 /// it may be sent one. Never called under `Chats::deciding()`.
 pub fn told(held: &Held, chat: u32) {

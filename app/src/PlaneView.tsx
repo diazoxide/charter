@@ -2666,9 +2666,7 @@ export const PlaneView = memo(function PlaneView({
    *  session number. */
   const nameOf = useCallback(
     (session: number) => {
-      const held = tabs.order.find((id) =>
-        panesOf(tabs, id).some((pane) => pane.session === session),
-      );
+      const held = tabHolding(tabs, session);
       if (held !== undefined) return tabs.byId[held].name;
       const listed = [
         ...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []),
@@ -4271,12 +4269,12 @@ export const PlaneView = memo(function PlaneView({
    *  chat is: nothing on the plane records a chat, so the directory it works in is it. */
   const workspaceChats = useMemo(
     () =>
-      (sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.chats ?? []).map((chat) => {
-        // Named as its tab is — the name the operator gave it, or `steward 3` — rather than by
-        // the harness's own name, which is a number (charter-app#254).
-        const tab = tabs.order.find((id) => chatOf(tabs, id) === chat.session);
-        return tab === undefined ? chat : { ...chat, name: tabs.byId[tab].name };
-      }),
+      (sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.chats ?? []).map((chat) => ({
+        // Named as the Chats list names it (`shownName`, #1484), never by the harness's own
+        // name, which is a number (charter-app#254): a task with no tab too.
+        ...chat,
+        name: shownName(tabs, chat),
+      })),
     [ofWorkspace, sidebar, tabs],
   );
 
@@ -4287,17 +4285,13 @@ export const PlaneView = memo(function PlaneView({
    */
   const listedChats = useMemo(() => {
     if (sidebar === undefined) return [];
-    const one = (chat: OpenChat, workspace: string) => {
-      const tab = tabs.order.find((id) =>
-        panesOf(tabs, id).some((pane) => pane.session === chat.session),
-      );
-      return listedChat(
+    const one = (chat: OpenChat, workspace: string) =>
+      listedChat(
         chat,
         workspace,
-        tab !== undefined ? tabs.byId[tab].name : untabbedName(chat),
-        tab !== undefined,
+        shownName(tabs, chat),
+        tabHolding(tabs, chat.session) !== undefined,
       );
-    };
     // By number, which is the order they were started in: the list arrives workspace by
     // workspace, and a chat's children are read in the order it asked for them.
     return [
@@ -7057,6 +7051,21 @@ type StopAsking = StopAsked & { session: number; busy: boolean; trouble?: string
 function untabbedName(chat: OpenChat): string {
   const who = whoOf(chat.persona, chat.harness);
   return chat.label ?? (who ? `${who} ${chat.name}` : chat.name);
+}
+
+/** The tab that holds chat `session`, in any of its panes, where one does. */
+function tabHolding(tabs: Tabs, session: number): number | undefined {
+  return tabs.order.find((id) => panesOf(tabs, id).some((pane) => pane.session === session));
+}
+
+/**
+ * **What a chat is called in every list** (#1484): the name of the tab holding it, and for a
+ * chat with no tab, what its tab would say. The Chats list, the explorer and the needs-you
+ * list all read this, so a task is one name everywhere and never its number.
+ */
+function shownName(tabs: Tabs, chat: OpenChat): string {
+  const held = tabHolding(tabs, chat.session);
+  return held !== undefined ? tabs.byId[held].name : untabbedName(chat);
 }
 
 /**

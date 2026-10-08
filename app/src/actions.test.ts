@@ -2590,6 +2590,10 @@ function listed(session: number, parent: number | null = null, tab = true): List
     from: parent === null ? null : `chat ${parent}`,
     tab,
     branch: null,
+    report: null,
+    outcome: null,
+    asking: null,
+    harness: null,
   };
 }
 

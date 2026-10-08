@@ -15,6 +15,7 @@ import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { forgetThisLaunch } from "./regions";
+import type { Shown } from "./shownState";
 
 /**
  * **The Chats section, against the whole window** (#1447): every running chat of the project
@@ -28,13 +29,13 @@ import { forgetThisLaunch } from "./regions";
 
 const drawn = vi.hoisted(() => ({ marks: [] as (string | undefined)[] }));
 
-vi.mock("./NeedsYou", async (original) => {
-  const real = await original<typeof import("./NeedsYou")>();
+vi.mock("./StateShown", async (original) => {
+  const real = await original<typeof import("./StateShown")>();
   return {
     ...real,
-    ChatMark: (props: { state: State | undefined }) => {
-      drawn.marks.push(props.state);
-      return <real.ChatMark {...props} />;
+    StateShown: (props: { shown: Shown }) => {
+      drawn.marks.push(props.shown.word);
+      return <real.StateShown {...props} />;
     },
   };
 });
@@ -302,7 +303,9 @@ describe("the Chats section", () => {
     const first = row(tree, "steward 1");
     expect(first.querySelector('[title="steward"]')?.getAttribute("data-initials")).toBe("ST");
     expect(first.querySelector(".workspace")?.textContent).toBe("alpha");
-    expect(within(first).getByRole("img", { name: "unknown" })).toBeTruthy();
+    expect(
+      within(first).getByRole("img", { name: "running (no detail from claude)" }),
+    ).toBeTruthy();
     expect(row(tree, "devops 4").querySelector(".workspace")?.textContent).toBe("beta");
   });
   it("nests a chat that works in another workspace under the chat that asked, and names its workspace", async () => {
@@ -362,7 +365,7 @@ describe("the Chats section", () => {
 
     move(2, "running", 11, []);
     expect(within(row(tree, "steward 2")).queryByRole("img", { name: "needs you" })).toBeNull();
-    expect(within(row(tree, "steward 2")).getByRole("img", { name: "running" })).toBeTruthy();
+    expect(within(row(tree, "steward 2")).getByRole("img", { name: "working" })).toBeTruthy();
   });
 });
 
@@ -505,13 +508,13 @@ describe("a chat moving, with fifty chats listed", () => {
 
     // Chat 31 is a task chat in alpha with no tab: its row here, and its row where it works
     // in alpha's explorer. Forty-nine other rows draw nothing.
-    expect(drawn.marks).toEqual(["running", "running"]);
-    expect(within(row(tree, "steward 31")).getByRole("img", { name: "running" })).toBeTruthy();
+    expect(drawn.marks).toEqual(["working", "working"]);
+    expect(within(row(tree, "steward 31")).getByRole("img", { name: "working" })).toBeTruthy();
   });
 });
 
 describe("an anonymous helper", () => {
-  it("still shows as a sub-agent row under its chat in the explorer", async () => {
+  it("still shows as a helper row under its chat in the explorer", async () => {
     const { move } = core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
     render(<App />);
     const tree = await section();
@@ -519,8 +522,8 @@ describe("an anonymous helper", () => {
 
     move(1, "running", 10, [], [{ agent: "thread-7", state: "running" }]);
 
-    const helpers = await screen.findByRole("list", { name: "Sub-agents of steward 1" });
-    expect(within(helpers).getByText("sub-agent thread-7")).toBeTruthy();
+    const helpers = await screen.findByRole("list", { name: "Helpers of steward 1" });
+    expect(within(helpers).getByText("helper thread-7")).toBeTruthy();
   });
 });
 
@@ -851,5 +854,125 @@ describe("what the chat that asked is shown of a stop (#1448)", () => {
         { plane: PLANE, session: 2, below: true },
       ]),
     );
+  });
+});
+
+/** The explorer's row for the chat it calls `name`. */
+const explorerRow = async (name: string) => {
+  const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+  const found = within(explorer)
+    .getAllByRole("treeitem")
+    .find((one) => one.querySelector(".session")?.textContent === name);
+  if (found === undefined) throw new Error(`the explorer has no row named ${name}`);
+  return found;
+};
+
+/** What a row says its chat is doing: the word drawn on it, and its mark's shape. */
+const says = (on: HTMLElement) => ({
+  word: on.querySelector(".shown-state .word")?.textContent,
+  shape: on.querySelector(".shown-state .shape")?.getAttribute("data-shape"),
+});
+
+/** A task of chat 1 as its record stands: how it reported, or whom it is asking. */
+const taskOf = (more: Partial<Lineage>): Lineage => ({ ...by(1, "task"), ...more });
+
+describe("a chat's state, as a word and a shape (#1484)", () => {
+  it("tells a finished task from a chat waiting on the person by word and by shape, in both lists", async () => {
+    const { move } = core([
+      chat(1, "alpha"),
+      chat(2, "alpha", { label: "talk", from: taskOf({ reported: true, outcome: "done" }) }),
+      chat(3, "alpha", { label: "sweep", from: taskOf({ reported: true, outcome: "cancelled" }) }),
+      chat(4, "alpha", { label: "probe", from: taskOf({ reported: true, outcome: "failed" }) }),
+      chat(5, "alpha", { label: "lost", from: taskOf({ unreported: true }) }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(5));
+
+    // Every one of them has ended its turn: the board says the same of all five.
+    for (const session of [1, 2, 3, 4]) move(session, "waiting", 10 + session, [1]);
+    move(5, "failed", 20, [1]);
+
+    const expected = [
+      ["steward 1", { word: "needs you", shape: "hand" }],
+      ["talk", { word: "done", shape: "tick" }],
+      ["sweep", { word: "cancelled", shape: "dash" }],
+      ["probe", { word: "failed", shape: "cross" }],
+      ["lost", { word: "ended without a report", shape: "slash" }],
+    ] as const;
+    for (const [name, state] of expected) {
+      expect(says(row(tree, name)), `${name} in the Chats list`).toEqual(state);
+      expect(says(await explorerRow(name)), `${name} in the explorer`).toEqual(state);
+    }
+    // And the word is the mark's accessible name, so it is read once.
+    expect(within(row(tree, "talk")).getByRole("img", { name: "done" })).toBeTruthy();
+  });
+
+  it("names a task with no tab the same in the Chats list and the explorer, never by its number", async () => {
+    core([
+      chat(1, "alpha"),
+      chat(17, "alpha", { persona: "devops", label: "live check talk", from: by(1, "task") }),
+      chat(18, "alpha", { persona: "devops", from: by(1, "task") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 steward 1", "2 live check talk", "2 devops 18"]),
+    );
+    expect(tabNames()).toEqual(["steward 1"]);
+    expect(await explorerRow("live check talk")).toBeTruthy();
+    expect(await explorerRow("devops 18")).toBeTruthy();
+    const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+    const named = within(explorer)
+      .getAllByRole("treeitem")
+      .map((one) => one.querySelector(".session")?.textContent)
+      .filter((name) => name !== undefined && name !== null);
+    expect(named).not.toContain("17");
+    expect(named).not.toContain("18");
+  });
+
+  it("says a task is asking the chat that dispatched it, by that chat's name", async () => {
+    const { move } = core([
+      chat(1, "alpha"),
+      chat(2, "alpha", { label: "talk", from: taskOf({ asking: true }) }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(2));
+    move(2, "running", 10);
+
+    const asking = { word: "asking steward 1", shape: "question" };
+    expect(says(row(tree, "talk"))).toEqual(asking);
+    expect(says(await explorerRow("talk"))).toEqual(asking);
+  });
+
+  it("says what is not known of a chat whose harness sends nothing, and guesses nothing", async () => {
+    core([
+      chat(1, "alpha", {
+        harness: "opencode",
+        card: { name: "opencode", title: "opencode", label: "", lines: [], cannot_type: null },
+      }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(1));
+
+    const unheard = { word: "running (no detail from opencode)", shape: "broken-ring" };
+    expect(says(row(tree, "steward 1"))).toEqual(unheard);
+    expect(says(await explorerRow("steward 1"))).toEqual(unheard);
+  });
+
+  it("says working in both lists once the chat's harness is heard", async () => {
+    const { move } = core([chat(1, "alpha")]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(1));
+
+    move(1, "running", 10);
+
+    const working = { word: "working", shape: "ring" };
+    expect(says(row(tree, "steward 1"))).toEqual(working);
+    expect(says(await explorerRow("steward 1"))).toEqual(working);
   });
 });

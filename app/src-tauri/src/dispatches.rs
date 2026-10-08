@@ -136,6 +136,14 @@ pub(crate) fn branch_of(held: &Held, session: u32) -> Option<purlis_core::handba
     })
 }
 
+/// How task `session` reported, in its dispatch record's word, where its newest dispatch ended
+/// with a report: what its row in the window says (#1484). The app's record, which a restart
+/// of the app keeps.
+pub(crate) fn outcome_of(held: &Held, session: u32) -> Option<&'static str> {
+    let record = dispatchrecord::latest_for(held.root(), &chat_ref(held, session)?)?;
+    Some(record.report?.outcome.word())
+}
+
 /// What a chat's list of its tasks says of the branch task `session` was given, where it was
 /// given one: the branch, and how it stands (`purlis_core::dispatchplace::Standing::said`).
 pub(crate) fn branch_listed(held: &Held, session: u32) -> Option<(String, String)> {

@@ -537,13 +537,13 @@ impl Harness {
             Self::Codex => Some(
                 "Codex says nothing until your first prompt, and nothing at all until you \
                  trust purlis's hooks when Codex asks; it never says when it stops mid-turn \
-                 for your approval, and a sub-agent reads working until the chat ends.",
+                 for your approval, and a helper reads working until the chat ends.",
             ),
             Self::Opencode => Some(
                 "opencode says nothing until your first prompt, and nothing when it quits; once \
                  you answer its permission prompt, the chat reads waiting until the turn ends, \
-                 a session you open inside it with /new is not followed, and its sub-agents \
-                 are not shown under it.",
+                 a session you open inside it with /new is not followed, and its helpers are \
+                 not shown under it.",
             ),
         }
     }
@@ -614,7 +614,7 @@ mod tests {
         assert!(
             Harness::Codex
                 .unreported()
-                .is_some_and(|said| said.contains("sub-agent reads working until")),
+                .is_some_and(|said| said.contains("helper reads working until")),
             "{:?}",
             Harness::Codex.unreported()
         );
@@ -632,7 +632,7 @@ mod tests {
         assert!(
             Harness::Opencode
                 .unreported()
-                .is_some_and(|said| said.contains("sub-agents are not shown under it")),
+                .is_some_and(|said| said.contains("helpers are not shown under it")),
             "{:?}",
             Harness::Opencode.unreported()
         );
