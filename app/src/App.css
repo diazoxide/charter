@@ -2644,6 +2644,19 @@ h2.sidebar-title .node-icon {
   content: " · ";
 }
 
+/* What a working chat is doing, in one line (#1493): dim, never wrapped. In a row it stands
+   in the second line, which is already one line high and cuts what does not fit; anything else
+   that mounts it gives it a line of its own to be cut in. The one name in it keeps its own
+   direction (`bdi`), so a name written right to left does not turn the words round. */
+.chat-doing {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chat-doing .named {
+  unicode-bidi: isolate;
+}
+
 /* How a folded row's finished tasks ended: each state's mark and its count. */
 .chats-section .below-summary {
   display: inline-flex;

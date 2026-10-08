@@ -32,6 +32,7 @@ mod dispatchgrants;
 mod dispatchlimits;
 mod dispatchunattended;
 mod doctor;
+mod doing;
 mod extensions;
 mod filewatch;
 mod findfiles;
@@ -2168,6 +2169,19 @@ fn chat_states(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<M
         .collect())
 }
 
+/// What each working chat is doing, in a kind and at most one short name (#1493).
+///
+/// The window asks once, when it opens; after that it is told (`chat-doing`). Only chats the
+/// board has running are answered: a chat whose hooks the app has not heard has no line.
+#[tauri::command]
+#[specta::specta]
+fn chat_doings(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<doing::ChatDoing>, String> {
+    Ok(planes.held(&plane)?.hooks().doing_now())
+}
+
 /// Sends what a pane typed to the session's program. Anything but the terminal's own answer
 /// drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
 #[tauri::command]
@@ -2300,6 +2314,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<hooks::ByHand>()
         // What `chat-touching` carries (FM-6).
         .typ::<hooks::ChatTouching>()
+        // What `chat-doing` carries (#1493).
+        .typ::<doing::ChatDoing>()
         // What `chat-sandbox-blocked` carries (#1338).
         .typ::<hooks::ChatBlocked>()
         // What `smart-close` carries (ADR 0064).
@@ -2932,6 +2948,14 @@ pub fn run() {
                             hooks::TOUCHING,
                             &told,
                         );
+                    })
+                })
+                // What a working chat is doing, each time its one line changes: the window
+                // says it under the chat's name (#1493). In memory only.
+                .telling_doings({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: doing::ChatDoing| {
+                        windows::emit_for_plane(&window, &told.plane.clone(), doing::EVENT, &told);
                     })
                 })
                 // A sandbox block a chat's hook found: the window shows it as a Notice on the

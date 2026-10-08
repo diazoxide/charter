@@ -671,6 +671,7 @@ fn an_app_answering(
             answer(ask, reader, writer);
         }),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: answerer,
@@ -887,6 +888,7 @@ fn from_outside_the_chat_secret_exec_says_why_and_runs_nothing() {
     let _reading = listener.hear(Hearing {
         secret_exec: Box::new(|_, _, _| panic!("nothing outside the chat is run")),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| crate::hookwire::Answer::No { why: String::new() }),

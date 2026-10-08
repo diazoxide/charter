@@ -14,6 +14,7 @@ import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from 
 import { BESIDE_ID, stopId, type Catalogued, type Offer } from "./actions";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
+import { ChatRowUnlessDoing, chatDoingId } from "./chatDoing";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
@@ -678,9 +679,9 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
  *
  * **Two lines** (#1499, V100-50). The first is the persona's mark, the name and the state; the
  * state's word is never cut short, and the name is, with the whole of it as its tooltip and in
- * what a screen reader is told. The second, dimmer, is what the chat is doing (`ChatRowActivity`,
- * which #1493 fills), where it works, how long it has been in its state, its own branch and
- * the closed chat it came from. **On one line the second is not drawn at all**, and what of it
+ * what a screen reader is told. The second, dimmer, is what the chat is doing while it works
+ * (`ChatRowActivity`, #1493), and otherwise where it works, how long it has been in its
+ * state, its own branch and the closed chat it came from. **On one line the second is not drawn at all**, and what of it
  * does not change is the row's tooltip: a row is never two lines squeezed into one.
  */
 const Row = memo(function Row({
@@ -818,6 +819,14 @@ const Row = memo(function Row({
                 ? `${needsName ?? "A chat"} below it needs you`
                 : undefined
             }
+            // What it is doing is its description on demand (#1493), never announced as it
+            // changes: the line is out of the tree where it stands, and named here. A chat
+            // below that needs you is said first, so it is the one description then.
+            aria-describedby={
+              lines === 2 && !(needs !== null && needs !== session)
+                ? chatDoingId(session)
+                : undefined
+            }
             data-tab={tab}
             data-lines={lines}
             title={lines === 1 && second.length > 0 ? second.join(" · ") : undefined}
@@ -873,18 +882,23 @@ const Row = memo(function Row({
             </span>
             {lines === 2 && (
               <span className="line two">
+                {/* What it is doing, while it works (#1493): in the place of the rest of
+                    the line, which comes back when its turn ends. Both read their own
+                    chat, so the swap draws this line's contents and not the row. */}
                 <ChatRowActivity session={session} />
-                {elsewhere && <span className="workspace">{workspace}</span>}
-                <StateSince clock={clock} session={session} />
-                {ownBranch !== null && (
-                  <span
-                    className="own-branch"
-                    title="A branch of its own, which nothing merges for it"
-                  >
-                    {ownBranch}
-                  </span>
-                )}
-                {cameFrom !== null && <span className="from">{cameFrom}</span>}
+                <ChatRowUnlessDoing session={session}>
+                  {elsewhere && <span className="workspace">{workspace}</span>}
+                  <StateSince clock={clock} session={session} />
+                  {ownBranch !== null && (
+                    <span
+                      className="own-branch"
+                      title="A branch of its own, which nothing merges for it"
+                    >
+                      {ownBranch}
+                    </span>
+                  )}
+                  {cameFrom !== null && <span className="from">{cameFrom}</span>}
+                </ChatRowUnlessDoing>
               </span>
             )}
           </button>

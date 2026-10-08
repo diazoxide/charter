@@ -298,6 +298,63 @@ describe("the Chats list in a narrow sidebar", () => {
     check("a row moved", JSON.stringify(after) === JSON.stringify(before), { before, after });
   });
 
+  it("moves no row when a working chat's line comes, changes and goes (#1493)", async () => {
+    check("there was no left region to draw in", await draw(TWO_LINES, "16rem"), "16rem");
+    const before = await tops();
+    check("no row was drawn", before.length >= 8, before);
+
+    // The fixture has rows that say what their chat is doing. Each second line is one line
+    // high whatever it holds.
+    const lines = await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      const two = [...(section?.querySelectorAll(".chat .line.two") ?? [])];
+      return {
+        doing: section?.querySelectorAll(".chat .line.two .chat-doing").length ?? 0,
+        heights: two.map((line) => Math.round(line.getBoundingClientRect().height)),
+      };
+    });
+    check("no row said what its chat is doing", lines.doing >= 1, lines);
+    check(
+      "a second line is not one line high",
+      new Set(lines.heights).size === 1 && lines.heights[0] > 0,
+      lines,
+    );
+
+    // A line far longer than the sidebar, on every row: cut short, on one line.
+    await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
+        const doing = document.createElement("span");
+        doing.className = "chat-doing";
+        doing.textContent = `editing ${"a_file_name_that_is_long".repeat(2)}.tsx`;
+        line.replaceChildren(doing);
+      }
+    });
+    const during = await tops();
+    check("a row moved when its line came", JSON.stringify(during) === JSON.stringify(before), {
+      before,
+      during,
+    });
+    const seen = await measured();
+    check("a line made the list scroll sideways", seen !== null && seen.overflow <= 1, seen);
+
+    // The turn ends: the line goes, and what was there comes back.
+    await browser.execute(() => {
+      const section = document.querySelector('[data-raised="chats-list.e2e"]');
+      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
+        const workspace = document.createElement("span");
+        workspace.className = "workspace";
+        workspace.textContent = "smart-ide";
+        line.replaceChildren(workspace);
+      }
+    });
+    const after = await tops();
+    check("a row moved when its line went", JSON.stringify(after) === JSON.stringify(before), {
+      before,
+      after,
+    });
+  });
+
   it("draws the state beside the name where there is room for both", async () => {
     check("there was no left region to draw in", await draw(TWO_LINES, "420px"), 420);
     const seen = whole(await measured(), 10);

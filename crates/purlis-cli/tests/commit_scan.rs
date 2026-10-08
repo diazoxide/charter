@@ -48,6 +48,7 @@ impl Chat {
                 purlis_core::secrets::brokered::not_answered(writer)
             }),
             blocked: Box::new(|_| {}),
+            doing: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| Ok(())),
             answer: Box::new(|_, _| panic!("no ask")),

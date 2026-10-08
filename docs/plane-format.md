@@ -5089,6 +5089,43 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   the file a chat's file tool touched, for the tree's live marker (FM-6). **It is never stored**:
   never spooled, never in the event log (which keeps only the arguments' digest), never in
   `app/reopen.json` or any other file here (D-86a).
+  Another, `doing`, says what a chat's tool hook saw the chat begin, for the one line a
+  working chat's row says under its name (#1493): `{"chat": <n>, "doing": {"is": "began",
+  "kind": "<kind>", "name": "<name>"}}` before a tool runs and `{"is": "ended"}` after one
+  comes back. **It is never stored either**: sent once, never spooled, never in the event
+  log, a dispatch record or the Activity view. The app keeps the latest per chat in memory,
+  replaces it at the chat's next one, and drops it when the chat's turn ends, when the chat
+  asks the person something, and when the chat closes. The window is told at most four times
+  a second per chat (`chat-doing`).
+
+  | `kind` | What the row says | `name` |
+  |---|---|---|
+  | `thinking` | thinking (a turn is running and no tool is in flight) | none |
+  | `command` | running a command; running `<program>` | the command's first word |
+  | `editing` | editing a file; editing `<file>` | the file's base name |
+  | `reading` | reading a file; reading `<file>`; reading 3 files (several in a row) | the file's base name |
+  | `searching` | searching | none |
+  | `fetching` | fetching a page | none |
+  | `helper` | waiting on a helper | none |
+  | `dispatching` | dispatching a task | none |
+  | `asking` | asking a question | none |
+  | `reporting` | writing its report | none |
+  | `tool` | using a tool (a tool purlis has no word for) | none |
+
+  The list is fixed, the sentences are the window's own, and a line whose `kind` is not in it
+  is dropped whole. `name` is the only word of the chat's that can reach the row, and the app
+  believes none of it: a file's base name is kept only if it is letters, digits and `._-+@~#`,
+  at most 48 characters; a program's only if the command's first word is ASCII letters,
+  digits, `._+-` and `/`, its base name at most 24. Anything else (a space, a control or
+  formatting character, markup, a variable set in front of a command) is dropped and the kind
+  is said without a name. Never a command's arguments, a URL, a search's pattern, a folder, a
+  tool's own name, or anything a tool came back with. `dispatching`, `asking` and `reporting`
+  are also said by the app itself when the chat's `purlis dispatch`, question or report
+  reaches it. A chat the app has not heard begin a turn has no line (a harness that sends no
+  events, Codex with its hooks untrusted), and a helper's tools do not change its chat's line.
+  Which tools are heard is which tools a hook is armed on (`hookreg`): Claude Code's `Bash`,
+  `Read`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and purlis's dispatch tools;
+  every opencode tool; Codex's shell alone (`purlis_core::doing`).
 - **Status:** **internal** — bound by the app while a plane is open and gone with it. Nothing
   reads it but the connection it serves. **purlis only.**
 - **Tier:** Clone state, transient — it lives as long as the app has the plane open.

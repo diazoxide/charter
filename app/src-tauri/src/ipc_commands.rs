@@ -94,6 +94,7 @@ macro_rules! app_commands {
                 unwatch_session,
                 running_sessions,
                 chat_states,
+                chat_doings,
                 opened_chats,
                 chats_that_would_not_start,
                 retry_chat_that_did_not_start,

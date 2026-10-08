@@ -291,6 +291,7 @@ import {
 } from "./chatsTree";
 import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
 import { HarnessChip } from "./HarnessCard";
+import { DoingsHere, useDoings, type DoingsOf } from "./chatDoing";
 import {
   ChatsHere,
   isShell,
@@ -468,6 +469,7 @@ export const PlaneView = memo(function PlaneView({
    *  It keeps listening while the project is behind another one, which is what lets its tab
    *  say that something over there needs you. */
   const chats = useChats(plane);
+  const doings = useDoings(plane);
   // **Only the shares this view draws from, each redrawing it only when it changes** (SC-3).
   // A chat's own state is not one of them: its tab, its explorer row and its pane read that
   // themselves, so a chat that only went from running to waiting redraws those and not this.
@@ -5478,6 +5480,7 @@ export const PlaneView = memo(function PlaneView({
   return (
     <Lent
       chats={chats}
+      doings={doings}
       references={referenceChats}
       personas={personaMarks}
       askPersona={openAskPersona}
@@ -6657,12 +6660,15 @@ export const PlaneView = memo(function PlaneView({
  */
 function Lent({
   chats,
+  doings,
   references,
   personas,
   askPersona,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
+  /** What each working chat is doing, for the one line under its name (#1493). */
+  doings: DoingsOf;
   references: ChatsForReferences;
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
@@ -6671,13 +6677,15 @@ function Lent({
 }) {
   return (
     <ChatsHere.Provider value={chats}>
-      <ReferenceChats.Provider value={references}>
-        <PersonaMarks.Provider value={personas.marks}>
-          <ReloadPersonaMarks.Provider value={personas.reload}>
-            <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
-          </ReloadPersonaMarks.Provider>
-        </PersonaMarks.Provider>
-      </ReferenceChats.Provider>
+      <DoingsHere.Provider value={doings}>
+        <ReferenceChats.Provider value={references}>
+          <PersonaMarks.Provider value={personas.marks}>
+            <ReloadPersonaMarks.Provider value={personas.reload}>
+              <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
+            </ReloadPersonaMarks.Provider>
+          </PersonaMarks.Provider>
+        </ReferenceChats.Provider>
+      </DoingsHere.Provider>
     </ChatsHere.Provider>
   );
 }

@@ -1314,6 +1314,8 @@ enum Line {
     Touching(Touching),
     /// After every other kind: it requires `sandbox_blocked`, which none of them carries.
     Blocked(SandboxBlocked),
+    /// After every other kind: it requires `doing`, which none of them carries.
+    Doing(Doing),
     /// After every other kind: it requires `secret_exec`, which none of them carries. Held on
     /// its connection for as long as the command runs (#1407).
     SecretExec(crate::secrets::brokered::Ask),
@@ -1342,6 +1344,7 @@ impl Line {
             Self::Permission(asked) => asked.chat,
             Self::Touching(touching) => touching.chat,
             Self::Blocked(blocked) => blocked.chat,
+            Self::Doing(doing) => doing.chat,
             Self::SecretExec(ask) => ask.chat,
         }
     }
@@ -1518,6 +1521,31 @@ pub struct Touching {
 /// What hears a [`Touching`]. Nothing is answered: the hook does not wait for it.
 pub type Touched = Box<dyn Fn(Touching) + Send + Sync + 'static>;
 
+/// What a chat's tool hook says the chat is doing (#1493): what the window says in one line
+/// under a working chat's name.
+///
+/// **Never recorded, anywhere**, as a [`Touching`] is not: a line of its own, sent once and
+/// never spooled ([`tell_doing`]), which the host keeps in memory until the chat's next one or
+/// the end of its turn. It holds a kind from a fixed list and at most one short name
+/// ([`crate::doing`]): never a command's arguments, a path, or anything a tool came back with.
+///
+/// The name is the chat's own word, so the host believes none of it until
+/// [`crate::doing::Said::neutral`] has passed it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Doing {
+    /// The app's number for the chat whose tool it was, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// What the hook said.
+    pub doing: crate::doing::Said,
+    /// The sub-agent whose tool it was ([`Report::agent`]'s rule). The chat's line is of the
+    /// chat's own work, so the host says nothing of a helper's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
+/// What hears a [`Doing`]. Nothing is answered: the hook does not wait for it.
+pub type DoingHeard = Box<dyn Fn(Doing) + Send + Sync + 'static>;
+
 /// A chat's sandbox blocked an operation (#1338): what the window shows as a notice on the
 /// chat's tab, and what `purlis doctor` counts.
 ///
@@ -1589,6 +1617,8 @@ pub struct Hearing {
     pub touching: Touched,
     /// Every [`SandboxBlocked`].
     pub blocked: Blocked,
+    /// Every [`Doing`].
+    pub doing: DoingHeard,
     /// Every brokered `secret exec`: held on its connection while the command runs.
     pub secret_exec: SecretExecuting,
 }
@@ -1635,6 +1665,20 @@ pub fn touch(
     touching: &Touching,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, touching)
+}
+
+/// Tells the app at `path` what its chat's tool hook says the chat is doing (#1493). Answers
+/// whether it was written.
+///
+/// [`tell`]'s shape and deadline, and **never spooled**, as a touch is not: a line the app did
+/// not take is one nobody was shown, and the next tool says the next thing.
+#[cfg(unix)]
+pub fn tell_doing(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    doing: &Doing,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, doing)
 }
 
 /// Tells the app at `path` its chat's sandbox blocked an operation (#1338). Answers whether it
@@ -2090,6 +2134,7 @@ impl Listener {
             tool: Box::new(|_| Ok(())),
             permission: Box::new(|_| None),
             blocked: Box::new(|_| {}),
+            doing: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             secret_exec: Box::new(|_, _, writer| {
                 crate::secrets::brokered::not_answered(writer);
@@ -2466,6 +2511,7 @@ fn serve(
             }
             Line::Touching(touching) => (hearing.touching)(touching),
             Line::Blocked(blocked) => (hearing.blocked)(blocked),
+            Line::Doing(doing) => (hearing.doing)(doing),
             Line::SecretExec(ask) => {
                 // Held for as long as the command runs, so the turn is let go first, as an
                 // ask's is. The asker's stdin may be quiet for as long as the child is, so no
@@ -2559,7 +2605,11 @@ fn refuse_with(line: &Line, why: &str, writer: &mut std::os::unix::net::UnixStre
             why: why.to_owned(),
             code: 1,
         }),
-        Line::ByHand(_) | Line::Saved(_) | Line::Touching(_) | Line::Blocked(_) => return,
+        Line::ByHand(_)
+        | Line::Saved(_)
+        | Line::Touching(_)
+        | Line::Blocked(_)
+        | Line::Doing(_) => return,
     };
     if let Ok(mut said) = said {
         said.push(b'\n');
@@ -5136,6 +5186,7 @@ mod tests {
         let _reading = listener.hear(Hearing {
             secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             blocked: Box::new(|_| {}),
+            doing: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
@@ -5195,6 +5246,7 @@ mod tests {
             refused: Box::new(|_| panic!("no commit was refused")),
             tool: Box::new(|_| panic!("no tool call was sent")),
             blocked: Box::new(|_| {}),
+            doing: Box::new(|_| {}),
             touching: Box::new(move |touching| tx.lock().unwrap().send(touching).unwrap()),
             permission: Box::new(|_| None),
         });
@@ -5209,6 +5261,90 @@ mod tests {
                 .is_err(),
             "the line without the chat's token was dropped"
         );
+    }
+
+    #[test]
+    fn what_a_chat_is_doing_is_its_own_line_handed_to_the_app_with_its_chats_token() {
+        use crate::doing::{Kind, Said};
+        let doing = Doing {
+            chat: 4,
+            doing: Said::Began {
+                kind: Kind::Command,
+                name: Some("cargo".to_owned()),
+            },
+            agent: None,
+        };
+        let line = serde_json::to_string(&doing).unwrap();
+        assert_eq!(
+            line,
+            r#"{"chat":4,"doing":{"is":"began","kind":"command","name":"cargo"}}"#
+        );
+        assert!(
+            matches!(serde_json::from_str::<Line>(&line), Ok(Line::Doing(_))),
+            "{line}"
+        );
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+            r#"{"chat":4,"tool_hook":"pretooluse"}"#.to_owned(),
+            r#"{"chat":4,"touching":"/w/a"}"#.to_owned(),
+            // A kind this build does not know is no line at all.
+            r#"{"chat":4,"doing":{"is":"began","kind":"notice"}}"#.to_owned(),
+            r#"{"chat":4,"doing":"needs you"}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(serde_json::from_str::<Line>(&other), Ok(Line::Doing(_))),
+                "no other line reads as this one: {other}"
+            );
+        }
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(|_| panic!("no commit was refused")),
+            tool: Box::new(|_| panic!("no tool call was sent")),
+            touching: Box::new(|_| panic!("no file was touched")),
+            blocked: Box::new(|_| panic!("nothing was blocked")),
+            doing: Box::new(move |doing| tx.lock().unwrap().send(doing).unwrap()),
+            permission: Box::new(|_| None),
+        });
+        tell_doing(&path, None, &doing).expect("the line is written");
+        tell_doing(&path, Some(&token), &doing).expect("the line is written");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(doing.clone())
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the line without the chat's token was dropped"
+        );
+    }
+
+    #[test]
+    fn what_a_chat_is_doing_is_lost_when_no_app_takes_it_and_never_spooled() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let doing = Doing {
+            chat: 4,
+            doing: crate::doing::Said::Began {
+                kind: crate::doing::Kind::Editing,
+                name: Some("CANARY-doing.rs".to_owned()),
+            },
+            agent: None,
+        };
+        assert!(tell_doing(&path, Some(&ChatToken::from("t")), &doing).is_err());
+        let written = walkdir_all(dir.path());
+        assert!(written.is_empty(), "nothing was written: {written:?}");
     }
 
     #[test]
@@ -5259,6 +5395,7 @@ mod tests {
             saved: Box::new(|_| panic!("no record was saved")),
             refused: Box::new(|_| panic!("no commit was refused")),
             tool: Box::new(|_| panic!("no tool call was sent")),
+            doing: Box::new(|_| {}),
             touching: Box::new(|_| panic!("no file was touched")),
             blocked: Box::new(move |blocked| tx.lock().unwrap().send(blocked).unwrap()),
             permission: Box::new(|_| None),
@@ -5337,6 +5474,7 @@ mod tests {
         let _reading = listener.hear(Hearing {
             secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             blocked: Box::new(|_| {}),
+            doing: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),

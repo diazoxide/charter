@@ -12,6 +12,7 @@ import {
   type ChatStates,
   type State,
 } from "./chatState";
+import { DoingsHere, fixedDoings } from "./chatDoing";
 import { chatsTree, type ListedChat } from "./chatsTree";
 import { forgetThisLaunch, SLOTS } from "./regions";
 import { MOST_TEXT } from "./textSize";
@@ -166,16 +167,32 @@ function states(): ChatStates {
   );
 }
 
+/**
+ * What two of the working chats are doing (#1493): a session's short line, and a task's with a
+ * name longer than a sidebar. Chat 6 has a line held of it and nothing heard of its state: it
+ * wears none.
+ */
+const DOINGS = fixedDoings({
+  bySession: {
+    1: { kind: "command", name: "cargo", count: 0 },
+    9: { kind: "editing", name: `${LONG}.tsx`, count: 0 },
+    6: { kind: "thinking", name: null, count: 0 },
+  },
+  heardAt: {},
+});
+
 function markup(): string {
   const { container } = render(
     <ChatsHere.Provider value={fixedChats(states())}>
-      <ChatsSection
-        rows={chatsTree(CHATS)}
-        front={1}
-        onOpen={() => {}}
-        stopping={new Set([6])}
-        finished={FINISHED}
-      />
+      <DoingsHere.Provider value={DOINGS}>
+        <ChatsSection
+          rows={chatsTree(CHATS)}
+          front={1}
+          onOpen={() => {}}
+          stopping={new Set([6])}
+          finished={FINISHED}
+        />
+      </DoingsHere.Provider>
     </ChatsHere.Provider>,
   );
   const section = container.querySelector(".chats-section");
@@ -201,6 +218,8 @@ describe("the Chats list the e2e measures", () => {
       "below-summary",
       "finished-task",
       'class="line two"',
+      "running <bdi",
+      `${LONG}.tsx`,
     ])
       expect(html, drawn).toContain(drawn);
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.two-lines.html");
@@ -211,6 +230,8 @@ describe("the Chats list the e2e measures", () => {
     const html = markup();
 
     expect(html).not.toContain('class="line two"');
+    // On one line there is no second line for it to stand in.
+    expect(html).not.toContain("chat-doing");
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.one-line.html");
   });
 
