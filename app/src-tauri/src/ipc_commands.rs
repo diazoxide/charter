@@ -69,6 +69,7 @@ macro_rules! app_commands {
                 sandboxing::list_grantable_folder,
                 sandboxing::unlist_grantable_folder,
                 vaultroute::vault_refusals,
+                dispatchunattended::chat_attended,
                 vaultroute::allow_refused_vault,
                 vaultroute::keep_vault_blocked,
                 dispatchlimits::dispatch_limits,
@@ -308,6 +309,8 @@ macro_rules! app_commands {
                 windowprefs::write_layout,
                 windowprefs::adopt_layout,
                 windowprefs::set_dismissed,
+                windowprefs::see_on_this_machine,
+                windowprefs::seen_on_this_machine,
                 windowprefs::use_built_in_theme,
             ],
             vault_values: [
