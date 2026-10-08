@@ -1652,6 +1652,18 @@ fn attendance(
     mark.attendance()
 }
 
+/// **Whether a person is at chat `session`** (#1501): taken the way a dispatch from it is
+/// ([`attendance`]), so the window says nothing on the tab of a chat that runs with its prompts
+/// off. A chat this app does not have open is nobody's.
+pub fn attended(held: &Held, session: u32) -> bool {
+    let Some(asking) = held.chats().recorded_chat(session) else {
+        return false;
+    };
+    let profiles = purlis_core::profiles::derive(held.root());
+    attendance(held, session, &asking, &profiles)
+        == purlis_core::dispatchunattended::Attendance::Attended
+}
+
 /// Dispatches what `wanted` describes, a task or a handoff, or says why not in a sentence the
 /// asking chat reads (#1436, #1444).
 ///
@@ -3840,6 +3852,24 @@ mod tests {
         // The next handoff across the pair starts without asking.
         let (again, _) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
         assert!(matches!(again, Answer::Opened { .. }), "{again:?}");
+    }
+
+    /// #1501: the window asks this before it explains the chip on a chat's tab, and a chat
+    /// nobody is at is told nothing.
+    #[test]
+    fn a_person_is_at_a_chat_until_its_harness_says_its_prompts_are_off() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        assert!(attended(&held, asking));
+        held.unattended().heard(asking, true);
+        assert!(!attended(&held, asking));
+        assert!(
+            !attended(&held, asking + 1000),
+            "a chat not open is nobody's"
+        );
     }
 
     #[test]

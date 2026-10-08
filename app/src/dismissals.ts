@@ -55,8 +55,26 @@ export const KEPT: ReadonlySet<string> = new Set([
  *  hold; settling keeps the real number to what is standing now. */
 export const MOST_PER_PROJECT = 200;
 
+/**
+ * **What the person has seen once on this machine** (#1501): a Notice shown once per machine,
+ * whatever the project, kept under this key beside the projects' paths
+ * (`purlis_core::windowprefs::ON_THIS_MACHINE`). A project is keyed by its absolute path, so
+ * no project is ever this key.
+ *
+ * Its causes never change and nothing settles them: a Notice seen once stays seen. Only the
+ * window writes them, on the person's press (`set_dismissed_on_this_machine`), and no chat
+ * reaches a window's commands, so no chat sets or clears what the person has seen.
+ */
+export const ON_THIS_MACHINE = "on this machine";
+
+/** The causes kept {@link ON_THIS_MACHINE}: each a Notice shown once per machine. */
+export const ONCE_ON_THIS_MACHINE: ReadonlySet<string> = new Set(["chip-explained"]);
+
 const kept = (cause: unknown): cause is string =>
   typeof cause === "string" && cause.length <= 1024 && KEPT.has(familyOf(cause));
+
+const keptOnce = (cause: unknown): cause is string =>
+  typeof cause === "string" && ONCE_ON_THIS_MACHINE.has(cause);
 
 /** Every project's kept causes, as the layout file holds them. */
 export type Dismissed = Record<string, string[]>;
@@ -78,7 +96,10 @@ export function loadDismissed(raw: unknown): { dismissed: Dismissed; said: strin
       said.push(`"dismissed" for ${project} is not a list, so it was left out`);
       continue;
     }
-    const usable = [...new Set(causes.filter(kept))].slice(0, MOST_PER_PROJECT);
+    const usable = [...new Set(causes.filter(project === ON_THIS_MACHINE ? keptOnce : kept))].slice(
+      0,
+      MOST_PER_PROJECT,
+    );
     if (usable.length < causes.length) said.push(`some of ${project}'s dismissals were left out`);
     if (usable.length > 0) dismissed[project] = usable;
   }
@@ -119,9 +140,11 @@ function change(project: string, next: ReadonlySet<string>) {
   for (const listener of listeners) listener();
   const causes = [...next];
   writing = writing.then(async () => {
-    const kept = await commands
-      .setDismissed(project, causes)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const kept = await (
+      project === ON_THIS_MACHINE
+        ? commands.setDismissedOnThisMachine(causes)
+        : commands.setDismissed(project, causes)
+    ).catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     sayAboutThisMachine(
       "dismissed",
       kept.status === "error"
@@ -173,6 +196,24 @@ export function showAgain(project: string, cause: string): void {
   const next = new Set(was);
   next.delete(cause);
   change(project, next);
+}
+
+/**
+ * Keeps `cause` as seen {@link ON_THIS_MACHINE}: its Notice is not shown again in any project,
+ * at any later launch. Only a cause of {@link ONCE_ON_THIS_MACHINE} is kept.
+ */
+export function seeOnThisMachine(cause: string): void {
+  const was = dismissedIn(ON_THIS_MACHINE);
+  if (!keptOnce(cause) || was.has(cause)) return;
+  change(ON_THIS_MACHINE, new Set(was).add(cause));
+}
+
+/** Whether `cause` was seen on this machine, for a component that redraws when it is, with
+ *  the way to say it now is. */
+export function useSeenOnThisMachine(cause: string): { seen: boolean; see: () => void } {
+  const seen = useSyncExternalStore(onDismissals, () => dismissedIn(ON_THIS_MACHINE).has(cause));
+  const see = useCallback(() => seeOnThisMachine(cause), [cause]);
+  return { seen, see };
 }
 
 /** Calls `listener` whenever a dismissal is kept or let go. Answers the way to stop. */

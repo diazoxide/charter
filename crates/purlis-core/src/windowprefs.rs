@@ -301,6 +301,12 @@ fn write_document(config_root: &Path, document: &serde_json::Value) -> io::Resul
 /// The layout's field for the Notices dismissed until their cause changes (NO-2, V91j).
 pub const DISMISSED: &str = "dismissed";
 
+/// **The key of what the person has seen once on this machine** (#1501), in [`DISMISSED`]
+/// beside the projects' paths: a Notice shown once per machine, whatever the project, is kept
+/// here. Never a project's key, since a project is keyed by its absolute path, and never pushed
+/// out by the projects' dismissals ([`DISMISSED_MOST_BYTES`]): dropping it would show it again.
+pub const ON_THIS_MACHINE: &str = "on this machine";
+
 /// The lock a read-modify-write of the layout file holds, beside it.
 const LAYOUT_LOCK: &str = "layout.json.lock";
 
@@ -380,9 +386,11 @@ fn within_bound(
     }
     let store = crate::machine::read(config_root).store;
     let opened = |one: &str| store.recent(Path::new(one)).map_or(0, |entry| entry.opened);
+    // What was seen once on this machine is a handful of words, and dropping it would show it
+    // again: it is never one of the others pushed out.
     let mut others: Vec<String> = dismissed
         .keys()
-        .filter(|one| *one != project)
+        .filter(|one| *one != project && *one != ON_THIS_MACHINE)
         .cloned()
         .collect();
     others.sort_by_key(|one| std::cmp::Reverse(opened(one)));
@@ -759,6 +767,40 @@ mod tests {
         set_dismissed(home.path(), "/p5", &many).unwrap();
         assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() <= MAX_BYTES);
         assert!(read_layout(home.path()).trouble.is_none());
+    }
+
+    #[test]
+    fn what_was_seen_once_on_this_machine_outlasts_every_project_s_dismissals() {
+        // A Notice shown once per machine (#1501) is kept under no project, and no project's
+        // dismissals push it out of the file: dropping it would show it a second time.
+        let home = home();
+        // Every project was opened on this machine; what was seen once was never "opened".
+        crate::machine::update(home.path(), |store| {
+            for (at, project) in (0u64..).zip(["/p0", "/p1", "/p2", "/p3"]) {
+                store.remember(Path::new(project), 100 + at);
+            }
+        })
+        .unwrap();
+        set_dismissed(home.path(), ON_THIS_MACHINE, &["chip-explained".to_owned()]).unwrap();
+        let many = |n: &str| -> Vec<String> {
+            (0..400)
+                .map(|i| format!("pin-dormant:{n}-{i:0>40}"))
+                .collect()
+        };
+        for project in ["/p0", "/p1", "/p2", "/p3"] {
+            set_dismissed(home.path(), project, &many(project)).unwrap();
+        }
+
+        let kept = dismissed_in(home.path());
+        assert_eq!(
+            kept[ON_THIS_MACHINE],
+            serde_json::json!(["chip-explained"]),
+            "{kept}"
+        );
+        assert!(
+            Path::new(ON_THIS_MACHINE).is_relative(),
+            "never a project's path"
+        );
     }
 
     #[test]

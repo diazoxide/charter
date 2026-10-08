@@ -259,6 +259,7 @@ import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { PaneCrumbs } from "./PaneCrumbs";
+import { ChipExplained, type ChipToExplain } from "./ChipExplained";
 import {
   asksInAModal,
   inPlace,
@@ -5388,6 +5389,22 @@ export const PlaneView = memo(function PlaneView({
    *  what the tab says it has. The chip's own answer (`tabTasks.hasTasks`). */
   const tabHasTasks = (id: number) =>
     hasTasks(chatsByTab.get(id) ?? NO_ROWS, endedByTab.get(id) ?? NO_ENDED);
+  /** **The tab in front, if its session has tasks to explain the chip by** (#1501): what the
+   *  session's pane draws the first dispatch's Notice from (`ChipExplained`). Not a task's tab,
+   *  since the session is what dispatched. */
+  const frontTabId = frontTab?.id;
+  const frontOwn = frontTabId === undefined ? undefined : chatOf(tabs, frontTabId);
+  const frontRows = frontTabId === undefined ? undefined : chatsByTab.get(frontTabId);
+  const frontEnded = frontTabId === undefined ? undefined : endedByTab.get(frontTabId);
+  const frontIsTask = frontOwn !== undefined && chatsByNumber.get(frontOwn)?.from?.task === true;
+  const chipToExplain = useMemo((): ChipToExplain | undefined => {
+    if (frontTabId === undefined || frontOwn === undefined || frontIsTask) return undefined;
+    const tasks =
+      (frontRows ?? NO_ROWS).filter((row) => row.level > 1).length + (frontEnded?.length ?? 0);
+    return tasks === 0
+      ? undefined
+      : { session: frontOwn, tasks, onShow: () => showTabTasks(frontTabId) };
+  }, [frontEnded, frontIsTask, frontOwn, frontRows, frontTabId, showTabTasks]);
   /** Goes to a chat from a tab's chip or its menu (#1487): the tab is switched to it, and its
    *  terminal takes the keyboard whether or not the tab was already on it. */
   //
@@ -7105,6 +7122,7 @@ export const PlaneView = memo(function PlaneView({
                     placed={frontPlaced}
                     away={frontAway}
                     finished={frontFinished}
+                    explaining={chipToExplain}
                     others={frontOthers}
                     closeOf={closeOfPane}
                     onBack={backInPane}
@@ -8848,6 +8866,7 @@ function LayoutPanes({
   placed,
   away,
   finished,
+  explaining,
   others,
   closeOf,
   onBack,
@@ -8889,6 +8908,8 @@ function LayoutPanes({
   /** The breadcrumb of each pane that shows its own chat and still has a path to say (#1489):
    *  a task in a pane of its own, and the session it is beside. */
   placed: Readonly<Record<number, Crumbs>>;
+  /** The session of the tab whose chip the first dispatch explains, on its own pane (#1501). */
+  explaining?: ChipToExplain;
   /** The panes that show a task they cannot draw, by pane, and why (`TaskAway`). */
   away: Readonly<Record<number, Away>>;
   /** The finished row of each task a pane was left on when it ended, by pane (#1485). */
@@ -9121,7 +9142,16 @@ function LayoutPanes({
         harness={glances[content.session]}
         onOpenCard={(glance) => onOpenView(harnessCardView(glance.name), glance.label)}
         workItem={workItems[content.session]}
-        notices={noticesOf(content.session)}
+        notices={
+          <>
+            {noticesOf(content.session)}
+            {/* The first dispatch on this machine explains the chip, on the session's own
+                pane (#1501). */}
+            {path === undefined && (
+              <ChipExplained plane={plane} session={content.session} chip={explaining} />
+            )}
+          </>
+        }
         others={hidden}
         doing={doing}
       >
@@ -9163,6 +9193,7 @@ function LayoutPanes({
               placed={placed}
               away={away}
               finished={finished}
+              explaining={explaining}
               others={others}
               closeOf={closeOf}
               onBack={onBack}

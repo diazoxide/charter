@@ -115,6 +115,22 @@ pub async fn set_dismissed(
     .map_err(|err| err.to_string())
 }
 
+/// Keeps what the person has seen once on this machine (#1501): `causes` replaces the list kept
+/// under no project (`windowprefs::ON_THIS_MACHINE`), and nothing else. Each is a Notice shown
+/// once per machine, whatever the project. Only a window asks it, on the person's press, and
+/// no chat reaches a window's commands: no chat sets or clears what the person has seen.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_dismissed_on_this_machine(causes: Vec<String>) -> Result<(), String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        windowprefs::set_dismissed(&root, windowprefs::ON_THIS_MACHINE, &causes)
+    })
+    .await
+    .map_err(|err| format!("keeping what you have seen did not finish: {err}"))?
+    .map_err(|err| err.to_string())
+}
+
 /// The config home, or the reason charter keeps no layout on this machine.
 fn config_root() -> Result<std::path::PathBuf, String> {
     purlis_core::machine::config_root().ok_or_else(|| {

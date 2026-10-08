@@ -408,6 +408,13 @@ export const commands = {
 	/**  The vaults chat `session` was refused and the person has not answered, oldest first. */
 	vaultRefusals: (plane: PlaneId, session: number) => typedError<VaultRefused[], string>(__TAURI_INVOKE("vault_refusals", { plane, session })),
 	/**
+	 *  **Whether a person is at chat `session`** (#1501): not where its harness ever reported its
+	 *  prompts off or it was started with them off, and not for a chat this app does not have
+	 *  open. What the window asks before it explains anything on that chat's tab: a chat nobody is
+	 *  at is told nothing, as it is told of no dispatch. It only reads.
+	 */
+	chatAttended: (plane: PlaneId, session: number) => typedError<boolean, string>(__TAURI_INVOKE("chat_attended", { plane, session })),
+	/**
 	 *  **Allow** on a refused vault's Notice: lets the chat's persona use `vault` in this project
 	 *  on this machine, audited, and tells the chat to run its command again, now or when its turn
 	 *  ends, or leaves that to the person ([`tell`]). No restart.
@@ -2001,6 +2008,13 @@ export const commands = {
 	 *  dismissing in different projects both keep theirs. An empty list takes the project out.
 	 */
 	setDismissed: (plane: PlaneId, causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed", { plane, causes })),
+	/**
+	 *  Keeps what the person has seen once on this machine (#1501): `causes` replaces the list kept
+	 *  under no project (`windowprefs::ON_THIS_MACHINE`), and nothing else. Each is a Notice shown
+	 *  once per machine, whatever the project. Only a window asks it, on the person's press, and
+	 *  no chat reaches a window's commands: no chat sets or clears what the person has seen.
+	 */
+	setDismissedOnThisMachine: (causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed_on_this_machine", { causes })),
 	/**
 	 *  **Use built-in** (NO-6): moves the operator's theme file aside to `theme.aside.json`, never
 	 *  over another file, so what is in force without it is drawn from here on. Answers where the
