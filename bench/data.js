@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791494497863,
+  "lastUpdate": 1791497737429,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3654,6 +3654,48 @@ window.BENCHMARK_DATA = {
             "value": 101.494464,
             "unit": "ms",
             "extra": "median of 5 runs: 101.089, 101.415, 101.494, 101.739, 101.771 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a48646b07353bfdaad39b5b14e2f34ee826b0596",
+          "message": "A dev build carries line tables, not full debug info\n\nA cargo test links over two hundred test binaries, each with the full debug\ninfo of every crate it links. That is most of what linking them costs and most\nof what a target directory weighs. Line tables keep file and line in a panic's\nbacktrace; a debugger session asks for variables with\nCARGO_PROFILE_DEV_DEBUG=full.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T01:36:58+04:00",
+          "tree_id": "5875d3a78768b8787bf6962c75bef02947617e6b",
+          "url": "https://github.com/purlis/purlis/commit/a48646b07353bfdaad39b5b14e2f34ee826b0596"
+        },
+        "date": 1791497735781,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.2750995,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.265, 0.267, 0.275, 0.276, 0.278 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.506196000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.458, 16.483, 16.506, 16.507, 16.601 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.68803150000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.488, 101.384, 101.688, 102.006, 102.565 ms"
           }
         ]
       }
