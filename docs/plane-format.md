@@ -3436,6 +3436,10 @@ handed over is quoted as data, under a sentence that says which chat's words fol
 - **Read by:** `charter/mcpseen.py:247` (`approved`) → `charter/persona.py:779`
   (`mcp_render_entry`) and `mcp_withheld` (`:832`).
 - **Git:** gitignored (under `/.charter/`).
+- **Sandbox:** **a sandboxed chat never writes it** (ADR 0067 §5, the integrity class, #1458),
+  under either name of the state folder and where `$PURLIS_HOME` puts it. A chat may read it.
+  A write that fails is never said to be recorded: `approve-mcp` exits 1 and says nothing was
+  approved, and inside a sandboxed chat that it is the person's to give.
 - **Encoding details:** `{"<persona>": ["<64-hex sha256>", …]}`, values sorted
   (`charter/mcpseen.py:262`, digest at `charter/mcpseen.py:236`). The fingerprint is a SHA-256 of the **consent line** the
   operator was shown. (This file sits on the boundary with the secrets area; included here

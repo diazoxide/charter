@@ -43,6 +43,22 @@ pub const FROM_A_CHAT: &str = "approving a persona's MCP servers hands a value f
      inside a chat; nothing was recorded. Ask the operator to run `purlis persona approve-mcp` \
      in a terminal";
 
+/// What the command says when the approval could not be written, and nothing was recorded for
+/// `persona` (#1458, D-1458-4). Inside a sandboxed chat that is the sandbox holding the record,
+/// which is the person's to write: the refusal says so, as [`FROM_A_CHAT`] does, rather than
+/// blaming the disk.
+fn not_recorded(persona: &str, err: &std::io::Error, sandboxed: bool) -> String {
+    if sandboxed {
+        format!("this chat's sandbox holds the approvals for {persona}: {FROM_A_CHAT}")
+    } else {
+        format!(
+            "purlis could not record the approval for {persona} ({err}), so nothing was \
+             approved and its servers stay withheld; nothing else changed. Check that the \
+             project's state folder can be written, then run it again"
+        )
+    }
+}
+
 /// `purlis persona approve-mcp`, and its exit code: ask about, and record, each credentialed
 /// server whose consent line the operator has read.
 pub fn approve(root: &Path, options: &Options, mut ask: Option<Ask>, say: Sink) -> u8 {
@@ -120,8 +136,15 @@ pub fn approve(root: &Path, options: &Options, mut ask: Option<Ask>, say: Sink) 
             }
             keep.push(fp);
         }
-        if !options.dry_run {
-            mcp::approve(root, &state, n, &keep);
+        if !options.dry_run
+            && let Err(err) = mcp::approve(root, &state, n, &keep)
+        {
+            say(Say::Fail(not_recorded(
+                &mcp::label(&[n]),
+                &err,
+                crate::sandbox::writes_are_sandboxed(),
+            )));
+            return 1;
         }
     }
     if !any {
@@ -246,6 +269,37 @@ mod tests {
         }
         assert!(approved(&plane).is_empty());
         assert!(!mcp::approvals_path(&plane.state()).exists());
+    }
+
+    #[test]
+    fn an_approval_that_cannot_be_written_is_refused_and_never_said_to_be_recorded() {
+        // #1458, D-1458-4: a sandboxed chat is denied the record, so a write that fails is where
+        // a chat that got past the refusal above ends up. Here the record's name is a folder.
+        let plane = Plane::daily_with_ops();
+        std::fs::create_dir_all(mcp::approvals_path(&plane.state())).expect("in the way");
+        let yes = Options {
+            yes: true,
+            persona: Some("ops"),
+            ..Options::default()
+        };
+        let (rc, heard) = run(&plane, &yes, None);
+        assert_eq!(rc, 1);
+        assert!(
+            heard.err.contains("could not record the approval for ops"),
+            "{}",
+            heard.err
+        );
+        assert!(!heard.err.contains("Recorded"), "{}", heard.err);
+    }
+
+    #[test]
+    fn inside_a_sandboxed_chat_the_refusal_names_the_sandbox_and_whose_approval_it_is() {
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let said = not_recorded("ops", &err, true);
+        assert!(said.contains("sandbox holds the approvals"), "{said}");
+        assert!(said.contains("is a person's to give"), "{said}");
+        assert!(said.contains("purlis persona approve-mcp"), "{said}");
+        assert!(!not_recorded("ops", &err, false).contains("sandbox"));
     }
 
     #[test]

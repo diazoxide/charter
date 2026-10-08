@@ -297,15 +297,37 @@ fn a_chat_never_writes_charters_integrity_state() {
             plane
                 .path()
                 .join(".purlis/harness-declarations-approved.json"),
+            plane.path().join(".purlis/mcp-approved.json"),
             plane.path().join(".charter/app"),
             plane.path().join(".charter/harness-profiles-launched.json"),
             plane
                 .path()
                 .join(".charter/harness-declarations-approved.json"),
+            plane.path().join(".charter/mcp-approved.json"),
             // Neither folder is there yet, so neither is the chat's to make (D-RN2a-7).
             plane.path().join(".purlis"),
             plane.path().join(".charter"),
         ]
+    );
+}
+
+/// #1458: the persona MCP approvals are read where `$PURLIS_HOME` puts the state folder, so
+/// they are held there too.
+#[test]
+fn the_persona_mcp_approvals_are_held_where_purlis_home_puts_them() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[("PURLIS_HOME", "/srv/purlis-state")]),
+        home: Some(std::path::PathBuf::from("/home/op")),
+        os: Os::Linux,
+    };
+    let denied = Denied::of(plane.path(), &machine);
+    assert!(
+        paths(&denied, Class::Integrity, Access::Write).contains(&std::path::PathBuf::from(
+            "/srv/purlis-state/mcp-approved.json"
+        )),
+        "{:?}",
+        denied.paths
     );
 }
 
@@ -518,6 +540,7 @@ fn every_harness_denies_a_chat_writing_the_persons_harness_approvals_or_the_decl
             [
                 crate::profiletrust::RECORD,
                 crate::harness_declaration::APPROVED,
+                crate::personaverbs::mcp::APPROVED_FILE,
             ]
             .map(|record| plane.path().join(state).join(record))
         })

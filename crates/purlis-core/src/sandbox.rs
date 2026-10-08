@@ -1043,9 +1043,12 @@ impl Denied {
             // The person's approvals of a profile's command and of a project's harness
             // declaration (#1458): what lets purlis start that program, written by the app when
             // the person approves in the window and by nothing a chat runs. Read, never written.
+            // And the person's approvals of a persona's credentialed MCP servers, written by
+            // `purlis persona approve-mcp` in the person's terminal, never a chat's.
             for record in [
                 crate::profiletrust::RECORD,
                 crate::harness_declaration::APPROVED,
+                crate::personaverbs::mcp::APPROVED_FILE,
             ] {
                 deny(
                     Class::Integrity,
@@ -1053,6 +1056,17 @@ impl Denied {
                     Access::Write,
                 );
             }
+        }
+        // The MCP approvals are read where `$PURLIS_HOME` puts the state folder, when it does.
+        if !crate::names::STATE_DIR
+            .spellings()
+            .any(|state| root.join(state) == ctx.state)
+        {
+            deny(
+                Class::Integrity,
+                crate::personaverbs::mcp::approvals_path(&ctx.state),
+                Access::Write,
+            );
         }
         // …and a state folder the project does not have as a folder is not the chat's to make
         // (D-RN2a-7): which folder holds charter's state is decided by which are there, so making

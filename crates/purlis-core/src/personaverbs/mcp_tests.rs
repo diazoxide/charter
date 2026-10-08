@@ -118,11 +118,11 @@ fn an_approval_is_recorded_per_persona_replacing_that_personas_set_and_no_other(
     let state = plane.state();
     assert_eq!(approvals_path(&state), state.join("mcp-approved.json"));
     assert!(approved(&state, "ops").is_empty());
-    approve(plane.root(), &state, "dev", &["abc".to_string()]);
+    approve(plane.root(), &state, "dev", &["abc".to_string()]).expect("recorded");
     let fps: Vec<String> = [OPS_APPROVED[1], "", OPS_APPROVED[0], OPS_APPROVED[1]]
         .map(String::from)
         .to_vec();
-    approve(plane.root(), &state, "ops", &fps);
+    approve(plane.root(), &state, "ops", &fps).expect("recorded");
     assert_eq!(
         plane.read(".charter/mcp-approved.json"),
         format!(
@@ -144,7 +144,7 @@ fn an_approval_is_recorded_per_persona_replacing_that_personas_set_and_no_other(
         OPS_APPROVED.map(String::from).into_iter().collect()
     );
     assert_eq!(approved(&state, "dev"), ["abc".to_string()].into());
-    approve(plane.root(), &state, "ops", &[]);
+    approve(plane.root(), &state, "ops", &[]).expect("recorded");
     assert!(approved(&state, "ops").is_empty());
     assert_eq!(approved(&state, "dev"), ["abc".to_string()].into());
 }
@@ -177,12 +177,12 @@ fn a_credentialed_server_is_withheld_until_its_own_line_is_approved() {
             ("gsc".to_string(), GSC_LINE.to_string())
         ]
     );
-    approve(plane.root(), &state, "ops", &[sha256(GSC_LINE)]);
+    approve(plane.root(), &state, "ops", &[sha256(GSC_LINE)]).expect("recorded");
     assert_eq!(
         withheld(plane.root(), &state, "ops"),
         [("grafana".to_string(), GRAFANA_LINE.to_string())]
     );
-    approve(plane.root(), &state, "ops", &OPS_APPROVED.map(String::from));
+    approve(plane.root(), &state, "ops", &OPS_APPROVED.map(String::from)).expect("recorded");
     assert!(withheld(plane.root(), &state, "ops").is_empty());
 }
 

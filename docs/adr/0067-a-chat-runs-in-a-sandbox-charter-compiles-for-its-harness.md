@@ -328,7 +328,11 @@ every spelling of the state folder, denied for writing and readable. Class 5 als
 program outside any sandbox. Each is denied in what every harness is compiled, wherever the
 chat stands, the project root included. Only the app writes the records, when the person
 approves in the window, so nothing a chat needs is lost; a declaration is written by a person.
-So "approved" means a person approved it, which is what the approval dialog promises.
+So "approved" means a person approved it, which is what the approval dialog promises. Class 2
+holds the person's approvals of a persona's credentialed MCP servers the same way,
+`mcp-approved.json`, also where `$PURLIS_HOME` puts the state folder. Its writer, `purlis
+persona approve-mcp`, is the person's: it refuses inside a chat, and a write the sandbox holds
+is told as that refusal, never as "recorded".
 
 *Amended 2026-10-03 (rulings V87d and V87f):*
 
