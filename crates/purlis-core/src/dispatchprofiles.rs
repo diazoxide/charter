@@ -12,8 +12,10 @@
 //! With no list for a persona, every profile the project offers on this machine may be
 //! chosen, as before this key existed. A list takes profiles away from that and adds none: a
 //! name in it is still only looked up among the profiles the project offers, still needs its
-//! approval on this machine, and is still refused where its command switches the harness's
-//! permission prompts off ([`crate::dispatchunattended::bypass_refusal`]). So a list a pull
+//! approval on this machine, and is still refused where it asks nobody: its command switches
+//! the harness's permission prompts off, or nobody marked it as asking
+//! ([`crate::dispatchunattended::bypass_refusal`]). There is no exception for a session the
+//! person started that way (ADR 0090 item 16, as amended by #1522). So a list a pull
 //! brought in can never let a chat start on something it could not start on without it, and
 //! needs nobody's acknowledgement.
 //!

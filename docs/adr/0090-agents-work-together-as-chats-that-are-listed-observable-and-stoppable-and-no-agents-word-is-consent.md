@@ -933,6 +933,18 @@ needs-you list says "`<persona>` wanted `<persona>` while you were away", with *
 `docs/plane-format.md` and `crates/purlis-core/docs/handoff.md`. A chat a dispatch started is
 held to it, and to the rule that a dispatched chat never runs with its harness's prompts off,
 each time it is started again: at a relaunch, a restart, and a Reopen of its finished task.
+
+**Amended (#1522), to the stricter rule:** V100-60 said a profile that skips permission checks
+is never used for a task *unless the person started the session that way*. There is no such
+exception. A profile that asks nobody never runs a task, a handoff or a persona chat the person
+asks for from a tab, whoever named it, the person's own session included; the code never built
+the exception, and the operator's standing rule is that it never will. And "asks nobody" is no
+longer read from a list of flags: a chat one chat starts for another starts only on a profile
+known to ask, a built-in whose harness asks by its own default (Claude Code, Codex) or a
+profile of the local file the person marked `asks = true`. Anything unmarked is taken not to
+ask, so a way of switching the prompts off that purlis cannot read (a settings file, an
+environment variable, a wrapper script) refuses by the missing mark. The flags purlis knows
+still refuse a profile marked so.
 The loop rule holds under every grant, "any persona" included. A project may set one list for
 every persona that has none of its own, nor one up its `extends:` chain: `"*"` under
 `[dispatch.profiles]` (#1522), so a persona a chat copies or makes is held to a list rather
