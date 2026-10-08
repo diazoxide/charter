@@ -147,18 +147,43 @@ export function useFinishedTasks(
  * leaves the list of chats one command before its finished row arrives, so the rows below it
  * would move up and then down again within a moment. `rows` is handed on as it is, but for
  * that moment: while a task that was listed is gone from it and the finished rows are not
- * `settled` for it yet, the list as it last stood is drawn. Nothing else is held: a chat that
+ * `settled` for it yet, that task's row is kept where it stood. Only its row: a chat that
  * arrives, a rename and a chat that is not a task going are drawn at once.
  */
 export function useRowsUntilRead<Row extends { session: number; mode: string | null }>(
   rows: readonly Row[],
   settled: boolean,
 ): readonly Row[] {
-  const [shown, setShown] = useState(rows);
-  if (shown === rows) return rows;
+  // The list as it stood before the task left, kept for as long as a row of it is held.
+  const [before, setBefore] = useState(rows);
+  const drawn = useMemo(() => rowsUntilRead(rows, before, settled), [rows, before, settled]);
+  if (drawn === rows && before !== rows) setBefore(rows);
+  return drawn;
+}
+
+/**
+ * `rows`, with each task row of `before` that is gone from them put back after the row it
+ * followed there, while the finished rows are not `settled`. `rows` itself, the same array,
+ * where nothing is kept.
+ */
+export function rowsUntilRead<Row extends { session: number; mode: string | null }>(
+  rows: readonly Row[],
+  before: readonly Row[],
+  settled: boolean,
+): readonly Row[] {
+  if (settled || before === rows) return rows;
   const listed = new Set(rows.map((row) => row.session));
-  const waits = !settled && shown.some((row) => row.mode === "task" && !listed.has(row.session));
-  if (waits) return shown;
-  setShown(rows);
-  return rows;
+  const kept = before.filter((row) => row.mode === "task" && !listed.has(row.session));
+  if (kept.length === 0) return rows;
+  const drawn = [...rows];
+  const there = new Set(listed);
+  for (const row of kept) {
+    // After the nearest row above it in `before` that is drawn, or first where none is.
+    let above = before.indexOf(row) - 1;
+    while (above >= 0 && !there.has(before[above].session)) above -= 1;
+    const at = above < 0 ? 0 : drawn.findIndex((one) => one.session === before[above].session) + 1;
+    drawn.splice(at, 0, row);
+    there.add(row.session);
+  }
+  return drawn;
 }
