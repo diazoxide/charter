@@ -5122,6 +5122,18 @@ mod tests {
             r#"{"dispatch_standing":{"chat":4}}"#,
             r#"{"dispatch_never":[{"asking":"steward","target":"devops"}]}"#,
             r#"{"dispatch_any":["steward"]}"#,
+            // #1504: Settings' table. Accept, Not on my machine, and a grant set aside given
+            // back or removed, by each window command's name; and the keys it keeps.
+            r#"{"accept_project_dispatch":{"chat":4,"asking":"steward","target":"*"}}"#,
+            r#"{"chat":4,"accept_project_dispatch":{"asking":"steward","target":"devops"},"token":"t"}"#,
+            r#"{"decline_project_dispatch":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"give_back_dispatch":{"chat":4,"name":"devops"}}"#,
+            r#"{"chat":4,"give_back_dispatch":{"name":"devops"},"token":"t"}"#,
+            r#"{"remove_dormant_dispatch":{"chat":4,"asking":"steward","target":"devops","any":false}}"#,
+            r#"{"dispatch_dormant":[{"asking":"steward","target":"*","any":true,"was":"steward"}]}"#,
+            r#"{"dispatch_known":[{"name":"devops","hash":"","away":false}]}"#,
+            r#"{"dispatch_accepted_aside":[{"said":"steward -> devops","was":"devops"}]}"#,
+            r#"{"dispatch_declined":["steward -> devops"]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {

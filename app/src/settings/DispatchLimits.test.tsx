@@ -506,7 +506,7 @@ describe("Settings › Project › Dispatch", () => {
     ).toBeInTheDocument();
   });
 
-  it("lists the dispatch grants, each with Revoke", async () => {
+  it("draws the table of dispatch grants, each with its action", async () => {
     core(page());
     const grants = {
       grants: [
@@ -520,6 +520,7 @@ describe("Settings › Project › Dispatch", () => {
           chat: null,
           locked: null,
           waiting: false,
+          declined: false,
         },
       ],
       all_locked: null,
@@ -531,13 +532,11 @@ describe("Settings › Project › Dispatch", () => {
     mockIPC((cmd) => (cmd === "dispatch_grants" ? grants : undefined));
     render(<Setting id={`${DISPATCH}.grants`} />);
 
-    const list = await screen.findByRole("list", { name: "Dispatch grants" });
-    expect(within(list).getByRole("listitem")).toHaveTextContent(
-      "steward chats may dispatch to devops · Me on this machine · granted by you",
-    );
-    expect(
-      screen.getByRole("button", { name: "Revoke steward dispatching to devops" }),
-    ).toBeInTheDocument();
+    const table = await screen.findByRole("table", { name: /Who may dispatch to whom/ });
+    const revoke = within(table).getByRole("button", {
+      name: "Revoke: my grant for steward to devops",
+    });
+    expect(revoke.closest("tr")).toHaveTextContent("Me on this machine");
     // What policy locks is the next row's, not said twice.
     expect(screen.queryByRole("list", { name: "Locked by policy" })).not.toBeInTheDocument();
   });
