@@ -194,6 +194,8 @@ function core(open: Listed[]) {
   const finished: FinishedTask[] = [];
   /** How many of the next `tab_shows` the core refuses. */
   const refusing = { shows: 0 };
+  /** The tasks the core's next answer to several allows, where keeping fails part way. */
+  const answering: { only?: number[] } = {};
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
@@ -236,8 +238,19 @@ function core(open: Listed[]) {
       refusals.set(a.session as number, []);
       return { said: cmd === "allow_refused_vault" ? "Allowed." : "Kept blocked." };
     }
-    if (cmd === "allow_sandbox_block_for_tasks")
-      return { said: "Allowed for each of these tasks on its own." };
+    if (cmd === "allow_sandbox_block_for_tasks") {
+      const tasks = (a.seen as { task: number }[]).map((one) => one.task);
+      const answered = answering.only ?? tasks;
+      return {
+        said:
+          answered.length === tasks.length
+            ? "Allowed for each of these tasks on its own."
+            : `It was allowed for chat ${answered.join(" and ")} only, and not for the rest.`,
+        answered,
+      };
+    }
+    if (cmd === "keep_sandbox_block_for_tasks")
+      return (a.seen as { task: number }[]).map((one) => one.task);
     if (cmd === "allow_sandbox_block") return { said: "Allowed for this chat." };
     if (cmd === "reference_into_chat") return { kind: "typed", text: "@src/main.rs" };
     if (cmd === "ask_chat_restart") return null;
@@ -309,6 +322,7 @@ function core(open: Listed[]) {
     open,
     finished,
     refusing,
+    answering,
     rowsChanged,
     /** The core says chat `session`'s stop has ended it: it is gone from what the core lists. */
     ended: async (session: number) => {
@@ -1216,7 +1230,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     await holdDispatch(5);
 
     const held = await screen.findByRole("status", {
-      name: "sweep (a task of steward 1): Dispatch to devops",
+      name: "“sweep” (a task of “steward 1”): Dispatch to devops",
     });
     await userEvent.click(within(held).getByRole("button", { name: "Keep blocked" }));
     await waitFor(() =>
@@ -1249,7 +1263,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     await refuseVault(5);
 
     const refused = await screen.findByRole("status", {
-      name: "sweep (a task of steward 1): Vault",
+      name: "“sweep” (a task of “steward 1”): Vault",
     });
     await userEvent.click(within(refused).getByRole("button", { name: "Keep blocked" }));
     await waitFor(() =>
@@ -1467,9 +1481,29 @@ describe("closing, while a tab shows a task", () => {
 });
 
 describe("what a task asks, on its session's tab (#1508)", () => {
+  /** The clock the questions read, moved by hand: a press too soon after a question is drawn
+   *  does nothing. */
+  const clock = { now: 1_000_000 };
+  beforeEach(() => {
+    clock.now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+  });
   afterEach(() => vi.restoreAllMocks());
+  /** Time enough for a question to settle. */
+  const settle = () => {
+    clock.now += 5_000;
+  };
 
-  it("names a task two levels down by its whole path", async () => {
+  /** What the window sends back for task `task` blocked on the npm registry. */
+  const seenOn = (task: number) => ({
+    task,
+    operation: "connect",
+    kind: "host",
+    what: "host",
+    target: "registry.npmjs.org",
+  });
+
+  it("names a task two levels down by its whole path, each name quoted", async () => {
     const { holdDispatch } = await drawn(withTasks());
     expect(onScreen()).toEqual([1]);
 
@@ -1479,26 +1513,25 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     // record of who asked whom.
     expect(
       await screen.findByRole("status", {
-        name: "deep (a task of steward 1 › talk): Dispatch to devops",
+        name: "“deep” (a task of “steward 1” › “talk”): Dispatch to devops",
       }),
     ).toBeTruthy();
     expect(onScreen()).toEqual([1]);
   });
 
   it("asks once for three tasks blocked on one host, and one answer restarts all three", async () => {
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
     const { asked, blockHost, move } = await drawn(withTasks());
 
     await blockHost(4);
-    await blockHost(5);
+    // The same host as a grant matches it: one question.
+    await blockHost(5, "Registry.npmjs.org:443");
     await blockHost(6);
-    now += 5_000;
+    settle();
 
     const question = await screen.findByRole("status", { name: "Sandbox block for 3 tasks" });
     expect(question.textContent).toContain("3 tasks want to reach registry.npmjs.org");
     expect(question.textContent).toContain(
-      "talk (a task of steward 1), sweep (a task of steward 1) and probe (a task of steward 1)",
+      "“talk” (a task of “steward 1”), “sweep” (a task of “steward 1”) and “probe” (a task of “steward 1”)",
     );
     // One question: no task asks it again on its own.
     expect(screen.queryAllByRole("status", { name: /Sandbox block$/ })).toEqual([]);
@@ -1507,14 +1540,13 @@ describe("what a task asks, on its session's tab (#1508)", () => {
       within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
     );
 
+    // Each task with the block it was shown blocked on, exactly.
     await waitFor(() =>
       expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([
         {
           plane: PLANE,
           session: 1,
-          tasks: [4, 5, 6],
-          what: "host",
-          target: "registry.npmjs.org",
+          seen: [seenOn(4), { ...seenOn(5), target: "Registry.npmjs.org:443" }, seenOn(6)],
           level: "chat",
         },
       ]),
@@ -1533,6 +1565,28 @@ describe("what a task asks, on its session's tab (#1508)", () => {
           .sort(),
       ).toEqual([4, 5, 6]),
     );
+  });
+
+  it("does nothing on a press as the question forms, where a task's own Allow was a moment ago", async () => {
+    const { asked, blockHost } = await drawn(withTasks());
+    await blockHost(4);
+    expect(
+      await screen.findByRole("status", { name: "“talk” (a task of “steward 1”): Sandbox block" }),
+    ).toBeTruthy();
+    settle();
+
+    // sweep is blocked the moment before the person presses talk's own Allow: the question
+    // for both is under the pointer now, and pressing it allows nothing.
+    await blockHost(5);
+    const question = await screen.findByRole("status", { name: "Sandbox block for 2 tasks" });
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Allow for these 2 tasks" }),
+    );
+    expect(question.textContent).toContain("nothing was answered");
+    await userEvent.click(within(question).getByRole("button", { name: "Keep blocked" }));
+    expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([]);
+    expect(commandsOf(asked, "keep_sandbox_block_for_tasks")).toEqual([]);
+    expect(commandsOf(asked, "allow_sandbox_block")).toEqual([]);
   });
 
   it("keeps the session's own block apart, and asks it on its own", async () => {
@@ -1556,38 +1610,57 @@ describe("what a task asks, on its session's tab (#1508)", () => {
   });
 
   it("says who joined after it was shown, and an answer pressed just then grants nothing", async () => {
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
     const { asked, blockHost } = await drawn(withTasks());
     await blockHost(4);
     await blockHost(5);
     await screen.findByRole("status", { name: "Sandbox block for 2 tasks" });
+    settle();
 
     // probe is blocked too, the moment before the person presses.
     await blockHost(6);
     const question = await screen.findByRole("status", { name: "Sandbox block for 3 tasks" });
     expect(question.textContent).toContain(
-      "probe (a task of steward 1) joined this question after it was first shown.",
+      "“probe” (a task of “steward 1”) joined this question after it was first shown.",
     );
     await userEvent.click(
       within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
     );
 
-    expect(question.textContent).toContain(
-      "This question changed just now, so nothing was allowed.",
-    );
+    expect(question.textContent).toContain("nothing was answered");
     expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([]);
 
     // Read, and answered again: it is the three it now shows.
-    now += 5_000;
+    settle();
     await userEvent.click(
       within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
     );
     await waitFor(() =>
-      expect(commandsOf(asked, "allow_sandbox_block_for_tasks").map((one) => one.tasks)).toEqual([
-        [4, 5, 6],
-      ]),
+      expect(
+        commandsOf(asked, "allow_sandbox_block_for_tasks").map((one) =>
+          (one.seen as { task: number }[]).map((seen) => seen.task),
+        ),
+      ).toEqual([[4, 5, 6]]),
     );
+  });
+
+  it("puts away only the tasks an answer allowed when keeping failed part way", async () => {
+    const { answering, blockHost } = await drawn(withTasks());
+    await blockHost(4);
+    await blockHost(5);
+    const question = await screen.findByRole("status", { name: "Sandbox block for 2 tasks" });
+    settle();
+    answering.only = [4];
+
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Allow for these 2 tasks" }),
+    );
+
+    // sweep was not allowed: its block is still asked, on its own.
+    expect(
+      await screen.findByRole("status", { name: "“sweep” (a task of “steward 1”): Sandbox block" }),
+    ).toBeTruthy();
+    expect(notice("“talk” (a task of “steward 1”): Sandbox block")).toBeNull();
+    expect(notice("Sandbox block")?.textContent).toContain("allowed for chat 4 only");
   });
 
   it("asks a task blocked after the answer in a new question, and Keep blocked answers each listed", async () => {
@@ -1595,15 +1668,23 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     await blockHost(4);
     await blockHost(5);
     const question = await screen.findByRole("status", { name: "Sandbox block for 2 tasks" });
+    settle();
 
     await userEvent.click(within(question).getByRole("button", { name: "Keep blocked" }));
+    await waitFor(() =>
+      expect(commandsOf(asked, "keep_sandbox_block_for_tasks")).toEqual([
+        { plane: PLANE, session: 1, seen: [seenOn(4), seenOn(5)] },
+      ]),
+    );
     await waitFor(() => expect(notice("Sandbox block for 2 tasks")).toBeNull());
     expect(screen.queryAllByRole("status", { name: /Sandbox block/ })).toEqual([]);
 
     // probe is blocked afterwards: it is asked on its own, and was answered nothing.
     await blockHost(6);
     expect(
-      await screen.findByRole("status", { name: "probe (a task of steward 1): Sandbox block" }),
+      await screen.findByRole("status", {
+        name: "“probe” (a task of “steward 1”): Sandbox block",
+      }),
     ).toBeTruthy();
     expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([]);
   });

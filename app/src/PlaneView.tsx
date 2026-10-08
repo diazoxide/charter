@@ -761,7 +761,11 @@ export const PlaneView = memo(function PlaneView({
   /** What each chat's start found to say, by session, until it is dismissed (ADR 0085). */
   const [startNotes, setStartNotes] = useState<Record<number, StartNotes>>({});
   /** What each chat's sandbox blocked, by session, for the Notice on its tab (#1338). */
-  const { blocks: sandboxBlocks, dismiss: dismissBlock } = useSandboxBlocks(plane);
+  const {
+    blocks: sandboxBlocks,
+    dismiss: dismissBlock,
+    answered: blockAnswered,
+  } = useSandboxBlocks(plane);
   /** What one answer to several tasks' same block allowed, by the session they are tasks of,
    *  until it is put away (#1508). */
   const [taskBlocksAnswered, setTaskBlocksAnswered] = useState<
@@ -4741,7 +4745,7 @@ export const PlaneView = memo(function PlaneView({
               group={group}
               onAnswered={(members, said) => {
                 for (const member of members) {
-                  dismissBlock(member.session, member.block);
+                  blockAnswered(member.session, member.block);
                   oweRestart(member.session);
                 }
                 setTaskBlocksAnswered((was) => [
@@ -4750,7 +4754,7 @@ export const PlaneView = memo(function PlaneView({
                 ]);
               }}
               onKeepBlocked={(members) => {
-                for (const member of members) dismissBlock(member.session, member.block);
+                for (const member of members) blockAnswered(member.session, member.block);
               }}
             />
           ))}
@@ -4768,7 +4772,7 @@ export const PlaneView = memo(function PlaneView({
       );
     }
     return asked;
-  }, [dismissBlock, frontGroups, frontShown, oweRestart, plane, taskBlocksAnswered]);
+  }, [blockAnswered, frontGroups, frontShown, oweRestart, plane, taskBlocksAnswered]);
 
   /** Every chat that lives in a tab of this window: a session's own chat, and each task
    *  below one. What a tab can be wearing the hand for. */

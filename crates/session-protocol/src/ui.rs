@@ -86,9 +86,14 @@ pub struct Server {
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
 ///
-/// `allow_sandbox_block_for_tasks` grants several tasks past their sandbox on one press (#1508):
-/// a person's consent given in their own window, which no link carries a second way to give.
-pub const WINDOW_ONLY: &[&str] = &["answer_ask", "allow_sandbox_block_for_tasks"];
+/// `allow_sandbox_block_for_tasks` and `keep_sandbox_block_for_tasks` answer several tasks'
+/// sandbox block on one press (#1508): a person's answer given in their own window, which no
+/// link carries a second way to give.
+pub const WINDOW_ONLY: &[&str] = &[
+    "answer_ask",
+    "allow_sandbox_block_for_tasks",
+    "keep_sandbox_block_for_tasks",
+];
 
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host

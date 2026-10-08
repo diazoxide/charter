@@ -1,10 +1,11 @@
 /**
  * **What a task asks of the person, as its session's tab says it** (#1508, V100-56, V100-57).
  *
- * - **Whose it is, by its whole path**: `deep (a task of steward 4 › talk)`. The path is read
- *   from the core's list of who asked whom (`ListedChat.parent`, which the app recorded when it
- *   started each task), never from anything a chat says about itself. A name on it is a chat's
- *   name as purlis lists it, shown as text.
+ * - **Whose it is, by its whole path**: `“deep” (a task of “steward 4” › “talk”)`. The path's
+ *   shape is read from the core's list of who asked whom (`ListedChat.parent`, which the app
+ *   recorded when it started each task), never from anything a chat says about itself. The
+ *   names on it are chosen by chats, so each is quoted ({@link named}): a name cannot draw a
+ *   step of the path, a quote or a `›` of purlis's.
  * - **One question for the tasks that hit the same block**: several tasks below one session
  *   blocked on the same host, or on writing the same folder, are grouped
  *   ({@link taskBlockGroups}) and asked about in one Notice, whose one answer applies to each
@@ -16,10 +17,18 @@ import type { ListedChat } from "./chatsTree";
 import type { Blocks } from "./sandboxBlocks";
 
 /**
+ * **A chat's name inside a path**, quoted: `“talk”`. The marks the path is drawn with are
+ * purlis's alone, so a name's own `“`, `”` and `›` are shown as `'`, `'` and `>`.
+ */
+export function named(name: string): string {
+  return `“${name.replace(/[“”]/g, "'").replace(/›/g, ">")}”`;
+}
+
+/**
  * **Whose a Notice of `chat` is, said on its session's tab**: the session's own name for the
- * session, and for a task its name with the path above it: `talk (a task of steward 4)`, `deep
- * (a task of steward 4 › talk)`. Where the path does not reach `own` in the core's list (a
- * link it does not hold), only the session is named, never a guess.
+ * session, and for a task its name with the path above it, each name quoted: `“talk” (a task
+ * of “steward 4”)`, `“deep” (a task of “steward 4” › “talk”)`. Where the path does not reach
+ * `own` in the core's list (a link it does not hold), only the session is named, never a guess.
  */
 export function whoseOf(chat: ListedChat, own: ListedChat, chats: readonly ListedChat[]): string {
   if (chat.session === own.session) return own.name;
@@ -32,11 +41,11 @@ export function whoseOf(chat: ListedChat, own: ListedChat, chats: readonly Liste
     if (parent === null || seen.has(parent)) break;
     seen.add(parent);
     if (parent === own.session)
-      return `${chat.name} (a task of ${[own.name, ...above].join(" › ")})`;
+      return `${named(chat.name)} (a task of ${[own.name, ...above].map(named).join(" › ")})`;
     at = byNumber.get(parent);
     if (at !== undefined) above.unshift(at.name);
   }
-  return `${chat.name} (a task of ${own.name})`;
+  return `${named(chat.name)} (a task of ${named(own.name)})`;
 }
 
 /** One task in a question its session's tab asks for several. */
@@ -49,7 +58,8 @@ export type TaskBlockGroup = {
   /** The session whose tasks these are. */
   session: number;
   offer: "host" | "write";
-  /** The host, or the folder, shown whole. */
+  /** The host, or the folder, shown whole, as a grant matches it ({@link matched}): what an
+   *  Allow grants. */
   target: string;
   /** What was blocked, in purlis's words. */
   said: string;
@@ -59,11 +69,26 @@ export type TaskBlockGroup = {
   members: Member[];
 };
 
+/**
+ * **What a block names, as a grant matches it**, the core's rule (`taskblocks::normalised`): a
+ * host lowered, without a trailing dot and without the default port (`:443`, `:80`); a folder
+ * as the core offered it.
+ */
+export function matched(offer: "host" | "write", target: string): string {
+  if (offer === "write") return target;
+  const host = target
+    .trim()
+    .toLowerCase()
+    .replace(/:(443|80)$/, "");
+  return host.endsWith(".") ? host.slice(0, -1) : host;
+}
+
 /** The question a block is asked under, or none for one that is answered on its own. */
 function keyOf(block: ChatBlocked): string | undefined {
   if (block.ours || block.target === null) return undefined;
   if (block.offer !== "host" && block.offer !== "write") return undefined;
-  return `${block.offer}\u0000${block.operation}\u0000${block.kind}\u0000${block.target}`;
+  const target = matched(block.offer, block.target);
+  return `${block.offer}\u0000${block.operation}\u0000${block.kind}\u0000${target}`;
 }
 
 /**
@@ -86,7 +111,7 @@ export function taskBlockGroups(
         key,
         session,
         offer: block.offer as "host" | "write",
-        target: block.target,
+        target: matched(block.offer as "host" | "write", block.target),
         said: block.said,
         levels: [...block.levels],
         members: [],

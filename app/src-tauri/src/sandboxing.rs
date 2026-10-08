@@ -787,7 +787,7 @@ pub fn allow_sandbox_block(
 ) -> Result<Allowed, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    allow(
+    let allowed = allow(
         &root,
         &sandbox::Machine::this(),
         held.chats(),
@@ -795,7 +795,12 @@ pub fn allow_sandbox_block(
         (what, &target, level),
         &|number, audited| held.hooks().record_grant(&root, number, audited),
         now_secs(),
-    )
+    )?;
+    // Answered: no question for several tasks can answer it again (#1508).
+    held.chats()
+        .blocks()
+        .answered_on_its_own(session, what, &target);
+    Ok(allowed)
 }
 
 /// The chats of this project owed a restart (#1342, #1428): to take a grant, or because the

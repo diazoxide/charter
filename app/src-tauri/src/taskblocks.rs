@@ -2,33 +2,158 @@
 //!
 //! Several tasks of one session that are blocked on the same host, or on writing the same
 //! folder, are asked about in one Notice on the session's tab, and the one answer applies to
-//! each task the Notice listed. This is the core's half: the window sends the session, the
-//! tasks it showed and what it showed them wanting, and this judges and keeps it.
+//! each task the Notice listed. This is the core's half: it holds the block each open chat is
+//! on now ([`Blocks`]), and judges and keeps an answer only against that.
 //!
-//! # What holds
+//! # What holds (D-1508-9, fail closed)
 //!
+//! - **An answer names the exact blocks the person saw**: each task with the block shown for
+//!   it ([`SeenBlock`]). The answer is refused whole if any task is not held on that block now
+//!   (it was never blocked, it was answered already, it moved on to another block, or it
+//!   ended), if the blocks are not one block, or if any task is not recorded below the
+//!   session. So a press can grant only a task whose block was on screen, as the dispatch
+//!   question's answer is bound to what it showed. Keep blocked is checked the same way.
 //! - **Who asked whom is purlis's own record**, the lineage the app wrote when it started each
-//!   task ([`purlis_core::reopen::HandedFrom`]), never anything a chat says about itself. A
-//!   listed chat that the record does not put below the session gets nothing, and neither does
-//!   any other listed chat: the answer is refused whole.
-//! - **The answer covers the tasks listed, and no other chat.** The session itself is never
-//!   one of them: a permission given to a session does not reach its tasks, and an answer about
-//!   its tasks does not reach the session. A task that hit the block after the question was
-//!   drawn is not in the list, so it gets nothing from this answer; the window asks it anew.
+//!   task ([`purlis_core::reopen::HandedFrom`]). The session itself is never one of its tasks: a
+//!   permission given to a session does not reach its tasks, and an answer about its tasks does
+//!   not reach the session.
 //! - **"For this chat" is each task's own grant**, held under that task's id and judged against
-//!   that task's own folder, as a block's Allow is for one chat ([`crate::sandboxing`]). Every
-//!   task is judged before anything is kept, so one that cannot be allowed allows none.
-//! - **"For me" and "for the project" are kept once**, as one Allow keeps them, and every task
-//!   listed is owed the restart that takes it.
+//!   that task's own folder. Every task is judged before anything is kept. If keeping fails part
+//!   way (the audit cannot be written), the answer says which tasks it allowed, and only those.
+//! - **"For me" and "for the project" are kept once**, audited once more for each other task
+//!   listed, and every task listed is owed the restart that takes it.
+
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 use purlis_core::sandbox::grant::{self, Level, What};
 
 use crate::planes::{PlaneId, Planes};
-use crate::sandboxing::{Allowed, GrantLevel, GrantWhat};
+use crate::sandboxing::{GrantLevel, GrantWhat};
 
 /// How far up a lineage is followed before it is taken to reach nothing: far past any depth a
 /// dispatch is allowed, so only a record that loops stops here.
 const MOST_DEPTH: usize = 64;
+
+/// The most blocks the app holds for one chat at once, as the window keeps them
+/// (`sandboxBlocks.ts`): one per operation and kind, the oldest going first.
+const MOST_HELD_PER_CHAT: usize = 5;
+
+/// **The host or folder a block names, as a grant matches it**: a host lowered, without a
+/// trailing dot, and without its scheme's default port (`:443`, `:80`), which the grant for the
+/// bare host covers; a folder as the core offered it. None for what no answer names.
+pub fn normalised(what: GrantWhat, target: &str) -> Option<String> {
+    match what {
+        GrantWhat::Host => {
+            let host = grant::host(target).ok()?;
+            let said = host.to_string();
+            Some(match host.port() {
+                Some(port @ (443 | 80)) => said
+                    .strip_suffix(&format!(":{port}"))
+                    .unwrap_or(&said)
+                    .to_owned(),
+                _ => said,
+            })
+        }
+        GrantWhat::Write => (!target.is_empty()).then(|| target.to_owned()),
+        GrantWhat::Vault => None,
+    }
+}
+
+/// One block a chat is held on: its operation and kind, by their words, and what it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldBlock {
+    pub operation: String,
+    pub kind: String,
+    pub what: GrantWhat,
+    /// [`normalised`].
+    pub target: String,
+}
+
+/// **The block each open chat is held on now**, as the app heard it: one per operation and
+/// kind, the newest replacing the one before as the window's Notice does. Cleared when an
+/// answer takes it, and when the chat ends ([`crate::chats::Chats::close`]). In memory only.
+#[derive(Default)]
+pub struct Blocks {
+    held: Mutex<HashMap<u32, Vec<HeldBlock>>>,
+}
+
+impl Blocks {
+    fn held(&self) -> std::sync::MutexGuard<'_, HashMap<u32, Vec<HeldBlock>>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Chat `session` is held on `block` now.
+    pub fn heard(&self, session: u32, block: HeldBlock) {
+        let mut held = self.held();
+        let mine = held.entry(session).or_default();
+        mine.retain(|one| one.operation != block.operation || one.kind != block.kind);
+        mine.push(block);
+        if mine.len() > MOST_HELD_PER_CHAT {
+            mine.remove(0);
+        }
+    }
+
+    /// Whether chat `session` is held on `block` now.
+    pub fn holds(&self, session: u32, block: &HeldBlock) -> bool {
+        self.held()
+            .get(&session)
+            .is_some_and(|mine| mine.contains(block))
+    }
+
+    /// `block` of chat `session` was answered: it is held no longer.
+    pub fn answered(&self, session: u32, block: &HeldBlock) {
+        let mut held = self.held();
+        if let Some(mine) = held.get_mut(&session) {
+            mine.retain(|one| one != block);
+            if mine.is_empty() {
+                held.remove(&session);
+            }
+        }
+    }
+
+    /// Whatever chat `session` is held on that names `target` as `what` was answered on its
+    /// own Notice: it is held no longer.
+    pub fn answered_on_its_own(&self, session: u32, what: GrantWhat, target: &str) {
+        let Some(target) = normalised(what, target) else {
+            return;
+        };
+        let mut held = self.held();
+        if let Some(mine) = held.get_mut(&session) {
+            mine.retain(|one| one.what != what || one.target != target);
+            if mine.is_empty() {
+                held.remove(&session);
+            }
+        }
+    }
+
+    /// Chat `session` ended: nothing is held for it.
+    pub fn ended(&self, session: u32) {
+        self.held().remove(&session);
+    }
+}
+
+/// Holds the block the window is about to be told of, where an answer could name it: a host
+/// or a folder to write, named whole.
+pub fn heard(chats: &crate::chats::Chats, told: &crate::hooks::ChatBlocked) {
+    let what = match told.offer {
+        crate::hooks::BlockOffer::Host => GrantWhat::Host,
+        crate::hooks::BlockOffer::Write => GrantWhat::Write,
+        _ => return,
+    };
+    let Some(target) = told.target.as_deref().and_then(|t| normalised(what, t)) else {
+        return;
+    };
+    chats.blocks().heard(
+        told.session,
+        HeldBlock {
+            operation: told.operation.clone(),
+            kind: told.kind.clone(),
+            what,
+            target,
+        },
+    );
+}
 
 /// The chat that asked for chat `session` as a task, by the app's own record of it; none for a
 /// chat no task link records (the person started it, or a handoff did).
@@ -48,67 +173,129 @@ pub fn below(asker_of: AskerOf<'_>, session: u32, task: u32) -> bool {
     false
 }
 
-/// What the window asks to allow, for which session's tasks and which tasks, at which level.
-/// What is allowed is [`Doing::judge`]'s to say.
-#[derive(Debug, Clone, Copy)]
-pub struct Asked<'a> {
-    pub session: u32,
-    pub tasks: &'a [u32],
-    pub level: GrantLevel,
+/// **One task's block, as the person saw it** on the question: what the window sends back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SeenBlock {
+    /// The task's number.
+    pub task: u32,
+    /// The block's operation and kind, by the words the window was told.
+    pub operation: String,
+    pub kind: String,
+    pub what: GrantWhat,
+    /// The host or folder shown for this task.
+    pub target: String,
 }
 
-/// What [`answered`] is told to do with the app, so it reads no chat store of its own.
-pub struct Doing<'a> {
+/// What one answer to several tasks did (#1508).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct TasksAnswered {
+    /// The sentence the Notice says.
+    pub said: String,
+    /// The tasks it answered: each listed one, or, where keeping failed part way, those it
+    /// allowed before it failed. The window puts their blocks away and restarts them.
+    pub answered: Vec<u32>,
+}
+
+/// What [`checked`] and [`answered`] read of the app, so they read no chat store of their own.
+pub struct Reading<'a> {
     /// Who asked whom ([`below`]).
     pub asker_of: AskerOf<'a>,
-    /// What allowing the target for one task would grant, judged by the core
+    /// Whether a task is held on a block now ([`Blocks::holds`]).
+    pub holds: &'a dyn Fn(u32, &HeldBlock) -> bool,
+}
+
+/// **What an answer to several tasks of `session` is checked against before anything is done**
+/// (D-1508-9): one block, named the same for every task; each task held on it now; each
+/// recorded below `session`, none of them `session`, none twice. Answers the tasks and the one
+/// block, or why the whole answer is refused.
+pub fn checked(
+    session: u32,
+    seen: &[SeenBlock],
+    reading: &Reading<'_>,
+) -> Result<(Vec<u32>, HeldBlock), String> {
+    let refused = |why: &str| Err(format!("Nothing was answered: {why}"));
+    let [first, ..] = seen else {
+        return refused("no task was named.");
+    };
+    let held_of = |one: &SeenBlock| {
+        normalised(one.what, &one.target).map(|target| HeldBlock {
+            operation: one.operation.clone(),
+            kind: one.kind.clone(),
+            what: one.what,
+            target,
+        })
+    };
+    let Some(block) = held_of(first) else {
+        return refused("the question names nothing that can be answered.");
+    };
+    let mut tasks = Vec::with_capacity(seen.len());
+    for one in seen {
+        if held_of(one).as_ref() != Some(&block) {
+            return refused(
+                "the tasks listed are not on one block, so one answer cannot cover them.",
+            );
+        }
+        if one.task == session {
+            return refused(
+                "a session is not one of its own tasks. Answer the session's own block on it.",
+            );
+        }
+        if tasks.contains(&one.task) {
+            return Err(format!(
+                "Nothing was answered: chat {} was named twice.",
+                one.task
+            ));
+        }
+        if !below(reading.asker_of, session, one.task) {
+            return Err(format!(
+                "Nothing was answered: purlis has no record of chat {} as a task of this \
+                 session, and one answer covers only the session's own tasks.",
+                one.task
+            ));
+        }
+        if !(reading.holds)(one.task, &block) {
+            return Err(format!(
+                "Nothing was answered: chat {} is not blocked on what the question showed any \
+                 more. The question is shown again as it is now.",
+                one.task
+            ));
+        }
+        tasks.push(one.task);
+    }
+    Ok((tasks, block))
+}
+
+/// Judges what allowing a block for one task would grant.
+pub type Judge<'a> = &'a dyn Fn(u32, &HeldBlock) -> Result<(What, Level), String>;
+
+/// What [`answered`] is told to do with the app.
+pub struct Doing<'a> {
+    /// What allowing `block` for one task would grant, judged by the core
     /// ([`crate::sandboxing::judged`]).
-    pub judge: &'a dyn Fn(u32) -> Result<(What, Level), String>,
+    pub judge: Judge<'a>,
     /// Keeps one grant for one task: audited, kept and the task owed its restart
     /// ([`crate::sandboxing::kept`]).
     pub keep: &'a mut dyn FnMut(u32, &What, Level) -> Result<(), String>,
+    /// Audits a grant kept once for everyone as reaching one more task.
+    pub note: &'a dyn Fn(u32, &What, Level) -> Result<(), String>,
     /// Owes one task a restart that tells it what it was allowed.
     pub owe: &'a dyn Fn(u32, String),
 }
 
-/// **The one answer to the tasks a Notice listed** ([module](self)): checked against the app's
-/// record, every task judged, then kept for each task (this chat) or once (for me, for the
-/// project) with each task owed its restart. Nothing is kept unless every check passed.
-pub fn answered(asked: Asked<'_>, doing: Doing<'_>) -> Result<Allowed, String> {
-    let Asked {
-        session,
-        tasks,
-        level,
-    } = asked;
-    if tasks.is_empty() {
-        return Err("No task was named, so nothing was allowed.".to_owned());
-    }
-    if tasks.contains(&session) {
-        return Err(
-            "Nothing was allowed: this answer is for the tasks the question listed, and a \
-             session is not one of its own tasks. Answer the session's own block on it."
-                .to_owned(),
-        );
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    if let Some(twice) = tasks.iter().find(|task| !seen.insert(**task)) {
-        return Err(format!(
-            "Nothing was allowed: chat {twice} was named twice."
-        ));
-    }
-    if let Some(stranger) = tasks
-        .iter()
-        .find(|task| !below(doing.asker_of, session, **task))
-    {
-        return Err(format!(
-            "Nothing was allowed: purlis has no record of chat {stranger} as a task of this \
-             session, and one answer covers only the session's own tasks. Ask again from the \
-             question on the session's tab."
-        ));
-    }
+/// **The one Allow to the tasks a Notice listed** ([module](self)): [`checked`], every task
+/// judged, then kept for each task (this chat) or once (for me, for the project) with each task
+/// audited and owed its restart. Nothing is kept unless every check passed.
+pub fn answered(
+    session: u32,
+    seen: &[SeenBlock],
+    level: GrantLevel,
+    reading: &Reading<'_>,
+    doing: Doing<'_>,
+) -> Result<TasksAnswered, String> {
+    let (tasks, block) = checked(session, seen, reading)?;
     let mut judged = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        let (what, level) = (doing.judge)(*task)
+    for task in &tasks {
+        let (what, level) = (doing.judge)(*task, &block)
             .map_err(|why| format!("Nothing was allowed: for chat {task}, {why}"))?;
         judged.push((*task, what, level));
     }
@@ -116,19 +303,21 @@ pub fn answered(asked: Asked<'_>, doing: Doing<'_>) -> Result<Allowed, String> {
     if Level::from(level) == Level::Chat {
         let mut allowed = Vec::new();
         for (task, what, level) in &judged {
-            (doing.keep)(*task, what, *level).map_err(|why| {
+            if let Err(why) = (doing.keep)(*task, what, *level) {
                 if allowed.is_empty() {
-                    format!("Nothing was allowed: {why}")
-                } else {
-                    format!(
+                    return Err(format!("Nothing was allowed: {why}"));
+                }
+                return Ok(TasksAnswered {
+                    said: format!(
                         "It was allowed for chat {} only, and not for the rest: {why}",
                         numbers(&allowed)
-                    )
-                }
-            })?;
+                    ),
+                    answered: allowed,
+                });
+            }
             allowed.push(*task);
         }
-        return Ok(Allowed {
+        return Ok(TasksAnswered {
             said: if count == 1 {
                 "Allowed for this task alone, not for the chat that asked it. It restarts on \
                  the same conversation once its turn ends, and is told to retry."
@@ -140,11 +329,12 @@ pub fn answered(asked: Asked<'_>, doing: Doing<'_>) -> Result<Allowed, String> {
                      is told to retry."
                 )
             },
+            answered: allowed,
         });
     }
     // Kept once: every task was judged to the same grant, or it is not one answer.
     let [(first, what, level), rest @ ..] = judged.as_slice() else {
-        return Err("No task was named, so nothing was allowed.".to_owned());
+        return Err("Nothing was allowed: no task was named.".to_owned());
     };
     if rest.iter().any(|(_, other, _)| other != what) {
         return Err(
@@ -156,15 +346,20 @@ pub fn answered(asked: Asked<'_>, doing: Doing<'_>) -> Result<Allowed, String> {
     (doing.keep)(*first, what, *level).map_err(|why| format!("Nothing was allowed: {why}"))?;
     let told = grant::told(what, *level);
     for (task, _, _) in rest {
+        if let Err(why) = (doing.note)(*task, what, *level) {
+            // The grant stands, audited once; only this task's line of it is missing.
+            tracing::warn!("purlis: a sandbox grant reaching chat {task} was not audited ({why})");
+        }
         (doing.owe)(*task, told.clone());
     }
-    Ok(Allowed {
+    Ok(TasksAnswered {
         said: format!(
             "Allowed {}. The {count} {} restart on the same conversation once each one's turn \
              ends, and are told to retry.",
             level.said(),
             if count == 1 { "task" } else { "tasks" }
         ),
+        answered: tasks,
     })
 }
 
@@ -184,53 +379,131 @@ fn asker_in(chats: &crate::chats::Chats, session: u32) -> Option<u32> {
     (from.mode == purlis_core::reopen::Mode::Task).then_some(from.chat)
 }
 
-/// **Allow on the one question for several tasks of chat `session`** (#1508, V100-57): every
-/// chat of `tasks` is a task below `session` by the app's own record, each is judged on its
-/// own, and the answer is kept for each task alone (`chat`), or once for every chat of the
-/// project on this machine (`you`) or for everyone in it (`project`), with each task owed a
-/// restart. The window then restarts each once its turn has ended (`restart_chat`).
+/// Runs `with` on what `chats` is read for: its lineage and the blocks it holds.
+fn reading<R>(chats: &crate::chats::Chats, with: impl FnOnce(&Reading<'_>) -> R) -> R {
+    with(&Reading {
+        asker_of: &|chat| asker_in(chats, chat),
+        holds: &|task, block| chats.blocks().holds(task, block),
+    })
+}
+
+/// [`allow_sandbox_block_for_tasks`] for the project at `root` on `machine`, with `chats` and
+/// `audit` the app's: [`answered`] with the real judging and keeping, then the blocks of the
+/// tasks it answered let go.
+pub fn allow_for_tasks(
+    root: &std::path::Path,
+    machine: &purlis_core::sandbox::Machine,
+    chats: &crate::chats::Chats,
+    (session, seen, level): (u32, &[SeenBlock], GrantLevel),
+    audit: crate::sandboxing::Audit<'_>,
+    at: u64,
+) -> Result<TasksAnswered, String> {
+    let done = reading(chats, |reading| {
+        answered(
+            session,
+            seen,
+            level,
+            reading,
+            Doing {
+                judge: &|task, block| {
+                    crate::sandboxing::judged(
+                        root,
+                        machine,
+                        chats.folder_of(task).as_deref(),
+                        task,
+                        (block.what, &block.target, level),
+                    )
+                },
+                keep: &mut |task, what, level| {
+                    crate::sandboxing::kept(root, chats, task, (what, level), audit, at)
+                },
+                note: &|task, what, level| {
+                    audit(
+                        Some(task),
+                        &grant::Audited {
+                            granted: true,
+                            what: what.word(),
+                            target: &what.target(),
+                            level,
+                        },
+                    )
+                },
+                owe: &|task, told| chats.owe_restart(task, told),
+            },
+        )
+    })?;
+    let_go(chats, seen, &done.answered);
+    Ok(done)
+}
+
+/// The blocks of `answered` among `seen` are answered: the app holds them no longer.
+fn let_go(chats: &crate::chats::Chats, seen: &[SeenBlock], answered: &[u32]) {
+    for one in seen.iter().filter(|one| answered.contains(&one.task)) {
+        if let Some(target) = normalised(one.what, &one.target) {
+            chats.blocks().answered(
+                one.task,
+                &HeldBlock {
+                    operation: one.operation.clone(),
+                    kind: one.kind.clone(),
+                    what: one.what,
+                    target,
+                },
+            );
+        }
+    }
+}
+
+/// **Allow on the one question for several tasks of chat `session`** (#1508, V100-57): `seen`
+/// is each task with the block the question showed for it. The whole answer is refused unless
+/// every task is held on that one block now and is a task below `session` by the app's own
+/// record. Each is judged on its own, and the answer is kept for each task alone (`chat`), or
+/// once for every chat of the project on this machine (`you`) or for everyone in it
+/// (`project`), with each task owed a restart. The window then restarts each once its turn has
+/// ended (`restart_chat`).
 #[tauri::command]
 #[specta::specta]
 pub fn allow_sandbox_block_for_tasks(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     session: u32,
-    tasks: Vec<u32>,
-    what: GrantWhat,
-    target: String,
+    seen: Vec<SeenBlock>,
     level: GrantLevel,
-) -> Result<Allowed, String> {
+) -> Result<TasksAnswered, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    let chats = held.chats();
-    let machine = purlis_core::sandbox::Machine::this();
-    let at = crate::sandboxing::now_secs();
-    let audit = |number: Option<u32>, audited: &grant::Audited<'_>| {
-        held.hooks().record_grant(&root, number, audited)
-    };
-    answered(
-        Asked {
-            session,
-            tasks: &tasks,
-            level,
-        },
-        Doing {
-            asker_of: &|chat| asker_in(chats, chat),
-            judge: &|task| {
-                crate::sandboxing::judged(
-                    &root,
-                    &machine,
-                    chats.folder_of(task).as_deref(),
-                    task,
-                    (what, &target, level),
-                )
-            },
-            keep: &mut |task, what, level| {
-                crate::sandboxing::kept(&root, chats, task, (what, level), &audit, at)
-            },
-            owe: &|task, told| chats.owe_restart(task, told),
-        },
+    allow_for_tasks(
+        &root,
+        &purlis_core::sandbox::Machine::this(),
+        held.chats(),
+        (session, &seen, level),
+        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        crate::sandboxing::now_secs(),
     )
+}
+
+/// **Keep blocked on the one question for several tasks of chat `session`** (#1508): checked
+/// as an Allow is ([`checked`]), then each task's block is let go. Nothing is granted.
+#[tauri::command]
+#[specta::specta]
+pub fn keep_sandbox_block_for_tasks(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    seen: Vec<SeenBlock>,
+) -> Result<Vec<u32>, String> {
+    let held = planes.held(&plane)?;
+    keep_blocked(held.chats(), session, &seen)
+}
+
+/// [`keep_sandbox_block_for_tasks`] on `chats`.
+pub fn keep_blocked(
+    chats: &crate::chats::Chats,
+    session: u32,
+    seen: &[SeenBlock],
+) -> Result<Vec<u32>, String> {
+    let (tasks, _) = reading(chats, |reading| checked(session, seen, reading))?;
+    let_go(chats, seen, &tasks);
+    Ok(tasks)
 }
 
 #[cfg(test)]

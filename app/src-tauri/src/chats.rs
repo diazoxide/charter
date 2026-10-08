@@ -386,6 +386,9 @@ pub struct Chats {
     /// conversation keeps it and no other chat ever gets it. **In memory only**: a grant for
     /// one chat ends with the app.
     grants: Mutex<HashMap<String, Vec<ChatGrant>>>,
+    /// The sandbox block each open chat is held on now, as the app heard it (#1508): what an
+    /// answer to several tasks is checked against. **In memory only**, and gone with the chat.
+    blocks: crate::taskblocks::Blocks,
     /// The session record the app last wrote for each open chat, project-relative (#1436): what
     /// a task's report names as its record. The app's own knowledge of what it wrote, so a
     /// report never names a path its chat chose. **In memory only**, and gone with the chat.
@@ -656,6 +659,7 @@ impl Chats {
             ending: AtomicBool::new(false),
             most_at_once: MOST_AT_ONCE,
             grants: Mutex::new(HashMap::new()),
+            blocks: crate::taskblocks::Blocks::default(),
             records: Mutex::new(HashMap::new()),
             dispatching: Mutex::new(()),
             reserved: Mutex::new(HashMap::new()),
@@ -1156,6 +1160,11 @@ impl Chats {
         lock(&self.open)
             .values()
             .any(|one| one.chat.identity.id.as_deref() == Some(id))
+    }
+
+    /// The sandbox blocks each open chat is held on now (#1508).
+    pub fn blocks(&self) -> &crate::taskblocks::Blocks {
+        &self.blocks
     }
 
     /// The folder chat `session` was started in: what a write grant for it is judged against.
@@ -1854,6 +1863,7 @@ impl Chats {
         lock(&self.owed).remove(&session);
         lock(&self.told).remove(&session);
         lock(&self.records).remove(&session);
+        self.blocks.ended(session);
         if let Some(gone) = gone {
             // A chat's grants end with it (D-1348-1): kept only while a session of that chat is
             // open, which a restart for a grant is, since it starts before the old one ends.
