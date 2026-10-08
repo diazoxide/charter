@@ -20,6 +20,7 @@ import {
   FileText,
   FolderGit2,
   GitPullRequest,
+  ClipboardCheck,
   History,
   KeyRound,
   ListChecks,
@@ -79,8 +80,10 @@ import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
 import { DispatchesTab } from "./DispatchesTab";
+import { PastTasksTab, type PastTasksDoes } from "./PastTasksTab";
 import { DISPATCHES_VIEW, isDispatches } from "./dispatches";
 import {
+  PAST_TASKS_VIEW,
   SAVING_VIEW,
   SETTINGS_TAB_TITLE,
   settingsLevelOf,
@@ -197,6 +200,11 @@ type ViewAnswerOrRefusal = { answer: ViewAnswer } | { refused: string };
 const kept = new Map<string, ViewAnswerOrRefusal>();
 
 /** Whether `view` is a workspace's changes, the one built-in view that reads a forge. */
+/** Whether `view` is a workspace's Past tasks (#1510). */
+function isPastTasks(view: ViewRef): boolean {
+  return view.from === null && view.view === PAST_TASKS_VIEW;
+}
+
 function isChanges(view: ViewRef): boolean {
   return view.from === null && view.view === "changes";
 }
@@ -245,6 +253,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [SESSION_VIEW]: History,
   /** The project's dispatches (#1452). */
   [DISPATCHES_VIEW.view]: Send,
+  /** A workspace's past tasks (#1510). */
+  [PAST_TASKS_VIEW]: ClipboardCheck,
   [MEMORY_VIEW]: Brain,
   /** One todo (#1214), drawn as the Todos panel marks one. */
   [TODO_VIEW]: CircleDashed,
@@ -299,6 +309,7 @@ export function ViewPane({
   onMemorySaved,
   onCloseView,
   firstTask,
+  pastTasks,
   split,
   onSplit,
   onShowInstead,
@@ -336,6 +347,8 @@ export function ViewPane({
   onCloseView?: (view: ViewRef) => void;
   /** What the first task's tab asks the plane to do: start a run, show a run's diff (FR-28). */
   firstTask?: FirstTaskDoes;
+  /** What a workspace's Past tasks asks the window to do: reopen one (#1510). */
+  pastTasks?: PastTasksDoes;
   /** Where this view's divider was, as its first side's share in percent (FM-2). */
   split?: number;
   /** The operator moved this view's divider. */
@@ -531,6 +544,17 @@ export function ViewPane({
                 does: { verb: "showChat", session },
               })
             }
+            onOpenRecord={(path, title) => onOpenView(sessionView(path), sessionTitle(title))}
+          />
+        ) : isPastTasks(view) ? (
+          /* A workspace's past tasks (#1510), read from the app's own dispatch records. Keyed
+             by the workspace, so a pane that comes to show another's starts from its own read. */
+          <PastTasksTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            workspace={view.key}
+            changed={changed + onDisk}
+            does={pastTasks}
             onOpenRecord={(path, title) => onOpenView(sessionView(path), sessionTitle(title))}
           />
         ) : isSession(view) ? (

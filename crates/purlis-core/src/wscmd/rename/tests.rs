@@ -596,6 +596,7 @@ fn a_move_rekeys_every_view_keyed_by_the_workspaces_name() {
         ("workspace-settings", "alpha", "beta"),
         ("changes", "alpha", "beta"),
         ("repo-instructions", "alpha", "beta"),
+        ("past-tasks", "alpha", "beta"),
         (
             "todo",
             "alpha/20260302-091400-review",

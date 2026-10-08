@@ -493,6 +493,14 @@ not asking for the person reads idle, and one whose harness sends nothing reads
 _Avoid_: job, todo (that is the workspace's), work item, task chat, sub-chat, persona chat (in a
 shown sentence, where a task is meant)
 
+**Past tasks** (of a workspace):
+The view of a workspace's **tasks** that have ended: asked from it or worked in it, read from
+the dispatch records this machine keeps, whether or not the chat that asked is still open and
+whether or not the finished row was cleared. A task still running is not a past task; it is in
+the Chats list.
+_Avoid_: history, task history, dispatch history, archive (that is where deleted memory goes),
+Dispatches (that is the project's tab of every dispatch, running too)
+
 **Helper** (of a chat):
 A sub-agent or child its harness spawns inside a chat: the harness's own, a **child run** of the
 chat's run. It carries the chat's persona, sandbox and asks, is never a chat or a persona, and

@@ -4973,7 +4973,15 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
     minute), or because the asking chat closed. Absent until then. A Reopen whose chat ended
     at once clears nothing: the row is drawn again. **It is the row's mark and nothing
     else**: a cleared record keeps its brief, its report and every other key, is still listed
-    in the Dispatches tab, and is collected as any record is.
+    in its workspace's Past tasks and in the Dispatches tab, and is collected as any record
+    is.
+  - `reopened` — `true` once the finished task was reopened as an ordinary chat and that chat
+    held (it was heard from, or lived past a quarter of a minute): written with `cleared`, in
+    the same write. **A task is reopened once**, from its finished row or from Past tasks, and
+    this is what refuses the second. Apart from `cleared` because a row that was only cleared,
+    or that went with its asking chat, can still be reopened from Past tasks. Absent until
+    then, and on every record written before this key: a task reopened by an earlier build
+    reads as cleared and not reopened.
   - `ended_by` — who ended the dispatch, where that was not its chat's own report alone:
     `"unreported"` where the chat went without reporting and purlis said so in its place,
     `"person"` where the person stopped or closed it, whatever it reported in the one turn its
@@ -5077,10 +5085,24 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   record. Run by a sandboxed chat, which is denied the store, it says the records could not
   be read and that `DISP` is the log's count alone: an unreadable store is never reported as
   no dispatches.
+- **In a workspace's Past tasks** (`dispatchrecord::past`): every task record whose dispatch
+  has ended with a report, whose persona chat this app does not have open, and whose
+  `asker.workspace` or `place.workspace` is that workspace, newest `ended` first, cleared or
+  not. A handoff is not a task and is not there. **Only this store is read**: nothing from
+  another machine, and nothing committed. At most 500 are listed
+  (`dispatchrecord::MOST_PAST`), which the 30 days a record is kept makes a month of one
+  workspace's tasks; the tasks older than those are counted and said. A file named as a
+  record that does not read as one of this build's (cut short, or another version) is skipped
+  and counted as one that could not be read, and one that fails the check above is counted as
+  one purlis will not draw: both counts are of the whole store, since such a file names no
+  workspace purlis would trust. A row's brief and report are read for the one row that is
+  opened. While the view is open, a later read parses only the records written since the read
+  before it (by the file's modification time) and those that were waiting for their chat to
+  close.
 - **In the Dispatches tab:** a record that has not ended and whose persona chat this app does
   not have open (one the reopen record lists that was not brought back) is said to be `not
   open`, with no duration: it is not running, and runs again when its chat is opened.
-- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and nothing else.
+- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and in its workspace's Past tasks, and nothing else.
 - **Git:** gitignored (under `/.charter/`).
 
 ### `app/hooks.sock`

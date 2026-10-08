@@ -1137,13 +1137,13 @@ pub fn moved(held: &Held, chat: u32) {
 }
 
 /// Chat `session`, which a Reopen of a finished task may have started, was heard from or has
-/// gone: the task's row is cleared where the resume worked, and stays, saying why, where the
-/// chat ended at once ([`Tasks::reopen_settles`]).
+/// gone: the task is marked reopened, which clears its row, where the resume worked, and
+/// stays as it was, saying why, where the chat ended at once ([`Tasks::reopen_settles`]).
 fn reopen_settled(held: &Held, session: u32, ended: bool) {
     if let Some((id, true)) = held.tasks().reopen_settles(session, ended)
-        && let Err(why) = purlis_core::dispatchrecord::clear(held.root(), &id)
+        && let Err(why) = purlis_core::dispatchrecord::reopened(held.root(), &id)
     {
-        tracing::warn!("purlis: a reopened task's row was not cleared ({why})");
+        tracing::warn!("purlis: a reopened task was not marked so ({why})");
     }
 }
 

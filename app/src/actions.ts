@@ -63,6 +63,8 @@ import { onAMac } from "./tabKeys";
 import {
   changesTitle,
   changesView,
+  pastTasksTitle,
+  pastTasksView,
   chatOf,
   contentsOf,
   focusedContent,
@@ -239,7 +241,7 @@ export type Does =
    *  asked of its program when the tab draws it, through the core's gate. A persona's row is
    *  here rather than only a click on the panel because a menu is a third reader of this list
    *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
-  | { verb: "openView"; view: ViewRef; title: string }
+  | { verb: "openView"; view: ViewRef; title: string; on?: string }
   /** Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its
    *  harness, given its conversation where it can be, and told the record in its briefing. It
    *  starts a chat, so it answers a `Ran` — the core can refuse. */
@@ -687,7 +689,7 @@ export type Doing = {
   stopChat: (session: number, below: boolean) => void;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
-  openView: (view: ViewRef, title: string) => void;
+  openView: (view: ViewRef, title: string, on?: string) => void;
   /** Resumes a session from its record at `path`, in a tab of its own. */
   resumeSession: (path: string) => Promise<Ran>;
   /** Opens a memory's tab: previewed, or kept when `keep` (SI-9b). */
@@ -1044,6 +1046,9 @@ export const dropMembershipTitle = (repo: string) => `Remove ${repo} from worksp
 function isPinned<T>(held: readonly T[], one: T): boolean {
   return held.includes(one);
 }
+
+/** The catalogue's id for the row that opens a workspace's Past tasks (#1510). */
+export const pastTasksId = (workspace: string): string => `workspace.past:${workspace}`;
 
 /** The catalogue's id for the row that opens the project's Dispatches tab (#1452). */
 export const DISPATCHES_SHOW = "dispatches.show";
@@ -1460,6 +1465,18 @@ export function catalogue(now: Now): Offer[] {
         workspace,
       }),
       note: `${workspace}: Settings at its level — live, repos, extensions, appearance and plugins.`,
+    });
+    // **Its past tasks** (#1510, V100-52): what was dispatched in it and has ended, cleared
+    // from the Chats list or not, in a tab filed on its strip. On every workspace's menu and
+    // in the palette, told apart by the name in the note as its settings are.
+    offers.push({
+      ...can(pastTasksId(workspace), "Past tasks", {
+        verb: "openView",
+        view: pastTasksView(workspace),
+        title: pastTasksTitle(workspace),
+        on: workspace,
+      }),
+      note: `${workspace}: the tasks dispatched in it that have ended, with their reports and briefs.`,
     });
     // Its cross-repo changes (charter#470), for the workspace in front of the operator: a view
     // tab keyed by the workspace and filed on its strip, which asks the forge when it opens and
@@ -2270,7 +2287,7 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       doing.stopChat(does.session, does.below);
       return DID;
     case "openView":
-      doing.openView(does.view, does.title);
+      doing.openView(does.view, does.title, does.on);
       return DID;
     case "openMemory":
       doing.openMemory(does.ref, does.title, does.keep);
@@ -3008,6 +3025,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `shell.new:${what.workspace}`,
           `workspace.pin:${what.workspace}`,
           `workspace.settings:${what.workspace}`,
+          pastTasksId(what.workspace),
           `workspace.live:${what.workspace}`,
           `workspace.rename:${what.workspace}`,
           "workspace.create",

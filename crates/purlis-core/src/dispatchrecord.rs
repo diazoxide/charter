@@ -292,6 +292,12 @@ pub struct Record {
     /// next launch. It is a finished row once it is closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub kept_open: bool,
+    /// The finished task was reopened as an ordinary chat, and that chat held (#1510): **one
+    /// task is reopened once**, from its row or from Past tasks. Apart from `cleared`, which a
+    /// Clear finished and the asking chat's close set too: a task whose row was only cleared
+    /// can still be reopened from Past tasks. Absent on every record written before this key.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reopened: bool,
 }
 
 /// Who ended a dispatch, where the app knows it was not the persona chat's own report alone.
@@ -393,6 +399,7 @@ pub fn open_as(
         cleared: false,
         ended_by: None,
         kept_open: false,
+        reopened: false,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -622,6 +629,163 @@ pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
         .count()
 }
 
+/// The finished task `id` was reopened as an ordinary chat, and the chat held (#1510): its
+/// record says so, and its row goes from its asking chat's list where it was still there
+/// (`cleared`). `false` for a record that is not there, is not a finished task's, or says so
+/// already.
+pub fn reopened(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.reopened || Finished::of(record).is_none() {
+            return false;
+        }
+        record.reopened = true;
+        record.cleared = true;
+        true
+    })
+}
+
+// ----- past tasks (#1510) --------------------------------------------------------------------
+
+/// The most past tasks one whole listing answers ([`past`]). **Decided from what the store
+/// keeps**: a record is collected 30 days after its last write, so the list is a month of one
+/// workspace's ended tasks. Five hundred is seventeen a day for the whole month, which is
+/// more than a person reads down; what is older than the bound is counted and said, never
+/// silently dropped.
+pub const MOST_PAST: usize = 500;
+
+/// How far before the last read a later read still looks, in milliseconds. A record is
+/// written to a temporary file and renamed into place, and keeps the time of the write, so
+/// one renamed just after a read can carry a time from just before it.
+const SINCE_SLACK_MS: u64 = 1000;
+
+/// What a listing of past tasks is asked for.
+#[derive(Debug, Clone, Copy)]
+pub struct PastAsk<'a> {
+    /// The most records a whole listing answers ([`MOST_PAST`]).
+    pub most: usize,
+    /// [`Past::read_at`] of the listing this one follows: only the records written since are
+    /// read. `None` reads the store whole.
+    pub since: Option<u64>,
+    /// Records to read whenever they were written, by id: [`Past::waiting`] of the listing
+    /// before. A task's record is not written again when its chat is closed, so nothing but
+    /// its name finds it then.
+    pub also: &'a [String],
+}
+
+/// A workspace's past tasks, as one read of the store answers them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Past {
+    /// Newest ended first. Of a whole read, at most [`PastAsk::most`]; of a later one, the
+    /// past tasks among the records it read.
+    pub records: Vec<Record>,
+    /// Tasks of this workspace that have reported and whose chat is still open, by record id:
+    /// not past yet, and what the next read is to ask about by name.
+    pub waiting: Vec<String>,
+    /// Past tasks older than the ones answered, which a whole read left out for its bound.
+    pub older: usize,
+    /// Files named as a record that do not read as one of this build's, among those read:
+    /// skipped and counted. **Of the whole store**, since a file that does not read names no
+    /// workspace.
+    pub unread: usize,
+    /// Records that read and that purlis will not draw ([`sound`]), among those read: the
+    /// whole store's too, for a name purlis will not draw is not one to match a workspace by.
+    pub refused: usize,
+    /// When the newest record seen was written, in milliseconds since the epoch: what the
+    /// next read hands back as [`PastAsk::since`].
+    pub read_at: u64,
+    /// Whether the store was read whole.
+    pub whole: bool,
+}
+
+/// Whether `record`'s dispatch was asked from `workspace` or worked in it (`None` is the
+/// project's root): what "dispatched in a workspace" means for its Past tasks.
+pub fn in_workspace(record: &Record, workspace: Option<&str>) -> bool {
+    record.asker.workspace.as_deref() == workspace || record.place.workspace.as_deref() == workspace
+}
+
+/// **A workspace's past tasks** (#1510, V100-52): every task asked from `workspace` or worked
+/// in it whose dispatch has ended with a report and whose chat is no longer open, newest ended
+/// first, of the records purlis draws. **Cleared or not**: a row cleared from its asking
+/// chat's list, or gone with that chat, is still here, which is where it went.
+///
+/// `open` answers for the chats the app has open now, as it does for [`finished`]: a task
+/// whose report is in and whose program purlis has not ended yet is still a chat in the Chats
+/// list, and is answered as [`Past::waiting`].
+///
+/// **Only this machine's store is read**: the records are the app's own state for this
+/// project, never committed, so nothing here is another machine's.
+///
+/// A whole read parses every record, as every listing of this store does, and answers at most
+/// [`PastAsk::most`]. **A later read does not read everything**: it stats each file and parses
+/// only those written since the read before ([`PastAsk::since`]) and those it is asked about
+/// by name ([`PastAsk::also`]). Its counts are of what it read, and it leaves nothing out.
+pub fn past(
+    root: &Path,
+    workspace: Option<&str>,
+    open: impl Fn(&ChatRef) -> bool,
+    ask: &PastAsk<'_>,
+) -> Past {
+    let mut past = Past {
+        read_at: ask.since.unwrap_or(0),
+        whole: ask.since.is_none(),
+        ..Past::default()
+    };
+    let from = ask.since.map(|at| at.saturating_sub(SINCE_SLACK_MS));
+    let Ok(entries) = std::fs::read_dir(dir(root)) else {
+        return past;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(id) = name.strip_suffix(".json").filter(|id| an_id(id)) else {
+            continue;
+        };
+        let written = entry
+            .metadata()
+            .ok()
+            .and_then(|found| found.modified().ok())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|at| u64::try_from(at.as_millis()).unwrap_or(u64::MAX));
+        if let Some(written) = written {
+            past.read_at = past.read_at.max(written);
+        }
+        // A file whose time cannot be read is read: never skipped on a guess.
+        if let (Some(from), Some(written)) = (from, written)
+            && written < from
+            && !ask.also.iter().any(|asked| asked == id)
+        {
+            continue;
+        }
+        let Some(record) = read(root, id) else {
+            past.unread += 1;
+            continue;
+        };
+        if !sound(&record) {
+            past.refused += 1;
+            continue;
+        }
+        if Finished::of(&record).is_none() || !in_workspace(&record, workspace) {
+            continue;
+        }
+        if open(&record.worker.chat) {
+            past.waiting.push(record.id);
+            continue;
+        }
+        past.records.push(record);
+    }
+    // By when it ended, as the record keeps it (one format, UTC, so the text sorts as the
+    // time does); two that ended in one second by the id, which sorts by when each started.
+    past.records
+        .sort_by(|a, b| (&b.ended, &b.id).cmp(&(&a.ended, &a.id)));
+    past.waiting.sort();
+    if past.whole && past.records.len() > ask.most {
+        past.older = past.records.len() - ask.most;
+        past.records.truncate(ask.most);
+    }
+    past
+}
+
 /// The newest task whose persona chat had the id `worker`, where a record names one: what a
 /// chat reopened from a finished task is told it was ([`crate::dispatched`]).
 pub fn task_worked_by(root: &Path, worker: &str) -> Option<Record> {
@@ -815,6 +979,7 @@ fn capped(record: &Record) -> Record {
         cleared: record.cleared,
         ended_by: record.ended_by,
         kept_open: record.kept_open,
+        reopened: record.reopened,
     }
 }
 

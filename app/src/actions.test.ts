@@ -1357,6 +1357,9 @@ describe("carrying out a row", () => {
         "openView:charter/piece-files/alpha/svc/fix-it,Files · fix-it",
         "openView:charter/vault/ops,ops",
         "openView:charter/changes/alpha,Changes · alpha",
+        // #1510: each workspace's Past tasks, filed on its own strip.
+        "openView:charter/past-tasks/alpha,Past tasks · alpha",
+        "openView:charter/past-tasks/beta,Past tasks · beta",
         "openView:charter/memory-archive/persona/steward,Archived memory · steward",
         "openView:charter/memory-archive/shared,Archived shared memory",
         "openView:charter/memory-archive/workspace/alpha,Archived memory · alpha",
@@ -1945,8 +1948,9 @@ describe("the palette at fifty chats", () => {
     // 601 since #1445: Set <persona>'s profile…, one row per persona.
     // 602 since #1452: Open dispatches, one row.
     // 603 since #1499: Open a chat beside the one in front, one row and not one per chat.
+    // 609 since #1510: Past tasks, one row per workspace (six here).
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(603);
+    expect(offers).toHaveLength(609);
   });
 
   /**

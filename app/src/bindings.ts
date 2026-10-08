@@ -896,6 +896,23 @@ export const commands = {
 	 */
 	clearFinishedTasks: (plane: PlaneId, ids: string[]) => typedError<number, string>(__TAURI_INVOKE("clear_finished_tasks", { plane, ids })),
 	/**
+	 *  **A workspace's past tasks** (#1510): every task asked from `workspace` or worked in it
+	 *  whose dispatch has ended and whose chat is closed, newest first, from the records this
+	 *  machine keeps for this project. `workspace` is `null` for the project's root. With `since`,
+	 *  only what was written since that read, and what was waiting then. On a blocking thread.
+	 */
+	pastTasks: (plane: PlaneId, workspace: string | null, since: {
+	/**  [`PastTasks::read_at`] of the read before. */
+	at: string,
+	/**  [`PastTasks::waiting`] of the read before. */
+	also: string[],
+} | null) => typedError<PastTasks, string>(__TAURI_INVOKE("past_tasks", { plane, workspace, since })),
+	/**
+	 *  One past task's brief and report (#1510), read when its row is opened: text, and drawn as
+	 *  text. On a blocking thread.
+	 */
+	pastTask: (plane: PlaneId, id: string) => typedError<PastTaskRead, string>(__TAURI_INVOKE("past_task", { plane, id })),
+	/**
 	 *  **Reopen** on a finished task's row (#1485): a NEW chat on the conversation the task ended
 	 *  in, as an ordinary chat with a tab ([`finished::reopen`]). It is no longer a task: it owes
 	 *  nobody a report, and the chat that asked is told nothing. The answer is the chat as the
@@ -4374,6 +4391,105 @@ export type Panels = {
 	 *  program started on every workspace focus would spend the 100 ms on a fork.
 	 */
 	contributed: PanelView[],
+};
+
+/**  What a later read of the list is asked with: the read it follows. */
+export type PastSince = {
+	/**  [`PastTasks::read_at`] of the read before. */
+	at: string,
+	/**  [`PastTasks::waiting`] of the read before. */
+	also: string[],
+};
+
+/**  One past task, as its row in the Past tasks view draws it. */
+export type PastTask = {
+	/**  Its dispatch record's id: what reading it and reopening it name it by. */
+	id: string,
+	/**  The task's name. */
+	name: string,
+	/**  The persona that ran it; `null` for a chat started as none. */
+	persona: string | null,
+	/**  The chat that asked, by the name the person saw. */
+	asker: string,
+	/**  The persona the asking chat ran as. */
+	asker_persona: string | null,
+	/**  Whether the person dispatched it themselves, from that chat's tab. */
+	by_person: boolean,
+	/**  How it ended, as a value: what the window draws its state from, as a finished row does. */
+	how: How,
+	/**  How it ended, in the core's words. */
+	outcome: string,
+	/**  When it started and when it ended, as the record keeps them (UTC, RFC 3339). */
+	started: string,
+	ended: string | null,
+	/**  How long it ran, spelled (`4m 30s`). Empty where its times do not read. */
+	duration: string,
+	/**  Where it worked: the workspace's name, or `project root`. */
+	place: string,
+	/**  Where it was asked from, where that is another place than it worked in. */
+	asked_from: string | null,
+	/**  The branch purlis cut for it, where its dispatch gave it one. */
+	branch: string | null,
+	/**  Its report's first line, cut short: what a row says before it is opened. */
+	says: string,
+	/**  The session record its chat wrote, by its project-relative path, where it wrote one. */
+	session_record: string | null,
+	/**
+	 *  Whether Reopen is offered: its record names the conversation it ended in, it was not
+	 *  reopened already, and no Reopen of it is under way. The rest of the finished row's
+	 *  rules (the harness, the folder) are checked for the one row that is opened ([`read`]),
+	 *  and again by the press.
+	 */
+	reopens: boolean,
+	/**  Whether it was reopened as an ordinary chat already. */
+	reopened: boolean,
+	/**  Why the last Reopen of it did not hold, where one did not. */
+	not_reopened: string | null,
+};
+
+/**  One past task, opened: its brief and its report, **as written and drawn as text**. */
+export type PastTaskRead = {
+	id: string,
+	/**  The brief it started on. */
+	brief: string,
+	/**  Its report: the task's words, or purlis's for one that sent none. */
+	report: string,
+	/**  What the report says changed, in the task's words, where it said. */
+	changed: string | null,
+	/**  The files and the commits its report named, where it named any. */
+	files: string[],
+	commits: string[],
+	/**
+	 *  Why it cannot be reopened, where it cannot: the finished row's own sentence
+	 *  ([`crate::finished::reopening`]). `null` where a Reopen would be taken.
+	 */
+	cannot_reopen: string | null,
+};
+
+/**  What the Past tasks view is handed. */
+export type PastTasks = {
+	/**  Newest ended first. Of a later read ([`PastSince`]), only the rows that are new or changed. */
+	rows: PastTask[],
+	/**
+	 *  Tasks of this workspace that have reported and whose chat is still open, by record id:
+	 *  they are in the Chats list, and the next read asks about them by name.
+	 */
+	waiting: string[],
+	/**
+	 *  Whether the store was read whole. A later read's rows are merged into the list; its
+	 *  counts below are not the store's, and the window keeps the whole read's.
+	 */
+	whole: boolean,
+	/**  Past tasks older than the ones listed, left out for the bound. */
+	older: number,
+	/**  The bound: the most rows a whole read answers. */
+	most: number,
+	/**  Records in the project's store that could not be read: skipped and counted. */
+	unread: number,
+	/**  Records purlis will not draw (`dispatchrecord::sound`). */
+	undrawn: number,
+	/**  What the next read hands back as [`PastSince::at`]. */
+	read_at: string,
 };
 
 /**  One percentage on the gauge, and the tone its threshold gives it. */

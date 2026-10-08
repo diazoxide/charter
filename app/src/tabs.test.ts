@@ -806,6 +806,7 @@ describe("a workspace's rename, in the keys of its views (#1248)", () => {
       ["workspace-settings", "alpha", "beta"],
       ["changes", "alpha", "beta"],
       ["repo-instructions", "alpha", "beta"],
+      ["past-tasks", "alpha", "beta"],
       ["todo", "alpha/20260302-091400-review", "beta/20260302-091400-review"],
       ["memory", "workspace/alpha/deploys", "workspace/beta/deploys"],
       ["memory", "workspace/alpha/\\", "workspace/beta/\\"],

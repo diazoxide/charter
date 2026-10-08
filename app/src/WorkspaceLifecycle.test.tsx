@@ -250,6 +250,7 @@ describe("deleting a workspace", () => {
       expect.stringContaining("New shell in alpha"),
       expect.stringContaining("Pin workspace alpha"),
       expect.stringContaining("Workspace settings…"),
+      expect.stringContaining("Past tasks"),
       expect.stringContaining("Make alpha live…"),
       expect.stringContaining("Rename workspace alpha…"),
       "New workspace…",

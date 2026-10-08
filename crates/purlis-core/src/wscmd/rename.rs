@@ -270,7 +270,7 @@ impl Move {
 /// never a key the record holds (`reopen::ViewOnDisk::held`).
 fn spelling(view: &str, workspace: &str) -> Option<(String, bool)> {
     match view {
-        "workspace-settings" | "changes" | "repo-instructions" => {
+        "workspace-settings" | "changes" | "repo-instructions" | "past-tasks" => {
             Some((workspace.to_owned(), true))
         }
         "todo" | "piece-files" | "piece-file" | "piece-diff" => Some((workspace.to_owned(), false)),
@@ -303,6 +303,7 @@ fn title_of(view: &str, workspace: &str) -> Option<String> {
         "workspace-settings" => "Workspace settings",
         "changes" => "Changes",
         "repo-instructions" => "Memory from the repo",
+        "past-tasks" => "Past tasks",
         "memory-archive" => "Archived memory",
         _ => return None,
     };

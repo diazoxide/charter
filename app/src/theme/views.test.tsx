@@ -58,6 +58,7 @@ import type {
   SessionRecordView,
   SettingsFile,
   VaultContents,
+  PastTasks,
   ViewAnswer,
   WorkspaceSettings,
 } from "../bindings";
@@ -606,6 +607,62 @@ const RECORD: SessionRecordView = {
   dispatches: [{ persona: "devops", task: "check prod", outcome: "done" }],
 };
 
+/** A workspace's past tasks (#1510): one that failed and cannot be reopened, one reopened,
+ *  and every line the view says about what it does not list. */
+const PAST_TASKS: PastTasks = {
+  rows: [
+    {
+      id: "01K6A",
+      name: "tidy the notes",
+      persona: "devops",
+      asker: "steward 3",
+      asker_persona: "steward",
+      by_person: false,
+      how: "failed",
+      outcome: "failed",
+      started: "2026-10-07T12:00:00+00:00",
+      ended: "2026-10-07T12:04:30+00:00",
+      duration: "4m 30s",
+      place: "web",
+      asked_from: "api",
+      branch: "purlis/tidy-the-notes",
+      says: "Tidied past.",
+      session_record: null,
+      reopens: false,
+      reopened: false,
+      not_reopened: "It could not be reopened: its harness ended at once.",
+    },
+    {
+      id: "01K69",
+      name: "count the hosts",
+      persona: null,
+      asker: "steward 3",
+      asker_persona: null,
+      by_person: true,
+      how: "stopped_by_person",
+      outcome: "closed by the person",
+      started: "2026-10-06T12:00:00+00:00",
+      ended: "2026-10-06T12:04:30+00:00",
+      duration: "4m 30s",
+      place: "web",
+      asked_from: null,
+      branch: null,
+      says: "",
+      session_record: "workspaces/web/sessions/2026-10-06-count.md",
+      reopens: false,
+      reopened: true,
+      not_reopened: null,
+    },
+  ],
+  waiting: [],
+  whole: true,
+  older: 3,
+  most: 500,
+  unread: 2,
+  undrawn: 1,
+  read_at: "1",
+};
+
 /** One dispatch that ran and reported, and one still running (#1452). */
 const DISPATCHES: DispatchRow[] = [
   {
@@ -744,6 +801,16 @@ const ORDINARY: Answers = {
   workspace_saving: REPO_SAVING,
   session_record: RECORD,
   dispatches: { rows: DISPATCHES, undrawn: 1 },
+  past_tasks: PAST_TASKS,
+  past_task: {
+    id: "01K6A",
+    brief: "Tidy the notes folder.",
+    report: "Tidied past.",
+    changed: "notes/: three files merged",
+    files: ["notes/a.md"],
+    commits: [],
+    cannot_reopen: "'tidy the notes' cannot be reopened: the folder it worked in is gone.",
+  },
   memory_read: MEMORY,
   todo_read: {
     workspace: "alpha",
@@ -924,6 +991,24 @@ const STATES: State[] = [
         }),
       );
     },
+  },
+  {
+    name: "a workspace's past tasks, one opened",
+    view: { from: null, view: "past-tasks", key: WORKSPACE },
+    drawn: /Tidied past\./,
+    then: async () => {
+      await userEvent.click(
+        await screen.findByRole("button", {
+          name: "Show the report and brief of tidy the notes",
+        }),
+      );
+    },
+  },
+  {
+    name: "a workspace's past tasks, none yet",
+    view: { from: null, view: "past-tasks", key: WORKSPACE },
+    answers: { past_tasks: { ...PAST_TASKS, rows: [] } },
+    drawn: /No past tasks yet/,
   },
   {
     name: "the project's dispatches, none yet",

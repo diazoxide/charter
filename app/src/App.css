@@ -5652,6 +5652,125 @@ h2.sidebar-title .node-icon {
   overflow-wrap: anywhere;
 }
 
+/* ---- A workspace's Past tasks (#1510) ------------------------------------------------- */
+
+/* The table is the Dispatches tab's, and so the vault's. What is added is the narrowing above
+   it, the state a row ends in, and the clipped text of an opened row. */
+.past-tools {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.past-tools .past-text,
+.past-tools .past-day input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.past-tools .past-text {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+}
+
+.past-tools .past-day {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.past-tools .past-all,
+.past-more {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.past-count {
+  max-width: 60rem;
+  margin: 0 0 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.past-tasks .past-name {
+  padding: 0.25rem 0;
+  color: var(--text-primary);
+}
+
+/* How it ended: the mark and the word every row says a state in, then the core's own word. */
+.past-tasks .past-end {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.past-tasks .past-end .outcome {
+  color: var(--text-muted);
+}
+
+/* Reopen where it would do nothing: still reachable, and drawn as not for pressing. */
+.past-tasks .dispatch-discard[aria-disabled="true"] {
+  opacity: 0.55;
+}
+
+.past-tasks .past-note td {
+  padding-block: 0 0.4rem;
+}
+
+.past-tasks .past-note p,
+.past-links,
+.past-not-shown p {
+  margin: 0 0 0.25rem;
+}
+
+/* A clipped report or brief keeps its own line breaks, and never grows past the pane. */
+.past-read pre {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.past-more {
+  margin: 0 0 0.5rem;
+}
+
+.past-not-shown {
+  max-width: 60rem;
+  margin-top: 0.5rem;
+}
+
+/* Where a chat's cleared rows went, under where they were (#1510). */
+.chats-section .finished-went {
+  max-width: 28rem;
+  margin: 0.1rem 0 0.2rem;
+  white-space: normal;
+}
+
+.chats-section .finished-past {
+  margin-inline-start: 0.3rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+}
+
+.chats-section .finished-past:hover {
+  background: var(--surface-hover);
+}
+
 /* The dispatches a session record's chat made, above the record's own text. */
 .session-dispatches {
   max-width: 60rem;

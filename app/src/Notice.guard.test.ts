@@ -130,12 +130,14 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "FindBar.tsx": { count: 1, why: "the find bar's match count, a live value" },
   "FinishedTasks.tsx": {
-    count: 1,
+    count: 2,
     why:
       ACTION +
       ": a finished task that could not be reopened, on its row beside Reopen. The core's " +
       "sentence says why (its folder is gone, its harness named no conversation), and its " +
-      "report is still on the row to read (#1485)",
+      "report is still on the row to read (#1485)" +
+      ". And what Clear finished just did (#1510): the answer to the press, under the chat " +
+      "it was pressed on, with See past tasks beside it as the way to where the rows went",
   },
   "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
   "FirstTaskTab.tsx": {
@@ -202,6 +204,15 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: "the palette's answers, counts and refusals, inside the palette dialog",
   },
   "Panels.tsx": { count: 3, why: "a panel's read refusal and its blocks' tone, inside the panel" },
+  "PastTasksTab.tsx": {
+    count: 3,
+    why:
+      "how many past tasks are listed and shown, a live value; a Reopen's refusal under the " +
+      "row it was pressed on (" +
+      ACTION +
+      "); and an opened row's read refusal, where shutting and opening the row is the retry. " +
+      "The list's own read refusal is a Notice with Read again",
+  },
   "PersonaProfile.tsx": {
     count: 2,
     why: ACTION + ". Also its read refusal: " + READ_ONCE,

@@ -11,7 +11,8 @@
 //!   (`dispatchrecord::Finished::folds`). A row goes when it is cleared, when the task is
 //!   reopened and its new chat is heard from, or when the chat that asked closes
 //!   ([`asker_closed`]). A row is matched to its chats by id, never by number. **Clearing takes the row
-//!   and nothing else**: the record stays, and is collected as any record is.
+//!   and nothing else**: the record stays, and is collected as any record is. Until then the
+//!   task is read in its workspace's Past tasks ([`crate::past`], #1510).
 //! - **Reopen** ([`reopen`]) starts a new chat on the conversation the task ended in, on the
 //!   profile, persona and folder the record names. **It is an ordinary chat**: the app records
 //!   no asking chat for it, so it owes nobody a report, a `purlis dispatch report` from it is
@@ -141,7 +142,10 @@ fn row(record: &Record, asker: u32, how: Finished) -> FinishedTask {
 /// does not stay a chat's own for that long: a chat started again is given a new one, and the
 /// count starts over where the record of open chats could not be read (`reopen::Record::dealt`
 /// holds it otherwise).
-fn is_open(recorded: &dispatchrecord::ChatRef, open: &crate::dispatches::OpenChat) -> bool {
+pub(crate) fn is_open(
+    recorded: &dispatchrecord::ChatRef,
+    open: &crate::dispatches::OpenChat,
+) -> bool {
     recorded.id.is_some() && recorded.id == open.id
 }
 
@@ -451,12 +455,15 @@ pub(crate) fn reopening(
 /// **Reopens the finished task `id`** as an ordinary chat on its conversation, and answers the
 /// new chat's number. The chat that asked is told nothing, here or later.
 ///
-/// **One Reopen of a row at a time, and one for good**: a second press while the first is
-/// starting its chat, and a press on a row already cleared, are refused, under one lock
-/// (`Tasks::reopen_begins`). So one row is one chat on its conversation.
+/// **One Reopen of a task at a time, and one for good**: a second press while the first is
+/// starting its chat, and a press on a task already reopened, are refused, under one lock
+/// (`Tasks::reopen_begins`). So one task is one chat on its conversation, whether the press
+/// was on its finished row or in Past tasks (#1510), which is the one other place it is
+/// offered. A row that was only cleared can still be reopened from there.
 ///
-/// **The row is not cleared here.** It is not drawn while the new chat starts, and is cleared
-/// when that chat is first heard from, or has lived long enough to have resumed. A chat that
+/// **The row is not cleared here.** It is not drawn while the new chat starts, and is marked
+/// reopened, and so cleared, when that chat is first heard from, or has lived long enough to
+/// have resumed (`dispatchrecord::reopened`). A chat that
 /// ends at once is a harness that could not bring the conversation back: the row is drawn
 /// again and says so (`dispatched::NOT_RESUMED`).
 pub(crate) fn reopen(
@@ -468,9 +475,9 @@ pub(crate) fn reopen(
         return Err("That task is being reopened already: its chat is starting.".to_owned());
     }
     let started = match dispatchrecord::read(held.root(), id) {
-        Some(record) if record.cleared => Err(
-            "That task was reopened or cleared already, so there is no row to reopen.".to_owned(),
-        ),
+        // **Reopened, and not merely cleared** (#1510): a row cleared from the sidebar, or
+        // gone with the chat that asked, is still reopened from Past tasks, once.
+        Some(record) if record.reopened => Err(crate::past::REOPENED_ALREADY.to_owned()),
         _ => reopening(held, id)
             .and_then(|(chat, ready)| held.chats().start_ready(&chat, &ready, size)),
     };
@@ -576,6 +583,7 @@ mod tests {
             cleared: false,
             ended_by: None,
             kept_open: false,
+            reopened: false,
         }
     }
 

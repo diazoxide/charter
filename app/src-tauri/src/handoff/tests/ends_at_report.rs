@@ -13,6 +13,9 @@ use super::*;
 /// What ends and what does not once a task has reported, on the real clock (fix round 1).
 mod working_again;
 
+/// Past tasks: what is read of a task after it has ended (#1510).
+mod past_tasks;
+
 /// A steward chat and the one task it dispatched, on a pretend host.
 fn a_steward_and_its_task() -> (Plane, Pretend, Planes, PlaneId, Arc<Held>, u32, u32) {
     let plane = a_plane_with_personas();
@@ -452,7 +455,7 @@ fn reopen_resumes_the_conversation_as_an_ordinary_chat_that_reports_to_nobody() 
     assert_eq!(finished_under(&held, steward), Vec::new());
     assert_eq!(
         crate::finished::reopen(&held, &row.id, A_SIZE).unwrap_err(),
-        "That task was reopened or cleared already, so there is no row to reopen."
+        crate::past::REOPENED_ALREADY
     );
     assert_eq!(open_chats(&held).len(), chats_before);
 

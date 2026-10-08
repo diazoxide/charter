@@ -9,6 +9,9 @@ import type { ViewRef } from "./tabs";
  * It is a view tab, `{ from: null, view: "dispatches", key: "" }`: one per project, opened from
  * the palette's `dispatches.show` row and from the Sessions panel's heading. The records are the
  * app's own, kept on this machine and never committed, so the tab lists what this machine saw.
+ *
+ * It is the project's ledger. One workspace's ended tasks, to search and to reopen, are its
+ * Past tasks (#1510, `pastTasks.ts`), read from the same records.
  */
 export const DISPATCHES_VIEW: ViewRef = { from: null, view: "dispatches", key: "" };
 

@@ -18,18 +18,26 @@ import { StateShown } from "./StateShown";
  * ever read as markup. **Reopen** resumes its conversation as an ordinary chat with a tab; it
  * is then no longer a task, and the chat that asked is told nothing.
  *
+ * **Cleared rows go to Past tasks** (#1510): clearing takes a row off this list and leaves its
+ * record, and the workspace's Past tasks view is where it is read from then. Clear finished
+ * says so, on its button and in the line it leaves behind, with the one press that goes there.
+ *
  * Not rows of the tree: there is no chat behind one to bring forward, so the arrows stop on the
  * chats and Tab reaches these, each a button of its own.
  */
 export const FinishedTasks = memo(function FinishedTasks({
   asker,
+  session,
   level,
   tasks,
   onClear,
   onReopen,
+  onPastTasks,
 }: {
   /** The chat that asked for them, by the name its row has. */
   asker: string;
+  /** That chat, by its number: what {@link onPastTasks} is told. */
+  session?: number;
   /** The level its tasks are drawn at: one below its own. */
   level: number;
   tasks: readonly FinishedTask[];
@@ -37,16 +45,52 @@ export const FinishedTasks = memo(function FinishedTasks({
   onClear: (ids: string[]) => void;
   /** Reopens one as an ordinary chat; answers why not, where it could not. */
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
+  /** Opens the Past tasks of the workspace chat `asker` works in. */
+  onPastTasks?: (asker: number) => void;
 }) {
   /** Whether the folded rows are drawn. This window's own, and folded to start with. */
   const [open, setOpen] = useState(false);
-  if (tasks.length === 0) return null;
+  /** How many rows this window cleared from under this chat: what the line left behind says,
+   *  until the list is drawn anew. */
+  const [cleared, setCleared] = useState(0);
+  const clear = (ids: string[]) => {
+    setCleared((was) => was + ids.length);
+    onClear(ids);
+  };
+  const past = onPastTasks !== undefined && session !== undefined && (
+    <button
+      type="button"
+      className="finished-past"
+      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+      tabIndex={0}
+      aria-label={`See past tasks, from ${asker}`}
+      title="Every task dispatched in this workspace that has ended, cleared or not."
+      onClick={() => onPastTasks(session)}
+    >
+      See past tasks
+    </button>
+  );
+  /* Where the cleared rows went, said where they were (#1510). */
+  const went = cleared > 0 && (
+    <p className="finished-went" role="status">
+      {cleared === 1
+        ? "Cleared 1 finished task. It stays in Past tasks."
+        : `Cleared ${cleared} finished tasks. They stay in Past tasks.`}
+      {past}
+    </p>
+  );
+  if (tasks.length === 0)
+    return went ? (
+      <li role="none" className="finished-tasks" data-level={level}>
+        {went}
+      </li>
+    ) : null;
   const { alone, folded } = foldedOf(tasks);
   return (
     <li role="none" className="finished-tasks" data-level={level}>
       <div role="group" aria-label={`Finished tasks of ${asker}`}>
         {alone.map((task) => (
-          <FinishedRow key={task.id} task={task} onClear={onClear} onReopen={onReopen} />
+          <FinishedRow key={task.id} task={task} onClear={clear} onReopen={onReopen} />
         ))}
         {folded.length > 0 && (
           <div className="finished-fold">
@@ -65,8 +109,8 @@ export const FinishedTasks = memo(function FinishedTasks({
               type="button"
               className="finished-clear"
               tabIndex={0}
-              title="Takes these rows away. Their dispatch records stay."
-              onClick={() => onClear(folded.map((task) => task.id))}
+              title="Takes these rows away. They stay in Past tasks."
+              onClick={() => clear(folded.map((task) => task.id))}
             >
               Clear finished
             </button>
@@ -74,7 +118,10 @@ export const FinishedTasks = memo(function FinishedTasks({
         )}
         {open &&
           folded.map((task) => <FinishedRow key={task.id} task={task} onReopen={onReopen} />)}
+        {/* With the fold open, the way to the ones no longer listed here. */}
+        {open && !went && past && <p className="finished-went">{past}</p>}
       </div>
+      {went}
     </li>
   );
 });
@@ -158,7 +205,7 @@ function FinishedRow({
             className="finished-clear"
             tabIndex={0}
             aria-label={`Clear ${task.name}`}
-            title="Takes this row away. Its dispatch record stays."
+            title="Takes this row away. It stays in Past tasks."
             onClick={() => onClear([task.id])}
           >
             Clear

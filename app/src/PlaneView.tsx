@@ -197,6 +197,8 @@ import {
   viewNamedNow,
   workspaceSettingsTitle,
   workspaceSettingsView,
+  pastTasksTitle,
+  pastTasksView,
   renameTab,
   viewKey,
   selectTab,
@@ -247,6 +249,7 @@ import { useMemoryEdits } from "./MemoryEdits";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewPane } from "./Views";
 import type { FirstTaskDoes } from "./FirstTaskTab";
+import type { PastTasksDoes } from "./PastTasksTab";
 import { useTabStop } from "./roving";
 import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
@@ -3792,7 +3795,7 @@ export const PlaneView = memo(function PlaneView({
    * refusal is the row's to say.
    */
   const reopenFinished = useCallback(
-    async (task: FinishedTask): Promise<string | undefined> => {
+    async (task: Pick<FinishedTask, "id">): Promise<string | undefined> => {
       const said = await commands
         .reopenFinishedTask(plane, task.id, STARTING_SIZE.columns, STARTING_SIZE.rows)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -3806,6 +3809,27 @@ export const PlaneView = memo(function PlaneView({
       return undefined;
     },
     [change, noteStarted, plane, rereadFinished],
+  );
+
+  /** What a workspace's Past tasks asks of this window (#1510): Reopen, by the finished row's
+   *  own path, so a task is reopened one way wherever the press was. */
+  const pastTasksDoes = useMemo<PastTasksDoes>(
+    () => ({ reopen: (id) => reopenFinished({ id }) }),
+    [reopenFinished],
+  );
+  /**
+   * **See past tasks**, from under a chat's finished rows (#1510): the Past tasks of the
+   * workspace that chat works in, on that workspace's strip; the project root's for a chat in
+   * no workspace.
+   */
+  const seePastTasks = useCallback(
+    (asker: number) => {
+      const workspace = sidebar?.workspaces.find((ws) =>
+        ws.chats.some((chat) => chat.session === asker),
+      )?.name;
+      showView(pastTasksView(workspace ?? ""), pastTasksTitle(workspace ?? ""), workspace);
+    },
+    [showView, sidebar],
   );
 
   /**
@@ -6188,6 +6212,7 @@ export const PlaneView = memo(function PlaneView({
                 finished={finishedTasks}
                 onClearFinished={clearFinished}
                 onReopen={reopenFinished}
+                onPastTasks={seePastTasks}
               />
               <Explorer
                 plane={plane}
@@ -6293,6 +6318,7 @@ export const PlaneView = memo(function PlaneView({
                       change((tabs) => showInstead(tabs, from, to, title)),
                   }}
                   firstTask={firstTaskDoes}
+                  pastTasks={pastTasksDoes}
                   split={{
                     of: (view) => splitOf(tabs, view),
                     moved: (view, split) => change((tabs) => setSplit(tabs, view, split)),
@@ -7913,6 +7939,7 @@ function LayoutPanes({
   onVaultChanged,
   memory,
   firstTask,
+  pastTasks,
   split,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
@@ -7985,6 +8012,8 @@ function LayoutPanes({
   };
   /** What the first task's tab asks the plane to do (FR-28). */
   firstTask: FirstTaskDoes;
+  /** What a workspace's Past tasks asks the plane to do (#1510). */
+  pastTasks: PastTasksDoes;
   /** Where a view's divider was, and where the operator moved it to (FM-2). */
   split: {
     of: (view: ViewRef) => number | undefined;
@@ -8029,6 +8058,7 @@ function LayoutPanes({
               onCloseView={memory.onClose}
               onShowInstead={memory.showInstead}
               firstTask={firstTask}
+              pastTasks={pastTasks}
               split={split.of(content.view)}
               onSplit={(to) => split.moved(content.view, to)}
             />
@@ -8193,6 +8223,7 @@ function LayoutPanes({
               onVaultChanged={onVaultChanged}
               memory={memory}
               firstTask={firstTask}
+              pastTasks={pastTasks}
               split={split}
             />
           </Panel>

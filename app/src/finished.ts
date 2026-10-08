@@ -14,8 +14,8 @@ import { shownState, type Shown, type TaskFacts } from "./shownState";
  * - **every other end stays a row of its own** until it is cleared: failed, blocked, ended
  *   without a report, closed by the person. A failure is never hidden behind a count.
  *
- * Clearing takes rows away and nothing else: the records stay, and the Dispatches tab still
- * lists them.
+ * Clearing takes rows away and nothing else: the records stay, and the workspace's Past tasks
+ * (#1510, `pastTasks.ts`) is where they are read from then.
  */
 
 /** A chat's finished tasks, as its rows are drawn: the ones that stand alone, oldest first,

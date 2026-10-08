@@ -593,7 +593,7 @@ pub(crate) fn row(
 
 /// How long `record`'s dispatch ran, or has run by `now`: `45s`, `4m 30s`, `2h 5m`. Empty for
 /// a record whose times do not read.
-fn lasted(record: &Record, now: chrono::DateTime<chrono::Utc>) -> String {
+pub(crate) fn lasted(record: &Record, now: chrono::DateTime<chrono::Utc>) -> String {
     let at = |stamp: &str| {
         chrono::DateTime::parse_from_rfc3339(stamp)
             .ok()
@@ -991,6 +991,7 @@ mod tests {
             cleared: false,
             ended_by: None,
             kept_open: false,
+            reopened: false,
         }
     }
 

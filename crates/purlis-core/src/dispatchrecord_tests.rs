@@ -1448,3 +1448,255 @@ fn a_chat_the_person_took_over_is_marked_on_its_record_once() {
     assert!(!serde_json::to_string(&task).unwrap().contains("kept_open"));
     assert!(!serde_json::to_string(&task).unwrap().contains("ended_by"));
 }
+
+// ----- past tasks (#1510) --------------------------------------------------------------------
+
+/// A task asked from `asked` that worked in `worked`, ended at 12:`minute`:30 with `report`.
+fn a_past_task(root: &Path, name: &str, asked: &str, worked: &str, minute: u32) -> Record {
+    let opening = Opening {
+        mode: Mode::Task,
+        task: Some(name.to_owned()),
+        asker: Asker {
+            workspace: Some(asked.to_owned()),
+            ..a_handoff().asker
+        },
+        worker: Worker {
+            chat: ChatRef {
+                chat: 7,
+                id: Some(mint()),
+                name: name.to_owned(),
+                persona: Some("devops".to_owned()),
+            },
+            ..a_handoff().worker
+        },
+        place: Place {
+            workspace: Some(worked.to_owned()),
+            folder: Some(format!("workspaces/{worked}")),
+            worktree: None,
+        },
+        ..a_handoff()
+    };
+    let opened = open(root, opening, at(&format!("2026-10-07T12:{minute:02}:00Z"))).unwrap();
+    close(
+        root,
+        &opened.id,
+        Ending {
+            report: Some(done("Done.")),
+            usage: None,
+        },
+        at(&format!("2026-10-07T12:{minute:02}:30Z")),
+    )
+    .unwrap();
+    read(root, &opened.id).unwrap()
+}
+
+/// Everything, up to `most`.
+fn whole(most: usize) -> PastAsk<'static> {
+    PastAsk {
+        most,
+        since: None,
+        also: &[],
+    }
+}
+
+fn ids(records: &[Record]) -> Vec<String> {
+    records.iter().map(|record| record.id.clone()).collect()
+}
+
+/// Sets when the record `id` was last written, as the file says it.
+fn written(root: &Path, id: &str, ago: std::time::Duration) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir(root).join(format!("{id}.json")))
+        .unwrap();
+    file.set_modified(std::time::SystemTime::now() - ago)
+        .unwrap();
+}
+
+#[test]
+fn past_tasks_are_the_ended_tasks_of_one_workspace_newest_ended_first_cleared_or_not() {
+    let (_d, root) = project();
+    // Opened first and ended last: the order is by when a task ended, not when it started.
+    let long = a_past_task(&root, "the long one", "alpha", "alpha", 9);
+    let asked_here = a_past_task(&root, "asked here, worked there", "alpha", "beta", 2);
+    let worked_here = a_past_task(&root, "asked there, worked here", "beta", "alpha", 3);
+    let elsewhere = a_past_task(&root, "another workspace's", "gamma", "gamma", 4);
+    // Cleared from the sidebar: this is where it went.
+    assert!(clear(&root, &asked_here.id).unwrap());
+    // A handoff that ended is not a task, and a task still running has not ended.
+    let moved = open(&root, a_handoff(), at("2026-10-07T12:05:00Z")).unwrap();
+    close(
+        &root,
+        &moved.id,
+        Ending {
+            report: Some(done("Moved.")),
+            usage: None,
+        },
+        at("2026-10-07T12:06:00Z"),
+    )
+    .unwrap();
+    open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:07:00Z"),
+    )
+    .unwrap();
+    // And one whose report is in and whose chat purlis has not ended yet: still in the Chats
+    // list, so not here, and named as one to ask about again.
+    let reported = a_past_task(&root, "reported a moment ago", "alpha", "alpha", 8);
+    let its_chat = reported.worker.chat.clone();
+
+    let past = past(
+        &root,
+        Some("alpha"),
+        |worker| same_chat(worker, &its_chat),
+        &whole(MOST_PAST),
+    );
+
+    assert_eq!(
+        ids(&past.records),
+        vec![
+            long.id.clone(),
+            worked_here.id.clone(),
+            asked_here.id.clone()
+        ]
+    );
+    assert!(past.records[2].cleared);
+    assert_eq!(past.waiting, vec![reported.id.clone()]);
+    assert_eq!((past.older, past.unread, past.refused), (0, 0, 0));
+    assert!(past.whole);
+
+    // Another workspace's list is its own, and the project root's has none of these.
+    let gamma = super::past(&root, Some("gamma"), nobody_open, &whole(MOST_PAST));
+    assert_eq!(ids(&gamma.records), vec![elsewhere.id]);
+    assert!(
+        super::past(&root, None, nobody_open, &whole(MOST_PAST))
+            .records
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_record_that_does_not_read_is_skipped_and_counted_and_one_purlis_will_not_draw_is_too() {
+    let (_d, root) = project();
+    let good = a_past_task(&root, "check prod", "alpha", "alpha", 1);
+    // Cut short, and a record of a version this build does not read.
+    std::fs::write(dir(&root).join(format!("{}.json", mint())), "{ \"v\": 1, ").unwrap();
+    let newer = mint();
+    std::fs::write(
+        dir(&root).join(format!("{newer}.json")),
+        serde_json::to_string(&Record {
+            v: VERSION + 1,
+            id: newer.clone(),
+            ..good.clone()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    // Not a record's name: nobody's to count.
+    std::fs::write(dir(&root).join("notes.json"), "{}").unwrap();
+    // Reads, and holds a character purlis refuses to put on the screen.
+    planted(&root, |record| {
+        record.task = Some("check\u{202e}prod".to_owned());
+    });
+
+    let past = past(&root, Some("alpha"), nobody_open, &whole(MOST_PAST));
+
+    assert_eq!(ids(&past.records), vec![good.id]);
+    assert_eq!((past.unread, past.refused), (2, 1));
+}
+
+#[test]
+fn a_listing_holds_the_newest_up_to_its_bound_and_says_how_many_older_ones_it_left_out() {
+    let (_d, root) = project();
+    let _oldest = a_past_task(&root, "one", "alpha", "alpha", 1);
+    let second = a_past_task(&root, "two", "alpha", "alpha", 2);
+    let third = a_past_task(&root, "three", "alpha", "alpha", 3);
+
+    let past = past(&root, Some("alpha"), nobody_open, &whole(2));
+
+    assert_eq!(ids(&past.records), vec![third.id, second.id]);
+    assert_eq!(past.older, 1);
+}
+
+#[test]
+fn a_later_read_reads_what_was_written_since_and_what_was_waiting_and_nothing_else() {
+    let (_d, root) = project();
+    let hour = std::time::Duration::from_secs(3600);
+    let old = a_past_task(&root, "last week's", "alpha", "alpha", 1);
+    let waiting = a_past_task(&root, "reported a moment ago", "alpha", "alpha", 2);
+    written(&root, &old.id, hour * 2);
+    written(&root, &waiting.id, hour);
+    let its_chat = waiting.worker.chat.clone();
+    let still_open = |worker: &ChatRef| same_chat(worker, &its_chat);
+
+    let first = past(&root, Some("alpha"), still_open, &whole(MOST_PAST));
+    assert_eq!(ids(&first.records), vec![old.id.clone()]);
+    assert_eq!(first.waiting, vec![waiting.id.clone()]);
+
+    // A task ends while the view is open.
+    let new = a_past_task(&root, "just ended", "alpha", "alpha", 3);
+    // The waiting one's record is not written again when its chat is closed: only being asked
+    // about by name finds it. Put well before the first read, so nothing else can.
+    written(&root, &waiting.id, hour * 3);
+    let also = first.waiting.clone();
+    let later = past(
+        &root,
+        Some("alpha"),
+        nobody_open,
+        &PastAsk {
+            most: MOST_PAST,
+            since: Some(first.read_at),
+            also: &also,
+        },
+    );
+
+    // The new one and the one that was waiting: last week's is not read again.
+    assert_eq!(
+        ids(&later.records),
+        vec![new.id.clone(), waiting.id.clone()]
+    );
+    assert!(!later.whole);
+    assert!(later.waiting.is_empty());
+    assert!(later.read_at >= first.read_at);
+
+    // With nothing written since and nothing waiting, a read answers nothing.
+    written(&root, &new.id, hour);
+    let nothing = past(
+        &root,
+        Some("alpha"),
+        nobody_open,
+        &PastAsk {
+            most: MOST_PAST,
+            since: Some(later.read_at),
+            also: &[],
+        },
+    );
+    assert!(nothing.records.is_empty());
+}
+
+#[test]
+fn a_reopened_task_is_marked_so_once_and_a_cleared_one_is_not_reopened() {
+    let (_d, root) = project();
+    let task = a_past_task(&root, "check prod", "alpha", "alpha", 1);
+    assert!(clear(&root, &task.id).unwrap());
+    // Cleared from the sidebar, and never reopened.
+    assert!(!read(&root, &task.id).unwrap().reopened);
+    assert!(!serde_json::to_string(&task).unwrap().contains("reopened"));
+
+    assert!(reopened(&root, &task.id).unwrap());
+    assert!(!reopened(&root, &task.id).unwrap());
+    let kept = read(&root, &task.id).unwrap();
+    assert!(kept.reopened && kept.cleared);
+
+    // Its row goes from the sidebar with the same mark, where it was still there.
+    let other = a_past_task(&root, "check staging", "alpha", "alpha", 2);
+    assert!(reopened(&root, &other.id).unwrap());
+    assert!(read(&root, &other.id).unwrap().cleared);
+    // A dispatch that is not a finished task is not one that was reopened.
+    let running = open(&root, a_handoff(), at("2026-10-07T12:09:00Z")).unwrap();
+    assert!(!reopened(&root, &running.id).unwrap());
+}

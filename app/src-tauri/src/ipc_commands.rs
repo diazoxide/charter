@@ -140,6 +140,8 @@ macro_rules! app_commands {
                 dispatches::dispatch_worktree_discard,
                 finished::finished_tasks,
                 finished::clear_finished_tasks,
+                past::past_tasks,
+                past::past_task,
                 reopen_finished_task,
                 resume_session,
                 autosave::plane_fetch,

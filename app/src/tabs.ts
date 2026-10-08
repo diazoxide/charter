@@ -109,6 +109,24 @@ export function repoInstructionsTitle(workspace: string): string {
 }
 
 /**
+ * **A workspace's past tasks** (#1510, V100-52): what was dispatched in it, read after each
+ * task has ended, from the dispatch records this machine keeps. Keyed by the workspace, like
+ * its changes, so there is one tab per workspace and it is filed on that workspace's strip.
+ */
+export function pastTasksView(workspace: string): ViewRef {
+  return { from: null, view: PAST_TASKS_VIEW, key: workspace };
+}
+
+/** Which of purlis's own views Past tasks is. */
+export const PAST_TASKS_VIEW = "past-tasks";
+
+/** What a workspace's Past tasks tab is called. The project's root, which is no workspace, is
+ *  keyed by no name. */
+export function pastTasksTitle(workspace: string): string {
+  return `Past tasks · ${workspace === "" ? "project root" : workspace}`;
+}
+
+/**
  * **The first task** (FR-28, #621): the guided task FR-1 measures, run twice on the repo the first
  * run opened — each run a chat on a branch of its own, with the task typed and unsent — and both
  * diffs one press away. Keyed by the repo's clone, which is where each run's branch is cut, and
@@ -637,6 +655,7 @@ const BY_WORKSPACE: { view: string; spell: (workspace: string) => string; whole:
   { view: "workspace-settings", spell: (ws) => ws, whole: true },
   { view: "changes", spell: (ws) => ws, whole: true },
   { view: "repo-instructions", spell: (ws) => ws, whole: true },
+  { view: PAST_TASKS_VIEW, spell: (ws) => ws, whole: true },
   { view: "todo", spell: (ws) => ws, whole: false },
   { view: "piece-files", spell: (ws) => ws, whole: false },
   { view: "piece-file", spell: (ws) => ws, whole: false },
@@ -651,6 +670,7 @@ const TITLED_BY_WORKSPACE: Record<string, (workspace: string) => string> = {
   "workspace-settings": workspaceSettingsTitle,
   changes: changesTitle,
   "repo-instructions": repoInstructionsTitle,
+  [PAST_TASKS_VIEW]: pastTasksTitle,
   "memory-archive": (ws) => archiveTitle({ kind: "workspace", name: ws }),
   "first-task": firstTaskTitle,
   "harness-setup": harnessSetupTitle,
