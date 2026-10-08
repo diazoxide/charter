@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791482571558,
+  "lastUpdate": 1791490255633,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3570,6 +3570,48 @@ window.BENCHMARK_DATA = {
             "value": 104.47006049999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.406, 102.789, 104.470, 104.620, 106.354 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "290ad5650ab4776cccedcfc967b6142da3dd4525",
+          "message": "A token is stored for the one vault whose tab it was put in from\n\nReview round for the vault tab's token box.\n\n- A store marks the vault the person is in and no other. Marking every\n  vault read through the same variable is taken out: a vault the\n  committed registry names is never given a token the person did not\n  put in from its own tab. The tab names the other vaults that still\n  have none, each a link to its own tab: a pointer, never a write.\n- A token stored again replaces the old one: the previous record's\n  keyring items are deleted once the new record is saved. A store that\n  fails part way deletes what it had stored and leaves the record as it\n  was.\n- A kept token that does not read the vault is no longer blamed for\n  every failure. The answer says what kind of failure it was, and the\n  tab says to replace the token only for a refused sign-in; a missing or\n  moved program and a network that is down say what they are. The box\n  stays in every case, with Read again beside it.\n- A vault read through several variables draws no box that every press\n  would be refused.\n- A read that fails after a store is never shown beside \"Stored\".\n- An open vault tab reads again when a token is stored in another.\n- An unreadable vault's health line is its refusal, not another run of\n  the provider.\n- The doctor row's hint is true on a machine with no window, the row is\n  not printed inside a chat, and it says \"marked as kept\".\n- The test that no answer carries the token now runs a provider\n  stand-in that prints the token it was handed.\n\nDecided in implementation: D-1526-7 (replaces D-1526-3) to D-1526-11.\n\nRefs #1526\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T00:01:06+04:00",
+          "tree_id": "cde10f5196fbb0c4a57f180d50641d436c3b41d4",
+          "url": "https://github.com/purlis/purlis/commit/290ad5650ab4776cccedcfc967b6142da3dd4525"
+        },
+        "date": 1791490254888,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5967985,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.594, 0.594, 0.597, 0.610, 0.622 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.077468000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.989, 16.052, 16.077, 16.155, 16.522 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.872724,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.068, 101.271, 101.873, 101.882, 102.175 ms"
           }
         ]
       }
