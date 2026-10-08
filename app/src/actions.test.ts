@@ -2908,6 +2908,9 @@ describe("the chats inside the tab in front (#1487)", () => {
             [
               {
                 chat: null,
+                did_not_start: false,
+                attempts: 0,
+                waits: null,
                 id: "01K6",
                 asker: 9,
                 name: "old",

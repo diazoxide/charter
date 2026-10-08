@@ -674,6 +674,52 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   reads `waiting on the operator` to the chat that asked. That chat cannot answer for you,
   and is told the wait is not its own to end.
 
+### When a task does not start
+
+A dispatch can be let through and still start no chat: the profile's program is missing or
+does not answer as its harness, the sandbox will not wrap it, there is no pseudo-terminal, its
+folder or workspace is gone, its worktree could not be cut, or a limit filled between the
+person's Allow and the start (`crates/purlis-core/src/didnotstart.rs`, #1497).
+
+Such a task is a finished one, failed, under the chat that asked. Its dispatch record ends
+with purlis's own sentence, `it did not start: <reason>`, and is marked `did_not_start`; its
+row is read from that record, never folds, is cleared as the others are, and is there after
+the app is started again. The window draws no line across itself for it. A task tried again
+and refused again is one row, which says how often and gives the latest reason. A worktree
+that was cut for it and could not be taken back is named on the row. `purlis dispatch list`
+says `did not start`.
+
+The chat that asked is told once:
+
+- **while its own command is still on the line** (`purlis dispatch`, with or without
+  `--wait`), that command prints the refusal, as it always did. The row is written, and
+  nothing is left for the chat's next turn.
+- **where the person pressed Allow on the dispatch's Notice**, it is told as it is told a
+  task's report: `failed`, in purlis's voice, with the reason quoted as data. It is listed by
+  a chat number, so `purlis dispatch wait <chat>` returns at once with it, and a chat waiting
+  for the person is typed the one line a landed report types.
+
+A start that the person's stop refused is not a failed start: the stop says what became of
+the chats below it, and no row is written. A task the person asked for from a tab is answered
+in the dialog they asked from, and leaves no row.
+
+**A launch that cannot start a task again ends nothing.** The reason is a condition of the
+machine at that moment (a profile waiting on the person's approval, a harness mid-update, a
+folder on a volume not mounted yet, more chats recorded than a launch starts), and the task
+is still a task: same chat, same number, its report still owed. It stays recorded and is
+tried again at the next launch. Where the chat that asked came back, the task is drawn under
+it with the reason, and its row offers Try to start again, Review and approve… where its
+profile waits on that, and End task. The chat that asked is sent nothing: `purlis dispatch
+wait <chat>` on it answers at once with `waiting on the operator: it did not start again
+(<reason>)`, and `list` says the same. **Only End task ends it**: its record then ends failed
+with the reason and keeps its conversation, so Reopen on the row carries it on as an ordinary
+chat; it leaves the reopen record; and the chat that asked is told once, as a failed report.
+If its record cannot be ended, nothing is forgotten and the row says why.
+
+A chat the person opened, a handoff's chat, a task that had already reported, and a task
+whose asking chat did not come back either stay in the window's own list of chats that did
+not start, with Retry now and Forget this chat, as before.
+
 ### Asking a persona yourself
 
 You can dispatch too, from the app: **Ask <persona>…** on a chat's tab menu and in the palette,
