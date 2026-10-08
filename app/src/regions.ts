@@ -1,6 +1,13 @@
 import { useCallback, useState } from "react";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
+import {
+  chatsListPrefs,
+  forgetChatsListPrefs,
+  isDefaultChatsList,
+  onChatsListPrefs,
+  type ChatsListPrefs,
+} from "./chatsListPrefs";
 import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
 import { forgetGroups } from "./settings/links";
 import { forgetDismissals } from "./dismissals";
@@ -157,6 +164,8 @@ type Document = {
   text: TextSizes;
   /** Your editor (`yourEditor.ts`, RC-20), when one is chosen. */
   editor?: YourEditor;
+  /** How the Chats list is drawn (`chatsListPrefs.ts`, #1499), when it is not the default. */
+  chats?: ChatsListPrefs;
 };
 
 /** A document read field by field, and what had to be put right to read it. */
@@ -272,6 +281,7 @@ export function forgetThisLaunch(): void {
   writing = Promise.resolve();
   forgetTextSizes();
   forgetYourEditor();
+  forgetChatsListPrefs();
   forgetDismissals();
   forgetGroups();
   clearTimeout(textWrite);
@@ -331,11 +341,13 @@ const where = (path: string) => path || "the layout file";
 
 const asDocument = (regions: Arrangement): Document => {
   const editor = yourEditor();
+  const chats = chatsListPrefs();
   return {
     version: VERSION,
     regions,
     text: textSizes(),
     ...(editor !== undefined ? { editor } : {}),
+    ...(isDefaultChatsList(chats) ? {} : { chats }),
   };
 };
 
@@ -353,6 +365,9 @@ onTextSizes(() => {
 
 /** Your editor was chosen (RC-20): one change, written at once. */
 onYourEditor(() => remember(remembered()));
+
+/** How the Chats list is drawn was changed (#1499): one change, written at once. */
+onChatsListPrefs(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

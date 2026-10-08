@@ -2475,15 +2475,10 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
-.explorer .started-chat .elsewhere,
-.chats-section .workspace,
-.chats-section .from {
-  color: var(--text-muted);
-  font-size: 0.9em;
-}
-
 .explorer .started-chat .elsewhere {
   padding: 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.9em;
   border: 1px solid var(--border-subtle);
   border-radius: 2px;
 }
@@ -2537,21 +2532,178 @@ h2.sidebar-title .node-icon {
   padding-inline-start: 3.4rem;
 }
 
-/* A row names one chat on one line, as an explorer row does, and the section scrolls sideways
-   for a long one. */
+/* **A row is two lines, and as wide as the list** (#1499, V100-50). It never makes the list
+   scroll sideways: what gives way in a narrow sidebar is the name, and never the state. */
 .chats-section .chat {
-  display: inline-flex;
-  gap: 0.35rem;
-  align-items: center;
-  min-width: max-content;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
   padding: 0.1rem 0.2rem;
   border: none;
   border-radius: 2px;
   color: inherit;
   background: none;
   font: inherit;
-  white-space: nowrap;
+  text-align: start;
   cursor: default;
+}
+
+/* The first line: the persona's mark, the name, the state. The name takes what the state
+   leaves and is cut short with an ellipsis; the state's word is whole (`.shown-state` does not
+   give way to it). Where the sidebar is too narrow for a few letters of name beside the state,
+   the state goes under the name, whole, and is still not cut. */
+.chats-section .chat .line.one {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.35rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.chats-section .chat .line.one > svg,
+.chats-section .chat .line.one > .persona-mark {
+  flex: none;
+}
+
+.chats-section .chat .session {
+  flex: 1 1 3rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The state on a row of the list: beside the name where both fit, under it where they do not,
+   and, in a sidebar narrower than the state itself, on as many lines as its words need. Never
+   cut: a state has no ellipsis. */
+.chats-section .chat .shown-state {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+}
+
+.chats-section .chat .shown-state .shape {
+  flex: none;
+}
+
+.chats-section .chat .shown-state .word {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The second line, dimmer: where it works, for how long, its own branch. One line, cut short
+   as a whole; a part with more to say has its own tooltip. Not drawn at all with nothing to
+   say, so a row with none is one line high. */
+.chats-section .chat .line.two {
+  display: block;
+  min-width: 0;
+  padding-inline-start: 1.35rem;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-section .chat .line.two:empty {
+  display: none;
+}
+
+.chats-section .chat .line.two > * + *::before {
+  content: " · ";
+}
+
+/* How a folded row's finished tasks ended: each state's mark and its count. */
+.chats-section .below-summary {
+  display: inline-flex;
+  flex: none;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.chats-section .below-summary .counted {
+  display: inline-flex;
+  gap: 0.1rem;
+  align-items: center;
+}
+
+.chats-section .below-summary svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+/* The filter over the list: the box, then its two chips. The box gives way first. */
+.chats-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+  margin-block-start: 0.25rem;
+}
+
+.chats-filter-text {
+  flex: 1 1 5rem;
+  min-width: 0;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  font: inherit;
+}
+
+.chats-chip {
+  display: inline-flex;
+  flex: none;
+  gap: 0.2rem;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.chats-chip:hover {
+  background: var(--surface-hover);
+}
+
+.chats-chip input {
+  margin: 0;
+}
+
+/* On is said by the box's own tick, and by the chip's edge and ground: never by colour alone. */
+.chats-chip[data-on] {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.chats-hidden,
+.chats-said {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.chats-hidden:empty,
+.chats-said:empty {
+  display: none;
+}
+
+/* A workspace's name over its sessions, where the list is grouped by workspace. */
+.chats-section li.chats-group {
+  margin-block-start: 0.3rem;
+  padding-inline-start: 1.15rem;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .chats-section .chat:hover,
@@ -2569,13 +2721,13 @@ h2.sidebar-title .node-icon {
   display: inline-flex;
 }
 
-/* A row of the Chats section is one line: the fold, the row, and the hand of a chat below it
-   (#1448). */
+/* A row of the Chats section: the fold, the row, and the hand of a chat below it (#1448). As
+   wide as the list and no wider (#1499): the row inside it gives way, not the list. */
 .chats-section li {
   display: flex;
   gap: 0.15rem;
-  align-items: center;
-  min-width: max-content;
+  align-items: flex-start;
+  min-width: 0;
 }
 
 /* The fold of a row with chats under it, and the same width left empty on a row with none, so
@@ -2590,6 +2742,7 @@ h2.sidebar-title .node-icon {
   padding: 0;
   border: none;
   border-radius: 2px;
+  margin-block-start: 0.2rem;
   color: var(--text-muted);
   background: none;
 }

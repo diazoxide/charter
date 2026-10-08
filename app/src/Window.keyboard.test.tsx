@@ -314,9 +314,14 @@ describe("the window's tab order", () => {
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
       "tab steward two",
       "button New tab",
-      // The left region, top to bottom. The project's chats (#1447): ONE stop, the row of the
-      // chat in front, which reads as its name, its workspace and its state's word (#1484).
-      "treeitem steward twoalpharunning (no detail from Claude Code)",
+      // The left region, top to bottom. The Chats list's filter (#1499): its box, then its two
+      // chips, needs you and working, each a box of its own.
+      "input Filter chats by name, persona, workspace or state",
+      "input",
+      "input",
+      // The project's chats (#1447): ONE stop, the row of the chat in front, which reads as
+      // its name and its state's word (#1484), then its workspace on its second line (#1499).
+      "treeitem steward tworunning (no detail from Claude Code)alpha",
       // The explorer: ONE stop, its current row.
       "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.

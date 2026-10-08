@@ -1829,9 +1829,10 @@ describe("the palette at fifty chats", () => {
       // SI-9c: `Open shared memory` (`shared` has `re`). And one more under `r` since FR-27:
       // `Switch project…` (`project` has an `r`). One up under both since SE-16: `Settings…`
       // took `Preferences…`'s place, and has neither an `re` nor an `r`. One more under `r`
-      // since SE-23: `Your settings…` (`your` has an `r`).
+      // since SE-23: `Your settings…` (`your` has an `r`). One more under `r` since #1499:
+      // `Open a chat beside the one in front` (`front` has an `r`).
       expect(at("re", loaded())).toBe(7);
-      expect(at("r", loaded())).toBe(12);
+      expect(at("r", loaded())).toBe(13);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1943,8 +1944,9 @@ describe("the palette at fifty chats", () => {
     // 593 since SE-23: Your settings…, one row.
     // 601 since #1445: Set <persona>'s profile…, one row per persona.
     // 602 since #1452: Open dispatches, one row.
+    // 603 since #1499: Open a chat beside the one in front, one row and not one per chat.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(602);
+    expect(offers).toHaveLength(603);
   });
 
   /**
