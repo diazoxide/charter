@@ -915,12 +915,20 @@ export const commands = {
 	task: string,
 	/**  The chat it asked, by its name. */
 	asked: string,
+	/**
+	 *  **The question's number**: what an answer is for (`answer_task_question`). The app
+	 *  numbers each question as it is asked, so a later question in the same words is
+	 *  another question.
+	 */
+	number: number,
 	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
 	question: string,
 } | null, string>(__TAURI_INVOKE("task_question", { plane, session })),
 	/**
 	 *  **The person answers the question a task put to its asking chat** (#1496, V100-46): chat
-	 *  `session`'s question, which is `question` as the window showed it, with `text`.
+	 *  `session`'s question `number` (`task_question`, or a line's `asks`), which read `question`
+	 *  as the window showed it, with `text`. It answers that question and no other: a question
+	 *  the task asked later is refused, though its words be the same.
 	 * 
 	 *  The task is handed the answer as the person's and carries on; the asking chat is told the
 	 *  person answered and does not answer again. An error is a sentence for the person, and
@@ -931,7 +939,7 @@ export const commands = {
 	 *  (`purlis_session_protocol::ui::WINDOW_ONLY`): what it sends reaches a chat marked as the
 	 *  person's. On a blocking thread, as it writes the dispatch's record.
 	 */
-	answerTaskQuestion: (plane: PlaneId, session: number, question: string, text: string) => typedError<null, string>(__TAURI_INVOKE("answer_task_question", { plane, session, question, text })),
+	answerTaskQuestion: (plane: PlaneId, session: number, number: number, question: string, text: string) => typedError<null, string>(__TAURI_INVOKE("answer_task_question", { plane, session, number, question, text })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
@@ -2078,7 +2086,11 @@ export type ActivityLine = {
 	 *  `not listed` for the one line that stands for messages the record kept no text of.
 	 */
 	kind: string,
-	/**  The chat that said it, by the name the person saw. */
+	/**
+	 *  The chat that said it, by the name the person saw. **As the window draws it**
+	 *  (`dispatchtalk::chat_shown`): a name that reads like one of the app's own marks for who
+	 *  spoke has "(a chat)" after it, here and in `to` and `task`, so no name passes for one.
+	 */
 	from: string,
 	/**  Which chat that is: its id, or `#<number>` for one given none. */
 	from_key: string,
@@ -2099,11 +2111,21 @@ export type ActivityLine = {
 	 */
 	by_person: boolean,
 	/**
-	 *  **A question its task is paused on now** (#1496): the person may answer it. Said by the
-	 *  app from what it holds open as the line is read or told, and never by the record. An
-	 *  answer, a report or an ending told later for the same dispatch closes it in the tab.
+	 *  **On a question its task is paused on now, that question's number** (#1496): the
+	 *  person may answer it, and the number is what their answer is for. `null` on every other
+	 *  line. Said by the app from what it holds open as the line is read or told, and never
+	 *  by the record.
 	 */
-	asks: boolean,
+	asks: number | null,
+	/**
+	 *  **On an answer told as it is recorded, the number of the question it answered**, whoever
+	 *  gave it; and on a `not listed` line told because an answer's words were not kept. It
+	 *  closes that question in an open tab, by number and not by where the line stands. `null`
+	 *  on a line that was read: there `asks` already says which question is open.
+	 */
+	answers: number | null,
+	/**  An answer the person gave that the task was never handed: it ended first. */
+	unread: boolean,
 	/**
 	 *  purlis wrote the line, and not the task: an ending it recorded in a chat's place, and
 	 *  a `not listed` line.
@@ -5889,6 +5911,12 @@ export type TaskQuestion = {
 	task: string,
 	/**  The chat it asked, by its name. */
 	asked: string,
+	/**
+	 *  **The question's number**: what an answer is for (`answer_task_question`). The app
+	 *  numbers each question as it is asked, so a later question in the same words is
+	 *  another question.
+	 */
+	number: number,
 	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
 	question: string,
 };

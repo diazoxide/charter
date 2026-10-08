@@ -335,7 +335,17 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
         let mut parts: Vec<String> = purlis_core::commitgate::nudge(hook).into_iter().collect();
         // The app's number for this chat, which is what a report is left under. A chat the app
         // did not start has none, and nothing was left for it.
-        if let Some(chat) = env(purlis_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok()) {
+        let chat: Option<u32> = env(purlis_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok());
+        // **The app is asked first, and the files are taken after** (#1496). An ask can wait
+        // on the app, and a hook can be ended while it waits: a report or a message taken off
+        // disk before that would be lost with it. So: what the person said to this chat in
+        // the purlis window (their answer to a question this task asked, or word that they
+        // answered one a task of its asked), which is the app's own to say and is read from
+        // no file; and one line when where this chat is working has changed since it was
+        // last told (#1450), by the app's own count of what it was told.
+        let person = chat.and_then(|_| crate::dispatch::from_the_person());
+        let working = crate::whereworking::update(hook.now);
+        if let Some(chat) = chat {
             let reports =
                 purlis_core::handback::take(hook.root, purlis_core::handback::For::Chat(chat));
             parts.extend(purlis_core::handback::context(&reports, false));
@@ -343,19 +353,20 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
             // (#1442): quoted as data, as a report is.
             let messages = purlis_core::dispatchtalk::take(hook.root, chat);
             parts.extend(purlis_core::dispatchtalk::context(&messages));
-            // And what the person said to it in the purlis window (#1496): their answer to a
-            // question this task asked, or word that they answered one a task of its asked.
-            // The app's own to say, so it is asked of the app and read from no file.
-            parts.extend(crate::dispatch::from_the_person());
         }
-        // One line when where this chat is working has changed since it was last told (#1450),
-        // by the app's own count of what it was told.
-        parts.extend(crate::whereworking::update(hook.now));
+        parts.extend(person.as_ref().map(|person| person.told.clone()));
+        parts.extend(working);
         if !parts.is_empty() {
             say(&purlis_core::handback::emitted(
                 "UserPromptSubmit",
                 &parts.join("\n\n"),
             ));
+        }
+        // **Only now does the turn have what the person said**: it is printed. Said to the
+        // app after that and never before, so a hook ended anywhere above loses nothing: the
+        // app still holds it, and the next turn is handed it again.
+        if let Some(person) = person {
+            person.handed_over();
         }
     });
 }

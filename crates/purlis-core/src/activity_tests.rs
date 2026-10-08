@@ -136,6 +136,7 @@ fn a_message_is_kept_on_its_task_s_record_with_its_time_and_kind() {
             kind: Sent::Question,
             text: "Which host?".to_owned(),
             by: None,
+            unread: false,
         }]
     );
     assert!(dispatchrecord::sound(&record));
@@ -1036,6 +1037,7 @@ fn the_person_s_answer_is_kept_with_who_said_it_and_the_timeline_says_it_is_thei
             kind: Sent::Answer,
             text: "prod-2.".to_owned(),
             by: Some(dispatchrecord::By::Person),
+            unread: false,
         }
     );
     assert!(dispatchrecord::sound(&record));
@@ -1116,4 +1118,58 @@ fn a_record_that_says_who_in_a_word_purlis_does_not_know_is_not_read_as_the_pers
     // Not a record this build wrote: it reads as none, and nothing of it is on a timeline.
     assert_eq!(dispatchrecord::read(&root, &id), None);
     assert!(timeline(&root, &steward()).lines.is_empty());
+}
+
+#[test]
+fn an_answer_the_task_never_read_says_so_on_the_timeline_and_no_other_line_does() {
+    // The person answered; the task reported before any turn of it was handed the answer.
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(
+        &root,
+        &id,
+        Sent::Question,
+        "Which host?",
+        "2026-10-08T09:01:00Z",
+    );
+    // An answer of the asking chat's to an earlier question is never marked.
+    says(&root, &id, Sent::Answer, "prod-1.", "2026-10-08T09:02:00Z");
+    assert!(!dispatchrecord::answer_unread(&root, &id).unwrap());
+    dispatchrecord::said_by(
+        &root,
+        &id,
+        Sent::Answer,
+        Some(dispatchrecord::By::Person),
+        "prod-2.",
+        at("2026-10-08T09:03:00Z"),
+    )
+    .unwrap();
+
+    assert!(dispatchrecord::answer_unread(&root, &id).unwrap());
+    assert!(
+        !dispatchrecord::answer_unread(&root, &id).unwrap(),
+        "said once"
+    );
+
+    let record = dispatchrecord::read(&root, &id).unwrap();
+    assert!(dispatchrecord::sound(&record));
+    let unread: Vec<bool> = timeline(&root, &steward())
+        .lines
+        .iter()
+        .map(|line| line.unread)
+        .collect();
+    assert_eq!(unread, [false, false, false, true]);
+    // On disk it is one key on that answer.
+    let stored: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dispatchrecord::dir(&root).join(format!("{id}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored["talk"][2]["unread"], true);
+    assert_eq!(stored["talk"][1].get("unread"), None);
 }

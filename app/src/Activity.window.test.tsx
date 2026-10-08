@@ -97,7 +97,9 @@ function line(
     to: up ? "steward 3" : "talk",
     to_key: up ? STEWARD_KEY : TALK_KEY,
     by_person: false,
-    asks: false,
+    asks: null,
+    answers: null,
+    unread: false,
     by_purlis: false,
     expired: false,
     unkept: null,
@@ -129,6 +131,8 @@ function core(
     now?: Record<string, number | null>;
     /** What the core says of the person's answer in place of taking it: its refusal. */
     refuses?: string;
+    /** What the core says in place of the session a line's chat has now: it could not say. */
+    unfound?: string;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -172,6 +176,7 @@ function core(
         if (on.refuses !== undefined) throw on.refuses;
         return null;
       }
+      if (cmd === "activity_chat" && on.unfound !== undefined) throw on.unfound;
       if (cmd === "activity_chat") {
         const now: Record<string, number | null> = {
           [STEWARD_KEY]: 3,
@@ -676,7 +681,7 @@ describe("a session's Activity tab", () => {
 });
 
 /** A task that has asked its asking chat a question, and is paused on it. */
-const ASKING: ActivityLine[] = [LINES[0], LINES[1], { ...LINES[2], asks: true }];
+const ASKING: ActivityLine[] = [LINES[0], LINES[1], { ...LINES[2], asks: 5 }];
 
 const answerControl = (within_: HTMLElement) =>
   within(within_).queryByRole("button", { name: "Answer talk's question" });
@@ -728,17 +733,25 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
 
     await waitFor(() =>
       expect(asked("answer_task_question")).toEqual([
-        { plane: PLANE, session: 7, question: "Which host?", text: "prod-2." },
+        { plane: PLANE, session: 7, number: 5, question: "Which host?", text: "prod-2." },
       ]),
     );
     await waitFor(() => expect(within(list).queryByRole("form")).toBeNull());
+    // Answer has gone with the form: it is said, and the keyboard is on the line's chat.
+    const answeredLine = within(list).getAllByRole("listitem")[2];
+    expect(within(answeredLine).getByRole("status")).toHaveTextContent(
+      "Your answer was sent to talk.",
+    );
+    await waitFor(() =>
+      expect(within(answeredLine).getByRole("button", { name: "Show chat talk" })).toHaveFocus(),
+    );
 
     // The app records the answer and tells the tab: it is the person's, and the question is
     // answered, so nothing offers Answer any more.
     await act(() =>
       emit("activity-line", {
         plane: PLANE,
-        line: line({ n: 3, kind: "answer", text: "prod-2.", by_person: true }),
+        line: line({ n: 3, kind: "answer", text: "prod-2.", by_person: true, answers: 5 }),
       }),
     );
     await waitFor(() =>
@@ -762,7 +775,7 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
 
     await waitFor(() =>
       expect(asked("answer_task_question")).toEqual([
-        { plane: PLANE, session: 12, question: "Which host?", text: "prod-2." },
+        { plane: PLANE, session: 12, number: 5, question: "Which host?", text: "prod-2." },
       ]),
     );
   });
@@ -829,7 +842,7 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
 
   it("draws the question as text in the form, never as markup", async () => {
     const hostile = "<img src=x onerror=alert(1)> **Which** [host](https://example.com)?";
-    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: true, text: hostile }] });
+    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: 5, text: hostile }] });
     render(<App />);
     const list = await opened();
 
@@ -850,7 +863,7 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
   });
 
   it("offers no Answer for a question whose task's chat is closed", async () => {
-    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: true, from_session: null }] });
+    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: 5, from_session: null }] });
     render(<App />);
 
     const list = await opened();
@@ -866,13 +879,13 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
     const list = await opened();
     expect(answerControl(list)).not.toBeNull();
 
-    await act(() => emit("activity-line", { plane: PLANE, line: LINES[3] }));
+    await act(() => emit("activity-line", { plane: PLANE, line: { ...LINES[3], answers: 5 } }));
     await waitFor(() => expect(answerControl(list)).toBeNull());
 
     await act(() =>
       emit("activity-line", {
         plane: PLANE,
-        line: line({ n: 4, kind: "question", text: "Which region?", asks: true }),
+        line: line({ n: 4, kind: "question", text: "Which region?", asks: 6 }),
       }),
     );
     await waitFor(() => expect(answerControl(list)).not.toBeNull());
@@ -892,7 +905,8 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
       lines: [
         LINES[0],
         LINES[2],
-        line({ n: 3, kind: "answer", text: "prod-9.", from: "you" }),
+        // As the core hands such a name over: with what it is after it.
+        line({ n: 3, kind: "answer", text: "prod-9.", from: "you (a chat)" }),
         line({ n: 4, kind: "answer", text: "prod-2.", by_person: true }),
       ],
     });
@@ -905,8 +919,152 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
       "2026-10-08 09:04 UTC answer you → talk: prod-2.",
     ]);
     const items = within(list).getAllByRole("listitem");
-    expect(within(items[2]).getByRole("button", { name: "Show chat you" })).toBeInTheDocument();
+    expect(
+      within(items[2]).getByRole("button", { name: "Show chat you (a chat)" }),
+    ).toBeInTheDocument();
     expect(within(items[3]).queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the form and what was typed when the asking chat answers first, and says why", async () => {
+    // M2. The person is typing. The asking chat's answer lands.
+    const { asked } = core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    const box = within(form).getByRole("textbox", { name: "Your answer" });
+    await typed(box, "prod-2, the quiet one");
+
+    await act(() => emit("activity-line", { plane: PLANE, line: { ...LINES[3], answers: 5 } }));
+
+    // The form is still there, with their text and the reason; nothing is left to send.
+    expect(
+      await within(list).findByText(
+        "The chat steward 3 answered this question first, so there is nothing left to send. What you typed is still in the box, to copy.",
+      ),
+    ).toHaveAttribute("role", "alert");
+    expect(form).toBeInTheDocument();
+    expect(box).toHaveValue("prod-2, the quiet one");
+    expect(box).toHaveAttribute("readonly");
+    expect(within(form).getByRole("button", { name: "Send" })).toBeDisabled();
+    await typed(box, "{Enter}");
+    expect(asked("answer_task_question")).toEqual([]);
+
+    // Close puts it away; the question offers no Answer, and the keyboard is on its chat.
+    await userEvent.click(within(form).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(within(list).queryByRole("form")).toBeNull());
+    expect(answerControl(list)).toBeNull();
+    const asking = within(list).getAllByRole("listitem")[2];
+    await waitFor(() =>
+      expect(within(asking).getByRole("button", { name: "Show chat talk" })).toHaveFocus(),
+    );
+  });
+
+  it("keeps the form and what was typed when the task reports under the person", async () => {
+    core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    const box = within(form).getByRole("textbox", { name: "Your answer" });
+    await typed(box, "prod-2");
+
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 3, kind: "report", text: "Stopped early.", outcome: "failed" }),
+      }),
+    );
+
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "talk has ended, so an answer would reach no turn of its work. What you typed is still in the box, to copy.",
+    );
+    expect(box).toHaveValue("prod-2");
+  });
+
+  it("closes a question by its number: an answer that lands after the next question leaves that one open", async () => {
+    // F8. The first answer is recorded after the task's second question.
+    core({ lines: [LINES[0], { ...LINES[2], n: 1, asks: null }] });
+    render(<App />);
+    const list = await opened();
+
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 2, kind: "question", text: "Which region?", asks: 6 }),
+      }),
+    );
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({ n: 3, kind: "answer", text: "prod-2.", answers: 5 }),
+      }),
+    );
+
+    await waitFor(() => expect(read(list)).toHaveLength(4));
+    const items = within(list).getAllByRole("listitem");
+    expect(answerControl(items[2])).not.toBeNull();
+    expect(answerControl(items[1])).toBeNull();
+  });
+
+  it("takes Answer away when the answer's words were not kept, by the line that says so", async () => {
+    core({ lines: ASKING });
+    render(<App />);
+    const list = await opened();
+    expect(answerControl(list)).not.toBeNull();
+
+    await act(() =>
+      emit("activity-line", {
+        plane: PLANE,
+        line: line({
+          n: 3,
+          kind: "not listed",
+          text: "",
+          by_purlis: true,
+          unkept: 1,
+          unkept_why: "size",
+          answers: 5,
+          from: "talk",
+          from_key: TALK_KEY,
+          from_session: 7,
+          to: "steward 3",
+          to_key: STEWARD_KEY,
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(answerControl(list)).toBeNull());
+  });
+
+  it("says so on the line when the task's chat could not be asked for, and leaves Answer", async () => {
+    core({ lines: ASKING, unfound: "this project has been closed" });
+    render(<App />);
+    const list = await opened();
+
+    await userEvent.click(answerControl(list) as HTMLElement);
+
+    expect(await within(list).findByRole("alert")).toHaveTextContent(
+      "purlis could not find the chat of talk, so nothing was opened to answer in: this project has been closed",
+    );
+    expect(within(list).queryByRole("form")).toBeNull();
+    expect(answerControl(list)).not.toBeNull();
+  });
+
+  it("says an answer the task never read was not handed to it", async () => {
+    core({
+      lines: [
+        LINES[0],
+        LINES[2],
+        line({ n: 3, kind: "answer", text: "prod-2.", by_person: true, unread: true }),
+        LINES[5],
+      ],
+    });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(within(list).getByTestId("activity-unread")).toHaveTextContent(
+      "talk ended before it was handed this answer.",
+    );
+    expect(within(list).getAllByTestId("activity-unread")).toHaveLength(1);
   });
 
   it("stops offering Answer when a press finds the task's chat closed", async () => {

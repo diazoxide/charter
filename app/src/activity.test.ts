@@ -4,7 +4,7 @@ import {
   activityView,
   alsoSaid,
   answerable,
-  chatShown,
+  closedWhy,
   heard,
   namedByOthers,
   timelineOf,
@@ -24,7 +24,9 @@ function line(over: Partial<ActivityLine> & Pick<ActivityLine, "dispatch" | "n">
     to_key: "01K6STEWARD",
     text: "",
     by_person: false,
-    asks: false,
+    asks: null,
+    answers: null,
+    unread: false,
     by_purlis: false,
     expired: false,
     unkept: null,
@@ -207,7 +209,8 @@ describe("a chat that is restarted", () => {
 });
 
 describe("the questions the person may answer (#1496)", () => {
-  const question = (dispatch: string, n: number, asks = true) =>
+  /** A question the app says is open, with number `asks`; `null` for one it says is not. */
+  const question = (dispatch: string, n: number, asks: number | null = 5) =>
     line({ dispatch, n, kind: "question", text: "Which host?", asks });
 
   it("is the question the app says its task is paused on", () => {
@@ -215,28 +218,45 @@ describe("the questions the person may answer (#1496)", () => {
       line({ dispatch: "01K6D1", n: 0, kind: "dispatched" }),
       question("01K6D1", 1),
       // Not open by the app's word: answered before the tab read it, or never held.
-      question("01K6D2", 1, false),
+      question("01K6D2", 1, null),
       // A note is not a question, whatever the app says of it.
-      line({ dispatch: "01K6D3", n: 1, kind: "note", asks: true }),
+      line({ dispatch: "01K6D3", n: 1, kind: "note", asks: 6 }),
     ]);
 
     expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
   });
 
-  it("is none once an answer, a report or an ending follows it in its dispatch", () => {
-    for (const kind of ["answer", "report", "stopped"]) {
-      const lines = drawn([question("01K6D1", 1), line({ dispatch: "01K6D1", n: 2, kind })]);
-      expect([...answerable(lines)], kind).toEqual([]);
-    }
-    // Whoever answered: the person's own answer closes it as the asking chat's does.
+  it("is closed by an answer told for its number, whoever gave it, and by its task's ending", () => {
+    const answered = (over: Parameters<typeof line>[0]) =>
+      drawn([question("01K6D1", 1), line(over)]);
+    expect([
+      ...answerable(answered({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5 })),
+    ]).toEqual([]);
     expect([
       ...answerable(
-        drawn([
-          question("01K6D1", 1),
-          line({ dispatch: "01K6D1", n: 2, kind: "answer", by_person: true }),
-        ]),
+        answered({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, by_person: true }),
       ),
     ]).toEqual([]);
+    // The record kept none of the answer's words: the line that stands for it closes it too.
+    expect([
+      ...answerable(answered({ dispatch: "01K6D1", n: 2, kind: "not listed", answers: 5 })),
+    ]).toEqual([]);
+    for (const kind of ["report", "stopped"])
+      expect([...answerable(answered({ dispatch: "01K6D1", n: 2, kind }))], kind).toEqual([]);
+  });
+
+  it("is closed by number and never by where a line stands", () => {
+    // F8. The task had its first answer from its waiting command and asked again at once, so
+    // the second question was recorded before the first answer: the answer's line stands
+    // after the question it does not answer.
+    const lines = drawn([
+      question("01K6D1", 1, null),
+      question("01K6D1", 2, 6),
+      line({ dispatch: "01K6D1", n: 3, kind: "answer", answers: 5 }),
+    ]);
+
+    expect([...answerable(lines)]).toEqual(["01K6D1:2"]);
+    expect(closedWhy(lines[1].line, lines)).toBeUndefined();
   });
 
   it("is still one after a note or a follow-up, and after another task's answer", () => {
@@ -244,39 +264,31 @@ describe("the questions the person may answer (#1496)", () => {
       question("01K6D1", 1),
       line({ dispatch: "01K6D1", n: 2, kind: "note" }),
       line({ dispatch: "01K6D1", n: 3, kind: "follow-up" }),
-      line({ dispatch: "01K6D2", n: 4, kind: "answer" }),
+      line({ dispatch: "01K6D2", n: 4, kind: "answer", answers: 5 }),
+      // An answer that was read and not told says nothing of which question it closed.
+      line({ dispatch: "01K6D1", n: 5, kind: "answer" }),
     ]);
 
     expect([...answerable(lines)]).toEqual(["01K6D1:1"]);
   });
 
-  it("is the later question where a task asked again after its first was answered", () => {
-    const lines = drawn([
-      question("01K6D1", 1),
-      line({ dispatch: "01K6D1", n: 2, kind: "answer" }),
-      question("01K6D1", 3),
-    ]);
+  it("says why a question can no longer be answered, in a sentence for who was answering", () => {
+    const asked = question("01K6D1", 1);
+    const closed = (over: Parameters<typeof line>[0]) =>
+      closedWhy(asked, drawn([asked, line(over)]));
 
-    expect([...answerable(lines)]).toEqual(["01K6D1:3"]);
-  });
-});
-
-describe("a chat's name on the timeline (#1496)", () => {
-  it("is drawn as it is", () => {
-    for (const name of ["talk", "steward 3", "youth survey", "purlisd logs", "the personnel list"])
-      expect(chatShown(name), name).toBe(name);
-  });
-
-  it("is marked as a chat's where it begins with a word the app uses for the person or itself", () => {
-    for (const name of [
-      "you",
-      "You",
-      " you, from steward 3",
-      "purlis",
-      "PURLIS, for talk",
-      "the person",
-      "The operator",
-    ])
-      expect(chatShown(name), name).toBe(`${name} (a chat)`);
+    expect(closedWhy(asked, drawn([asked]))).toBeUndefined();
+    expect(
+      closed({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, from: "steward 3" }),
+    ).toBe("The chat steward 3 answered this question first, so there is nothing left to send.");
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "answer", answers: 5, by_person: true })).toBe(
+      "You have already answered this question, and one answer is final.",
+    );
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "not listed", answers: 5 })).toBe(
+      "This question was answered first, so there is nothing left to send.",
+    );
+    expect(closed({ dispatch: "01K6D1", n: 2, kind: "report" })).toBe(
+      "talk has ended, so an answer would reach no turn of its work.",
+    );
   });
 });

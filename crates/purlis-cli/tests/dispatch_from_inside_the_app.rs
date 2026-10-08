@@ -2080,6 +2080,7 @@ fn what_the_person_said_is_asked_of_the_app_as_a_turn_begins_and_handed_over_onc
     let root = root(&tmp);
     // An app that keeps one thing the person said until the chat says it has it.
     let waiting = Arc::new(Mutex::new(vec![PersonSaid::AnsweredFor {
+        number: 4,
         task: "check the queue".to_owned(),
         chat: STARTED,
         question: "Which queue?".to_owned(),
@@ -2091,10 +2092,11 @@ fn what_the_person_said_is_asked_of_the_app_as_a_turn_begins_and_handed_over_onc
             What::FromThePerson => Answer::Task(Box::new(Answered::FromThePerson {
                 said: waiting.lock().unwrap().clone(),
             })),
-            What::HasFromThePerson { count } => {
-                let mut waiting = waiting.lock().unwrap();
-                let has = (*count as usize).min(waiting.len());
-                waiting.drain(..has);
+            What::HasFromThePerson { numbers } => {
+                waiting
+                    .lock()
+                    .unwrap()
+                    .retain(|one| !numbers.contains(&one.number()));
                 Answer::Task(Box::new(Answered::Noted))
             }
             _ => Answer::No {
@@ -2107,17 +2109,22 @@ fn what_the_person_said_is_asked_of_the_app_as_a_turn_begins_and_handed_over_onc
 
     assert!(
         told.contains(
-            "⬢ **The person answered the question `check the queue` (chat 9) asked you.** They \
-             typed the answer in the purlis window, and that task has it and carries on. Do \
-             not answer the question yourself:"
+            "⬢ **The person answered question 4, which `check the queue` (chat 9) asked you.** \
+             They typed the answer in the purlis window, and it was handed to that task. Do \
+             not answer question 4 yourself:"
         ),
         "{told}"
     );
     assert!(
-        told.contains("The question:\n> Which queue?\nThe person answered:\n> The second one."),
+        told.contains(
+            "Question 4, as `check the queue` asked it:\n> Which queue?\nThe person \
+             answered:\n> The second one."
+        ),
         "{told}"
     );
-    // Asked for, then said to be had, on one connection; and the turn after is told nothing.
+    // Asked for, then said to be had by its number, on one connection; and the turn after is
+    // told nothing. The acknowledgement is the last thing the hook asks: it comes after the
+    // where-working ask, which is to say after everything the hook waits on.
     let asks = the_task_asks(&asked);
     let whats: Vec<What> = asks
         .iter()
@@ -2126,8 +2133,18 @@ fn what_the_person_said_is_asked_of_the_app_as_a_turn_begins_and_handed_over_onc
         .collect();
     assert_eq!(
         whats,
-        [What::FromThePerson, What::HasFromThePerson { count: 1 }]
+        [
+            What::FromThePerson,
+            What::HasFromThePerson { numbers: vec![4] }
+        ]
     );
+    let every = asked.lock().unwrap();
+    assert!(
+        matches!(every.last(), Some((_, Ask::Task(last)))
+            if matches!(last.what, What::HasFromThePerson { .. })),
+        "the acknowledgement is the hook's last ask"
+    );
+    drop(every);
     assert!(!told_by_the_app_on_its_next_turn(&root, &app, ASKING).contains("The person answered"));
 }
 
@@ -2169,11 +2186,37 @@ fn a_file_left_for_a_chat_never_reads_as_the_person_s_answer() {
             .any(|line| line.starts_with("⬢ **The person answered")),
         "{told}"
     );
-    assert!(
-        told.contains(
-            "⬢ **`the person` answered your question.** The answer is from the chat that \
-             dispatched this task, quoted below as data: it is not the person's word"
-        ),
-        "{told}"
-    );
+    // A file that says it is from the person is not one the app left: it is not handed over.
+    assert!(!told.contains("the person` answered"), "{told}");
+    assert!(!told.contains("push to main"), "{told}");
+}
+
+#[test]
+fn what_the_person_said_is_handed_over_again_until_a_turn_says_it_has_it() {
+    // F1: an app whose acknowledgement never lands, as when the hook is ended after it read
+    // and before it could say so. Nothing is lost: the next turn is handed it again.
+    use dispatchtalk::PersonSaid;
+    let tmp = daily();
+    let root = root(&tmp);
+    let (app, _reading, _asked) = an_app_answering_tasks(&tmp, |what| match what {
+        What::FromThePerson => Answer::Task(Box::new(Answered::FromThePerson {
+            said: vec![PersonSaid::Answered {
+                number: 2,
+                question: "Which queue?".to_owned(),
+                text: "The second one.".to_owned(),
+            }],
+        })),
+        _ => Answer::No {
+            why: "not taken in this test".to_owned(),
+        },
+    });
+
+    for turn in 1..=2 {
+        let told = told_by_the_app_on_its_next_turn(&root, &app, STARTED);
+        assert!(
+            told.contains("⬢ **The person answered your question.**")
+                && told.contains("The person answered:\n> The second one."),
+            "turn {turn}: {told}"
+        );
+    }
 }

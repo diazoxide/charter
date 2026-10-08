@@ -110,40 +110,58 @@ export function heard(was: Timeline, line: ActivityLine): Timeline {
   return { lines, chats, tasks };
 }
 
-/**
- * **A chat's name as the timeline draws it** (#1496). The timeline says "you" for the person
- * and "purlis" for the app, and those marks are the app's alone to put on a line. A chat can be
- * given any name, a task's by the chat that dispatched it, so a name that begins with one of
- * those words is drawn with what it is beside it: a chat. Every other name is drawn as it is.
- */
-export function chatShown(name: string): string {
-  return /^\s*(you|purlis|the person|the operator)(?![\p{L}\p{N}])/iu.test(name)
-    ? `${name} (a chat)`
-    : name;
-}
+/** The kinds of line that end a task: after one, none of its questions takes an answer. */
+const ENDS_A_TASK: readonly string[] = ["report", "stopped"];
 
 /**
  * **The questions the person may answer now** (#1496), by {@link lineKey}: a question the app
- * said its task is paused on (`ActivityLine.asks`), with nothing after it in its dispatch that
- * closes it. An answer closes it, whoever gave it; so does the task's report, and its ending.
+ * said its task is paused on, with that question's number (`ActivityLine.asks`), which nothing
+ * told since has closed.
+ *
+ * **A question is closed by its number, never by where a line stands.** The app tells an answer
+ * with the number of the question it answered (`ActivityLine.answers`), whoever gave it; and
+ * tells the same on the one "not listed" line where the record kept none of the answer's words.
+ * So an answer that is recorded after the task's next question does not close that next
+ * question. A task's report or its ending closes every question it had.
  *
  * The app says which question is open as it reads the timeline and as it tells a question. What
- * is told afterwards for the same dispatch is folded in here, so a question answered while the
- * tab is open stops offering Answer without the timeline being read again.
+ * is told afterwards is folded in here, so a question answered while the tab is open stops
+ * offering Answer without the timeline being read again.
  */
 export function answerable(lines: readonly Drawn[]): ReadonlySet<string> {
-  /** By dispatch: the place of its last line that closes a question. */
-  const closed = new Map<string, number>();
-  for (const { line } of lines) {
-    if (line.kind === "answer" || line.kind === "report" || line.kind === "stopped")
-      closed.set(line.dispatch, Math.max(closed.get(line.dispatch) ?? -1, line.n));
-  }
   const open = new Set<string>();
   for (const { line } of lines) {
-    if (line.kind === "question" && line.asks && line.n > (closed.get(line.dispatch) ?? -1))
+    if (line.kind === "question" && line.asks !== null && closedBy(line, lines) === undefined)
       open.add(lineKey(line));
   }
   return open;
+}
+
+/** The line that closed the question on `asked`, where one has been told: its answer (or the
+ *  line that stands for an answer whose words were not kept), else its task's ending. */
+function closedBy(asked: ActivityLine, lines: readonly Drawn[]): ActivityLine | undefined {
+  const mine = lines.map((one) => one.line).filter((one) => one.dispatch === asked.dispatch);
+  return (
+    mine.find((one) => one.answers !== null && one.answers === asked.asks) ??
+    mine.find((one) => ENDS_A_TASK.includes(one.kind))
+  );
+}
+
+/**
+ * **Why the question on `asked` can no longer be answered**, in one sentence for the person who
+ * was answering it (M2 of #1496's review); `undefined` while it still can be.
+ */
+export function closedWhy(asked: ActivityLine, lines: readonly Drawn[]): string | undefined {
+  if (asked.asks === null) return `${asked.from} is not waiting on this question any more.`;
+  const by = closedBy(asked, lines);
+  if (by === undefined) return undefined;
+  if (ENDS_A_TASK.includes(by.kind))
+    return `${asked.from} has ended, so an answer would reach no turn of its work.`;
+  if (by.kind === "answer" && by.by_person)
+    return "You have already answered this question, and one answer is final.";
+  if (by.kind === "answer")
+    return `The chat ${by.from} answered this question first, so there is nothing left to send.`;
+  return "This question was answered first, so there is nothing left to send.";
 }
 
 /** A file another task's report names too, and those tasks, by name. */

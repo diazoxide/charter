@@ -10875,6 +10875,16 @@ mod tests {
         }
     }
 
+    /// The number of the question task `task` is paused on, as the window is given it; 0 where
+    /// it is paused on none.
+    fn asked_number(held: &Held, task: u32) -> u32 {
+        held.tasks()
+            .ledger()
+            .talk
+            .open(task)
+            .map_or(0, |(number, _)| number)
+    }
+
     /// The state `purlis dispatch list` gives task `task` for its asking chat.
     fn listed_state(held: &Held, id: &PlaneId, asking: u32, task: u32) -> String {
         match asks(held, id, asking, What::List) {
@@ -10900,6 +10910,7 @@ mod tests {
             Some(crate::dispatched::TaskQuestion {
                 task: "check the queue".to_owned(),
                 asked: "steward 1".to_owned(),
+                number: 1,
                 question: "Which queue?".to_owned(),
             })
         );
@@ -10908,8 +10919,14 @@ mod tests {
             "asking this chat a question"
         );
 
-        crate::dispatched::person_answers(&held, task, "Which queue?", " The second one. ")
-            .expect("the person's answer is taken");
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            " The second one. ",
+        )
+        .expect("the person's answer is taken");
 
         // The task's waiting command is answered with it, marked as the person's.
         assert_eq!(
@@ -10926,6 +10943,7 @@ mod tests {
         assert_eq!(
             from_the_person(&held, &id, task),
             [PersonSaid::Answered {
+                number: 1,
                 question: "Which queue?".to_owned(),
                 text: "The second one.".to_owned(),
             }]
@@ -10951,14 +10969,21 @@ mod tests {
     fn the_asking_chat_is_told_the_person_answered_and_its_own_answer_is_refused_in_plain_words() {
         let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
         asks(&held, &id, task, question("Which queue?"));
-        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
-            .expect("the person's answer is taken");
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person's answer is taken");
 
         // Its next turn is handed what the person said, with the question and the answer.
         let told = from_the_person(&held, &id, asking);
         assert_eq!(
             told,
             [PersonSaid::AnsweredFor {
+                number: 1,
                 task: "check the queue".to_owned(),
                 chat: task,
                 question: "Which queue?".to_owned(),
@@ -10968,7 +10993,12 @@ mod tests {
         // Kept until the turn says it has it, then handed to no later turn.
         assert_eq!(from_the_person(&held, &id, asking), told);
         assert_eq!(
-            asks(&held, &id, asking, What::HasFromThePerson { count: 1 }),
+            asks(
+                &held,
+                &id,
+                asking,
+                What::HasFromThePerson { numbers: vec![1] }
+            ),
             Answer::Task(Box::new(Answered::Noted))
         );
         assert!(from_the_person(&held, &id, asking).is_empty());
@@ -11007,7 +11037,13 @@ mod tests {
         let person = {
             let held = Arc::clone(&held);
             std::thread::spawn(move || {
-                crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
+                crate::dispatched::person_answers(
+                    &held,
+                    task,
+                    asked_number(&held, task),
+                    "Which queue?",
+                    "The second one.",
+                )
             })
         };
         let chat = {
@@ -11041,7 +11077,9 @@ mod tests {
             (Err(why), Answer::Task(_)) => {
                 assert_eq!((text.as_str(), by_person), ("The first.", false));
                 assert!(
-                    why.starts_with("'steward 1' answered that question of 'check the queue'"),
+                    why.starts_with(
+                        "The chat 'steward 1' answered that question of 'check the queue'"
+                    ),
                     "{why}"
                 );
                 assert!(from_the_person(&held, &id, asking).is_empty());
@@ -11054,7 +11092,7 @@ mod tests {
     fn the_person_s_answer_is_refused_whole_where_there_is_nothing_of_theirs_to_answer() {
         let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
         let answers = |chat: u32, shown: &str, text: &str| {
-            crate::dispatched::person_answers(&held, chat, shown, text)
+            crate::dispatched::person_answers(&held, chat, asked_number(&held, chat), shown, text)
         };
         // No question yet.
         assert_eq!(
@@ -11156,11 +11194,24 @@ mod tests {
         // a chat that names neither is handed nothing, whatever it asks for.
         asks(&held, &id, task, What::GotAnswer);
         asks(&held, &id, task, question("Which cluster?"));
-        crate::dispatched::person_answers(&held, task, "Which cluster?", "The west one.")
-            .expect("the person's answer is taken");
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which cluster?",
+            "The west one.",
+        )
+        .expect("the person's answer is taken");
         assert!(from_the_person(&held, &id, other).is_empty());
         assert_eq!(
-            asks(&held, &id, other, What::HasFromThePerson { count: 9 }),
+            asks(
+                &held,
+                &id,
+                other,
+                What::HasFromThePerson {
+                    numbers: vec![1, 2]
+                }
+            ),
             Answer::Task(Box::new(Answered::Noted))
         );
         assert_eq!(from_the_person(&held, &id, task).len(), 1);
@@ -11190,8 +11241,14 @@ mod tests {
             "{refused:?}"
         );
 
-        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
-            .expect("the person is not limited");
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person is not limited");
 
         assert_eq!(from_the_person(&held, &id, task).len(), 1);
     }
@@ -11227,7 +11284,8 @@ mod tests {
         let question_told = heard.lock().unwrap().last().expect("told").line.clone();
         assert_eq!(
             (question_told.kind.as_str(), question_told.asks),
-            ("question", true)
+            ("question", Some(1)),
+            "with the question's number, which an answer is for"
         );
         let before = crate::activity::read(&held, asking).expect("open");
         assert_eq!(
@@ -11236,11 +11294,17 @@ mod tests {
                 .iter()
                 .map(|line| (line.kind.as_str(), line.asks))
                 .collect::<Vec<_>>(),
-            [("dispatched", false), ("question", true)]
+            [("dispatched", None), ("question", Some(1))]
         );
 
-        crate::dispatched::person_answers(&held, task, "Which queue?", "The second one.")
-            .expect("the person's answer is taken");
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person's answer is taken");
 
         // The record keeps the answer with who said it.
         let record = purlis_core::dispatchrecord::list(held.root())
@@ -11263,6 +11327,7 @@ mod tests {
             (told.kind.as_str(), told.by_person, told.text.as_str()),
             ("answer", true, "The second one.")
         );
+        assert_eq!(told.answers, Some(1), "it says which question it closed");
         let after = crate::activity::read(&held, asking).expect("open");
         assert_eq!(
             after
@@ -11271,11 +11336,210 @@ mod tests {
                 .map(|line| (line.kind.as_str(), line.by_person, line.asks))
                 .collect::<Vec<_>>(),
             [
-                ("dispatched", false, false),
-                ("question", false, false),
-                ("answer", true, false)
+                ("dispatched", false, None),
+                ("question", false, None),
+                ("answer", true, None)
             ]
         );
+        assert!(after.lines.iter().all(|line| !line.unread));
+    }
+
+    #[test]
+    fn an_answer_written_for_one_question_is_not_taken_for_a_later_one_in_the_same_words() {
+        // M1. The task asks, the asking chat answers, and the task asks again, word for word,
+        // about something else. A form that was opened on the first question sends "yes".
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Shall I go ahead?"));
+        let first = asked_number(&held, task);
+        asks(&held, &id, asking, the_answer(task, "No, dry run first."));
+        asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 });
+        asks(&held, &id, task, What::GotAnswer);
+        asks(&held, &id, task, question("Shall I go ahead?"));
+        let second = asked_number(&held, task);
+        assert_ne!(first, second);
+        assert_eq!(
+            crate::dispatched::question_of(&held, task).map(|open| open.number),
+            Some(second)
+        );
+
+        let stale =
+            crate::dispatched::person_answers(&held, task, first, "Shall I go ahead?", "yes");
+
+        assert_eq!(
+            stale,
+            Err(dispatchtalk::another_question("check the queue"))
+        );
+        // Nothing reached the task, and its question is still open.
+        assert!(from_the_person(&held, &id, task).is_empty());
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 1 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::NotYet {
+                    from: "steward 1".to_owned()
+                }
+            }))
+        );
+        // The answer for the question that is open now is taken.
+        crate::dispatched::person_answers(&held, task, second, "Shall I go ahead?", "no")
+            .expect("the open question's own answer");
+    }
+
+    #[test]
+    fn the_asking_chat_s_answer_waits_a_turn_where_the_person_answered_the_question_before() {
+        // The same weakness from the chat's side. The person answers the question the chat
+        // read; the task has its answer and asks another at once; the chat has not been told.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person's answer is taken");
+        asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 });
+        asks(&held, &id, task, What::GotAnswer);
+        asks(&held, &id, task, question("Which cluster?"));
+
+        let early = asks(&held, &id, asking, the_answer(task, "The first one."));
+
+        assert_eq!(
+            early,
+            Answer::No {
+                why: dispatchtalk::not_told_yet("check the queue", task)
+            }
+        );
+        // Nothing was left for the task, and nothing was counted against the pair.
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+        assert!(crate::dispatched::question_of(&held, task).is_some());
+        // Its next turn is handed what the person answered, and says it has it.
+        let told = from_the_person(&held, &id, asking);
+        assert_eq!(told.len(), 1);
+        asks(
+            &held,
+            &id,
+            asking,
+            What::HasFromThePerson {
+                numbers: told.iter().map(PersonSaid::number).collect(),
+            },
+        );
+        // Then the new question is its to answer, as any is.
+        assert_eq!(
+            asks(&held, &id, asking, the_answer(task, "The west one.")),
+            sent(Kind::Answer, "check the queue")
+        );
+    }
+
+    #[test]
+    fn an_answer_the_task_never_read_is_said_so_on_the_timeline_when_the_task_ends() {
+        // F1. The person answered; the task reported before any turn of it was handed the
+        // answer (its hook was ended, or it never took another turn).
+        let plane = a_plane_with_personas();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let planes = planes().telling_activity({
+            let heard = Arc::clone(&heard);
+            Arc::new(move |line: crate::activity::ActivityHeard| {
+                heard.lock().unwrap().push(line);
+            })
+        });
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            None,
+            "check the queue",
+        );
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        asks(&held, &id, task, question("Which queue?"));
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person's answer is taken");
+        // Read by its hook, and never said to be had.
+        assert_eq!(from_the_person(&held, &id, task).len(), 1);
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let after = crate::activity::read(&held, asking).expect("open");
+        assert_eq!(
+            after
+                .lines
+                .iter()
+                .map(|line| (line.kind.as_str(), line.unread))
+                .collect::<Vec<_>>(),
+            [
+                ("dispatched", false),
+                ("question", false),
+                ("answer", true),
+                ("report", false)
+            ]
+        );
+        // And an open tab was told the answer's line again, as it now stands.
+        assert!(
+            heard
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|told| told.line.kind == "answer" && told.line.unread),
+            "told"
+        );
+        // The asking chat is still told the person answered: it is true, and says no more
+        // than that the answer was handed over.
+        assert_eq!(from_the_person(&held, &id, asking).len(), 1);
+    }
+
+    #[test]
+    fn an_answer_the_task_said_it_has_is_not_marked_when_the_task_ends() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, task, question("Which queue?"));
+        crate::dispatched::person_answers(
+            &held,
+            task,
+            asked_number(&held, task),
+            "Which queue?",
+            "The second one.",
+        )
+        .expect("the person's answer is taken");
+        let told = from_the_person(&held, &id, task);
+        asks(
+            &held,
+            &id,
+            task,
+            What::HasFromThePerson {
+                numbers: told.iter().map(PersonSaid::number).collect(),
+            },
+        );
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let after = crate::activity::read(&held, asking).expect("open");
+        assert!(after.lines.iter().all(|line| !line.unread), "{after:?}");
     }
 
     #[test]

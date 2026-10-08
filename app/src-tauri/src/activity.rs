@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use purlis_core::activity::{self, Line};
 use purlis_core::dispatchrecord::{self, ChatRef, Mode, Record};
+use purlis_core::dispatchtalk;
 
 use crate::dispatches::OpenChat;
 use crate::planes::{Held, PlaneId};
@@ -40,7 +41,9 @@ pub struct ActivityLine {
     /// `dispatched`, `follow-up`, `note`, `question`, `answer`, `report`, `stopped`, or
     /// `not listed` for the one line that stands for messages the record kept no text of.
     pub kind: String,
-    /// The chat that said it, by the name the person saw.
+    /// The chat that said it, by the name the person saw. **As the window draws it**
+    /// (`dispatchtalk::chat_shown`): a name that reads like one of the app's own marks for who
+    /// spoke has "(a chat)" after it, here and in `to` and `task`, so no name passes for one.
     pub from: String,
     /// Which chat that is: its id, or `#<number>` for one given none.
     pub from_key: String,
@@ -56,10 +59,18 @@ pub struct ActivityLine {
     /// dispatched the task themselves from that chat's tab; on an answer, they answered the
     /// task's question in the window (#1496). The words are theirs.
     pub by_person: bool,
-    /// **A question its task is paused on now** (#1496): the person may answer it. Said by the
-    /// app from what it holds open as the line is read or told, and never by the record. An
-    /// answer, a report or an ending told later for the same dispatch closes it in the tab.
-    pub asks: bool,
+    /// **On a question its task is paused on now, that question's number** (#1496): the
+    /// person may answer it, and the number is what their answer is for. `null` on every other
+    /// line. Said by the app from what it holds open as the line is read or told, and never
+    /// by the record.
+    pub asks: Option<u32>,
+    /// **On an answer told as it is recorded, the number of the question it answered**, whoever
+    /// gave it; and on a `not listed` line told because an answer's words were not kept. It
+    /// closes that question in an open tab, by number and not by where the line stands. `null`
+    /// on a line that was read: there `asks` already says which question is open.
+    pub answers: Option<u32>,
+    /// An answer the person gave that the task was never handed: it ended first.
+    pub unread: bool,
     /// purlis wrote the line, and not the task: an ending it recorded in a chat's place, and
     /// a `not listed` line.
     pub by_purlis: bool,
@@ -116,7 +127,7 @@ fn key(chat: &ChatRef) -> String {
 }
 
 /// The session `chat`, a chat as a record names it, has now, where it is open.
-fn session_of(chat: &ChatRef, open: &[OpenChat]) -> Option<u32> {
+pub(crate) fn session_of(chat: &ChatRef, open: &[OpenChat]) -> Option<u32> {
     // By the chat's id, which a restart keeps; by its number only for a record with no id.
     open.iter()
         .find(|one| dispatchrecord::named(chat, one.id.as_deref(), Some(one.session)))
@@ -132,24 +143,35 @@ pub(crate) fn drawn(line: &Line, open: &[OpenChat], depth: u32) -> ActivityLine 
         n: line.n,
         at: line.at.clone(),
         kind: line.kind.word().to_owned(),
-        from: line.from.name.clone(),
+        from: dispatchtalk::chat_shown(&line.from.name),
         from_key: key(&line.from),
         from_session,
-        to: line.to.name.clone(),
+        to: dispatchtalk::chat_shown(&line.to.name),
         to_key: key(&line.to),
         text: line.text.clone(),
         by_person: line.by_person,
-        asks: false,
+        asks: None,
+        answers: None,
+        unread: line.unread,
         by_purlis: line.by_purlis,
         expired: line.expired,
         unkept: line.unkept.map(|(count, _)| count),
         unkept_why: line.unkept.map(|(_, why)| why.word().to_owned()),
         outcome: line.outcome.map(|outcome| outcome.word().to_owned()),
         files: line.files.clone(),
-        task: line.task.clone(),
+        task: dispatchtalk::chat_shown(&line.task),
         place: line.place.clone(),
         depth,
     }
+}
+
+/// The question chat `task` is paused on, as the app holds it: its number and its words.
+fn open_question(held: &Held, task: u32) -> Option<(u32, String)> {
+    held.tasks()
+        .ledger()
+        .talk
+        .open(task)
+        .map(|(number, text)| (number, text.to_owned()))
 }
 
 /// The timeline of chat `session`: its tasks and everything under them, oldest first. `None`
@@ -163,9 +185,7 @@ pub(crate) fn read(held: &Held, session: u32) -> Option<Activity> {
         .iter()
         .map(|line| drawn(line, &open, line.depth))
         .collect();
-    still_asked(&mut lines, |task| {
-        held.tasks().ledger().talk.asks(task).map(str::to_owned)
-    });
+    still_asked(&mut lines, |task| open_question(held, task));
     Some(Activity {
         key: key(&chat),
         name: chat.name,
@@ -174,22 +194,23 @@ pub(crate) fn read(held: &Held, session: u32) -> Option<Activity> {
     })
 }
 
-/// Marks, among `lines`, **each question its task is paused on now** ([`ActivityLine::asks`]):
-/// the last question of a dispatch, from a chat that is open, whose words are the question
-/// `asks` says that chat has open. An earlier question of the same task was answered, and a
-/// question whose words are not kept cannot be shown to be answered.
-fn still_asked(lines: &mut [ActivityLine], asks: impl Fn(u32) -> Option<String>) {
+/// Marks, among `lines`, **each question its task is paused on now, with its number**
+/// ([`ActivityLine::asks`]): the last question of a dispatch, from a chat that is open, whose
+/// words are the question `asks` says that chat has open. An earlier question of the same task
+/// was answered, and a question whose words are not kept cannot be shown to be answered.
+fn still_asked(lines: &mut [ActivityLine], asks: impl Fn(u32) -> Option<(u32, String)>) {
     let mut seen: Vec<String> = Vec::new();
     for line in lines.iter_mut().rev() {
         if line.kind != activity::Kind::Question.word() || seen.contains(&line.dispatch) {
             continue;
         }
         seen.push(line.dispatch.clone());
-        line.asks = !line.expired
-            && line
-                .from_session
-                .and_then(&asks)
-                .is_some_and(|open| open == line.text);
+        line.asks = line
+            .from_session
+            .filter(|_| !line.expired)
+            .and_then(&asks)
+            .filter(|(_, open)| *open == line.text)
+            .map(|(number, _)| number);
     }
 }
 
@@ -259,7 +280,7 @@ pub fn to_its_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, heard: &Activ
 
 /// Tells the window `line` of `record`, where the record is one a timeline lists: a task's,
 /// holding only text purlis draws.
-fn tell(held: &Held, record: &Record, line: Option<&Line>) {
+fn tell(held: &Held, record: &Record, line: Option<&Line>, answers: Option<u32>) {
     let Some(line) = line else {
         return;
     };
@@ -268,31 +289,49 @@ fn tell(held: &Held, record: &Record, line: Option<&Line>) {
     }
     let mut told = [drawn(line, &crate::dispatches::open_chats(held), 0)];
     // A question told as it is asked is one its task is paused on: the person may answer it.
-    still_asked(&mut told, |task| {
-        held.tasks().ledger().talk.asks(task).map(str::to_owned)
-    });
-    let [told] = told;
+    still_asked(&mut told, |task| open_question(held, task));
+    let [mut told] = told;
+    told.answers = answers;
     held.tell_activity(told);
 }
 
 /// The app opened `record`: its first line, the dispatch and its brief.
 pub(crate) fn dispatched(held: &Held, record: &Record) {
-    tell(held, record, activity::lines_of(record, 1).first());
+    tell(held, record, activity::lines_of(record, 1).first(), None);
 }
 
 /// The app kept a message on `record`, which is the record as it now stands: its newest line.
-pub(crate) fn said(held: &Held, record: &Record) {
-    tell(held, record, activity::lines_of(record, 1).last());
+/// `answers` is the number of the question it answered, where it is an answer (#1496).
+pub(crate) fn said(held: &Held, record: &Record, answers: Option<u32>) {
+    tell(held, record, activity::lines_of(record, 1).last(), answers);
 }
 
 /// The app counted a message on `record` and kept no text of it: the one line that says how
-/// many it did not keep, as it now stands. No words of the message are told.
-pub(crate) fn unkept(held: &Held, record: &Record) {
+/// many it did not keep, as it now stands. No words of the message are told. `answers` is the
+/// number of the question that message answered, where it was an answer: the question is
+/// closed in an open tab though no answer's line says so.
+pub(crate) fn unkept(held: &Held, record: &Record, answers: Option<u32>) {
     let lines = activity::lines_of(record, 1);
     tell(
         held,
         record,
         lines.iter().find(|line| line.unkept.is_some()),
+        answers,
+    );
+}
+
+/// Dispatch `id` ended before its task was handed the person's answer (#1496), and its record
+/// now says so: that answer's line is told again as it stands.
+pub(crate) fn answer_unread(held: &Held, id: &str) {
+    let Some(record) = dispatchrecord::read(held.root(), id) else {
+        return;
+    };
+    let lines = activity::lines_of(&record, 1);
+    tell(
+        held,
+        &record,
+        lines.iter().rev().find(|line| line.unread),
+        None,
     );
 }
 
@@ -307,6 +346,7 @@ pub(crate) fn ended(held: &Held, id: &str) {
         held,
         &record,
         lines.last().filter(|line| line.outcome.is_some()),
+        None,
     );
 }
 
@@ -337,6 +377,7 @@ mod tests {
             text: "<b>Both</b> are healthy.".to_owned(),
             by_person: false,
             by_purlis: false,
+            unread: false,
             expired: false,
             unkept: None,
             outcome: Some(Outcome::Done),
@@ -405,7 +446,7 @@ mod tests {
 
     #[test]
     fn only_the_question_a_task_is_paused_on_now_is_one_the_person_may_answer() {
-        let asked = |task: u32| (task == 7).then(|| "Which region?".to_owned());
+        let asked = |task: u32| (task == 7).then(|| (5, "Which region?".to_owned()));
         let mut lines = vec![
             // Answered long ago, by its words and by its place.
             a_question("A", 1, "Which queue?"),
@@ -424,13 +465,14 @@ mod tests {
 
         still_asked(&mut lines, asked);
 
-        let asks: Vec<bool> = lines.iter().map(|line| line.asks).collect();
-        assert_eq!(asks, [false, true, false, false]);
+        // The open one carries its number: what the person's answer is for.
+        let asks: Vec<Option<u32>> = lines.iter().map(|line| line.asks).collect();
+        assert_eq!(asks, [None, Some(5), None, None]);
     }
 
     #[test]
     fn a_question_is_not_one_to_answer_once_its_chat_is_closed_or_its_words_are_gone() {
-        let asked = |_: u32| Some("Which region?".to_owned());
+        let asked = |_: u32| Some((5, "Which region?".to_owned()));
         let mut lines = vec![
             ActivityLine {
                 from_session: None,
@@ -449,7 +491,34 @@ mod tests {
 
         still_asked(&mut lines, asked);
 
-        assert!(lines.iter().all(|line| !line.asks), "{lines:?}");
+        assert!(lines.iter().all(|line| line.asks.is_none()), "{lines:?}");
+    }
+
+    #[test]
+    fn a_chat_named_like_the_app_s_marks_is_drawn_as_a_chat_wherever_its_name_stands() {
+        // A task's name is chosen by the chat that dispatched it.
+        let line = Line {
+            from: chat(7, Some("worker"), "you"),
+            to: chat(3, None, "purlis, for talk"),
+            task: "The person".to_owned(),
+            ..a_report()
+        };
+
+        let drawn = drawn(&line, &[], 1);
+
+        assert_eq!(drawn.from, "you (a chat)");
+        assert_eq!(drawn.to, "purlis, for talk (a chat)");
+        assert_eq!(drawn.task, "The person (a chat)");
+        // And a name that only begins like one is left as it is.
+        let plain = super::drawn(
+            &Line {
+                from: chat(7, Some("worker"), "youth survey"),
+                ..a_report()
+            },
+            &[],
+            1,
+        );
+        assert_eq!(plain.from, "youth survey");
     }
 
     #[test]

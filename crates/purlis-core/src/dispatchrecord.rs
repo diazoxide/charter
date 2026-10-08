@@ -255,6 +255,12 @@ pub struct Said {
     /// every message a chat sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<By>,
+    /// **The task ended before it was handed this answer** (#1496): on an answer the person
+    /// gave, where the task reported, or its chat ended, before any turn of it had the
+    /// answer. Set by the app as the dispatch ends ([`answer_unread`]), so the timeline does
+    /// not say an answer was given that the task never read. Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unread: bool,
 }
 
 /// Who said a message, where it was not the chat its kind names ([`Said::by`]).
@@ -504,6 +510,7 @@ pub fn said_by(
                 kind,
                 text,
                 by,
+                unread: false,
             });
             taken = Taken::Kept(record.clone());
         } else {
@@ -512,6 +519,31 @@ pub fn said_by(
         true
     })?;
     Ok(taken)
+}
+
+/// **The task of dispatch `id` ended before it was handed the person's answer** (#1496): the
+/// last answer the person gave on it says so from now on ([`Said::unread`]). Whether anything
+/// changed: nothing does where the record kept no such answer.
+///
+/// Called by the app as the dispatch ends, where it still holds an answer of the person's
+/// that the task never said it had. The answer stays on the timeline, and is not left to read
+/// as one the task worked from.
+pub fn answer_unread(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| {
+        let Some(said) = record
+            .talk
+            .iter_mut()
+            .rev()
+            .find(|said| said.by == Some(By::Person))
+        else {
+            return false;
+        };
+        if said.unread {
+            return false;
+        }
+        said.unread = true;
+        true
+    })
 }
 
 /// How long after a dispatch ended its record keeps what the two chats said (D-1495-12).

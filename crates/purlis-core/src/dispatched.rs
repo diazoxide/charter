@@ -95,9 +95,13 @@ pub enum What {
     /// (#1496): asked by the chat's own hook as its turn begins. It names no chat: what is
     /// handed over is what the app keeps for the chat whose token the line carries.
     FromThePerson,
-    /// The turn has the first `count` of them: they need not be handed to a later turn too.
-    /// Unsaid, by a hook that was killed, they are handed over again: nothing is lost.
-    HasFromThePerson { count: u32 },
+    /// The turn has what the person said of the questions `numbers`
+    /// ([`crate::dispatchtalk::PersonSaid::number`]): those need not be handed to a later turn
+    /// too. **Said once the hook has printed them for its turn, and not before.** Unsaid, by a
+    /// hook that was killed before it printed or as it did, they are handed over again on the
+    /// next turn. By number, so what the person said since the list was read is never counted
+    /// as had.
+    HasFromThePerson { numbers: Vec<u32> },
 }
 
 /// What the app answers an [`Asked`] with.
@@ -761,10 +765,10 @@ impl Ledger {
         self.talk.got_answer(task)
     }
 
-    /// **The person answers the question `task`, called `name`, put to its asking chat
-    /// `asker`** (#1496, [`crate::dispatchtalk::Talk::person_answers`], which decides and
-    /// refuses). `seen` is the question as the window showed it, and `text` the answer.
-    /// `asker` is none where that chat has closed.
+    /// **The person answers question `number`, which `task`, called `name`, put to its asking
+    /// chat `asker`** (#1496, [`crate::dispatchtalk::Talk::person_answers`], which decides and
+    /// refuses). `number` and `seen` are the question as the window showed it, and `text` the
+    /// answer. `asker` is none where that chat has closed.
     ///
     /// Taken, each chat has something to be told of when it may be typed a line: the task
     /// that its question is answered, and the asking chat that the person answered it. The
@@ -775,10 +779,13 @@ impl Ledger {
         task: u32,
         name: &str,
         asker: Option<u32>,
+        number: u32,
         seen: &str,
         text: &str,
     ) -> Result<Option<PathBuf>, String> {
-        let unread = self.talk.person_answers(task, name, asker, seen, text)?;
+        let unread = self
+            .talk
+            .person_answers(task, name, asker, number, seen, text)?;
         self.landed(task, Landed::PersonAnswered);
         if let Some(asker) = asker {
             if let Some(told) = self.landed.get_mut(&asker) {
@@ -789,11 +796,11 @@ impl Ledger {
         Ok(unread)
     }
 
-    /// Chat `chat`'s turn has the first `count` things the person said to it
-    /// ([`crate::dispatchtalk::Talk::from_person`]): they are handed to no later turn, and
-    /// where that is all of them the chat is typed no line about them.
-    pub fn handed_from_person(&mut self, chat: u32, count: usize) {
-        self.talk.handed_from_person(chat, count);
+    /// Chat `chat`'s turn has what the person said of the questions `numbers`
+    /// ([`crate::dispatchtalk::Talk::from_person`]): those are handed to no later turn, and
+    /// where that is all there was the chat is typed no line about them.
+    pub fn handed_from_person(&mut self, chat: u32, numbers: &[u32]) {
+        self.talk.handed_from_person(chat, numbers);
         if self.talk.from_person(chat).is_empty()
             && let Some(told) = self.landed.get_mut(&chat)
         {
@@ -1552,6 +1559,7 @@ mod tests {
             .talk
             .answer(
                 TASK,
+                ASKER,
                 "check the queue",
                 crate::dispatchtalk::Given {
                     from: "steward 3".to_owned(),
@@ -2107,7 +2115,11 @@ mod tests {
     /// What chat `chat` is handed of what the person said, and has from then on.
     fn handed(ledger: &mut Ledger, chat: u32) -> Vec<crate::dispatchtalk::PersonSaid> {
         let said = ledger.talk.from_person(chat);
-        ledger.handed_from_person(chat, said.len());
+        let numbers: Vec<u32> = said
+            .iter()
+            .map(crate::dispatchtalk::PersonSaid::number)
+            .collect();
+        ledger.handed_from_person(chat, &numbers);
         said
     }
 
@@ -2134,6 +2146,7 @@ mod tests {
                 TASK,
                 "check the queue",
                 Some(ASKER),
+                1,
                 "Which queue?",
                 "The second.",
             )
@@ -2198,6 +2211,7 @@ mod tests {
                 TASK,
                 "check the queue",
                 Some(ASKER),
+                1,
                 "Which queue?",
                 "The second.",
             )
@@ -2220,6 +2234,7 @@ mod tests {
                 TASK,
                 "check the queue",
                 Some(ASKER),
+                1,
                 "Which queue?",
                 "The second.",
             )
@@ -2249,6 +2264,7 @@ mod tests {
             .talk
             .answer(
                 TASK,
+                ASKER,
                 "check the queue",
                 crate::dispatchtalk::Given {
                     from: "steward 3".to_owned(),
@@ -2264,6 +2280,7 @@ mod tests {
             TASK,
             "check the queue",
             Some(ASKER),
+            1,
             "Which queue?",
             "The second.",
         );
@@ -2271,7 +2288,7 @@ mod tests {
         assert!(
             refused
                 .as_ref()
-                .is_err_and(|why| why.starts_with("'steward 3' answered that question")),
+                .is_err_and(|why| why.starts_with("The chat 'steward 3' answered that question")),
             "{refused:?}"
         );
         assert_eq!(ledger.nudge_step(TASK, WAITING), vec![Landed::Answer]);
@@ -2316,8 +2333,11 @@ mod tests {
             serde_json::json!("from_the_person")
         );
         assert_eq!(
-            serde_json::to_value(What::HasFromThePerson { count: 2 }).unwrap(),
-            serde_json::json!({"has_from_the_person": {"count": 2}})
+            serde_json::to_value(What::HasFromThePerson {
+                numbers: vec![2, 5]
+            })
+            .unwrap(),
+            serde_json::json!({"has_from_the_person": {"numbers": [2, 5]}})
         );
         // An answer of a chat's goes over the wire as it always did: no mark.
         assert_eq!(

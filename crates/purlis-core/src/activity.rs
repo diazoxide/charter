@@ -140,6 +140,9 @@ pub struct Line {
     /// **purlis wrote this line, and not the task**: the ending it recorded in a chat's place
     /// (ended without a report, stopped by the person), and [`Kind::Unkept`].
     pub by_purlis: bool,
+    /// An answer the person gave that the task was never handed: it ended first
+    /// ([`dispatchrecord::Said::unread`]).
+    pub unread: bool,
     /// A message whose words were kept and are not any more
     /// ([`dispatchrecord::expire_talk`]).
     pub expired: bool,
@@ -215,6 +218,7 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             text: text.to_owned(),
             by_person: false,
             by_purlis: false,
+            unread: false,
             expired: false,
             unkept: None,
             outcome: None,
@@ -232,6 +236,7 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
         lines.push(Line {
             // The person's answer, which the record says is theirs (#1496).
             by_person: said.by == Some(dispatchrecord::By::Person),
+            unread: said.unread,
             // A message is never taken empty: one with no words had them, and they are gone.
             expired: said.text.is_empty(),
             ..line(lines.len(), &said.at, Kind::of(said.kind), &said.text)

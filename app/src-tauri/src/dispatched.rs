@@ -252,10 +252,10 @@ pub fn answer(held: &Held, asked: &Asked, connection: u64) -> Answer {
         What::FromThePerson => task(Answered::FromThePerson {
             said: held.tasks().ledger().talk.from_person(asker),
         }),
-        What::HasFromThePerson { count } => {
-            held.tasks()
-                .ledger()
-                .handed_from_person(asker, usize::try_from(*count).unwrap_or(usize::MAX));
+        // Its turn has those: by the number of the question each is about, never by how
+        // many, so what the person said since it read its list stays for the next turn.
+        What::HasFromThePerson { numbers } => {
+            held.tasks().ledger().handed_from_person(asker, numbers);
             task(Answered::Noted)
         }
     }
@@ -395,11 +395,13 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
 fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> {
     let (from, name) = owned(held, asker, to)?;
     {
-        // Where the person answered it first (#1496), the refusal says so.
+        // Where the person answered it first (#1496), the refusal says so; and where they
+        // answered an earlier question this chat has not been told of, it waits a turn.
         let ledger = held.tasks().ledger();
-        if from.report != Owed::Due || ledger.talk.asks(to).is_none() {
+        if from.report != Owed::Due {
             return Err(ledger.talk.nothing_to_answer(&name, to));
         }
+        ledger.talk.may_answer(to, asker, &name)?;
     }
     let text = dispatchtalk::text(said)?;
     let asker_name = shown(held, asker)?;
@@ -410,13 +412,12 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
         text: text.clone(),
     };
     let limits = limits_between(held, asker, to);
-    {
+    let number = {
         // The hold the person's own answer is taken under ([`person_answers`]): of the two,
         // one is the answer and the other is told who gave it.
         let mut ledger = held.tasks().ledger();
-        if ledger.talk.asks(to).is_none() {
-            return Err(ledger.talk.nothing_to_answer(&name, to));
-        }
+        // Asked again under the hold, before anything is counted or left.
+        ledger.talk.may_answer(to, asker, &name)?;
         ledger.talk.count(asker, to, &limits, Instant::now())?;
         let file = dispatchtalk::leave(held.root(), to, &message).map_err(kept)?;
         let given = dispatchtalk::Given {
@@ -425,10 +426,11 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
             file: Some(file),
             by_person: false,
         };
-        ledger.talk.answer(to, &name, given)?;
+        let number = ledger.talk.answer(to, asker, &name, given)?;
         ledger.landed(to, Landed::Answer);
-    }
-    crate::dispatches::message(held, to, &message);
+        number
+    };
+    crate::dispatches::answered(held, to, &message, number);
     held.tasks().changed();
     tell_the_chat(held, to);
     Ok(task(Answered::Sent {
@@ -503,6 +505,10 @@ pub struct TaskQuestion {
     pub task: String,
     /// The chat it asked, by its name.
     pub asked: String,
+    /// **The question's number**: what an answer is for (`answer_task_question`). The app
+    /// numbers each question as it is asked, so a later question in the same words is
+    /// another question.
+    pub number: u32,
     /// What it asked, **as text**: a chat's own words, never drawn as markup.
     pub question: String,
 }
@@ -515,24 +521,34 @@ pub fn question_of(held: &Held, task: u32) -> Option<TaskQuestion> {
     if from.mode != Mode::Task || from.report != Owed::Due || seen(held, task).ended {
         return None;
     }
-    let question = held.tasks().ledger().talk.asks(task)?.to_owned();
+    let (number, question) = held
+        .tasks()
+        .ledger()
+        .talk
+        .open(task)
+        .map(|(number, text)| (number, text.to_owned()))?;
     Some(TaskQuestion {
-        task: held.chats().shown_name(task)?,
-        asked: held
-            .chats()
-            .shown_name(from.chat)
-            .unwrap_or_else(|| from.name.clone()),
+        task: dispatchtalk::chat_shown(&held.chats().shown_name(task)?),
+        asked: dispatchtalk::chat_shown(
+            &held
+                .chats()
+                .shown_name(from.chat)
+                .unwrap_or_else(|| from.name.clone()),
+        ),
+        number,
         question,
     })
 }
 
-/// **The person answers the question task `task` put to its asking chat** (#1496, V100-46).
-/// `question` is the question as the window showed it, and `said` what they typed.
+/// **The person answers question `number`, which task `task` put to its asking chat** (#1496,
+/// V100-46). `number` and `question` are the question as the window showed it, its number
+/// and its words, and `said` is what they typed.
 ///
 /// Refused, with a sentence for the person and nothing sent, where the chat is not a task
-/// that is still working, where it is paused on no question or on another one, where the
-/// asking chat answered first, and where the text is not one purlis hands a chat
-/// (`dispatchtalk::person_text`). **The text is never cut**: it is sent whole or not at all.
+/// that is still working, where it is paused on no question or on another one (**another
+/// number, though its words be the same**), where the asking chat answered first, and where
+/// the text is not one purlis hands a chat (`dispatchtalk::person_text`). **The text is never
+/// cut**: it is sent whole or not at all.
 ///
 /// Taken, the question is closed under the hold the asking chat's answer is taken under, and:
 ///
@@ -547,7 +563,13 @@ pub fn question_of(held: &Held, task: u32) -> Option<TaskQuestion> {
 /// **The pair's messages-a-minute limit is not asked.** It is there so two chats cannot drive
 /// each other in a loop, and the person is not a chat: their answer is not counted against
 /// the pair, and a limit of 0 does not stop it.
-pub fn person_answers(held: &Held, task: u32, question: &str, said: &str) -> Result<(), String> {
+pub fn person_answers(
+    held: &Held,
+    task: u32,
+    number: u32,
+    question: &str,
+    said: &str,
+) -> Result<(), String> {
     let name = held
         .chats()
         .shown_name(task)
@@ -569,13 +591,13 @@ pub fn person_answers(held: &Held, task: u32, question: &str, said: &str) -> Res
     let unread = held
         .tasks()
         .ledger()
-        .person_answers(task, &name, asker, question, &text)?;
+        .person_answers(task, &name, asker, number, question, &text)?;
     // The question the asking chat had not read: it is told it was answered, and not asked it.
     if let Some(file) = unread {
         purlis_core::handback::took(held.root(), &file);
     }
     // One more message on the task's dispatch record, kept as the person's (#1495).
-    crate::dispatches::person_answered(held, task, &text);
+    crate::dispatches::person_answered(held, task, &text, number);
     held.tasks().changed();
     tell_the_chat(held, task);
     if let Some(asker) = asker {
@@ -599,7 +621,9 @@ pub(crate) fn task_question(
 }
 
 /// **The person answers the question a task put to its asking chat** (#1496, V100-46): chat
-/// `session`'s question, which is `question` as the window showed it, with `text`.
+/// `session`'s question `number` (`task_question`, or a line's `asks`), which read `question`
+/// as the window showed it, with `text`. It answers that question and no other: a question
+/// the task asked later is refused, though its words be the same.
 ///
 /// The task is handed the answer as the person's and carries on; the asking chat is told the
 /// person answered and does not answer again. An error is a sentence for the person, and
@@ -615,12 +639,13 @@ pub(crate) async fn answer_task_question(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
     session: u32,
+    number: u32,
     question: String,
     text: String,
 ) -> Result<(), String> {
     let held = planes.held(&plane)?;
     crate::off_the_window("answering a task's question", move || {
-        person_answers(&held, session, &question, &text)
+        person_answers(&held, session, number, &question, &text)
     })
     .await
 }

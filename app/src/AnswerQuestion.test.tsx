@@ -16,7 +16,7 @@ afterEach(() => {
 
 const PLANE = "/home/dev/plane";
 
-function core(question: { task: string; asked: string; question: string } | null) {
+function core(question: { task: string; asked: string; number: number; question: string } | null) {
   const asked: { cmd: string; args: unknown }[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
@@ -28,7 +28,7 @@ function core(question: { task: string; asked: string; question: string } | null
 
 describe("the form that answers a task's question", () => {
   it("asks the core for the question where the surface gave none, and answers that one", async () => {
-    const asked = core({ task: "talk", asked: "steward 3", question: "Which host?" });
+    const asked = core({ task: "talk", asked: "steward 3", number: 9, question: "Which host?" });
     const onDone = vi.fn();
     render(
       <AnswerQuestion plane={PLANE} session={7} task="talk" onDone={onDone} onCancel={vi.fn()} />,
@@ -41,7 +41,8 @@ describe("the form that answers a task's question", () => {
 
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(asked("answer_task_question")).toEqual([
-      { plane: PLANE, session: 7, question: "Which host?", text: "prod-2." },
+      // With the number the core gave the question, which is what the answer is for.
+      { plane: PLANE, session: 7, number: 9, question: "Which host?", text: "prod-2." },
     ]);
   });
 
@@ -79,6 +80,7 @@ describe("the form that answers a task's question", () => {
         plane={PLANE}
         session={7}
         task="talk"
+        number={9}
         question="Which host?"
         onDone={onDone}
         onCancel={vi.fn()}
@@ -95,5 +97,38 @@ describe("the form that answers a task's question", () => {
 
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(asked).toHaveLength(1);
+  });
+
+  it("keeps what was typed and says why when the question closes under the person", async () => {
+    const asked = core(null);
+    const form = (closed?: string) => (
+      <AnswerQuestion
+        plane={PLANE}
+        session={7}
+        task="talk"
+        number={9}
+        question="Which host?"
+        closed={closed}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const { rerender } = render(form());
+    const box = screen.getByRole("textbox", { name: "Your answer" });
+    await userEvent.type(box, "prod-2, the quiet");
+
+    rerender(form("The chat steward 3 answered this question first."));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The chat steward 3 answered this question first. What you typed is still in the box, to copy.",
+    );
+    // Their text is there, can be selected, and can no longer be changed or sent.
+    expect(box).toHaveValue("prod-2, the quiet");
+    expect(box).not.toBeDisabled();
+    expect(box).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    await userEvent.type(box, "{Enter}");
+    expect(asked("answer_task_question")).toEqual([]);
   });
 });
