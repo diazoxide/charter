@@ -559,7 +559,14 @@ fn kept_token_missing(
     target: &str,
     keyring: Option<VaultError>,
 ) -> VaultError {
-    let again = setup::token_again(&vault.name);
+    // The command where it works; for a vault only the committed half declares, the tab.
+    let again = match setup::token_again_for(ctx, &vault.name) {
+        Some(command) => format!(" Or, in a terminal of your own: {command}"),
+        None => format!(
+            " This vault is declared by the committed vaults.json alone. {}",
+            setup::COMMITTED_ONLY
+        ),
+    };
     if identity::in_keyring(ctx, vault) {
         let why = keyring.map_or_else(
             || format!("{} holds none for it", keyring::STORE_NAME),
@@ -568,7 +575,7 @@ fn kept_token_missing(
         return VaultError::new(format!(
             "vault '{}' is read with a service-account token purlis keeps in {}, but {why}. \
              purlis will not fall back to an ambient ${target}.\n  Paste the token again in \
-             this vault's tab in the app. Or, in a terminal of your own: {again}",
+             this vault's tab in the app.{again}",
             vault.name,
             keyring::STORE_NAME
         ));
@@ -577,8 +584,7 @@ fn kept_token_missing(
         "vault '{}' is read with a service-account token purlis keeps in {}, and this machine \
          has none for it. purlis will not fall back to an ambient ${target}: that would read \
          this vault under an identity it does not declare.\n  Put the token in: open this \
-         vault's tab in the app and paste it into the box there. Or, in a terminal of your \
-         own: {again}",
+         vault's tab in the app and paste it into the box there.{again}",
         vault.name,
         keyring::STORE_NAME
     ))

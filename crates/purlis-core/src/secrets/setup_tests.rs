@@ -610,7 +610,17 @@ fn a_committed_declaration_makes_no_record_and_names_no_variable_to_read() {
         "{}",
         refused.message
     );
-    assert!(refused.message.contains("--token-stdin"));
+    // Declared by the committed half alone: the tab, never a terminal command.
+    assert!(
+        !refused.message.contains("--token-stdin"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains(COMMITTED_ONLY),
+        "{}",
+        refused.message
+    );
     assert!(!refused.message.contains(BAD));
 }
 
@@ -1519,4 +1529,67 @@ fn a_listing_that_fails_for_a_reason_purlis_does_not_know_says_the_listing_faile
     let refused = Set::new("401: Unauthorized");
     let failed = op_vaults(&refused.ctx, &SignIn::Token(BAD.into()), None).unwrap_err();
     assert_eq!(failed.kind, Kind::SignIn);
+}
+
+#[test]
+fn a_vault_only_the_committed_half_declares_is_given_no_token_from_a_terminal() {
+    // #1527 re-review: the record would pin settings a commit chose, which nobody was shown.
+    let set = Set::new("unused");
+    set.commit(
+        json!({"pulled": {"provider": "1password", "persona": null, "config": {
+        "op-vault": "Pulled", "op-item": "another-item", "token": "keyring"}}}),
+    );
+    // A local entry that only pins an account does not declare the vault here.
+    let mut local = registry::load_local(&set.ctx).unwrap();
+    local.insert(
+        "vaults".into(),
+        json!({"pulled": {"config": {"account": "acme.1password.eu"}}}),
+    );
+    registry::save_local(&set.ctx, &local).unwrap();
+    let before = std::fs::read_to_string(set.ctx.local_registry()).unwrap();
+    assert!(!declared_here(&set.ctx, "pulled"));
+    assert_eq!(token_again_for(&set.ctx, "pulled"), None);
+
+    // Exactly what the old sentence printed, at a terminal and from a pipe.
+    for tty in [false, true] {
+        let mut rec = Rec {
+            stdin: GOOD.into(),
+            tty_in: tty,
+            hidden: GOOD.into(),
+            ..Default::default()
+        };
+        let request = AddRequest {
+            name: "pulled".into(),
+            provider: "1password".into(),
+            token_stdin: true,
+            ..Default::default()
+        };
+        assert_eq!(vaultcmd::add(&set.ctx, &request, &mut rec), 1);
+        assert!(
+            rec.said()
+                .contains("declared by the committed vaults.json alone"),
+            "{}",
+            rec.said()
+        );
+        assert!(rec.said().contains(COMMITTED_ONLY), "{}", rec.said());
+        assert_eq!(rec.stdin, GOOD, "nothing was read");
+        assert!(rec.prompts.is_empty(), "nobody was asked");
+    }
+    assert_eq!(set.args(), "", "no program was run");
+    assert!(set.items().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(set.ctx.local_registry()).unwrap(),
+        before
+    );
+    let vault = registry::vault(&set.ctx, "pulled").unwrap();
+    assert!(!identity::in_keyring(&set.ctx, &vault));
+
+    // Registered on this machine, the same command works (the printed one, by `token_again_for`).
+    let mut local = registry::load_local(&set.ctx).unwrap();
+    local["vaults"]["pulled"]["provider"] = json!("1password");
+    registry::save_local(&set.ctx, &local).unwrap();
+    assert_eq!(
+        token_again_for(&set.ctx, "pulled").as_deref(),
+        Some("purlis vault add pulled --provider 1password --token-stdin")
+    );
 }

@@ -1178,13 +1178,40 @@ pub(crate) fn in_a_chat_with(
     }
 }
 
-/// The command that gives a registered 1Password vault its token from a terminal, as a
-/// sentence prints it: it works as printed, keeps every other setting of the vault, and is
-/// the same wherever the vault is registered (`vault add --token-stdin` on a registered vault
-/// is [`change`]).
+/// The command that gives a 1Password vault this machine's registry half declares its token
+/// from a terminal, as a sentence prints it: it works as printed and keeps every other setting
+/// of the vault (`vault add --token-stdin` on such a vault is [`change`]).
 pub fn token_again(vault: &str) -> String {
     format!("purlis vault add {vault} --provider 1password --token-stdin")
 }
+
+/// Whether this machine's registry half declares vault `name`: registers it with a provider,
+/// as `vault add` writes it. A local entry that only pins an account over a committed vault
+/// does not: the committed half still says what that vault is.
+///
+/// **A record for a vault only the committed half declares is made in the app's window
+/// alone**, where the settings it will pin are shown (ADR 0047's 2026-10-09 amendment), never
+/// by `vault add --token-stdin`. A half that cannot be read declares nothing.
+pub fn declared_here(ctx: &Ctx, name: &str) -> bool {
+    registry::load_local(ctx).is_ok_and(|local| {
+        registry::usable_vaults(&local)
+            .get(name)
+            .and_then(|entry| entry.get("provider"))
+            .and_then(Value::as_str)
+            .is_some_and(|p| !p.is_empty())
+    })
+}
+
+/// [`token_again`] where it works, for a vault this machine's half declares; `None` for one
+/// only the committed half declares, whose token is given in its tab in the app.
+pub fn token_again_for(ctx: &Ctx, vault: &str) -> Option<String> {
+    declared_here(ctx, vault).then(|| token_again(vault))
+}
+
+/// What is said for a vault only the committed half declares, where a terminal would give it
+/// its token: the app's tab, which shows the settings the record will pin.
+pub const COMMITTED_ONLY: &str = "Its record is made in its tab in the app, which shows the \
+     settings the committed vaults.json gives it before anything is stored.";
 
 /// What is said when purlis could not tell whether it runs inside a chat: the reason, then
 /// [`NOT_FROM_A_CHAT`]'s way out.

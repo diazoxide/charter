@@ -148,10 +148,11 @@ fn file_owner(ctx: &Ctx, file: &str, name: &str) -> Option<String> {
 ///
 /// - **A new vault** is registered with its keyring record in one step ([`setup::create`]),
 ///   and so is one `--force` registers again.
-/// - **A 1Password vault that is registered already** keeps every setting it has and is given
-///   the token ([`setup::change`]): the command a missing token's sentence prints
-///   ([`setup::token_again`]) works as printed, wherever the vault is registered, and drops
-///   nothing. A setting given that differs from the vault's is refused rather than taken as a
+/// - **A 1Password vault this machine's registry half declares** keeps every setting it has
+///   and is given the token ([`setup::change`]): the command a missing token's sentence prints
+///   ([`setup::token_again`]) works as printed and drops nothing. **One only the committed half
+///   declares is refused before anything is read**: its record is made in the app's tab, which
+///   shows the settings it will pin ([`setup::declared_here`]). A setting given that differs from the vault's is refused rather than taken as a
 ///   change: changing those is a registration again, with `--force`.
 ///
 /// **Refused inside a chat before anything is read** ([`setup::in_a_chat`]), and wherever
@@ -316,6 +317,23 @@ fn token_for_a_registered_vault(
         io.say(Say::Err(why));
         1
     };
+    // A record for a vault only the committed half declares would pin settings a commit chose
+    // and nobody was shown: the app's tab shows them first, and a terminal does not (ADR 0047's
+    // 2026-10-09 amendment). Refused before anything is read.
+    if !setup::declared_here(ctx, &req.name) {
+        return refuse(
+            io,
+            format!(
+                "vault '{}' is declared by the committed vaults.json alone, so purlis will not \
+                 make its keyring record from a terminal: the record would pin settings that \
+                 were not shown to you. Nothing was read and nothing was stored. {} To register \
+                 a vault of this name on this machine with settings you give instead, use \
+                 --force with --op-vault.",
+                req.name,
+                setup::COMMITTED_ONLY
+            ),
+        );
+    }
     if vault.provider != "1password" {
         return refuse(
             io,

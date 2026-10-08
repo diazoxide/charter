@@ -309,17 +309,39 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
              by the app opened from the Dock.",
         );
     }
-    if let Some(name) = kept_nowhere.first() {
+    // The command only where it works: a vault only the committed half declares is given its
+    // token in its tab, where its settings are shown (#1527).
+    let (here, committed): (Vec<&String>, Vec<&String>) = kept_nowhere
+        .iter()
+        .partition(|name| crate::secrets::setup::declared_here(ctx, name));
+    if let Some(name) = here.first() {
         hint.push_str(&format!(
             " A vault that keeps its token in the keyring alone has no variable to export: in \
              a terminal of your own, `{}` asks for its token and keeps every other setting of \
              the vault{}.",
             crate::secrets::setup::token_again(name),
-            if kept_nowhere.len() > 1 {
+            if here.len() > 1 {
                 " (the same for each such vault, by its name)"
             } else {
                 ""
             }
+        ));
+    }
+    if !committed.is_empty() {
+        hint.push_str(&format!(
+            " {} declared by the committed vaults.json alone: open {} tab in the app. {}",
+            committed
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+                + if committed.len() == 1 { " is" } else { " are" },
+            if committed.len() == 1 {
+                "its"
+            } else {
+                "each one's"
+            },
+            crate::secrets::setup::COMMITTED_ONLY
         ));
     }
     Some(Row::warn(TOKENS, detail, hint))
@@ -690,6 +712,34 @@ mod tests {
             row.hint
         );
         assert!(!format!("{row:?}").contains(KEPT));
+    }
+
+    #[test]
+    fn a_kept_token_vault_only_the_committed_half_declares_is_pointed_at_its_tab() {
+        // #1527: the terminal command would make a record from settings nobody was shown, so
+        // the hint does not print it for such a vault.
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+        std::fs::write(
+            plane.ctx.shared_registry(),
+            json!({"vaults": {"pulled": {"provider": "1password", "persona": null,
+                "config": {"op-vault": "Prod", "token": "keyring"}}}})
+            .to_string(),
+        )
+        .unwrap();
+
+        let row = token_row(&plane.ctx).expect("a row");
+
+        assert_eq!(row.detail, "'pulled': its token is nowhere");
+        assert!(!row.hint.contains("--token-stdin"), "{}", row.hint);
+        assert!(
+            row.hint.ends_with(
+                "'pulled' is declared by the committed vaults.json alone: open its tab in the \
+                 app. Its record is made in its tab in the app, which shows the settings the \
+                 committed vaults.json gives it before anything is stored."
+            ),
+            "{}",
+            row.hint
+        );
     }
 
     #[test]

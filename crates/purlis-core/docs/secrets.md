@@ -185,12 +185,17 @@ input when that is a pipe. The token is never an argument and never a variable n
 command line. The command runs the same test, and a test that does not pass registers nothing;
 then the same one-step create.
 
-On a 1Password vault that is registered already, `--token-stdin` changes its token and nothing
-else: `purlis vault add team --provider 1password --token-stdin` keeps the vault's 1Password
-vault, item, account and persona, wherever the vault is registered, and converts a vault bound
-to a variable. This is the command a missing token's refusal and `purlis doctor` print. A
-setting given beside it that differs from the vault's is refused, not taken; changing those is a
-registration again, with `--force`.
+On a 1Password vault this machine's half of the registry declares, `--token-stdin` changes its
+token and nothing else: `purlis vault add team --provider 1password --token-stdin` keeps the
+vault's 1Password vault, item, account and persona, and converts a vault bound to a variable.
+A setting given beside it that differs from the vault's is refused, not taken; changing those
+is a registration again, with `--force`.
+
+**A vault only the committed `vaults.json` declares is refused there, before anything is
+read.** Its record would pin settings a commit chose, and a terminal shows them to nobody.
+Give its token in its tab in the app, which shows those settings first. A missing token's
+refusal and `purlis doctor` print the terminal command only for a vault this machine declares,
+and point to the tab for the others.
 
 **It is refused inside a chat, or a shell the app started, before anything is read**: a chat is
 never the one supplying a vault's token. It is refused too where purlis cannot tell (the
