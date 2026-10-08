@@ -11,7 +11,7 @@ import {
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
-import { BESIDE_ID, stopId, type Catalogued, type Offer } from "./actions";
+import { BESIDE_ID, taskStopId, type Catalogued, type Offer } from "./actions";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
 import { ChatShownState } from "./ChatRows";
@@ -144,7 +144,8 @@ function byKeyboard(target: Element): boolean {
  * row, after the chats still running under it, and are hidden with them when the row is folded.
  *
  * **A row's menu stops its chat** (#1448): Stop, and Stop with everything below it, from the
- * window's one catalogue, as a tab's menu has them.
+ * window's one catalogue, as a tab's menu has them. **A task's has its own two rows instead**
+ * (#1488): Stop and get its report, and Close now.
  *
  * **A chat moving redraws its own marks and no row** (SC-3). The rows are held, on plain
  * values, and each state mark reads its own chat's state, so fifty chats cost one mark per
@@ -383,7 +384,9 @@ export function ChatsSection({
   const press = useCallback((offer: Offer) => onPress?.(offer), [onPress]);
   const act = useCallback(
     (session: number, what: Asked) => {
-      const offer = offers.get(what === "beside" ? BESIDE_ID : stopId(session));
+      // Delete on a task asks to stop it and get its report (#1488, V100-17): the task's own
+      // row of the catalogue, which asks first where the task is mid-turn.
+      const offer = offers.get(what === "beside" ? BESIDE_ID : taskStopId(session));
       if (offer === undefined) return;
       if (!offer.available) {
         setSaid(offer.reason);

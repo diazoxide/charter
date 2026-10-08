@@ -287,6 +287,12 @@ pub struct Record {
     /// before this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_by: Option<EndedBy>,
+    /// Which way the person ended it, where they did (#1488): stopped, with the one short
+    /// report it was given a turn for, or closed, with none. **The app's fact**, as
+    /// `ended_by` is. Absent for every other end, and for a record written before this key: a
+    /// task the person ended that names no way is read as closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_way: Option<EndedWay>,
     /// The person took the task's chat over after it reported (#1485): they typed in it, or
     /// began a Smart close of it. purlis does not end such a chat, at its report or at the
     /// next launch. It is a finished row once it is closed.
@@ -303,6 +309,17 @@ pub enum EndedBy {
     /// The person stopped or closed it. Whatever it reported in its last turn, it did not
     /// end by itself.
     Person,
+}
+
+/// Which of the two ways the person ended a task (#1488, V100-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndedWay {
+    /// Stop and get its report: its turn was ended, and it sent one short report.
+    Stopped,
+    /// Close now: its program was ended with no report from it. Also what a stop comes to
+    /// when the task sends no report in the time it has.
+    Closed,
 }
 
 impl Record {
@@ -392,6 +409,7 @@ pub fn open_as(
         conversation: None,
         cleared: false,
         ended_by: None,
+        ended_way: None,
         kept_open: false,
     };
     // As it is stored, so what the caller holds is what a read gives back.
@@ -462,11 +480,25 @@ pub fn close_by(
     by: Option<EndedBy>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<bool> {
+    close_as(root, id, ending, by, None, now)
+}
+
+/// [`close_by`], saying which way the person ended it where they did ([`EndedWay`]). A way is
+/// kept only beside `by: person`: no other end has one.
+pub fn close_as(
+    root: &Path,
+    id: &str,
+    ending: Ending,
+    by: Option<EndedBy>,
+    way: Option<EndedWay>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<bool> {
     change(root, id, |record| {
         if !record.running() {
             return false;
         }
         record.ended_by = by;
+        record.ended_way = way.filter(|_| by == Some(EndedBy::Person));
         record.ended = Some(crate::dispatch::stamp(now));
         record.report = ending.report.as_ref().map(capped_report);
         record.usage = ending.usage.filter(|usage| !usage.is_empty());
@@ -497,7 +529,9 @@ pub enum Finished {
     Failed,
     /// Its program ended before it reported, and purlis said so in its place.
     EndedWithoutAReport,
-    /// The person stopped or closed it before it reported.
+    /// The person stopped it, and it sent the one short report it was given a turn for.
+    StoppedByThePerson,
+    /// The person closed it: its program was ended with no report from it.
     ClosedByThePerson,
 }
 
@@ -513,7 +547,12 @@ impl Finished {
         // task cannot make its row read as purlis's word by reporting purlis's sentence, and
         // a task the person stopped is said so whatever its last report says of itself.
         match record.ended_by {
-            Some(EndedBy::Person) => return Some(Self::ClosedByThePerson),
+            Some(EndedBy::Person) => {
+                return Some(match record.ended_way {
+                    Some(EndedWay::Stopped) => Self::StoppedByThePerson,
+                    Some(EndedWay::Closed) | None => Self::ClosedByThePerson,
+                });
+            }
             Some(EndedBy::Unreported) => return Some(Self::EndedWithoutAReport),
             None => {}
         }
@@ -526,15 +565,41 @@ impl Finished {
         })
     }
 
-    /// The word on its row.
+    /// The word on its row, which the person reads: the two ends they caused are said to
+    /// them as theirs (#1488).
     pub fn word(self) -> &'static str {
+        match self {
+            Self::StoppedByThePerson => "stopped by you",
+            Self::ClosedByThePerson => "closed by you",
+            other => other.said_to_a_chat(),
+        }
+    }
+
+    /// The same end as a chat is told it, where it lists its tasks: the person is not the
+    /// reader there.
+    pub fn said_to_a_chat(self) -> &'static str {
         match self {
             Self::Done => "done",
             Self::Cancelled => "cancelled",
             Self::Blocked => "blocked",
             Self::Failed => "failed",
             Self::EndedWithoutAReport => ENDED_WITHOUT_A_REPORT,
+            Self::StoppedByThePerson => "stopped by the person",
             Self::ClosedByThePerson => "closed by the person",
+        }
+    }
+
+    /// The value a window is sent for it, and a chat's row is told as its outcome: one word
+    /// with no spaces, never drawn.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::EndedWithoutAReport => "unreported",
+            Self::StoppedByThePerson => "stopped_by_person",
+            Self::ClosedByThePerson => "closed_by_person",
         }
     }
 
@@ -814,6 +879,7 @@ fn capped(record: &Record) -> Record {
         conversation: record.conversation.as_deref().map(name),
         cleared: record.cleared,
         ended_by: record.ended_by,
+        ended_way: record.ended_way,
         kept_open: record.kept_open,
     }
 }

@@ -367,6 +367,9 @@ pub struct Gone {
 pub enum Landed {
     /// The report of this task, which the chat dispatched.
     Report(u32),
+    /// purlis's word that the person ended this task, which the chat dispatched (#1488): with
+    /// its one short report where they stopped it, with none where they closed it.
+    Ended(u32),
     /// A question from this task, which the chat dispatched.
     Question(u32),
     /// A follow-up from the chat that dispatched this one.
@@ -516,10 +519,17 @@ pub fn left_out_at_launch(
 /// working task takes (#1485): `asked` is what it wanted, as "nothing to cancel" reads.
 /// `report` is the task's, where it sent one.
 pub fn finished_already(name: &str, of: u32, report: Option<&Handback>, asked: &str) -> String {
-    let how = match report.and_then(|report| report.task.as_ref()) {
-        Some(task) => format!("it reported ({})", task.outcome.word()),
-        None if report.is_some() => "it reported".to_owned(),
-        None => "it ended without a report".to_owned(),
+    // The person ended it (#1488): said as that, whatever it reported of itself on the way.
+    let ended_by_the_person = report.and_then(|report| report.stopped.as_ref());
+    let how = match (
+        ended_by_the_person,
+        report.and_then(|report| report.task.as_ref()),
+    ) {
+        (Some(stopped), _) if stopped.wrote => "the person stopped it".to_owned(),
+        (Some(_), _) => "the person closed it".to_owned(),
+        (None, Some(task)) => format!("it reported ({})", task.outcome.word()),
+        (None, None) if report.is_some() => "it reported".to_owned(),
+        (None, None) => "it ended without a report".to_owned(),
     };
     format!(
         "'{}' (chat {of}) has finished: {how}, and its program has ended, so there is {asked}. \
@@ -538,6 +548,86 @@ pub fn reopened_reports_nothing(task: &str) -> String {
         crate::personas::one_line(task)
     )
 }
+
+// ---- the person ends a task (#1488) -------------------------------------------------------------
+
+/// Why purlis cannot give a task the one short turn that **Stop and get its report** asks for
+/// (#1488, V100-5): the reasons it types nothing into a chat (D-1441-13), each said to the
+/// person in a sentence of its own. Where one holds, only **Close now** is offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoReportTurn {
+    /// It has reported already, or purlis reported in its place: there is nothing to ask for.
+    Settled,
+    /// Its program has ended.
+    Ended,
+    /// Its harness is not one purlis types a line into.
+    Harness,
+    /// purlis has heard nothing from its harness since it started: it may be showing a
+    /// start-up dialog, or its hooks are not trusted there.
+    Unheard,
+    /// It is showing the person a prompt.
+    Prompt,
+    /// A key of the person's has gone to its pane since its harness last spoke.
+    PersonTyping,
+}
+
+impl NoReportTurn {
+    /// The sentence the person reads, about the task called `name`.
+    pub fn say(self, name: &str) -> String {
+        let name = crate::personas::one_line(name);
+        match self {
+            Self::Settled => {
+                format!("'{name}' has reported already, so there is no report to ask it for.")
+            }
+            Self::Ended => format!("'{name}' is not running any more, so it cannot be asked."),
+            Self::Harness => format!(
+                "purlis does not type into the harness '{name}' runs on, so it cannot ask it \
+                 for a report."
+            ),
+            Self::Unheard => format!(
+                "purlis has heard nothing from '{name}' since it started, so it does not know \
+                 what its terminal is showing and types nothing into it."
+            ),
+            Self::Prompt => format!(
+                "'{name}' is showing a prompt that is yours to answer, and purlis types nothing \
+                 into a chat that is."
+            ),
+            Self::PersonTyping => format!(
+                "You have typed in '{name}' since it last spoke, and purlis does not type over \
+                 you."
+            ),
+        }
+    }
+}
+
+/// **Whether a task can be given its one short turn to report**, by what the app knows of its
+/// chat (`seen`), whether a key of the person's is in its pane (`keyed`,
+/// [`Ledger::keyed`]) and what it still owes (`owed`). The rule a cancel types by
+/// ([`Ledger::cancel_step`]), asked before anything is sent: a turn purlis heard begin may be
+/// interrupted and then asked, and a chat waiting for a prompt may be asked at once.
+pub fn report_turn(seen: Seen, keyed: bool, owed: Owed) -> Result<(), NoReportTurn> {
+    if owed != Owed::Due {
+        Err(NoReportTurn::Settled)
+    } else if seen.ended {
+        Err(NoReportTurn::Ended)
+    } else if !seen.measured {
+        Err(NoReportTurn::Harness)
+    } else if !seen.heard {
+        Err(NoReportTurn::Unheard)
+    } else if seen.asking {
+        Err(NoReportTurn::Prompt)
+    } else if keyed {
+        Err(NoReportTurn::PersonTyping)
+    } else if seen.takes_a_line() || seen.takes_an_interrupt() {
+        Ok(())
+    } else {
+        // Heard from, and neither waiting nor in a turn purlis heard begin.
+        Err(NoReportTurn::Unheard)
+    }
+}
+
+/// What a listed task says while the person is stopping it (#1488).
+pub const BEING_STOPPED: &str = "being stopped by the person";
 
 /// What the app does next for a cancel ([`Ledger::cancel_step`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -609,6 +699,10 @@ pub fn nudge(landed: &[Landed]) -> String {
         Landed::Report(chat) => Some(*chat),
         _ => None,
     });
+    let ended = chats(|one| match one {
+        Landed::Ended(chat) => Some(*chat),
+        _ => None,
+    });
     let questions = chats(|one| match one {
         Landed::Question(chat) => Some(*chat),
         _ => None,
@@ -628,6 +722,17 @@ pub fn nudge(landed: &[Landed]) -> String {
             many.join(", ")
         )),
     }
+    // The person's doing, said as that: the chat is not told a task "reported" that was closed.
+    match ended.as_slice() {
+        [] => {}
+        [one] => said.push(format!(
+            "the person ended a task this chat dispatched (chat {one})"
+        )),
+        many => said.push(format!(
+            "the person ended tasks this chat dispatched (chats {})",
+            many.join(", ")
+        )),
+    }
     match questions.as_slice() {
         [] => {}
         [one] => said.push(format!(
@@ -643,7 +748,7 @@ pub fn nudge(landed: &[Landed]) -> String {
         1 => said.push("the chat that asked for this task has sent it a message".to_owned()),
         _ => said.push("the chat that asked for this task has sent it messages".to_owned()),
     }
-    let one = reports.len() + questions.len() + from_above == 1;
+    let one = reports.len() + ended.len() + questions.len() + from_above == 1;
     let attached = if one {
         "It is attached to this turn as context, quoted as data."
     } else {
@@ -651,7 +756,7 @@ pub fn nudge(landed: &[Landed]) -> String {
     };
     // What a turn handed nothing can run instead: only a task's report or question can be
     // asked for again, by the chat that dispatched it.
-    let mut asked_for: Vec<&String> = reports.iter().chain(&questions).collect();
+    let mut asked_for: Vec<&String> = reports.iter().chain(&ended).chain(&questions).collect();
     asked_for.dedup();
     let otherwise = match asked_for.as_slice() {
         [] => String::new(),
@@ -711,7 +816,7 @@ impl Ledger {
         self.keyed.remove(&chat);
         for told in self.landed.values_mut() {
             told.retain(|one| match one {
-                Landed::Report(of) => *of != chat || waits,
+                Landed::Report(of) | Landed::Ended(of) => *of != chat || waits,
                 Landed::Question(of) => *of != chat,
                 Landed::FollowUp | Landed::Answer => true,
             });
@@ -743,7 +848,9 @@ impl Ledger {
         for told in self.landed.values_mut() {
             for one in told.iter_mut() {
                 match one {
-                    Landed::Report(of) | Landed::Question(of) if *of == old => *of = new,
+                    Landed::Report(of) | Landed::Ended(of) | Landed::Question(of) if *of == old => {
+                        *of = new;
+                    }
                     _ => {}
                 }
             }
@@ -836,7 +943,13 @@ impl Ledger {
                 .is_some_and(|said| !said.by_person && said.outcome != Outcome::Blocked);
         let has_reader = file.is_some();
         if has_reader {
-            self.landed(asker, Landed::Report(task));
+            // purlis's word that the person ended it is told of as that, not as a report.
+            let what = if report.stopped.is_some() {
+                Landed::Ended(task)
+            } else {
+                Landed::Report(task)
+            };
+            self.landed(asker, what);
         }
         // A question it had open is closed with it: an answer now would reach no turn of the
         // work, and the chat is typed nothing about one.
@@ -996,7 +1109,7 @@ impl Ledger {
         let question = self.talk.read(task);
         for told in self.landed.values_mut() {
             told.retain(|one| match one {
-                Landed::Report(of) => *of != task || report.is_none(),
+                Landed::Report(of) | Landed::Ended(of) => *of != task || report.is_none(),
                 Landed::Question(of) => *of != task || question.is_none(),
                 Landed::FollowUp | Landed::Answer => true,
             });
@@ -3015,5 +3128,173 @@ mod tests {
         let (back, out) = left_out_at_launch(&record, |_| false);
         assert!(out.is_empty());
         assert_eq!(back, record);
+    }
+
+    // ---- the person ends a task (#1488) -------------------------------------------------------
+
+    fn heard_and(running: bool) -> Seen {
+        Seen {
+            heard: true,
+            running,
+            waiting: !running,
+            measured: true,
+            ..Seen::default()
+        }
+    }
+
+    #[test]
+    fn a_task_is_asked_for_a_report_only_where_purlis_may_type_into_it() {
+        // Waiting for a prompt, or in a turn purlis heard begin: it may be asked.
+        assert_eq!(report_turn(heard_and(false), false, Owed::Due), Ok(()));
+        assert_eq!(report_turn(heard_and(true), false, Owed::Due), Ok(()));
+        // Each reason purlis types nothing, in its own word.
+        let showing = Seen {
+            asking: true,
+            ..heard_and(false)
+        };
+        assert_eq!(
+            report_turn(showing, false, Owed::Due),
+            Err(NoReportTurn::Prompt)
+        );
+        assert_eq!(
+            report_turn(heard_and(true), true, Owed::Due),
+            Err(NoReportTurn::PersonTyping)
+        );
+        let another_harness = Seen {
+            measured: false,
+            ..heard_and(true)
+        };
+        assert_eq!(
+            report_turn(another_harness, false, Owed::Due),
+            Err(NoReportTurn::Harness)
+        );
+        // Hooks not trusted, or still starting: nothing was heard.
+        let unheard = Seen {
+            measured: true,
+            ..Seen::default()
+        };
+        assert_eq!(
+            report_turn(unheard, false, Owed::Due),
+            Err(NoReportTurn::Unheard)
+        );
+        let gone = Seen {
+            ended: true,
+            ..heard_and(false)
+        };
+        assert_eq!(
+            report_turn(gone, false, Owed::Due),
+            Err(NoReportTurn::Ended)
+        );
+        for owed in [Owed::Sent, Owed::Failed, Owed::Nothing] {
+            assert_eq!(
+                report_turn(heard_and(false), false, owed),
+                Err(NoReportTurn::Settled)
+            );
+        }
+        // A chat nothing is known of is never typed into.
+        assert!(report_turn(Seen::default(), false, Owed::Due).is_err());
+    }
+
+    #[test]
+    fn why_a_task_cannot_be_asked_is_said_to_the_person_in_one_line() {
+        for why in [
+            NoReportTurn::Settled,
+            NoReportTurn::Ended,
+            NoReportTurn::Harness,
+            NoReportTurn::Unheard,
+            NoReportTurn::Prompt,
+            NoReportTurn::PersonTyping,
+        ] {
+            let said = why.say("check\nthe `queue`");
+            assert!(!said.contains('\n'), "{said}");
+            assert!(said.ends_with('.'), "{said}");
+        }
+    }
+
+    fn the_person_s_word(wrote: bool) -> Handback {
+        Handback {
+            stopped: Some(crate::handback::Stopped {
+                wrote,
+                task: true,
+                ..Default::default()
+            }),
+            summary: if wrote {
+                "Half done.".to_owned()
+            } else {
+                String::new()
+            },
+            task: wrote.then_some(crate::handback::Task {
+                outcome: Outcome::Done,
+                changed: None,
+                record: None,
+                by_person: false,
+                unreported: false,
+                stepped_in: false,
+                branch: None,
+            }),
+            ..a_report(Outcome::Done)
+        }
+    }
+
+    #[test]
+    fn the_word_that_the_person_ended_a_task_wakes_the_asking_chat_and_ends_nothing_itself() {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, the_person_s_word(true), Some("f".into()));
+
+        // The stop ends its program, not the end a report brings.
+        assert!(!ledger.ending(TASK));
+        // The asking chat is typed a line as for any report, and it says what happened.
+        let landed = ledger.nudge_step(ASKER, heard_and(false));
+        assert_eq!(landed, vec![Landed::Ended(TASK)]);
+        assert_eq!(
+            nudge(&landed),
+            format!(
+                "purlis: the person ended a task this chat dispatched (chat {TASK}). It is \
+                 attached to this turn as context, quoted as data. If it is not there, run \
+                 `purlis dispatch wait {TASK}`."
+            )
+        );
+        // The typing rule applies: a chat mid-turn, or one the person is typing in, is not
+        // typed into, and the word waits for its next turn.
+        ledger.reported(TASK, ASKER, the_person_s_word(false), Some("f".into()));
+        assert!(ledger.nudge_step(ASKER, heard_and(true)).is_empty());
+        ledger.person_keyed(ASKER);
+        assert!(ledger.nudge_step(ASKER, heard_and(false)).is_empty());
+    }
+
+    #[test]
+    fn a_wait_on_a_task_the_person_ended_returns_purlis_s_word_and_it_is_kept_once_closed() {
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, the_person_s_word(false), Some("f".into()));
+        ledger.forget(TASK, Some((ASKER, "check the queue")));
+
+        let gone = ledger.gone(ASKER, TASK).expect("remembered");
+        assert_eq!(gone.report, Some(the_person_s_word(false)));
+        // Still told of: the chat that asked may have been busy when it landed.
+        assert_eq!(
+            ledger.nudge_step(ASKER, heard_and(false)),
+            vec![Landed::Ended(TASK)]
+        );
+        // And what it asks of the task afterwards says who ended it.
+        let closed = finished_already(
+            "check the queue",
+            TASK,
+            Some(&the_person_s_word(false)),
+            "nothing to cancel",
+        );
+        assert!(
+            closed.contains("has finished: the person closed it"),
+            "{closed}"
+        );
+        let stopped = finished_already(
+            "check the queue",
+            TASK,
+            Some(&the_person_s_word(true)),
+            "nothing to cancel",
+        );
+        assert!(
+            stopped.contains("has finished: the person stopped it"),
+            "{stopped}"
+        );
     }
 }

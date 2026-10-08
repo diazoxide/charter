@@ -113,10 +113,24 @@ describe("a task", () => {
     expect(said({ task: OWED, board: "failed" })).toBe("triangle ended without a report");
   });
 
-  it("reads cancelled when the person stopped it before it reported, not as one that died", () => {
-    // What the core sends for a stop: the report written in its place, the record `stopped`.
-    for (const board of ["running", "waiting", "done", "failed"] as const)
-      expect(said({ board, task: inItsPlace("stopped") })).toBe("dash cancelled");
+  it("says in its own word and shape which way the person ended it, and never cancelled", () => {
+    // #1488. Who ended it and which way are the core's fact, sent as the record's outcome.
+    for (const board of ["done", "failed", "waiting", "unknown", undefined] as const) {
+      // Closed: the report was written in its place. Stopped: it sent its one short report.
+      expect(said({ board, task: inItsPlace("closed_by_person") })).toBe("octagon closed by you");
+      expect(said({ board, task: sent("stopped_by_person") })).toBe("square stopped by you");
+      // A record from before the way was kept: the person ended it, read as closed.
+      expect(said({ board, task: inItsPlace("stopped") })).toBe("octagon closed by you");
+    }
+    // A stopped task still in the turn that sent its report is working, as any reported one.
+    expect(said({ board: "running", task: sent("stopped_by_person") })).toBe("ring working");
+    // What a task reports of itself is never one of these: its outcome is one of four words.
+    expect(said({ board: "waiting", task: sent("cancelled") })).toBe("dash cancelled");
+    // And both are over: a folded session counts them, and neither is at work.
+    const kind = (task: TaskFacts) =>
+      shownState({ board: "done", needsYou: false, task, harness: null })?.kind;
+    expect(kind(inItsPlace("closed_by_person"))).toBe("closed-by-you");
+    expect(kind(sent("stopped_by_person"))).toBe("stopped-by-you");
   });
 
   it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {

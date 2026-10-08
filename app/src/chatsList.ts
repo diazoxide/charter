@@ -48,6 +48,8 @@ const OVER: ReadonlySet<ShownKind> = new Set([
   "done",
   "failed",
   "cancelled",
+  "stopped-by-you",
+  "closed-by-you",
   "unreported",
   "reported",
 ]);
@@ -259,7 +261,15 @@ export function found(rows: readonly ChatRow[], asked: ReadonlySet<number>): Cha
 }
 
 /** The kinds a folded session counts its finished tasks by, in the order it says them. */
-const COUNTED: readonly ShownKind[] = ["done", "cancelled", "failed", "unreported", "reported"];
+const COUNTED: readonly ShownKind[] = [
+  "done",
+  "cancelled",
+  "stopped-by-you",
+  "closed-by-you",
+  "failed",
+  "unreported",
+  "reported",
+];
 
 /** One count of a folded session's summary: how many of its tasks ended one way. */
 export type Counted = { shape: ShownShape; count: number; word: string };

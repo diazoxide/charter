@@ -21,6 +21,12 @@ import {
   stopBelowId,
   stopId,
   stopRows,
+  taskCloseId,
+  taskEndIds,
+  taskEndRows,
+  taskStopId,
+  CLOSES_THE_TASK,
+  STOPS_THE_TASK,
   STOPS_IT,
   toKeep,
   OUTSIDE,
@@ -118,6 +124,9 @@ function doing(): Doing & { calls: string[] } {
     }),
     stopChat: vi.fn((session: number, below: boolean) => {
       calls.push(`stopChat:${session}:${below}`);
+    }),
+    endTask: vi.fn((session: number, way: string) => {
+      calls.push(`endTask:${session}:${way}`);
     }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
@@ -2639,9 +2648,14 @@ function listed(session: number, parent: number | null = null, tab = true): List
   };
 }
 
+/** `listed`, for a chat a handoff opened: it is stopped as any chat is, and is no task. */
+function handed(session: number, parent: number, tab = true): ListedChat {
+  return { ...listed(session, parent, tab), mode: "handoff" };
+}
+
 describe("stopping a chat (#1448)", () => {
-  /** 1 started 2, which started 3. 3 is a task chat with no tab. */
-  const three = [listed(1), listed(2, 1), listed(3, 2, false)];
+  /** 1 handed work to 2, which handed work to 3. 3 has no tab. */
+  const three = [listed(1), handed(2, 1), handed(3, 2, false)];
 
   it("offers Stop, and Stop with everything below it, on every running chat", () => {
     const offers = catalogue(now({ listed: three }));
@@ -2657,7 +2671,7 @@ describe("stopping a chat (#1448)", () => {
       available: true,
       does: { verb: "stopChat", session: 2, below: true },
     });
-    // A task chat has no tab, and has the rows all the same.
+    // A chat with no tab has the rows all the same.
     expect(by(offers, stopId(3))?.available).toBe(true);
   });
 
@@ -2702,7 +2716,7 @@ describe("stopping a chat (#1448)", () => {
     expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
     expect(ids(row.above)).toEqual([]);
 
-    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-2)).toEqual([
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-4, -2)).toEqual([
       stopId(2),
       stopBelowId(2),
     ]);
@@ -2716,6 +2730,78 @@ describe("stopping a chat (#1448)", () => {
 
   it("offers no stop for a chat that is not running", () => {
     expect(ids(catalogue(now())).filter((id) => id.startsWith("chat.stop"))).toEqual([]);
+  });
+});
+
+describe("ending a task by hand (#1488)", () => {
+  /** 1 dispatched task 2, which dispatched task 3. 3 has no tab. */
+  const tasks = [listed(1), listed(2, 1), listed(3, 2, false)];
+
+  it("offers a task its own two rows, and none of a chat's Stop rows", () => {
+    const offers = catalogue(now({ listed: tasks }));
+
+    expect(by(offers, taskStopId(2))).toMatchObject({
+      title: "Stop task chat 2 and get its report",
+      available: true,
+      note: STOPS_THE_TASK,
+      does: { verb: "endTask", session: 2, way: "report" },
+    });
+    expect(by(offers, taskCloseId(2))).toMatchObject({
+      title: "Close task chat 2 now",
+      available: true,
+      note: CLOSES_THE_TASK,
+      does: { verb: "endTask", session: 2, way: "now" },
+    });
+    // A task with no tab has them too, so the palette finds them.
+    expect(by(offers, taskStopId(3))?.available).toBe(true);
+    // A task is not stopped as a chat is: one vocabulary for ending it.
+    expect(by(offers, stopId(2))).toBeUndefined();
+    expect(by(offers, stopBelowId(2))).toBeUndefined();
+    // And the session that asked is not a task: it keeps its Stop rows and has neither of these.
+    expect(by(offers, stopId(1))?.title).toBe("Stop chat chat 1");
+    expect(by(offers, taskStopId(1))).toBeUndefined();
+    expect(by(offers, taskCloseId(1))).toBeUndefined();
+  });
+
+  it("says no word of a Smart close or of closing a tab on either row", () => {
+    for (const row of taskEndRows(tasks, [])) {
+      const said = `${row.title} ${row.note ?? ""}`;
+      expect(said).not.toMatch(/smart close|close tab|end chat/i);
+    }
+  });
+
+  it("does not stop a task twice: one being stopped is only closed now", () => {
+    const rows = taskEndRows(tasks, [2]);
+
+    expect(rows.find((row) => row.id === taskStopId(2))).toMatchObject({
+      available: false,
+      reason:
+        "chat 2 is being stopped already, and has one short turn to say what it did. Close now ends it without waiting.",
+    });
+    expect(rows.find((row) => row.id === taskCloseId(2))?.available).toBe(true);
+    expect(rows.find((row) => row.id === taskStopId(3))?.available).toBe(true);
+  });
+
+  it("asks first: a row hands the window the task and the way, and ends nothing by itself", () => {
+    const hands = doing();
+    const offers = catalogue(now({ listed: tasks }));
+
+    void run(offers, taskStopId(3), hands);
+    void run(offers, taskCloseId(2), hands);
+
+    expect(hands.calls).toEqual(["endTask:3:report", "endTask:2:now"]);
+  });
+
+  it("puts both under the line of the task's row menu, and is what a tab's menu mounts", () => {
+    const offers = catalogued(catalogue(now({ listed: tasks })));
+
+    const row = menuRows({ on: "listed", session: 2 }, offers);
+    expect(ids(row.below)).toEqual([taskStopId(2), taskCloseId(2)]);
+    expect(taskEndIds(2)).toEqual([taskStopId(2), taskCloseId(2)]);
+    // A task that has a tab of its own: the same two, after the tab's own rows.
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-2)).toEqual(taskEndIds(2));
+    const tab = menuRows({ on: "chat", tab: 7, session: 2 }, offers);
+    expect(ids(tab.below).slice(-2)).toEqual(taskEndIds(2));
   });
 });
 

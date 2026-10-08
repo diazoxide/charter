@@ -604,3 +604,22 @@ report.
   says. It stays a row of its own.
 - **A task that had reported when the app quit is not started again.** At the next launch it
   is a finished row, read from its record.
+
+
+### Ending a task by hand (2026-10-08, V100-5, V100-6, V100-7, V100-18; #1488)
+
+- **Two ways, and the asking chat is told which.** Stop and get its report, and Close now, go
+  through the one stop there is. The asking chat reads one of three ends in purlis's words:
+  stopped by the person (with the task's short report, quoted as data), closed by the person
+  (no report), ended without a report. The first two add: "The person ended this task. Do not
+  dispatch it again unless they ask."
+- **The stop is the outcome from the moment it is recorded**, under the lock a report is taken
+  under. A report sent after that is the stop's report, whatever it says of itself. One that
+  landed before it was an ordinary report, and the task ended by itself.
+- **Nothing is typed into a task purlis may not type into.** There only Close now is offered,
+  and a stop pressed all the same closes the task as it stands. A stop is bounded and never
+  leaves a task stopping.
+- **A task is not stopped as a chat is.** Its row has its own two rows and no Stop chat rows;
+  a session and a handoff's chat are unchanged. The record keeps who ended a task
+  (`ended_by`) and which way (`ended_way`).
+- **Only the window asks for either.** No hook line and no chat's command reaches them.

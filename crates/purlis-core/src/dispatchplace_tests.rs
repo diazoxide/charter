@@ -466,6 +466,7 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         conversation: None,
         cleared: false,
         ended_by: None,
+        ended_way: None,
         kept_open: false,
     }
 }

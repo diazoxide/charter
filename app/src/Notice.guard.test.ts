@@ -258,6 +258,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       "Harness, a sandbox it cannot apply offers its install, and a start's refusal is ACTION's",
   },
   "TabRename.tsx": { count: 1, why: "a rename's refusal, beside the box being typed in" },
+  "TaskEnd.tsx": {
+    count: 1,
+    why: ACTION,
+  },
   "TodoTab.tsx": {
     count: 1,
     why: HEALS,

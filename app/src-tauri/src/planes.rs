@@ -703,11 +703,23 @@ impl Held {
     /// work are the person's choice, asked before the close ([`Self::close_chat_stopping`]),
     /// and where they are kept their reports go to the workspace this chat asked from.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        // The chat that asked for it, where it is a task: read before its record goes.
+        let asker = self
+            .chats
+            .handed_from(session)
+            .filter(|from| from.mode == purlis_core::dispatchdecision::Mode::Task)
+            .map(|from| from.chat);
         let closed = {
             let deciding = self.chats.deciding();
             self.close_chat_held(session, &deciding)
         };
         self.stops_carry_on();
+        // **The chat that asked is woken as for any report** (#1488, V100-6): purlis's word
+        // that the person ended its task was left for its next turn, and where it may be typed
+        // a line it is typed one now, the lock let go. Nothing where nothing waits for it.
+        if let Some(asker) = asker {
+            crate::dispatched::told(self, asker);
+        }
         closed
     }
 
@@ -738,7 +750,7 @@ impl Held {
         // told so, in the one word a stop is told in (D-T59-j3). One a stop has ended already
         // is settled, and nothing is said twice.
         if self.chats.owed_task_report(session).is_some() {
-            handoff::operator_stopped(self, session, false, true, deciding);
+            handoff::operator_stopped(self, session, false, true, Vec::new(), deciding);
         }
         // **Settled before the program is ended, whatever became of the word** (D-1443-13,
         // D-T59-j15): the end of a program waits for this lock only while the chat still owes

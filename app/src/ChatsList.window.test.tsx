@@ -98,7 +98,8 @@ const HOW: Record<string, FinishedTask["how"]> = {
   blocked: "blocked",
   failed: "failed",
   "ended without a report": "unreported",
-  "closed by the person": "stopped_by_person",
+  "closed by you": "closed_by_person",
+  "stopped by you": "stopped_by_person",
 };
 
 function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): FinishedTask {
@@ -151,6 +152,16 @@ function core(open: Filed[], ended: FinishedTask[] = []) {
       return null;
     }
     if (cmd === "stopping_chats") return [];
+    // What ending a task would do (#1488): here every task is in the middle of a turn.
+    if (cmd === "task_ending")
+      return {
+        name: "devops 2",
+        working: true,
+        no_report: null,
+        below: [],
+        stopping: false,
+        reported: false,
+      };
     if (cmd === "finished_tasks") return ended;
     if (cmd === "plane_sidebar")
       return {
@@ -964,8 +975,10 @@ describe("the keys of a row (#1499)", () => {
     act(() => row("devops 2").focus());
     await userEvent.keyboard("{Delete}");
 
-    expect(await screen.findByRole("alertdialog", { name: "Stop chat devops 2?" })).toBeTruthy();
+    // The task's own question (#1488), never a chat's Stop and never the close dialog.
+    expect(await screen.findByRole("alertdialog", { name: "Stop task 'devops 2'?" })).toBeTruthy();
     expect(asked("stop_chat")).toEqual([]);
+    expect(asked("end_task")).toEqual([]);
   });
 
   it("asks to stop a task on the key a Mac marks delete, which sends Backspace", async () => {
@@ -976,7 +989,9 @@ describe("the keys of a row (#1499)", () => {
       act(() => row("devops 2").focus());
       await userEvent.keyboard("{Backspace}");
 
-      expect(await screen.findByRole("alertdialog", { name: "Stop chat devops 2?" })).toBeTruthy();
+      expect(
+        await screen.findByRole("alertdialog", { name: "Stop task 'devops 2'?" }),
+      ).toBeTruthy();
     } finally {
       platform.mockRestore();
     }

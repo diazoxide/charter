@@ -951,7 +951,10 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
       chat(4, "alpha", { label: "probe", from: taskOf({ reported: true, outcome: "failed" }) }),
       chat(5, "alpha", { label: "lost", from: taskOf({ unreported: true, outcome: "failed" }) }),
       // Stopped by the person before it reported: purlis's own report, the record `stopped`.
-      chat(6, "alpha", { label: "halt", from: taskOf({ unreported: true, outcome: "stopped" }) }),
+      chat(6, "alpha", {
+        label: "halt",
+        from: taskOf({ unreported: true, outcome: "closed_by_person" }),
+      }),
     ]);
     render(<App />);
     const tree = await section();
@@ -971,7 +974,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
       ["sweep", { word: "cancelled", shape: "dash" }],
       ["probe", { word: "failed", shape: "cross" }],
       ["lost", { word: "ended without a report", shape: "triangle" }],
-      ["halt", { word: "cancelled", shape: "dash" }],
+      ["halt", { word: "closed by you", shape: "octagon" }],
     ] as const;
     for (const [name, state] of expected) {
       expect(says(row(tree, name)), `${name} in the Chats list`).toEqual(state);

@@ -95,7 +95,8 @@ const HOW: Record<string, FinishedTask["how"]> = {
   blocked: "blocked",
   failed: "failed",
   "ended without a report": "unreported",
-  "closed by the person": "stopped_by_person",
+  "closed by you": "closed_by_person",
+  "stopped by you": "stopped_by_person",
 };
 
 function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): FinishedTask {

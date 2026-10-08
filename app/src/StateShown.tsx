@@ -5,7 +5,9 @@ import {
   Hand,
   MessageCircleQuestion,
   Minus,
+  Octagon,
   Pause,
+  Square,
   TriangleAlert,
   X,
   type LucideIcon,
@@ -18,7 +20,8 @@ import { property } from "./theme/theme";
 /**
  * Each shape as it is drawn. **No two share an outline** at the size of a row: one ring only
  * (working), and what is not known and what ended without a report are three dots and a
- * triangle, not two more rings a few pixels apart. `dot` is the same circle filled
+ * triangle, not two more rings a few pixels apart. A task the person stopped is a square and
+ * one they closed an octagon (#1488): a stop button and a stop sign, neither of them a ring. `dot` is the same circle filled
  * (`.shown-state [data-shape="dot"]`), since an outline that small is no mark at all.
  */
 export const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
@@ -28,6 +31,8 @@ export const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
   tick: Check,
   cross: X,
   dash: Minus,
+  square: Square,
+  octagon: Octagon,
   triangle: TriangleAlert,
   dot: Circle,
   pause: Pause,

@@ -1233,6 +1233,60 @@ button.show-more:focus-visible {
   opacity: 0.92;
 }
 
+/* **The two ways to end the task a pane shows** (#1488), beside its path: words, in the line's
+   own quiet colours, and no cross. They are the first thing the line gives up after the gauge
+   and the harness's name: the same two rows are on the task's row in the Chats list and in the
+   palette. */
+.pane-task-ends {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 0.25rem;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.pane-task-ends .task-end {
+  padding: 0 0.35rem;
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pane-task-ends .task-end:hover {
+  color: var(--text-primary);
+}
+
+.pane-task-ends .task-end[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* What becomes of the tasks at work below a task being ended (#1488): one choice, in the
+   question. */
+.task-end-below {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  border: none;
+}
+
+.task-end-below legend {
+  padding: 0;
+  margin-bottom: 0.25rem;
+}
+
+.task-end-below label {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
 .pane-crumbs .crumb-path {
   display: flex;
   flex: 0 1 auto;
