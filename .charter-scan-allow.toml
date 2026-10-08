@@ -1,0 +1,4 @@
+[[allow]]
+reason = "The recorded tests' made-up forge token: a fixture value every row lists as text that must never be printed."
+fingerprint = "sha256:99041bcad5bc73b82096efd118632a674723b3b9b60b40747989b5335fd964fc"
+paths = ["tests/fixtures/recorded/behaviour.jsonl"]
