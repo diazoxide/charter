@@ -9,14 +9,14 @@
  */
 import type { FinishedTask } from "./bindings";
 import { markOf, type ChatStates } from "./chatState";
-import type { ChatRow } from "./chatsTree";
+import type { ChatRow, ListedChat } from "./chatsTree";
 import { shownOf } from "./finished";
 import { shownState, type Shown, type ShownKind, type ShownShape } from "./shownState";
 
 /** A row's state as `ChatShownState` draws it: the one function, on the row's own facts. */
 export function shownOfRow(
   states: ChatStates,
-  row: ChatRow,
+  row: Pick<ListedChat, "session" | "shell" | "report" | "outcome" | "asking" | "harness">,
   /** The needs-you queue as a set, for a caller that asks about every row. */
   queue: ReadonlySet<number> = new Set(states.needsYou),
 ): Shown | undefined {

@@ -20,6 +20,8 @@ import {
   needsYouRows,
   stopBelowId,
   stopId,
+  handedOffId,
+  handedOffRows,
   stopRows,
   STOPS_IT,
   toKeep,
@@ -2695,6 +2697,45 @@ describe("stopping a chat (#1448)", () => {
       available: false,
       reason: "chat 1 started no chat that is still running.",
     });
+  });
+
+  it("has a row to go to each chat a chat's work was handed off to, in that chat's menu, the newest first", () => {
+    // #1492: the keyboard's way to "handed off to", and to the "and 2 more".
+    const moved = [
+      listed(1),
+      { ...listed(2, 1), mode: "handoff" as const, name: "drop commons" },
+      { ...listed(3, 1), mode: "handoff" as const, name: "release notes" },
+      listed(4, 1),
+      // From a chat that has closed: no row holds it.
+      { ...listed(6, 9), mode: "handoff" as const },
+    ];
+    const offers = catalogue(now({ listed: moved }));
+
+    expect(
+      offers
+        .filter((offer) => offer.id.startsWith("chat.handed:"))
+        .map((offer) => [offer.id, offer.title, offer.available, offer.does]),
+    ).toEqual([
+      [
+        handedOffId(1, 3),
+        "Go to release notes (handed off to by chat 1)",
+        true,
+        { verb: "showChat", session: 3 },
+      ],
+      [
+        handedOffId(1, 2),
+        "Go to drop commons (handed off to by chat 1)",
+        true,
+        { verb: "showChat", session: 2 },
+      ],
+    ]);
+    // The palette puts the name of the chat it goes to first.
+    expect(by(offers, handedOffId(1, 3))?.name).toBe("release notes");
+    // In the menu of the row it was handed off from, above the line, and in no other row's.
+    const menu = menuRows({ on: "listed", session: 1, handed: [3, 2] }, catalogued(offers));
+    expect(ids(menu.above)).toEqual([handedOffId(1, 3), handedOffId(1, 2)]);
+    expect(ids(menuRows({ on: "listed", session: 2 }, catalogued(offers)).above)).toEqual([]);
+    expect(handedOffRows([listed(1), listed(4, 1)])).toEqual([]);
   });
 
   it("asks first: the row opens the question and stops nothing by itself", () => {

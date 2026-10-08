@@ -38,7 +38,7 @@ import type {
 } from "./bindings";
 import { DISPATCHES_TITLE, DISPATCHES_VIEW } from "./dispatches";
 import { backSaid } from "./chatState";
-import { tasksOf, type ListedChat } from "./chatsTree";
+import { handedOff, tasksOf, type ListedChat } from "./chatsTree";
 import { MAIN } from "./here";
 import {
   DRAFT,
@@ -2033,6 +2033,7 @@ export function catalogue(now: Now): Offer[] {
 
   offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
   offers.push(...taskRows(now.listed ?? []));
+  offers.push(...handedOffRows(now.listed ?? []));
   offers.push(BESIDE);
 
   const remove = "Remove the folder of this chat's branch";
@@ -2583,6 +2584,35 @@ export function taskRows(listed: readonly ListedChat[]): Offer[] {
     });
 }
 
+/**
+ * **A row for each chat a chat's work was handed off to** (#1492, V100-69):
+ * `chat.handed:<from>:<to>`, which goes to that chat as pressing its own row does. The
+ * keyboard's way to where the work went: the words on the row of the chat it came from are a
+ * pointer's, name only the newest, and are a tooltip on one line. The row's menu lists these
+ * for its chat, the newest first, and the palette finds them by either chat's name.
+ */
+export function handedOffRows(listed: readonly ListedChat[]): Offer[] {
+  const named = new Map(listed.map((chat) => [chat.session, chat.name]));
+  return [...handedOff(listed)].flatMap(([from, went]) => {
+    const by = named.get(from);
+    // A chat that has closed has no row to hold a menu, and its handoffs say `from` it.
+    if (by === undefined) return [];
+    return went.map((chat) =>
+      can(
+        handedOffId(from, chat.session),
+        `Go to ${chat.name} (handed off to by ${by})`,
+        { verb: "showChat", session: chat.session },
+        chat.name,
+      ),
+    );
+  });
+}
+
+/** The catalogue's id for the row that goes to chat `to`, which chat `from` handed off to. */
+export function handedOffId(from: number, to: number): string {
+  return `chat.handed:${from}:${to}`;
+}
+
 /** The catalogue's id for the row that shows a task. */
 export function taskShowId(session: number): string {
   return `chat.show:${session}`;
@@ -2605,7 +2635,7 @@ const BESIDE: Offer = cannot(
 
 /** What stopping everything below does that its title cannot fit. */
 export const BELOW_TOO =
-  "Every chat it started, and every chat those started, deepest first. Nothing outside them is touched.";
+  "Every task it asked for, and every task those asked for, deepest first. A chat it handed work off to is not one of them, and nothing outside them is touched.";
 
 /** What Stop does that its title cannot fit. */
 export const STOPS_IT =
@@ -2927,7 +2957,12 @@ export type MenuOn =
   | { on: "chat"; tab: number; session?: number }
   /** One running chat, by its number: a row of the Chats section (#1447), which a task chat
    *  has before it has a tab. */
-  | { on: "listed"; session: number }
+  | {
+      on: "listed";
+      session: number;
+      /** The chats its work was handed off to, the newest first (#1492). */
+      handed?: readonly number[];
+    }
   | { on: "workspace"; workspace: string }
   /** The plane root's tab (SI-1): not a workspace, so a menu of its own. */
   | { on: "root" }
@@ -2999,7 +3034,10 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       };
     case "listed":
       return {
-        above: [showId(what.session)],
+        above: [
+          showId(what.session),
+          ...(what.handed ?? []).map((to) => handedOffId(what.session, to)),
+        ],
         below: [stopId(what.session), stopBelowId(what.session)],
       };
     case "workspace":
