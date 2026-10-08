@@ -38,8 +38,12 @@
 //! 6. the limits ([`Refused::Limit`]): a limit of 0, the loop rule, the depth, then how many
 //!    the asking chat has running, how many its lineage holds, and the two counts a persona
 //!    has;
-//! 7. the grant: none is needed for the asking chat's own persona, or when the person
-//!    dispatches; any other pair answers [`Decision::NeedsGrant`] until one is in force.
+//! 7. the grant: none is needed when the person dispatches, **who is not held to their own
+//!    never either** (it is their rule for chats). For a chat: a pair the person said never
+//!    to, for its own persona or for one above it in its chain, is refused and nobody is asked
+//!    ([`Refused::Never`]); its own persona needs no grant; any other pair answers
+//!    [`Decision::NeedsGrant`] until one is in force, and also while this machine's record of
+//!    nevers does not read, when no grant counts.
 //!
 //! A limit is said before a grant is asked for: asking the person for a grant that would
 //! start nothing wastes their yes.
@@ -170,6 +174,10 @@ pub enum Refused {
     /// A limit or the loop rule stands in the way: which, with the count it stands at
     /// ([`crate::dispatchlimits::Refused`]).
     Limit(crate::dispatchlimits::Refused),
+    /// The person said never to this dispatch (#1503): to the asking chat's persona, or to one
+    /// above it in its chain. The whole sentence ([`crate::dispatchgrant::never_said`],
+    /// [`crate::dispatchgrant::never_above_said`]). No grant covers it and nobody is asked.
+    Never(String),
 }
 
 impl Refused {
@@ -197,6 +205,7 @@ impl Refused {
             Self::Locked(why) => format!("{why} {LOCKED}"),
             Self::Profile(why) => why.say(),
             Self::Limit(why) => why.say(),
+            Self::Never(said) => said.clone(),
         }
     }
 }
@@ -360,7 +369,14 @@ pub fn asked_by_a_chat(
     );
     let locks = crate::sandbox::policy::Locks::of(root);
     let grant = match pair.to.as_deref() {
-        Some(to) => crate::dispatchgrant::covers(pair.asking.as_deref(), to, moment.grants, &locks),
+        // With who is above the asking chat, so a never said for one of them holds here too.
+        Some(to) => crate::dispatchgrant::covers_in_chain(
+            pair.asking.as_deref(),
+            to,
+            moment.grants,
+            &locks,
+            &lineage.chain,
+        ),
         // A chat on no persona dispatching to none: its own, which only a lock on all
         // dispatch stands in the way of.
         None if locks.forbids_dispatch() => Covers::Locked(
@@ -476,10 +492,22 @@ pub fn decide(request: &Request<'_>) -> Decision {
         // No persona named, for a chat that runs as one: not a pair a grant could name.
         (None, _) if asking.persona.is_some() => refused(Refused::NoPersonaNamed),
         (_, Covers::Covered) => Decision::Start,
-        (Some(to), _) => Decision::NeedsGrant {
-            from: asking.persona.map(str::to_owned),
-            to: to.to_owned(),
-        },
+        // The person's never: refused here, so no reader of this decision asks them.
+        (Some(to), Covers::Never) => refused(Refused::Never(crate::dispatchgrant::never_said(
+            asking.persona.unwrap_or_default(),
+            to,
+        ))),
+        (Some(to), Covers::NeverAbove(above)) => refused(Refused::Never(
+            crate::dispatchgrant::never_above_said(above, to),
+        )),
+        // No grant, or none that counts while the record of nevers does not read: the person
+        // is asked. Policy was answered at step 4.
+        (Some(to), Covers::NeedsGrant | Covers::Unread | Covers::Locked(_)) => {
+            Decision::NeedsGrant {
+                from: asking.persona.map(str::to_owned),
+                to: to.to_owned(),
+            }
+        }
         (None, _) => refused(Refused::NoPersonaNamed),
     }
 }

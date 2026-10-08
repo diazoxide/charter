@@ -1869,3 +1869,168 @@ fn a_teammate_s_any_persona_waits_in_settings_and_covers_nothing_until_it_is_all
         Requested::Covered(_)
     ));
 }
+
+// ---- a record of nevers that does not read (#1503, fix round 1) ---------------------------------
+
+/// Writes this machine's record of nevers in `world`'s project as `text`.
+fn nevers_by_hand(world: &World, text: &str) {
+    let path = purlis_core::dispatchnever::path(world.root());
+    std::fs::create_dir_all(path.parent().expect("a folder")).expect("made");
+    std::fs::write(path, text).expect("written");
+}
+
+#[test]
+fn while_the_record_of_nevers_does_not_read_no_grant_starts_a_dispatch_unasked() {
+    let world = World::new();
+    let (store, answered) = store();
+    // Granted for this chat and for the person, and "any persona" on top.
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+    sandbox::local::grant_dispatch(world.root(), "steward", "devops").expect("kept");
+    purlis_core::dispatchgrant::allow_any(world.root(), "steward", Level::You).expect("kept");
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+    let started = answered.lock().unwrap().len();
+
+    nevers_by_hand(&world, "not json");
+
+    // The person is asked, and the question says why.
+    let held = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    let shown = told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &store.waiting(3)[0],
+    );
+    let why = shown.never_unread.expect("said on the Notice");
+    assert!(
+        why.starts_with("purlis could not read the list of pairs you said never to (")
+            && why.ends_with(
+                "so it changed nothing there and no dispatch grant counts until it reads. Fix \
+                 that file, or delete it to say never to nothing."
+            ),
+        "{why}"
+    );
+    assert_eq!(answered.lock().unwrap().len(), started, "nothing started");
+    // A chat nobody is at is refused, and nothing is held for it.
+    assert_eq!(
+        world.request_unattended(&store, chat(4, Some("steward")), "devops", BRIEF),
+        (
+            Requested::Refused(purlis_core::dispatchgrant::NEVERS_UNREAD.to_owned()),
+            None
+        )
+    );
+    // A chat's own persona needs no grant, so none is missing for it.
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "steward", BRIEF),
+        Requested::Covered(_)
+    ));
+
+    // The person's Allow starts the one dispatch they read, and says the next one asks.
+    assert_eq!(
+        world.allow(&store, held, Level::You),
+        Ok(
+            "Allowed for me on this machine. This dispatch starts now. The next one asks \
+             again until the list of pairs you said never to reads."
+                .to_owned()
+        )
+    );
+    let told_now = answered.lock().unwrap().clone();
+    assert_eq!(told_now.len(), started + 1);
+    assert_eq!(told_now[started].pending.id, held);
+    assert!(told_now[started].allowed.is_some());
+    // Started again as it was first asked, it is let through once, and only once.
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    // Never for another chat, or another target of the same chat.
+    pending_of(&world.request(&store, chat(5, Some("steward")), "devops", BRIEF));
+    pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+
+    // Mended by the person, the grants count again.
+    std::fs::remove_file(purlis_core::dispatchnever::path(world.root())).expect("deleted");
+    assert!(matches!(
+        world.request(&store, chat(5, Some("steward")), "prod", BRIEF),
+        Requested::Covered(_)
+    ));
+}
+
+#[test]
+fn an_allow_s_one_start_goes_with_its_chat() {
+    let world = World::new();
+    let (store, _) = store();
+    nevers_by_hand(&world, "[]");
+    let held = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, held, Level::Chat).expect("allowed");
+    store.chat_closed(3, Some("chat-3"));
+    // A chat opened under the same id does not inherit a start nobody spent.
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+}
+
+#[test]
+fn a_record_of_nevers_that_does_not_read_is_neither_added_to_nor_lifted_from() {
+    let world = World::new();
+    let (store, answered) = store();
+    let broken = r#"{"never": [{"asking": "qa", "target": "prod"}, 3]}"#;
+    nevers_by_hand(&world, broken);
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+
+    let refused = world
+        .on(|ground| store.never(ground, id))
+        .expect_err("refused");
+    assert!(
+        refused.starts_with("purlis could not read the list of pairs you said never to ("),
+        "{refused}"
+    );
+    let refused = world
+        .on(|ground| lift_never(ground.root, "qa", "prod", ground.audit))
+        .expect_err("refused");
+    assert!(refused.contains("so it changed nothing there"), "{refused}");
+
+    // Nothing recorded, nothing written, and the question still waits.
+    assert!(world.audited().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(purlis_core::dispatchnever::path(world.root())).expect("read"),
+        broken
+    );
+    assert_eq!(store.waiting(3).len(), 1);
+    assert!(answered.lock().unwrap().is_empty());
+    // Settings is told, with nothing listed as if it were everything.
+    let standing = standing_of(world.root());
+    assert!(standing.nevers.is_empty());
+    assert!(standing.nevers_unread.is_some());
+    assert_eq!(standing_of(World::new().root()).nevers_unread, None);
+}
+
+#[test]
+fn a_never_stands_whatever_becomes_of_this_machine_s_other_record() {
+    // The review's probe, through the store: a never, a grant for the chat itself, and a
+    // fault in the record the standing grants are kept in.
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+    purlis_core::dispatchgrant::never(
+        world.root(),
+        &Pair::new("steward", "devops").expect("a pair"),
+    )
+    .expect("kept");
+    let record = sandbox::local::path(world.root());
+    std::fs::create_dir_all(record.parent().expect("a folder")).expect("made");
+    std::fs::write(&record, r#"{"hosts_mine": "x"}"#).expect("a fault");
+
+    let refused = Requested::Refused(purlis_core::dispatchgrant::never_said("steward", "devops"));
+    assert_eq!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        refused
+    );
+    // The record is started again by its next write, as an older build's would do it.
+    sandbox::local::count(world.root(), sandbox::local::Started::Sandboxed).expect("counted");
+    assert_eq!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        refused
+    );
+}

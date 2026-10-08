@@ -2713,6 +2713,12 @@ export type DispatchPending = {
 	levels: GrantLevel[],
 	/**  Where policy locks it: the policy's sentence, naming who set it. No Allow is offered. */
 	locked: string | null,
+	/**
+	 *  Where this machine's list of pairs the person said never to does not read (#1503): the
+	 *  sentence saying so. No grant counts until it reads, which is why the person is asked;
+	 *  an Allow starts this one dispatch, and the next asks again.
+	 */
+	never_unread: string | null,
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */
@@ -2786,6 +2792,11 @@ export type DispatchRow = {
 export type DispatchStanding = {
 	nevers: DispatchNever[],
 	any: DispatchAny[],
+	/**
+	 *  Where the list of nevers is there and does not read: the sentence saying so, and how
+	 *  the person mends it. `nevers` is then empty, and no dispatch grant counts.
+	 */
+	nevers_unread: string | null,
 };
 
 /**  What the Dispatches tab is handed. */

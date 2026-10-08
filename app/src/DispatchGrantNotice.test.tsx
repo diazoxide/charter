@@ -32,6 +32,7 @@ const WAITING: DispatchPending = {
   brief_lines: 2,
   levels: ["chat", "you", "project"],
   locked: null,
+  never_unread: null,
 };
 
 /** A core holding `waiting` for the chat, which records what the window sends. */
@@ -199,6 +200,21 @@ describe("the dispatch grant Notice", () => {
       ),
     );
     expect(screen.getByRole("button", { name: "Never for this pair" })).toBeInTheDocument();
+  });
+
+  it("says why it asks about a pair already granted when the list of nevers does not read", async () => {
+    const unread =
+      "purlis could not read the list of pairs you said never to (.purlis/app/dispatch-never.json in this project), so it changed nothing there and no dispatch grant counts until it reads. Fix that file, or delete it to say never to nothing.";
+    core([{ ...WAITING, never_unread: unread }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      `${unread} Allowing here starts this one dispatch, and the next one asks again.`,
+    );
+    // Still a question the person can answer.
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep blocked" })).toBeInTheDocument();
   });
 
   it("says who locked a pair policy locks, and offers no Allow", async () => {

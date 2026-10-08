@@ -114,6 +114,7 @@ const HELD: DispatchPending = {
   brief_lines: 3,
   levels: ["chat", "you", "project"],
   locked: null,
+  never_unread: null,
 };
 
 function core(now: Core) {

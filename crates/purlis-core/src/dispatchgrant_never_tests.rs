@@ -64,6 +64,7 @@ fn a_never_refuses_the_pair_whatever_grants_it_at_any_level() {
         you_any: vec!["steward".to_owned()],
         project_any: vec!["steward".to_owned()],
         never: never("steward", "devops"),
+        never_unread: false,
     };
     assert_eq!(asked("steward", "devops", &every), Covers::Never);
     // Only that pair: the same persona to another target, and the pair the other way round.
@@ -84,8 +85,9 @@ fn a_never_is_kept_in_this_machine_s_record_and_never_in_the_project_s_file() {
     super::never(root, &pair("steward", "devops")).expect("kept");
     super::never(root, &pair("steward", "devops")).expect("kept once");
     assert_eq!(nevers(root), never("steward", "devops"));
-    let kept = std::fs::read_to_string(crate::sandbox::local::path(root)).expect("the record");
-    assert!(kept.contains("\"dispatch_never\""), "{kept}");
+    // In a record of its own: not beside the grants, and not in the project's file.
+    assert!(crate::dispatchnever::path(root).exists());
+    assert!(!crate::sandbox::local::path(root).exists());
     assert!(!crate::names::manifest(root).exists());
     assert_eq!(
         asked("steward", "devops", &InForce::read(root, Vec::new())),
@@ -422,11 +424,8 @@ fn an_accepted_star_with_nothing_in_the_project_s_file_grants_nothing() {
     let grants = InForce::read(root, Vec::new());
     assert_eq!(grants.project_any, Vec::<String>::new());
     assert_eq!(asked("steward", "devops", &grants), Covers::NeedsGrant);
-    // And the acceptance of a grant that is not there does not wait for one to arrive.
-    assert_eq!(
-        crate::sandbox::local::dispatch_any_seen(root),
-        Vec::<String>::new()
-    );
+    // With no project file to read, nothing stored is changed either.
+    assert_eq!(crate::sandbox::local::dispatch_any_seen(root), ["steward"]);
 }
 
 #[test]
@@ -436,11 +435,15 @@ fn a_never_written_by_hand_is_held_as_written() {
     by_hand(
         root,
         r#"{"dispatch_mine": [{"asking": "steward", "target": "devops"}],
-            "dispatch_any": ["steward"],
-            "dispatch_never": [{"asking": "steward", "target": "devops"},
-                               {"asking": "steward", "target": "steward"},
-                               {"asking": "steward", "target": "*"}]}"#,
+            "dispatch_any": ["steward"]}"#,
     );
+    std::fs::write(
+        crate::dispatchnever::path(root),
+        r#"{"never": [{"asking": "steward", "target": "devops"},
+                      {"asking": "steward", "target": "steward"},
+                      {"asking": "steward", "target": "*"}]}"#,
+    )
+    .expect("written by hand");
     let grants = InForce::read(root, Vec::new());
     assert_eq!(asked("steward", "devops", &grants), Covers::Never);
     // One naming a persona twice is held too: nothing reads it as a mistake to step over.
@@ -460,7 +463,7 @@ fn a_record_that_does_not_read_grants_nothing_at_all() {
     for broken in [
         "not json",
         r#"{"dispatch_any": "steward"}"#,
-        r#"{"dispatch_mine": [{"asking": "steward", "target": "devops"}], "dispatch_never": [3]}"#,
+        r#"{"dispatch_mine": [{"asking": "steward", "target": "devops"}], "hosts_mine": 3}"#,
     ] {
         by_hand(root, broken);
         let grants = InForce::read(root, Vec::new());
@@ -643,4 +646,271 @@ fn a_star_taken_out_of_the_project_s_file_and_put_back_waits_for_a_yes_again() {
     std::fs::write(crate::names::manifest(root), with_it).expect("another pull");
     assert_eq!(InForce::read(root, Vec::new()), InForce::default());
     assert_eq!(any_unaccepted(root), ["steward"]);
+}
+
+#[test]
+fn a_project_file_that_does_not_read_for_a_moment_changes_nothing_that_is_stored() {
+    let with_it = "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n";
+    let project = project(with_it);
+    let root = project.path();
+    allow_any(root, "steward", Level::Project).expect("accepted");
+
+    // A merge left half done, then no file at all: nothing is granted meanwhile, and the
+    // acceptance is still there when the file reads again.
+    for broken in [
+        Some("<<<<<<< HEAD\nschema = 1\n=======\nschema = 2\n>>>>>>> theirs\n"),
+        None,
+    ] {
+        match broken {
+            Some(text) => std::fs::write(crate::names::manifest(root), text).expect("a conflict"),
+            None => std::fs::remove_file(crate::names::manifest(root)).expect("gone"),
+        }
+        assert_eq!(
+            InForce::read(root, Vec::new()).project_any,
+            Vec::<String>::new()
+        );
+        assert_eq!(crate::sandbox::local::dispatch_any_seen(root), ["steward"]);
+    }
+    std::fs::write(crate::names::manifest(root), with_it).expect("resolved");
+    assert_eq!(InForce::read(root, Vec::new()).project_any, ["steward"]);
+}
+
+// ---- any persona covers personas, and nothing that is not one -----------------------------------
+
+#[test]
+fn any_persona_covers_no_target_that_is_not_a_persona_s_name() {
+    let grants = InForce {
+        you_any: vec!["steward".to_owned()],
+        project_any: vec!["steward".to_owned()],
+        ..InForce::default()
+    };
+    for target in ["*", "Devops", "dev ops", "../devops", ""] {
+        assert_eq!(
+            asked("steward", target, &grants),
+            Covers::NeedsGrant,
+            "{target:?}"
+        );
+        assert_eq!(grants.level_of(Some("steward"), target), None, "{target:?}");
+    }
+    assert_eq!(asked("steward", "devops", &grants), Covers::Covered);
+}
+
+#[test]
+fn only_a_grant_that_names_the_pair_is_a_named_one() {
+    let grants = InForce {
+        chat: vec![ChatPair {
+            asking: Some("steward".to_owned()),
+            target: "prod".to_owned(),
+        }],
+        you: vec![pair("steward", "qa")],
+        project: vec![pair("steward", "devops")],
+        you_any: vec!["steward".to_owned()],
+        project_any: vec!["steward".to_owned()],
+        ..InForce::default()
+    };
+    assert_eq!(
+        grants.named_level_of(Some("steward"), "devops"),
+        Some(Level::Project)
+    );
+    assert_eq!(
+        grants.named_level_of(Some("steward"), "qa"),
+        Some(Level::You)
+    );
+    // Not one chat's, and not "any persona".
+    assert_eq!(grants.named_level_of(Some("steward"), "prod"), None);
+    assert_eq!(grants.named_level_of(Some("steward"), "someone-new"), None);
+    assert_eq!(
+        grants.level_of(Some("steward"), "someone-new"),
+        Some(Level::Project)
+    );
+}
+
+// ---- a never holds down the chain ---------------------------------------------------------------
+
+fn above(personas: &[Option<&str>]) -> Vec<Option<String>> {
+    personas.iter().map(|one| one.map(str::to_owned)).collect()
+}
+
+#[test]
+fn a_never_for_a_persona_refuses_its_target_to_every_chat_below_a_chat_of_that_persona() {
+    let none = Locks::none();
+    // steward never dispatches to devops; qa may, by name, and steward may dispatch to qa.
+    let grants = InForce {
+        you: vec![pair("steward", "qa"), pair("qa", "devops")],
+        you_any: vec!["qa".to_owned()],
+        never: never("steward", "devops"),
+        ..InForce::default()
+    };
+    // steward to qa to devops: refused, naming the pair the person refused.
+    for chain in [
+        above(&[Some("steward")]),
+        // However far above, and past a chat on no persona.
+        above(&[Some("ops"), None, Some("steward")]),
+    ] {
+        assert_eq!(
+            covers_in_chain(Some("qa"), "devops", &grants, &none, &chain),
+            Covers::NeverAbove("steward".to_owned()),
+            "{chain:?}"
+        );
+    }
+    // qa to devops with no steward chat above it is as it was.
+    for chain in [above(&[]), above(&[Some("ops"), None])] {
+        assert_eq!(
+            covers_in_chain(Some("qa"), "devops", &grants, &none, &chain),
+            Covers::Covered,
+            "{chain:?}"
+        );
+    }
+    // Below steward, qa still reaches every other target.
+    assert_eq!(
+        covers_in_chain(
+            Some("qa"),
+            "prod",
+            &grants,
+            &none,
+            &above(&[Some("steward")])
+        ),
+        Covers::Covered
+    );
+    // It is refused where it would have been asked, too, and qa's own persona below it.
+    let bare = InForce {
+        never: never("steward", "devops"),
+        ..InForce::default()
+    };
+    assert_eq!(
+        covers_in_chain(
+            Some("qa"),
+            "devops",
+            &bare,
+            &none,
+            &above(&[Some("steward")])
+        ),
+        Covers::NeverAbove("steward".to_owned())
+    );
+    assert_eq!(
+        covers_in_chain(
+            Some("devops"),
+            "devops",
+            &bare,
+            &none,
+            &above(&[Some("steward")])
+        ),
+        Covers::NeverAbove("steward".to_owned())
+    );
+}
+
+#[test]
+fn a_policy_lock_and_the_asking_chat_s_own_never_are_said_before_one_from_above() {
+    let under = Locks::parse(
+        r#"{"owner": "IT", "dispatch": {"locked": [{"from": "qa", "to": "devops"}]}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    let grants = InForce {
+        never: vec![
+            ("steward".to_owned(), "devops".to_owned()),
+            ("qa".to_owned(), "prod".to_owned()),
+            ("steward".to_owned(), "prod".to_owned()),
+        ],
+        ..InForce::default()
+    };
+    let chain = above(&[Some("steward")]);
+    assert!(matches!(
+        covers_in_chain(Some("qa"), "devops", &grants, &under, &chain),
+        Covers::Locked(_)
+    ));
+    assert_eq!(
+        covers_in_chain(Some("qa"), "prod", &grants, &Locks::none(), &chain),
+        Covers::Never
+    );
+}
+
+#[test]
+fn a_chat_reads_who_above_it_the_person_refused_and_what_to_do() {
+    assert_eq!(
+        never_above_said("steward", "devops"),
+        "the person said never to steward chats dispatching to devops on this machine, and \
+         this chat works for a steward chat: one is above it in its chain. So nothing was \
+         started and they were not asked. Do not dispatch to devops for this work. Do it \
+         without devops, or say in your report that it is waiting: only the person lifts it, \
+         in Settings › Project › Dispatch."
+    );
+}
+
+// ---- the one decision reads a never itself ------------------------------------------------------
+
+/// What the decision says of a task from a `qa` chat to `devops` under `grant`, asked by a
+/// chat or by the person from its tab.
+fn decided(grant: &Covers, by_the_person: bool) -> crate::dispatchdecision::Decision {
+    use crate::dispatchdecision::{Asker, AskingChat, Mode, Persona, Request};
+    use crate::dispatchlimits::{self, Lineage};
+    let limits = dispatchlimits::in_force(
+        &dispatchlimits::Table::default(),
+        None,
+        Some("qa"),
+        Some("devops"),
+        &dispatchlimits::Table::default(),
+        &dispatchlimits::Level::unset(),
+    );
+    let chat = AskingChat {
+        persona: Some("qa"),
+        held: false,
+    };
+    crate::dispatchdecision::decide(&Request {
+        asker: if by_the_person {
+            Asker::Person(chat)
+        } else {
+            Asker::Chat(chat)
+        },
+        to: Persona::Defined("devops"),
+        mode: Mode::Task,
+        grant,
+        profile: None,
+        limits: &limits,
+        lineage: &Lineage {
+            lineage: 1,
+            ..Lineage::default()
+        },
+    })
+}
+
+#[test]
+fn the_decision_refuses_a_never_and_asks_nobody() {
+    use crate::dispatchdecision::{Decision, Refused};
+    assert_eq!(
+        decided(&Covers::Never, false),
+        Decision::Refused(Refused::Never(never_said("qa", "devops")))
+    );
+    assert_eq!(
+        decided(&Covers::NeverAbove("steward".to_owned()), false),
+        Decision::Refused(Refused::Never(never_above_said("steward", "devops")))
+    );
+    assert_eq!(
+        Refused::Never(never_said("qa", "devops")).say(),
+        never_said("qa", "devops")
+    );
+}
+
+#[test]
+fn the_decision_asks_the_person_while_the_record_of_nevers_does_not_read() {
+    use crate::dispatchdecision::Decision;
+    assert_eq!(
+        decided(&Covers::Unread, false),
+        Decision::NeedsGrant {
+            from: Some("qa".to_owned()),
+            to: "devops".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn the_person_s_own_dispatch_from_a_tab_is_not_held_to_their_never() {
+    use crate::dispatchdecision::Decision;
+    for grant in [
+        Covers::Never,
+        Covers::NeverAbove("steward".to_owned()),
+        Covers::Unread,
+        Covers::NeedsGrant,
+    ] {
+        assert_eq!(decided(&grant, true), Decision::Start, "{grant:?}");
+    }
 }

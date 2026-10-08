@@ -103,6 +103,11 @@ pub enum Refusal {
     /// The person said never to the pair on this machine (#1503): the asking persona and the
     /// target.
     Never(String, String),
+    /// The person said never to a persona above this chat in its chain dispatching to the
+    /// target: that persona, and the target.
+    NeverAbove(String, String),
+    /// This machine's record of nevers does not read, so no grant counts.
+    NeversUnread,
 }
 
 impl Refusal {
@@ -111,6 +116,8 @@ impl Refusal {
         match self {
             Self::Missing(missing) => missing.say(),
             Self::Never(asking, target) => dispatchgrant::never_said(asking, target),
+            Self::NeverAbove(above, target) => dispatchgrant::never_above_said(above, target),
+            Self::NeversUnread => dispatchgrant::NEVERS_UNREAD.to_owned(),
             Self::Unsandboxed(target) => {
                 let target = crate::shown::short(target);
                 format!(
@@ -223,6 +230,9 @@ pub fn answer_of(
             asking.unwrap_or_default().to_owned(),
             target.to_owned(),
         )),
+        Covers::NeverAbove(above) => Answer::Refused(Refusal::NeverAbove(above, target.to_owned())),
+        // A chat's own persona never reads as this; for any other, nobody is here to ask.
+        Covers::Unread => Answer::Refused(Refusal::NeversUnread),
         Covers::Covered if asking == Some(target) => Answer::Covered,
         Covers::Covered | Covers::NeedsGrant if !sandboxed => {
             Answer::Refused(Refusal::Unsandboxed(target.to_owned()))

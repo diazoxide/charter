@@ -8,14 +8,19 @@
   once that you said no, and you are not asked a second time; a new chat is asked. A grant can
   also be "any persona", for you on this machine or for everyone in the project
   (`steward = ["*"]` under `[dispatch.grants]`), which covers personas added later. It is set
-  only on purpose, never by answering a question. Settings › Project › Dispatch gains the
-  list and the buttons for these in #1504; the core and the window commands are here (#1503).
+  only on purpose, never by answering a question. Settings › Project › Dispatch lists the
+  pairs you said never to, each with **Lift** (#1503).
 
 ### Security
 
 - **A never is yours alone, and "any persona" is never an answer.** A never for a pair is kept
-  in this machine's own record, beats every grant including the project's and "any persona",
-  and is lifted only by you. Nothing in the project's file lifts it. No answer on a dispatch's
+  on this machine in a file of its own, beats every grant including the project's and "any
+  persona", and is lifted only by you. Nothing in the project's file lifts it. It holds down a
+  chain of chats: a chat working below a chat of that persona does not dispatch to that
+  persona either. If the file that keeps your nevers cannot be read, purlis does not treat that
+  as "none": no grant counts until it reads, you are asked and told why, and a chat nobody is
+  at is refused. For a chat nobody is at, "any persona" does not carry it into another
+  workspace as another persona: only a grant that names the two does. No answer on a dispatch's
   Notice writes "any persona", and a chat cannot ask for it: its target must be a persona's
   name. A teammate's "any persona" in the project's file covers nothing on your machine until
   you allow it there in Settings. A record edited by hand grants no more than it names: a `*`

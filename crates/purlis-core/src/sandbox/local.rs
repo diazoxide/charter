@@ -67,10 +67,12 @@ struct OnDisk {
     /// each as [`crate::dispatchgrant::Pair`] is displayed; absent before the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dispatch_seen: Option<Vec<String>>,
-    /// The pairs you said **never** to on this machine (#1503): while one stands, no chat
-    /// running as `asking` is asked or allowed to dispatch to `target`, whatever else grants.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    dispatch_never: Vec<DispatchPair>,
+    /// **Not this file's any more**: the nevers one dev build kept here, before they moved to
+    /// `app/dispatch-never.json` ([`crate::dispatchnever`]). Carried as it was written until
+    /// that module moves it ([`legacy_dispatch_nevers`], [`drop_legacy_dispatch_nevers`]), so
+    /// no write of this file drops a never on the way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dispatch_never: Option<serde_json::Value>,
     /// The personas whose chats you let dispatch to **any** persona, on this machine (#1503).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_any: Vec<String>,
@@ -143,7 +145,11 @@ fn change(root: &Path, how: impl FnOnce(&mut OnDisk)) -> io::Result<()> {
         // starts again rather than refusing every chat start that would add to it.
         let mut held: OnDisk = now
             .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
+            .unwrap_or_else(|| OnDisk {
+                // What starts again never takes a never an earlier build left here with it.
+                dispatch_never: now.and_then(legacy_nevers_in),
+                ..OnDisk::default()
+            });
         how(&mut held);
         serde_json::to_string_pretty(&held)
             .map(|text| Some(format!("{text}\n")))
@@ -521,43 +527,48 @@ pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
     change(root, |held| held.dispatch_seen = Some(shown.to_vec()))
 }
 
-// ---- never for a pair, and any persona (#1503) -----------------------------------------------
+// ---- any persona, and what an earlier build left of nevers (#1503) -----------------------
 
-/// The pairs you said never to in the project at `root`, each as asking persona and target
-/// persona, **as the file spells them**: a never is matched as written and never dropped for
-/// its spelling, so a hand-edited one still refuses what it names.
-pub fn dispatch_nevers(root: &Path) -> Vec<(String, String)> {
-    read(root)
-        .dispatch_never
-        .into_iter()
-        .map(|pair| (pair.asking, pair.target))
-        .collect()
+/// What `text`, this file, holds under the key one dev build kept nevers in, whatever else in
+/// the file reads or does not.
+fn legacy_nevers_in(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()?
+        .get("dispatch_never")
+        .cloned()
 }
 
-/// Records your never for `asking` to `target` on this machine: the grant Notice's "Never for
-/// this pair", never a chat (a sandboxed chat cannot write this file).
-pub fn never_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<()> {
-    let pair = DispatchPair {
-        asking: asking.to_owned(),
-        target: target.to_owned(),
+/// **The nevers an earlier build left in this file**, for [`crate::dispatchnever`] to move:
+/// each as asking persona and target persona. Empty where there are none; `None` where the
+/// key is there and is not a list of pairs, so what it refused is unknown.
+pub fn legacy_dispatch_nevers(root: &Path) -> Option<Vec<(String, String)>> {
+    let Some(left) = std::fs::read_to_string(path(root))
+        .ok()
+        .as_deref()
+        .and_then(legacy_nevers_in)
+    else {
+        return Some(Vec::new());
     };
-    change(root, |held| {
-        if !held.dispatch_never.contains(&pair) {
-            held.dispatch_never.push(pair);
-        }
-    })
+    crate::dispatchnever::pairs_of(&left)
 }
 
-/// Lifts that never: Settings, never a chat. Answers whether there was one.
-pub fn lift_never_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
-    let mut was = false;
-    change(root, |held| {
-        let before = held.dispatch_never.len();
-        held.dispatch_never
-            .retain(|pair| !(pair.asking == asking && pair.target == target));
-        was = held.dispatch_never.len() != before;
-    })?;
-    Ok(was)
+/// Takes that key out of this file, once what it held is kept where it belongs. Every other
+/// key stays as it is written, read by this build or not.
+pub fn drop_legacy_dispatch_nevers(root: &Path) -> io::Result<()> {
+    crate::rewrite::update(root, &path(root), |now| {
+        let Some(serde_json::Value::Object(mut whole)) =
+            now.and_then(|text| serde_json::from_str(text).ok())
+        else {
+            return Ok(None);
+        };
+        if whole.remove("dispatch_never").is_none() {
+            return Ok(None);
+        }
+        serde_json::to_string_pretty(&whole)
+            .map(|text| Some(format!("{text}\n")))
+            .map_err(io::Error::other)
+    })
+    .map(|_| ())
 }
 
 /// The personas whose chats you let dispatch to any persona in the project at `root`, on this

@@ -2485,11 +2485,12 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
             short(persona)
         ),
         // Never the person's: a helper is not a tab, a held chat's tab may ask, the person's
-        // ask always names a persona, and it sends no message between chats. Said as the chat
-        // is told, should one arise.
+        // ask always names a persona, it sends no message between chats, and their own
+        // dispatch is not held to their never. Said as the chat is told, should one arise.
         Refused::Helper
         | Refused::Held
         | Refused::NoPersonaNamed
+        | Refused::Never(_)
         | Refused::Limit(Limit::TooManyMessages { .. }) => why.say(),
     }
 }

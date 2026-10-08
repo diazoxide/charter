@@ -27,6 +27,9 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * in Settings. It is offered where the chat runs as a persona, since a chat on none has no pair.
  * No answer here grants "any persona": that is Settings' alone.
  *
+ * **Where the list of nevers does not read, the Notice says so** (`never_unread`): no grant
+ * counts until it does, which is why a pair already granted is asked about again.
+ *
  * **It reads top to bottom as it is answered** (#1481): the sentence, then the ways out in the
  * order above, then the brief in a box of about eight lines that scrolls. The brief is under
  * the buttons and never beside or above them: a long brief must not push the answer out of
@@ -159,6 +162,8 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       anything {first.target} can do, without asking you again. The grant covers the helper
       sub-agents {first.asking === null ? "this chat runs" : "those chats run"} too: what one of
       them asks is asked as its chat.
+      {first.never_unread !== null &&
+        ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}
       {behind}
     </Notice>

@@ -643,6 +643,33 @@ fn a_chat_nobody_is_at_crosses_into_another_workspace_only_under_a_standing_gran
         // And only the pair it names.
         assert!(nobody_to_ask(Some("devops"), Some("steward"), &standing, "beta").is_some());
     }
+    // "Any persona" does not count here (#1503): with nobody to see it, a chat crosses into
+    // another workspace as another persona only under a grant that names the two.
+    for any in [
+        InForce {
+            you_any: vec!["steward".to_owned()],
+            ..InForce::default()
+        },
+        InForce {
+            project_any: vec!["steward".to_owned()],
+            ..InForce::default()
+        },
+    ] {
+        assert!(
+            nobody_to_ask(Some("steward"), Some("devops"), &any, "beta").is_some(),
+            "{any:?}"
+        );
+        // Beside it, a grant that names the pair still carries it across.
+        let named = InForce {
+            you: vec![pair("steward", "devops")],
+            ..any
+        };
+        assert_eq!(
+            nobody_to_ask(Some("steward"), Some("devops"), &named, "beta"),
+            None
+        );
+        assert!(nobody_to_ask(Some("steward"), Some("qa"), &named, "beta").is_some());
+    }
     // A chat on no persona has no pair a standing grant could name.
     let said = nobody_to_ask(None, None, &none, "beta").unwrap().say();
     assert!(
