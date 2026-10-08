@@ -126,6 +126,10 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(refused.is_err(), "{refused:?}");
     assert!(commands.asked.lock().unwrap().is_empty());
     assert!(ui::WINDOW_ONLY.contains(&"answer_ask"));
+    // Ending a chat is the person's too (#1488): none of these is served on a link.
+    for command in ["end_task", "task_ending", "stop_chat", "close_session"] {
+        assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
+    }
 }
 
 #[tokio::test]

@@ -1951,6 +1951,37 @@ impl Chats {
         Ok(())
     }
 
+    /// **The person sent task chat `session`'s tab back to the Chats list** (#1488, V100-38):
+    /// the other half of [`Self::open_tab`]. It has no tab from here on, across a reload and a
+    /// relaunch, and **nothing of the task changes**: its program runs, it owes what it owed,
+    /// and nobody is told anything. Only a task has this: every other chat is its tab, and
+    /// taking that away is ending it, which this never does. Written only when it changes.
+    pub fn close_tab(&self, session: u32) -> Result<(), String> {
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return Err(format!("purlis has no chat {session} open."));
+        };
+        let task = one
+            .chat
+            .from
+            .as_ref()
+            .is_some_and(|from| from.mode == purlis_core::reopen::Mode::Task);
+        if !task {
+            return Err(
+                "Only a task goes back to the Chats list. This chat is not one: closing its \
+                 tab ends it."
+                    .to_owned(),
+            );
+        }
+        if !one.chat.tab_opened {
+            return Ok(());
+        }
+        one.chat.tab_opened = false;
+        drop(open);
+        self.write_it_down();
+        Ok(())
+    }
+
     /// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with
     /// `None` (#1486): the record keeps it, so a reloaded window and the next launch put each
     /// tab back on the chat it showed. Written only when it changes, for [`Self::pin`]'s reason.

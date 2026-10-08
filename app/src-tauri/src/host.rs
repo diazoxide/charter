@@ -288,6 +288,7 @@ pub(crate) mod pretend {
         openings: Mutex<Vec<Opening>>,
         socket: Mutex<Option<std::path::PathBuf>>,
         running: Mutex<Vec<u32>>,
+        typed: Mutex<Vec<(u32, Vec<u8>)>>,
         dealt: AtomicU32,
         ends: Mutex<Option<Ends>>,
         /// Why it starts nothing, while a test has it refuse ([`Pretend::refuses`]).
@@ -322,6 +323,16 @@ pub(crate) mod pretend {
         /// Starts under `number` again.
         pub fn starts_number(&self, number: u32) {
             lock(&self.seen.refusing_numbers).retain(|(one, _)| *one != number);
+        }
+
+        /// Everything written to session `id`'s terminal, in order: what a test reads to know
+        /// which keys reached a chat, and that none did.
+        pub fn typed(&self, id: u32) -> Vec<Vec<u8>> {
+            lock(&self.seen.typed)
+                .iter()
+                .filter(|(to, _)| *to == id)
+                .map(|(_, bytes)| bytes.clone())
+                .collect()
         }
 
         /// Says its sessions report on `socket`.
@@ -371,8 +382,10 @@ pub(crate) mod pretend {
             lock(&self.seen.running).push(id);
             Ok(id)
         }
-        fn input(&self, id: u32, _bytes: &[u8]) -> Result<(), String> {
-            self.here(id)
+        fn input(&self, id: u32, bytes: &[u8]) -> Result<(), String> {
+            self.here(id)?;
+            lock(&self.seen.typed).push((id, bytes.to_vec()));
+            Ok(())
         }
         fn resize(&self, id: u32, _size: Size) -> Result<(), String> {
             self.here(id)

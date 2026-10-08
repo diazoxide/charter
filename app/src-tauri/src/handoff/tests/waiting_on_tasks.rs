@@ -305,7 +305,7 @@ fn a_task_that_ends_without_a_report_is_flagged_and_one_the_person_stopped_is_no
     // The person's stop: purlis's word to the asking chat, and no failure of the work.
     {
         let deciding = held.chats().deciding();
-        operator_stopped(&held, stopped, false, true, &deciding);
+        operator_stopped(&held, stopped, false, true, Vec::new(), &deciding);
     }
     assert!(held.hooks().board().failed_tasks(steward).is_empty());
     assert!(!queue(&held).contains(&steward));
@@ -415,7 +415,7 @@ fn the_person_has_a_key_in(held: &Held, chat: u32) {
 fn the_person_stops(held: &Held, chat: u32) {
     {
         let deciding = held.chats().deciding();
-        operator_stopped(held, chat, false, true, &deciding);
+        operator_stopped(held, chat, false, true, Vec::new(), &deciding);
     }
     held.close_chat(chat).expect("closed");
 }

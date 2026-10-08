@@ -12,7 +12,7 @@ import { shownState, type Shown, type TaskFacts } from "./shownState";
  *
  * - **done and cancelled fold into one line**, "Finished (n)", with Clear finished;
  * - **every other end stays a row of its own** until it is cleared: failed, blocked, ended
- *   without a report, closed by the person. A failure is never hidden behind a count.
+ *   without a report, stopped by you, closed by you. A failure is never hidden behind a count.
  *
  * Clearing takes rows away and nothing else: the records stay, and the Dispatches tab still
  * lists them.
@@ -44,14 +44,15 @@ export function firstLine(report: string): string {
 
 /**
  * What the record of a task that ended `how` says of it, as a chat's row is told it
- * (`TaskFacts`). The two ends where purlis wrote the report in the task's place sent none
- * themselves: one whose program ended owing it, and one the person stopped (the record's
- * `stopped`). A value a later core sends that this window does not know is handed on as it is,
- * and is not guessed at.
+ * (`TaskFacts`). A task whose program ended owing its report sent none, and nor did one the
+ * person closed; one the person stopped sent the one short report it was given a turn for.
+ * **Which of the person's two ways it was is the core's value, handed on as it is** (#1488):
+ * the one function gives each its own word. A value a later core sends that this window does
+ * not know is handed on too, and is not guessed at.
  */
 function recordOf(how: FinishedTask["how"]): TaskFacts {
   if (how === "unreported") return { report: "failed", outcome: null, asking: null };
-  if (how === "stopped_by_person") return { report: "failed", outcome: "stopped", asking: null };
+  if (how === "closed_by_person") return { report: "failed", outcome: how, asking: null };
   return { report: "sent", outcome: how, asking: null };
 }
 
@@ -72,9 +73,8 @@ export function shownOf(task: Pick<FinishedTask, "how">): Shown | undefined {
 
 /**
  * The core's own words for how a task ended (`FinishedTask.outcome`), where they say more
- * than its state's word does (a blocked task, one the person closed): what a row draws beside
- * the state. Nothing where the
- * state's word is the core's.
+ * than its state's word does (a blocked task): what a row draws beside the state. Nothing
+ * where the state's word is the core's, as it is for the two ends the person caused.
  */
 export function qualifierOf(task: Pick<FinishedTask, "how" | "outcome">): string | undefined {
   return task.outcome === shownOf(task)?.word ? undefined : task.outcome;

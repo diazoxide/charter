@@ -2073,6 +2073,23 @@ fn open_chat_tab(
     planes.held(&plane)?.chats().open_tab(session)
 }
 
+/// The person sent a task chat's tab back to the Chats list: the tab goes, and the task keeps
+/// working. It ends nothing and tells no chat anything. Refused for a chat that is not a task.
+/// The record keeps it, so a reloaded window and the next launch draw no tab for it.
+#[tauri::command]
+#[specta::specta]
+fn close_chat_tab(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    held.chats().close_tab(session)?;
+    // Its row says it has no tab from here on.
+    held.rows_changed();
+    Ok(())
+}
+
 /// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
 /// (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
 /// put each tab back on the chat it showed.
@@ -3649,6 +3666,22 @@ mod tests {
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         assert!(bindings.contains("(\"answer_ask\""), "the window answers");
         assert!(!ui_rpc_client().contains("(\"answer_ask\""));
+    }
+
+    #[test]
+    fn ending_a_chat_is_the_window_s_alone_and_never_in_the_link_s_client() {
+        // #1488: ending a task writes a sentence in the person's name to the chat that asked,
+        // so it is the window's over Tauri's IPC, as answering an ask is; and so are the
+        // question it asks first, a chat's stop and a chat's close.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        let client = ui_rpc_client();
+        for command in ["end_task", "task_ending", "stop_chat", "close_session"] {
+            let called = format!("(\"{command}\"");
+            assert!(bindings.contains(&called), "the window's: {command}");
+            assert!(!client.contains(&called), "served on a link: {command}");
+        }
+        // Sending a task's tab back to the list ends nothing, and is an ordinary command.
+        assert!(client.contains("(\"close_chat_tab\""));
     }
 
     /// The window's commands that take a channel: `watch_session`, the one that streams a

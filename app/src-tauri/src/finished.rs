@@ -44,7 +44,7 @@ pub(crate) struct FinishedTask {
     /// window never reads the sentence in `outcome` to learn this.
     pub how: How,
     /// How it ended, in words: `done`, `cancelled`, `blocked`, `failed`, `ended without a
-    /// report` or `closed by the person`.
+    /// report`, `stopped by you` or `closed by you`.
     pub outcome: String,
     /// Whether it folds into the one "Finished (n)" line: done and cancelled do, and every
     /// other end stays a row of its own until it is cleared (V100-9).
@@ -95,8 +95,10 @@ pub(crate) enum How {
     Failed,
     /// Its program ended before it reported, and purlis said so in its place.
     Unreported,
-    /// The person stopped or closed it.
+    /// The person stopped it, and it sent the one short report it was given a turn for.
     StoppedByPerson,
+    /// The person closed it: its program was ended with no report from it.
+    ClosedByPerson,
 }
 
 impl From<Finished> for How {
@@ -107,7 +109,8 @@ impl From<Finished> for How {
             Finished::Blocked => Self::Blocked,
             Finished::Failed => Self::Failed,
             Finished::EndedWithoutAReport => Self::Unreported,
-            Finished::ClosedByThePerson => Self::StoppedByPerson,
+            Finished::StoppedByThePerson => Self::StoppedByPerson,
+            Finished::ClosedByThePerson => Self::ClosedByPerson,
         }
     }
 }
@@ -246,9 +249,10 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
                 Finished::Done | Finished::Cancelled | Finished::Blocked | Finished::Failed => {
                     format!("reported: {}", how.word())
                 }
-                Finished::EndedWithoutAReport | Finished::ClosedByThePerson => {
-                    how.word().to_owned()
-                }
+                // A chat reads this, and the person is not it: "by the person".
+                Finished::EndedWithoutAReport
+                | Finished::StoppedByThePerson
+                | Finished::ClosedByThePerson => how.said_to_a_chat().to_owned(),
             },
             age_secs: chrono::DateTime::parse_from_rfc3339(&record.started)
                 .ok()
@@ -623,6 +627,7 @@ mod tests {
             conversation: Some("9f2c-the-conversation".to_owned()),
             cleared: false,
             ended_by: None,
+            ended_way: None,
             kept_open: false,
             did_not_start: false,
             attempts: 0,
@@ -671,6 +676,7 @@ mod tests {
         let unreported = Record {
             conversation: None,
             ended_by: Some(dispatchrecord::EndedBy::Unreported),
+            ended_way: None,
             ..a_task(Outcome::Failed, dispatchrecord::ENDED_WITHOUT_A_REPORT)
         };
         let drawn = row(&unreported, 3, Finished::of(&unreported).unwrap());
@@ -681,9 +687,11 @@ mod tests {
 
         let closed = a_task(Outcome::Stopped, purlis_core::handback::STOPPED);
         let drawn = row(&closed, 3, Finished::of(&closed).unwrap());
+        // A record from before the way was kept: read as closed, and said to the person as
+        // theirs (#1488).
         assert_eq!(
-            (drawn.outcome.as_str(), drawn.folds),
-            ("closed by the person", false)
+            (drawn.outcome.as_str(), drawn.how, drawn.folds),
+            ("closed by you", How::ClosedByPerson, false)
         );
     }
 }

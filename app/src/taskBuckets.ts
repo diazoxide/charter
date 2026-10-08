@@ -60,10 +60,14 @@ export function taskBucketOf(kind: ShownKind | undefined): TaskBucket {
     case "failed":
     case "unreported":
       return "failed";
-    // An open task that reported done or was cancelled is a row that will fold.
+    // An open task that reported done or was cancelled is a row that will fold. One the
+    // person ended, either way, is not the task failing: its row says which and never folds,
+    // and it is done.
     case "done":
     case "cancelled":
     case "reported":
+    case "stopped-by-you":
+    case "closed-by-you":
       return "done";
     default:
       return "waiting";

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenChat } from "./bindings";
 import { rowFactsOf, shownState, taskFactsOf, type Facts, type TaskFacts } from "./shownState";
+import { taskBucketOf } from "./taskBuckets";
 import { TOKENS } from "./theme/theme";
 
 /**
@@ -113,10 +114,24 @@ describe("a task", () => {
     expect(said({ task: OWED, board: "failed" })).toBe("triangle ended without a report");
   });
 
-  it("reads cancelled when the person stopped it before it reported, not as one that died", () => {
-    // What the core sends for a stop: the report written in its place, the record `stopped`.
-    for (const board of ["running", "waiting", "done", "failed"] as const)
-      expect(said({ board, task: inItsPlace("stopped") })).toBe("dash cancelled");
+  it("says in its own word and shape which way the person ended it, and never cancelled", () => {
+    // #1488. Who ended it and which way are the core's fact, sent as the record's outcome.
+    for (const board of ["done", "failed", "waiting", "unknown", undefined] as const) {
+      // Closed: the report was written in its place. Stopped: it sent its one short report.
+      expect(said({ board, task: inItsPlace("closed_by_person") })).toBe("octagon closed by you");
+      expect(said({ board, task: sent("stopped_by_person") })).toBe("square stopped by you");
+      // A record from before the way was kept: the person ended it, read as closed.
+      expect(said({ board, task: inItsPlace("stopped") })).toBe("octagon closed by you");
+    }
+    // A stopped task still in the turn that sent its report is working, as any reported one.
+    expect(said({ board: "running", task: sent("stopped_by_person") })).toBe("ring working");
+    // What a task reports of itself is never one of these: its outcome is one of four words.
+    expect(said({ board: "waiting", task: sent("cancelled") })).toBe("dash cancelled");
+    // And both are over: a folded session counts them, and neither is at work.
+    const kind = (task: TaskFacts) =>
+      shownState({ board: "done", needsYou: false, task, harness: null })?.kind;
+    expect(kind(inItsPlace("closed_by_person"))).toBe("closed-by-you");
+    expect(kind(sent("stopped_by_person"))).toBe("stopped-by-you");
   });
 
   it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {
@@ -292,5 +307,38 @@ describe("what a task's record says of it", () => {
     const asking = chat({ ...from, asking: true });
     expect(taskFactsOf(asking, () => undefined)?.asking).toBe("steward 4");
     expect(taskFactsOf(asking)?.asking).toBe("steward 4");
+  });
+});
+
+// The count itself is `taskBuckets.taskBucketOf`, the one rule every surface counts by: these
+// hold it against the states the one function gives.
+describe("the four counts a session's tasks are summed into (#1488)", () => {
+  const bucket = (more: Partial<Facts>) => {
+    const shown = shownState(of(more));
+    return shown === undefined ? undefined : taskBucketOf(shown.kind);
+  };
+
+  it("counts a task the person stopped or closed as done with, never as failed", () => {
+    expect(bucket({ board: "done", task: sent("stopped_by_person") })).toBe("done");
+    // Its record says no report was sent (`failed`), and it is still not a failure.
+    expect(bucket({ board: "done", task: inItsPlace("closed_by_person") })).toBe("done");
+    expect(bucket({ board: "done", task: inItsPlace("stopped") })).toBe("done");
+    expect(bucket({ board: "waiting", task: sent("done") })).toBe("done");
+    expect(bucket({ board: "waiting", task: sent("cancelled") })).toBe("done");
+  });
+
+  it("counts failed, blocked and ended without a report as failed", () => {
+    expect(bucket({ board: "waiting", task: sent("failed") })).toBe("failed");
+    expect(bucket({ board: "waiting", task: sent("blocked") })).toBe("failed");
+    expect(bucket({ board: "done", task: inItsPlace(null) })).toBe("failed");
+    expect(bucket({ board: "failed", task: OWED })).toBe("failed");
+  });
+
+  it("counts what is at work as working and what waits on the person as waiting", () => {
+    expect(bucket({ board: "running", task: OWED })).toBe("working");
+    expect(bucket({ board: "unknown", task: OWED })).toBe("working");
+    expect(bucket({ board: "waiting", task: { ...OWED, asking: "steward 1" } })).toBe("working");
+    expect(bucket({ board: "waiting", needsYou: true, task: OWED })).toBe("waiting");
+    expect(bucket({ board: "waiting", task: OWED })).toBe("waiting");
   });
 });

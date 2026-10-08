@@ -173,7 +173,14 @@ pub fn answer(
             if let Err(why) = tickets.spend(back.chat, connection, &back.ticket, now) {
                 return no(why);
             }
-            report_it(held, back.chat, &back.summary, back.task.as_ref()).unwrap_or_else(no)
+            report_it(
+                held,
+                back.chat,
+                &back.summary,
+                back.task.as_ref(),
+                Voice::Chat,
+            )
+            .unwrap_or_else(no)
         }
         Ask::Dispatch(dispatch) => {
             // Spent first, for the open's reason: one run of the command starts one chat.
@@ -247,7 +254,17 @@ pub(crate) fn report_for(
         outcome,
         changed: None,
     };
-    report_it(held, chat, text, Some(&task)).map(|_| ())
+    report_it(held, chat, text, Some(&task), Voice::Purlis).map(|_| ())
+}
+
+/// Whose words a report is: the chat's own, or purlis's, written in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Voice {
+    Chat,
+    /// **purlis writing in a task's place never takes a stop's last words** (#1488): those
+    /// are the one report a stopped chat itself may send. And while the person is stopping
+    /// the task nothing is written for it at all: the stop tells the chat that asked.
+    Purlis,
 }
 
 /// Hands `summary` back from `chat` to the chat whose handoff opened it, or says why not
@@ -277,12 +294,19 @@ fn report_it(
     chat: u32,
     summary: &str,
     task: Option<&TaskReport>,
+    voice: Voice,
 ) -> Result<Answer, String> {
     // From "is one owed" to "one was sent" under one lock, so two reports in flight are one
     // report and one refusal, and a restart of the chat that asked lands on one side of it.
     let deciding = held.chats().deciding();
+    // Asked under the lock a stop is recorded under, so it is one or the other.
+    if voice == Voice::Purlis && held.stopping().is_stopping(chat) {
+        return Err(format!(
+            "chat {chat} is being stopped by the person, and its stop tells the chat that asked"
+        ));
+    }
     // The one report a stop asks for, tested and taken in one call.
-    let last_words = held.stopping().take_last_report(chat);
+    let last_words = voice == Voice::Chat && held.stopping().take_last_report(chat);
     let said = report_under(held, chat, summary, task, last_words);
     if said.is_err() && last_words {
         held.stopping().give_back_last_report(chat);
@@ -338,6 +362,10 @@ fn report_under(
             )
         }
     })?;
+    // **A task's stop takes a report only while one is owed** (#1488): one that reported
+    // before the person's stop was recorded ended by itself, and has no second report. A chat
+    // handed its work may send its stop's one report whatever it owed, as before.
+    let last_words = last_words && (from.mode == Mode::Handoff || from.report == Owed::Due);
     match (from.report, from.mode) {
         (Owed::Due, _) => {}
         _ if last_words => {}
@@ -429,12 +457,27 @@ fn report_under(
     };
     // What it says changed is kept on the record with the report's text (#1452).
     let changed = task.as_ref().and_then(|task| task.changed.clone());
-    let delivered = deliver(held, chat, &from, summary.clone(), task, None)?;
+    // **A report a task sends once the person's stop is recorded is the stop's report**
+    // (#1488, V100-6), whatever it says of itself and whether or not it had been asked yet:
+    // it is delivered as purlis's own word that the person stopped the task, which carries it
+    // quoted as data and names what was stopped below. The stop was recorded under the lock
+    // this is taken under, so the two are in one order: a report that landed first was an
+    // ordinary report, and the task had ended by itself.
+    let the_stop_s = (last_words && task.is_some()).then(|| handback::Stopped {
+        wrote: true,
+        task: true,
+        by_person: from.by_person,
+        // Its session record is named by the report's own part.
+        record: None,
+        below: held.stopping().ended_below(chat),
+    });
+    let delivered = deliver(held, chat, &from, summary.clone(), task, the_stop_s)?;
     held.chats().owes(chat, Owed::Sent);
     // A report a chat sends in the one turn its stop gave it is still a stop's: the person
     // ended it, whatever it says of itself, and its row does not fold (#1485).
     let by = last_words.then_some(purlis_core::dispatchrecord::EndedBy::Person);
-    crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by);
+    let way = last_words.then_some(purlis_core::dispatchrecord::EndedWay::Stopped);
+    crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by, way);
     if delivered.kept_for.is_none() {
         held.board().reported_to_its_asker(chat);
     } else if !last_words {
@@ -682,6 +725,7 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
                 text,
                 None,
                 Some(purlis_core::dispatchrecord::EndedBy::Unreported),
+                None,
             );
             tracing::info!(
                 "purlis: chat {chat} {text}, so '{}' is told{}",
@@ -712,12 +756,22 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
 /// Not told (`tell` is false: the chat that asked is ending in the same stop), it is settled
 /// all the same, so no word goes on to a workspace for nobody.
 ///
+/// **A task is told of in one of two words** (#1488, V100-6). One that sent the report its
+/// stop took (`wrote`) was told of as it reported, as **stopped by the person**, in a word
+/// that carries that report ([`report_under`]): nothing is left to say here. One that sent
+/// none is **closed by the person**, and that word is written here: Close now, the tab's
+/// Close on a task that had not reported, and a stop that got no report in the time it had.
+/// `below` names the tasks ended with it, below it. **A task whose report was settled before
+/// the person ended it is told of no more**: it had ended by itself, and the chat that asked
+/// already knows how.
+///
 /// Under the caller's hold of the lock a report is taken under.
 pub(crate) fn operator_stopped(
     held: &Held,
     chat: u32,
     wrote: bool,
     tell: bool,
+    below: Vec<String>,
     _deciding: &Deciding<'_>,
 ) {
     use purlis_core::handback;
@@ -726,15 +780,21 @@ pub(crate) fn operator_stopped(
         return;
     };
     let task = from.mode == Mode::Task;
+    // Settled already: it reported, by itself or as its stop's one report, or purlis said in
+    // its place that it went without one.
+    if task && from.report != Owed::Due {
+        return;
+    }
     if tell {
         let stopped = handback::Stopped {
-            wrote,
+            wrote: wrote && !task,
             task,
             by_person: task && from.by_person,
             record: held
                 .chats()
                 .last_record(chat)
                 .and_then(|path| handback::record_path(&path)),
+            below: if task { below } else { Vec::new() },
         };
         if let Err(why) = deliver(held, chat, &from, String::new(), None, Some(stopped)) {
             // Still owed where it was: the chat's close tries once more.
@@ -748,14 +808,15 @@ pub(crate) fn operator_stopped(
     if task && from.report == Owed::Due {
         held.chats().owes(chat, Owed::Failed);
         // Its dispatch's record ends here too, in the app's own words and under a word of
-        // its own (#1452, D-T59-j10): the person stopped it, and it did not fail by itself.
+        // its own (#1452, D-T59-j10): the person closed it, and it did not fail by itself.
         crate::dispatches::reported(
             held,
             chat,
             purlis_core::dispatchrecord::Outcome::Stopped,
-            handback::STOPPED,
+            handback::CLOSED,
             None,
             Some(purlis_core::dispatchrecord::EndedBy::Person),
+            Some(purlis_core::dispatchrecord::EndedWay::Closed),
         );
     }
     // Stopped, it owes nothing more: the chat that asked and every chat above it may have
@@ -4820,7 +4881,14 @@ mod tests {
             report.outcome,
             purlis_core::dispatchrecord::Outcome::Stopped
         );
-        assert_eq!(report.text, purlis_core::handback::STOPPED);
+        assert_eq!(report.text, purlis_core::handback::CLOSED);
+        assert_eq!(
+            (record.ended_by, record.ended_way),
+            (
+                Some(purlis_core::dispatchrecord::EndedBy::Person),
+                Some(purlis_core::dispatchrecord::EndedWay::Closed)
+            )
+        );
     }
 
     #[test]
@@ -9215,8 +9283,8 @@ mod tests {
         // The one that reported said it itself.
         assert_eq!(left[0].from, "check staging");
         assert!(!left[0].task.as_ref().unwrap().unreported);
-        // The one closed first is said by purlis, as a stop and not as a failure of its own:
-        // by the one mark and in the one sentence every stop is told in (D-T59-j3).
+        // The one closed first is said by purlis, as closed by the person and not as a failure
+        // of its own: by the one mark, in the word every such close is told in (#1488).
         assert_eq!(left[1].from, "check prod");
         assert_eq!(
             left[1].stopped,
@@ -9229,9 +9297,10 @@ mod tests {
         assert_eq!(left[1].task, None);
         let told = purlis_core::handback::context(&left[1..], false).expect("context");
         assert!(
-            told.starts_with("⬢ purlis: the operator stopped `check prod`"),
+            told.starts_with("⬢ **`check prod`: closed by the person**"),
             "{told}"
         );
+        assert!(told.contains(purlis_core::handback::PERSON_ENDED), "{told}");
         assert!(!told.contains("failed"), "{told}");
         // Settled for good, as a task purlis reported for is.
         assert_eq!(held.stopping().now(), Vec::<u32>::new());
@@ -10325,13 +10394,15 @@ mod tests {
         );
         assert!(matches!(again, Answer::No { .. }), "{again:?}");
 
-        // Two reports reached the chat that asked, one from each, and no third.
+        // Two reports reached the chat that asked, one from each, and no third. The task's is
+        // carried by purlis's word that the person stopped it (#1488); the handed chat's is
+        // its own report, as it was.
         let left = purlis_core::handback::take(held.root(), For::Chat(steward));
         assert_eq!(
             left.iter()
                 .map(|one| (one.stopped.is_some(), one.task.is_some()))
                 .collect::<Vec<_>>(),
-            [(false, true), (false, false)],
+            [(true, true), (false, false)],
             "{left:?}"
         );
     }
@@ -10364,8 +10435,8 @@ mod tests {
         );
         let told = purlis_core::handback::context(&left, false).expect("context");
         assert!(
-            told.starts_with("⬢ purlis: the operator stopped `(ops) - 'prod'`")
-                && told.contains("which was doing the task you dispatched to it."),
+            told.starts_with("⬢ **`(ops) - 'prod'`: closed by the person**")
+                && told.contains("on the task you dispatched to it."),
             "{told}"
         );
     }
@@ -11225,15 +11296,15 @@ mod tests {
         // one function, under the lock a report is taken under.
         {
             let deciding = held.chats().deciding();
-            operator_stopped(&held, stopped, false, true, &deciding);
+            operator_stopped(&held, stopped, false, true, Vec::new(), &deciding);
         }
         host.program_ends(died, KILLED());
 
-        // Neither reported, and the record's word tells them apart: the window says
-        // "cancelled" of the first and "ended without a report" of the second.
+        // Neither reported, and the app's own fact tells them apart: the window says
+        // "closed by you" of the first and "ended without a report" of the second.
         let listed = listed_from(&held, stopped);
         assert!(listed.unreported && !listed.reported, "{listed:?}");
-        assert_eq!(listed.outcome.as_deref(), Some("stopped"));
+        assert_eq!(listed.outcome.as_deref(), Some("closed_by_person"));
         let listed = listed_from(&held, died);
         assert!(listed.unreported && !listed.reported, "{listed:?}");
         assert_eq!(listed.outcome.as_deref(), Some("failed"));
@@ -11713,4 +11784,7 @@ mod tests {
     /// A session waiting on its tasks is not a needs-you item, and is flagged only for what
     /// matters (#1491).
     mod waiting_on_tasks;
+
+    /// The person ends a task: Stop and get its report, or Close now (#1488).
+    mod person_ends;
 }

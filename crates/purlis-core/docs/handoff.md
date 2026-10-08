@@ -235,8 +235,38 @@ the chat that wrote it becomes a needs-you item that says so.
 report in it, whatever it owed before. The chat that asked is then told the operator stopped
 it, on its next turn, as a line of purlis's own (`purlis: the operator stopped …`) that quotes
 nothing: a report is what a chat said, and this is not one, so no report can pass for it. It is
-the same line however you stopped it: **Stop** on the chat or on a chat above it, *Stop them*
-as you close the chat that asked, or closing the tab of a task that had not reported.
+the same line however you stopped it: **Stop** on the chat or on a chat above it, or *Stop them*
+as you close the chat that asked.
+
+**A task you end from the window is ended one of two ways**, and the chat that asked is told
+which, in purlis's own words:
+
+- **Stop and get its report.** Its turn is ended as a cancel ends one, and it gets one short
+  turn to say what it did. The chat that asked is told `stopped by the person`, with that
+  report quoted as data. The stop is the outcome from the moment you press it: a report the
+  task sends after that is the stop's report, even if it says it is done. One that landed
+  before you pressed was an ordinary report.
+- **Close now.** Its program is ended at once. The chat that asked is told `closed by the
+  person`, with no report.
+
+**Either takes a second step.** A task that is not mid-turn is asked about where you pressed:
+"Stop it" or "Close it", beside "Keep", which has the keyboard. A task mid-turn, or with tasks
+of its own still working, is asked about in one question. **Closing a task's tab ends
+nothing**: the tab goes, and the task goes back to the Chats list and keeps working. A task
+you are closing is in its stop until its program is gone: a report it still gets in is the
+stop's report, and it starts no chat. If you quit while a task is being stopped, it is closed.
+
+Both add one sentence: "The person ended this task. Do not dispatch it again unless they ask."
+A task whose program ends on its own is told of as `ended without a report`, and has no such
+sentence. Where purlis may not type into a task (it is showing a prompt, you are typing in it,
+its harness is one purlis does not type into or has not been heard from), only Close now is
+offered, and the window says why. A stop never waits for good: a line that starts no turn, and
+a turn that does not end, both close the task. A task with tasks of its own still working asks
+you once whether they are ended too or kept; the report to the chat above names what was ended
+below. Only the window can ask for either, over its own channel to the app and never over a
+link: a chat's own way to end a task it dispatched is `purlis dispatch cancel`. A task cannot
+say any of these three ends of itself through its report. The folder reports wait in is still
+writable from outside a sandbox, and a file left there is read as purlis's word.
 
 A chat can cancel a task it dispatched itself (`purlis dispatch cancel`, below), which asks
 that task for a short report and ends nothing. **Only you stop any other chat**: no command or
@@ -600,7 +630,7 @@ Where it may not, the cancel takes effect when the task's turn ends: it is asked
 harness purlis does not type into, a report is written for it. A task that ends the turn it was
 asked in without reporting, or whose program ends, has a report written for it too. So a
 cancel ends in a report, and `purlis dispatch wait <chat>` returns it; unless you stop the
-task or close its tab first, and then the chat that asked is told the operator stopped it.
+task or close it first, and then the chat that asked is told you stopped or closed it.
 
 **A chat can wait on, list and cancel only the tasks it dispatched itself.** Which those are is
 purlis's record of each chat, written when the chat was started; the command names a chat by
@@ -671,9 +701,8 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   own before it sent its report, purlis tells the chat that asked `failed: ended without a
   report`, in its own words and with the path of that chat's session record where one was
   written. It is said as soon as the program is gone, once, and it is final: a chat started
-  again in that tab cannot report for the task. If you close the tab before it reported, the
-  chat that asked is told the operator stopped it instead, in the line every stop is told in
-  (`purlis: the operator stopped …`), and that is final too.
+  again in that tab cannot report for the task. If you close it before it reported, the
+  chat that asked is told it was closed by the person instead, and that is final too.
 - **Stopping every agent, quitting, closing the project and restarting a chat report
   nothing.** Those chats are kept, and each reports when it runs again.
 - **A task ends at its report.** The report is delivered to the chat that asked, and then

@@ -789,21 +789,23 @@ describe("stopping a chat (#1448)", () => {
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(4));
 
-    fireEvent.contextMenu(row(tree, "drop commons"));
-    expect(await screen.findByRole("menuitem", { name: "Stop chat drop commons" })).toBeTruthy();
+    // The session's own row: a task under it is not stopped as a chat is, and has its own two
+    // ways to end (#1488), so the stops are a session's.
+    fireEvent.contextMenu(row(tree, "steward 1"));
+    expect(await screen.findByRole("menuitem", { name: "Stop chat steward 1" })).toBeTruthy();
     await userEvent.click(
-      screen.getByRole("menuitem", { name: "Stop chat drop commons and everything below it" }),
+      screen.getByRole("menuitem", { name: "Stop chat steward 1 and everything below it" }),
     );
 
     const question = await screen.findByRole("alertdialog", {
-      name: "Stop chat drop commons and everything below it?",
+      name: "Stop chat steward 1 and everything below it?",
     });
-    expect(question.textContent).toContain("drop commons and the 1 chat below it end");
+    expect(question.textContent).toContain("steward 1 and the 2 chats below it end");
     expect(stops(asked)).toEqual([]);
 
-    await userEvent.click(within(question).getByRole("button", { name: "Stop 2 chats" }));
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 3 chats" }));
 
-    await waitFor(() => expect(stops(asked)).toEqual([{ plane: PLANE, session: 2, below: true }]));
+    await waitFor(() => expect(stops(asked)).toEqual([{ plane: PLANE, session: 1, below: true }]));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 
@@ -813,10 +815,11 @@ describe("stopping a chat (#1448)", () => {
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(4));
 
-    fireEvent.contextMenu(row(tree, "drop commons"));
-    await userEvent.click(await screen.findByRole("menuitem", { name: "Stop chat drop commons" }));
-    const question = await screen.findByRole("alertdialog", { name: "Stop chat drop commons?" });
-    expect(question.textContent).toContain("one short turn to write what it did");
+    fireEvent.contextMenu(row(tree, "steward 1"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Stop chat steward 1" }));
+    const question = await screen.findByRole("alertdialog", { name: "Stop chat steward 1?" });
+    // A session reports to nobody: it ends, and that is all the question has to say.
+    expect(question.textContent).toContain("steward 1 ends. There is no undo.");
     await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
 
     expect(stops(asked)).toEqual([]);
@@ -861,19 +864,22 @@ describe("stopping a chat (#1448)", () => {
     render(<App />);
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(4));
-    expect(tabNames()).toContain("drop commons");
+    expect(tabNames()).toContain("steward 1");
 
-    stop(2, "stopping");
-    expect(row(tree, "drop commons").querySelector(".stopping")?.textContent).toBe("Stopping…");
+    stop(1, "stopping");
+    expect(row(tree, "steward 1").querySelector(".stopping")?.textContent).toBe("Stopping…");
     // Pressed again, it ends without waiting, and the row says so.
-    fireEvent.contextMenu(row(tree, "drop commons"));
-    expect(await screen.findByRole("menuitem", { name: "End chat drop commons now" })).toBeTruthy();
+    fireEvent.contextMenu(row(tree, "steward 1"));
+    expect(await screen.findByRole("menuitem", { name: "End chat steward 1 now" })).toBeTruthy();
     await userEvent.keyboard("{Escape}");
 
-    stop(2, "stopped");
+    stop(1, "stopped");
 
-    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 3", "1 steward 4"]));
-    expect(tabNames()).not.toContain("drop commons");
+    // Its tasks go on, and stand at the top now that the chat they hung from is gone.
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 drop commons", "2 devops 3", "1 steward 4"]),
+    );
+    expect(tabNames()).not.toContain("steward 1");
     // The core ended it: the window does not end it a second time.
     expect(asked.filter((one) => one.cmd === "close_session")).toEqual([]);
   });
@@ -927,23 +933,23 @@ describe("what the chat that asked is shown of a stop (#1448)", () => {
     render(<App />);
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(4));
-    stop(2, "stopping");
+    stop(1, "stopping");
 
-    fireEvent.contextMenu(row(tree, "drop commons"));
+    fireEvent.contextMenu(row(tree, "steward 1"));
     await userEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Stop chat drop commons and everything below it",
+        name: "Stop chat steward 1 and everything below it",
       }),
     );
     const question = await screen.findByRole("alertdialog", {
-      name: "Stop chat drop commons and everything below it?",
+      name: "Stop chat steward 1 and everything below it?",
     });
-    expect(question.textContent).toContain("drop commons is being stopped already.");
-    await userEvent.click(within(question).getByRole("button", { name: "Stop 1 chat" }));
+    expect(question.textContent).toContain("steward 1 is being stopped already.");
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 2 chats" }));
 
     await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "stop_chat").map((one) => one.args)).toEqual([
-        { plane: PLANE, session: 2, below: true },
+        { plane: PLANE, session: 1, below: true },
       ]),
     );
   });
@@ -1285,7 +1291,10 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
       chat(4, "alpha", { label: "probe", from: tabbed({ reported: true, outcome: "failed" }) }),
       chat(5, "alpha", { label: "lost", from: tabbed({ unreported: true, outcome: "failed" }) }),
       // Stopped by the person before it reported: purlis's own report, the record `stopped`.
-      chat(6, "alpha", { label: "halt", from: tabbed({ unreported: true, outcome: "stopped" }) }),
+      chat(6, "alpha", {
+        label: "halt",
+        from: tabbed({ unreported: true, outcome: "closed_by_person" }),
+      }),
     ]);
     render(<App />);
     const tree = await section();
@@ -1305,7 +1314,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
       ["sweep", { word: "cancelled", shape: "dash" }],
       ["probe", { word: "failed", shape: "cross" }],
       ["lost", { word: "ended without a report", shape: "triangle" }],
-      ["halt", { word: "cancelled", shape: "dash" }],
+      ["halt", { word: "closed by you", shape: "octagon" }],
     ] as const;
     for (const [name, state] of expected) {
       expect(says(row(tree, name)), `${name} in the Chats list`).toEqual(state);

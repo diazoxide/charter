@@ -265,8 +265,13 @@ describe("a chat's finished tasks", () => {
         folds: false,
       }),
       finished("01K6E", "shut", {
+        how: "closed_by_person",
+        outcome: "closed by you",
+        folds: false,
+      }),
+      finished("01K6H", "halted", {
         how: "stopped_by_person",
-        outcome: "closed by the person",
+        outcome: "stopped by you",
         folds: false,
       }),
     ]);
@@ -276,7 +281,9 @@ describe("a chat's finished tasks", () => {
     expect(within(group).getByRole("button", { name: "Finished (2)" })).toBeInTheDocument();
     expect(theRow(group, "stuck")).toHaveTextContent("blocked");
     expect(theRow(group, "died")).toHaveTextContent("ended without a report");
-    expect(theRow(group, "shut")).toHaveTextContent("closed by the person");
+    // The two ends the person caused are rows of their own, never in the fold (V100-9).
+    expect(theRow(group, "shut")).toHaveTextContent("closed by you");
+    expect(theRow(group, "halted")).toHaveTextContent("stopped by you");
     expect(within(group).queryByText("counted")).toBeNull();
     expect(within(group).queryByText("called off")).toBeNull();
   });
@@ -300,8 +307,13 @@ describe("a chat's finished tasks", () => {
           folds: false,
         }),
         finished("01K6E", "shut", {
+          how: "closed_by_person",
+          outcome: "closed by you",
+          folds: false,
+        }),
+        finished("01K6H", "halted", {
           how: "stopped_by_person",
-          outcome: "closed by the person",
+          outcome: "stopped by you",
           folds: false,
         }),
         finished("01K6F", "broke", { how: "failed", outcome: "failed", folds: false }),
@@ -331,18 +343,17 @@ describe("a chat's finished tasks", () => {
       word: "ended without a report",
       shape: "triangle",
     });
-    // The two ends the one vocabulary has no word of its own for keep the core's word beside
-    // the state's, so neither is said less exactly than before.
+    // The one end the vocabulary has no word of its own for keeps the core's word beside
+    // the state's, so it is not said less exactly than before.
     expect(says(theRow(group, "stuck"))).toEqual({
       word: "failed",
       shape: "cross",
       more: "blocked",
     });
-    expect(says(theRow(group, "shut"))).toEqual({
-      word: "cancelled",
-      shape: "dash",
-      more: "closed by the person",
-    });
+    // **The two ends the person caused have their own words and shapes** (#1488), said once:
+    // never "cancelled", which is what the asking chat does, and with no second word beside.
+    expect(says(theRow(group, "shut"))).toEqual({ word: "closed by you", shape: "octagon" });
+    expect(says(theRow(group, "halted"))).toEqual({ word: "stopped by you", shape: "square" });
     // An end this window does not know is not guessed at: it is drawn as the core said it.
     expect(says(theRow(group, "odd"))).toEqual({
       word: "reported",
