@@ -390,6 +390,9 @@ struct Task {
     end: Option<End>,
     /// A turn began in it after its report: the bound on the reporting turn is spent.
     later_turn: bool,
+    /// The bound on its reporting turn passed while it was held, with that turn not known to
+    /// be over: it is set again when the hold goes.
+    bound_passed_held: bool,
 }
 
 /// A report the app delivered, kept so a wait can answer with it.
@@ -447,6 +450,9 @@ pub enum Ends {
     Hold,
     /// Its turn has ended: ask again, as [`Looked::Settled`], in [`A_TURN_SETTLES_WITHIN`].
     Settle,
+    /// What held it has gone, its turn is not over, and the bound it was given passed while it
+    /// was held: ask again, as [`Looked::WaitedOut`], in [`ends_within`].
+    Bound,
     /// End its program now.
     End,
 }
@@ -503,6 +509,19 @@ pub fn left_out_at_launch(
                 && numbers.contains(&from.chat)
         }) && finished(chat)
     });
+    // A tab left showing a chat that is not coming back shows its own chat again: what it
+    // shows is where the person is taken to be looking (#1486), and nobody looks at a chat
+    // that is not there.
+    let gone: Vec<u32> = out.iter().filter_map(|chat| chat.number).collect();
+    let back = back
+        .into_iter()
+        .map(|mut chat| {
+            if chat.shows.is_some_and(|shown| gone.contains(&shown)) {
+                chat.shows = None;
+            }
+            chat
+        })
+        .collect();
     (
         crate::reopen::Record {
             chats: back,
@@ -851,6 +870,7 @@ impl Ledger {
         if ends && entry.end.is_none() {
             entry.end = Some(End::Reported);
             entry.later_turn = false;
+            entry.bound_passed_held = false;
         }
     }
 
@@ -921,7 +941,9 @@ impl Ledger {
     ///   Nor does it end a chat that is showing the person a prompt.
     /// - **Not while it is held.** Ending it while a task of its own works would leave that
     ///   one's report with nobody to read it; ending it in front of the person would take
-    ///   away what they are reading. It is ended when the hold has gone.
+    ///   away what they are reading. It is ended when the hold has gone. Where its bound
+    ///   passed while it was held and its turn is still not over, the bound is set again as
+    ///   the hold goes ([`Ends::Bound`]), so a hold never keeps a program for good.
     pub fn end_step(&mut self, task: u32, seen: Seen, held: bool, looked: Looked) -> Ends {
         let Some(entry) = self.tasks.get_mut(&task) else {
             return Ends::Nothing;
@@ -938,6 +960,7 @@ impl Ledger {
             (Looked::WaitedOut, End::Settling) => Ends::Hold,
             (Looked::WaitedOut, _) if held => {
                 entry.end = Some(End::Due);
+                entry.bound_passed_held = !over;
                 Ends::Hold
             }
             (Looked::WaitedOut, _) => {
@@ -967,6 +990,18 @@ impl Ledger {
             (Looked::Moved, End::Reported) if over => {
                 entry.end = Some(End::Due);
                 Ends::Hold
+            }
+            // What held it has gone, and the turn that reported is still not over: a harness
+            // purlis hears nothing from, or a turn that will not end. The one bound it had
+            // passed while it was held, and nothing else would look at it again, so it is
+            // given the bound anew. Only that turn: a task held once its turn was over, and
+            // found working when the hold goes, is in a later turn, which has no bound.
+            (Looked::Moved, End::Due)
+                if !held && !over && entry.bound_passed_held && !entry.later_turn =>
+            {
+                entry.end = Some(End::Reported);
+                entry.bound_passed_held = false;
+                Ends::Bound
             }
             (Looked::Moved, _) => Ends::Hold,
         }
@@ -3015,5 +3050,95 @@ mod tests {
         let (back, out) = left_out_at_launch(&record, |_| false);
         assert!(out.is_empty());
         assert_eq!(back, record);
+    }
+
+    #[test]
+    fn a_tab_left_showing_a_task_that_is_left_out_shows_its_own_chat_at_the_launch() {
+        // The person quit while reading a reported task in its session's tab. The task is a
+        // finished row at the launch, and the tab is not said to show a chat that is not there.
+        let shows = |shown: u32| crate::reopen::Chat {
+            shows: Some(shown),
+            ..recorded(ASKER, None)
+        };
+        let record = crate::reopen::Record {
+            chats: vec![shows(TASK), recorded(TASK, owing(Owed::Sent))],
+            ..Default::default()
+        };
+
+        let (back, out) = left_out_at_launch(&record, |_| true);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(back.chats.len(), 1);
+        assert_eq!(back.chats[0].shows, None);
+
+        // One that comes back is still what its tab shows.
+        let (back, out) = left_out_at_launch(&record, |_| false);
+        assert!(out.is_empty());
+        assert_eq!(back.chats[0].shows, Some(TASK));
+    }
+
+    #[test]
+    fn a_task_whose_bound_passed_while_it_was_looked_at_is_given_it_again_and_then_ended() {
+        // On a harness purlis hears nothing from, nothing says its turn ended: the bound is
+        // the only thing that ends it. It passes while the person is reading the task.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(ledger.held_back(), [TASK]);
+        // Still looked at: nothing more.
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, true, Looked::Moved),
+            Ends::Hold
+        );
+
+        // They look away. Its turn is not known to be over, so it is given the bound again,
+        // once.
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, false, Looked::Moved),
+            Ends::Hold
+        );
+        // And that bound ends it.
+        assert_eq!(
+            ledger.end_step(TASK, UNHEARD, false, Looked::WaitedOut),
+            Ends::End
+        );
+        assert!(!ledger.ending(TASK));
+
+        // The same for a turn purlis hears that will not end.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::End
+        );
+
+        // A later turn has no bound: one that began while the task was held is waited for.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        ledger.line_typed(TASK);
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
     }
 }

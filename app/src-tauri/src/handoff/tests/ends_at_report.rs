@@ -222,6 +222,9 @@ fn a_finished_task_stays_as_a_row_under_the_chat_that_asked_read_from_its_record
     );
     assert_eq!(row.report, "Forty are stuck.");
     assert_eq!(row.id, record_of(&held, task).id);
+    // The number its chat had: what a pane left on that chat finds this row by, and never
+    // by its name.
+    assert_eq!(row.chat, Some(task));
     // It ended in a conversation, which is what a Reopen resumes.
     assert!(row.reopens);
     assert!(record_of(&held, task).conversation.is_some());
@@ -646,7 +649,7 @@ fn a_reopen_is_refused_where_the_profile_now_runs_another_harness() {
 #[test]
 fn a_task_that_had_reported_when_the_app_quit_is_a_finished_row_at_the_next_launch() {
     // M2. It reported, and the app quit before purlis had ended it: in its moment to settle.
-    let (plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
+    let (plane, host, quit, id, held, steward, task) = a_steward_and_its_task();
     let still_working = a_task_of(&held, &id, steward, "read the logs");
     works(&held, task);
     reports(&held, &id, task);
@@ -662,6 +665,15 @@ fn a_task_that_had_reported_when_the_app_quit_is_a_finished_row_at_the_next_laun
 
     let numbers: Vec<u32> = back.chats.iter().filter_map(|chat| chat.number).collect();
     assert_eq!(numbers, [steward, still_working]);
+    // **The app that quit is gone before the next one opens the project**, as it is in life:
+    // one project is never open twice in one process. Two of them would be two listeners on
+    // the project's one hook socket, and the first could not be woken to stop. Bounded, so a
+    // close that does not come back fails here and says so.
+    bounded("the app that quit, closing its project", move || {
+        drop(held);
+        drop(quit);
+        drop(host);
+    });
     // Put back on a host of its own, as a new launch has: nothing is started for the task.
     let relaunched = Pretend::default();
     let planes = planes_on(&relaunched);

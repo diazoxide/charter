@@ -955,8 +955,8 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     ]);
     render(<App />);
     const tree = await section();
-    // Every task under it is over, so the session folded by itself (#1499): opened by hand.
-    fireEvent.click(await within(tree).findByTitle("Show the chats under steward 1"));
+    // Not every task under it came out done or cancelled, so the session stays open by
+    // itself (#1499): a failure is not folded away.
     await waitFor(() => expect(shape(tree)).toHaveLength(6));
 
     // Every one of them has ended its turn: the board says the same of them all, and the

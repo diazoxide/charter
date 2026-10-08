@@ -191,6 +191,32 @@ fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not
 }
 
 #[test]
+fn a_task_looked_at_when_its_bound_passed_is_ended_once_the_person_looks_away() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats().tab_shows(steward, Some(task)).expect("shown");
+    works(&held, task);
+    reports(&held, &id, task);
+    // The turn that reported does not end, and its bound passes while they read the task.
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(held.tasks().ledger().held_back(), [task]);
+
+    // They go back to the session's own chat. The turn is still not over, so nothing ends it
+    // yet: it is given the bound again, and is no longer only waiting on a hold.
+    held.chats().tab_shows(steward, None).expect("its own chat");
+    crate::dispatched::front_moved(&held);
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(held.tasks().ledger().held_back(), Vec::<u32>::new());
+    assert!(held.tasks().ledger().ending(task));
+
+    // That bound passing ends it: its program is not kept for good.
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
 fn a_task_shown_in_a_tab_that_is_no_longer_in_front_is_ended() {
     let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
     held.chats().bring_to_front(Some(steward));

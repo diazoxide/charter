@@ -81,18 +81,18 @@ export function qualifierOf(task: Pick<FinishedTask, "how" | "outcome">): string
 }
 
 /**
- * **The finished row of the task called `name` that chat `asker` asked for** (#1486's ended
- * view reads it), or nothing. A finished row names its task and the chat that asked and not
- * the number its chat had, so it is found by those two; where two of a chat's finished tasks
- * have one name, nothing says which is meant, and none is answered.
+ * **The finished row of the task whose chat was `session`, which chat `asker` asked for**
+ * (#1486's ended view reads it), or nothing. **By the number its chat had when it ended, and
+ * never by its name**: a chat dispatches again under one name as a matter of course, and a
+ * pane must not draw another task's report. A row with no number (a task that finished before
+ * this app was started, or an entry that is not an ended task at all) is no pane's.
  */
 export function finishedOf(
   finished: ReadonlyMap<number, readonly FinishedTask[]>,
   asker: number,
-  name: string,
+  session: number,
 ): FinishedTask | undefined {
-  const named = (finished.get(asker) ?? []).filter((task) => task.name === name);
-  return named.length === 1 ? named[0] : undefined;
+  return (finished.get(asker) ?? []).find((task) => task.chat === session);
 }
 
 const NONE: readonly FinishedTask[] = [];
@@ -102,25 +102,36 @@ const NONE: readonly FinishedTask[] = [];
  * time `changed` changes (the window's own sign that a chat started, ended or closed), and
  * again on `read`. A list that cannot be read is no list: nothing is drawn as finished that the
  * core did not say is.
+ *
+ * `settled` says the rows are the ones read for this `changed`, or that the read for it has
+ * failed: what `useRowsUntilRead` waits for.
  */
 export function useFinishedTasks(
   plane: PlaneId,
   changed: unknown,
-): { finished: ReadonlyMap<number, FinishedTask[]>; read: () => void } {
-  const [known, setKnown] = useState<{ plane?: PlaneId; tasks: readonly FinishedTask[] }>({
-    tasks: NONE,
-  });
+): { finished: ReadonlyMap<number, FinishedTask[]>; read: () => void; settled: boolean } {
+  const [known, setKnown] = useState<{
+    plane?: PlaneId;
+    tasks: readonly FinishedTask[];
+    /** The `changed` these were read for, or the last one a read was answered for. */
+    readFor?: unknown;
+  }>({ tasks: NONE });
   const [asked, setAsked] = useState(0);
   useEffect(() => {
     let gone = false;
+    // A read that gave no list leaves the rows as they were, and is still an answer.
+    const unread = () => {
+      if (!gone) setKnown((was) => ({ ...was, readFor: changed }));
+    };
     void commands
       .finishedTasks(plane)
       .then((answer) => {
-        if (gone || answer.status !== "ok" || !Array.isArray(answer.data)) return;
-        setKnown({ plane, tasks: answer.data });
+        if (gone) return;
+        if (answer.status !== "ok" || !Array.isArray(answer.data)) return unread();
+        setKnown({ plane, tasks: answer.data, readFor: changed });
       })
       // A list that cannot be read shows none.
-      .catch(() => undefined);
+      .catch(unread);
     return () => {
       gone = true;
     };
@@ -128,5 +139,26 @@ export function useFinishedTasks(
   const tasks = known.plane === plane ? known.tasks : NONE;
   const finished = useMemo(() => byAsker(tasks), [tasks]);
   const read = useCallback(() => setAsked((count) => count + 1), []);
-  return { finished, read };
+  return { finished, read, settled: known.readFor === changed };
+}
+
+/**
+ * **A task's row stays until the finished row that replaces it is read.** A task that ends
+ * leaves the list of chats one command before its finished row arrives, so the rows below it
+ * would move up and then down again within a moment. `rows` is handed on as it is, but for
+ * that moment: while a task that was listed is gone from it and the finished rows are not
+ * `settled` for it yet, the list as it last stood is drawn. Nothing else is held: a chat that
+ * arrives, a rename and a chat that is not a task going are drawn at once.
+ */
+export function useRowsUntilRead<Row extends { session: number; mode: string | null }>(
+  rows: readonly Row[],
+  settled: boolean,
+): readonly Row[] {
+  const [shown, setShown] = useState(rows);
+  if (shown === rows) return rows;
+  const listed = new Set(rows.map((row) => row.session));
+  const waits = !settled && shown.some((row) => row.mode === "task" && !listed.has(row.session));
+  if (waits) return shown;
+  setShown(rows);
+  return rows;
 }

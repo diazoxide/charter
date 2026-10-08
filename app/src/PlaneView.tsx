@@ -281,7 +281,7 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
-import { finishedOf, qualifierOf, shownOf, useFinishedTasks } from "./finished";
+import { finishedOf, qualifierOf, shownOf, useFinishedTasks, useRowsUntilRead } from "./finished";
 import {
   below as chatsBelow,
   chatsTree,
@@ -888,6 +888,9 @@ export const PlaneView = memo(function PlaneView({
     },
     [settleNotices],
   );
+  /** What the core holds each session's tab to show, by session: what it said at the launch,
+   *  then what this window has told it since (#1486). */
+  const lastShownSaid = useRef<ReadonlyMap<number, number>>(new Map());
   useEffect(() => {
     if (adopted.current) return;
     adopted.current = true;
@@ -983,6 +986,15 @@ export const PlaneView = memo(function PlaneView({
             return tabs;
           return restoreShown(tabs, [shown], askedBy);
         }, drawn);
+        // **What the core holds each tab to show**, as it just said: the starting point of
+        // what this window tells it (`lastShownSaid`). A `shows` that was not put back (its
+        // chat is gone, or is no task below that session) is then said to be none, so the
+        // core does not go on taking the person to be looking at a chat that is not there.
+        lastShownSaid.current = new Map(
+          open.flatMap((chat) =>
+            typeof chat.shows === "number" ? [[chat.session, chat.shows] as const] : [],
+          ),
+        );
         const inFront =
           front !== undefined
             ? homeOf(shownBack, front.session, askedBy)?.tab
@@ -1063,7 +1075,6 @@ export const PlaneView = memo(function PlaneView({
    * each tab back on the chat it showed. After the record is heard, and only what differs, for
    * the order's reasons above. A tab back on its own chat says so, with nothing.
    */
-  const lastShownSaid = useRef<ReadonlyMap<number, number>>(new Map());
   useEffect(() => {
     if (!viewsHeard) return;
     const said = new Map(
@@ -1075,11 +1086,27 @@ export const PlaneView = memo(function PlaneView({
     );
     const was = lastShownSaid.current;
     lastShownSaid.current = said;
-    for (const [own, shown] of said)
-      if (was.get(own) !== shown) void commands.tabShows(plane, own, shown).catch(() => undefined);
+    /** Says it, and where the core did not take it, forgets having said it: the next change
+     *  to the tabs says it again. Left alone where something newer was said meanwhile. */
+    const say = (own: number, shown: number | null) => {
+      const unsaid = () => {
+        if ((lastShownSaid.current.get(own) ?? null) !== shown) return;
+        const held = new Map(lastShownSaid.current);
+        const before = was.get(own);
+        if (before === undefined) held.delete(own);
+        else held.set(own, before);
+        lastShownSaid.current = held;
+      };
+      void commands
+        .tabShows(plane, own, shown)
+        .then((answer) => {
+          if (answer.status !== "ok") unsaid();
+        })
+        .catch(unsaid);
+    };
+    for (const [own, shown] of said) if (was.get(own) !== shown) say(own, shown);
     for (const own of was.keys())
-      if (!said.has(own) && tabHolding(tabs, own) !== undefined)
-        void commands.tabShows(plane, own, null).catch(() => undefined);
+      if (!said.has(own) && tabHolding(tabs, own) !== undefined) say(own, null);
   }, [plane, tabs, viewsHeard]);
 
   // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
@@ -3744,7 +3771,11 @@ export const PlaneView = memo(function PlaneView({
    * **Each chat's finished tasks** (#1485), read again whenever the sidebar is: that is when a
    * chat started, ended or closed, which is when a task finishes or its asking chat goes.
    */
-  const { finished: finishedTasks, read: rereadFinished } = useFinishedTasks(plane, sidebar);
+  const {
+    finished: finishedTasks,
+    read: rereadFinished,
+    settled: finishedSettled,
+  } = useFinishedTasks(plane, sidebar);
   /** Clear finished: the rows go, and nothing else does. */
   const clearFinished = useCallback(
     (ids: string[]) => {
@@ -4534,6 +4565,9 @@ export const PlaneView = memo(function PlaneView({
     chatsListed.current = listedChats;
   }, [listedChats]);
   const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
+  /** The Chats list's rows: a task that ended keeps its row until its finished row is read,
+   *  so the rows below it move once and not up and then down (`useRowsUntilRead`). */
+  const listRows = useRowsUntilRead(chatRows, finishedSettled);
   /**
    * **The breadcrumb of every pane that shows a task and can be drawn**, by tab, pane and
    * chat (#1486): the path read off the core's list, for the panes `shownLive` says are live.
@@ -4605,7 +4639,8 @@ export const PlaneView = memo(function PlaneView({
   /**
    * **The finished row of each task a pane was left on when it ended**, by pane (#1485 under
    * #1486's ended view): its report is drawn on the pane, and the pane says how it ended in
-   * the row's words. Found by the chat that asked and the task's name, as the row has them.
+   * the row's words. Found by the number the task's chat had, and never by its name: a pane
+   * with no row of its own draws no report.
    */
   const frontFinished = useMemo(() => {
     const rows: Record<number, FinishedTask> = {};
@@ -4613,7 +4648,7 @@ export const PlaneView = memo(function PlaneView({
       if (gone.why !== "ended") continue;
       const [asker, task] = gone.crumbs.path.slice(-2);
       const row =
-        task === undefined ? undefined : finishedOf(finishedTasks, asker.session, task.name);
+        task === undefined ? undefined : finishedOf(finishedTasks, asker.session, task.session);
       if (row !== undefined) rows[Number(pane)] = row;
     }
     return rows;
@@ -6143,7 +6178,7 @@ export const PlaneView = memo(function PlaneView({
                focused workspace's repos and branches under them. */
             <div className="left-region">
               <ChatsSection
-                rows={chatRows}
+                rows={listRows}
                 // The chat that has the keyboard: a task, while its pane shows it (#1486).
                 front={focusedChat(tabs)}
                 onOpen={showChat}

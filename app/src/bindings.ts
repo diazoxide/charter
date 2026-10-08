@@ -3180,6 +3180,12 @@ export type FinishedTask = {
 	asker: number,
 	/**  The task's name, as its row had it while it worked. */
 	name: string,
+	/**
+	 *  The number the task's chat had, where it ended in this launch and that number is still
+	 *  its own (the ledger's memory of closed tasks says so): what a pane left on that chat
+	 *  finds its row by. None for a task that finished before this app was started.
+	 */
+	chat: number | null,
 	persona: string | null,
 	/**
 	 *  **How it ended, as a value** ([`How`]): what the window draws its state from. The

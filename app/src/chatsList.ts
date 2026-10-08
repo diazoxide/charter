@@ -43,18 +43,19 @@ export function rankOf(kind: ShownKind | undefined): Rank {
   return 2;
 }
 
-/** The states a chat's row keeps once it is over: nothing more will come of it. */
-const OVER: ReadonlySet<ShownKind> = new Set([
-  "done",
-  "failed",
-  "cancelled",
-  "unreported",
-  "reported",
-]);
+/**
+ * The states an open chat's row may be folded away in by the list itself: it came out done, or
+ * it was cancelled. The ends a finished row folds on (V100-9), and no other: a chat that reads
+ * failed (a blocked task is one, and stays open, waiting on something), ended without a report
+ * or reported keeps its session open, as a finished row that stands alone does. A failure is
+ * never behind a fold nobody set.
+ */
+const FOLDS_AWAY: ReadonlySet<ShownKind> = new Set(["done", "cancelled"]);
 
-/** Whether a state is one a chat is still in: at work, idle, or needing someone. */
+/** Whether a state keeps the session above it open by itself: every state but the two an
+ *  open chat folds away in. */
 export function isLive(kind: ShownKind | undefined): boolean {
-  return kind === undefined || !OVER.has(kind);
+  return kind === undefined || !FOLDS_AWAY.has(kind);
 }
 
 /** Row `at`'s rows below it, at any depth: the index after the last of them. */
@@ -157,8 +158,9 @@ export function stamped(rows: readonly ChatRow[]): ChatRow[] {
 
 /**
  * **The sessions that are open by themselves** (V100-48): the ones with a chat under them, at
- * any depth, that is still at work, idle or needing someone. A session whose chats are all
- * over is not here, and folds by itself.
+ * any depth, that is still at work, idle or needing someone, or that ended any way but done or
+ * cancelled (`isLive`). A session whose chats all came out done or were cancelled is not here,
+ * and folds by itself.
  */
 export function liveBelow(
   rows: readonly ChatRow[],
@@ -265,15 +267,61 @@ const COUNTED: readonly ShownKind[] = ["done", "cancelled", "failed", "unreporte
 export type Counted = { shape: ShownShape; count: number; word: string };
 
 /**
- * **What a folded session says of its finished tasks** (V100-48, "steward 4 · ✓5"): how many
- * ended each way, each as the shape and the word that state has on a row, or nothing where it
- * has none. One plain value (`shape:count:word`, joined by `|`), so a row held on it is drawn
- * again only when a count changes.
+ * **The open chats under each row that are over**, as one plain value a row a session: its
+ * number, then the kind, shape and word of each (`\t` between the parts, `|` between the
+ * chats), in the rows' order. What a folded session counts beside its finished tasks: a task
+ * that reported and has not been ended yet (the person is reading it, or it is blocked) is in
+ * no finished row, and must not be in no count.
  */
-export function summaryOf(tasks: readonly FinishedTask[]): string | null {
+export function overBelow(
+  rows: readonly ChatRow[],
+  shownOf: (row: ChatRow) => Shown | undefined,
+): string[] {
+  const over: string[] = [];
+  rows.forEach((row, at) => {
+    const below: string[] = [];
+    for (let under = at + 1; under < endOf(rows, at); under += 1) {
+      const shown = shownOf(rows[under]);
+      if (shown !== undefined && COUNTED.includes(shown.kind))
+        below.push([shown.kind, shown.shape, shown.word].join("\t"));
+    }
+    if (below.length > 0) over.push(`${row.session}\t${below.join("|")}`);
+  });
+  return over;
+}
+
+/** `overBelow`'s value as the states it holds, by the row they are under. */
+export function overOf(over: readonly string[]): ReadonlyMap<number, Shown[]> {
+  return new Map(
+    over.map((one) => {
+      const [session, ...rest] = one.split("\t");
+      const shown = rest
+        .join("\t")
+        .split("|")
+        .map((chat) => {
+          const [kind, shape, word] = chat.split("\t");
+          // The colour is the row's own to draw; a count has none of its own.
+          return { kind, shape, word, token: "text.muted" } as Shown;
+        });
+      return [Number(session), shown];
+    }),
+  );
+}
+
+/**
+ * **What a folded session says of the tasks under it that are over** (V100-48, "steward 4 ·
+ * ✓5"): how many ended each way, each as the shape and the word that state has on a row, or
+ * nothing where it has none. Its finished tasks, and with them the `open` chats under it that
+ * are over and have not been ended. One plain value (`shape:count:word`, joined by `|`), so a
+ * row held on it is drawn again only when a count changes.
+ */
+export function summaryOf(
+  tasks: readonly FinishedTask[],
+  open: readonly Shown[] = [],
+): string | null {
   const counts = new Map<ShownKind, { shown: Shown; count: number }>();
-  for (const task of tasks) {
-    const shown = shownOf(task);
+  const all = [...tasks.map((task) => shownOf(task)), ...open];
+  for (const shown of all) {
     if (shown === undefined) continue;
     counts.set(shown.kind, { shown, count: (counts.get(shown.kind)?.count ?? 0) + 1 });
   }

@@ -35,6 +35,10 @@ pub(crate) struct FinishedTask {
     pub asker: u32,
     /// The task's name, as its row had it while it worked.
     pub name: String,
+    /// The number the task's chat had, where it ended in this launch and that number is still
+    /// its own (the ledger's memory of closed tasks says so): what a pane left on that chat
+    /// finds its row by. None for a task that finished before this app was started.
+    pub chat: Option<u32>,
     pub persona: Option<String>,
     /// **How it ended, as a value** ([`How`]): what the window draws its state from. The
     /// window never reads the sentence in `outcome` to learn this.
@@ -102,6 +106,7 @@ fn row(record: &Record, asker: u32, how: Finished) -> FinishedTask {
         id: record.id.clone(),
         asker,
         name: name_of(record),
+        chat: None,
         persona: record.persona.clone(),
         how: how.into(),
         outcome: how.word().to_owned(),
@@ -132,8 +137,10 @@ fn row(record: &Record, asker: u32, how: Finished) -> FinishedTask {
 }
 
 /// Whether `recorded`, a chat as a record names it, is the open chat `open`: **by its id, and
-/// never by its number**. A finished task's record is read across launches, and a number is
-/// dealt again in each.
+/// never by its number**. A finished task's record is read across launches, and a number
+/// does not stay a chat's own for that long: a chat started again is given a new one, and the
+/// count starts over where the record of open chats could not be read (`reopen::Record::dealt`
+/// holds it otherwise).
 fn is_open(recorded: &dispatchrecord::ChatRef, open: &crate::dispatches::OpenChat) -> bool {
     recorded.id.is_some() && recorded.id == open.id
 }
@@ -152,12 +159,27 @@ pub(crate) fn listed(held: &Held) -> Vec<FinishedTask> {
         .iter()
         .filter(|record| !held.tasks().reopening(&record.id))
         .filter_map(|record| {
+            let asker = is(&record.asker.chat)?;
             Some(FinishedTask {
+                chat: ended_as(held, record, asker),
                 not_reopened: held.tasks().not_reopened(&record.id),
-                ..row(record, is(&record.asker.chat)?, Finished::of(record)?)
+                ..row(record, asker, Finished::of(record)?)
             })
         })
         .collect()
+}
+
+/// The number `record`'s task chat had when it ended, where it ended in this launch under the
+/// chat now numbered `asker`: the ledger's own memory of the tasks that closed in this launch
+/// says whether that number is still this task's.
+fn ended_as(held: &Held, record: &Record, asker: u32) -> Option<u32> {
+    let number = record.worker.chat.chat;
+    let name = name_of(record);
+    held.tasks()
+        .ledger()
+        .gone(asker, number)
+        .is_some_and(|gone| gone.name == name)
+        .then_some(number)
 }
 
 /// The finished tasks of chat `asker`, as `purlis dispatch list` lists them after its open
@@ -177,18 +199,9 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
     .filter(|record| !held.tasks().reopening(&record.id))
     .filter_map(|record| {
         let how = Finished::of(record)?;
-        let number = record.worker.chat.chat;
-        let name = name_of(record);
-        // The ledger's own memory of the tasks that closed in this launch says whether that
-        // number is still this task's.
-        let this_launch = held
-            .tasks()
-            .ledger()
-            .gone(asker, number)
-            .is_some_and(|gone| gone.name == name);
         Some(purlis_core::dispatched::Row {
-            chat: if this_launch { number } else { 0 },
-            name,
+            chat: ended_as(held, record, asker).unwrap_or(0),
+            name: name_of(record),
             persona: record.persona.clone(),
             place: record
                 .place
@@ -578,6 +591,8 @@ mod tests {
                 // The asking chat by the number it has now, whatever it had then.
                 asker: 12,
                 name: "check prod".to_owned(),
+                // Read from the store alone, as after a restart: no pane was left on it.
+                chat: None,
                 persona: Some("devops".to_owned()),
                 how: How::Done,
                 outcome: "done".to_owned(),

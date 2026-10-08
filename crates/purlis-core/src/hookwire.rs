@@ -2672,6 +2672,10 @@ pub struct Reading {
     reading: Option<std::thread::JoinHandle<()>>,
 }
 
+/// How long a dropped [`Reading`] waits for its thread to be woken and go.
+#[cfg(unix)]
+const A_READING_STOPS_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[cfg(unix)]
 impl Drop for Reading {
     fn drop(&mut self) {
@@ -2681,9 +2685,29 @@ impl Drop for Reading {
         // would leave it there for the life of the process. One connection of our own is
         // what it is waiting for.
         let _ = std::os::unix::net::UnixStream::connect(&self.path);
-        if let Some(reading) = self.reading.take() {
-            let _ = reading.join();
+        let Some(reading) = self.reading.take() else {
+            return;
+        };
+        // **The wait is bounded.** The connection above goes to whatever listens at the path
+        // now. Where another listener has since been bound there (a second one on the same
+        // project in one process; `bind` takes a path that is in use), it reached that one, or
+        // nothing at all once that one had gone and taken the file with it, and this thread
+        // is still in `accept` with nothing left that can wake it. Joining it then would hold
+        // whoever dropped this for the life of the process, with nothing said.
+        let began = std::time::Instant::now();
+        while !reading.is_finished() && began.elapsed() < A_READING_STOPS_WITHIN {
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        if !reading.is_finished() {
+            tracing::warn!(
+                "purlis: the hook channel at {} did not stop when it was closed: another \
+                 listener was bound at its path. Its thread is left; nothing reaches it",
+                self.path.display()
+            );
+            // And the file is not this listener's to remove any more.
+            return;
+        }
+        let _ = reading.join();
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -3587,6 +3611,51 @@ mod tests {
                 "{bad:?} was taken as a pid"
             );
         }
+    }
+
+    #[test]
+    fn a_listener_another_was_bound_over_is_dropped_without_waiting_for_good() {
+        // Two listeners at one path in one process: the second takes the path. Dropping the
+        // first cannot wake its own thread any more (its connection reaches the second), and
+        // it must come back all the same. A join there held a whole test run for an hour.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let first = Listener::bind(dir.path(), &path)
+            .expect("a socket")
+            .each(Box::new(|_| {}));
+        let listener = Listener::bind(dir.path(), &path).expect("the same path, bound again");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let second = listener.each(Box::new(move |report| {
+            let _ = tx.send(report);
+        }));
+
+        let (dropped, came_back) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(first);
+            let _ = dropped.send(());
+        });
+        came_back
+            .recv_timeout(A_READING_STOPS_WITHIN + std::time::Duration::from_secs(10))
+            .expect("dropping a listener another was bound over never came back");
+
+        // The second is untouched by it: its file is still there, and it still hears.
+        let sent = Report {
+            chat: 7,
+            event: Event::Notification,
+            conversation: Conversation::Named("abc".to_owned()),
+            pid: Some(99),
+            agent: None,
+            detail: Detail::default(),
+        };
+        send(&path, Some(&token), &sent).expect("the listener at the path took it");
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(sent));
+
+        // And one dropped the ordinary way still stops at once and takes its file.
+        let began = std::time::Instant::now();
+        drop(second);
+        assert!(began.elapsed() < A_READING_STOPS_WITHIN);
+        assert!(!path.exists());
     }
 
     #[test]

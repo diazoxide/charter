@@ -22,6 +22,8 @@ import {
   filters,
   found,
   liveBelow,
+  overBelow,
+  overOf,
   matches,
   matchesFinished,
   sessionOrder,
@@ -222,6 +224,16 @@ export function ChatsSection({
     sameList,
   );
   const live = useChatsSelect(chats, (states) => liveBelow(rows, kindsOf(states)), sameList);
+  /** The open chats under each row that are over: what a folded row counts with its finished
+   *  tasks (`overBelow`). */
+  const overOpen = useChatsSelect(
+    chats,
+    (states) => {
+      const queue = new Set(states.needsYou);
+      return overBelow(rows, (row) => shownOfRow(states, row, queue));
+    },
+    sameList,
+  );
   const asked = useChatsSelect(
     chats,
     (states) => {
@@ -277,20 +289,28 @@ export function ChatsSection({
       setRanks([]);
     });
 
-  /** What each chat's finished tasks come to: a folded row's summary, and whether one of them
-   *  stands alone, which keeps its chat open. */
+  /** What each chat's finished tasks come to: whether one of them stands alone, which keeps
+   *  its chat open. */
   const ended = useMemo(
     () =>
       new Map(
         [...finished]
           .filter(([, tasks]) => tasks.length > 0)
-          .map(([session, tasks]) => [
-            session,
-            { summary: summaryOf(tasks), alone: tasks.some((task) => !task.folds) },
-          ]),
+          .map(([session, tasks]) => [session, { alone: tasks.some((task) => !task.folds) }]),
       ),
     [finished],
   );
+  /** What a folded row says of what is over under it: its finished tasks, and the open chats
+   *  under it that are over and not ended yet. */
+  const summaries = useMemo(() => {
+    const open = overOf(overOpen);
+    const by = new Map<number, string>();
+    for (const session of new Set([...finished.keys(), ...open.keys()])) {
+      const summary = summaryOf(finished.get(session) ?? [], open.get(session));
+      if (summary !== null) by.set(session, summary);
+    }
+    return by;
+  }, [finished, overOpen]);
   /** The rows the list is drawn from: every chat, less the ones that arrived while it is
    *  held. A chat that ended is not in `rows`, and is not kept. */
   const steady = useMemo(() => {
@@ -603,7 +623,7 @@ export function ChatsSection({
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
-                      summary={open === false ? (ended.get(row.session)?.summary ?? null) : null}
+                      summary={open === false ? (summaries.get(row.session) ?? null) : null}
                       needs={lead === undefined ? null : lead}
                       needsName={
                         lead === undefined || lead === row.session
