@@ -15,6 +15,7 @@ import { BESIDE_ID, stopId, type Catalogued, type Offer } from "./actions";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
 import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
+import { HelpersSaid } from "./ExplorerChats";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
@@ -454,7 +455,9 @@ export function ChatsSection({
   useRevealedTask(section, reveal, rows, {
     fold,
     shut: (session) => opens.get(session) === false,
-    // A finished row, or a chat's own, that the filter does not ask for.
+    // A finished row, or a chat's own, that the filter does not ask for. And a chat's own row
+    // asked for by the explorer's line (#1490) under any filter: the line counted the tasks
+    // under it, and a filter that kept the row could still hide those.
     hides: (asked) =>
       filtering &&
       (asked.task === undefined ||
@@ -1009,6 +1012,10 @@ const Row = memo(function Row({
                   </span>
                 )}
                 {cameFrom !== null && <span className="from">{cameFrom}</span>}
+                {/* A task's helpers, as a count (#1490, V100-4): it has no row in the
+                    explorer, where a chat's helpers unfold, so its own row says them. Last
+                    on the line, and only where it has some. */}
+                {task && <HelpersSaid session={session} />}
               </span>
             )}
           </button>

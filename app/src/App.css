@@ -2722,33 +2722,16 @@ h2.sidebar-title .node-icon {
   color: color-mix(in srgb, currentcolor 70%, transparent);
 }
 
-/* A chat's child agents, under it (FD-18): one line each, indented under the chat, in the
-   note's size. Each line is the sub-agent and its state mark. */
-.explorer .child-agents {
-  margin: 0.1rem 0 0 1rem;
-  padding: 0;
-  list-style: none;
-  font-size: 0.8em;
-}
-
-.explorer .child-agent {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
+/* **A chat's helpers, as a count on its row** (#1490, V100-4): `3 helpers`, after the row and
+   on its line, which a press unfolds. A row of the tree for the keyboard, and quieter than
+   the chat it is a fact about. The item keeps the three on one line; the sentence about what
+   a harness cannot report still wraps. */
+.explorer .here > li {
   white-space: nowrap;
 }
 
-/* The chats a chat started that went to another workspace, under it and after its sub-agents
-   (#1447): one line each, a button that brings that chat forward, and a badge naming the
-   workspace. */
-.explorer .started-chats {
-  margin: 0.1rem 0 0 1rem;
-  padding: 0;
-  list-style: none;
-}
-
-.explorer .started-chat {
-  white-space: nowrap;
+.explorer .here > li > .unreported {
+  white-space: normal;
 }
 
 /* **How a session's tasks stand, on its row** (#1491): `2 working · 1 waiting · 3 done`.
@@ -2765,12 +2748,90 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
-.explorer .started-chat .elsewhere {
+.explorer .helpers-count {
+  margin-inline-start: 0.2rem;
   padding: 0 0.3rem;
-  color: var(--text-muted);
-  font-size: 0.9em;
   border: 1px solid var(--border-subtle);
   border-radius: 2px;
+  color: var(--text-muted);
+  background: none;
+  font: inherit;
+  font-size: 0.75rem;
+  vertical-align: top;
+  cursor: default;
+}
+
+.explorer .helpers-count:hover,
+.explorer .needs-you-mark.rolled-up:hover {
+  background: var(--surface-hover);
+}
+
+/* A helper, once unfolded: a row that does nothing when pressed, in the note's size. */
+.explorer .chat.helper {
+  font-size: 0.75rem;
+}
+
+.explorer .chat.helper:hover {
+  background: none;
+}
+
+/* **The one line for a set of tasks** (#1490, V100-14): how many, then how many in each
+   state, the counts quieter than the total. */
+.explorer .tasks-line .counted {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A failed count is never quiet: it is the one part of the line that asks to be looked at. */
+.explorer .tasks-line .counted[data-bucket="failed"] {
+  color: inherit;
+}
+
+/* Each part wears the mark its state has on a row (a word and a shape, #1484), at the size
+   the Chats list's folded summary draws them. */
+.explorer .tasks-line .counted .shape {
+  display: inline-flex;
+  margin-inline-end: 0.15rem;
+  vertical-align: middle;
+}
+
+.explorer .tasks-line .counted .shape svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+/* A task's helpers, said on its row in the Chats list (#1490): last on the second line, in
+   that line's own quiet. */
+.chats-section .line.two .helpers {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* **A row another part of the window asked for** (#1490, `revealTask.ts`): the explorer's
+   line was pressed, and this is where it went. Marked for a moment with the band a hovered
+   row has, which is still there under reduced motion, and faded in once. A pointer's press
+   draws no focus ring, so without this the press could show nothing. */
+@keyframes charter-revealed {
+  from {
+    background-color: transparent;
+  }
+}
+
+.chats-section [data-revealed] {
+  background-color: var(--surface-hover);
+  animation: charter-revealed var(--motion-duration-settle) var(--motion-easing-standard);
+}
+
+/* The hand a session's row wears for a task of it that needs you: a button of its own beside
+   the row, as on a row of the Chats section. */
+.explorer .needs-you-mark.rolled-up {
+  padding: 0.1rem;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  vertical-align: top;
+  cursor: default;
 }
 
 /* **The left region** (ADR 0038, as amended): the project's chats over the workspace's

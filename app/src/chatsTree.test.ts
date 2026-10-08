@@ -11,7 +11,6 @@ import {
   ownBranch,
   parentsIn,
   startedBy,
-  startedElsewhere,
   tasksOf,
   unfolded,
   type ListedChat,
@@ -106,18 +105,6 @@ describe("the project's chats as a tree", () => {
     const by = startedBy([listed(1), listed(2, 1), listed(3, 1), listed(8, 7)]);
     expect([...by.keys()]).toEqual([1]);
     expect(by.get(1)?.map((chat) => chat.session)).toEqual([2, 3]);
-  });
-
-  it("keeps, for the explorer, only the started chats that work in another workspace", () => {
-    const away = { ...listed(3, 1), workspace: "beta" };
-    const by = startedElsewhere([
-      listed(1),
-      listed(2, 1),
-      away,
-      { ...listed(4, 3), workspace: "beta" },
-    ]);
-    expect([...by.keys()]).toEqual([1]);
-    expect(by.get(1)).toEqual([away]);
   });
 });
 
@@ -229,11 +216,6 @@ describe("a handoff in the tree (#1492, V100-69)", () => {
   it("does not put the hand on the row of the chat it came from when it needs you", () => {
     const marks = needing(chatsTree(moved()), [4]);
     expect([...marks.keys()]).toEqual([3, 4]);
-  });
-
-  it("is still a chat that chat started, for the explorer's line of what went elsewhere", () => {
-    const away = { ...handoff(3, 1), workspace: "beta" };
-    expect(startedElsewhere([listed(1), away]).get(1)).toEqual([away]);
   });
 
   it("is where the work of the chat it came from went, the newest first, open chats only", () => {

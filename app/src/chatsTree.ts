@@ -162,23 +162,6 @@ export function handedOffSaid(newest: string, more: number): string {
 }
 
 /**
- * The chats each chat started that work in **another workspace** than it does, by its number:
- * what the explorer draws under the asking chat's row with the workspace named, since nothing
- * else in that workspace's explorer would say where they went.
- */
-export function startedElsewhere(chats: readonly ListedChat[]): ReadonlyMap<number, ListedChat[]> {
-  const at = new Map(chats.map((chat) => [chat.session, chat.workspace]));
-  return new Map(
-    [...startedBy(chats)]
-      .map(([asker, started]) => {
-        const away = started.filter((chat) => chat.workspace !== at.get(asker));
-        return [asker, away] as const;
-      })
-      .filter(([, away]) => away.length > 0),
-  );
-}
-
-/**
  * The rows of the tree, top to bottom: each chat, then the tasks it asked for, nested under it.
  *
  * **A chat whose parent has closed stands at the top**, marked `orphaned`: it is still running,
