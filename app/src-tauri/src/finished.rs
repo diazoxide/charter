@@ -379,6 +379,21 @@ pub(crate) fn reopening(
     let profile = record.worker.profile.clone().ok_or_else(|| {
         format!("'{name}' cannot be reopened: its record does not say which profile it ran on.")
     })?;
+    // **A finished task is started again on the profile a dispatch chose for it**, so it is
+    // held to what that dispatch was held to (#1509), as every other way a dispatched chat
+    // starts again is (`Chats::start_recorded_told`): a profile the project lists for its
+    // persona, where it lists any, and one whose command does not switch the harness's
+    // prompts off. Either may have changed since, and nobody chose the change for this
+    // conversation. Asked here because the chat a Reopen starts names no asking chat, so the
+    // check on a recorded chat does not see that a dispatch started it. Said for a Reopen:
+    // the task was not reopened, and its report is still there.
+    if let Some(refused) = purlis_core::dispatchprofiles::task_reopen_refusal(
+        root,
+        record.persona.as_deref(),
+        &profile,
+    ) {
+        return Err(refused);
+    }
     let folder = record.place.folder.as_deref().unwrap_or(".");
     // As the record's writer says it: relative to the project, or the whole path of a folder
     // outside it. A relative one that climbs out is not one the app wrote.

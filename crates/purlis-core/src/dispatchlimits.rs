@@ -898,14 +898,27 @@ pub fn read(text: Option<&str>, file: &str) -> Read {
     // `grants` is the project's dispatch grants (#1437), read by `dispatchgrant`: not a limit
     // and not a level, and what it holds that grants nothing is said with the rest.
     let grants = crate::dispatchgrant::KEY;
+    // And `profiles` is the profiles the project lists for a persona's dispatched chats
+    // (#1509), read by `dispatchprofiles`: the same, and the committed file's alone.
+    let profiles = crate::dispatchprofiles::KEY;
     out.table.project = level_of(
         table,
         TABLE,
         file,
         false,
-        &[WORKSPACES, PERSONAS, grants],
+        &[WORKSPACES, PERSONAS, grants, profiles],
         refused,
     );
+    if table.contains_key(profiles) {
+        if file == crate::profiles::LOCAL_FILE {
+            refused.push(format!(
+                "{TABLE}.{profiles} in {file} is not read: the profiles a persona's dispatched \
+                 chats may start on are listed in the project's committed file"
+            ));
+        } else {
+            refused.extend(crate::dispatchprofiles::listed(text).refused);
+        }
+    }
     if table.contains_key(grants) {
         if file == crate::profiles::LOCAL_FILE {
             refused.push(format!(

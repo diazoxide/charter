@@ -71,6 +71,11 @@ pub struct Named {
     /// project: a chat as it starts only on a harness purlis can deny it those tools on
     /// ([`crate::personaverbs::chatstart`], #1451 D-1451-18).
     pub denies_tools: Option<String>,
+    /// The profiles the project lists for this persona's dispatched chats, where it lists any
+    /// ([`crate::dispatchprofiles`], #1509): a chat dispatched to it starts on one of them or
+    /// not at all. `None` where the project lists none, so any profile it offers may be
+    /// chosen. **Never read from the persona's own definition**, which a chat may edit.
+    pub listed: Option<Vec<String>>,
 }
 
 /// The nearest `profile:` line of `chain` (child first), and whose it is.
@@ -99,6 +104,7 @@ pub fn named_by(root: &Path, persona: &str) -> Named {
         persona: persona.to_owned(),
         denies_tools: (!crate::personaverbs::chatstart::denied_tools(root, persona).is_empty())
             .then(|| crate::personaverbs::def_rel(root, persona)),
+        listed: crate::dispatchprofiles::listed_at(root, persona),
         ..Named::default()
     };
     match nearest(root, &chain) {
@@ -196,6 +202,14 @@ pub enum Refused {
         by: Who,
         persona: Option<String>,
     },
+    /// The project lists profiles for the persona, and this one is not among them (#1509).
+    /// `listed` is what it lists, which may be nothing.
+    NotListed {
+        profile: String,
+        by: Who,
+        persona: String,
+        listed: Vec<String>,
+    },
     /// Nobody named a profile and the asking chat is on none.
     NoProfile,
     /// The persona declares `disallowed-tools:`, and the profile chosen runs a harness purlis
@@ -247,6 +261,7 @@ impl Refused {
                 by.named(persona.as_deref()),
                 shown::short(profile)
             ),
+            Self::NotListed { .. } => self.said_on(Road::Task),
             Self::NoProfile => "the asking chat is not on a harness profile and nobody named \
                                 one, so there is no profile to start the new chat on. Nothing \
                                 was started."
@@ -258,6 +273,111 @@ impl Refused {
             } => crate::personaverbs::chatstart::unenforced_said(persona, file, *harness),
         }
     }
+
+    /// [`Self::say`], for whoever reads it on `road`. Only a profile that is not listed
+    /// ([`Self::NotListed`]) is said differently by road: every other sentence is one a chat
+    /// and a person read alike.
+    ///
+    /// It ends by who chose the profile, because what can be done about it differs: a
+    /// dispatch that named it names another; a persona's definition that named it disagrees
+    /// with the project's list, and a person changes one of the two; the asking chat's own
+    /// needs a profile named; a handoff and the person's ask name none at all.
+    pub fn said_on(&self, road: Road) -> String {
+        let Self::NotListed {
+            profile,
+            by,
+            persona: whose,
+            listed,
+        } = self
+        else {
+            return self.say();
+        };
+        let persona = shown::short(whose);
+        let profile = shown::short(profile);
+        let who = match (road, by) {
+            (Road::Person, Who::AskingChat) => "this tab's chat runs on".to_owned(),
+            _ => by.named(Some(whose)),
+        };
+        let head = format!(
+            "{who} profile '{profile}', which this project does not list for persona \
+             '{persona}', so nothing was started."
+        );
+        let names: Vec<String> = listed
+            .iter()
+            .map(|name| format!("'{}'", shown::short(name)))
+            .collect();
+        // What the project lists, and how "one of them" is said of it.
+        let (lists, one) = match names.split_last() {
+            None => {
+                return format!(
+                    "{head} The project lists no profile for that persona that purlis can \
+                     read, so no chat is dispatched to it until a person fixes \
+                     [dispatch.profiles] in the project's file."
+                );
+            }
+            Some((only, [])) => (
+                format!("The project lists only {only} for that persona."),
+                "that one",
+            ),
+            Some((last, rest)) => (
+                format!(
+                    "The project lists {} and {last} for that persona.",
+                    rest.join(", ")
+                ),
+                "one of them",
+            ),
+        };
+        // The two that disagree where the persona's own definition named the profile, and
+        // where each is changed.
+        let line = if *by == Who::PersonaModel {
+            MODEL_KEY
+        } else {
+            KEY
+        };
+        let disagree = format!(
+            "The project's list and the persona's own definition disagree: a person changes \
+             [dispatch.profiles] in the project's file, or the `{line}:` line of the \
+             persona's definition."
+        );
+        let what_to_do = match (road, by) {
+            (Road::Task, Who::Asker) => format!("Name {one} with --profile."),
+            (Road::Task, Who::Persona | Who::PersonaModel) => {
+                format!("{disagree} Until then, name {one} with --profile.")
+            }
+            (Road::Task, Who::AskingChat) => {
+                format!("Dispatch the task again, naming {one} with --profile.")
+            }
+            (Road::Handoff, Who::Persona | Who::PersonaModel) => format!(
+                "{disagree} A handoff names no profile, so until then dispatch a task to \
+                 {persona}, naming {one} with --profile."
+            ),
+            (Road::Handoff, Who::Asker | Who::AskingChat) => format!(
+                "A handoff names no profile and starts on the asking chat's: hand off from a \
+                 chat on {one}, or dispatch a task to {persona}, naming {one} with --profile."
+            ),
+            (Road::Person, Who::Persona | Who::PersonaModel) => format!(
+                "Set the persona's profile to {one} from its view, or list '{profile}' for \
+                 {persona} under [dispatch.profiles] in the project's file."
+            ),
+            (Road::Person, Who::Asker | Who::AskingChat) => format!(
+                "Ask from a chat on {one}, or list '{profile}' for {persona} under \
+                 [dispatch.profiles] in the project's file."
+            ),
+        };
+        format!("{head} {lists} {what_to_do}")
+    }
+}
+
+/// Who reads a refusal, and by which road the dispatch came: what each can do about a
+/// profile that is not listed differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Road {
+    /// A chat's task, which may name a profile with `--profile`.
+    Task,
+    /// A chat's handoff, which names no profile.
+    Handoff,
+    /// The person's own ask from a chat's tab, which names no profile either.
+    Person,
 }
 
 impl Who {
@@ -321,6 +441,10 @@ impl Chosen {
 ///   committed and a local profile is one machine's. With no asking profile to fall back to,
 ///   it is a refusal.
 ///
+/// - **Where the project lists profiles for the persona** ([`Named::listed`], #1509), the
+///   one chosen is one of them, whoever chose it, or it is a refusal that names the listed
+///   ones. A list adds nothing: a listed profile is still held to every rule above.
+///
 /// A persona's `model:` counts as naming a profile only where one of `offered` is called that.
 pub fn for_dispatch(
     persona: &Named,
@@ -328,7 +452,25 @@ pub fn for_dispatch(
     named: Option<&str>,
     offered: &[Offer],
 ) -> Result<Chosen, Refused> {
+    // **Where the project lists profiles for the persona, the one chosen is one of them**
+    // (#1509), whoever chose it. What the dispatch names is asked first, before whether the
+    // project offers it: the listed ones are what it may name, and the refusal says so.
+    let unlisted = |profile: &str, by: Who| {
+        let listed = persona.listed.as_ref()?;
+        (!listed.iter().any(|one| one == profile)).then(|| Refused::NotListed {
+            profile: profile.to_owned(),
+            by,
+            persona: persona.persona.clone(),
+            listed: listed.clone(),
+        })
+    };
+    if let Some(refused) = named.and_then(|profile| unlisted(profile, Who::Asker)) {
+        return Err(refused);
+    }
     let chosen = chosen_for(persona, asking, named, offered)?;
+    if let Some(refused) = unlisted(&chosen.profile, chosen.by) {
+        return Err(refused);
+    }
     // Whoever chose the profile, a persona's deny-list holds on it or nothing starts
     // (D-1451-18): the answer the start itself gives ([`crate::start::ready`]).
     if let Some(file) = &persona.denies_tools {
@@ -613,6 +755,310 @@ mod tests {
             model: model.map(str::to_owned),
             inherited_from: None,
             denies_tools: None,
+            listed: None,
+        }
+    }
+
+    /// `persona`, with the project listing `profiles` for it.
+    fn listing(persona: Named, profiles: &[&str]) -> Named {
+        Named {
+            listed: Some(profiles.iter().map(|name| (*name).to_owned()).collect()),
+            ..persona
+        }
+    }
+
+    fn not_listed(profile: &str, by: Who, listed: &[&str]) -> Result<Chosen, Refused> {
+        Err(Refused::NotListed {
+            profile: profile.to_owned(),
+            by,
+            persona: "ops".to_owned(),
+            listed: listed.iter().map(|name| (*name).to_owned()).collect(),
+        })
+    }
+
+    // ----- the profiles the project lists for a persona (#1509, V100-60) --------------------
+
+    #[test]
+    fn a_dispatch_names_only_a_profile_the_project_lists_for_the_persona() {
+        let ops = listing(names(None, None), &["work", "claude"]);
+        // One it lists starts.
+        assert_eq!(
+            for_dispatch(&ops, Some("claude"), Some("work"), &project()),
+            chosen("work", Who::Asker)
+        );
+        // One the project offers and this machine approved, and does not list for it: refused,
+        // in words that name the ones it does.
+        let refused = for_dispatch(&ops, Some("claude"), Some("codex"), &project());
+        assert_eq!(
+            refused,
+            not_listed("codex", Who::Asker, &["work", "claude"])
+        );
+        assert_eq!(
+            refused.unwrap_err().say(),
+            "the dispatch names profile 'codex', which this project does not list for persona \
+             'ops', so nothing was started. The project lists 'work' and 'claude' for that \
+             persona. Name one of them with --profile."
+        );
+        // One the project does not offer at all is told the same: the listed ones are what it
+        // may name, not every profile of the project.
+        assert_eq!(
+            for_dispatch(&ops, Some("claude"), Some("prod"), &project()),
+            not_listed("prod", Who::Asker, &["work", "claude"])
+        );
+    }
+
+    #[test]
+    fn a_persona_the_project_lists_no_profiles_for_is_named_any_profile_as_before() {
+        for profile in ["claude", "codex", "work"] {
+            assert_eq!(
+                for_dispatch(
+                    &names(None, None),
+                    Some("claude"),
+                    Some(profile),
+                    &project()
+                ),
+                chosen(profile, Who::Asker)
+            );
+        }
+    }
+
+    #[test]
+    fn the_list_holds_whoever_chose_the_profile() {
+        // The persona's own definition, which a chat running as it can write.
+        let own = listing(names(Some("codex"), None), &["work"]);
+        let refused = for_dispatch(&own, Some("work"), None, &project());
+        assert_eq!(refused, not_listed("codex", Who::Persona, &["work"]));
+        assert_eq!(
+            refused.unwrap_err().say(),
+            "persona 'ops' names profile 'codex', which this project does not list for persona \
+             'ops', so nothing was started. The project lists only 'work' for that persona. \
+             The project's list and the persona's own definition disagree: a person changes \
+             [dispatch.profiles] in the project's file, or the `profile:` line of the \
+             persona's definition. Until then, name that one with --profile."
+        );
+        // Its `model:`, where a profile is called that.
+        assert_eq!(
+            for_dispatch(
+                &listing(names(None, Some("codex")), &["work"]),
+                Some("work"),
+                None,
+                &project()
+            ),
+            not_listed("codex", Who::PersonaModel, &["work"])
+        );
+        // Nobody: the asking chat's own profile.
+        let refused = for_dispatch(
+            &listing(names(None, None), &["work"]),
+            Some("codex"),
+            None,
+            &project(),
+        );
+        assert_eq!(refused, not_listed("codex", Who::AskingChat, &["work"]));
+        assert_eq!(
+            refused.unwrap_err().say(),
+            "the asking chat runs on profile 'codex', which this project does not list for \
+             persona 'ops', so nothing was started. The project lists only 'work' for that \
+             persona. Dispatch the task again, naming that one with --profile."
+        );
+        // And the asking chat's, standing in for a persona's own this machine does not offer.
+        assert_eq!(
+            for_dispatch(
+                &listing(names(Some("gone"), None), &["gone"]),
+                Some("codex"),
+                None,
+                &project()
+            ),
+            not_listed("codex", Who::AskingChat, &["gone"])
+        );
+        // Each starts where the profile chosen is one the project lists.
+        assert_eq!(
+            for_dispatch(
+                &listing(names(Some("codex"), None), &["codex"]),
+                Some("work"),
+                None,
+                &project()
+            ),
+            chosen("codex", Who::Persona)
+        );
+        assert_eq!(
+            for_dispatch(
+                &listing(names(None, None), &["work"]),
+                Some("work"),
+                None,
+                &project()
+            ),
+            chosen("work", Who::AskingChat)
+        );
+    }
+
+    #[test]
+    fn a_list_that_holds_nothing_starts_no_chat_and_says_where_to_list_one() {
+        let ops = listing(names(Some("work"), None), &[]);
+        for named in [None, Some("work"), Some("codex")] {
+            let refused = for_dispatch(&ops, Some("claude"), named, &project()).unwrap_err();
+            assert!(matches!(refused, Refused::NotListed { .. }), "{named:?}");
+            assert!(
+                refused.say().ends_with(
+                    "so nothing was started. The project lists no profile for that persona \
+                     that purlis can read, so no chat is dispatched to it until a person \
+                     fixes [dispatch.profiles] in the project's file."
+                ),
+                "{named:?}: {}",
+                refused.say()
+            );
+        }
+    }
+
+    #[test]
+    fn a_listed_profile_is_still_one_the_project_offers_and_this_machine_approved() {
+        // Listing a profile adds nothing: a name in the list is looked up among the profiles
+        // the project offers, and waits for its approval, as any other.
+        let ops = listing(names(None, None), &["aider", "prod", "work"]);
+        assert_eq!(
+            for_dispatch(&ops, Some("work"), Some("aider"), &with_aider()),
+            Err(Refused::NotApproved {
+                profile: "aider".to_owned(),
+                by: Who::Asker,
+                persona: None,
+            })
+        );
+        assert_eq!(
+            for_dispatch(&ops, Some("work"), Some("prod"), &with_aider()),
+            Err(Refused::NotOffered {
+                profile: "prod".to_owned(),
+                by: Who::Asker,
+                persona: None,
+            })
+        );
+    }
+
+    /// What each reader is told to do, by who chose the profile and by which road the
+    /// dispatch came: each ending is one that reader can act on.
+    #[test]
+    fn an_unlisted_profile_s_refusal_ends_on_what_its_reader_can_do() {
+        const DISAGREE: &str = "The project's list and the persona's own definition disagree: \
+             a person changes [dispatch.profiles] in the project's file, or the `profile:` line \
+             of the persona's definition.";
+        let said =
+            |by, road, listed: &[&str]| not_listed("codex", by, listed).unwrap_err().said_on(road);
+        let ends = |by, road, listed: &[&str], end: &str| {
+            let said = said(by, road, listed);
+            assert!(said.ends_with(end), "{by:?} {road:?}: {said}");
+            assert!(!said.contains('\n'), "{said}");
+        };
+        // A task: `--profile` is the chat's to give.
+        ends(
+            Who::Asker,
+            Road::Task,
+            &["work"],
+            "The project lists only 'work' for that persona. Name that one with --profile.",
+        );
+        ends(
+            Who::Persona,
+            Road::Task,
+            &["work", "claude"],
+            &format!("{DISAGREE} Until then, name one of them with --profile."),
+        );
+        ends(
+            Who::PersonaModel,
+            Road::Task,
+            &["work"],
+            "or the `model:` line of the persona's definition. Until then, name that one with \
+             --profile.",
+        );
+        ends(
+            Who::AskingChat,
+            Road::Task,
+            &["work", "claude"],
+            "Dispatch the task again, naming one of them with --profile.",
+        );
+        // A handoff names no profile, so it is never told to name one in the handoff.
+        ends(
+            Who::AskingChat,
+            Road::Handoff,
+            &["work"],
+            "A handoff names no profile and starts on the asking chat's: hand off from a chat \
+             on that one, or dispatch a task to ops, naming that one with --profile.",
+        );
+        ends(
+            Who::Persona,
+            Road::Handoff,
+            &["work"],
+            &format!(
+                "{DISAGREE} A handoff names no profile, so until then dispatch a task to ops, \
+                 naming that one with --profile."
+            ),
+        );
+        // The person, asking from a tab: no `--profile` is theirs to give, and the sentence
+        // says the tab, not "the asking chat".
+        assert_eq!(
+            said(Who::AskingChat, Road::Person, &["work"]),
+            "this tab's chat runs on profile 'codex', which this project does not list for \
+             persona 'ops', so nothing was started. The project lists only 'work' for that \
+             persona. Ask from a chat on that one, or list 'codex' for ops under \
+             [dispatch.profiles] in the project's file."
+        );
+        ends(
+            Who::Persona,
+            Road::Person,
+            &["work", "claude"],
+            "Set the persona's profile to one of them from its view, or list 'codex' for ops \
+             under [dispatch.profiles] in the project's file.",
+        );
+        for road in [Road::Handoff, Road::Person] {
+            for by in [Who::Persona, Who::PersonaModel, Who::AskingChat] {
+                let said = said(by, road, &["work"]);
+                assert!(!said.contains("name that one with --profile"), "{said}");
+                assert!(!said.contains("in the dispatch"), "{said}");
+            }
+        }
+        // `say` is the task's road.
+        assert_eq!(
+            not_listed("codex", Who::Asker, &["work"])
+                .unwrap_err()
+                .say(),
+            said(Who::Asker, Road::Task, &["work"])
+        );
+        // And a refusal that is not about the list is said the same on every road.
+        for road in [Road::Task, Road::Handoff, Road::Person] {
+            assert_eq!(Refused::NoProfile.said_on(road), Refused::NoProfile.say());
+        }
+    }
+
+    #[test]
+    fn the_profiles_the_project_lists_are_named_one_two_and_three_at_a_time() {
+        let lists = |listed: &[&str]| {
+            let said = not_listed("x", Who::Asker, listed).unwrap_err().say();
+            let from = said.find("The project lists").expect("what it lists");
+            said[from..].to_owned()
+        };
+        assert_eq!(
+            lists(&["work"]),
+            "The project lists only 'work' for that persona. Name that one with --profile."
+        );
+        assert_eq!(
+            lists(&["work", "codex"]),
+            "The project lists 'work' and 'codex' for that persona. Name one of them with \
+             --profile."
+        );
+        assert_eq!(
+            lists(&["work", "codex", "claude"]),
+            "The project lists 'work', 'codex' and 'claude' for that persona. Name one of \
+             them with --profile."
+        );
+        // None: said the same whoever chose and whoever reads, since nothing can be named.
+        for by in [Who::Asker, Who::Persona, Who::PersonaModel, Who::AskingChat] {
+            for road in [Road::Task, Road::Handoff, Road::Person] {
+                let said = not_listed("x", by, &[]).unwrap_err().said_on(road);
+                assert!(
+                    said.ends_with(
+                        "The project lists no profile for that persona that purlis can read, \
+                         so no chat is dispatched to it until a person fixes \
+                         [dispatch.profiles] in the project's file."
+                    ),
+                    "{by:?} {road:?}: {said}"
+                );
+            }
         }
     }
 
