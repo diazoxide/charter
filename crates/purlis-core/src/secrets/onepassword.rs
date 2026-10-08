@@ -163,7 +163,7 @@ fn op_argv(vault: &Vault, args: &[&str]) -> Vec<String> {
     argv
 }
 
-/// `_run`: `op` must be on PATH, and runs under this vault's declared identity.
+/// `_run`: `op` must be found ([`Ctx::program`]), and runs under this vault's declared identity.
 fn op_run(
     ctx: &Ctx,
     vault: &Vault,
@@ -172,19 +172,22 @@ fn op_run(
 ) -> Result<Ran, VaultError> {
     checked(vault)?;
     // A keyring-held identity runs exactly the `op` pinned when its token was stored — never one
-    // the caller's PATH resolves, which a chat controls (#271 review, U1). A vault whose identity
-    // is not in the keyring keeps resolving `op` from PATH: no keyring item is at stake.
+    // the caller's PATH resolves, which a chat controls (#271 review, U1). Any other vault runs
+    // the `op` the one lookup finds (#1516), by its absolute path, so the child's own `PATH`
+    // chooses nothing.
     let mut argv = argv.to_vec();
     match super::identity::pinned_op(ctx, vault)? {
         Some(path) => argv[0] = path.display().to_string(),
-        None => {
-            if ctx.which("op").is_none() {
-                return Err(VaultError::new(
-                    "the 1Password CLI ('op') is not on PATH. Install it and sign in \
-                     (https://developer.1password.com/docs/cli/), then retry.",
-                ));
+        None => match ctx.program("op") {
+            Ok(found) => argv[0] = found.path.display().to_string(),
+            Err(not) => {
+                return Err(VaultError::new(format!(
+                    "purlis could not find the 1Password CLI ('op'). Install it and sign in \
+                     (https://developer.1password.com/docs/cli/), then retry. {}",
+                    ctx.looked_in(&not)
+                )));
             }
-        }
+        },
     }
     let overlay = super::env_overlay(ctx, vault)?;
     run::run(&ctx.env, &argv, stdin, &overlay, None).map_err(|e| match e {
@@ -529,7 +532,7 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
 
 /// `health`: whether the item is reachable and how many fields it holds. Never a value.
 pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
-    if ctx.which("op").is_none() {
+    if ctx.program("op").is_err() {
         return (false, "op CLI not on PATH".into());
     }
     let item = match op_item(vault) {

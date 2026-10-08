@@ -483,6 +483,105 @@ fn an_asker_that_goes_away_has_its_command_stopped() {
     assert!(matches!(frames.last(), Some(Frame::Exit(code)) if *code != 0));
 }
 
+// ---- where the app looks for a provider's program (#1516) ---------------------------------
+
+/// A stand-in `op` that answers every `op read` with `value`, and leaves `ran` beside itself.
+fn an_op(dir: &Path, value: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    stand_in::program(
+        dir,
+        "op",
+        &format!("#!/bin/sh\n: > \"$(dirname \"$0\")/ran\"\nprintf %s '{value}'\n"),
+    );
+}
+
+/// A project whose vault `prod` is a 1Password one tagged for persona `devops`.
+fn project_on_1password() -> tempfile::TempDir {
+    let tmp = project();
+    std::fs::write(
+        tmp.path().join("vaults.json"),
+        serde_json::json!({ "vaults": {
+            "prod": {"provider": "1password", "config": {"op-vault": "Prod"}, "persona": "devops"},
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    tmp
+}
+
+/// The app as the Dock starts it: the system's short `PATH`, and the person's home.
+fn asker_from_the_dock(root: &Path, home: &Path) -> Asker {
+    Asker {
+        env: Env::of(&[
+            ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+            ("HOME", &home.to_string_lossy()),
+        ]),
+        ..asker(root, Some("devops"))
+    }
+}
+
+#[test]
+fn an_app_started_from_the_dock_finds_the_providers_program_where_a_login_shell_would() {
+    let project = project_on_1password();
+    let home = tempfile::tempdir().unwrap();
+    an_op(&home.path().join(".local/bin"), TOKEN);
+    let mut want = wanted(
+        project.path(),
+        "prod",
+        sh(r#"test -n "$X" && echo ok; echo "leak: $X""#),
+    );
+    want.env = vec!["X=TOKEN".into()];
+    let frames = served(&asker_from_the_dock(project.path(), home.path()), want);
+    assert_eq!(frames.last(), Some(&Frame::Exit(0)), "{frames:?}");
+    assert_eq!(stdout(&frames), "ok\nleak: ***\n");
+}
+
+#[test]
+fn nothing_in_a_chats_environment_chooses_the_providers_program() {
+    let project = project_on_1password();
+    let home = tempfile::tempdir().unwrap();
+    an_op(&home.path().join(".local/bin"), TOKEN);
+    // The chat's own `PATH` and `HOME` both lead to an `op` it wrote in its folder.
+    let planted = project.path().join("work/bin");
+    an_op(&planted, "planted");
+    an_op(&project.path().join("work/.local/bin"), "planted");
+    let mut want = wanted(project.path(), "prod", sh(r#"printf %s "$X" | wc -c"#));
+    want.env = vec!["X=TOKEN".into()];
+    want.environment = vec![
+        (
+            "PATH".into(),
+            format!("{}:/usr/bin:/bin", planted.display()),
+        ),
+        (
+            "HOME".into(),
+            project.path().join("work").display().to_string(),
+        ),
+    ];
+    let asker = asker_from_the_dock(project.path(), home.path());
+    let frames = served(&asker, want.clone());
+    assert_eq!(frames.last(), Some(&Frame::Exit(0)), "{frames:?}");
+    assert_eq!(stdout(&frames).trim(), TOKEN.len().to_string());
+    assert!(home.path().join(".local/bin/ran").exists());
+    assert!(!planted.join("ran").exists());
+
+    // With no `op` where the app looks, nothing runs, and the refusal names the app's
+    // directories and none of the chat's.
+    std::fs::remove_file(home.path().join(".local/bin/op")).unwrap();
+    let frames = served(&asker, want);
+    let why = refusal(&frames);
+    assert!(
+        why.contains("could not find the 1Password CLI ('op')"),
+        "{why}"
+    );
+    assert!(
+        why.contains("It looked in: /usr/bin, /bin, /usr/sbin, /sbin, "),
+        "{why}"
+    );
+    assert!(!why.contains(&planted.display().to_string()), "{why}");
+    assert!(!planted.join("ran").exists());
+    assert!(!project.path().join("work/.local/bin/ran").exists());
+}
+
 #[test]
 fn a_program_that_is_not_there_is_not_found() {
     let project = project();

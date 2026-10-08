@@ -123,6 +123,16 @@ the keys and the command — never a value.
   `--op-item`), each secret a concealed field of it, read and written through the `op` CLI; a
   value reaches `op` on stdin, never in its arguments.
 
+**Where purlis looks for `op` and `vault`.** In the `PATH` of the process that reads the vault,
+then in the directories installers use under your home (`~/.local/bin` first), then in
+Homebrew's and the system's. For a sandboxed chat that process is the app, so a program your
+shell finds is found however the app was started, and nothing the chat sets changes where it is
+looked for. A directory a chat may write (the project, a temp directory, a harness's own home)
+is searched after every other. A refusal names every directory searched; a program installed
+somewhere else is found once a link to it is in `~/.local/bin`. `purlis doctor` has a row for
+each such program your vaults use (`op for vaults`), saying where it was found and whether only
+this `PATH` finds it.
+
 A vault may declare the identity it is read through — `--env OP_SERVICE_ACCOUNT_TOKEN=<VAR>`
 or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, purlis refuses rather than read
 the vault as whoever the ambient token belongs to, and `secret exec` never hands one vault's
@@ -207,7 +217,7 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
   export from your shell's startup files — a chat can still read it from purlis. The tab warns
   while the app's environment still holds one. Pasting into the box avoids this; prefer it.
 - **purlis only runs the `op` it pinned when the token was stored.** A keyring-held identity is
-  handed to the absolute `op` resolved from your PATH at store time, whose code-signing team is
+  handed to the absolute `op` purlis found at store time, whose code-signing team is
   pinned too; a chat that drops its own `op` on `$PATH` cannot receive the token, and purlis
   refuses rather than fall back to `$PATH`. Re-store the token if you move or reinstall `op`.
 - **On macOS the two purlis programs are asked for separately.** The token item is written by
@@ -225,7 +235,8 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
   Clipboard** is on, macOS may sync the copy to your other Apple devices, which purlis cannot
   reach to clear; turn it off for a machine that copies secrets.
 
-`purlis doctor`'s vaults row does not check vaults yet.
+`purlis doctor`'s vaults row does not check vaults yet. Its `op for vaults` and `vault for
+vaults` rows say only whether each provider's program is found.
 
 ## Where a vault lives
 

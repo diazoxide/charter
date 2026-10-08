@@ -34,6 +34,7 @@ pub mod keyhold;
 pub mod keyring;
 pub mod onepassword;
 pub mod plain_file;
+pub mod program;
 pub mod reference;
 pub mod registry;
 pub mod run;
@@ -248,11 +249,6 @@ impl Ctx {
     /// recorded `file` as it was, and its undo moves it back.
     pub fn vault_file_path(&self, configured: &str) -> PathBuf {
         crate::names::under_state(&self.root, &expanduser(configured, &self.env))
-    }
-
-    /// `shutil.which(name)` against this environment's `PATH`.
-    pub fn which(&self, name: &str) -> Option<PathBuf> {
-        run::which(name, self.env.get("PATH").as_deref())
     }
 }
 

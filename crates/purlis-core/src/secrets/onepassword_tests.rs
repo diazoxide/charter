@@ -391,7 +391,12 @@ fn a_read_back_that_fails_says_whether_op_read_merely_exited_non_zero() {
         "{}",
         e.message
     );
-    assert!(e.message.contains("('op') is not on PATH"), "{}", e.message);
+    assert!(
+        e.message
+            .contains("could not find the 1Password CLI ('op')"),
+        "{}",
+        e.message
+    );
     assert!(!e.message.contains("exited non-zero"), "{}", e.message);
 }
 
@@ -507,4 +512,64 @@ fn health_of_an_unreadable_vault_is_the_first_sentence_of_why() {
         health(&fake.ctx, &eng()),
         (false, "listing vault 'team' failed (op exit 1)".into())
     );
+}
+
+// ---- where `op` is looked for (#1516) -----------------------------------------------------
+
+/// A plane whose fake `op` is installed only in `<home>/.local/bin`, which a login shell has on
+/// its `PATH`, read by a process whose own `PATH` is the one an app started from the Dock gets.
+struct Elsewhere {
+    plane: tempfile::TempDir,
+    home: tempfile::TempDir,
+    ctx: Ctx,
+}
+
+impl Elsewhere {
+    fn new() -> Self {
+        let plane = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        stand_in::program(&bin, "op", FAKE_OP);
+        let d = plane.path().to_string_lossy().into_owned();
+        let h = home.path().to_string_lossy().into_owned();
+        let ctx = Ctx::new(
+            plane.path(),
+            Env::of(&[
+                ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+                ("HOME", h.as_str()),
+                ("FAKE_OP_DIR", d.as_str()),
+            ]),
+        );
+        Self { plane, home, ctx }
+    }
+}
+
+#[test]
+fn an_op_installed_only_where_a_login_shell_looks_is_found_and_run() {
+    let at = Elsewhere::new();
+    std::fs::write(at.plane.path().join("read.out"), "hunter2").unwrap();
+    assert_eq!(get(&at.ctx, &eng(), "A").unwrap(), "hunter2");
+    let (ok, said) = health(&at.ctx, &eng());
+    assert_ne!((ok, said.as_str()), (false, "op CLI not on PATH"));
+}
+
+#[test]
+fn an_op_that_is_nowhere_is_refused_with_every_directory_that_was_searched() {
+    let at = Elsewhere::new();
+    std::fs::remove_file(at.home.path().join(".local/bin/op")).unwrap();
+    let e = get(&at.ctx, &eng(), "A").unwrap_err();
+    assert!(
+        e.message
+            .starts_with("purlis could not find the 1Password CLI ('op'). Install it and sign in"),
+        "{}",
+        e.message
+    );
+    let looked = e.message.split("It looked in: ").nth(1).expect(&e.message);
+    assert!(
+        looked.starts_with("/usr/bin, /bin, /usr/sbin, /sbin, "),
+        "{looked}"
+    );
+    let local = at.home.path().join(".local/bin");
+    assert!(looked.contains(&local.display().to_string()), "{looked}");
 }

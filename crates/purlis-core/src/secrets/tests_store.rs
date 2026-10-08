@@ -117,8 +117,14 @@ fn a_context_finds_a_cli_on_its_own_path_and_not_elsewhere() {
     let bin = bin_dir(&["op"]);
     let path = bin.path().to_string_lossy().into_owned();
     let ctx = Ctx::new(Path::new("/plane"), Env::of(&[("PATH", &path)]));
-    assert_eq!(ctx.which("op"), Some(bin.path().join("op")));
-    assert_eq!(ctx.which("vault"), None);
+    assert_eq!(
+        ctx.program("op").map(|found| found.path),
+        Ok(bin.path().join("op"))
+    );
+    assert_eq!(
+        ctx.program("vault").map_err(|not| not.looked),
+        Err(vec![bin.path().to_path_buf()])
+    );
 }
 
 #[test]
@@ -813,6 +819,43 @@ fn a_reference_resolves_to_what_its_cli_printed() {
     let (_tmp, _bin, ctx) = resolving_plane("resolved-value", 0);
     let v = vault("refs", "reference", json!({"file": "refs.json"}));
     assert_eq!(reference::get(&ctx, &v, "A").unwrap(), "resolved-value");
+}
+
+/// #1516: the reference provider asks the one lookup the 1Password provider asks.
+#[cfg(unix)]
+#[test]
+fn a_reference_resolves_through_a_cli_installed_only_where_a_login_shell_looks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let local = home.path().join(".local/bin");
+    std::fs::create_dir_all(&local).unwrap();
+    stand_in::program(&local, "op", "#!/bin/sh\nprintf '%s' 'resolved-value'\n");
+    let ctx = Ctx::new(
+        tmp.path(),
+        Env::of(&[
+            ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+            ("HOME", &home.path().to_string_lossy()),
+        ]),
+    );
+    let v = vault("refs", "reference", json!({"file": "refs.json"}));
+    reference::set(&ctx, &v, "A", "op://Eng/item/field").unwrap();
+    assert_eq!(reference::get(&ctx, &v, "A").unwrap(), "resolved-value");
+
+    std::fs::remove_file(local.join("op")).unwrap();
+    let e = reference::get(&ctx, &v, "A").unwrap_err();
+    assert!(
+        e.message.starts_with(
+            "'A' needs the 'op' CLI to resolve it, and purlis could not find it. Install it and \
+             authenticate, then retry. It looked in: /usr/bin, /bin, /usr/sbin, /sbin, "
+        ),
+        "{}",
+        e.message
+    );
+    assert!(
+        e.message.contains(&local.display().to_string()),
+        "{}",
+        e.message
+    );
 }
 
 #[test]
