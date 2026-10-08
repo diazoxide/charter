@@ -89,11 +89,20 @@ export const SIDES: readonly Side[] = ["left", "right", "bottom"];
  * to be in a slot would change the moment one moved. These are written once and never move, so
  * a region is free to.
  */
-export const SLOTS: Record<Side, { least: number; most: number }> = {
-  left: { least: 8, most: 45 },
+export const SLOTS: Record<Side, { least: number; most: number; floor?: string }> = {
+  // **The left slot has a floor in the text's own unit too** (#1499): 8% of the narrowest
+  // window is about 80px, where a nested row of the Chats list has no room left for its state.
+  // 11rem is a row's twist, mark and state word on one line, and it follows the text size, so a
+  // person who makes the text bigger does not get a sidebar its rows no longer fit.
+  left: { least: 8, most: 45, floor: "11rem" },
   right: { least: 10, most: 45 },
   bottom: { least: 6, most: 50 },
 };
+
+/** The least a slot may be dragged to, as its panel is told: its floor where it has one. */
+export function leastOf(side: Side): string {
+  return SLOTS[side].floor ?? `${SLOTS[side].least}%`;
+}
 
 /** What a region *is* — the part that is code and not data, because it cannot be JSON. */
 export type Definition = {

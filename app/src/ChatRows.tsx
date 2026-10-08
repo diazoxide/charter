@@ -65,8 +65,11 @@ export const ChatShownState = memo(function ChatShownState({
   outcome = null,
   asking = null,
   harness,
+  changed = false,
 }: {
   session: number;
+  /** Its state changed while its row was not drawn, so it arrives in it (`StateShown`). */
+  changed?: boolean;
   /** A shell tab, which shows no state until something reports one. */
   shell: boolean;
   /** As a task, the report it owes (`TaskFacts`); nothing for a chat that is not one. */
@@ -89,7 +92,7 @@ export const ChatShownState = memo(function ChatShownState({
       }),
     sameShown,
   );
-  return shown === undefined ? null : <StateShown shown={shown} />;
+  return shown === undefined ? null : <StateShown shown={shown} changed={changed} />;
 });
 
 /** How many characters of a harness's id for a helper its row shows: enough to tell

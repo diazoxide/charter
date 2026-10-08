@@ -1,0 +1,339 @@
+<section class="chats-section" data-testid="chats-section" aria-labelledby="chats-title">
+<div class="chats-head">
+<h2 class="sidebar-title" id="chats-title">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-messages-square node-icon" aria-hidden="true">
+<path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z">
+</path>
+<path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1">
+</path>
+</svg>Chats</h2>
+<div class="chats-filter" role="search" aria-label="Filter the chats">
+<input class="chats-filter-text" tabindex="0" aria-label="Filter chats by name, persona, workspace or state" placeholder="Filter chats" type="search" value="">
+<div class="chats-chips" role="group" aria-label="Show only" tabindex="-1" data-orientation="horizontal" style="outline: none;">
+<label class="chats-chip">
+<input tabindex="0" data-orientation="horizontal" data-radix-collection-item="" type="checkbox">needs you</label>
+<label class="chats-chip">
+<input tabindex="-1" data-orientation="horizontal" data-radix-collection-item="" type="checkbox">working</label>
+</div>
+</div>
+<div class="chats-notes">
+<p class="chats-hidden" role="status">
+</p>
+<p class="chats-said" role="status">
+</p>
+</div>
+</div>
+<div class="chats-list">
+<ul role="tree" aria-label="Chats of this project" tabindex="-1" data-orientation="vertical" style="outline: none;">
+<li role="none" data-level="1">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="open" title="Fold the chats under cancel mid-turn smart-ide">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="1" aria-posinset="1" aria-setsize="4" aria-current="true" aria-expanded="true" aria-description="live check of the staging cluster after the release below it needs you" data-tab="true" data-lines="1" title="smart-ide" tabindex="0" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="steward" data-mark="initials" data-initials="ST" data-colour="green" style="--accent-base: #7da17d; --accent-surface: #1e2c1f;" title="steward" aria-hidden="true">
+</span>
+<span class="session" title="cancel mid-turn smart-ide">cancel mid-turn smart-ide</span>
+<span class="shown-state" data-state="working">
+<span class="shape" data-shape="ring" style="color: var(--state-running);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle" aria-hidden="true">
+<circle cx="12" cy="12" r="10">
+</circle>
+</svg>
+</span>
+<span class="word">working</span>
+</span>
+</span>
+</button>
+<button type="button" class="needs-you-mark rolled-up" data-mark="needs-you" data-leads-to="2" tabindex="-1" aria-label="Go to live check of the staging cluster after the release below cancel mid-turn smart-ide, which needs you" title="Go to live check of the staging cluster after the release below cancel mid-turn smart-ide, which needs you">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-hand" aria-hidden="true">
+<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2">
+</path>
+<path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2">
+</path>
+<path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8">
+</path>
+<path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15">
+</path>
+</svg>
+</button>
+</li>
+<li role="none" data-level="2">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="open" title="Fold the chats under live check of the staging cluster after the release">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="2" aria-posinset="1" aria-setsize="1" aria-expanded="true" data-tab="false" data-lines="1" title="volaticloud · own branch purlis/dispatch/live-check-of-the-staging-cluster" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="live check of the staging cluster after the release">live check of the staging cluster after the release</span>
+<span class="shown-state" data-state="needs-you">
+<span class="shape" data-shape="hand" data-mark="needs-you" style="color: var(--needs-you-base);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-hand" aria-hidden="true">
+<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2">
+</path>
+<path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2">
+</path>
+<path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8">
+</path>
+<path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15">
+</path>
+</svg>
+</span>
+<span class="word">needs you</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="3">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="open" title="Fold the chats under devops 3">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="3" aria-posinset="1" aria-setsize="1" aria-expanded="true" data-tab="false" data-lines="1" title="smart-ide" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="devops 3">devops 3</span>
+<span class="shown-state" data-state="asking">
+<span class="shape" data-shape="question" style="color: var(--state-waiting);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-circle-question-mark lucide-message-circle-question" aria-hidden="true">
+<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719">
+</path>
+<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3">
+</path>
+<path d="M12 17h.01">
+</path>
+</svg>
+</span>
+<span class="word">asking a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="4">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="open" title="Fold the chats under devops 4">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="4" aria-posinset="1" aria-setsize="1" aria-expanded="true" data-tab="false" data-lines="1" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="devops 4">devops 4</span>
+<span class="shown-state" data-state="unreported">
+<span class="shape" data-shape="triangle" style="color: var(--state-unreadable);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert lucide-alert-triangle" aria-hidden="true">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+</path>
+<path d="M12 9v4">
+</path>
+<path d="M12 17h.01">
+</path>
+</svg>
+</span>
+<span class="word">ended without a report</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="5">
+<span class="twist" aria-hidden="true">
+</span>
+<button type="button" class="chat" role="treeitem" aria-level="5" aria-posinset="1" aria-setsize="2" data-tab="false" data-lines="1" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar">a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar</span>
+<span class="shown-state" data-state="unreported">
+<span class="shape" data-shape="triangle" style="color: var(--state-unreadable);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert lucide-alert-triangle" aria-hidden="true">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+</path>
+<path d="M12 9v4">
+</path>
+<path d="M12 17h.01">
+</path>
+</svg>
+</span>
+<span class="word">ended without a report</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="5">
+<span class="twist" aria-hidden="true">
+</span>
+<button type="button" class="chat" role="treeitem" aria-level="5" aria-posinset="2" aria-setsize="2" data-tab="false" data-lines="1" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="devops 9">devops 9</span>
+<span class="shown-state" data-state="working">
+<span class="shape" data-shape="ring" style="color: var(--state-running);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle" aria-hidden="true">
+<circle cx="12" cy="12" r="10">
+</circle>
+</svg>
+</span>
+<span class="word">working</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="1">
+<span class="twist" aria-hidden="true">
+</span>
+<button type="button" class="chat" role="treeitem" aria-level="1" aria-posinset="2" aria-setsize="4" data-tab="true" data-lines="1" title="smart-ide" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="steward" data-mark="initials" data-initials="ST" data-colour="green" style="--accent-base: #7da17d; --accent-surface: #1e2c1f;" title="steward" aria-hidden="true">
+</span>
+<span class="session" title="steward 6">steward 6</span>
+<span class="shown-state" data-state="unheard">
+<span class="shape" data-shape="dots" style="color: var(--text-muted);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-ellipsis lucide-more-horizontal" aria-hidden="true">
+<circle cx="12" cy="12" r="1">
+</circle>
+<circle cx="19" cy="12" r="1">
+</circle>
+<circle cx="5" cy="12" r="1">
+</circle>
+</svg>
+</span>
+<span class="word">running (no detail from Claude Code)</span>
+</span>
+<span class="stopping">Stopping…</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="1">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="folded" title="Show the chats under steward 7">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-right" aria-hidden="true">
+<path d="m9 18 6-6-6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="1" aria-posinset="3" aria-setsize="4" aria-expanded="false" data-tab="true" data-lines="1" title="smart-ide" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="steward" data-mark="initials" data-initials="ST" data-colour="green" style="--accent-base: #7da17d; --accent-surface: #1e2c1f;" title="steward" aria-hidden="true">
+</span>
+<span class="session" title="steward 7">steward 7</span>
+<span class="shown-state" data-state="idle">
+<span class="shape" data-shape="pause" style="color: var(--text-muted);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pause" aria-hidden="true">
+<rect x="14" y="3" width="5" height="18" rx="1">
+</rect>
+<rect x="5" y="3" width="5" height="18" rx="1">
+</rect>
+</svg>
+</span>
+<span class="word">idle</span>
+</span>
+<span class="below-summary" role="img" aria-label="5 done">
+<span class="counted" data-shape="tick">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true">
+<path d="M20 6 9 17l-5-5">
+</path>
+</svg>5</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" data-level="1">
+<button type="button" class="twist" tabindex="-1" aria-hidden="true" data-fold="open" title="Fold the chats under steward 8">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" class="chat" role="treeitem" aria-level="1" aria-posinset="4" aria-setsize="4" aria-expanded="true" data-tab="true" data-lines="1" title="smart-ide" tabindex="-1" data-orientation="vertical" data-radix-collection-item="">
+<span class="line one">
+<span class="persona-mark" data-persona="steward" data-mark="initials" data-initials="ST" data-colour="green" style="--accent-base: #7da17d; --accent-surface: #1e2c1f;" title="steward" aria-hidden="true">
+</span>
+<span class="session" title="steward 8">steward 8</span>
+<span class="shown-state" data-state="idle">
+<span class="shape" data-shape="pause" style="color: var(--text-muted);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pause" aria-hidden="true">
+<rect x="14" y="3" width="5" height="18" rx="1">
+</rect>
+<rect x="5" y="3" width="5" height="18" rx="1">
+</rect>
+</svg>
+</span>
+<span class="word">idle</span>
+</span>
+</span>
+</button>
+</li>
+<li role="none" class="finished-tasks" data-level="2">
+<div role="group" aria-label="Finished tasks of steward 8">
+<div class="finished-task" data-outcome="ended without a report">
+<div class="finished-line">
+<button type="button" class="finished-name" tabindex="0" aria-expanded="false" title="All good.">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="live check of the staging cluster after the release">live check of the staging cluster after the release</span>
+<span class="shown-state" data-state="unreported">
+<span class="shape" data-shape="triangle" style="color: var(--state-unreadable);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert lucide-alert-triangle" aria-hidden="true">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+</path>
+<path d="M12 9v4">
+</path>
+<path d="M12 17h.01">
+</path>
+</svg>
+</span>
+<span class="word">ended without a report</span>
+</span>
+</button>
+<button type="button" class="finished-reopen" tabindex="0" aria-label="Reopen live check of the staging cluster after the release" title="Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told.">Reopen</button>
+<button type="button" class="finished-clear" tabindex="0" aria-label="Clear live check of the staging cluster after the release" title="Takes this row away. Its dispatch record stays.">Clear</button>
+</div>
+</div>
+<div class="finished-task" data-outcome="blocked">
+<div class="finished-line">
+<button type="button" class="finished-name" tabindex="0" aria-expanded="false" title="All good.">
+<span class="persona-mark" data-persona="devops" data-mark="initials" data-initials="DE" data-colour="red" style="--accent-base: #bf8b86; --accent-surface: #372322;" title="devops" aria-hidden="true">
+</span>
+<span class="session" title="a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar">a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar</span>
+<span class="shown-state" data-state="failed">
+<span class="shape" data-shape="cross" style="color: var(--state-failed);" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x" aria-hidden="true">
+<path d="M18 6 6 18">
+</path>
+<path d="m6 6 12 12">
+</path>
+</svg>
+</span>
+<span class="word">failed</span>
+</span>
+<span class="outcome">blocked</span>
+</button>
+<button type="button" class="finished-reopen" tabindex="0" aria-label="Reopen a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar" title="Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told.">Reopen</button>
+<button type="button" class="finished-clear" tabindex="0" aria-label="Clear a_name_with_no_space_in_it_that_is_far_wider_than_a_sidebar" title="Takes this row away. Its dispatch record stays.">Clear</button>
+</div>
+</div>
+<div class="finished-fold">
+<button type="button" class="finished-count" tabindex="0" aria-expanded="false">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-right" aria-hidden="true">
+<path d="m9 18 6-6-6-6">
+</path>
+</svg>Finished (1)</button>
+<button type="button" class="finished-clear" tabindex="0" title="Takes these rows away. Their dispatch records stay.">Clear finished</button>
+</div>
+</div>
+</li>
+</ul>
+</div>
+</section>

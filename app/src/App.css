@@ -2500,12 +2500,25 @@ h2.sidebar-title .node-icon {
 }
 
 .chats-section {
+  /* Its own width is what its rows are laid out by: a narrow list indents less (below). */
+  container: chats / inline-size;
   flex: 0 1 auto;
   max-height: 40%;
   overflow: auto;
-  padding: 0.5rem;
+  padding: 0 0.5rem 0.5rem;
   border-block-end: 1px solid var(--border-subtle);
   font-size: 0.85rem;
+}
+
+/* The title, the filter and the line under it stay at the top while the rows scroll under
+   them (#1499): at fifty chats the filter is what the person scrolled away from. */
+.chats-head {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  margin-inline: -0.5rem;
+  padding: 0.5rem 0.5rem 0.1rem;
+  background: var(--surface-base);
 }
 
 .chats-section ul {
@@ -2532,8 +2545,22 @@ h2.sidebar-title .node-icon {
   padding-inline-start: 3.4rem;
 }
 
-/* **A row is two lines, and as wide as the list** (#1499, V100-50). It never makes the list
-   scroll sideways: what gives way in a narrow sidebar is the name, and never the state. */
+/* **A narrow list cannot afford a step per level** (#1499): at the sidebar's least width four
+   steps of indent leave a row no room for its state. There, every row under another is
+   indented by one small step, whatever its level, which a screen reader is still told. */
+@container chats (max-width: 16rem) {
+  .chats-section li[data-level]:not([data-level="1"]) {
+    padding-inline-start: 0.5rem;
+  }
+
+  .chats-section li.finished-tasks {
+    margin-inline-start: 0.5rem;
+  }
+}
+
+/* **A row is two lines, and as wide as the list** (#1499, V100-50). No row, of a chat or of a
+   finished task, makes the list scroll sideways: what gives way in a narrow sidebar is the
+   name, and never the state. */
 .chats-section .chat {
   display: flex;
   flex: 1 1 0;
@@ -2578,37 +2605,39 @@ h2.sidebar-title .node-icon {
 /* The state on a row of the list: beside the name where both fit, under it where they do not,
    and, in a sidebar narrower than the state itself, on as many lines as its words need. Never
    cut: a state has no ellipsis. */
-.chats-section .chat .shown-state {
+.chats-section .chat .shown-state,
+.chats-section .finished-name .shown-state {
   flex: 0 1 auto;
   min-width: 0;
   white-space: normal;
 }
 
-.chats-section .chat .shown-state .shape {
+.chats-section .chat .shown-state .shape,
+.chats-section .finished-name .shown-state .shape {
   flex: none;
 }
 
-.chats-section .chat .shown-state .word {
+.chats-section .chat .shown-state .word,
+.chats-section .finished-name .shown-state .word {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 /* The second line, dimmer: where it works, for how long, its own branch. One line, cut short
-   as a whole; a part with more to say has its own tooltip. Not drawn at all with nothing to
-   say, so a row with none is one line high. */
+   as a whole; a part with more to say has its own tooltip. **Always a line high, with or
+   without words**: what it comes to say later (a time, what the chat is doing) must not make
+   the row taller and move the rows below it. */
 .chats-section .chat .line.two {
   display: block;
   min-width: 0;
+  min-height: 1.4em;
+  min-height: 1lh;
   padding-inline-start: 1.35rem;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 0.9em;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chats-section .chat .line.two:empty {
-  display: none;
 }
 
 .chats-section .chat .line.two > * + *::before {
@@ -2656,6 +2685,12 @@ h2.sidebar-title .node-icon {
   font: inherit;
 }
 
+.chats-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 .chats-chip {
   display: inline-flex;
   flex: none;
@@ -2684,16 +2719,62 @@ h2.sidebar-title .node-icon {
   background: var(--surface-hover);
 }
 
-.chats-hidden,
-.chats-said {
-  margin: 0.2rem 0 0;
+/* **The line under the filter: one line, always there** (#1499). What the filter hides and
+   why a key did nothing are said on it, so saying either pushes no row down, and both stay in
+   the accessibility tree while they are empty, so what they come to say is announced. Cut
+   short where the sidebar is narrow, with the whole of it as its tooltip; the button that goes
+   to a hidden chat that needs you is first and is never cut. */
+.chats-notes {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  height: 1.5em;
+  margin-block-start: 0.2rem;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 0.9em;
+  white-space: nowrap;
 }
 
-.chats-hidden:empty,
-.chats-said:empty {
-  display: none;
+.chats-hidden,
+.chats-said {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The count while the key's reason is drawn in its place: out of sight, still in the tree. */
+.chats-hidden.away {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+}
+
+.chats-hidden-go {
+  display: inline-flex;
+  flex: none;
+  gap: 0.2rem;
+  align-items: center;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  color: var(--text-primary);
+  background: none;
+  font: inherit;
+  cursor: default;
+}
+
+.chats-hidden-go:hover {
+  background: var(--surface-hover);
+}
+
+.chats-hidden-go svg {
+  width: 1em;
+  height: 1em;
+  color: var(--needs-you-base);
 }
 
 /* A workspace's name over its sessions, where the list is grouped by workspace. */
@@ -2775,12 +2856,16 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
+/* A finished row obeys a chat row's rule (#1499): as wide as the list and no wider. The name
+   gives way with an ellipsis, the state is whole and wraps its own words where it must, and
+   Reopen and Clear go under the name where they do not fit beside it. */
 .chats-section .finished-line,
 .chats-section .finished-fold {
   display: flex;
-  gap: 0.35rem;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.35rem;
   align-items: center;
-  min-width: max-content;
+  min-width: 0;
 }
 
 .chats-section .finished-name,
@@ -2798,6 +2883,36 @@ h2.sidebar-title .node-icon {
   font: inherit;
   white-space: nowrap;
   cursor: default;
+}
+
+.chats-section .finished-name {
+  flex: 1 1 6rem;
+  flex-wrap: wrap;
+  min-width: 0;
+  text-align: start;
+  white-space: normal;
+}
+
+.chats-section .finished-name > svg,
+.chats-section .finished-name > .persona-mark {
+  flex: none;
+}
+
+.chats-section .finished-name .session {
+  flex: 1 1 3rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-section .finished-name .outcome {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chats-section .finished-count {
+  min-width: 0;
 }
 
 .chats-section .finished-name:hover,
@@ -2829,7 +2944,7 @@ h2.sidebar-title .node-icon {
 
 /* The report, as the task wrote it: plain text that keeps its own line breaks. */
 .chats-section .finished-report {
-  max-width: 28rem;
+  max-width: min(28rem, 100%);
   max-height: 14rem;
   margin: 0.15rem 0 0.3rem;
   padding: 0.3rem 0.4rem;
@@ -3425,8 +3540,10 @@ h2.sidebar-title .node-icon {
   font-size: 0.9em;
 }
 
-/* "reported": the ring, filled. An outline this small is no mark. */
-.shown-state [data-shape="dot"] svg {
+/* "reported": the ring, filled. An outline this small is no mark. The same in a folded
+   session's count of how its tasks ended (#1499), which draws the shapes outside a state. */
+.shown-state [data-shape="dot"] svg,
+.below-summary [data-shape="dot"] svg {
   fill: currentcolor;
   transform: scale(0.6);
 }

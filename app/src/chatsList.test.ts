@@ -8,11 +8,13 @@ import {
   isLive,
   liveBelow,
   matches,
+  matchesFinished,
   rankOf,
   sessionOrder,
   sinceSaid,
   stamped,
   summaryOf,
+  type Rank,
 } from "./chatsList";
 import { chatsTree, type ChatRow, type ListedChat } from "./chatsTree";
 import type { Shown, ShownKind } from "./shownState";
@@ -147,7 +149,7 @@ describe("the filter (V100-49)", () => {
     shape: "ring",
     token: "state.running",
   };
-  const asks = (text: string, kinds: ShownKind[] = []) => matches(row, working, { text, kinds });
+  const asks = (text: string, ranks: Rank[] = []) => matches(row, working, { text, ranks });
 
   it("finds a chat by its name, its persona, its workspace or its state's word", () => {
     expect(asks("check")).toBe(true);
@@ -162,17 +164,58 @@ describe("the filter (V100-49)", () => {
     expect(asks("devops alpha")).toBe(false);
   });
 
-  it("asks, with a chip, for a chat in that state", () => {
-    expect(asks("", ["working"])).toBe(true);
-    expect(asks("", ["needs-you"])).toBe(false);
-    expect(asks("", ["needs-you", "working"])).toBe(true);
-    expect(asks("steward", ["working"])).toBe(false);
+  it("finds a name whatever accents it was typed or written with", () => {
+    const jose = chatsTree([listed(8, null, "alpha", { name: "José's review" })])[0];
+
+    expect(matches(jose, working, { text: "jose", ranks: [] })).toBe(true);
+    expect(matches(row, working, { text: "chéck", ranks: [] })).toBe(true);
+  });
+
+  it("asks, with a chip, for a chat whose state stands where the chip's does in the order", () => {
+    expect(asks("", [1])).toBe(true);
+    expect(asks("", [0])).toBe(false);
+    expect(asks("", [0, 1])).toBe(true);
+    expect(asks("steward", [1])).toBe(false);
+    // What the order counts as at work, the "working" chip finds: a chat nothing is heard
+    // from, and a task asking the chat that dispatched it.
+    const unheard: Shown = {
+      kind: "unheard",
+      word: "running (no detail from claude)",
+      shape: working.shape,
+      token: "text.muted",
+    };
+    const asking: Shown = { ...working, kind: "asking", word: "asking steward 1" };
+    expect(matches(row, unheard, { text: "", ranks: [1] })).toBe(true);
+    expect(matches(row, asking, { text: "", ranks: [1] })).toBe(true);
+    expect(matches(row, undefined, { text: "", ranks: [1] })).toBe(false);
   });
 
   it("asks for nothing while nothing is typed and no chip is pressed", () => {
-    expect(filters({ text: "  ", kinds: [] })).toBe(false);
-    expect(filters({ text: "a", kinds: [] })).toBe(true);
-    expect(filters({ text: "", kinds: ["working"] })).toBe(true);
+    expect(filters({ text: "  ", ranks: [] })).toBe(false);
+    expect(filters({ text: "a", ranks: [] })).toBe(true);
+    expect(filters({ text: "", ranks: [1] })).toBe(true);
+  });
+
+  it("finds a finished task by its name, persona, place and how it ended, and never by a chip", () => {
+    const ended = {
+      id: "01K6",
+      asker: 1,
+      name: "check staging",
+      persona: "devops",
+      outcome: "blocked",
+      folds: false,
+      report: "",
+      changed: null,
+      ended: null,
+      place: "beta",
+      branch: null,
+      reopens: false,
+    };
+    for (const text of ["staging", "devops", "beta", "failed", "blocked", "BETA check"])
+      expect(matchesFinished(ended, { text, ranks: [] }), text).toBe(true);
+    expect(matchesFinished(ended, { text: "alpha", ranks: [] })).toBe(false);
+    expect(matchesFinished(ended, { text: "", ranks: [] })).toBe(false);
+    expect(matchesFinished(ended, { text: "staging", ranks: [1] })).toBe(false);
   });
 
   it("keeps every row above a match, in the order they stood, and no other", () => {
@@ -208,7 +251,7 @@ describe("what a folded session says of its finished tasks (V100-48)", () => {
     expect(countsOf(summary ?? "")).toEqual([
       { shape: "tick", count: 3, word: "done" },
       { shape: "cross", count: 1, word: "failed" },
-      { shape: "slash", count: 1, word: "ended without a report" },
+      { shape: "triangle", count: 1, word: "ended without a report" },
     ]);
   });
 

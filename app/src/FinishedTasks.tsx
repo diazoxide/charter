@@ -118,7 +118,11 @@ function FinishedRow({
           ) : (
             <PersonaMark persona={task.persona} />
           )}
-          <span className="session">{task.name}</span>
+          {/* Cut short in a narrow sidebar (#1499), and whole here for a pointer that rests on
+              it; a screen reader is told the text. */}
+          <span className="session" title={task.name}>
+            {task.name}
+          </span>
           {/* How it ended, as every row says a state: the mark and the word a chat's row
             wears (#1484). The core's own word follows where it says more than that word
             does (blocked, closed by the person), so no end is said less exactly here. */}
