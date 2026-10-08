@@ -86,29 +86,64 @@ pub struct Server {
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
 ///
-/// **So is every command that acts on the person's word for a chat** (#1488, a delegated
-/// ruling, and its list as the train's review completed it). The rule is what a command does,
-/// and the list is every command that does it:
+/// **So is every command that ends, starts or restarts a chat on the person's word** (#1488,
+/// a delegated ruling, and its list as the train's reviews completed it). The rule is what a
+/// command does, and it fails closed: a command that does one of these is listed here, whether
+/// or not anything has yet been found to misuse it.
 ///
-/// - **it ends a chat or a task as the person**: `end_task` (which writes a sentence in the
-///   person's name to the chat that asked), `task_ending` (the question it asks first),
-///   `stop_chat`, `close_session`, `close_chat_stopping` (a close that also stops what is
-///   below) and `end_task_that_did_not_start`;
-/// - **it starts a chat as the person**, with no grant asked: `ask_persona_chat`;
-/// - **it starts a chat again outside the sandbox**, which is the person's choice alone:
-///   `restart_chat_without_sandbox`.
+/// - **it ends a chat, a task, or every chat of a project or of the app**: `end_task` (which
+///   writes a sentence in the person's name to the chat that asked), `task_ending` (the
+///   question it asks first), `stop_chat`, `close_session`, `close_chat_stopping`,
+///   `end_task_that_did_not_start`, `smart_close`, `stop_every_agent`,
+///   `forget_chat_that_did_not_start`, `close_plane`, `forget_project`, and the two that quit
+///   the app to start it again (`restart_on_the_session_bus`, `restart_to_update`);
+/// - **it starts a chat or a shell as the person**: `ask_persona_chat`, `start_chat`,
+///   `start_chat_here`, `open_session`, `open_shell_in_branch`, `first_task_run`,
+///   `resume_session`, `retry_chat_that_did_not_start`, `reopen_finished_task`, `curate` (a
+///   chat with a curation's prompt typed), and `relaunch` (the launch's answer, which starts
+///   every chat the project held);
+/// - **it starts a chat again**: `restart_chat_without_sandbox`, `restart_chat`,
+///   `start_chat_fresh`, `ask_chat_restart`.
 ///
 /// None is served on a link. A command added later that does one of these belongs here.
+///
+/// **What this rule does not cover.** The other commands that act as the person (an answer
+/// to a question other than a chat's ask, typing into a chat, saying what is on screen) end,
+/// start and restart nothing. They are served to a `local-ui` peer of the same build, and
+/// whether they join this list awaits a ruling.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
+    // Ends.
     "end_task",
     "task_ending",
     "stop_chat",
     "close_session",
     "close_chat_stopping",
     "end_task_that_did_not_start",
+    "smart_close",
+    "stop_every_agent",
+    "forget_chat_that_did_not_start",
+    "close_plane",
+    "forget_project",
+    "restart_on_the_session_bus",
+    "restart_to_update",
+    // Starts.
     "ask_persona_chat",
+    "start_chat",
+    "start_chat_here",
+    "open_session",
+    "open_shell_in_branch",
+    "first_task_run",
+    "resume_session",
+    "retry_chat_that_did_not_start",
+    "reopen_finished_task",
+    "curate",
+    "relaunch",
+    // Starts again.
     "restart_chat_without_sandbox",
+    "restart_chat",
+    "start_chat_fresh",
+    "ask_chat_restart",
 ];
 
 impl Server {

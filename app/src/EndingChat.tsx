@@ -236,12 +236,6 @@ export function EndingChat({
   );
 }
 
-/** What the dialog asks about the chats at work below a closing chat. */
-/**
- * What a close says of the closing session's tasks that have a tab of their own (#1489,
- * V100-39): how many, and that their tabs go either way. A task kept running is in the Chats
- * list; one that is stopped ends.
- */
 /**
  * **What the dialog says of the tasks whose tabs go with this close, in one line** (#1488,
  * #1489): the tasks among what is being closed, by name, and how many of the closing
@@ -253,6 +247,11 @@ export function TASK_TABS_SAY(back: readonly string[], ownTabs: number): string 
     .join(" ");
 }
 
+/**
+ * What a close says of the closing session's tasks that have a tab of their own (#1489,
+ * V100-39): how many, and that their tabs go either way. A task kept running is in the Chats
+ * list; one that is stopped ends.
+ */
 export function OWN_TABS_SAYS(count: number): string {
   const tasks =
     count === 1
@@ -263,6 +262,7 @@ export function OWN_TABS_SAYS(count: number): string {
   return `${tasks}. ${those} with this one: ${kept} stay in the Chats list.`;
 }
 
+/** What the dialog asks about the chats at work below a closing chat. */
 export function RUNNING_SAYS(running: readonly string[]): string {
   const count = running.length === 1 ? "1 chat" : `${running.length} chats`;
   return `${count} it started ${running.length === 1 ? "is" : "are"} still at work: ${running.join(", ")}.`;

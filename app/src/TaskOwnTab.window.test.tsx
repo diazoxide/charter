@@ -170,6 +170,18 @@ function core(open: Listed[], { running = [], spared = [], updated = [] }: Core 
       if (cmd === "smart_close_offer") return { available: false, why: null, close_first: false };
       if (cmd === "chats_plane_updated") return updated;
       if (cmd === "ask_chat_restart") return null;
+      if (cmd === "task_ending") {
+        // An idle task with nothing below it: the one that is asked about in place.
+        const one = open.find((chat) => chat.session === a.session);
+        return {
+          name: one?.label ?? "",
+          working: false,
+          no_report: null,
+          below: [],
+          stopping: false,
+          reported: false,
+        };
+      }
       if (cmd === "restart_chat") {
         // The same chat on its conversation, under a new number.
         const one = open.find((chat) => chat.session === a.session);
@@ -846,6 +858,36 @@ describe("nothing drawn on a task's tab ends it (fix round 1, M2)", () => {
     await waitFor(() =>
       expect(commandsOf(asked, "ask_chat_restart")).toEqual([{ plane: PLANE, session: 4 }]),
     );
+  });
+
+  it("asks in a dialog on a task's tab that draws no breadcrumb for it, for an end and for a restart", async () => {
+    // Chat 9 asked for it and has closed since: its own tab has no path to say, so there is
+    // no breadcrumb line to ask on. A question set there would stand where nobody sees it.
+    const { tree, asked } = await drawn([
+      chat(1, "alpha"),
+      chat(12, "alpha", { persona: "devops", label: "left behind", from: taskOf(9) }),
+    ]);
+    await userEvent.click(row(tree, "left behind"));
+    await waitFor(() => expect(tabNames()).toEqual(["steward 1", "left behind"]));
+    expect(crumbsSaid()).toEqual([]);
+
+    fireEvent.contextMenu(tab("left behind"));
+    await pick(/^Stop and get its report/);
+    const end = await screen.findByRole("alertdialog");
+    expect(screen.queryByRole("group", { name: /left behind/ })).toBeNull();
+    expect(commandsOf(asked, "end_task")).toEqual([]);
+    await userEvent.click(within(end).getByRole("button", { name: /^(Keep|Cancel)/ }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    fireEvent.contextMenu(tab("left behind"));
+    await pick(/^Restart chat .*left behind/);
+    const restart = await screen.findByRole("alertdialog", { name: "Restart left behind?" });
+    expect(commandsOf(asked, "ask_chat_restart")).toEqual([]);
+    await userEvent.click(within(restart).getByRole("button", { name: "Restart it" }));
+    await waitFor(() =>
+      expect(commandsOf(asked, "ask_chat_restart")).toEqual([{ plane: PLANE, session: 12 }]),
+    );
+    expect(ended(asked)).toEqual([]);
   });
 
   it("lists a task's Send back above the line of its tab's menu: it ends nothing", async () => {

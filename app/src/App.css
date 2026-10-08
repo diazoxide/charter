@@ -1261,7 +1261,18 @@ button.show-more:focus-visible {
    The group gives way before the path does (it shrinks a thousand times faster), because the
    same two rows are on the task's row in the Chats list and in the palette; and after the
    gauge and the harness's name (above). So the breadcrumb's own thresholds hold as they are
-   once the two are gone. */
+   once the two are gone.
+
+   **It has two pixels to spare at its end** (`padding-right`). A short line is made up by
+   every thing on it at once, each in proportion to how fast it shrinks times how wide it is:
+   nothing waits for another to be gone. So while the gauge and the harness's name still had
+   all the room the line was short of, the group still gave its share, a thousandth of
+   theirs: under a ninth of a pixel. A wrapping line that is a ninth of a pixel short of its
+   last item wraps it, so "Close now" was never drawn on a line that was short at all, by
+   however little, and every line with a gauge on it is. Measured: "Stop" whole at 34px and
+   no "Close now", in half of a 1280px window with room for both. The group's share stays
+   under one pixel until the gauge and the name are down to their padding (it is at most
+   its own width, about 7rem, over a thousand), so two is spare. */
 .pane-task-ends {
   display: flex;
   flex: 0 1000 auto;
@@ -1269,8 +1280,10 @@ button.show-more:focus-visible {
   gap: 0 0.25rem;
   align-items: center;
   align-content: flex-start;
+  box-sizing: border-box;
   height: 1.25rem;
   min-width: 0;
+  padding-right: 2px;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -1340,6 +1353,15 @@ button.show-more:focus-visible {
   white-space: nowrap;
 }
 
+/* A refusal on that line is cut as the question is, and never clipped unread: its title says
+   it whole. */
+.pane-task-ends.asking .task-end-confirm .trouble {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .pane-task-ends.asking .task-end-confirm button {
   flex: none;
 }

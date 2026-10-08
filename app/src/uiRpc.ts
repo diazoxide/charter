@@ -33,13 +33,6 @@ export const commands = {
 	/**  Whether the bus answers now, so a restart onto it is worth offering. */
 	can_restart: boolean,
 } | null>("session_bus"),
-	/**
-	 *  Quit, and start again on the session bus, now that it answers. The operator's choice,
-	 *  from the window's notice: charter never does this by itself, because a restart ends every
-	 *  chat. It goes the way a quit goes — every plane writes what was open, so the launch after
-	 *  it offers them back — and the new launch is started last, at `Exit` ([`restart_if_asked`]).
-	 */
-	restartOnTheSessionBus: () => typedError<null, string>(__TAURI_INVOKE("restart_on_the_session_bus")),
 	/**  The vaults this launch's keychain copy left waiting, or nothing. */
 	vaultsToMove: () => __TAURI_INVOKE<{
 	/**
@@ -93,20 +86,6 @@ export const commands = {
 	 *  plane comes up in, and what it returns to when the last project is closed.
 	 */
 	openPlanes: () => __TAURI_INVOKE<PlaneId[]>("open_planes"),
-	/**
-	 *  Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
-	 *  released. Every window drawing it is told `plane-closed` and takes its tab out, whoever
-	 *  asked (#1242).
-	 * 
-	 *  **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
-	 *  a plane closed here can be opened again — by this process or another — with everything
-	 *  still in it.
-	 * 
-	 *  Its opposite is `opener::open_plane`, which is gated: opening a plane runs what its record
-	 *  names, so it happens behind the operator's yes (ADR 0035). Closing one needs no gate — it
-	 *  only ever does less.
-	 */
-	closePlane: (plane: PlaneId) => typedError<null, string>(__TAURI_INVOKE("close_plane", { plane })),
 	/**
 	 *  The planes this machine remembers, each checked against the disk, with what was dropped.
 	 * 
@@ -183,14 +162,6 @@ export const commands = {
 	 */
 	after_update: boolean,
 } | null, string>(__TAURI_INVOKE("relaunch_ask")),
-	/**
-	 *  The operator's answer to [`relaunch_ask`] — or `ReopenAll` from a window that had nothing to
-	 *  ask. **Every launch sends one**, because the launch's own project is put back here and
-	 *  nowhere else; a second answer, from a window that reloaded, changes nothing.
-	 * 
-	 *  On a blocking thread because the answer starts every chat the launch's project held.
-	 */
-	relaunch: (choice: RelaunchChoice) => typedError<null, string>(__TAURI_INVOKE("relaunch", { choice })),
 	/**
 	 *  A window says what it is holding: its projects as tabs, and which one is in front.
 	 * 
@@ -502,22 +473,6 @@ export const commands = {
 	 */
 	importInstructions: (plane: PlaneId, workspace: string, chosen: ChosenInstruction[]) => typedError<number, string>(__TAURI_INVOKE("import_instructions", { plane, workspace, chosen })),
 	/**
-	 *  Starts run `run` (1 or 2) of the first task in the repo clone at `cwd`, on `profile`, as
-	 *  `persona`, with the task typed and unsent.
-	 */
-	firstTaskRun: (plane: PlaneId, cwd: string, profile: string, persona: string | null, run: number, columns: number, rows: number) => typedError<FirstTaskRun, string>(__TAURI_INVOKE("first_task_run", { plane, cwd, profile, persona, run, columns, rows })),
-	/**
-	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
-	 *  the operator's shell.
-	 */
-	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
-	/**
-	 *  A shell tab in one folder of a branch (FM-10): the operator's own shell, as `open_session`
-	 *  with no program starts it, in a folder the core resolved. `""` is the branch's own folder.
-	 *  Refused, in the core's sentence, for a folder outside the branch, a link or git's own.
-	 */
-	openShellInBranch: (plane: PlaneId, workspace: string, repo: string, piece: string | null, folder: string, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_shell_in_branch", { plane, workspace, repo, piece, folder, name, columns, rows })),
-	/**
 	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
 	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
 	 */
@@ -571,47 +526,6 @@ export const commands = {
 	 */
 	chatsThatWouldNotStart: (plane: PlaneId) => typedError<NotStarted[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
 	/**
-	 *  Retry now (NO-3): starts the chat with id `id` that this launch could not start, the way
-	 *  the launch tried to. It is the chat as the window draws it, or why it still did not start —
-	 *  and then it is still recorded, with that reason.
-	 * 
-	 *  On a blocking thread, as `start_chat` is: a chat on a profile resolves its launch and checks
-	 *  its program before it runs, and the window must not wait on that.
-	 */
-	retryChatThatDidNotStart: (plane: PlaneId, id: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("retry_chat_that_did_not_start", { plane, id, columns, rows })),
-	/**
-	 *  Forget this chat (NO-3): drops the chat with id `id` that this launch could not start from
-	 *  the record. Kept otherwise, on purpose, so a moved directory never deletes a chat.
-	 */
-	forgetChatThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, id })),
-	/**
-	 *  Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
-	 *  now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
-	 *  new one as the window draws it. The old one is ended here once the new one has started; a
-	 *  refused start ends nothing. On a blocking thread, as `start_chat` is.
-	 */
-	startChatFresh: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("start_chat_fresh", { plane, session, columns, rows })),
-	/**
-	 *  **Restart chat** (#1428): the person asks for chat `session` to be restarted on its
-	 *  conversation, from its tab's menu, from the Notice after a sandbox setting changed, or
-	 *  from Restart now on a Notice (#1362). It is owed the restart from here on, and the window
-	 *  drives it with `restart_chat` once the chat's turn has ended.
-	 * 
-	 *  **The person's action only.** This is a command of the window; no hook line, and nothing
-	 *  else a chat can send, reaches it.
-	 */
-	askChatRestart: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ask_chat_restart", { plane, session })),
-	/**
-	 *  **Restarts chat `session`**: the same chat on its conversation, started again with the
-	 *  project's sandbox as it is compiled now and what the chat was granted, and told, as its
-	 *  first message, what was allowed where something was (#1342). The one restart: a sandbox
-	 *  grant, the persona grants a person allowed (#1362) and Restart chat (#1428) all come here.
-	 *  The window asks once the chat's turn has ended; a chat owed no restart is refused, and one
-	 *  waiting on a permission prompt is not restarted yet. The answer is the new one as the
-	 *  window draws it, in the old one's place.
-	 */
-	restartChat: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<ChatRestart, string>(__TAURI_INVOKE("restart_chat", { plane, session, columns, rows })),
-	/**
 	 *  **The chats this project has open that run under a sandbox other than the one the
 	 *  project's settings decide for them now** (#1428), or none. The window asks when the
 	 *  project's settings change, when its chats do, and after each of its own sandbox commands
@@ -661,11 +575,6 @@ export const commands = {
 	 *  remembered project can be on a share that is not coming back.
 	 */
 	thisMachine: () => typedError<ThisMachine, string>(__TAURI_INVOKE("this_machine")),
-	/**
-	 *  Forgets a project on this machine: its recent, its approval, its pins and any tab a launch
-	 *  would put back. A project that is gone from the disk is forgotten the same way.
-	 */
-	forgetProject: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_project", { path })),
 	/**
 	 *  Re-points a remembered project that is gone (moved, or on a disk that is not here) at a
 	 *  folder the operator picked, and answers the project found there (NO-5). The folder is
@@ -748,15 +657,6 @@ export const commands = {
 	quitCancelled: () => __TAURI_INVOKE<void>("quit_cancelled"),
 	/**  Whether every agent is stopped, for a window drawing its title bar. */
 	agentsStopped: () => __TAURI_INVOKE<boolean>("agents_stopped"),
-	/**
-	 *  The title bar's stop: every chat and shell charter started, in every project and window,
-	 *  ended, and no chat started until re-armed. Answers how many it stopped, or the sentence
-	 *  saying the stop holds here but was not kept on disk.
-	 * 
-	 *  On a blocking thread, because ending takes about a second and the window must go on drawing
-	 *  while it does. Every window is told the switch's state once it is done, whichever way.
-	 */
-	stopEveryAgent: () => typedError<number, string>(__TAURI_INVOKE("stop_every_agent")),
 	/**  The title bar's re-arm: chats may start again. Nothing that was stopped is restarted. */
 	rearmAgents: () => typedError<null, string>(__TAURI_INVOKE("rearm_agents")),
 	/**  Hides the window, which is what its close button does. Every session keeps running. */
@@ -875,25 +775,6 @@ export const commands = {
 	 *  its report.
 	 */
 	clearFinishedTasks: (plane: PlaneId, ids: string[]) => typedError<number, string>(__TAURI_INVOKE("clear_finished_tasks", { plane, ids })),
-	/**
-	 *  **Reopen** on a finished task's row (#1485): a NEW chat on the conversation the task ended
-	 *  in, as an ordinary chat with a tab ([`finished::reopen`]). It is no longer a task: it owes
-	 *  nobody a report, and the chat that asked is told nothing. The answer is the chat as the
-	 *  window draws it. The task's row goes; its dispatch record stays.
-	 */
-	reopenFinishedTask: (plane: PlaneId, id: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("reopen_finished_task", { plane, id, columns, rows })),
-	/**
-	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
-	 *  given its conversation where it can be, and told the record in its briefing
-	 *  (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
-	 *  `resumed` or `fresh` says which happened.
-	 * 
-	 *  `instead_of` is the window saying the chat it resumed this record into, by its number, ended
-	 *  before its harness reported a session — the harness could not bring the conversation back —
-	 *  so the same record starts fresh this time, and says so. It is **the same chat**, under its
-	 *  id, in a run that begins `fresh` (ADR 0066), and not a second one. It may already be closed.
-	 */
-	resumeSession: (plane: PlaneId, path: string, name: string, insteadOf: number | null, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("resume_session", { plane, path, name, insteadOf, columns, rows })),
 	/**
 	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
 	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.
@@ -1087,33 +968,6 @@ export const commands = {
 	 */
 	approveProfile: (plane: PlaneId, name: string, shown: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { plane, name, shown })),
 	/**
-	 *  Starts a chat on a harness profile, with a persona.
-	 * 
-	 *  A command of its own rather than a flag on `open_session`, so neither can be mistaken
-	 *  for the other by a caller passing null: this one goes through every gate a launch has,
-	 *  and that one opens the operator's shell.
-	 * 
-	 *  `boxes.show_footer` is the picker's footer checkbox, and it is a property of THIS chat
-	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
-	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
-	 *  environment its harness was started with, and no later click can change it.
-	 * 
-	 *  `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
-	 *  instead of its default. It is held to the same rule a rename is, and **a refusal comes back
-	 *  before anything starts**, so a name charter will not draw never costs a chat.
-	 * 
-	 *  `boxes.new_branch` is the picker's "on a new branch" box (GL-1). When `cwd` is a repo's clone
-	 *  and it is set, the chat starts on a branch of its own, cut for it and taken back if the start is
-	 *  refused (`worktrees::on_a_branch`); anywhere else it changes nothing. The pane is told the
-	 *  branch first, then whatever the start found to say.
-	 * 
-	 *  **Off the main thread** (GL-1 review S3): cutting a branch checks a tree out, which takes
-	 *  seconds on a large repo, and the window froze for it. Two starts in one clone are still
-	 *  cut one at a time, by `chatpiece`'s lock per clone. Starting a session off the main thread
-	 *  is what a relaunch's put-back already does.
-	 */
-	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, boxes: Boxes, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, boxes, columns, rows })),
-	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
 	 *  Called for every chat the sidebar draws. `worktree::locate` is path arithmetic and spawns
@@ -1253,26 +1107,6 @@ export const commands = {
 	 *  to be relaunched after it, and says so rather than doing it under the operator's sessions.
 	 */
 	installUpdate: () => __TAURI_INVOKE<void>("install_update"),
-	/**
-	 *  Restart into the update this process installed, and put back what was open
-	 *  (charter-app#251).
-	 * 
-	 *  Every plane's record is written first, saying it was written by a restart to update, and
-	 *  every session is ended — [`crate::planes::Planes::let_go_of_all_to_update`] — so all of it
-	 *  is on disk before the restart is asked for. The launch that follows asks #250's question,
-	 *  with "charter restarted to install an update." in it and **Reopen all** in front, and a
-	 *  launch that does not follow — the relaunch failed, the operator started charter by hand a
-	 *  day later — reads the same records and asks the same question.
-	 * 
-	 *  **Which chats are mid-turn is asked before this, by the window**, which is where each
-	 *  chat's state is drawn (`Updates.tsx`). By the time this runs the operator has said to go.
-	 * 
-	 *  Tauri's own restart, never one of charter's: `request_restart` runs the exit event first
-	 *  (the single-instance plugin gives up its socket there, so the new process is not handed
-	 *  straight back to this one), then starts the binary the bundle now names — on macOS read
-	 *  from the new `Info.plist`, because an update may have renamed it.
-	 */
-	restartToUpdate: () => typedError<null, string>(__TAURI_INVOKE("restart_to_update")),
 	/**
 	 *  What has contributed what to this window.
 	 * 
@@ -1548,14 +1382,6 @@ export const commands = {
 	 */
 	curationOffers: (plane: PlaneId, subjects: string[]) => typedError<Curations, string>(__TAURI_INVOKE("curation_offers", { plane, subjects })),
 	/**
-	 *  Opens a chat for one curation action on one subject, with the action's prompt typed into it
-	 *  once its harness has started, and never sent.
-	 * 
-	 *  The harness is the project's default profile, as a new chat's is; the persona and the
-	 *  directory are the core's answer. A refusal comes back before anything starts.
-	 */
-	curate: (plane: PlaneId, subject: string, action: string, columns: number, rows: number) => typedError<Curating, string>(__TAURI_INVOKE("curate", { plane, subject, action, columns, rows })),
-	/**
 	 *  One file, folder or range of lines of a branch, typed into chat `session` as a reference in
 	 *  its harness's syntax, and never sent — or copied, with the reason, where it cannot be typed
 	 *  now.
@@ -1564,23 +1390,8 @@ export const commands = {
 	first: number,
 	last: number,
 } | null, session: number) => typedError<Handed, string>(__TAURI_INVOKE("reference_into_chat", { plane, workspace, repo, piece, path, lines, session })),
-	/**
-	 *  Opens a chat on the project's default profile in the branch's own folder, with a reference
-	 *  to one of its files or folders — or a range of lines of a file — typed as its first prompt
-	 *  once its harness has started, and never sent. Where the harness cannot be typed into, the
-	 *  chat still opens and the reference is put on the clipboard.
-	 */
-	startChatHere: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, lines: {
-	first: number,
-	last: number,
-} | null, columns: number, rows: number) => typedError<StartedHere, string>(__TAURI_INVOKE("start_chat_here", { plane, workspace, repo, piece, path, lines, columns, rows })),
 	/**  Whether chat `session` is offered Smart close, and the answer the close dialog starts on. */
 	smartCloseOffer: (plane: PlaneId, session: number) => typedError<SmartCloseOffer, string>(__TAURI_INVOKE("smart_close_offer", { plane, session })),
-	/**
-	 *  Smart-closes a chat: sends it the prompt to write its session record, now or when its turn
-	 *  ends, and closes its tab when the record is saved.
-	 */
-	smartClose: (plane: PlaneId, session: number) => typedError<Phase, string>(__TAURI_INVOKE("smart_close", { plane, session })),
 	/**  Cancels a chat's smart close. The chat stays open and running. */
 	cancelSmartClose: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("cancel_smart_close", { plane, session })),
 	/**

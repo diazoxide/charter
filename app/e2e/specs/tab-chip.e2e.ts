@@ -41,6 +41,22 @@ async function tabNames(): Promise<string[]> {
   );
 }
 
+/** The strip as it is drawn: every tab's name, the one in front, and the chats on screen. */
+async function strip(): Promise<{ tabs: string[]; front: string | null; panes: number[] }> {
+  return browser.execute((at: string) => {
+    const tabs = [...(document.querySelector(at)?.querySelectorAll('[role="tab"]') ?? [])];
+    const name = (tab: Element) => tab.querySelector(".tab-name")?.textContent ?? "";
+    const front = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+    return {
+      tabs: tabs.map(name),
+      front: front ? name(front) : null,
+      panes: [...document.querySelectorAll('[data-testid="pane"]')].map((pane) =>
+        Number(pane.getAttribute("data-session") ?? -1),
+      ),
+    };
+  }, STRIP);
+}
+
 async function untilShows(text: string): Promise<void> {
   await browser.waitUntil(
     async () => {
@@ -312,33 +328,67 @@ describe("the chip a session's tab wears for its tasks", () => {
     wereAlreadyOpen = await tabNames();
     was = await browser.getWindowSize();
     await windowIs(1280, 800);
+    // **Each tab is waited for by itself, and by its name.** The pane in front already shows
+    // the harness's word from the tab before, so "a pane shows it" is true at once: without
+    // a wait of its own the next tab was pressed for while this one was still starting. And
+    // not by a count of the strip: one app serves the whole run, and a tab the spec before
+    // this one was still closing goes while this one opens, so "one more than there were"
+    // never comes true (CI, twice). A tab is new when the strip draws a name it had not.
+    mine = [];
     for (let opened = 0; opened < 3; opened++) {
-      // **Each tab is waited for by itself.** The pane in front already shows the harness's
-      // word from the tab before, so "a pane shows it" is true at once: without this the next
-      // tab was pressed for while this one was still starting, and the names read below were
-      // of a strip that was still filling (one tab on one machine, three with a name that
-      // then changed on another).
-      const had = (await tabNames()).length;
-      const front = await sessionInFront();
+      const known = new Set([...wereAlreadyOpen, ...(await tabNames()), ...mine]);
       await pressAndStart("New tab");
-      await browser.waitUntil(
-        async () => (await tabNames()).length === had + 1 && (await sessionInFront()) !== front,
-        { timeout: 30_000, interval: 250, timeoutMsg: "the new tab never came in front" },
-      );
+      let saw = "nothing was read";
+      let came: string | undefined;
+      await browser
+        .waitUntil(
+          async () => {
+            const now = await strip();
+            saw = JSON.stringify(now);
+            came = now.tabs.find((name) => name !== "" && !known.has(name));
+            return came !== undefined;
+          },
+          {
+            timeout: 30_000,
+            interval: 250,
+            timeoutMsg: `tab ${opened + 1} of 3 never came onto the strip`,
+          },
+        )
+        .catch((err: unknown) => {
+          // What the strip held, so a red run says what it saw.
+          throw new Error(
+            `${String(err)}; before the press: ${JSON.stringify([...known])}; last seen: ${saw}`,
+          );
+        });
       await untilShows(READY);
+      // Its name is read once it has stopped changing: a tab is named before its chat has
+      // told the window what it is called.
+      let last = "";
+      await browser
+        .waitUntil(
+          async () => {
+            const names = (await tabNames()).filter((name) => name !== "" && !known.has(name));
+            const settled = names.length === 1 && names[0] === last;
+            last = names[0] ?? "";
+            return settled;
+          },
+          {
+            timeout: 10_000,
+            interval: 400,
+            timeoutMsg: `tab ${opened + 1} of 3 never settled on a name`,
+          },
+        )
+        .catch(async (err: unknown) => {
+          throw new Error(`${String(err)}; the strip: ${JSON.stringify(await strip())}`);
+        });
+      mine.push(last);
     }
-    // And the names are read once they have stopped changing.
-    let last = "";
-    await browser.waitUntil(
-      async () => {
-        const now = (await tabNames()).join("|");
-        const settled = now === last;
-        last = now;
-        return settled;
-      },
-      { timeout: 10_000, interval: 400, timeoutMsg: "the strip's names never settled" },
-    );
-    mine = (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab));
+    // All three are drawn: a strip that had hidden one would be measuring something else.
+    const drawn = await strip();
+    if (!mine.every((name) => drawn.tabs.includes(name)))
+      throw new Error(
+        `the strip does not draw this file's three tabs ${JSON.stringify(mine)}: ${JSON.stringify(drawn)}`,
+      );
     await select(mine[0]);
     await browser.waitUntil(async () => (await sessionInFront()) > 0, { timeout: 10_000 });
     asker = await sessionInFront();

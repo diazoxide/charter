@@ -166,6 +166,36 @@ async function measuredEnds(pane: number) {
   }, pane);
 }
 
+/** Pane `pane`'s top line, and each thing on it: its class, its box, and what it holds. */
+async function lineOf(pane: number) {
+  return browser.execute((at: number) => {
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const line = frames[at]?.querySelector<HTMLElement>(".pane-corner.at-start > .pane-chips");
+    if (!line) return null;
+    const said = (el: HTMLElement) => {
+      const { left, right } = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return {
+        is: el.className,
+        left,
+        right,
+        holds: el.scrollWidth,
+        shrink: style.flexShrink,
+        least: style.minWidth,
+      };
+    };
+    return {
+      frame: frames[at].getBoundingClientRect().width,
+      controls: getComputedStyle(line).getPropertyValue("--pane-controls"),
+      line: said(line),
+      on: [...line.children].map((child) => said(child as HTMLElement)),
+      ways: [...line.querySelectorAll<HTMLElement>(".pane-task-ends > *")].map(said),
+    };
+  }, pane);
+}
+
 /** Takes away everything this file drew, and puts back every control it took away. */
 async function erase(): Promise<void> {
   await browser.execute(() => {
@@ -612,8 +642,13 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
     const ends = await measuredEnds(0);
     check("the two ways were not drawn", ends !== null, "is", true);
     if (ends === null) return;
-    expect(
-      ends.buttons.filter((button) => button.box.top < ends.group.bottom - 1 && !button.cut),
-    ).toHaveLength(2);
+    const whole = ends.buttons.filter(
+      (button) => button.box.top < ends.group.bottom - 1 && !button.cut,
+    );
+    // A red run says the line it measured: each thing on it, how wide it is drawn and how
+    // wide it would be with room, so what took the two ways' room is read from the log.
+    if (whole.length !== 2)
+      console.log(`pane-crumbs.e2e: the top line was ${JSON.stringify(await lineOf(0))}`);
+    expect(whole).toHaveLength(2);
   });
 });

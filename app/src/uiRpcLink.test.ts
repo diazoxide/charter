@@ -50,9 +50,9 @@ describe("the UI RPC's client", () => {
 
   it("reads a command's own error as the typed client's error", async () => {
     const link = await opened();
-    const closed = commands.closePlane("p2");
+    const asked = commands.openedChats("p2");
     link.host('{"ui":{"reply":{"re":1,"err":"that plane is not open"}}}');
-    expect(await closed).toEqual({ status: "error", error: "that plane is not open" });
+    expect(await asked).toEqual({ status: "error", error: "that plane is not open" });
   });
 
   it("matches each answer to its own call, in whatever order they come", async () => {
@@ -77,7 +77,7 @@ describe("the UI RPC's client", () => {
     const link = fakeLink();
     // Never welcomed: it ends unanswered when the link is forgotten.
     openUiRpc(link.transport, "0.4.0+9055f7a").catch(() => {});
-    await expect(commands.closePlane("p2")).rejects.toThrow("not open");
+    await expect(commands.openedChats("p2")).rejects.toThrow("not open");
     expect(link.sent).toEqual([{ ui: { hello: { build: "0.4.0+9055f7a" } } }]);
   });
 
