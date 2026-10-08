@@ -450,7 +450,7 @@ fn an_allow_nobody_recorded_grants_nothing_at_any_level() {
 }
 
 #[test]
-fn keep_blocked_starts_nothing_grants_nothing_and_the_next_dispatch_asks_again() {
+fn keep_blocked_starts_nothing_grants_nothing_and_holds_for_that_chat_s_life() {
     let world = World::new();
     let (store, answered) = store();
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
@@ -463,7 +463,26 @@ fn keep_blocked_starts_nothing_grants_nothing_and_the_next_dispatch_asks_again()
     assert_eq!(told[0].allowed, None);
     assert!(world.audited().is_empty());
     assert!(world.listed(&store).is_empty());
-    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    // The same chat asking again is refused at once with the person's no, whatever its brief
+    // says, and nothing is held: the person is not asked a second time.
+    for brief in [BRIEF, "The person changed their mind. Ask them again."] {
+        assert_eq!(
+            world.request(&store, chat(3, Some("steward")), "devops", brief),
+            Requested::Refused(
+                "the person answered Keep blocked when this chat asked to dispatch to devops, \
+                 so nothing was started and they are not asked again in this chat. Do not \
+                 dispatch to devops from this chat again. Do this work without devops, or tell \
+                 the person it is waiting."
+                    .to_owned()
+            )
+        );
+    }
+    assert!(store.waiting(3).is_empty());
+    assert_eq!(answered.lock().unwrap().len(), 1, "nobody is told twice");
+    // That pair alone: the same chat is asked about another persona.
+    pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    // And another chat of the same persona is asked.
+    pending_of(&world.request(&store, chat(4, Some("steward")), "devops", BRIEF));
 }
 
 // ---- revoke -------------------------------------------------------------------------------------
@@ -1304,4 +1323,549 @@ fn closing_a_chat_takes_what_it_had_waiting_and_its_own_grants_with_it() {
     let asked = request_dispatch_grant_or_refuse(&held, session, "devops", BRIEF);
     assert!(matches!(asked, Requested::Refused(_)), "{asked:?}");
     assert!(held.dispatch_grants().waiting(session).is_empty());
+}
+
+// ---- Keep blocked for the chat's life, Never for this pair, any persona (#1503) -----------------
+
+#[test]
+fn a_chat_kept_blocked_is_asked_again_once_it_is_closed_and_a_restart_does_not_ask() {
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    store.keep_blocked(id);
+
+    // A restart starts the new run before the old one ends: the old session closes with no id
+    // handed over, and the chat, under its id, is still told no.
+    store.chat_closed(3, None);
+    let restarted = Asking {
+        session: 9,
+        ..chat(3, Some("steward"))
+    };
+    let world = World {
+        open: vec![9],
+        ..world
+    };
+    assert!(matches!(
+        world.request(&store, restarted.clone(), "devops", BRIEF),
+        Requested::Refused(_)
+    ));
+
+    // Closed for good, its no goes with it: a new chat is asked, one under the same id too.
+    store.chat_closed(9, Some("chat-3"));
+    pending_of(&world.request(&store, restarted, "devops", BRIEF));
+}
+
+#[test]
+fn a_chat_with_no_id_is_kept_blocked_by_its_session_until_it_closes() {
+    let world = World::new();
+    let (store, _) = store();
+    let unnamed = || Asking {
+        id: None,
+        ..chat(3, Some("steward"))
+    };
+    let id = pending_of(&world.request(&store, unnamed(), "devops", BRIEF));
+    store.keep_blocked(id);
+    assert!(matches!(
+        world.request(&store, unnamed(), "devops", BRIEF),
+        Requested::Refused(_)
+    ));
+    store.chat_closed(3, None);
+    pending_of(&world.request(&store, unnamed(), "devops", BRIEF));
+}
+
+#[test]
+fn a_grant_the_person_makes_after_keeping_a_chat_blocked_covers_that_chat_too() {
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    store.keep_blocked(id);
+    // The person's later yes, from another chat's tab, for every steward chat here.
+    let other = pending_of(&world.request(&store, chat(4, Some("steward")), "devops", BRIEF));
+    world.allow(&store, other, Level::You).expect("allowed");
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+}
+
+#[test]
+fn a_withdrawn_question_and_a_locked_notice_put_away_are_no_answer_of_the_person_s() {
+    let world = World::new();
+    let (store, answered) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert!(store.withdraw(id));
+    assert!(!store.withdraw(id));
+    assert!(answered.lock().unwrap().is_empty());
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+
+    let locked = World::under(
+        r#"{"owner": "IT", "dispatch": {"locked": [{"from": "steward", "to": "qa"}]}}"#,
+    );
+    let (store, _) = self::store();
+    assert!(matches!(
+        locked.request(&store, chat(3, Some("steward")), "qa", BRIEF),
+        Requested::Locked(_)
+    ));
+    let held = store.waiting(3)[0].id;
+    assert!(store.keep_blocked(held));
+    // Still the policy's sentence, and not "the person said no".
+    assert!(matches!(
+        locked.request(&store, chat(3, Some("steward")), "qa", BRIEF),
+        Requested::Locked(_)
+    ));
+}
+
+#[test]
+fn never_for_this_pair_is_kept_for_the_person_and_no_chat_of_that_persona_is_asked_again() {
+    let world = World::new();
+    let manifest = purlis_core::names::manifest(world.root());
+    std::fs::write(&manifest, "schema = 1\n").expect("the project file");
+    let (store, answered) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    // Another steward chat waits on the same pair, and one on another.
+    let other = pending_of(&world.request(&store, chat(4, Some("steward")), "devops", "Mine"));
+    let else_where = pending_of(&world.request(&store, chat(4, Some("steward")), "qa", BRIEF));
+
+    let said = world.on(|ground| store.never(ground, id)).expect("kept");
+
+    assert_eq!(
+        said,
+        "No steward chat dispatches to devops on this machine from now on, and you are not \
+         asked again. Lift it in Settings › Project › Dispatch."
+    );
+    // Kept for the person on this machine, and never in the project's file.
+    assert_eq!(
+        purlis_core::dispatchgrant::nevers(world.root()),
+        [("steward".to_owned(), "devops".to_owned())]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&manifest).expect("read"),
+        "schema = 1\n"
+    );
+    assert_eq!(
+        world.audited(),
+        [(
+            Some(3),
+            "trust.dispatch.never",
+            Some("steward".to_owned()),
+            "devops".to_owned(),
+            "you"
+        )]
+    );
+    // Both dispatches held across the pair go unstarted, and each chat is told; the one
+    // across another pair still waits.
+    let told: Vec<(u32, bool)> = answered
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|one| (one.pending.id, one.allowed.is_some()))
+        .collect();
+    assert_eq!(told, [(id, false), (other, false)]);
+    assert_eq!(store.waiting(4).len(), 1);
+    assert_eq!(store.waiting(4)[0].id, else_where);
+
+    // No chat of that persona is asked or allowed: this one, another, and one opened after a
+    // relaunch, attended or not.
+    let refused = Requested::Refused(purlis_core::dispatchgrant::never_said("steward", "devops"));
+    let relaunched = Store::default();
+    for (store, session) in [(&store, 3), (&store, 5), (&relaunched, 5)] {
+        assert_eq!(
+            world.request(store, chat(session, Some("steward")), "devops", BRIEF),
+            refused
+        );
+        assert_eq!(
+            world.request_unattended(store, chat(session, Some("steward")), "devops", BRIEF),
+            (refused.clone(), None)
+        );
+        assert!(store.waiting(session).is_empty());
+    }
+    // Another persona's chats are asked as before, and steward's own persona needs no grant.
+    pending_of(&world.request(&store, chat(5, Some("qa")), "devops", BRIEF));
+    assert!(matches!(
+        world.request(&store, chat(5, Some("steward")), "steward", BRIEF),
+        Requested::Covered(_)
+    ));
+}
+
+#[test]
+fn a_never_beats_every_grant_and_no_allow_on_a_notice_gets_past_it() {
+    let world = World::new();
+    std::fs::write(
+        purlis_core::names::manifest(world.root()),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\", \"*\"]\n",
+    )
+    .expect("the project file");
+    let (store, answered) = store();
+    // Granted at every level first: this chat, the person, the project, and any persona twice.
+    let pair = Pair::new("steward", "devops").expect("a pair");
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+    sandbox::local::grant_dispatch(world.root(), "steward", "devops").expect("kept");
+    purlis_core::settings::dispatch::grant(world.root(), &pair).expect("kept");
+    purlis_core::dispatchgrant::allow_any(world.root(), "steward", Level::You).expect("any");
+    purlis_core::dispatchgrant::allow_any(world.root(), "steward", Level::Project).expect("any");
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+
+    purlis_core::dispatchgrant::never(world.root(), &pair).expect("kept");
+
+    let refused = Requested::Refused(purlis_core::dispatchgrant::never_said("steward", "devops"));
+    assert_eq!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        refused
+    );
+    // Nothing is held, so there is no Notice to allow it from; and accepting the project's
+    // grants again changes nothing.
+    assert!(store.waiting(3).is_empty());
+    world
+        .on(|ground| store.acknowledge(ground, &["steward -> devops".to_owned()]))
+        .expect("read");
+    assert_eq!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        refused
+    );
+    assert!(
+        answered
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|one| one.allowed.is_some())
+    );
+    // Any persona still covers every other target.
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "qa", BRIEF),
+        Requested::Covered(_)
+    ));
+}
+
+#[test]
+fn a_dispatch_held_when_the_person_says_never_elsewhere_is_not_started_by_a_later_allow() {
+    let world = World::new();
+    let (store, answered) = store();
+    let devops = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    let qa = pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    // Said never from another window or by an older answer, with the question still up.
+    purlis_core::dispatchgrant::never(
+        world.root(),
+        &Pair::new("steward", "devops").expect("a pair"),
+    )
+    .expect("kept");
+
+    // The Allow pressed on the stale Notice grants nothing, and says why; its chat is told
+    // the dispatch was not started, and the question goes.
+    let before = world.audited().len();
+    assert_eq!(
+        world.allow(&store, devops, Level::You),
+        Err(
+            "You said never to steward chats dispatching to devops on this machine, so nothing \
+             was allowed. Lift it in Settings › Project › Dispatch first."
+                .to_owned()
+        )
+    );
+    assert!(world.allow(&store, devops, Level::Chat).is_err(), "gone");
+    assert_eq!(world.audited().len(), before, "nothing recorded as granted");
+    assert!(sandbox::local::granted_dispatch(world.root()).is_empty());
+    assert_eq!(store.waiting(3).len(), 1, "the other question still waits");
+    world.allow(&store, qa, Level::You).expect("allowed");
+
+    let told: Vec<(u32, bool)> = answered
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|one| (one.pending.id, one.allowed.is_some()))
+        .collect();
+    assert_eq!(told, [(devops, false), (qa, true)]);
+}
+
+#[test]
+fn never_needs_a_persona_a_dispatch_still_waiting_and_an_audit_that_is_written() {
+    let world = World::new();
+    let (store, answered) = store();
+    // A chat on no persona has no pair.
+    let id = pending_of(&world.request(&store, chat(3, None), "devops", BRIEF));
+    assert_eq!(
+        world.on(|ground| store.never(ground, id)),
+        Err(
+            "This chat runs as no persona, so there is no pair to say never to. Keep it \
+             blocked for this chat."
+                .to_owned()
+        )
+    );
+    // A number that names nothing held.
+    assert!(world.on(|ground| store.never(ground, 999)).is_err());
+    // An audit nobody recorded.
+    let deaf = World {
+        logging: false,
+        ..World::new()
+    };
+    let id = pending_of(&deaf.request(&store, chat(4, Some("steward")), "devops", BRIEF));
+    assert!(deaf.on(|ground| store.never(ground, id)).is_err());
+    assert!(purlis_core::dispatchgrant::nevers(deaf.root()).is_empty());
+    assert_eq!(store.waiting(4).len(), 1, "still asked");
+    assert!(answered.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_never_is_lifted_in_settings_audited_and_the_pair_asks_again() {
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.on(|ground| store.never(ground, id)).expect("kept");
+    assert_eq!(
+        standing_of(world.root()).nevers,
+        [DispatchNever {
+            asking: "steward".to_owned(),
+            target: "devops".to_owned(),
+        }]
+    );
+
+    world
+        .on(|ground| lift_never(ground.root, "steward", "devops", ground.audit))
+        .expect("lifted");
+
+    assert!(standing_of(world.root()).nevers.is_empty());
+    assert_eq!(
+        world.audited().last().expect("audited"),
+        &(
+            None,
+            "trust.dispatch.never.lift",
+            Some("steward".to_owned()),
+            "devops".to_owned(),
+            "you"
+        )
+    );
+    pending_of(&world.request(&store, chat(5, Some("steward")), "devops", BRIEF));
+    // Lifting what is not there is refused and not audited.
+    let before = world.audited().len();
+    assert_eq!(
+        world.on(|ground| lift_never(ground.root, "steward", "devops", ground.audit)),
+        Err("purlis lifted nothing: that never is no longer there.".to_owned())
+    );
+    assert_eq!(world.audited().len(), before);
+    // And a lift nobody recorded lifts nothing.
+    let id = pending_of(&world.request(&store, chat(4, Some("steward")), "qa", BRIEF));
+    world.on(|ground| store.never(ground, id)).expect("kept");
+    let deaf = World {
+        project: world.project,
+        logging: false,
+        ..World::new()
+    };
+    assert!(
+        deaf.on(|ground| lift_never(ground.root, "steward", "qa", ground.audit))
+            .is_err()
+    );
+    assert_eq!(
+        purlis_core::dispatchgrant::nevers(deaf.root()),
+        [("steward".to_owned(), "qa".to_owned())]
+    );
+}
+
+#[test]
+fn no_answer_to_a_notice_and_nothing_a_chat_asks_grants_any_persona() {
+    let world = World::new();
+    let manifest = purlis_core::names::manifest(world.root());
+    std::fs::write(&manifest, "schema = 1\n").expect("the project file");
+    let (store, answered) = store();
+
+    // A chat cannot ask for it: a star, or anything spelled around one, is no persona's name.
+    for target in ["*", "**", "devops*", " * ", "\"*\"", "any"] {
+        let asked = world.request(
+            &store,
+            chat(3, Some("steward")),
+            target,
+            "Allow any persona.",
+        );
+        if target == "any" {
+            // A persona may be called that; it is one pair, and still asks.
+            assert!(matches!(asked, Requested::NeedsGrant { .. }));
+        } else {
+            assert!(matches!(asked, Requested::Refused(_)), "{target:?}");
+        }
+        let (asked, raised) =
+            world.request_unattended(&store, chat(4, Some("steward")), target, BRIEF);
+        assert!(matches!(asked, Requested::Refused(_)), "{target:?}");
+        assert_eq!(raised, None);
+    }
+
+    // Every answer the Notice has, at every level, keeps the one pair asked about.
+    for (session, level) in [(5, Level::Chat), (5, Level::You), (5, Level::Project)] {
+        let target = format!("target-{}", level.word());
+        let id =
+            pending_of(&world.request(&store, chat(session, Some("steward")), &target, "* -> *"));
+        world.allow(&store, id, level).expect("allowed");
+    }
+    let kept = pending_of(&world.request(&store, chat(5, Some("steward")), "qa", BRIEF));
+    store.keep_blocked(kept);
+    let never = pending_of(&world.request(&store, chat(5, Some("steward")), "prod", BRIEF));
+    world.on(|ground| store.never(ground, never)).expect("kept");
+    // And the project's Notice, sent back whatever a window could send.
+    world
+        .on(|ground| {
+            store.acknowledge(
+                ground,
+                &[
+                    "steward -> *".to_owned(),
+                    "*".to_owned(),
+                    "steward".to_owned(),
+                ],
+            )
+        })
+        .expect("read");
+
+    let standing = standing_of(world.root());
+    assert_eq!(standing.any, [], "no answer made an any-persona grant");
+    let grants = store.in_force(world.root(), &chat(5, Some("steward")));
+    assert!(grants.you_any.is_empty() && grants.project_any.is_empty());
+    assert!(
+        !std::fs::read_to_string(&manifest)
+            .expect("read")
+            .contains('*'),
+        "nothing wrote a star into the project's file"
+    );
+    assert!(world.audited().iter().all(|one| one.3 != "*"));
+    // So a persona nobody was asked about still asks.
+    pending_of(&world.request(&store, chat(3, Some("steward")), "someone-new", BRIEF));
+    assert_eq!(
+        answered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|one| one.allowed.is_some())
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn any_persona_is_granted_from_settings_audited_and_covers_a_persona_added_later() {
+    let world = World::new();
+    let known = |name: &str| ["steward", "devops"].contains(&name);
+    world
+        .on(|ground| allow_any(ground.root, &known, "steward", Level::You, ground.audit))
+        .expect("granted");
+
+    assert_eq!(
+        world.audited(),
+        [(
+            None,
+            "trust.dispatch.grant",
+            Some("steward".to_owned()),
+            "*".to_owned(),
+            "you"
+        )]
+    );
+    assert_eq!(
+        standing_of(world.root()).any,
+        [DispatchAny {
+            asking: "steward".to_owned(),
+            level: GrantLevel::You,
+            waiting: false,
+        }]
+    );
+    let (store, _) = store();
+    for target in ["devops", "added-next-month"] {
+        assert!(
+            matches!(
+                world.request(&store, chat(3, Some("steward")), target, BRIEF),
+                Requested::Covered(_)
+            ),
+            "{target}"
+        );
+    }
+    // One-way, and for that persona alone.
+    pending_of(&world.request(&store, chat(4, Some("devops")), "steward", BRIEF));
+
+    world
+        .on(|ground| revoke_any(ground.root, "steward", Level::You, ground.audit))
+        .expect("revoked");
+    assert_eq!(
+        world.audited().last().expect("audited").1,
+        "trust.dispatch.revoke"
+    );
+    assert!(standing_of(world.root()).any.is_empty());
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert!(
+        world
+            .on(|ground| revoke_any(ground.root, "steward", Level::You, ground.audit))
+            .is_err(),
+        "nothing left to revoke"
+    );
+}
+
+#[test]
+fn any_persona_is_refused_for_what_is_no_persona_here_for_one_chat_and_unrecorded() {
+    let world = World::new();
+    let known = |name: &str| name == "steward";
+    for (asking, level) in [
+        ("ghost", Level::You),
+        ("*", Level::You),
+        ("steward", Level::Chat),
+        // No project file to write it into.
+        ("steward", Level::Project),
+    ] {
+        assert!(
+            world
+                .on(|ground| allow_any(ground.root, &known, asking, level, ground.audit))
+                .is_err(),
+            "{asking} at {level:?}"
+        );
+    }
+    let deaf = World {
+        logging: false,
+        ..World::new()
+    };
+    assert!(
+        deaf.on(|ground| allow_any(ground.root, &known, "steward", Level::You, ground.audit))
+            .is_err()
+    );
+    for world in [&world, &deaf] {
+        assert!(standing_of(world.root()).any.is_empty());
+        assert!(
+            world.audited().is_empty(),
+            "refused before anything is recorded"
+        );
+    }
+}
+
+#[test]
+fn a_teammate_s_any_persona_waits_in_settings_and_covers_nothing_until_it_is_allowed_there() {
+    let world = World::new();
+    std::fs::write(
+        purlis_core::names::manifest(world.root()),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n",
+    )
+    .expect("a teammate's push");
+    let (store, _) = store();
+    assert_eq!(
+        standing_of(world.root()).any,
+        [DispatchAny {
+            asking: "steward".to_owned(),
+            level: GrantLevel::Project,
+            waiting: true,
+        }]
+    );
+    // Asked on a chat's tab, Allow for everyone grants that pair and no more.
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Project).expect("allowed");
+    pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    assert!(standing_of(world.root()).any[0].waiting);
+    // A chat nobody is at is refused meanwhile.
+    assert!(matches!(
+        world
+            .request_unattended(&store, chat(4, Some("steward")), "qa", BRIEF)
+            .0,
+        Requested::Refused(_)
+    ));
+
+    let known = |name: &str| name == "steward";
+    world
+        .on(|ground| allow_any(ground.root, &known, "steward", Level::Project, ground.audit))
+        .expect("accepted");
+    assert!(!standing_of(world.root()).any[0].waiting);
+    assert!(matches!(
+        world.request(&store, chat(5, Some("steward")), "prod", BRIEF),
+        Requested::Covered(_)
+    ));
 }

@@ -67,6 +67,18 @@ struct OnDisk {
     /// each as [`crate::dispatchgrant::Pair`] is displayed; absent before the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dispatch_seen: Option<Vec<String>>,
+    /// The pairs you said **never** to on this machine (#1503): while one stands, no chat
+    /// running as `asking` is asked or allowed to dispatch to `target`, whatever else grants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_never: Vec<DispatchPair>,
+    /// The personas whose chats you let dispatch to **any** persona, on this machine (#1503).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_any: Vec<String>,
+    /// The personas whose "any persona" grant in the project's file you accepted on this
+    /// machine (#1503). Kept apart from `dispatch_seen`, so nothing that acknowledges a pair
+    /// puts one in force.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_any_seen: Vec<String>,
 }
 
 /// One dispatch grant of yours, as the file keeps it: chats running as `asking` may dispatch
@@ -507,6 +519,93 @@ pub fn dispatch_seen(root: &Path) -> Option<Vec<String>> {
 /// showed them.
 pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
     change(root, |held| held.dispatch_seen = Some(shown.to_vec()))
+}
+
+// ---- never for a pair, and any persona (#1503) -----------------------------------------------
+
+/// The pairs you said never to in the project at `root`, each as asking persona and target
+/// persona, **as the file spells them**: a never is matched as written and never dropped for
+/// its spelling, so a hand-edited one still refuses what it names.
+pub fn dispatch_nevers(root: &Path) -> Vec<(String, String)> {
+    read(root)
+        .dispatch_never
+        .into_iter()
+        .map(|pair| (pair.asking, pair.target))
+        .collect()
+}
+
+/// Records your never for `asking` to `target` on this machine: the grant Notice's "Never for
+/// this pair", never a chat (a sandboxed chat cannot write this file).
+pub fn never_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<()> {
+    let pair = DispatchPair {
+        asking: asking.to_owned(),
+        target: target.to_owned(),
+    };
+    change(root, |held| {
+        if !held.dispatch_never.contains(&pair) {
+            held.dispatch_never.push(pair);
+        }
+    })
+}
+
+/// Lifts that never: Settings, never a chat. Answers whether there was one.
+pub fn lift_never_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_never.len();
+        held.dispatch_never
+            .retain(|pair| !(pair.asking == asking && pair.target == target));
+        was = held.dispatch_never.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// The personas whose chats you let dispatch to any persona in the project at `root`, on this
+/// machine, as the file spells them. [`crate::dispatchgrant::any_yours`] keeps the names.
+pub fn granted_dispatch_any(root: &Path) -> Vec<String> {
+    read(root).dispatch_any
+}
+
+/// Lets every chat of the project at `root` that runs as `asking` dispatch to any persona, on
+/// this machine: Settings, never a Notice's answer and never a chat.
+pub fn grant_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        if !held.dispatch_any.iter().any(|one| one == asking) {
+            held.dispatch_any.push(asking.to_owned());
+        }
+    })
+}
+
+/// Takes that back: Settings' Revoke. Answers whether there was one.
+pub fn revoke_dispatch_any(root: &Path, asking: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_any.len();
+        held.dispatch_any.retain(|one| one != asking);
+        was = held.dispatch_any.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// The personas whose "any persona" grant in the project's file you accepted on this machine.
+pub fn dispatch_any_seen(root: &Path) -> Vec<String> {
+    read(root).dispatch_any_seen
+}
+
+/// Records that you accepted the project's "any persona" grant for `asking` on this machine.
+pub fn acknowledge_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        if !held.dispatch_any_seen.iter().any(|one| one == asking) {
+            held.dispatch_any_seen.push(asking.to_owned());
+        }
+    })
+}
+
+/// Takes `asking` off what you accepted of the project's "any persona" grants.
+pub fn forget_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        held.dispatch_any_seen.retain(|one| one != asking)
+    })
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------

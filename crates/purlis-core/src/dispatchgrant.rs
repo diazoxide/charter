@@ -43,6 +43,26 @@
 //! project's one-time Notice or on a chat's tab. One made in this window is acknowledged as it
 //! is written. So a chat nobody is at never dispatches under a pair nobody here has seen.
 //!
+//! # Any persona, and never (#1503)
+//!
+//! **A grant is one-way**: `steward -> devops` allows nothing from devops to steward. A report
+//! back needs none; a new task the other way is its own pair.
+//!
+//! **Any persona** is a grant with no named target ([`ANY`]): for you on this machine
+//! (`app/sandbox.json` `dispatch_any`) or for everyone in the project (`steward = ["*"]`,
+//! accepted per machine in `dispatch_any_seen`). [`allow_any`] is the one way it is made, and
+//! Settings is the one caller: a Notice's answer keeps a [`Pair`], and a pair's target is a
+//! persona's name. It covers a persona added later, since nothing reads the list of personas.
+//!
+//! **Never for a pair** ([`never`], [`Covers::Never`]) is the person's refusal on this machine
+//! (`app/sandbox.json` `dispatch_never`). It is read before any grant, so nothing granted at
+//! any level covers the pair, "any persona" and the project's file included, and nothing in the
+//! project's file lifts it. [`lift_never`] does, from Settings.
+//!
+//! **A record edited by hand fails closed.** A star among the named grants, or as an asking
+//! persona, grants nothing; a never is matched as it is spelled and never dropped; and a
+//! record that does not read grants nothing at all.
+//!
 //! # Policy
 //!
 //! An administrator's policy can lock all dispatch, or a pair
@@ -67,6 +87,11 @@ pub const TABLE: &str = crate::dispatchlimits::TABLE;
 
 /// The key in [`TABLE`] that holds the project's grants: asking persona to target personas.
 pub const KEY: &str = "grants";
+
+/// **Any persona**, as a target is spelled where a grant covers every persona (#1503): in
+/// `[dispatch.grants]` (`steward = ["*"]`), and in the audit. Not a persona's name, so no pair
+/// is ever made of it.
+pub const ANY: &str = "*";
 
 /// **Who may dispatch to whom**: chats running as `asking`, to `target`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,6 +153,13 @@ pub struct InForce {
     pub chat: Vec<ChatPair>,
     pub you: Vec<Pair>,
     pub project: Vec<Pair>,
+    /// The personas whose chats you let dispatch to any persona, on this machine (#1503).
+    pub you_any: Vec<String>,
+    /// The personas the project's file lets dispatch to any persona, each accepted on this
+    /// machine (#1503).
+    pub project_any: Vec<String>,
+    /// The pairs you said never to on this machine (#1503), as the record spells them.
+    pub never: Vec<(String, String)>,
 }
 
 impl InForce {
@@ -137,6 +169,10 @@ impl InForce {
     /// a pull brought in covers nothing here until a person allows it on the one-time Notice,
     /// or on a chat's tab. A grant made in this window is acknowledged as it is written.
     pub fn read(root: &Path, chat: Vec<ChatPair>) -> Self {
+        // An acceptance does not outlive what it accepted: one left behind is dropped here,
+        // where every dispatch is judged, so a star taken out of the file and put back later
+        // waits for a yes again.
+        forget_any_the_file_dropped(root);
         let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
         Self {
             chat,
@@ -145,7 +181,19 @@ impl InForce {
                 .into_iter()
                 .filter(|pair| seen.contains(&pair.to_string()))
                 .collect(),
+            you_any: any_yours(root),
+            project_any: any_of_the_project(root),
+            never: nevers(root),
         }
+    }
+
+    /// Whether you said never to `asking` dispatching to `target`.
+    pub fn refuses(&self, asking: Option<&str>, target: &str) -> bool {
+        asking.is_some_and(|asking| {
+            self.never
+                .iter()
+                .any(|(from, to)| from == asking && to == target)
+        })
     }
 
     /// The widest level a grant of `asking` to `target` is held at, if any is.
@@ -157,9 +205,14 @@ impl InForce {
                     .any(|pair| pair.asking == asking && pair.target == target)
             })
         };
-        if named(&self.project) {
+        // "Any persona" covers whoever the target is, a persona added after it was granted
+        // included: nothing here reads the list of personas.
+        let any = |personas: &[String]| {
+            asking.is_some_and(|asking| personas.iter().any(|one| one == asking))
+        };
+        if named(&self.project) || any(&self.project_any) {
             Some(Level::Project)
-        } else if named(&self.you) {
+        } else if named(&self.you) || any(&self.you_any) {
             Some(Level::You)
         } else if self
             .chat
@@ -183,13 +236,17 @@ pub enum Covers {
     /// An administrator's policy locks it: the policy's sentence, naming who set it. No Allow
     /// is offered, and no grant covers it.
     Locked(String),
+    /// The person said never to the pair on this machine (#1503): nothing starts, nobody is
+    /// asked, and no grant covers it, an "any persona" one and the project's included.
+    Never,
 }
 
 /// **Whether a chat running as `asking` may dispatch to `target`** under `grants` and `policy`.
 ///
 /// In order: a policy that locks all dispatch, which holds a chat's own persona too; a policy
-/// lock on the pair, a persona's own included where the policy names it twice; the same
-/// persona, which needs no grant; then a grant at any level.
+/// lock on the pair, a persona's own included where the policy names it twice; the person's
+/// never for the pair, which no grant lifts; the same persona, which needs no grant; then a
+/// grant at any level, a named pair or "any persona".
 /// `asking` is `None` for a chat on no persona, which only a grant for that chat covers.
 pub fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Locks) -> Covers {
     if policy.forbids_dispatch() {
@@ -203,6 +260,12 @@ pub fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Loc
     // persona's dispatch to itself.
     if let Some(why) = policy.dispatch_refused(asking, target) {
         return Covers::Locked(why);
+    }
+    // Before any grant is read, so nothing granted anywhere answers for a pair the person
+    // refused; and before the same-persona answer, so a never written by hand is held as
+    // written.
+    if grants.refuses(asking, target) {
+        return Covers::Never;
     }
     if asking == Some(target) {
         return Covers::Covered;
@@ -218,6 +281,8 @@ pub fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Loc
 pub struct Committed {
     /// Each pair it grants, in file order, once.
     pub pairs: Vec<Pair>,
+    /// Each asking persona it lets dispatch to any persona (`"*"` in its list), once (#1503).
+    pub any: Vec<String>,
     /// Each thing in it that grants nothing, as one sentence.
     pub refused: Vec<String>,
 }
@@ -250,6 +315,12 @@ pub fn committed(text: Option<&str>) -> Committed {
             continue;
         };
         for target in targets {
+            if target.as_str() == Some(ANY) && crate::personas::valid_name(asking) {
+                if !out.any.contains(asking) {
+                    out.any.push(asking.clone());
+                }
+                continue;
+            }
             match target.as_str().map(|target| Pair::new(asking, target)) {
                 Some(Ok(pair)) => {
                     if !out.pairs.contains(&pair) {
@@ -282,6 +353,147 @@ pub fn yours(root: &Path) -> Vec<Pair> {
         .iter()
         .filter_map(|(asking, target)| Pair::new(asking, target).ok())
         .collect()
+}
+
+// ---- never for a pair, and any persona (#1503) ------------------------------------------------
+
+/// The pairs you said never to in the project at `root`, on this machine, as the record spells
+/// them. **Matched as written**: one whose names are no persona's refuses nothing real, and is
+/// never read as anything wider.
+pub fn nevers(root: &Path) -> Vec<(String, String)> {
+    crate::sandbox::local::dispatch_nevers(root)
+}
+
+/// **Records the person's never for `pair`** on this machine: the grant Notice's "Never for
+/// this pair". Kept in `app/sandbox.json`, never the project's file, so it is yours alone and
+/// nothing a teammate commits lifts it.
+pub fn never(root: &Path, pair: &Pair) -> std::io::Result<()> {
+    crate::sandbox::local::never_dispatch(root, &pair.asking, &pair.target)
+}
+
+/// **Lifts the never for `asking` to `target`**: Settings' own action. Answers whether there
+/// was one. The names are taken as the record spells them, so one written by hand can be
+/// lifted too. What then covers the pair is whatever grant stands; with none, the next
+/// dispatch asks.
+pub fn lift_never(root: &Path, asking: &str, target: &str) -> std::io::Result<bool> {
+    crate::sandbox::local::lift_never_dispatch(root, asking, target)
+}
+
+/// What a chat is told when it asks across a pair the person said never to.
+pub fn never_said(asking: &str, target: &str) -> String {
+    let (asking, target) = (crate::shown::short(asking), crate::shown::short(target));
+    format!(
+        "the person said never to {asking} chats dispatching to {target} on this machine, so \
+         nothing was started and they were not asked. Do not dispatch to {target} again. Do \
+         this work without {target}, or tell the person it is waiting: only they lift it, in \
+         {SETTINGS}."
+    )
+}
+
+/// Where the person sees, takes back and lifts what they said of dispatch.
+pub const SETTINGS: &str = crate::dispatchunattended::SETTINGS;
+
+/// The personas whose chats you let dispatch to any persona in the project at `root`, on this
+/// machine. A name that is no persona's grants nothing: `"*"` there is not "everyone".
+pub fn any_yours(root: &Path) -> Vec<String> {
+    crate::sandbox::local::granted_dispatch_any(root)
+        .into_iter()
+        .filter(|asking| crate::personas::valid_name(asking))
+        .collect()
+}
+
+/// The personas the project's file at `root` lets dispatch to any persona, accepted here or
+/// not.
+pub fn any_committed_at(root: &Path) -> Vec<String> {
+    let text = crate::sandbox::read_plane_file(&crate::names::manifest(root))
+        .ok()
+        .flatten();
+    committed(text.as_deref()).any
+}
+
+/// The personas the project's file lets dispatch to any persona **and** you accepted on this
+/// machine: the only ones of the file's in force here, as a pulled pair waits for a yes
+/// (D-1437-R1). The acceptance is its own record, which no Notice's answer writes.
+pub fn any_of_the_project(root: &Path) -> Vec<String> {
+    let accepted = crate::sandbox::local::dispatch_any_seen(root);
+    any_committed_at(root)
+        .into_iter()
+        .filter(|asking| accepted.contains(asking))
+        .collect()
+}
+
+/// **Drops this machine's acceptance of each "any persona" grant the project's file no longer
+/// holds**, so the grant is not in force unasked if the file comes to hold it again. Best
+/// effort: an acceptance that could not be dropped still covers nothing while the file lacks
+/// the grant.
+pub fn forget_any_the_file_dropped(root: &Path) {
+    let accepted = crate::sandbox::local::dispatch_any_seen(root);
+    if accepted.is_empty() {
+        return;
+    }
+    let held = any_committed_at(root);
+    for asking in accepted.iter().filter(|one| !held.contains(one)) {
+        let _ = crate::sandbox::local::forget_dispatch_any(root, asking);
+    }
+}
+
+/// The project's "any persona" grants nobody on this machine has accepted: in the file, in
+/// force for no chat here.
+pub fn any_unaccepted(root: &Path) -> Vec<String> {
+    let accepted = crate::sandbox::local::dispatch_any_seen(root);
+    any_committed_at(root)
+        .into_iter()
+        .filter(|asking| !accepted.contains(asking))
+        .collect()
+}
+
+/// Why "any persona" is not granted for `asking` at `level`, before anything is written or
+/// audited; `Ok` where [`allow_any`] would keep it.
+pub fn can_allow_any(root: &Path, asking: &str, level: Level) -> Result<(), String> {
+    if !crate::personas::valid_name(asking) {
+        return Err(format!(
+            "{} is not a persona's name, so purlis keeps no dispatch grant for it.",
+            crate::shown::short(asking)
+        ));
+    }
+    match level {
+        Level::Chat => Err(
+            "Any persona is granted for you on this machine or for everyone in this project, \
+             never for one chat."
+                .to_owned(),
+        ),
+        Level::You => Ok(()),
+        Level::Project => crate::settings::dispatch::can_grant_any(root, asking),
+    }
+}
+
+/// **Lets chats running as `asking` dispatch to any persona**, for you on this machine
+/// ([`Level::You`]) or for everyone in the project ([`Level::Project`]): **Settings' explicit
+/// grant and nothing else's**. No answer to a grant Notice calls this, and no line a chat
+/// sends reaches it. It covers a persona added later; a never for a pair, a policy lock, the
+/// loop rule and the rule for a chat nobody is at all hold as they did.
+pub fn allow_any(root: &Path, asking: &str, level: Level) -> Result<(), String> {
+    can_allow_any(root, asking, level)?;
+    match level {
+        Level::Project => crate::settings::dispatch::grant_any(root, asking),
+        _ => crate::sandbox::local::grant_dispatch_any(root, asking)
+            .map_err(|why| format!("purlis could not keep the grant: {why}")),
+    }
+}
+
+/// **Takes back `asking`'s grant of any persona at `level`**: Settings' Revoke. Answers
+/// whether there was one. A pair granted by name stands as it did.
+pub fn revoke_any(root: &Path, asking: &str, level: Level) -> Result<bool, String> {
+    match level {
+        Level::Chat => Ok(false),
+        Level::You => crate::sandbox::local::revoke_dispatch_any(root, asking)
+            .map_err(|why| format!("purlis could not revoke it: {why}")),
+        Level::Project => {
+            let was = any_committed_at(root).iter().any(|one| one == asking);
+            crate::settings::dispatch::revoke_any(root, asking)?;
+            Ok(was)
+        }
+    }
 }
 
 /// The project's dispatch grants as they changed since this machine last told the person: what
@@ -366,26 +578,41 @@ pub fn forget_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
     crate::sandbox::local::acknowledge_dispatch(root, &seen)
 }
 
-/// **A dispatch grant or revoke, as the audit records it** (`trust.dispatch.grant`,
-/// `trust.dispatch.revoke`; ADR 0075 §4): who (the person, by scope, never a login), the level
+/// **A dispatch grant or revoke, or a never and its lifting, as the audit records it**
+/// (`trust.dispatch.grant`, `trust.dispatch.revoke`, `trust.dispatch.never`,
+/// `trust.dispatch.never.lift`; ADR 0075 §4): who (the person, by scope, never a login), the level
 /// and the pair. Which chat it came from, when and on which machine are the envelope's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Audited<'a> {
-    /// A grant made, or one taken back.
-    pub granted: bool,
+    /// What the person did.
+    pub act: Act,
     /// The asking persona; none for a chat on no persona.
     pub asking: Option<&'a str>,
     pub target: &'a str,
     pub level: Level,
 }
 
+/// What a person did to a dispatch grant, as [`Audited`] records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// A grant made: a pair, or any persona where the target is [`ANY`].
+    Grant,
+    /// A grant taken back.
+    Revoke,
+    /// "Never for this pair" (#1503): always at [`Level::You`].
+    Never,
+    /// A never lifted.
+    LiftNever,
+}
+
 impl Audited<'_> {
     /// The event's kind.
     pub fn kind(&self) -> &'static str {
-        if self.granted {
-            "trust.dispatch.grant"
-        } else {
-            "trust.dispatch.revoke"
+        match self.act {
+            Act::Grant => "trust.dispatch.grant",
+            Act::Revoke => "trust.dispatch.revoke",
+            Act::Never => "trust.dispatch.never",
+            Act::LiftNever => "trust.dispatch.never.lift",
         }
     }
 
@@ -477,3 +704,7 @@ pub fn shown_brief(brief: &str) -> ShownBrief {
 #[cfg(test)]
 #[path = "dispatchgrant_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dispatchgrant_never_tests.rs"]
+mod never_tests;

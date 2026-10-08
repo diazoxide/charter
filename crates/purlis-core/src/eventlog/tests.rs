@@ -1656,7 +1656,7 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
             plane,
             Some(3),
             &Audited {
-                granted: true,
+                act: crate::dispatchgrant::Act::Grant,
                 asking: Some("steward"),
                 target: "devops",
                 level: Level::You,
@@ -1686,7 +1686,7 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
             plane,
             None,
             &Audited {
-                granted: false,
+                act: crate::dispatchgrant::Act::Revoke,
                 asking: Some("steward"),
                 target: "devops",
                 level: Level::You,

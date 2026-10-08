@@ -100,6 +100,9 @@ pub enum Refusal {
     Unsandboxed(String),
     /// No grant that counts covers the pair.
     Missing(Missing),
+    /// The person said never to the pair on this machine (#1503): the asking persona and the
+    /// target.
+    Never(String, String),
 }
 
 impl Refusal {
@@ -107,6 +110,7 @@ impl Refusal {
     pub fn say(&self) -> String {
         match self {
             Self::Missing(missing) => missing.say(),
+            Self::Never(asking, target) => dispatchgrant::never_said(asking, target),
             Self::Unsandboxed(target) => {
                 let target = crate::shown::short(target);
                 format!(
@@ -214,6 +218,11 @@ pub fn answer_of(
 ) -> Answer {
     match answer {
         Covers::Locked(why) => Answer::Locked(why),
+        // The person's never, whatever stands beside it: said as it is said to any chat.
+        Covers::Never => Answer::Refused(Refusal::Never(
+            asking.unwrap_or_default().to_owned(),
+            target.to_owned(),
+        )),
         Covers::Covered if asking == Some(target) => Answer::Covered,
         Covers::Covered | Covers::NeedsGrant if !sandboxed => {
             Answer::Refused(Refusal::Unsandboxed(target.to_owned()))

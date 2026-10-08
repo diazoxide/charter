@@ -405,6 +405,7 @@ describe("a refused vault, on a pane whose chat has already asked that persona",
       "Allow for me on this machine",
       "Allow for everyone in this project",
       "Keep blocked",
+      "Never for this pair",
     ]);
     // The brief is under the answers, in the same box, in a box of its own that scrolls.
     const brief = screen.getByRole("region", { name: "Brief from the chat" });
