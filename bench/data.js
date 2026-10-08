@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791490255633,
+  "lastUpdate": 1791494497863,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3612,6 +3612,48 @@ window.BENCHMARK_DATA = {
             "value": 101.872724,
             "unit": "ms",
             "extra": "median of 5 runs: 101.068, 101.271, 101.873, 101.882, 102.175 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "1bab0fda317e95830c4dce7088309e48801933ad",
+          "message": "Evidence-only jobs run nightly only, and the tests are built in a step of their own\n\nfedora, windows and the preview-image builds ran on every push to main and\nagain nightly (V70). fedora alone took 20 minutes, so main was 28 minutes\nbehind a merge whose gating jobs finished in 18, and each merge held four more\nrunners. They gate nothing, so they now run on the nightly schedule only. A\nbreak on one of those platforms is reported the next night.\n\nThe rust job's cargo test step was 916 s of an 18 minute job with nothing to\nsay how much was compiling and linking 208 test binaries and how much was\nrunning them. Building with --no-run first puts that split in the step\ntimings of every run.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T01:08:38+04:00",
+          "tree_id": "090b5f49a8b5fd1ff6dca10c22393ca63a8bf3b1",
+          "url": "https://github.com/purlis/purlis/commit/1bab0fda317e95830c4dce7088309e48801933ad"
+        },
+        "date": 1791494496168,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.479823,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.479, 0.480, 0.480, 0.486, 0.493 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.2989405,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.183, 16.240, 16.299, 16.305, 16.401 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.494464,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.089, 101.415, 101.494, 101.739, 101.771 ms"
           }
         ]
       }
