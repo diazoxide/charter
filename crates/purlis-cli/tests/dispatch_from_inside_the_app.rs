@@ -1844,6 +1844,81 @@ fn a_refused_message_says_why_in_the_apps_words() {
 }
 
 #[test]
+fn a_task_the_person_asked_for_is_refused_to_the_asking_chat_in_words_that_say_so() {
+    // #1492, V100-70. The person asked devops from this chat's tab: chat 9 is listed under
+    // this chat and reports to it, and this chat's cancel, tell and answer for it are refused
+    // in the app's sentence, said whole, which says whose the task is.
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app_answering_tasks(&tmp, |what| match what {
+        What::Cancel { of } | What::Tell { to: of, .. } | What::Answer { to: of, .. } => {
+            Answer::No {
+                why: purlis_core::dispatched::asked_by_the_person(*of),
+            }
+        }
+        _ => Answer::Task(Box::new(Answered::Noted)),
+    });
+
+    for args in [
+        &["dispatch", "cancel", "9"][..],
+        &["dispatch", "tell", "9", "also check staging"],
+        &["dispatch", "answer", "9", "the blue one"],
+    ] {
+        let out = purlis_as(&root(&tmp), Some(&app), ASKING, args, "");
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert_eq!(text(&out.stdout), "", "{args:?}");
+        assert!(
+            text(&out.stderr).contains(
+                "purlis dispatch: the person asked for chat 9 themselves, from this chat's \
+                 tab, so it is theirs and not this chat's to wait on, tell, answer or cancel. \
+                 Nothing was sent. Its report comes to this chat when it has one."
+            ),
+            "{args:?}: {}",
+            text(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn the_list_marks_a_task_the_person_asked_for_as_theirs() {
+    // #1492: what `purlis dispatch list` prints in the asking chat for a task the person
+    // started from its tab, beside one the chat dispatched itself.
+    let tmp = daily();
+    let row = |chat, name: &str, by_person| Row {
+        chat,
+        name: name.to_owned(),
+        persona: Some("devops".to_owned()),
+        place: "alpha".to_owned(),
+        state: "running".to_owned(),
+        age_secs: Some(185),
+        by_person,
+        branch: None,
+        branch_stands: None,
+        finished: false,
+    };
+    let (app, _reading, _asked) = an_app_answering_tasks(&tmp, move |_| {
+        Answer::Task(Box::new(Answered::Listed {
+            rows: vec![row(8, "check the queue", false), row(9, "check prod", true)],
+        }))
+    });
+
+    let out = purlis_as(&root(&tmp), Some(&app), ASKING, &["dispatch", "list"], "");
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    let place = Place::Workspace("alpha".to_owned()).said();
+    assert_eq!(
+        text(&out.stdout),
+        format!(
+            "2 tasks under this chat:\n\
+             - chat 8 · 'check the queue' · devops · {place} · running · started 3m ago\n\
+             - chat 9 · 'check prod' · devops · {place} · running · started 3m ago · started \
+             by the person from this chat's tab: its report comes here, and it is not this \
+             chat's to wait on, tell, answer or cancel\n"
+        )
+    );
+}
+
+#[test]
 fn a_question_waits_for_its_answer_and_prints_it_as_data_from_the_asking_chat() {
     let tmp = daily();
     let (app, _reading, asked) = an_app_answering_tasks(&tmp, |what| match what {

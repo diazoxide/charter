@@ -1301,6 +1301,17 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* `asked by you` (#1492): after the state, and it goes with `in <workspace>`, before any name
+   and long before the state, which it never pushes. */
+.pane-crumbs .crumb-by {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  color: var(--text-muted);
+}
+
 /* **Words for a screen reader and for nobody else**: what a drawn separator stands for. Clipped
    to nothing rather than hidden, so it is read where it stands. */
 .hidden-words {
@@ -2907,6 +2918,14 @@ h2.sidebar-title .node-icon {
 
 .chats-section .chat .line.two > * + *::before {
   content: " · ";
+}
+
+/* Where a chat's work was handed off to (#1492): words in the row that go to that chat, and
+   say so under the pointer. Text of the line like the rest of it: no box, no height of its
+   own, and cut with the line. */
+.chats-section .chat .line.two .handed-off:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
 }
 
 /* How a folded row's finished tasks ended: each state's mark and its count. */

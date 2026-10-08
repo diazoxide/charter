@@ -615,8 +615,8 @@ pub struct HandedFromNote {
     /// The workspace it came from, or `plane root` for a chat that handed off from there
     /// (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
     pub workspace: String,
-    /// That chat's number: what the Chats section nests this one under while it is open.
-    /// Never drawn; the note says the name.
+    /// That chat's number: what the Chats section nests a task under while it is open, and
+    /// names a handoff's row by (#1492). Never drawn; the note says the name.
     pub chat: u32,
     /// Whether a dispatch started it as a task, which owes that chat a report; a handoff, where
     /// the work moved, is not one.
@@ -641,6 +641,11 @@ pub struct HandedFromNote {
     /// paused until that chat answers (#1484): its row says whom it is asking.
     #[specta(optional)]
     pub asking: Option<bool>,
+    /// Whether, as a task, the person asked for it themselves from that chat's tab (#1492,
+    /// V100-70): its row and its breadcrumb say `asked by you`. The app's own record of how it
+    /// was started, never a word a chat said.
+    #[specta(optional)]
+    pub by_person: Option<bool>,
 }
 
 impl HandedFromNote {
@@ -660,6 +665,8 @@ impl HandedFromNote {
             // ([`with_task_standing`]): not the chat's record, so not read here.
             outcome: None,
             asking: None,
+            by_person: (from.mode == purlis_core::reopen::Mode::Task && from.by_person)
+                .then_some(true),
         }
     }
 }

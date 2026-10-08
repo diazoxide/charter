@@ -913,6 +913,7 @@ mod tests {
         let refusals = [
             purlis_core::dispatchtalk::no_question("check the queue", 9),
             purlis_core::dispatched::not_yours(9),
+            purlis_core::dispatched::asked_by_the_person(9),
             purlis_core::dispatchtalk::NO_ASKING_CHAT.to_owned(),
             purlis_core::dispatchtalk::ALREADY_REPORTED.to_owned(),
             purlis_core::dispatchtalk::ASKED_BY_THE_PERSON.to_owned(),

@@ -84,8 +84,19 @@ const CHATS: ListedChat[] = [
   listed(6),
   // Idle, folded by itself over five finished tasks.
   listed(7),
-  // Idle, open over a finished task that ended without a report.
+  // Idle, open over a finished task that ended without a report. Its work went to two chats
+  // (#1492): the second line starts with where, under the longest name there is.
   listed(8),
+  // A handoff: a row of its own at the top, which says the chat it came from.
+  listed(10, { name: LONG, parent: 8, mode: "handoff", from: "steward 8" }),
+  listed(11, { name: "drop commons", parent: 8, mode: "handoff", from: "steward 8" }),
+  // A task the person asked for themselves, elsewhere, on a branch: the most a line two says.
+  task(12, 11, {
+    name: "devops 12",
+    byYou: true,
+    workspace: "volaticloud",
+    branch: "purlis/dispatch/asked-by-the-person",
+  }),
 ];
 
 /** The core's typed end for each of its words for one (`FinishedTask.how`, #1485). */
@@ -205,6 +216,9 @@ describe("the Chats list the e2e measures", () => {
       "below-summary",
       "finished-task",
       'class="line two"',
+      "handed off to drop commons and 1 more",
+      `from steward 8`,
+      "asked by you",
     ])
       expect(html, drawn).toContain(drawn);
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.two-lines.html");

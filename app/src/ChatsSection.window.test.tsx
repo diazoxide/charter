@@ -338,8 +338,8 @@ describe("the Chats section", () => {
   it("lists every running chat of the project as a tree of which chat started which", async () => {
     core([
       chat(1, "alpha"),
-      chat(2, "alpha", { from: by(1, "handoff"), label: "drop commons" }),
-      chat(3, "alpha", { from: by(2, "handoff", "drop commons") }),
+      chat(2, "alpha", { from: by(1, "task"), label: "drop commons" }),
+      chat(3, "alpha", { from: by(2, "task", "drop commons") }),
       chat(4, "beta", { persona: "devops" }),
     ]);
     render(<App />);
@@ -356,7 +356,7 @@ describe("the Chats section", () => {
     expect(row(tree, "devops 4").querySelector(".workspace")?.textContent).toBe("beta");
   });
   it("nests a chat that works in another workspace under the chat that asked, and names its workspace", async () => {
-    core([chat(1, "alpha"), chat(2, "beta", { persona: "devops", from: by(1, "handoff") })]);
+    core([chat(1, "alpha"), chat(2, "beta", { persona: "devops", from: by(1, "task") })]);
     render(<App />);
     const tree = await section();
 
@@ -375,7 +375,8 @@ describe("the Chats section", () => {
     core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
     render(<App />);
     const tree = await section();
-    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 steward 2"]));
+    // A handoff is a row of its own at the top, here as in the explorer (#1492).
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 2"]));
 
     const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
     await within(explorer).findByRole("treeitem", { name: /steward 2/ });
@@ -388,7 +389,7 @@ describe("the Chats section", () => {
     core([
       chat(1, "alpha"),
       chat(8, "alpha", { from: by(7, "handoff", "release notes") }),
-      chat(9, "beta", { from: by(8, "handoff", "steward 8") }),
+      chat(9, "beta", { from: by(8, "task", "steward 8") }),
     ]);
     render(<App />);
     const tree = await section();
@@ -556,7 +557,9 @@ describe("a task chat", () => {
     open.push(chat(3, "alpha", { persona: "devops", from: by(1, "handoff") }));
     arrive(open[2]);
     await waitFor(() => expect(tabNames()).toEqual(["steward 1", "devops 3"]));
-    expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "2 devops 3"]);
+    // And as a row of its own at the top: it is not a task of the chat it came from (#1492).
+    expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "1 devops 3"]);
+    expect(row(tree, "devops 3").querySelector(".from")?.textContent).toBe("from steward 1");
   });
 });
 
@@ -597,10 +600,13 @@ describe("an anonymous helper", () => {
   });
 });
 
-/** 1 in alpha started 2 in alpha, which started the task chat 3 in beta. 4 is on its own. */
+/**
+ * 1 in alpha asked 2 in alpha for a task, which asked the task chat 3 in beta. 4 is on its own.
+ * 2 was given a tab of its own, so it is where 3 opens. A handoff would not be under 1 (#1492).
+ */
 const threeDeep = () => [
   chat(1, "alpha"),
-  chat(2, "alpha", { from: by(1, "handoff"), label: "drop commons" }),
+  chat(2, "alpha", { from: { ...by(1, "task"), tab: true }, label: "drop commons" }),
   chat(3, "beta", { persona: "devops", from: by(2, "task", "drop commons") }),
   chat(4, "alpha"),
 ];
