@@ -9,7 +9,11 @@
   Allow for one chat covers that chat's tasks in that workspace. Settings › Project › Dispatch
   shows where each grant holds and lets you narrow or widen your own, and a project grant's for
   everyone, each asked first. "Any persona" can be limited the same way. A never is not: it
-  holds in every workspace. Grants you already have hold in any workspace, as before (#1505).
+  holds in every workspace, and so does Keep blocked for a chat. At the project's root there
+  is no workspace to limit a grant to, so the question and its answers say an Allow for you
+  or for the project holds in any workspace. A question asked again for another workspace
+  says where you already allowed the pair. Grants you already have hold in any workspace, as
+  before (#1505).
 
 ### Changed
 
@@ -27,7 +31,21 @@
   read grants nothing. A teammate's limited grant waits in Settings for your Accept. A grant
   counts only while its workspace is there, and a workspace made later under the name of one
   purlis saw removed inherits none: Settings shows the grant as covering nothing, with
-  **Remove**, and **Count it again** for the workspace that is there now. **What this does not
-  catch:** a workspace removed and made again with no dispatch and no look at Settings in
-  between is not noticed. Every grant, revoke and change of a grant's workspace is recorded in
+  **Remove**, and **Count it again** for the workspace that is there now. `purlis workspace
+  remove` and `purlis workspace rename` count the old name gone themselves. **A grant does not
+  follow a rename**: after `purlis workspace rename runners ci` the grants "in runners" cover
+  nothing until you set each one's workspace again in Settings, and the rename says how many
+  it left. No grant is kept for a workspace that is not there yet: allowing a handoff that
+  makes its workspace starts that one dispatch, and the next one asks. **What this does not
+  catch:** a workspace's folder removed and made again by hand, or by a pull, with no
+  dispatch and no look at Settings in between is not noticed. Every grant, revoke and change of a grant's workspace is recorded in
   purlis's event log with the workspace it holds in (#1505).
+- **An Allow that starts one dispatch is for the dispatch you read.** Where an Allow starts a
+  dispatch no grant covers (the list of pairs you said never to does not read, or the
+  workspace is not there yet), it starts that dispatch with that brief and no other, and
+  nothing of it is left once that dispatch has returned, or once you revoke the grant, say
+  never, or change its workspace (#1505).
+- **If you run two versions of purlis on one project:** a version from before this change that
+  rewrites this machine's record (`app/sandbox.json`) drops the grants you limited to a
+  workspace and what you accepted of the project's. Nothing widens: those dispatches ask
+  again (#1505).

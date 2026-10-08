@@ -262,7 +262,8 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
 
     assert_eq!(
         said,
-        "Allowed for this chat. The dispatch starts now, and the next one starts without asking."
+        "Allowed for this chat. The dispatch starts now, and the next one from this chat that \
+         works at the project's root starts without asking."
     );
     // The held dispatch is handed on to start, with the target's own grants.
     let started = answered.lock().unwrap().clone();

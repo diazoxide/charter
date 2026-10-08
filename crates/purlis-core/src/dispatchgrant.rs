@@ -909,6 +909,10 @@ pub enum Act {
     /// earlier persona of the name had (#1504): `asking` and `target` are both that name.
     /// Each grant it puts back in force is a [`Act::Grant`] after it.
     GiveBack,
+    /// **One dispatch allowed, and no grant kept** (#1505): the person's Allow on a question
+    /// about a task whose workspace is not there yet. `workspace` is that name, and `level`
+    /// the answer they pressed, which kept nothing.
+    Once,
 }
 
 impl Audited<'_> {
@@ -922,6 +926,7 @@ impl Audited<'_> {
             Act::Decline => "trust.dispatch.decline",
             Act::SetAside => "trust.dispatch.revoke",
             Act::GiveBack => "trust.dispatch.give_back",
+            Act::Once => "trust.dispatch.once",
         }
     }
 

@@ -43,7 +43,12 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * **Policy has the last word**: a pair an administrator's policy locks was refused already.
  * The Notice says so, with the policy's sentence and who set it, and offers no Allow.
  *
- * **Where an Allow holds** (#1505). Where the task works in a workspace (`works_in`), every
+ * **Where an Allow holds** (#1505), said on every question. At the project's root there is no
+ * workspace to limit a grant to: the sentence says an Allow for the person or the project
+ * holds in any workspace, and those two buttons say it too. Where the workspace is not there
+ * yet (`works_in_missing`), nothing is kept: one answer, **Allow this one dispatch**. Where
+ * the pair is already allowed in other workspaces (`allowed_in`), the sentence says so first,
+ * which is why the person is asked again. Where the task works in a workspace (`works_in`), every
  * Allow is for work in that workspace only, and the sentence says so. Under the answers and
  * above the brief the person may choose **In any workspace** for the two wider Allows; the
  * narrower one is preselected, and each new question starts from it. The narrower Allow is
@@ -96,10 +101,27 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   };
 
   /** Whether an Allow for the person or the project can be limited to the task's workspace. */
-  const limits =
-    first.works_in !== null &&
-    first.locked === null &&
-    first.levels.some((level) => level !== "chat");
+  const wider = first.locked === null && first.levels.some((level) => level !== "chat");
+  const limits = first.works_in !== null && !first.works_in_missing && wider;
+  /** At the project's root there is no workspace to limit a grant to: the two wider Allows
+   *  hold in any workspace, and each says so on its own button. */
+  const atRoot = first.works_in === null && wider;
+  /** The other workspaces this dispatch is already allowed in: why it is asked again. */
+  const before =
+    first.allowed_in.length === 0
+      ? ""
+      : ` You allowed this for work in ${first.allowed_in.join(", ")}.`;
+  /** Where an Allow holds, in a sentence. */
+  const holds =
+    first.works_in === null
+      ? atRoot
+        ? `${before} This task works at the project's root, which is no workspace: an Allow for you or for the project holds in any workspace.`
+        : before
+      : first.works_in_missing
+        ? `${before} ${first.works_in} is not a workspace of this project yet: an Allow starts this one dispatch and keeps no grant, so the next one asks again.`
+        : `${before} ${before === "" ? "The" : "This"} task works in ${first.works_in}: an Allow holds for work there only${
+            limits ? ", unless you choose any workspace below" : ""
+          }.`;
   const anywhere = limits && wide === first.id;
   // A group of radios with its own label, and no fieldset: a fieldset is as wide as its
   // longest word in some engines, and this has to fit a narrow pane.
@@ -194,7 +216,15 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   const never: NoticeAction[] =
     first.asking === null ? [] : [{ label: "Never for this pair", onPress: sayNever }];
   const allows: NoticeAction[] = ALLOWS.filter(([level]) => first.levels.includes(level)).map(
-    ([level, label]) => ({ label, onPress: () => allow(level) }),
+    ([level, label]) => ({
+      // An answer that keeps nothing is named as that, and one that holds everywhere says so.
+      label: first.works_in_missing
+        ? "Allow this one dispatch"
+        : atRoot && level !== "chat"
+          ? `${label}, in any workspace`
+          : label,
+      onPress: () => allow(level),
+    }),
   );
   const [one, ...others] = [...allows, keep, ...never];
   const fixes: readonly [NoticeAction, ...NoticeAction[]] = [one ?? keep, ...others];
@@ -218,10 +248,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       anything {first.target} can do, without asking you again. The grant covers the helper
       sub-agents {first.asking === null ? "this chat runs" : "those chats run"} too: what one of
       them asks is asked as its chat.
-      {first.works_in !== null &&
-        ` The task works in ${first.works_in}: an Allow holds for work there only${
-          limits ? ", unless you choose any workspace below" : ""
-        }.`}
+      {holds}
       {first.never_unread !== null &&
         ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}

@@ -43,13 +43,25 @@
 //! person made it; **the grant counts only while the two are equal**. So a workspace made
 //! under the name of one that was removed inherits nothing: the grant is shown as covering
 //! nothing, and the person removes it or sets its workspace again, which is the yes for the
-//! one that is there now. purlis has no workspace rename; one renamed by hand is the old name
-//! gone and a new one that no grant names.
+//! one that is there now.
 //!
-//! **What this does not catch**: a workspace removed and made again with no dispatch judged
-//! and Settings not read in between. Nothing was looked at, so nothing was counted, and the
-//! new one has the old one's grants. A workspace has no identity beside its name to tell the
-//! two apart by.
+//! **purlis's own workspace commands look** ([`noticed`]): `workspace remove` and `workspace
+//! rename` count the old name gone as they finish, and whatever makes a workspace folder
+//! (`create`, `fork`, `restore`, a handoff) looks before it makes one. **A grant does not
+//! follow a rename**: `purlis workspace rename runners ci` leaves the grants "in runners"
+//! covering nothing, in `ci` and in any `runners` made later, until the person sets each
+//! one's workspace again. The project's file names the workspace for teammates too, so
+//! rewriting it is not this command's to do. The rename says how many it left behind
+//! ([`naming`]).
+//!
+//! **No standing grant is made for a name that is no workspace** ([`grant_yours`],
+//! [`accept`], [`set_yours`] each refuse one): it would belong to whatever was made under
+//! that name next.
+//!
+//! **What this does not catch**: a workspace's folder removed and made again by hand, or by
+//! a pull, with no dispatch judged and Settings not read in between. Nothing looked, so
+//! nothing was counted, and the new one has the old one's grants. A workspace has no
+//! identity beside its name to tell the two apart by.
 //!
 //! # Never is not limited
 //!
@@ -285,13 +297,15 @@ impl Seen {
         }
         if !self.is_there(name) {
             return Some(format!(
-                "{shown} is not a workspace of this project now, so this grant covers nothing."
+                "{shown} is not a workspace of this project now, so this grant covers nothing. \
+                 A grant does not follow a workspace that was renamed: set its workspace \
+                 again, or remove it."
             ));
         }
         (self.gone(name) != seen).then(|| {
             format!(
-                "A workspace named {shown} was removed after this grant was made, so it \
-                 covers nothing in the one that is there now."
+                "A workspace named {shown} was removed or renamed after this grant was made, \
+                 so it covers nothing in the one that is there now."
             )
         })
     }
@@ -330,20 +344,69 @@ pub fn noticed(root: &Path) -> Seen {
     Seen::read(root)
 }
 
-/// **How many times `workspace` has been seen gone, as of now**: what a grant made or
-/// confirmed at this moment keeps. The name is looked at first, though no grant holds it yet,
-/// so a grant made for a workspace that is not there (a handoff about to make it) is made
-/// after that absence and counts once the workspace is.
-fn seen_now(root: &Path, workspace: &str) -> u32 {
-    let seen = Seen::read(root);
-    if seen.listed
-        && let Err(why) = local::note_dispatch_workspaces(root, &[workspace.to_owned()], &|name| {
-            seen.is_there(name)
-        })
-    {
-        tracing::warn!("purlis: a workspace that is gone was not recorded so ({why})");
+/// Why no standing grant is made for `workspace` now: it is no workspace of the project.
+/// **A grant made for a name that is no workspace would belong to whatever is made under
+/// that name next**, so none is ever kept for one.
+pub fn not_there_said(workspace: &str) -> String {
+    format!(
+        "{} is not a workspace of this project now, so purlis keeps no grant for it.",
+        crate::shown::short(workspace)
+    )
+}
+
+/// How many times `workspace` has been seen gone, where it is a workspace of the project
+/// now: what a grant made or confirmed at this moment keeps. `Err` where it is not one.
+fn there_now(root: &Path, workspace: &str) -> Result<u32, String> {
+    let seen = noticed(root);
+    if !seen.is_there(workspace) {
+        return Err(not_there_said(workspace));
     }
-    Seen::read(root).gone(workspace)
+    Ok(seen.gone(workspace))
+}
+
+/// **How many grants are limited to the workspace `name`** in the project at `root`: yours,
+/// and the project's file's. What `workspace rename` says it left behind.
+pub fn naming(root: &Path, name: &str) -> usize {
+    yours(root)
+        .iter()
+        .filter(|(one, _)| one.workspace == name)
+        .count()
+        + committed_at(root)
+            .iter()
+            .filter(|one| one.workspace == name)
+            .count()
+}
+
+/// What `workspace remove` and `workspace rename` say of the `count` dispatch grants limited
+/// to `old` that they left behind; `new` is what a rename called the workspace.
+pub fn left_behind_said(count: usize, old: &str, new: Option<&str>) -> String {
+    let (grants, they, cover, each) = if count == 1 {
+        (
+            "grant holds",
+            "It does",
+            "it covers",
+            "its workspace again, or remove it,",
+        )
+    } else {
+        (
+            "grants hold",
+            "They do",
+            "they cover",
+            "the workspace of each again, or remove it,",
+        )
+    };
+    let settings = crate::dispatchgrant::SETTINGS;
+    match new {
+        Some(new) => format!(
+            "{count} dispatch {grants} in '{old}' only. {they} not follow the rename: \
+             {cover} nothing in '{new}', and nothing in a workspace made as '{old}' later. Set \
+             {each} in {settings}."
+        ),
+        None => format!(
+            "{count} dispatch {grants} in '{old}' only. {they} not go to a workspace made as \
+             '{old}' later: {cover} nothing now. Set {each} in {settings}."
+        ),
+    }
 }
 
 /// Your grants limited to one workspace, in the project at `root`, each with what it had seen
@@ -380,6 +443,11 @@ pub fn accepted(root: &Path) -> Vec<(Limited, u32)> {
 /// The project's limited grants nobody on this machine has accepted: in the file, in force
 /// for no chat here. **Settings is where each is accepted** ([`accept`]); the project's
 /// one-time Notice does not name them.
+///
+/// **As the file writes them, and no more is checked here**: one whose workspace is not
+/// there, or whose names are no personas of the project now, is in this list too. A caller
+/// that offers them to the person asks [`Seen::why_not`] and the project's personas first;
+/// [`accept`] refuses a workspace that is not there.
 pub fn unaccepted(root: &Path) -> Vec<Limited> {
     let kept = local::dispatch_seen_in(root);
     committed_at(root)
@@ -445,13 +513,17 @@ pub fn in_force(root: &Path) -> Vec<(Level, Limited)> {
 /// grant Notice, an item the person answers afterwards, or Settings. The caller audits first.
 ///
 /// A limited grant is kept with what this machine has seen of its workspace now, so it holds
-/// for the workspace of that name the person is looking at.
+/// for the workspace of that name the person is looking at. **Refused, with nothing written,
+/// where that workspace is not one of the project's now** ([`not_there_said`]): the error's
+/// kind is [`std::io::ErrorKind::NotFound`]. A caller answering for a dispatch that waited
+/// may then start that one dispatch, and keeps nothing.
 pub fn grant_yours(root: &Path, pair: &Pair, within: &Within) -> std::io::Result<()> {
     match within {
         Within::Any => local::grant_dispatch(root, &pair.asking, &pair.target),
         Within::Workspace(workspace) => {
             let one = Limited::of(pair, workspace).map_err(std::io::Error::other)?;
-            let seen = seen_now(root, workspace);
+            let seen = there_now(root, workspace)
+                .map_err(|why| std::io::Error::new(std::io::ErrorKind::NotFound, why))?;
             local::keep_dispatch_in(root, Record::Mine, &one.on_disk(seen))
         }
     }
@@ -471,12 +543,13 @@ pub fn revoke_yours(root: &Path, one: &Limited) -> std::io::Result<bool> {
 
 /// **Accepts the project's limited grant `one` on this machine**: it records the acceptance,
 /// with what this machine has seen of the workspace now, and never writes the committed file.
-/// Refused where the file does not hold the grant.
+/// Refused where the file does not hold the grant, and where its workspace is not one of the
+/// project's now.
 pub fn accept(root: &Path, one: &Limited) -> Result<(), String> {
     if !committed_at(root).contains(one) {
         return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
     }
-    let seen = seen_now(root, &one.workspace);
+    let seen = there_now(root, &one.workspace)?;
     local::keep_dispatch_in(root, Record::Accepted, &one.on_disk(seen))
         .map_err(|why| format!("purlis could not record it as allowed on this machine: {why}"))
 }
@@ -553,13 +626,20 @@ pub fn set_yours(
     from: &Within,
     to: &Within,
 ) -> std::io::Result<bool> {
+    let seen = match to.workspace() {
+        Some(name) => Some(
+            there_now(root, name)
+                .map_err(|why| std::io::Error::new(std::io::ErrorKind::NotFound, why))?,
+        ),
+        None => None,
+    };
     local::move_dispatch_mine(
         root,
         asking,
         target,
         target == ANY,
         from.workspace(),
-        to.workspace().map(|name| (name, seen_now(root, name))),
+        to.workspace().zip(seen),
     )
 }
 

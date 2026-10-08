@@ -583,8 +583,12 @@ describe("a Notice in a pane's corner", () => {
 
   it("keeps the dispatch question's workspace choice under its answers and inside a narrow pane", async () => {
     // #1505. Where an Allow holds is chosen in the box under the line, above the brief. Drawn
-    // here with the classes `DispatchGrantNotice` draws, and a workspace named far longer than
-    // the pane is wide.
+    // here by hand, as every Notice in this file is, with a workspace named far longer than
+    // the pane is wide. **This holds the stylesheet, not the component**: it keeps passing if
+    // `DispatchGrantNotice` stops drawing `.dispatch-within` as a radio group of a `p` and
+    // two `label`s. That markup, and its place under the answers and above the brief, is
+    // `DispatchGrantNotice.test.tsx`'s ("draws the choice under the answers and above the
+    // brief") and `Notice.pane.test.tsx`'s; change the three together.
     await windowIs(1024, 768);
     expect(await raise(0, { sentence: ASKS, ways: FIVE_WAYS, opened: BRIEF })).toBe(true);
     const drawn = await browser.execute((workspace: string) => {

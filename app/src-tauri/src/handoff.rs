@@ -2055,6 +2055,10 @@ pub fn answered(
             Err(why) => (Answered::NotStarted, why),
         }
     };
+    // **Whatever one start the person's answer carried ends here**, on every arm: started,
+    // held again, or refused before it reached the grant store. It was for this dispatch as
+    // they read it, so nothing of it is left for a later ask with another brief.
+    held.dispatch_grants().end_once(answer.pending.id);
     tell_the_asker(held, &wanted, how, &detail);
 }
 

@@ -228,8 +228,8 @@ fn a_task_at_the_project_s_root_has_no_workspace_to_limit_a_grant_to() {
     assert_eq!(
         world.allow(&store, id, Level::You).as_deref(),
         Ok(
-            "Allowed for me on this machine. The dispatch starts now, and the next one starts \
-            without asking."
+            "Allowed for me on this machine, in any workspace. The dispatch starts now, and the \
+            next one starts without asking."
         )
     );
     assert_eq!(
@@ -452,11 +452,84 @@ fn an_allow_for_everyone_writes_the_limited_spelling_and_covers_that_workspace_o
 }
 
 #[test]
-fn a_dispatch_allowed_into_a_workspace_that_is_not_there_yet_starts_once_and_the_grant_waits_for_it()
- {
-    // A handoff that makes its workspace is judged before the workspace is there.
+fn an_allow_into_a_workspace_that_is_not_there_yet_starts_that_one_dispatch_and_keeps_nothing() {
+    // A handoff that makes its workspace is judged before the workspace is there. No grant
+    // is kept for a name that is no workspace, at any level.
+    for level in [Level::Chat, Level::You] {
+        let world = world();
+        let (store, answered) = store();
+        let id = pending_of(&ask(
+            &world,
+            &store,
+            chat(3, Some("steward")),
+            "devops",
+            Some("fresh"),
+        ));
+        // The question says so, and offers one answer.
+        let shown = told(
+            &PlaneId::for_tests(world.root()),
+            world.root(),
+            &store.waiting(3)[0],
+        );
+        assert!(shown.works_in_missing);
+        assert_eq!(shown.levels, [GrantLevel::Chat]);
+
+        assert_eq!(
+            world.allow(&store, id, level).as_deref(),
+            Ok(
+                "fresh is not a workspace of this project yet, so this starts this one dispatch \
+                and keeps no grant. The next one asks you."
+            )
+        );
+        assert_eq!(
+            answered.lock().unwrap().len(),
+            1,
+            "the one they read starts"
+        );
+        assert_eq!(
+            said(&world),
+            [audit_in(
+                "trust.dispatch.once",
+                "steward",
+                "devops",
+                level.word(),
+                Some("fresh")
+            )]
+        );
+        // Nothing is kept: not for me, not for the chat.
+        assert!(!sandbox::local::path(world.root()).exists());
+        assert!(world.listed(&store).is_empty());
+        // Asked again as it was first asked, it is let through, once.
+        assert_eq!(
+            ask(
+                &world,
+                &store,
+                chat(3, Some("steward")),
+                "devops",
+                Some("fresh")
+            ),
+            covered()
+        );
+        // The workspace is made: nothing was waiting for it, and the next dispatch asks.
+        workspace(&world, "fresh");
+        assert!(held(&ask(
+            &world,
+            &store,
+            chat(3, Some("steward")),
+            "devops",
+            Some("fresh")
+        )));
+        assert!(held(&ask(
+            &world,
+            &store,
+            chat(4, Some("steward")),
+            "devops",
+            Some("fresh")
+        )));
+    }
+    // The wider answer keeps nothing there either.
     let world = world();
-    let (store, answered) = store();
+    let (store, _) = store();
     let id = pending_of(&ask(
         &world,
         &store,
@@ -464,41 +537,360 @@ fn a_dispatch_allowed_into_a_workspace_that_is_not_there_yet_starts_once_and_the
         "devops",
         Some("fresh"),
     ));
+    world
+        .on(|ground| store.allow_anywhere(ground, id, Level::Project))
+        .expect("started once");
+    assert!(sandbox::local::granted_dispatch(world.root()).is_empty());
+    assert!(!sandbox::local::path(world.root()).exists());
+}
+
+// ---- the one start -------------------------------------------------------------------------------
+
+/// What `asking` is answered for `target` in `works_in`, with `brief`.
+fn ask_with(
+    world: &World,
+    store: &Store,
+    asking: Asking,
+    works_in: Option<&str>,
+    brief: &str,
+) -> Requested {
+    world.on(|ground| {
+        store
+            .request_in(
+                ground,
+                asking,
+                "devops",
+                brief,
+                Uncovered::AskThePerson,
+                works_in,
+            )
+            .0
+    })
+}
+
+/// A dispatch allowed once, by each of the two ways there is one: the list of nevers does
+/// not read (`unread`), or the task's workspace is not there yet. Answers the store, the
+/// world, the held dispatch's number and the workspace.
+fn allowed_once(unread: bool) -> (World, Store, u32, Option<&'static str>) {
+    let world = world();
+    let (store, _) = store();
+    let works_in = if unread {
+        Some("runners")
+    } else {
+        Some("fresh")
+    };
+    if unread {
+        let path = purlis_core::dispatchnever::path(world.root());
+        std::fs::create_dir_all(path.parent().expect("a folder")).expect("made");
+        std::fs::write(path, "not json").expect("written");
+    }
+    let id = pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        works_in,
+    ));
     world.allow(&store, id, Level::You).expect("allowed");
-    assert_eq!(
-        answered.lock().unwrap().len(),
-        1,
-        "the one they read starts"
-    );
-    // Asked again as it was first asked, it is let through, once.
-    assert_eq!(
-        ask(
+    (world, store, id, works_in)
+}
+
+#[test]
+fn the_one_start_is_for_the_brief_the_person_read_and_never_for_another() {
+    for unread in [true, false] {
+        let (world, store, _, works_in) = allowed_once(unread);
+        // Another brief, from the same chat, to the same persona, for the same workspace: it
+        // is another dispatch, and the person is asked.
+        assert!(
+            held(&ask_with(
+                &world,
+                &store,
+                chat(3, Some("steward")),
+                works_in,
+                "Drop prod."
+            )),
+            "unread: {unread}"
+        );
+        // The one they read is still let through, once.
+        assert_eq!(
+            ask_with(&world, &store, chat(3, Some("steward")), works_in, BRIEF),
+            covered(),
+            "unread: {unread}"
+        );
+        assert!(held(&ask_with(
             &world,
             &store,
             chat(3, Some("steward")),
-            "devops",
-            Some("fresh")
-        ),
-        covered()
+            works_in,
+            BRIEF
+        )));
+    }
+}
+
+#[test]
+fn a_replay_that_never_reached_the_grants_leaves_no_start_behind() {
+    // The answered dispatch was refused by a limit before it asked for its grant again, or
+    // was held again: either way it has returned, and what was left of its one start ends.
+    for unread in [true, false] {
+        let (world, store, id, works_in) = allowed_once(unread);
+        store.end_once(id);
+        assert!(
+            held(&ask_with(
+                &world,
+                &store,
+                chat(3, Some("steward")),
+                works_in,
+                BRIEF
+            )),
+            "unread: {unread}"
+        );
+    }
+}
+
+#[test]
+fn a_revoke_a_never_and_a_change_of_workspace_each_take_an_unspent_start_with_them() {
+    let pair = Pair::new("steward", "devops").expect("a pair");
+    // Revoked: the grant the Allow kept while the list of nevers did not read.
+    let (world, store, _, works_in) = allowed_once(true);
+    let listed = world.listed(&store);
+    world
+        .on(|ground| revoke(ground.root, &store, &listed[0].id, ground.audit))
+        .expect("revoked");
+    assert!(held(&ask_with(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        works_in,
+        BRIEF
+    )));
+
+    // Its workspace changed.
+    let (world, store, _, works_in) = allowed_once(true);
+    world
+        .on(|ground| {
+            set_workspace(
+                &store,
+                ground,
+                &known(&world),
+                "steward",
+                "devops",
+                Level::You,
+                (
+                    &Within::Workspace("runners".to_owned()),
+                    &Within::Workspace("web".to_owned()),
+                ),
+            )
+        })
+        .expect("changed");
+    assert!(held(&ask_with(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        works_in,
+        BRIEF
+    )));
+
+    // Said never to, from another chat's question, with the workspace not there yet.
+    let (world, store, _, works_in) = allowed_once(false);
+    let other = pending_of(&ask(
+        &world,
+        &store,
+        chat(4, Some("steward")),
+        "devops",
+        Some("web"),
+    ));
+    world
+        .on(|ground| store.never(ground, other))
+        .expect("never");
+    assert!(matches!(
+        ask_with(&world, &store, chat(3, Some("steward")), works_in, BRIEF),
+        Requested::Refused(_)
+    ));
+    purlis_core::dispatchgrant::lift_never(world.root(), &pair.asking, &pair.target)
+        .expect("lifted");
+    assert!(held(&ask_with(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        works_in,
+        BRIEF
+    )));
+}
+
+#[test]
+fn a_question_asked_again_for_another_workspace_says_where_the_pair_is_already_allowed() {
+    let world = world();
+    workspace(&world, "alpha");
+    let (store, _) = store();
+    // For this chat in runners, and for me in web.
+    let id = pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        Some("runners"),
+    ));
+    world.allow(&store, id, Level::Chat).expect("this chat");
+    purlis_core::dispatchwithin::grant_yours(
+        world.root(),
+        &Pair::new("steward", "devops").unwrap(),
+        &Within::Workspace("web".to_owned()),
+    )
+    .expect("kept");
+    pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        Some("alpha"),
+    ));
+    let shown = told_by(
+        &store,
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &store.waiting(3)[0],
     );
+    assert_eq!(shown.allowed_in, ["runners", "web"]);
+    assert!(!shown.works_in_missing);
+    // Another chat has no grant of its own: only mine is said.
+    pending_of(&ask(
+        &world,
+        &store,
+        chat(4, Some("steward")),
+        "devops",
+        Some("alpha"),
+    ));
+    let shown = told_by(
+        &store,
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &store.waiting(4)[0],
+    );
+    assert_eq!(shown.allowed_in, ["web"]);
+}
+
+#[test]
+fn count_it_again_on_a_project_grant_is_this_machine_s_act_and_leaves_the_file_as_it_is() {
+    let text = "schema = 1\n\n[dispatch.grants]\nsteward = [\"qa\", { to = \"devops\", in = \"runners\" }]\n";
+    let world = world_with(&["steward", "devops", "qa"], &text["schema = 1\n".len()..]);
+    workspace(&world, "runners");
+    let (store, _) = store();
+    let root = world.root();
+    let one = limited("steward", "devops", "runners");
+    world
+        .on(|ground| accept_in(&store, ground, &known(&world), &one))
+        .expect("accepted");
+    // The workspace is made again; the acceptance is for the one that was removed.
+    std::fs::remove_dir_all(root.join("workspaces/runners")).expect("removed");
+    world.listed(&store);
+    workspace(&world, "runners");
     assert!(held(&ask(
         &world,
         &store,
         chat(3, Some("steward")),
         "devops",
-        Some("fresh")
+        Some("runners")
     )));
-    // Once the workspace is there, the grant made for it counts.
-    workspace(&world, "fresh");
+
+    let runners = Within::Workspace("runners".to_owned());
+    world
+        .on(|ground| {
+            set_workspace(
+                &store,
+                ground,
+                &known(&world),
+                "steward",
+                "devops",
+                Level::Project,
+                (&runners, &runners),
+            )
+        })
+        .expect("counted again");
+    // The committed file is byte for byte what it was.
+    assert_eq!(
+        std::fs::read_to_string(purlis_core::names::manifest(root)).expect("the file"),
+        text
+    );
     assert_eq!(
         ask(
             &world,
             &store,
             chat(4, Some("steward")),
             "devops",
-            Some("fresh")
+            Some("runners")
         ),
         covered()
+    );
+    // Recorded as what it is: this machine following the project's grant, for that workspace.
+    assert_eq!(
+        said(&world).last(),
+        Some(&audit_in(
+            "trust.dispatch.grant",
+            "steward",
+            "devops",
+            "project",
+            Some("runners")
+        ))
+    );
+    // And nothing is accepted for a workspace that is not there.
+    std::fs::remove_dir_all(root.join("workspaces/runners")).expect("removed");
+    assert_eq!(
+        world.on(|ground| accept_in(&store, ground, &known(&world), &one)),
+        Err(
+            "runners is not a workspace of this project now, so purlis keeps no grant for it."
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_project_change_that_is_in_the_file_is_not_recorded_as_put_back_when_this_machine_cannot_follow_it()
+ {
+    let world = world_with(
+        &["steward", "devops"],
+        "\n[dispatch.grants]\nsteward = [{ to = \"devops\", in = \"runners\" }]\n",
+    );
+    workspace(&world, "runners");
+    let (store, _) = store();
+    let root = world.root();
+    // This machine's own record cannot be written: a folder stands where the file goes.
+    let record = sandbox::local::path(root);
+    std::fs::create_dir_all(&record).expect("a folder in its place");
+
+    let refused = world
+        .on(|ground| {
+            set_workspace(
+                &store,
+                ground,
+                &known(&world),
+                "steward",
+                "devops",
+                Level::Project,
+                (&Within::Workspace("runners".to_owned()), &Within::Any),
+            )
+        })
+        .expect_err("not followed here");
+    assert!(
+        refused.contains("and it covers nothing on this machine yet"),
+        "{refused}"
+    );
+    // The file holds the wider grant, for the team, and the log's last word is that grant.
+    assert_eq!(
+        std::fs::read_to_string(purlis_core::names::manifest(root)).expect("the file"),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n"
+    );
+    assert_eq!(
+        said(&world),
+        [
+            audit_in(
+                "trust.dispatch.revoke",
+                "steward",
+                "devops",
+                "project",
+                Some("runners")
+            ),
+            audit_in("trust.dispatch.grant", "steward", "devops", "project", None),
+        ]
     );
 }
 
@@ -583,7 +975,9 @@ fn the_table_says_which_workspace_each_grant_holds_in_and_why_one_covers_nothing
                 "devops".to_owned(),
                 Some("gone".to_owned()),
                 Some(
-                    "gone is not a workspace of this project now, so this grant covers nothing."
+                    "gone is not a workspace of this project now, so this grant covers nothing. \
+                     A grant does not follow a workspace that was renamed: set its workspace \
+                     again, or remove it."
                         .to_owned()
                 )
             ),
@@ -797,7 +1191,11 @@ fn a_grant_whose_workspace_was_made_again_covers_nothing_until_the_person_counts
     let gone = world.listed(&store);
     assert_eq!(
         gone[0].nowhere.as_deref(),
-        Some("runners is not a workspace of this project now, so this grant covers nothing.")
+        Some(
+            "runners is not a workspace of this project now, so this grant covers nothing. A \
+             grant does not follow a workspace that was renamed: set its workspace again, or \
+             remove it."
+        )
     );
     workspace(&world, "runners");
     assert!(held(&ask(
@@ -810,8 +1208,8 @@ fn a_grant_whose_workspace_was_made_again_covers_nothing_until_the_person_counts
     assert_eq!(
         world.listed(&store)[0].nowhere.as_deref(),
         Some(
-            "A workspace named runners was removed after this grant was made, so it covers \
-             nothing in the one that is there now."
+            "A workspace named runners was removed or renamed after this grant was made, so it \
+             covers nothing in the one that is there now."
         )
     );
     // Count it again: the same workspace, set by the person, audited.

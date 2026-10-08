@@ -34,6 +34,8 @@ const WAITING: DispatchPending = {
   locked: null,
   never_unread: null,
   works_in: null,
+  works_in_missing: false,
+  allowed_in: [],
 };
 
 /** A core holding `waiting` for the chat, which records what the window sends. */
@@ -102,8 +104,8 @@ describe("the dispatch grant Notice", () => {
 
   it.each([
     ["Allow for this chat", "chat"],
-    ["Allow for me on this machine", "you"],
-    ["Allow for everyone in this project", "project"],
+    ["Allow for me on this machine, in any workspace", "you"],
+    ["Allow for everyone in this project, in any workspace", "project"],
   ])("%s sends the held dispatch and that level, and nothing of the pair", async (label, level) => {
     const asked = core([WAITING]);
     render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
@@ -125,8 +127,14 @@ describe("the dispatch grant Notice", () => {
     const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
     expect(notice).toHaveTextContent("This chat wants to dispatch to devops.");
     expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Allow for me on this machine" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Allow for everyone in this project" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Allow for me on this machine, in any workspace" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Allow for everyone in this project, in any workspace",
+      }),
+    ).toBeNull();
     expect(screen.getByRole("button", { name: "Keep blocked" })).toBeInTheDocument();
   });
 
@@ -173,8 +181,8 @@ describe("the dispatch grant Notice", () => {
       .filter((label) => label !== "Dismiss");
     expect(answers).toEqual([
       "Allow for this chat",
-      "Allow for me on this machine",
-      "Allow for everyone in this project",
+      "Allow for me on this machine, in any workspace",
+      "Allow for everyone in this project, in any workspace",
       "Keep blocked",
       "Never for this pair",
     ]);
@@ -395,12 +403,62 @@ describe("the dispatch grant Notice, for a task that works in a workspace", () =
     expect(where().closest(".notice-under-pane")).not.toBeNull();
   });
 
-  it("offers no choice for a task at the project's root, and says nothing of a workspace", async () => {
+  it("says an Allow at the project's root holds in any workspace, on the sentence and on the two wider answers", async () => {
+    const asked = core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      "This task works at the project's root, which is no workspace: an Allow for you or for the project holds in any workspace.",
+    );
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Allow for everyone in this project, in any workspace" }),
+    ).toBeInTheDocument();
+    // There is no narrower grant to choose, so no choice is drawn, and the plain Allow is sent.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Allow for me on this machine, in any workspace" }),
+    );
+    await waitFor(() =>
+      expect(sent(asked, "allow_dispatch")).toEqual([{ plane: PLANE, id: 7, level: "you" }]),
+    );
+  });
+
+  it("says why it asks again where the pair is already allowed in another workspace", async () => {
+    core([{ ...IN_RUNNERS, works_in: "web", allowed_in: ["alpha", "runners"] }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      "You allowed this for work in alpha, runners. This task works in web: an Allow holds for work there only, unless you choose any workspace below.",
+    );
+  });
+
+  it("offers one answer that keeps nothing where the workspace is not there yet", async () => {
+    const asked = core([
+      { ...IN_RUNNERS, works_in: "fresh", works_in_missing: true, levels: ["chat"] },
+    ]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      "fresh is not a workspace of this project yet: an Allow starts this one dispatch and keeps no grant, so the next one asks again.",
+    );
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Allow for/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Allow this one dispatch" }));
+    await waitFor(() =>
+      expect(sent(asked, "allow_dispatch")).toEqual([{ plane: PLANE, id: 7, level: "chat" }]),
+    );
+    expect(sent(asked, "allow_dispatch_anywhere")).toEqual([]);
+  });
+
+  it("offers no choice for a task at the project's root", async () => {
     core([WAITING]);
     render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
 
     const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
-    expect(notice).not.toHaveTextContent("The task works in");
+    expect(notice).not.toHaveTextContent("task works in");
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.queryByRole("radio")).toBeNull();
   });

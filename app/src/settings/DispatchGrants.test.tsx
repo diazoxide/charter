@@ -1109,7 +1109,8 @@ describe("which workspace a grant holds in", () => {
     const gone = grant({
       id: "in\u001fyou\u001fsteward\u001fdevops\u001fold",
       workspace: "old",
-      nowhere: "old is not a workspace of this project now, so this grant covers nothing.",
+      nowhere:
+        "old is not a workspace of this project now, so this grant covers nothing. A grant does not follow a workspace that was renamed: set its workspace again, or remove it.",
     });
     const fake = core({ grants: [gone], standing: { workspaces: WORKSPACES } });
     fake.on("revoke_dispatch_grant", () => {
@@ -1123,7 +1124,7 @@ describe("which workspace a grant holds in", () => {
     const row = rowOf(remove);
     expect(row).toHaveClass("dispatch-dormant");
     expect(row).toHaveTextContent(
-      "old is not a workspace of this project now, so this grant covers nothing.",
+      "A grant does not follow a workspace that was renamed: set its workspace again, or remove it.",
     );
     // There is no workspace of that name to count it for.
     expect(screen.queryByRole("button", { name: /Count it again/ })).toBeNull();
@@ -1138,7 +1139,7 @@ describe("which workspace a grant holds in", () => {
     const stale = grant({
       ...IN_RUNNERS,
       nowhere:
-        "A workspace named runners was removed after this grant was made, so it covers nothing in the one that is there now.",
+        "A workspace named runners was removed or renamed after this grant was made, so it covers nothing in the one that is there now.",
     });
     const fake = core({ grants: [stale], standing: { workspaces: WORKSPACES } });
     fake.on("set_dispatch_workspace", () => {
@@ -1170,6 +1171,34 @@ describe("which workspace a grant holds in", () => {
         name: "Revoke: my grant for steward to devops in runners",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("counts a project grant again on this machine without touching the committed file", async () => {
+    const stale = grant({
+      id: "in\u001fproject\u001fsteward\u001fdevops\u001frunners",
+      level: "project",
+      by: "Dana",
+      workspace: "runners",
+      nowhere:
+        "A workspace named runners was removed or renamed after this grant was made, so it covers nothing in the one that is there now.",
+    });
+    const fake = core({ grants: [stale], standing: { workspaces: WORKSPACES } });
+    fake.on("accept_project_dispatch_in", () => {});
+    render(<Table />);
+
+    const said = await press(
+      "Count it again: the project's grant for steward to devops in runners",
+      "Count it again",
+    );
+    expect(said).toContain("Follow this grant on this machine for the workspace named runners");
+    expect(said).toContain("purlis.toml is not changed.");
+    await waitFor(() =>
+      expect(fake.sent("accept_project_dispatch_in")).toEqual([
+        { plane: PLANE, asking: "steward", target: "devops", workspace: "runners" },
+      ]),
+    );
+    // Never the command that edits the project's file.
+    expect(fake.sent("set_dispatch_workspace")).toEqual([]);
   });
 
   it("accepts a teammate's grant for one workspace for that workspace", async () => {

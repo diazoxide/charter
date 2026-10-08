@@ -386,9 +386,20 @@ export function DispatchGrantsList({
       return {
         yes: "Count it again",
         about: `${grant} in ${to}`,
-        says: `Let this grant hold in the workspace named ${to} that is there now? It was made for an earlier workspace of that name. ${pairSaid(changes)} for work in ${to} without asking you.`,
-        done: `It holds in ${to} again.${yetToCount(changes.asking, changes.target)}`,
-        run,
+        says:
+          changes.level === "project"
+            ? `Follow this grant on this machine for the workspace named ${to} that is there now? It was accepted here for an earlier workspace of that name. ${pairSaid(changes)} for work in ${to} without asking you. ${file} is not changed.`
+            : `Let this grant hold in the workspace named ${to} that is there now? It was made for an earlier workspace of that name. ${pairSaid(changes)} for work in ${to} without asking you.`,
+        done: `It holds in ${to} again${changes.level === "project" ? " on this machine" : ""}.${yetToCount(changes.asking, changes.target)}`,
+        // For a project grant this is this machine's act: its acceptance, made again for the
+        // workspace that is there now. The committed file is not written.
+        run:
+          changes.level === "project"
+            ? async () =>
+                ran(
+                  await commands.acceptProjectDispatchIn(plane, changes.asking, changes.target, to),
+                )
+            : run,
       };
     return {
       yes: `Limit to ${to}`,

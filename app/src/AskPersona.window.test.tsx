@@ -116,6 +116,8 @@ const HELD: DispatchPending = {
   locked: null,
   never_unread: null,
   works_in: null,
+  works_in_missing: false,
+  allowed_in: [],
 };
 
 function core(now: Core) {
@@ -404,8 +406,8 @@ describe("a refused vault, on a pane whose chat has already asked that persona",
     expect([...request.children].map((one) => one.textContent)).toEqual([
       expect.stringMatching(/^This chat runs as steward and wants to dispatch to devops\./),
       "Allow for this chat",
-      "Allow for me on this machine",
-      "Allow for everyone in this project",
+      "Allow for me on this machine, in any workspace",
+      "Allow for everyone in this project, in any workspace",
       "Keep blocked",
       "Never for this pair",
     ]);

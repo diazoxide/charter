@@ -347,7 +347,11 @@ fn a_grant_for_a_workspace_that_is_not_there_covers_nothing_and_says_why() {
     assert!(!seen.is_there("runners"));
     assert_eq!(
         seen.why_not("runners", 0).as_deref(),
-        Some("runners is not a workspace of this project now, so this grant covers nothing.")
+        Some(
+            "runners is not a workspace of this project now, so this grant covers nothing. A \
+             grant does not follow a workspace that was renamed: set its workspace again, or \
+             remove it."
+        )
     );
     // The grant is still in its record: nothing was moved.
     assert_eq!(yours(root), [(limited("steward", "devops", "runners"), 0)]);
@@ -388,8 +392,8 @@ fn a_workspace_made_under_the_name_of_one_that_was_removed_inherits_no_grant() {
     assert_eq!(
         noticed(root).why_not("runners", 0).as_deref(),
         Some(
-            "A workspace named runners was removed after this grant was made, so it covers \
-             nothing in the one that is there now."
+            "A workspace named runners was removed or renamed after this grant was made, so it \
+             covers nothing in the one that is there now."
         )
     );
     // Judged again and again, it is counted gone once.
@@ -479,6 +483,165 @@ fn nothing_is_counted_gone_where_the_workspaces_cannot_be_looked_at() {
             "purlis could not look at this project's workspaces, so this grant covers nothing \
              for now."
         )
+    );
+}
+
+// ---- no grant for a name that is no workspace ----------------------------------------------------
+
+#[test]
+fn no_standing_grant_is_made_accepted_or_set_for_a_name_that_is_no_workspace() {
+    let dir = project(&["web"]);
+    let root = dir.path();
+    let runners = Within::Workspace("runners".to_owned());
+    // For me: refused, with nothing written and nothing counted for the name.
+    let refused = grant_yours(root, &pair("steward", "devops"), &runners).expect_err("refused");
+    assert_eq!(refused.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        refused.to_string(),
+        "runners is not a workspace of this project now, so purlis keeps no grant for it."
+    );
+    assert!(yours(root).is_empty());
+    assert!(!local::path(root).exists(), "nothing was written");
+    // Set from one that holds everywhere: refused, and the grant is as it was.
+    grant_yours(root, &pair("steward", "devops"), &Within::Any).expect("kept");
+    assert!(set_yours(root, "steward", "devops", &Within::Any, &runners).is_err());
+    assert!(yours_holds(root, "steward", "devops", &Within::Any));
+    assert!(yours(root).is_empty());
+    // So a workspace made under the name later has nothing waiting for it.
+    make(root, "runners");
+    assert!(yours(root).is_empty());
+    assert!(local::dispatch_workspaces(root).is_empty());
+}
+
+// ---- purlis's own workspace commands -------------------------------------------------------------
+
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(1_760_000_000, 0).expect("a time")
+}
+
+/// A project whose workspaces `names` purlis itself made.
+fn made_by_purlis(names: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a project");
+    for name in names {
+        crate::wscmd::ensure::ensure(dir.path(), name, now(), "fixture").expect("made");
+    }
+    dir
+}
+
+#[test]
+fn a_workspace_purlis_removes_and_makes_again_inherits_no_grant_with_nothing_judged_between() {
+    let dir = made_by_purlis(&["runners"]);
+    let root = dir.path();
+    grant_yours(
+        root,
+        &pair("steward", "devops"),
+        &Within::Workspace("runners".to_owned()),
+    )
+    .expect("kept");
+
+    let mut said = Vec::new();
+    let done = crate::wscmd::remove::remove(root, "runners", true, &mut |line| {
+        said.push(line.to_string());
+    });
+    assert_eq!(done.code, 0, "{said:?}");
+    assert!(
+        said.iter().any(|line| line.contains(
+            "1 dispatch grant holds in 'runners' only. It does not go to a workspace made as \
+             'runners' later: it covers nothing now."
+        )),
+        "{said:?}"
+    );
+    // No dispatch is judged and Settings is not read: the removal itself counted the name.
+    assert_eq!(local::dispatch_workspaces(root)[0].gone, 1);
+    crate::wscmd::ensure::ensure(root, "runners", now(), "fixture").expect("made again");
+    assert_eq!(
+        asked(root, "steward", "devops", Some("runners")),
+        Covers::NeedsGrant
+    );
+}
+
+#[test]
+fn a_grant_does_not_follow_a_rename_and_a_workspace_made_under_the_old_name_inherits_none() {
+    let dir = made_by_purlis(&["runners"]);
+    let root = dir.path();
+    grant_yours(
+        root,
+        &pair("steward", "devops"),
+        &Within::Workspace("runners".to_owned()),
+    )
+    .expect("kept");
+
+    let mut said = Vec::new();
+    crate::wscmd::rename::rename(
+        &crate::wscmd::rename::Request {
+            root,
+            old: "runners",
+            new: "ci",
+            running: &[],
+            config_root: None,
+        },
+        &mut |line| said.push(line.to_string()),
+    );
+    assert!(root.join("workspaces/ci").is_dir(), "{said:?}");
+    assert!(!root.join("workspaces/runners").exists(), "{said:?}");
+    // The grant is where it was, names the old name, and covers nothing under either.
+    assert_eq!(yours(root), [(limited("steward", "devops", "runners"), 0)]);
+    assert_eq!(
+        asked(root, "steward", "devops", Some("ci")),
+        Covers::NeedsGrant
+    );
+    assert_eq!(local::dispatch_workspaces(root)[0].gone, 1);
+    // A workspace made as the old name, with nothing judged in between, has none of it.
+    crate::wscmd::ensure::ensure(root, "runners", now(), "fixture").expect("made");
+    assert_eq!(
+        asked(root, "steward", "devops", Some("runners")),
+        Covers::NeedsGrant
+    );
+    // The person sets the grant's workspace to the new name: their yes for it.
+    let (old, new) = (
+        Within::Workspace("runners".to_owned()),
+        Within::Workspace("ci".to_owned()),
+    );
+    assert!(set_yours(root, "steward", "devops", &old, &new).expect("set"));
+    assert_eq!(
+        asked(root, "steward", "devops", Some("ci")),
+        Covers::Covered
+    );
+}
+
+#[test]
+fn a_workspace_purlis_makes_under_a_name_a_grant_still_holds_is_counted_before_it_is_made() {
+    // A grant left for a name that is no workspace (written by hand, or by an earlier build):
+    // whatever purlis makes under the name looks first, so the grant is not its.
+    let dir = made_by_purlis(&["web"]);
+    let root = dir.path();
+    local::keep_dispatch_in(
+        root,
+        Record::Mine,
+        &limited("steward", "devops", "runners").on_disk(0),
+    )
+    .expect("kept");
+    crate::wscmd::ensure::ensure(root, "runners", now(), "fixture").expect("made");
+    assert_eq!(
+        asked(root, "steward", "devops", Some("runners")),
+        Covers::NeedsGrant
+    );
+    assert_eq!(naming(root, "runners"), 1);
+}
+
+#[test]
+fn what_a_rename_and_a_removal_say_of_the_grants_they_left_behind() {
+    assert_eq!(
+        left_behind_said(1, "runners", Some("ci")),
+        "1 dispatch grant holds in 'runners' only. It does not follow the rename: it covers \
+         nothing in 'ci', and nothing in a workspace made as 'runners' later. Set its workspace \
+         again, or remove it, in Settings › Project › Dispatch."
+    );
+    assert_eq!(
+        left_behind_said(2, "runners", None),
+        "2 dispatch grants hold in 'runners' only. They do not go to a workspace made as \
+         'runners' later: they cover nothing now. Set the workspace of each again, or remove \
+         it, in Settings › Project › Dispatch."
     );
 }
 
@@ -887,6 +1050,31 @@ fn a_project_grant_is_narrowed_and_widened_in_one_edit_of_the_file() {
     assert!(with_within(before, "qa", "devops", &any, &runners).is_err());
 }
 
+#[test]
+fn widening_a_project_grant_leaves_an_entry_this_build_does_not_read_as_it_is() {
+    use crate::settings::dispatch::with_within;
+    // A later build's entry, with a key this build does not know: it grants nothing here, and
+    // it is not this build's to take out of the team's file.
+    let before = "[dispatch.grants]\nsteward = [{ to = \"devops\", in = \"runners\" }, \
+                  { to = \"devops\", in = \"web\", until = \"2027\" }]\n";
+    let widened = with_within(
+        before,
+        "steward",
+        "devops",
+        &Within::Workspace("runners".to_owned()),
+        &Within::Any,
+    )
+    .expect("widened");
+    assert!(
+        widened.contains("{ to = \"devops\", in = \"web\", until = \"2027\" }"),
+        "{widened}"
+    );
+    let read = committed(Some(&widened));
+    assert_eq!(read.pairs, [pair("steward", "devops")]);
+    assert!(read.limited.is_empty());
+    assert_eq!(read.refused.len(), 1);
+}
+
 // ---- the audit -----------------------------------------------------------------------------------
 
 #[test]
@@ -969,6 +1157,16 @@ fn the_project_s_limited_grant_waits_for_this_machine_s_yes_and_then_covers_its_
         accept(root, &limited("steward", "qa", "runners")),
         Err("purlis changed nothing: the project no longer has that grant.".to_owned())
     );
+    // Nor for a workspace that is not there: the star's is for `web`, which is removed.
+    remove(root, "web");
+    assert_eq!(
+        accept(root, &limited("steward", ANY, "web")),
+        Err(
+            "web is not a workspace of this project now, so purlis keeps no grant for it."
+                .to_owned()
+        )
+    );
+    assert!(crate::settings::dispatch::grant_in(root, &limited("steward", "qa", "web")).is_err());
 }
 
 #[test]

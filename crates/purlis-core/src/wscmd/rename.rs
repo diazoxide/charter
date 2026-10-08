@@ -504,6 +504,9 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
         if crashed(Step::Journal) {
             return 1;
         }
+        // A dispatch grant limited to the new name was made for a workspace that is gone:
+        // counted so now, while the name is nobody's, so this workspace inherits none (#1505).
+        crate::dispatchwithin::noticed(root);
         // The commit point.
         if let Err(why) = std::fs::rename(&from, &to) {
             let _ = std::fs::remove_file(journal_path(root));
@@ -597,6 +600,11 @@ fn finish(request: &Request, say: Sink) -> u8 {
     } = *request;
     let moved = Move::in_plane(root, old, new);
     let mut left: Vec<String> = Vec::new();
+    // **Dispatch grants do not follow a rename** (#1505): the old name is counted gone, here
+    // and so on a rename finished after a crash too, and the grants limited to it cover
+    // nothing until the person sets each one's workspace again.
+    let grants_left = crate::dispatchwithin::naming(root, old);
+    crate::dispatchwithin::noticed(root);
 
     left.extend(repair_worktrees(root, &moved));
     if crashed(Step::Repair) {
@@ -667,6 +675,13 @@ fn finish(request: &Request, say: Sink) -> u8 {
         say(Say::Warn(stale));
     }
     say(Say::Done(format!("Renamed workspace '{old}' to '{new}'.")));
+    if grants_left > 0 {
+        say(Say::Warn(crate::dispatchwithin::left_behind_said(
+            grants_left,
+            old,
+            Some(new),
+        )));
+    }
 
     // Something tracked moved only for a LIVE workspace or a committed default — asked of the
     // disk, so a rename finished after a crash saves what the first run changed.

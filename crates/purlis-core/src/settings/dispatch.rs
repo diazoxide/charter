@@ -242,11 +242,15 @@ fn is_limited(entry: &toml_edit::Value, target: &str, workspace: &str) -> bool {
     })
 }
 
-/// Whether `entry` is any limited grant to `target`.
+/// Whether `entry` is a limited grant to `target`, in whichever workspace: a table of
+/// exactly the two keys this build reads. **A table with a key more is not one**: it is a
+/// later build's, this build grants nothing by it, and no edit here takes it out.
 fn is_limited_to(entry: &toml_edit::Value, target: &str) -> bool {
-    entry
-        .as_inline_table()
-        .is_some_and(|table| table.get(TO).and_then(toml_edit::Value::as_str) == Some(target))
+    entry.as_inline_table().is_some_and(|table| {
+        table.len() == 2
+            && table.get(TO).and_then(toml_edit::Value::as_str) == Some(target)
+            && table.get(IN).and_then(toml_edit::Value::as_str).is_some()
+    })
 }
 
 /// A limited grant as the file writes it: `{ to = "devops", in = "runners" }`.
@@ -390,18 +394,34 @@ pub fn can_grant_in(root: &Path, one: &Limited) -> Result<(), String> {
     with_in(&on_disk(root)?, one).map(|_| ())
 }
 
+/// **Writes `one` into the project's file at `root`, and no more**: the committed half of
+/// [`grant_in`]. Refused, with nothing written, where its workspace is not one of the
+/// project's now. Where the file holds it already (a teammate's) nothing is written.
+pub fn write_in(root: &Path, one: &Limited) -> Result<(), String> {
+    if !crate::dispatchwithin::Seen::read(root).is_there(&one.workspace) {
+        return Err(crate::dispatchwithin::not_there_said(&one.workspace));
+    }
+    write(root, |text| with_in(text, one))
+}
+
 /// **Grants `one` for everyone in the project at `root`**: the grant Notice's Allow at the
-/// project level, for the workspace the task works in. Where the file holds it already (a
-/// teammate's) nothing is written. Either way it is accepted on this machine, so it is in
-/// force here.
+/// project level, for the workspace the task works in. Either way it is accepted on this
+/// machine, so it is in force here. A caller that must tell "not written" from "written, and
+/// not accepted here" calls [`write_in`] and [`crate::dispatchwithin::accept`] itself.
 pub fn grant_in(root: &Path, one: &Limited) -> Result<(), String> {
-    write(root, |text| with_in(text, one))?;
-    crate::dispatchwithin::accept(root, one).map_err(|why| {
-        format!(
-            "The grant is in {}, and it covers nothing here yet. {why} Allow it again.",
-            Which::Shared.file()
-        )
-    })
+    write_in(root, one)?;
+    crate::dispatchwithin::accept(root, one).map_err(|why| written_not_accepted(&why))
+}
+
+/// What is said where a grant is in the project's file and this machine could not record
+/// its own acceptance of it.
+pub fn written_not_accepted(why: &str) -> String {
+    format!(
+        "The grant is in {}, and it covers nothing on this machine yet. {why} Accept it in \
+         {}.",
+        Which::Shared.file(),
+        crate::dispatchgrant::SETTINGS
+    )
 }
 
 /// **Revokes the project's limited grant `one`**: Settings' Remove for everyone.
@@ -423,12 +443,30 @@ pub fn can_set_within(
     with_within(&on_disk(root)?, asking, target, from, to).map(|_| ())
 }
 
-/// **Moves the project's grant of `asking` to `target` (`"*"`: any persona) from holding
-/// `from` to holding `to`, for everyone**: Settings' change of a project grant's workspace,
-/// one edit of the committed file. This machine's acceptance follows it: what it accepted of
-/// the grant as it was is dropped, and the grant as it is now is accepted here, since the
-/// person at this machine just wrote it.
-pub fn set_within(
+/// **Writes the move of the project's grant of `asking` to `target` (`"*"`: any persona)
+/// from holding `from` to holding `to` into the project's file, and no more**: the committed
+/// half of [`set_within`]. Refused, with nothing written, where `to` is a workspace that is
+/// not one of the project's now.
+pub fn write_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    if let Within::Workspace(workspace) = to
+        && !crate::dispatchwithin::Seen::read(root).is_there(workspace)
+    {
+        return Err(crate::dispatchwithin::not_there_said(workspace));
+    }
+    write(root, |text| with_within(text, asking, target, from, to))
+}
+
+/// **Has this machine follow a project grant that [`write_within`] just moved**: what it
+/// accepted of the grant as it was is dropped, and the grant as it is now is accepted here,
+/// since the person at this machine just wrote it. `Err` where the acceptance could not be
+/// recorded: the file holds the change all the same.
+pub fn follow_within(
     root: &Path,
     asking: &str,
     target: &str,
@@ -436,7 +474,6 @@ pub fn set_within(
     to: &Within,
 ) -> Result<(), String> {
     let any = target == crate::dispatchgrant::ANY;
-    write(root, |text| with_within(text, asking, target, from, to))?;
     // Best effort, as a revoke's is: what is left accepted covers nothing the file lacks.
     match from {
         Within::Workspace(workspace) => {
@@ -453,27 +490,34 @@ pub fn set_within(
             }
         }
     }
-    let not_recorded = |why: String| {
-        format!(
-            "The change is in {}, and purlis could not record it as allowed on this machine \
-             ({}), so the grant covers nothing here yet. Accept it in the table.",
-            Which::Shared.file(),
-            crate::shown::short(&why)
-        )
-    };
     match to {
         Within::Workspace(workspace) => {
             let one = Limited::new(asking, target, workspace)?;
-            crate::dispatchwithin::accept(root, &one).map_err(not_recorded)
+            crate::dispatchwithin::accept(root, &one).map_err(|why| written_not_accepted(&why))
         }
         Within::Any if any => crate::sandbox::local::acknowledge_dispatch_any(root, asking)
-            .map_err(|why| not_recorded(why.to_string())),
+            .map_err(|why| written_not_accepted(&format!("({why})"))),
         Within::Any => {
             let pair = Pair::new(asking, target)?;
             crate::dispatchgrant::acknowledge_pair(root, &pair)
-                .map_err(|why| not_recorded(why.to_string()))
+                .map_err(|why| written_not_accepted(&format!("({why})")))
         }
     }
+}
+
+/// **Moves the project's grant of `asking` to `target` (`"*"`: any persona) from holding
+/// `from` to holding `to`, for everyone**: Settings' change of a project grant's workspace,
+/// one edit of the committed file ([`write_within`]), which this machine then follows
+/// ([`follow_within`]).
+pub fn set_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    write_within(root, asking, target, from, to)?;
+    follow_within(root, asking, target, from, to)
 }
 
 #[cfg(test)]

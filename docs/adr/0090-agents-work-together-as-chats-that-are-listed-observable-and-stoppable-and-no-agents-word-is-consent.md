@@ -665,11 +665,15 @@ no other. #1505 builds it.
   started in that place. A grant is the person's consent to what the other persona may be
   asked to do, and where that persona works is what bounds it; read the other way, a chat in
   one workspace could send the other persona to work in any. A task at the project's root
-  works in no workspace, so no limited grant covers it and the question there offers none.
+  works in no workspace, so no limited grant covers it. There is no narrower grant to offer
+  there, so an Allow for the person or the project holds in any workspace, and the question
+  and its two wider answers say so.
 - **The question offers the narrower grant first.** Where the task works in a workspace, an
   Allow for the person or the project holds in that workspace only; *in any workspace* is the
   explicit other choice. A grant for one chat is for the task it was asked about: it covers
-  that chat's dispatches in that workspace and nowhere else, and has no choice to make.
+  that chat's dispatches in that workspace and nowhere else, and has no choice to make. A
+  question asked again for another workspace says where the pair is already allowed. Keep
+  blocked is not limited: it is per chat and persona, in every workspace.
 - **"Any persona" may be limited the same way. A never is not**: it holds in every workspace.
   A refusal that stopped at a workspace's edge would be walked around by naming another place.
   The chain rule of change 4 and the loop rule are as they were.
@@ -687,10 +691,25 @@ no other. #1505 builds it.
   is there. A workspace made later under the name of one that was seen gone inherits no
   grant: the grant is shown as covering nothing, with Remove, and the person may count it
   again for the workspace that is there now. Nothing is moved by a read; the one thing a read
-  writes is the count of times the name was seen gone. **What this does not catch:** a
-  workspace removed and made again with nothing looked at in between; a workspace has no
-  identity beside its name. purlis has no workspace rename: one renamed by hand is the old
-  name gone and a new name no grant holds.
+  writes is the count of times the name was seen gone. purlis's own workspace commands look
+  too: `workspace remove` and `workspace rename` count the old name gone as they finish, and
+  whatever makes a workspace folder looks before it makes one.
+- **A grant does not follow a rename.** `purlis workspace rename` leaves the grants limited
+  to the old name where they are: they cover nothing under the new name, and nothing in a
+  workspace made as the old name later, until the person sets each one's workspace again.
+  The project's file names the workspace for teammates too, so rewriting it is not that
+  command's to do. The rename says how many it left behind.
+- **No standing grant names a workspace that is not there.** An Allow on a question about a
+  task whose workspace is not made yet (a handoff that makes it) starts that one dispatch,
+  is recorded as that, and keeps nothing; the next dispatch asks. Accepting a project grant
+  and setting a grant's workspace refuse such a name.
+- **One start is for one dispatch.** Where an Allow starts a dispatch that no grant covers
+  (the workspace is not there yet, or the list of nevers does not read), it is for the
+  dispatch the person read, with that brief, and for nothing else. It ends when that
+  dispatch returns, started or not, and goes when the pair's grant is revoked, said never
+  to, or has its workspace changed.
+- **What this does not catch:** a workspace's folder removed and made again by hand, or by a
+  pull, with nothing looked at in between; a workspace has no identity beside its name.
 - **Settings shows and changes it.** The table's workspace column says where each grant holds.
   Narrowing and widening a grant of one's own are each a confirmed, recorded write; a project
   grant's is changed for everyone, with the confirmation every write of the committed file

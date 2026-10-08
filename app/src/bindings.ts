@@ -2850,9 +2850,23 @@ export type DispatchPending = {
 	/**
 	 *  The workspace the task works in (#1505); null at the project's root. Where it is one,
 	 *  an Allow for the person or the project holds in it alone unless the person chooses
-	 *  any workspace, which is a command of its own ([`allow_dispatch_anywhere`]).
+	 *  any workspace, which is a command of its own ([`allow_dispatch_anywhere`]). Where it
+	 *  is null and an Allow for the person or the project is offered, that Allow holds in
+	 *  any workspace, and the Notice says so.
 	 */
 	works_in: string | null,
+	/**
+	 *  Whether `works_in` is not a workspace of the project yet (a handoff that makes it):
+	 *  no grant is kept for a name that is no workspace, so an Allow starts this one dispatch
+	 *  and the next one asks. One Allow is offered, and no choice of where it holds.
+	 */
+	works_in_missing: boolean,
+	/**
+	 *  The other workspaces this dispatch is already allowed in, sorted: by a grant for this
+	 *  chat, the person's, or the project's. Where there are any, the Notice says why the
+	 *  person is asked again: the grant they made holds there, and this task works elsewhere.
+	 */
+	allowed_in: string[],
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */
