@@ -227,7 +227,8 @@ export const MY_HOSTS = "project.sandbox.mine";
  * in `file`, with Remove, and an Add form of one field the core checks
  * (`purlis_core::settings::hosts`, `add_sandbox_host`, `remove_sandbox_host`): the project's in
  * `charter.toml` (`hosts`), which every teammate follows, or yours in `charter.local.toml`
- * (`myHosts`), on this machine only. A host the core refuses is said under the field, with why.
+ * (`myHosts`), on this machine only. A host the core refuses is said under the field, with why:
+ * as it is typed (`check_sandbox_host`, the core's parser, #1405), and again when Add is pressed.
  */
 function hostsCollection(file: SettingsFile, name: "hosts" | "myHosts"): Collection {
   return {
@@ -248,6 +249,8 @@ function hostsCollection(file: SettingsFile, name: "hosts" | "myHosts"): Collect
         label: "Host",
         help: "A domain such as api.example.com, *.example.com for every name under it, or an IP address such as 10.0.0.5. Add :port to reach a port other than HTTPS's.",
         kind: "text",
+        // The core's parser, as the field is typed in (#1405).
+        check: (typed) => commands.checkSandboxHost(typed),
       },
     ],
   };

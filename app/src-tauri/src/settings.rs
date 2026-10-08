@@ -543,6 +543,17 @@ pub async fn add_sandbox_host(
         .map_err(|err| format!("adding the host did not finish: {err}"))?
 }
 
+/// **The host field, checked as it is typed** (#1405): why `host` is not a host the sandbox
+/// takes, or `null` when it is one. The core's own parser
+/// (`purlis_core::sandbox::hosts::Host::parse`), so the field and Add refuse the same text with
+/// the same sentence; reads nothing and writes nothing. Add still asks the core again, which
+/// also checks the file and an administrator's policy.
+#[tauri::command]
+#[specta::specta]
+pub fn check_sandbox_host(host: String) -> Option<String> {
+    purlis_core::sandbox::hosts::Host::parse(&host).err()
+}
+
 /// [`add_sandbox_host`], without a runtime.
 pub(crate) fn add_host(
     root: &std::path::Path,
@@ -1019,6 +1030,22 @@ fn value_to_core(value: SettingsValue) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1405: the field's check is the core's parser, word for word.
+    #[test]
+    fn the_host_field_is_checked_by_the_cores_parser() {
+        assert_eq!(check_sandbox_host("api.example.com:8443".to_owned()), None);
+        assert_eq!(check_sandbox_host("*.example.com".to_owned()), None);
+        for typed in ["https://api.example.com/v1", "10.0.0.0/8", "a b", ""] {
+            let said = check_sandbox_host(typed.to_owned());
+            assert_eq!(
+                said,
+                purlis_core::sandbox::hosts::Host::parse(typed).err(),
+                "{typed}"
+            );
+            assert!(said.is_some(), "{typed}");
+        }
+    }
 
     fn plane(shared: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

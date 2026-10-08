@@ -110,6 +110,9 @@ export type EntryField = {
   choices?: readonly string[];
   /** What the field holds when the form opens. */
   initial?: string;
+  /** The core's check of what is typed, asked as it is typed (#1405): why the text is refused,
+   *  or `null`. Said under the field; Add still asks the core, which decides. */
+  check?: (typed: string) => Promise<string | null>;
 };
 
 /** What every setting has: its stable address (`<group id>.<setting>`), label and help. */

@@ -1902,6 +1902,14 @@ export const commands = {
 	 */
 	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to })),
 	/**
+	 *  **The host field, checked as it is typed** (#1405): why `host` is not a host the sandbox
+	 *  takes, or `null` when it is one. The core's own parser
+	 *  (`purlis_core::sandbox::hosts::Host::parse`), so the field and Add refuse the same text with
+	 *  the same sentence; reads nothing and writes nothing. Add still asks the core again, which
+	 *  also checks the file and an administrator's policy.
+	 */
+	checkSandboxHost: (host: string) => __TAURI_INVOKE<string | null>("check_sandbox_host", { host }),
+	/**
 	 *  Add a host to the sandbox's Internet access (#1341): `shared` is the project's, in
 	 *  `charter.toml`, which every teammate follows; `local` is yours, in `charter.local.toml`, on
 	 *  this machine only. The core checks it and says why it refuses one
