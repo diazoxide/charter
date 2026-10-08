@@ -35,6 +35,7 @@ mod doctor;
 mod extensions;
 mod filewatch;
 mod findfiles;
+mod finished;
 mod firstrun;
 mod firsttask;
 mod gitbroker;
@@ -894,6 +895,29 @@ fn resume_session(
     // And what was guessed on the way, said beside it.
     drawn.guessed = (!resumed.notes.is_empty()).then(|| resumed.notes.join("; "));
     Ok(drawn)
+}
+
+/// **Reopen** on a finished task's row (#1485): a NEW chat on the conversation the task ended
+/// in, as an ordinary chat with a tab ([`finished::reopen`]). It is no longer a task: it owes
+/// nobody a report, and the chat that asked is told nothing. The answer is the chat as the
+/// window draws it. The task's row goes; its dispatch record stays.
+#[tauri::command]
+#[specta::specta]
+fn reopen_finished_task(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    id: String,
+    columns: u16,
+    rows: u16,
+) -> Result<OpenChat, String> {
+    let held = planes.held(&plane)?;
+    let session = finished::reopen(&held, &id, Size { columns, rows })?;
+    held.chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == session)
+        .map(OpenChat::from)
+        .ok_or_else(|| format!("chat {session} ended as it started"))
 }
 
 /// What git says about each of the focused workspace's clones, and what the forge cache

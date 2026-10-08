@@ -565,3 +565,23 @@ tickets start from:
 | 4 | The cause `dispatcher` | Accepted as written |
 | 5 | The caps' initial values | Replaced by the limits of change 4 |
 | 6 | AC-11's lineage exclusion | Accepted as written. AC-11 itself is out of the first version |
+
+## Amended (2026-10-08): a task ends at its report
+
+The operator's rulings V100-1, V100-8, V100-9 and V100-10 (spec #1483, built in #1485) replace
+one line of *Amended and accepted (2026-10-07)*: "A persona chat stays open after it reports,
+marked as reported, until the person or its asking chat closes it."
+
+- **A task's program ends when it reports.** The report is delivered to the asking chat first,
+  and purlis then ends the program, under the lock that already orders a report against an
+  exit. Its row stays under the asking chat as a finished entry, with its outcome and its
+  report, read from the dispatch record.
+- Done and cancelled rows fold into one "Finished (n)" line with Clear finished. Failed, ended
+  without a report and closed by the person stay rows of their own until cleared.
+- Finished rows last until the asking chat closes or they are cleared, and are there after the
+  app is restarted. Clearing removes rows only: the dispatch records stay.
+- **Reopen** resumes a finished task's conversation as an ordinary chat with a tab. It is no
+  longer a task: it sends no second report, and the asking chat is not told.
+
+Everything else in this record stands. A handoff's chat is not a task and is not ended by its
+report.

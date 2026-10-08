@@ -924,8 +924,9 @@ function ChatList({
               {/* Its own chat's state, read by the mark itself (SC-3). */}
               <ChatStateMark session={chat.session} shell={isShell(chat)} />
               <WrappingUp held={wrapping.has(chat.session)} />
-              {/* A task that has made its one report stays open, and says so, until you or
-                the chat that asked for it closes it. One that ended without reporting says
+              {/* A task that has made its one report says so for the moment it is still open:
+                purlis ends its program once that turn is over, and it is a finished row under
+                the chat that asked from then (#1485). One that ended without reporting says
                 that instead: purlis told the chat that asked. */}
               {chat.from?.task && chat.from.reported && (
                 <span className="harness reported">reported</span>

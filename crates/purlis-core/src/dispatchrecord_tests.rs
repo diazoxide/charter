@@ -1124,3 +1124,209 @@ fn only_a_record_s_own_cut_short_write_is_named_as_its_temporary_file() {
         assert!(!a_record_s_temp(&name), "{name}");
     }
 }
+
+// ----- a finished task's row (#1485) ---------------------------------------------------------
+
+/// `steward 3` dispatched `name` as a task, and it ended with `report`.
+fn a_finished_task(root: &Path, name: &str, worker: u32, report: Report, minute: u32) -> Record {
+    let opening = Opening {
+        mode: Mode::Task,
+        task: Some(name.to_owned()),
+        worker: Worker {
+            chat: ChatRef {
+                chat: worker,
+                id: Some(mint()),
+                name: name.to_owned(),
+                persona: Some("devops".to_owned()),
+            },
+            ..a_handoff().worker
+        },
+        ..a_handoff()
+    };
+    let opened = open(root, opening, at(&format!("2026-10-07T12:{minute:02}:00Z"))).unwrap();
+    close(
+        root,
+        &opened.id,
+        Ending {
+            report: Some(report),
+            usage: None,
+        },
+        at(&format!("2026-10-07T12:{minute:02}:30Z")),
+    )
+    .unwrap();
+    read(root, &opened.id).unwrap()
+}
+
+fn ended(outcome: Outcome, text: &str) -> Report {
+    Report {
+        outcome,
+        text: text.to_owned(),
+        changed: Changed::default(),
+    }
+}
+
+fn nobody_open(_: &ChatRef) -> bool {
+    false
+}
+
+#[test]
+fn a_finished_task_is_listed_under_the_chat_that_asked_until_it_is_cleared() {
+    let (_d, root) = project();
+    let first = a_finished_task(&root, "check prod", 7, done("Healthy."), 1);
+    let second = a_finished_task(&root, "check staging", 8, done("Healthy too."), 2);
+    // A handoff that ended is not a task, and a task still running has not finished.
+    let moved = open(&root, a_handoff(), at("2026-10-07T12:03:00Z")).unwrap();
+    close(
+        &root,
+        &moved.id,
+        Ending {
+            report: Some(done("Moved.")),
+            usage: None,
+        },
+        at("2026-10-07T12:04:00Z"),
+    )
+    .unwrap();
+    open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:05:00Z"),
+    )
+    .unwrap();
+
+    // Oldest first, read from the store: what an app started again reads too.
+    let listed = |root: &Path| -> Vec<String> {
+        finished_for(root, &steward(), nobody_open)
+            .into_iter()
+            .map(|record| record.id)
+            .collect()
+    };
+    assert_eq!(listed(&root), vec![first.id.clone(), second.id.clone()]);
+    // Another chat's list has none of them, whatever number it has.
+    let other = ChatRef {
+        id: Some("01K6SOMEONEELSE0000000000C".to_owned()),
+        ..steward()
+    };
+    assert!(finished_for(&root, &other, nobody_open).is_empty());
+
+    // Clearing one takes its row and nothing else: the record reads as it did, but for the
+    // mark, and a second clear changes nothing.
+    assert!(clear(&root, &first.id).unwrap());
+    assert!(!clear(&root, &first.id).unwrap());
+    assert_eq!(listed(&root), vec![second.id.clone()]);
+    let kept = read(&root, &first.id).expect("the record stays");
+    assert_eq!(
+        kept,
+        Record {
+            cleared: true,
+            ..first.clone()
+        }
+    );
+    // A dispatch that has not finished has no row to clear.
+    assert!(!clear(&root, &moved.id).unwrap());
+}
+
+#[test]
+fn a_task_whose_chat_is_still_open_is_not_listed_as_finished_yet() {
+    // Its report is in and its record has ended, and purlis has not ended its program yet:
+    // it is still drawn as the open chat it is, once.
+    let (_d, root) = project();
+    let task = a_finished_task(&root, "check prod", 7, done("Healthy."), 1);
+    let its_chat = task.worker.chat.clone();
+    assert!(finished_for(&root, &steward(), |worker| same_chat(worker, &its_chat)).is_empty());
+    assert_eq!(finished_for(&root, &steward(), nobody_open).len(), 1);
+}
+
+#[test]
+fn the_rows_of_a_chat_s_finished_tasks_go_when_it_closes_and_their_records_stay() {
+    let (_d, root) = project();
+    let done_one = a_finished_task(&root, "check prod", 7, done("Healthy."), 1);
+    let failed = a_finished_task(
+        &root,
+        "check staging",
+        8,
+        ended(Outcome::Failed, "The cluster refused the login."),
+        2,
+    );
+
+    assert_eq!(clear_for(&root, &steward()), 2);
+    assert!(finished_for(&root, &steward(), nobody_open).is_empty());
+    assert_eq!(clear_for(&root, &steward()), 0);
+    for id in [&done_one.id, &failed.id] {
+        let kept = read(&root, id).expect("the record stays");
+        assert!(kept.cleared);
+        assert!(kept.report.is_some(), "the report is still readable");
+    }
+    assert_eq!(list(&root).len(), 2);
+}
+
+#[test]
+fn done_and_cancelled_fold_and_every_other_end_stays_a_row_of_its_own() {
+    // V100-9: a failure is never hidden behind a count.
+    let (_d, root) = project();
+    let said = |outcome: Outcome, text: &str| {
+        let record = a_finished_task(&root, "a task", 7, ended(outcome, text), 1);
+        let how = Finished::of(&record).expect("a finished task");
+        (how.word(), how.folds())
+    };
+    assert_eq!(said(Outcome::Done, "All good."), ("done", true));
+    assert_eq!(
+        said(Outcome::Cancelled, "Stopped half way."),
+        ("cancelled", true)
+    );
+    assert_eq!(said(Outcome::Failed, "It broke."), ("failed", false));
+    assert_eq!(said(Outcome::Blocked, "Needs a login."), ("blocked", false));
+    assert_eq!(
+        said(Outcome::Failed, ENDED_WITHOUT_A_REPORT),
+        ("ended without a report", false)
+    );
+    assert_eq!(
+        said(Outcome::Failed, crate::handback::UNREPORTED),
+        ("ended without a report", false)
+    );
+    assert_eq!(
+        said(Outcome::Stopped, crate::handback::STOPPED),
+        ("closed by the person", false)
+    );
+    // A handoff's record is no finished task, whatever it ended with.
+    let moved = open(&root, a_handoff(), at("2026-10-07T12:03:00Z")).unwrap();
+    assert_eq!(Finished::of(&moved), None);
+}
+
+#[test]
+fn the_conversation_a_task_ended_in_is_kept_for_a_reopen() {
+    let (_d, root) = project();
+    let running = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    // Not while it runs: its chat may still move to another conversation.
+    assert!(!ended_in(&root, &running.id, "9f2c-the-conversation").unwrap());
+
+    let task = a_finished_task(&root, "check prod", 7, done("Healthy."), 1);
+    assert_eq!(task.conversation, None);
+    assert!(ended_in(&root, &task.id, "9f2c-the-conversation").unwrap());
+    assert!(!ended_in(&root, &task.id, "9f2c-the-conversation").unwrap());
+    let kept = read(&root, &task.id).unwrap();
+    assert_eq!(kept.conversation.as_deref(), Some("9f2c-the-conversation"));
+    assert!(sound(&kept));
+    // And a record written before this field reads with none.
+    let text = serde_json::to_string(&task).unwrap();
+    assert!(!text.contains("conversation"), "{text}");
+    assert!(!text.contains("cleared"), "{text}");
+
+    // The task a chat was reopened from is found by the id its persona chat had.
+    let worker = task.worker.chat.id.clone().unwrap();
+    assert_eq!(
+        task_worked_by(&root, &worker).map(|record| record.id),
+        Some(task.id)
+    );
+    assert_eq!(task_worked_by(&root, "01K6NOBODY0000000000000000"), None);
+}

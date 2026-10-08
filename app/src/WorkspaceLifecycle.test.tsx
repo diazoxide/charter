@@ -447,6 +447,9 @@ describe("deleting a workspace", () => {
       // And so are the badges and repo columns its extensions show (charter-app#340).
       "extension_facts",
       "plane_sidebar",
+      // The chats' finished tasks are read whenever the sidebar is (#1485): a read of the
+      // dispatch records.
+      "finished_tasks",
       "plane_pins",
       "workspace_panels",
       "workspace_repos",

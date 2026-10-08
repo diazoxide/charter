@@ -294,6 +294,11 @@ fn report_it(
     if let Some(asker) = tell {
         crate::dispatched::told(held, asker);
     }
+    // **Delivered, and only then is the task's program to be ended** (#1485): the report is
+    // kept for the chat that asked and its record says sent, both under the lock just let go.
+    // The end takes that lock again as a close does, so the exit it causes finds nothing
+    // owed ([`its_program_ended`]) and marks nothing failed.
+    crate::dispatched::delivered(held, chat);
     Ok(answer)
 }
 
@@ -310,6 +315,11 @@ fn report_under(
     use purlis_core::handback;
 
     let from = held.chats().handed_from(chat).ok_or_else(|| {
+        // A chat reopened from a finished task is an ordinary chat (#1485, V100-8): the task
+        // it was has reported, and nothing it says now is a report to anyone.
+        if let Some(was) = crate::finished::reopened_from(held, chat) {
+            return purlis_core::dispatched::reopened_reports_nothing(&was);
+        }
         if task.is_some() {
             format!(
                 "chat {chat} was not started by a dispatch, so there is no chat waiting on a \
@@ -703,6 +713,9 @@ pub fn its_program_ended(held: &Held, chat: u32) {
             if let Some(asker) = asker {
                 crate::dispatched::told(held, asker);
             }
+            // Its asking chat is told it failed, and its row is a finished one from here
+            // (#1485): the chat whose program is gone is closed, off this thread.
+            crate::dispatched::delivered(held, chat);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -723,7 +736,8 @@ pub enum PersonaChatState {
     /// Stopped on something only you can answer, in its own tab: a permission prompt or a
     /// question.
     WaitingOnOperator,
-    /// It sent its report, and stays open until it is closed.
+    /// It sent its report. Its program is ended once the turn that sent it is over (#1485),
+    /// and it is listed from then as a finished task.
     Reported,
     /// Its program ended before it reported, and the chat that asked was told it failed.
     Ended,
@@ -8953,7 +8967,8 @@ mod tests {
     }
 
     #[test]
-    fn a_reported_persona_chat_stays_open_and_typeable_until_it_is_closed() {
+    fn a_reported_persona_chat_is_open_while_its_turn_goes_on_and_is_ended_when_it_is_over() {
+        // #1485: a task ends at its report. It used to stay open until somebody closed it.
         let plane = a_plane_with_personas();
         let host = Pretend::default();
         let (planes, id, steward) = a_steward_chat(&host, &plane);
@@ -8963,26 +8978,25 @@ mod tests {
             stands(&held, steward, task),
             Some((PersonaChatState::Running, "running".to_owned()))
         );
+        works(&held, task);
 
         let said = reports(&held, &id, task);
 
         assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
-        // Marked reported, and still a chat: open, and the person's keys reach it.
+        // Marked reported, and still a chat while the turn that reported goes on.
         assert_eq!(
             stands(&held, steward, task),
             Some((PersonaChatState::Reported, "reported".to_owned()))
         );
         assert!(open_chats(&held).contains(&task));
         assert_eq!(held.operator_input(task, b"one more thing\r"), Ok(()));
-        // Typing in it, and a turn of its own afterwards, leave it reported.
-        works(&held, task);
-        assert_eq!(
-            stands(&held, steward, task).map(|(state, _)| state),
-            Some(PersonaChatState::Reported)
-        );
-        // Until the person closes it, which reports nothing more.
-        held.close_chat(task).expect("closed");
+        // Its turn ends, and it has its moment: purlis ends its program, which reports
+        // nothing more.
+        the_board_hears(&held, task, Event::Stop);
+        crate::dispatched::moved(&held, task);
+        crate::dispatched::end_look(&held, task, purlis_core::dispatched::Looked::Settled);
         assert_eq!(stands(&held, steward, task), None);
+        assert!(!open_chats(&held).contains(&task));
         assert_eq!(
             waiting(&held, For::Chat(steward)).len(),
             1,
@@ -11016,4 +11030,7 @@ mod tests {
             "{said:?}"
         );
     }
+
+    /// A task ends at its report, stays as a finished row, and can be reopened (#1485).
+    mod ends_at_report;
 }
