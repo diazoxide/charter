@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -49,6 +50,7 @@ import {
 } from "./tabTasks";
 import { TASK_BUCKETS, TASK_BUCKET_DRAWN, tasksIn, type TaskBucket } from "./taskBuckets";
 import { property } from "./theme/theme";
+import { fitCountsOn } from "./wholeWays";
 
 /** Each count's mark: its shape as it is drawn (`StateShown` draws the same four for a row). */
 const MARKS: Readonly<Record<TaskBucket, LucideIcon>> = {
@@ -301,11 +303,17 @@ function Chip({
     isOpen.current = true;
     setOpen(true);
   }, []);
+  /** Whether "End a task" has its rows open (`Menu.Sub`). Held here, so a menu the rest
+   *  opened, which takes no keyboard, can open it by the pointer too. */
+  const [endsOpen, setEndsOpen] = useState(false);
+  const endsSoon = useRef(0);
   const hide = useCallback(() => {
     notResting();
     notLeaving();
     isOpen.current = false;
     setOpen(false);
+    window.clearTimeout(endsSoon.current);
+    setEndsOpen(false);
     setUnfolded(false);
     setReports(NO_REPORTS);
   }, [notLeaving, notResting]);
@@ -385,6 +393,13 @@ function Chip({
     return true;
   };
   const said = chipSaid(name, counts);
+  // **Each count whole or not at all**, and only once the name has given up what it can:
+  // measured, as the tab strip is (`wholeWays.ts`).
+  const anyTasks = tasksIn(counts) > 0;
+  useLayoutEffect(() => {
+    if (!anyTasks || trigger.current === null) return;
+    return fitCountsOn(trigger.current);
+  }, [anyTasks]);
   /** The tab's open tasks, each with the rows that end it: what "End a task" lists. Never a
    *  pane's own chat, which is no task, and never a task that has ended. */
   const endable =
@@ -514,6 +529,17 @@ function Chip({
               collisionPadding={8}
               onPointerEnter={notLeaving}
               onPointerLeave={leaveSoon}
+              // In a menu that took no keyboard, Radix closes the ways to end a task when the
+              // keyboard leaves them, which it never came to: a move onto another of this
+              // menu's rows closes them instead. Moves in the ways' own rows, which are this
+              // menu's in the tree, and on the line that opens them, keep them.
+              onPointerMove={(event) => {
+                if (!quiet || !endsOpen) return;
+                const on = event.target;
+                if (on instanceof Element && on.closest(".tasks-menu-end, .tasks-menu-ends"))
+                  return;
+                setEndsOpen(false);
+              }}
               onInteractOutside={(event) => {
                 // The chip is outside the menu and is not "outside": its own press says
                 // what a press on it does, and a dismissal here would undo it.
@@ -557,12 +583,41 @@ function Chip({
                    and the palette say one thing. One line of this menu, which opens to them:
                    a way to end a task is never one stray press from a way to go to it. A
                    press ends nothing: the window asks its second step. */
-                <Menu.Sub>
+                <Menu.Sub
+                  open={endsOpen}
+                  onOpenChange={(next) => {
+                    window.clearTimeout(endsSoon.current);
+                    setEndsOpen(next);
+                  }}
+                >
                   <Menu.SubTrigger
                     className="tasks-menu-row tasks-menu-end"
                     textValue="End a task"
-                    onPointerMove={quiet ? keepsNoKeyboard : undefined}
-                    onPointerLeave={quiet ? keepsNoKeyboard : undefined}
+                    // **In a menu the rest opened, the pointer opens these rows too.** The
+                    // move is kept from Radix there (it would give the row the keyboard), and
+                    // that kept Radix's own opening as well: this is it, after the same
+                    // moment Radix waits.
+                    onPointerMove={
+                      quiet
+                        ? (event) => {
+                            keepsNoKeyboard(event);
+                            if (endsOpen || endsSoon.current !== 0) return;
+                            endsSoon.current = window.setTimeout(() => {
+                              endsSoon.current = 0;
+                              setEndsOpen(true);
+                            }, ENDS_OPEN_AFTER);
+                          }
+                        : undefined
+                    }
+                    onPointerLeave={
+                      quiet
+                        ? (event) => {
+                            keepsNoKeyboard(event);
+                            window.clearTimeout(endsSoon.current);
+                            endsSoon.current = 0;
+                          }
+                        : undefined
+                    }
                   >
                     <span className="name">End a task</span>
                     <ChevronRight aria-hidden="true" />
@@ -660,6 +715,9 @@ function openFocus(handler: (event: Event) => void): object {
 function keepsNoKeyboard(event: ReactPointerEvent) {
   event.preventDefault();
 }
+
+/** How long the pointer rests on "End a task" before its rows open: Radix's own wait. */
+const ENDS_OPEN_AFTER = 100;
 
 /** The deepest step in a line is drawn at. A task of a task of a task of a task is rare, and
  *  one further in would leave its name no room. */

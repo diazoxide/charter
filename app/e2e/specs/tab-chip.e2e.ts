@@ -453,6 +453,8 @@ describe("the chip a session's tab wears for its tasks", () => {
     for (const name of mine.slice(1)) check(`${name} wears a chip`, after[name].chip, "is", false);
 
     const seen = await measured(mine[0]);
+    if (seen.shown.length !== 3)
+      console.log(`tab-chip.e2e: the chip with room was ${JSON.stringify(seen)}`);
     expect(seen.said).toContain("2 working, 1 failed, 3 done");
     // With room to spare the chip shows every count, and sits inside its tab's own cell,
     // between the tab's button and its close.
@@ -595,11 +597,22 @@ describe("the chip a session's tab wears for its tasks", () => {
       return true;
     });
     expect(onTheLine).toBe(true);
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => document.querySelector('[role="menu"].tasks-menu-ends') !== null),
-      { timeout: 5_000, interval: 50, timeoutMsg: "the ways to end a task never opened" },
-    );
+    await browser
+      .waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector('[role="menu"].tasks-menu-ends') !== null),
+        { timeout: 5_000, interval: 50, timeoutMsg: "the ways to end a task never opened" },
+      )
+      .catch(async (err: unknown) => {
+        const menu = await browser.execute(() => ({
+          menus: document.querySelectorAll('[role="menu"]').length,
+          rows: [...document.querySelectorAll('.tasks-menu [role="menuitem"]')].map(
+            (row) => `${row.className}: ${row.textContent ?? ""}`,
+          ),
+          line: document.querySelector(".tasks-menu-end")?.outerHTML.slice(0, 300) ?? null,
+        }));
+        throw new Error(`${String(err)}; the menu: ${JSON.stringify(menu)}`);
+      });
 
     // Into its rows, and well past the time a menu left by the pointer would have closed.
     const inside = await browser.execute(() => {
@@ -652,6 +665,8 @@ describe("the chip a session's tab wears for its tasks", () => {
       const seen = await measured(mine[0]);
       const [cell, tab, chip, closer] = [seen.cell, seen.tab, seen.chip, seen.closer] as Box[];
       const at = `at ${width}px`;
+      // A red run says the cell it measured.
+      console.log(`tab-chip.e2e: ${at} the tab with a chip was ${JSON.stringify(seen)}`);
 
       // Its share of the strip is the share of every other tab drawn.
       for (const [name, other] of Object.entries(await cells()))
