@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791439814254,
+  "lastUpdate": 1791475730145,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3486,6 +3486,48 @@ window.BENCHMARK_DATA = {
             "value": 102.4769505,
             "unit": "ms",
             "extra": "median of 5 runs: 101.449, 101.615, 102.477, 102.526, 103.143 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "7d7b166168fc041df8947b1e7e25ec4ea1cbe777",
+          "message": "The app's move test writes the keyring stub where its fixture's project is\n\nThe 1Password fixture's project moved to a folder of its own beside the\nstand-in `op`, and one test still wrote the keyring stub under the old root,\na folder that no longer exists.\n\nIt now writes through the fixture's own state folder (`ctx.state`), so the\npath follows the project wherever the fixture puts it.\n\nRefs #1516\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-08T19:55:02+04:00",
+          "tree_id": "c8601348b7bdea247ec17c95aae9e2a2336bfc2c",
+          "url": "https://github.com/purlis/purlis/commit/7d7b166168fc041df8947b1e7e25ec4ea1cbe777"
+        },
+        "date": 1791475728559,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.53555,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.519, 0.528, 0.536, 0.547, 0.548 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.2565885,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.174, 16.207, 16.257, 17.092, 17.235 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.9442165,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.982, 101.670, 102.944, 105.768, 107.019 ms"
           }
         ]
       }
