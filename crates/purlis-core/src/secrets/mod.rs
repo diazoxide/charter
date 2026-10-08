@@ -496,6 +496,13 @@ pub fn identity_missing(ctx: &Ctx, vault: &registry::Vault) -> Option<VaultError
 
 /// The refusal for an identity variable found nowhere. Names only: a keyring failure is the
 /// store's sentence, which names the service and never a value.
+///
+/// **The ways out, in the order they should be taken** (#1526). The keyring first: the vault's
+/// tab in the app has the box that stores the token, and there is no command that does. Then the
+/// export, which only a purlis started from that shell ever sees. Unbinding the vault is not a
+/// fix for a missing token, since it changes whose identity reads the vault, and is said last
+/// and as that. The first line is what `vault list` and the app draw; the app's tab ends it with
+/// its own way out, the box under it.
 fn identity_unset(
     ctx: &Ctx,
     vault: &registry::Vault,
@@ -510,8 +517,9 @@ fn identity_unset(
         );
         return VaultError::new(format!(
             "vault '{}' is read through ${source}, which was moved into {}, but {why}, and it \
-             is not set here either. purlis will not fall back to an ambient ${target}.\n  Set \
-             ${source} where purlis runs and move it again from the vault's tab.",
+             is not set here either. purlis will not fall back to an ambient ${target}.\n  \
+             Paste the token again in this vault's tab in the app. Or export {source}=… where \
+             purlis runs.",
             vault.name,
             keyring::STORE_NAME
         ));
@@ -520,9 +528,13 @@ fn identity_unset(
         "vault '{}' is read through ${source}, which is unset. purlis will not fall \
          back to an ambient ${target}: that would read this vault under an identity \
          it does not declare, and the failure would look like a missing secret rather \
-         than a wrong credential.\n  export {source}=… , or drop the binding: purlis \
-         vault add {} --provider {} --force",
-        vault.name, vault.name, vault.provider
+         than a wrong credential.\n  Put the token in {}: open this vault's tab in the app \
+         and paste it into the box there. Or export {source}=… where purlis runs. If this vault \
+         should not be bound to that identity at all: purlis vault add {} --provider {} --force",
+        vault.name,
+        keyring::STORE_NAME,
+        vault.name,
+        vault.provider
     ))
 }
 

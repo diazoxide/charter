@@ -11,6 +11,14 @@
 //! and where the only one found is where a chat may write, which is never run. The lookup is the providers' own ([`Ctx::program`]), asked of this process's
 //! environment: the Doctor the app opens answers for the app, which is what resolves a
 //! sandboxed chat's `secret exec`.
+//!
+//! The `vault tokens` row (#1526): for each vault read through an identity variable, where its
+//! token is: in the system keyring, in this process's environment only, or nowhere. Printed
+//! only for a project with such a vault. Said from this machine's record and the environment
+//! ([`crate::secrets::identity::held`]): the keyring is not read, so the row makes it ask
+//! nothing, and no token is ever in hand here. A warning for a token found nowhere, and for one
+//! only this environment has, which is the app started from the Dock finding nothing where a
+//! terminal finds everything.
 
 use std::collections::BTreeMap;
 
@@ -208,6 +216,72 @@ fn program_row(ctx: &Ctx, program: &str, vaults: &[Vault]) -> Row {
     } else {
         Row::warn(&name, said.join("; "), hints.join(" "))
     }
+}
+
+/// The row's name.
+pub(super) const TOKENS: &str = "vault tokens";
+
+/// The `vault tokens` row for the project `d` answers for, or `None`. None for the preflight
+/// a chat's start runs: no chat is given an identity variable, so asked of a chat's environment
+/// the row would warn of every token still in a shell.
+pub(super) fn identity_tokens(d: &Doctor) -> Option<Row> {
+    if !d.has_plane || d.preflight {
+        return None;
+    }
+    token_row(&Ctx::new(&d.root, Env::from_process()))
+}
+
+/// [`identity_tokens`] for the project `ctx` names: `None` where no vault declares an identity,
+/// or the registry cannot be read (`purlis vault list`'s to report). Names, never a value.
+pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
+    use crate::secrets::identity::{self, Held};
+    let doc = registry::load_registry(ctx).ok()?;
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    let mut said: Vec<String> = Vec::new();
+    let (mut nowhere, mut here_only) = (false, false);
+    for name in names {
+        let Ok(vault) = registry::vault_in(&doc, &name) else {
+            continue;
+        };
+        for bound in identity::held(ctx, &vault) {
+            let whereabouts = match bound.held {
+                Held::Keyring => format!("is in {}", crate::secrets::keyring::STORE_NAME),
+                Held::Environment => {
+                    here_only = true;
+                    "is in this environment only".to_owned()
+                }
+                Held::Unset => {
+                    nowhere = true;
+                    "is nowhere".to_owned()
+                }
+            };
+            said.push(format!(
+                "'{}': ${} {whereabouts}",
+                crate::personas::one_line(&vault.name),
+                crate::personas::one_line(&bound.source)
+            ));
+        }
+    }
+    if said.is_empty() {
+        return None;
+    }
+    let detail = said.join("; ");
+    if !nowhere && !here_only {
+        return Some(Row::ok(TOKENS, detail));
+    }
+    let mut hint = format!(
+        "Open the vault's tab in the app and paste the token into the box there: it goes into \
+         {}, where purlis finds it however it is started and no chat can read it.",
+        crate::secrets::keyring::STORE_NAME
+    );
+    if here_only {
+        hint.push_str(
+            " A token in this environment is found only by a purlis started from it, which the \
+             app opened from the Dock is not.",
+        );
+    }
+    Some(Row::warn(TOKENS, detail, hint))
 }
 
 #[cfg(test)]
@@ -462,6 +536,82 @@ mod tests {
                 ("vault for vaults", "not found. Used by 'refs'"),
             ]
         );
+    }
+
+    // ---- `vault tokens` (#1526) -------------------------------------------------------------
+
+    const KEPT: &str = "ops_fixture-doctor-kept-1526";
+    const EXPORTED: &str = "ops_fixture-doctor-exported-1526";
+
+    /// A 1Password vault `name` read through `$source`.
+    fn read_through(plane: &Plane, name: &str, source: &str) {
+        plane.register(
+            name,
+            "1password",
+            json!({"op-vault": "Prod", "env": {"OP_SERVICE_ACCOUNT_TOKEN": source}}),
+            None,
+        );
+    }
+
+    #[test]
+    fn each_vault_read_through_a_token_is_said_with_where_its_token_is_and_no_token() {
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin"), ("OP_SHELL_TOKEN", EXPORTED)]);
+        plane.plain("files", json!({"K": "never-printed-1526"}));
+        read_through(&plane, "kept", "OP_KEPT_TOKEN");
+        read_through(&plane, "lost", "OP_LOST_TOKEN");
+        read_through(&plane, "shell", "OP_SHELL_TOKEN");
+        let kept = registry::vault(&plane.ctx, "kept").unwrap();
+        crate::secrets::identity::put_in_keyring(&plane.ctx, &kept, KEPT).unwrap();
+        // A keyring that cannot be read at all: the row is said without reading it.
+        std::fs::write(
+            plane.ctx.state.join(crate::secrets::keyring::STUB_FILE),
+            "not json",
+        )
+        .unwrap();
+
+        let row = token_row(&plane.ctx).expect("a row");
+
+        assert_eq!(row.name, "vault tokens");
+        assert_eq!(row.status, super::super::Status::Warn);
+        assert_eq!(
+            row.detail,
+            "'kept': $OP_KEPT_TOKEN is in the system keyring; 'lost': $OP_LOST_TOKEN is nowhere; \
+             'shell': $OP_SHELL_TOKEN is in this environment only"
+        );
+        assert!(
+            row.hint
+                .starts_with("Open the vault's tab in the app and paste the token into the box"),
+            "{}",
+            row.hint
+        );
+        let all = format!("{row:?}");
+        assert!(!all.contains(KEPT) && !all.contains(EXPORTED), "{all}");
+    }
+
+    #[test]
+    fn a_project_whose_tokens_are_all_in_the_keyring_gets_a_green_row() {
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+        read_through(&plane, "kept", "OP_KEPT_TOKEN");
+        read_through(&plane, "too", "OP_KEPT_TOKEN");
+        let kept = registry::vault(&plane.ctx, "kept").unwrap();
+        crate::secrets::identity::put_in_keyring(&plane.ctx, &kept, KEPT).unwrap();
+
+        let row = token_row(&plane.ctx).expect("a row");
+
+        assert_eq!(row.status, super::super::Status::Ok);
+        assert_eq!(
+            row.detail,
+            "'kept': $OP_KEPT_TOKEN is in the system keyring; 'too': $OP_KEPT_TOKEN is in the \
+             system keyring"
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_vault_read_through_a_token_gets_no_token_row() {
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+        plane.plain("files", json!({"K": "never-printed-1526"}));
+        plane.register("prod", "1password", json!({"op-vault": "Prod"}), None);
+        assert_eq!(token_row(&plane.ctx), None);
     }
 
     #[test]

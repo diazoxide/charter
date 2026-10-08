@@ -145,18 +145,30 @@ this `PATH` finds it, where it is missing, and where the only one is where a cha
 A vault may declare the identity it is read through — `--env OP_SERVICE_ACCOUNT_TOKEN=<VAR>`
 or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, purlis refuses rather than read
 the vault as whoever the ambient token belongs to, and `secret exec` never hands one vault's
-identity variables to a command run for another.
+identity variables to a command run for another. The refusal says the ways out in order: put
+the token in the keyring from the vault's tab in the app, or export `<VAR>` where purlis runs.
 
-**The token itself belongs in the keyring, not in a shell.** Open the vault's tab in the app:
-where its identity variable is set in the app's environment, the tab offers **Move this token
-into the Keychain**. That stores the token in the system keyring — service `charter/identity`,
-account the variable's name (`OP_TEAM_TOKEN`) — and marks the vault's identity as moved in
-`.charter/vaults.json`, this machine's half of the registry. From then on every `purlis secret`
-command, in a chat or in a plain terminal, reads that variable from the keyring first and the
-environment second, so a terminal that exports nothing still runs `purlis secret exec`. The
-mark is honoured only in this machine's half: a committed `vaults.json` cannot tell purlis to
-hand a keyring item to `op`. `vault list` and the tab say where each identity is from the mark,
-without reading the keyring.
+**The token itself belongs in the keyring, not in a shell.** Open the vault's tab in the app.
+It has a box to paste the token into, and it draws that box whether or not the vault could be
+read: a vault whose token is nowhere shows the refusal and the box under it, and lists its
+secrets by itself once the token is stored. This is the case of an app opened from the Dock,
+which never sees what a shell exports. Where the identity variable is set in the app's
+environment, the tab also offers **Move the token from purlis's environment**. Either way the
+token goes into the system keyring, under an item of its own with a random name (service
+`purlis/@identity/<id>`, account the variable's name, `OP_TEAM_TOKEN`), and the vault's
+identity is marked as kept there in `.charter/vaults.json`, this machine's half of the
+registry. From then on every `purlis secret` command, in a chat or in a plain terminal, reads
+that variable from the keyring first and the environment second, so a terminal that exports
+nothing still runs `purlis secret exec`. The mark is honoured only in this machine's half: a
+committed `vaults.json` cannot tell purlis to hand a keyring item to `op`. `vault list`, the tab
+and `purlis doctor` say where each identity is from the mark, without reading the keyring.
+
+**One token serves every vault read through the same variable.** Storing a token marks each
+vault of the project that is read by the same provider through exactly the same variables, as
+the registry stands at that moment, so three vaults read through `$OP_TEAM_TOKEN` take one
+paste. Each gets its own keyring item and its own mark, pinned to its own vault's settings;
+nothing is found by the variable's name. A vault registered later, or one whose variables you
+change, is read through no stored token until you store it again from a tab.
 
 **A chat starts from an allowlisted environment, not the app's whole one.** Whatever the app
 inherited — from a terminal it was started in, `launchctl setenv`, a login item — reaches a chat
@@ -245,7 +257,10 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
   reach to clear; turn it off for a machine that copies secrets.
 
 `purlis doctor`'s vaults row does not check vaults yet. Its `op for vaults` and `vault for
-vaults` rows say only whether each provider's program is found.
+vaults` rows say only whether each provider's program is found. Its `vault tokens` row says,
+for each vault read through an identity variable, whether the token is in the system keyring,
+in this environment only, or nowhere. It warns for the last two, and it reads no keyring item
+to say so.
 
 ## Where a vault lives
 

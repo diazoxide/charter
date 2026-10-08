@@ -835,3 +835,98 @@ fn a_keyring_held_reference_runs_the_pinned_op_and_refuses_any_other_cli() {
     let err = reference::get(&bare, &v, "B").unwrap_err();
     assert!(err.message.contains("pins only `op`"), "{}", err.message);
 }
+
+// ---------------------------------------------------------------------------------------
+// #1526: the way out of an unset identity, and one token for every vault read through it.
+
+#[test]
+fn an_unset_identity_is_told_the_keyring_first_then_the_export_and_last_how_to_unbind() {
+    let (tmp, v) = team_plane();
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+
+    let said = env_overlay(&bare, &v).unwrap_err().message;
+
+    let (why, ways) = said.split_once('\n').expect("two lines");
+    assert!(
+        why.starts_with("vault 'team' is read through $OP_TEAM_TOKEN, which is unset."),
+        "{why}"
+    );
+    assert_eq!(
+        ways,
+        "  Put the token in the system keyring: open this vault's tab in the app and paste it \
+         into the box there. Or export OP_TEAM_TOKEN=… where purlis runs. If this vault should \
+         not be bound to that identity at all: purlis vault add team --provider 1password --force"
+    );
+}
+
+/// Register a 1Password vault `name` kept in `op_vault` and read through `$source`.
+fn read_through(ctx: &Ctx, name: &str, op_vault: &str, source: &str) -> registry::Vault {
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!(op_vault));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": source}),
+    );
+    registry::add_vault(ctx, name, "1password", config, None, false, false).unwrap();
+    registry::vault(ctx, name).unwrap()
+}
+
+#[test]
+fn one_pasted_token_serves_every_vault_read_through_the_same_variable() {
+    let (tmp, bin, _op, team) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    read_through(&ctx, "edge", "Edge", "OP_TEAM_TOKEN");
+    read_through(&ctx, "prod", "Prod", "OP_PROD_TOKEN");
+
+    identity::put_in_keyring(&ctx, &team, PASTED_TOKEN).unwrap();
+
+    // A chat's purlis, which carries neither variable.
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let edge = registry::vault(&bare, "edge").unwrap();
+    assert_eq!(
+        held_at(&bare, &edge),
+        [("OP_TEAM_TOKEN".to_string(), identity::Held::Keyring)]
+    );
+    assert_eq!(
+        env_overlay(&bare, &edge).unwrap(),
+        vec![(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            PASTED_TOKEN.to_string()
+        )]
+    );
+    // Its record is its own, in this machine's half: pinned to ITS binding, under its own item.
+    let local = registry::load_local(&bare).unwrap();
+    let of = |name: &str| local["vaults"][name]["config"]["identity"].clone();
+    assert_eq!(of("edge")["op_vault"], "Edge");
+    assert_eq!(of("edge")["account"], serde_json::Value::Null);
+    assert_eq!(of("team")["op_vault"], "Fixture");
+    assert_ne!(of("edge")["ids"], of("team")["ids"]);
+
+    // A vault read through another variable is given nothing.
+    let prod = registry::vault(&bare, "prod").unwrap();
+    assert_eq!(
+        held_at(&bare, &prod),
+        [("OP_PROD_TOKEN".to_string(), identity::Held::Unset)]
+    );
+    assert!(env_overlay(&bare, &prod).is_err());
+    assert_eq!(of("prod"), serde_json::Value::Null);
+}
+
+#[test]
+fn a_token_moved_from_the_environment_serves_every_vault_read_through_the_same_variable() {
+    let (tmp, team) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    read_through(&carrying, "edge", "Edge", "OP_TEAM_TOKEN");
+
+    identity::move_to_keyring(&carrying, &team).unwrap();
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let edge = registry::vault(&bare, "edge").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &edge).unwrap(),
+        vec![(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            MOVED_TOKEN.to_string()
+        )]
+    );
+}
