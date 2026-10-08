@@ -46,6 +46,7 @@ import {
   openView,
   selectTab,
   splitFocusedPane,
+  switchTabTo,
   viewKey,
   type Tabs,
   type ViewRef,
@@ -390,6 +391,23 @@ describe("the one list of actions", () => {
 
     expect(by(offers, "pane.close")?.title).toBe("End this pane's chat");
     expect(by(offers, "pane.close")?.note).toBe(ENDS_IT);
+  });
+
+  it("offers no pane close while the pane shows a task, and still ends the session from its tab", () => {
+    // Chat 9 is a task of chat 7, shown inside chat 7's tab (#1486).
+    const tabs = switchTabTo(openTab(noTabs(), 7, "3", "steward"), 9, (session) =>
+      session === 9 ? 7 : undefined,
+    );
+    const offers = catalogue(now({ tabs }));
+
+    expect(by(offers, "pane.close")?.available).toBe(false);
+    expect(by(offers, "pane.close")?.reason).toBe(
+      "This pane shows a task of steward 3. Go back to steward 3 to end its chat, or close the tab.",
+    );
+    // The tab is the session's, and its close is the session's.
+    expect(by(offers, "tab.close:1")?.title).toBe("End chat steward 3");
+    expect(by(offers, "tab.close:1")?.available).toBe(true);
+    expect(by(offers, "tab.close:1")?.does).toEqual({ verb: "closeTab", tab: 1, ends: true });
   });
 
   it("says on letting go of a project what goes with it and what does not", () => {
