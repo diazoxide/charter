@@ -2032,7 +2032,7 @@ export function catalogue(now: Now): Offer[] {
   }
 
   offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
-  offers.push(...taskRows(now.listed ?? [], now.tabs));
+  offers.push(...taskRows(now.listed ?? []));
   offers.push(BESIDE);
 
   const remove = "Remove the folder of this chat's branch";
@@ -2561,14 +2561,16 @@ export function stopRows(listed: readonly ListedChat[], stopping: readonly numbe
 }
 
 /**
- * **A row for each task that has no tab** (#1499, V100-49), so the palette's search finds a
- * task as it finds a tab: `chat.show:<session>`, which shows the task as its row in the Chats
- * list does. Its title says where it works and who asked, so either finds it. A chat with a
- * tab is found by its `Switch to tab` row and has none here.
+ * **A row for each task** (#1499, V100-49), so the palette's search finds a task as it finds a
+ * tab: `chat.show:<session>`, which shows the task as its row in the Chats list does, inside
+ * the tab of the session that asked for it (#1486). Its title says where it works and who
+ * asked, so either finds it. **Every task, shown or not**: a task on screen is in its
+ * session's tab and has no `Switch to tab` row of its own, so leaving it out would make the
+ * one the person is looking at the one the palette cannot find.
  */
-export function taskRows(listed: readonly ListedChat[], tabs: Tabs): Offer[] {
+export function taskRows(listed: readonly ListedChat[]): Offer[] {
   return listed
-    .filter((chat) => chat.mode === "task" && tabHolding(tabs, chat.session) === undefined)
+    .filter((chat) => chat.mode === "task")
     .map((chat) => {
       const asker = chat.from === null ? "" : `, asked by ${chat.from}`;
       return can(
@@ -2580,7 +2582,7 @@ export function taskRows(listed: readonly ListedChat[], tabs: Tabs): Offer[] {
     });
 }
 
-/** The catalogue's id for the row that shows a task with no tab. */
+/** The catalogue's id for the row that shows a task. */
 export function taskShowId(session: number): string {
   return `chat.show:${session}`;
 }

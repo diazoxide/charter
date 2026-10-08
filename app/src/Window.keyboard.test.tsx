@@ -314,10 +314,9 @@ describe("the window's tab order", () => {
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
       "tab steward two",
       "button New tab",
-      // The left region, top to bottom. The Chats list's filter (#1499): its box, then its two
-      // chips, needs you and working, each a box of its own.
+      // The left region, top to bottom. The Chats list's filter (#1499): its box, then its
+      // chips, needs you and working, which are ONE stop with the arrows between them.
       "input Filter chats by name, persona, workspace or state",
-      "input",
       "input",
       // The project's chats (#1447): ONE stop, the row of the chat in front, which reads as
       // its name and its state's word (#1484), then its workspace on its second line (#1499).

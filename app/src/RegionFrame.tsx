@@ -4,6 +4,7 @@ import { Activity, BellRing, FolderTree } from "lucide-react";
 import {
   CATALOGUE,
   inSlots,
+  leastOf,
   shownIn,
   SIDES,
   slotSize,
@@ -186,7 +187,7 @@ function Slot({
       collapsible
       collapsedSize="0%"
       defaultSize={`${startingSize(side, started)}%`}
-      minSize={`${SLOTS[side].least}%`}
+      minSize={leastOf(side)}
       maxSize={`${SLOTS[side].most}%`}
     >
       {shown.map((one) => (

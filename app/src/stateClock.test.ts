@@ -80,6 +80,19 @@ describe("how long a chat has been in its state, as the window saw it (V100-19)"
     expect(clock.since(3)).toBe(7000);
   });
 
+  it("does not take old chats for arrivals when the list comes back after being empty or partial", () => {
+    const clock = stateClock();
+    clock.read(nothingKnown, rows, 1000);
+
+    // The sidebar is read again: for a moment no chat is listed, then one, then both.
+    clock.read(nothingKnown, [], 2000);
+    clock.read(nothingKnown, chatsTree([listed(2)]), 3000);
+    clock.read(nothingKnown, rows, 4000);
+
+    expect(clock.since(1)).toBeNull();
+    expect(clock.since(2)).toBeNull();
+  });
+
   it("tells its readers when a time changes, and only then", () => {
     const clock = stateClock();
     let told = 0;
@@ -93,6 +106,22 @@ describe("how long a chat has been in its state, as the window saw it (V100-19)"
     clock.read(states, rows, 3000);
 
     expect(told).toBe(1);
+  });
+
+  it("says once that a chat's state changed while its row was not drawn", () => {
+    const clock = stateClock();
+    let states = after(nothingKnown, 1, "running", 1);
+    states = after(states, 2, "running", 2);
+    clock.read(states, rows, 1000, new Set([1]));
+
+    states = after(states, 1, "waiting", 3);
+    states = after(states, 2, "waiting", 4);
+    clock.read(states, rows, 2000, new Set([1]));
+
+    // Chat 1's row showed the change; chat 2's was folded away.
+    expect(clock.missed(1)).toBe(false);
+    expect(clock.missed(2)).toBe(true);
+    expect(clock.missed(2)).toBe(false);
   });
 
   it("forgets a chat that is no longer listed", () => {

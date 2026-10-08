@@ -2,7 +2,9 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type FocusEvent,
   type KeyboardEvent,
@@ -21,22 +23,25 @@ import {
   found,
   liveBelow,
   matches,
+  matchesFinished,
   sessionOrder,
   shownOfRow,
   sinceSaid,
   stamped,
   summaryOf,
   type Filter,
+  type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
 import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
-import type { ShownKind, TaskFacts } from "./shownState";
+import type { TaskFacts } from "./shownState";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
 import { useTabStop } from "./roving";
 import { stateClock, useStateSince, type StateClock } from "./stateClock";
 import { SHAPES } from "./StateShown";
+import { deletes } from "./tabKeys";
 
 /** A row's id in the section's roving focus. */
 const rowId = (session: number) => `chats:${session}`;
@@ -50,11 +55,15 @@ const NO_TASKS: readonly FinishedTask[] = [];
 const NOT_REOPENED = () => Promise.resolve<string | undefined>(undefined);
 const NOT_CLEARED = () => undefined;
 
-/** The states the filter's chips ask for, as each is said. */
-const CHIPS: readonly { kind: ShownKind; says: string }[] = [
-  { kind: "needs-you", says: "needs you" },
-  { kind: "working", says: "working" },
+/** The filter's chips: the rank each asks for (`chatsList.rankOf`), as each is said. */
+const CHIPS: readonly { rank: Rank; says: string }[] = [
+  { rank: 0, says: "needs you" },
+  { rank: 1, says: "working" },
 ];
+
+/** A chip's id in the chips' roving focus. */
+const chipId = (rank: Rank) => `chats-chip:${rank}`;
+const CHIP_IDS = CHIPS.map((chip) => chipId(chip.rank));
 
 /** What the list is drawn from that the chats' own moves change: held still while the pointer
  *  or the keyboard is in the list. */
@@ -65,13 +74,31 @@ type Moving = {
   live: readonly number[];
   /** The chats the filter asks for, or nothing while it asks for none. */
   asked: readonly number[] | null;
+  /** Every chat listed: one that arrives while the list is held is drawn when it is let go. */
+  listed: readonly number[];
 };
 
 const sameAsked = (one: readonly number[] | null, other: readonly number[] | null) =>
   one === other || (one !== null && other !== null && sameList(one, other));
 
+/** No folds set by hand. */
+const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
+
 /** What a key on a row asks for beside opening it. */
 type Asked = "beside" | "stop";
+
+/**
+ * Whether the element that took the focus took it from the keyboard. A pointer's press focuses
+ * a row too, on the WebViews that focus a button on a click, and a list held for that would
+ * stay held after the pointer left. Where the engine cannot say, it is taken as the keyboard's.
+ */
+function byKeyboard(target: Element): boolean {
+  try {
+    return target.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
 
 /**
  * **Every running chat of the project, in one tree** (#1447), in the left region above the
@@ -91,10 +118,18 @@ type Asked = "beside" | "stop";
  * the list finds a chat by its name, persona, workspace or state, keeps the rows above a match,
  * and says how many it hides. A row is two lines, or one (`chatsListPrefs.ts`).
  *
- * **Nothing moves under a resting pointer.** While the pointer is over the list, or the
- * keyboard is in it, the order, the folds the list makes by itself and the filter's answer are
- * held as they were, and are brought up to date when both have left. What the person does
- * themselves (a fold, a word typed in the filter) is applied at once.
+ * **No row is moved under a resting pointer.** While the pointer is over the list, or the
+ * keyboard is in it, the order, the folds the list makes by itself, the filter's answer and
+ * the chats that arrive are held as they were, and are brought up to date when both have left,
+ * or when the window stops being the one in use. A row is the same height whatever it comes to
+ * say, and what the section says about the filter or a key has a line of its own that is
+ * always there. What the person does themselves (a fold, a word typed in the filter) is
+ * applied at once. **One thing is not held: a chat that ends.** Its row goes, and the rows
+ * below it move up, because a row kept for a chat that is gone would be a way to nothing.
+ *
+ * **A chat that needs you is never filtered away silently.** Where the filter hides one, the
+ * line under the filter says so and has a button that goes to it. And a filter opens every row
+ * above what it found, whatever fold was set by hand, which is back when the filter is cleared.
  *
  * **A row says its chat's state in a word beside a mark** (#1484): `ChatShownState`, which the
  * explorer's rows draw too.
@@ -132,7 +167,8 @@ export function ChatsSection({
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
   front?: number;
-  /** A row was pressed: go to that chat. A task is shown inside its session's tab (#1486). */
+  /** A row was pressed: go to that chat. A task is shown inside its session's tab (#1486).
+   *  The one way a row opens. */
   onOpen: (session: number) => void;
   /** The catalogue as it stands, by id: what each row's menu reads its rows from. */
   offers?: Catalogued;
@@ -150,14 +186,29 @@ export function ChatsSection({
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
   const [text, setText] = useState("");
-  const [kinds, setKinds] = useState<readonly ShownKind[]>([]);
-  const filter = useMemo<Filter>(() => ({ text, kinds }), [text, kinds]);
+  const [ranks, setRanks] = useState<readonly Rank[]>([]);
+  const filter = useMemo<Filter>(() => ({ text, ranks }), [text, ranks]);
   const filtering = filters(filter);
   /** The folds the person set, by chat: true is folded. This window's own, and forgotten with
    *  it. A chat that is not here folds and opens by itself. */
-  const [hand, setHand] = useState<ReadonlyMap<number, boolean>>(() => new Map());
-  /** Why a key pressed on a row did nothing, while that is worth saying. */
+  const [hand, setHand] = useState<ReadonlyMap<number, boolean>>(NO_FOLDS);
+  /** The folds the person set while a filter is on, which last as long as the filter does: a
+   *  filter opens every row above what it found, whatever `hand` says, and leaves `hand` be. */
+  const [handFiltered, setHandFiltered] = useState<ReadonlyMap<number, boolean>>(NO_FOLDS);
+  if (!filtering && handFiltered.size > 0) setHandFiltered(NO_FOLDS);
+  /** Why a key pressed on a row did nothing, until the next key. */
   const [said, setSaid] = useState<string>();
+
+  /** The finished tasks the filter asks for, by the chat that asked for them. */
+  const finishedFound = useMemo(() => {
+    const by = new Map<number, FinishedTask[]>();
+    if (!filtering) return by;
+    for (const [session, tasks] of finished) {
+      const asked = tasks.filter((task) => matchesFinished(task, filter));
+      if (asked.length > 0) by.set(session, asked);
+    }
+    return by;
+  }, [finished, filter, filtering]);
 
   // What the chats' own moves change, each read through the selector: a move that changes
   // none of them draws nothing here.
@@ -177,15 +228,20 @@ export function ChatsSection({
       if (!filtering) return null;
       const queue = new Set(states.needsYou);
       return rows
-        .filter((row) => matches(row, shownOfRow(states, row, queue), filter))
+        .filter(
+          (row) =>
+            matches(row, shownOfRow(states, row, queue), filter) || finishedFound.has(row.session),
+        )
         .map((row) => row.session);
     },
     sameAsked,
   );
+  const listed = useMemo(() => rows.map((row) => row.session), [rows]);
 
   // **Held still while the pointer is over the list or the keyboard is in it** (V100-47): no
-  // row moves under a click. Taken as the pointer or the focus comes in, let go when both have
-  // left.
+  // row moves under a click. Taken as the pointer or the keyboard comes in, let go when both
+  // have left.
+  const list = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
   const [inside, setInside] = useState(false);
   // The list is not drawn with no chat to list, so nothing would say the pointer left it.
@@ -193,9 +249,20 @@ export function ChatsSection({
     setOver(false);
     setInside(false);
   }
+  // And neither hold outlives the window being the one in use: a pointer parked over the
+  // sidebar while the person works elsewhere sends no leave. The next move of the pointer, or
+  // key in the list, takes it again.
+  useEffect(() => {
+    const away = () => {
+      setOver(false);
+      setInside(false);
+    };
+    window.addEventListener("blur", away);
+    return () => window.removeEventListener("blur", away);
+  }, []);
   const resting = over || inside;
   const [held, setHeld] = useState<Moving | null>(null);
-  const moving: Moving = { order, live, asked };
+  const moving: Moving = { order, live, asked, listed };
   if (resting && held === null) setHeld(moving);
   if (!resting && held !== null) setHeld(null);
   const now = resting && held !== null ? held : moving;
@@ -204,6 +271,11 @@ export function ChatsSection({
     how();
     setHeld(null);
   };
+  const clear = () =>
+    refilter(() => {
+      setText("");
+      setRanks([]);
+    });
 
   /** What each chat's finished tasks come to: a folded row's summary, and whether one of them
    *  stands alone, which keeps its chat open. */
@@ -219,17 +291,25 @@ export function ChatsSection({
       ),
     [finished],
   );
+  /** The rows the list is drawn from: every chat, less the ones that arrived while it is
+   *  held. A chat that ended is not in `rows`, and is not kept. */
+  const steady = useMemo(() => {
+    if (now.listed === listed) return rows;
+    const known = new Set(now.listed);
+    return rows.filter((row) => known.has(row.session));
+  }, [rows, listed, now.listed]);
   /** The rows in the order they stand, less what the filter hides. */
   const base = useMemo(() => {
-    const inOrder = arranged(rows, now.order);
+    const inOrder = arranged(steady, now.order);
     return stamped(now.asked === null ? inOrder : found(inOrder, new Set(now.asked)));
-  }, [rows, now.order, now.asked]);
+  }, [steady, now.order, now.asked]);
   const parents = useMemo(() => parentsIn(base), [base]);
   /**
    * Whether each row's own rows are drawn under it, for a row that has some (a chat or a
-   * finished task). **A fold set by hand wins** (V100-48). Otherwise a row is open while a
-   * chat under it is not over or a finished task of its own stands alone, and a filter opens
-   * every row it kept a chat under.
+   * finished task). **A fold set by hand wins over the folds the list makes** (V100-48):
+   * without one, a row is open while a chat under it is not over or a finished task of its
+   * own stands alone. **A filter wins over both**: every row above what it found is open, so
+   * what it found is drawn, and only a fold set while it is on shuts one again.
    */
   const opens = useMemo(() => {
     const alive = new Set(now.live);
@@ -237,44 +317,69 @@ export function ChatsSection({
     for (const row of base) {
       const { session } = row;
       if (!parents.has(session) && !ended.has(session)) continue;
-      const set = hand.get(session);
+      const set = now.asked !== null ? handFiltered.get(session) : hand.get(session);
       by.set(
         session,
         set !== undefined
           ? !set
           : now.asked !== null
-            ? parents.has(session)
+            ? parents.has(session) || finishedFound.has(session)
             : alive.has(session) || ended.get(session)?.alone === true,
       );
     }
     return by;
-  }, [base, parents, ended, hand, now.live, now.asked]);
+  }, [base, parents, ended, hand, handFiltered, finishedFound, now.live, now.asked]);
   const folded = useMemo(
     () => new Set([...opens].filter(([, open]) => !open).map(([session]) => session)),
     [opens],
   );
   const drawn = useMemo(() => unfolded(base, folded), [base, folded]);
+  // **The keyboard's hold never outlives the keyboard being here.** A focused row that is
+  // taken out of the document (its task stopped, or finished, or was filtered away) sends no
+  // blur, so after every draw the hold is let go when the focus is no longer in the list.
+  useLayoutEffect(() => {
+    if (inside && list.current?.contains(document.activeElement) !== true) setInside(false);
+  }, [inside, drawn, rows, finished]);
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
   const leads = useMemo(() => needing(rows, needsYou), [rows, needsYou]);
   const byNumber = useMemo(() => new Map(rows.map((row) => [row.session, row])), [rows]);
+  /**
+   * **The chats that need the person and that the filter hides**, longest waiting first
+   * (#1499): their own rows and every row above them are filtered out, so no hand is drawn
+   * for them anywhere in the list. Read off the queue as it stands, never held.
+   */
+  const hiddenNeeding = useMemo(() => {
+    if (now.asked === null) return [];
+    const kept = new Set(base.map((row) => row.session));
+    return needsYou.filter((session) => byNumber.has(session) && !kept.has(session));
+  }, [base, byNumber, needsYou, now.asked]);
 
   // How long each chat has been in its state, as this window saw it: read off every chat, drawn
-  // or not, so a row that was folded away says the same time when it is drawn again.
-  const [clock] = useState(stateClock);
+  // or not, so a row that was folded away says the same time when it is drawn again. One clock
+  // per project: chats are numbered per project.
+  const { store, plane } = chats;
+  const clock = useMemo(() => {
+    void plane;
+    return stateClock();
+  }, [plane]);
+  const onScreen = useMemo(() => new Set(drawn.map((row) => row.session)), [drawn]);
   useEffect(() => {
-    const read = () => clock.read(chats.store.statesFor(chats.plane), rows, Date.now());
+    const read = () => clock.read(store.statesFor(plane), rows, Date.now(), onScreen);
     read();
-    return chats.store.subscribe(read);
-  }, [chats, clock, rows]);
+    return store.subscribe(read);
+  }, [store, plane, clock, rows, onScreen]);
 
-  const fold = useCallback((session: number, shut: boolean) => {
-    setHand((was) => {
-      if (was.get(session) === shut) return was;
-      const set = new Map(was);
-      set.set(session, shut);
-      return set;
-    });
-  }, []);
+  const fold = useCallback(
+    (session: number, shut: boolean) => {
+      (filtering ? setHandFiltered : setHand)((was) => {
+        if (was.get(session) === shut) return was;
+        const set = new Map(was);
+        set.set(session, shut);
+        return set;
+      });
+    },
+    [filtering],
+  );
   const press = useCallback((offer: Offer) => onPress?.(offer), [onPress]);
   const act = useCallback(
     (session: number, what: Asked) => {
@@ -284,7 +389,6 @@ export function ChatsSection({
         setSaid(offer.reason);
         return;
       }
-      setSaid(undefined);
       onPress?.(offer);
     },
     [offers, onPress],
@@ -293,185 +397,251 @@ export function ChatsSection({
     front === undefined ? undefined : rowId(front),
     drawn.map((row) => rowId(row.session)),
   );
+  const chipStop = useTabStop(undefined, CHIP_IDS);
   const left = (event: FocusEvent<HTMLElement>) => {
     const to = event.relatedTarget;
     if (to instanceof Node && event.currentTarget.contains(to)) return;
     setInside(false);
     setSaid(undefined);
   };
-  const hidden = rows.length - base.length;
+  const hidden = steady.length - base.length;
+  const hiddenFirst = hiddenNeeding.length === 0 ? undefined : byNumber.get(hiddenNeeding[0]);
+  /** What the line under the filter says of it. A chat that needs the person comes first. */
+  const hides = !filtering
+    ? ""
+    : [
+        hiddenNeeding.length === 0
+          ? ""
+          : hiddenNeeding.length === 1
+            ? "1 chat the filter hides needs you."
+            : `${hiddenNeeding.length} chats the filter hides need you.`,
+        base.length === 0
+          ? "No chat matches the filter."
+          : hidden === 0
+            ? "The filter hides no chat."
+            : `The filter hides ${hidden} of ${steady.length} chats.`,
+      ]
+        .filter((one) => one !== "")
+        .join(" ");
   return (
     <section className="chats-section" data-testid="chats-section" aria-labelledby="chats-title">
-      <h2 className="sidebar-title" id="chats-title">
-        <MessagesSquare className="node-icon" aria-hidden="true" />
-        Chats
-      </h2>
+      {/* The title and the filter stay at the top of the section while its rows scroll. */}
+      <div className="chats-head">
+        <h2 className="sidebar-title" id="chats-title">
+          <MessagesSquare className="node-icon" aria-hidden="true" />
+          Chats
+        </h2>
+        {rows.length > 0 && (
+          <>
+            <div className="chats-filter" role="search" aria-label="Filter the chats">
+              <input
+                type="search"
+                className="chats-filter-text"
+                // #190: WebKit leaves a control out of the tab sequence without `tabIndex`.
+                tabIndex={0}
+                aria-label="Filter chats by name, persona, workspace or state"
+                placeholder="Filter chats"
+                value={text}
+                onChange={(event) => {
+                  const typed = event.target.value;
+                  refilter(() => setText(typed));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape" || !filtering) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  clear();
+                }}
+              />
+              {/* The chips: ONE Tab stop, with the arrows between them (`roving.ts`), named
+                  as a group so each box is heard as what it narrows the list to. A box each,
+                  since each is on or off, drawn as a chip. */}
+              <RovingFocusGroup.Root asChild orientation="horizontal" {...chipStop}>
+                <div className="chats-chips" role="group" aria-label="Show only">
+                  {CHIPS.map((chip) => (
+                    <label
+                      key={chip.rank}
+                      className="chats-chip"
+                      data-on={ranks.includes(chip.rank) || undefined}
+                    >
+                      <RovingFocusGroup.Item asChild tabStopId={chipId(chip.rank)}>
+                        <input
+                          type="checkbox"
+                          checked={ranks.includes(chip.rank)}
+                          onChange={() =>
+                            refilter(() =>
+                              setRanks((was) =>
+                                was.includes(chip.rank)
+                                  ? was.filter((rank) => rank !== chip.rank)
+                                  : [...was, chip.rank],
+                              ),
+                            )
+                          }
+                        />
+                      </RovingFocusGroup.Item>
+                      {chip.says}
+                    </label>
+                  ))}
+                </div>
+              </RovingFocusGroup.Root>
+            </div>
+            {/* **One line, always there**, so what it comes to say is announced (a live region
+                that enters the tree with its words is not) and pushes no row down. Two things
+                are said on it: what the filter hides, and why a key just pressed on a row did
+                nothing, which is drawn in the count's place until the next key. */}
+            <div className="chats-notes">
+              {hiddenFirst !== undefined && (
+                <button
+                  type="button"
+                  className="chats-hidden-go"
+                  // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+                  tabIndex={0}
+                  data-leads-to={hiddenFirst.session}
+                  aria-label={`Go to ${hiddenFirst.name}, which needs you and the filter hides`}
+                  title={`Go to ${hiddenFirst.name}, which needs you and the filter hides`}
+                  onClick={() => onOpen(hiddenFirst.session)}
+                >
+                  <Hand aria-hidden="true" />
+                  Go
+                </button>
+              )}
+              <p
+                className={said === undefined ? "chats-hidden" : "chats-hidden away"}
+                role="status"
+                title={hides || undefined}
+              >
+                {hides}
+              </p>
+              <p className="chats-said" role="status" title={said}>
+                {said ?? ""}
+              </p>
+            </div>
+          </>
+        )}
+      </div>
       {rows.length === 0 ? (
         <p className="empty">No chats are running in this project.</p>
       ) : (
-        <>
-          <div className="chats-filter" role="search" aria-label="Filter the chats">
-            <input
-              type="search"
-              className="chats-filter-text"
-              // #190: WebKit leaves a control out of the tab sequence without `tabIndex`.
-              tabIndex={0}
-              aria-label="Filter chats by name, persona, workspace or state"
-              placeholder="Filter chats"
-              value={text}
-              onChange={(event) => {
-                const typed = event.target.value;
-                refilter(() => setText(typed));
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape" || !filtering) return;
-                event.preventDefault();
-                event.stopPropagation();
-                refilter(() => {
-                  setText("");
-                  setKinds([]);
-                });
-              }}
-            />
-            {/* The chips: a box each, since each is on or off, drawn as a chip. */}
-            {CHIPS.map((chip) => (
-              <label
-                key={chip.kind}
-                className="chats-chip"
-                data-on={kinds.includes(chip.kind) || undefined}
-              >
-                <input
-                  type="checkbox"
-                  tabIndex={0}
-                  checked={kinds.includes(chip.kind)}
-                  onChange={() =>
-                    refilter(() =>
-                      setKinds((was) =>
-                        was.includes(chip.kind)
-                          ? was.filter((kind) => kind !== chip.kind)
-                          : [...was, chip.kind],
-                      ),
-                    )
-                  }
-                />
-                {chip.says}
-              </label>
-            ))}
-          </div>
-          {/* Said whenever a filter is on, so the rows it hides are never simply missing. */}
-          <p className="chats-hidden" role="status">
-            {!filtering
-              ? ""
-              : base.length === 0
-                ? "No chat matches the filter."
-                : hidden === 0
-                  ? "The filter hides no chat."
-                  : `The filter hides ${hidden} of ${rows.length} chats.`}
-          </p>
-          <p className="chats-said" role="status">
-            {said ?? ""}
-          </p>
-          <div
-            className="chats-list"
-            onPointerEnter={() => setOver(true)}
-            onPointerLeave={() => setOver(false)}
-            onFocus={() => setInside(true)}
-            onBlur={left}
-            onKeyDown={(event) => {
-              // Escape in the list takes the filter off, as it does in the filter's own box.
-              if (event.key !== "Escape" || !filtering) return;
-              event.preventDefault();
-              refilter(() => {
-                setText("");
-                setKinds([]);
-              });
-            }}
-          >
-            {drawn.length > 0 && (
-              <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-                <ul role="tree" aria-label="Chats of this project">
-                  {drawn.map((row, at) => {
-                    const lead = leads.get(row.session);
-                    const open = opens.get(row.session);
-                    const asker = row.parent === null ? undefined : byNumber.get(row.parent);
-                    const above = at === 0 ? undefined : topBefore(drawn, at);
-                    return [
-                      // **A workspace's sessions stand together** (V100-47, a setting): its
-                      // name over the first of them. Not a row of the tree, and not said by
-                      // it: each row says its own workspace.
-                      prefs.grouped && row.level === 1 && above?.workspace !== row.workspace && (
-                        <li
-                          key={`group:${row.session}`}
-                          role="none"
-                          className="chats-group"
-                          aria-hidden="true"
-                        >
-                          {row.workspace}
-                        </li>
-                      ),
-                      <Row
-                        key={row.session}
-                        session={row.session}
-                        name={row.name}
-                        persona={row.persona}
-                        workspace={row.workspace}
-                        // A task says where it works only when that is not where the chat
-                        // that asked works (V100-19); every other chat says it.
-                        elsewhere={
-                          row.mode !== "task" ||
-                          asker === undefined ||
-                          asker.workspace !== row.workspace
+        <div
+          ref={list}
+          className="chats-list"
+          onPointerEnter={() => setOver(true)}
+          // Taken again by the pointer's next move, after the window was left and come back to.
+          onPointerMove={() => {
+            if (!over) setOver(true);
+          }}
+          onPointerLeave={() => setOver(false)}
+          // Only the keyboard's focus holds the list: see `byKeyboard`.
+          onFocus={(event) => {
+            if (byKeyboard(event.target)) setInside(true);
+          }}
+          onBlur={left}
+          // Before the row's own keys: what the last key left said is taken down by the next,
+          // unless that is Space again, and a key in the list is the keyboard being here.
+          onKeyDownCapture={(event) => {
+            if (event.key !== " ") setSaid(undefined);
+            if (!inside) setInside(true);
+          }}
+          onKeyDown={(event) => {
+            // Escape in the list takes the filter off, as it does in the filter's own box, and
+            // like that one it is taken here: nothing behind the list acts on it too.
+            if (event.key !== "Escape" || !filtering) return;
+            event.preventDefault();
+            event.stopPropagation();
+            clear();
+          }}
+        >
+          {drawn.length > 0 && (
+            <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+              <ul role="tree" aria-label="Chats of this project">
+                {/* One flat list of keyed items, so a row that changes place is moved and not
+                    made again: a list of lists would key each row by where it stands. */}
+                {drawn.flatMap((row, at) => {
+                  const lead = leads.get(row.session);
+                  const open = opens.get(row.session);
+                  const asker = row.parent === null ? undefined : byNumber.get(row.parent);
+                  const above = at === 0 ? undefined : topBefore(drawn, at);
+                  return [
+                    // **A workspace's sessions stand together** (V100-47, a setting): its
+                    // name over the first of them. Not a row of the tree, and not said by
+                    // it: each row says its own workspace.
+                    prefs.grouped && row.level === 1 && above?.workspace !== row.workspace && (
+                      <li
+                        key={`group:${row.session}`}
+                        role="none"
+                        className="chats-group"
+                        aria-hidden="true"
+                      >
+                        {row.workspace}
+                      </li>
+                    ),
+                    <Row
+                      key={row.session}
+                      session={row.session}
+                      name={row.name}
+                      persona={row.persona}
+                      workspace={row.workspace}
+                      // A task says where it works only when that is not where the chat
+                      // that asked works (V100-19); every other chat says it.
+                      elsewhere={
+                        row.mode !== "task" ||
+                        asker === undefined ||
+                        asker.workspace !== row.workspace
+                      }
+                      task={row.mode === "task"}
+                      lines={prefs.lines}
+                      branch={row.branch}
+                      shell={row.shell}
+                      report={row.report}
+                      outcome={row.outcome}
+                      asking={row.asking}
+                      harness={row.harness}
+                      level={row.level}
+                      posinset={row.posinset}
+                      setsize={row.setsize}
+                      from={row.orphaned ? row.from : null}
+                      tab={row.tab}
+                      current={row.session === front}
+                      open={open ?? null}
+                      summary={open === false ? (ended.get(row.session)?.summary ?? null) : null}
+                      needs={lead === undefined ? null : lead}
+                      needsName={
+                        lead === undefined || lead === row.session
+                          ? null
+                          : (byNumber.get(lead)?.name ?? null)
+                      }
+                      stopping={stopping?.has(row.session) ?? false}
+                      offers={offers}
+                      clock={clock}
+                      onOpen={onOpen}
+                      onFold={fold}
+                      onPress={press}
+                      onAct={act}
+                    />,
+                    // The finished tasks of each chat whose rows end here (#1485): this
+                    // row's own, where no chat is drawn under it, then those of every chat
+                    // above it that this row is the last one under. Under a filter, the ones
+                    // it asks for.
+                    ...endingAt(drawn, at, folded).map((one) => (
+                      <FinishedTasks
+                        key={`finished:${one.session}`}
+                        asker={one.name}
+                        level={one.level + 1}
+                        tasks={
+                          (now.asked !== null
+                            ? finishedFound.get(one.session)
+                            : finished.get(one.session)) ?? NO_TASKS
                         }
-                        task={row.mode === "task"}
-                        lines={prefs.lines}
-                        branch={row.branch}
-                        shell={row.shell}
-                        report={row.report}
-                        outcome={row.outcome}
-                        asking={row.asking}
-                        harness={row.harness}
-                        level={row.level}
-                        posinset={row.posinset}
-                        setsize={row.setsize}
-                        from={row.orphaned ? row.from : null}
-                        tab={row.tab}
-                        current={row.session === front}
-                        open={open ?? null}
-                        summary={open === false ? (ended.get(row.session)?.summary ?? null) : null}
-                        needs={lead === undefined ? null : lead}
-                        needsName={
-                          lead === undefined || lead === row.session
-                            ? null
-                            : (byNumber.get(lead)?.name ?? null)
-                        }
-                        stopping={stopping?.has(row.session) ?? false}
-                        offers={offers}
-                        clock={clock}
-                        onOpen={onOpen}
-                        onFold={fold}
-                        onPress={press}
-                        onAct={act}
-                      />,
-                      // The finished tasks of each chat whose rows end here (#1485): this
-                      // row's own, where no chat is drawn under it, then those of every chat
-                      // above it that this row is the last one under.
-                      ...endingAt(drawn, at, folded).map((one) => (
-                        <FinishedTasks
-                          key={`finished:${one.session}`}
-                          asker={one.name}
-                          level={one.level + 1}
-                          tasks={finished.get(one.session) ?? NO_TASKS}
-                          onClear={onClearFinished}
-                          onReopen={onReopen}
-                        />
-                      )),
-                    ];
-                  })}
-                </ul>
-              </RovingFocusGroup.Root>
-            )}
-          </div>
-        </>
+                        onClear={onClearFinished}
+                        onReopen={onReopen}
+                      />
+                    )),
+                  ];
+                })}
+              </ul>
+            </RovingFocusGroup.Root>
+          )}
+        </div>
       )}
     </section>
   );
@@ -586,17 +756,23 @@ const Row = memo(function Row({
   onAct: (session: number, what: Asked) => void;
 }) {
   // The keys of a row. Enter is the button's own press, which opens it. Space asks for it
-  // beside the chat in front, and Delete asks to stop a task: the catalogue's rows, which ask
+  // beside the chat in front, and Delete (Backspace on a Mac, `tabKeys.deletes`) asks to stop
+  // a task: the catalogue's rows, which ask
   // first or say why not. The tree's own (WAI-ARIA "Tree View"): Right opens a folded row,
   // Left folds an open one. Up and Down are the roving group's.
   const keys = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === " ") onAct(session, "beside");
-    else if (event.key === "Delete" && task) onAct(session, "stop");
-    else if (open !== null && event.key === "ArrowRight" && !open) onFold(session, false);
+    // A key held down is one press: neither asks a second time.
+    if (event.key === " ") {
+      if (!event.repeat) onAct(session, "beside");
+    } else if (task && deletes(event)) {
+      if (!event.repeat) onAct(session, "stop");
+    } else if (open !== null && event.key === "ArrowRight" && !open) onFold(session, false);
     else if (open !== null && event.key === "ArrowLeft" && open) onFold(session, true);
     else return;
     event.preventDefault();
   };
+  // Asked once, as the row is drawn: whether its chat's state changed while it was not.
+  const [changed] = useState(() => clock.missed(session));
   const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
   const cameFrom = from === null ? null : `from ${from}`;
@@ -672,6 +848,7 @@ const Row = memo(function Row({
                 outcome={outcome}
                 asking={asking}
                 harness={harness}
+                changed={changed}
               />
               {counts.length > 0 && (
                 /* Folded over finished tasks: how they ended, in the marks a state has
@@ -679,7 +856,7 @@ const Row = memo(function Row({
                 <span
                   className="below-summary"
                   role="img"
-                  aria-label={`${counts.map((one) => `${one.count} ${one.word}`).join(", ")}, folded`}
+                  aria-label={`${counts.map((one) => `${one.count} ${one.word}`).join(", ")}`}
                 >
                   {counts.map((one) => {
                     const Shape = SHAPES[one.shape];

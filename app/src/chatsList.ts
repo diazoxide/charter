@@ -180,27 +180,53 @@ export function liveBelow(
 export type Filter = {
   /** What was typed: every word of it must be in the row's name, persona, workspace or state. */
   text: string;
-  /** The chips pressed: a row in any of these states. */
-  kinds: readonly ShownKind[];
+  /**
+   * The chips pressed: a row whose state stands at any of these ranks. **By rank and not by
+   * word**, so the "working" chip finds what the order puts with the working: a task asking
+   * its asker, and a chat on a harness purlis hears nothing from.
+   */
+  ranks: readonly Rank[];
 };
 
 /** Whether a filter asks for anything. */
 export function filters(filter: Filter): boolean {
-  return filter.text.trim() !== "" || filter.kinds.length > 0;
+  return filter.text.trim() !== "" || filter.ranks.length > 0;
+}
+
+/** Text as the filter compares it: case folded and accents taken off, so "jose" finds "José". */
+function plain(text: string): string {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+}
+
+/** Whether every word typed is in one of `fields`. */
+function inFields(text: string, fields: readonly string[]): boolean {
+  const among = fields.map(plain);
+  return plain(text)
+    .split(/\s+/)
+    .filter((word) => word !== "")
+    .every((word) => among.some((field) => field.includes(word)));
 }
 
 /** Whether `row`, in the state `shown`, is one the filter asks for (V100-49). */
 export function matches(row: ChatRow, shown: Shown | undefined, filter: Filter): boolean {
-  if (filter.kinds.length > 0 && (shown === undefined || !filter.kinds.includes(shown.kind)))
-    return false;
-  const fields = [row.name, row.persona ?? "", row.workspace, shown?.word ?? ""].map((field) =>
-    field.toLowerCase(),
-  );
-  return filter.text
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((word) => word !== "")
-    .every((word) => fields.some((field) => field.includes(word)));
+  if (filter.ranks.length > 0 && !filter.ranks.includes(rankOf(shown?.kind))) return false;
+  return inFields(filter.text, [row.name, row.persona ?? "", row.workspace, shown?.word ?? ""]);
+}
+
+/**
+ * Whether a finished task is one the filter asks for: by its name, persona, the place it
+ * worked in, and how it ended, in the row's word and in the core's. Never by a chip: both ask
+ * for a chat that is still running.
+ */
+export function matchesFinished(task: FinishedTask, filter: Filter): boolean {
+  if (filter.ranks.length > 0 || filter.text.trim() === "") return false;
+  return inFields(filter.text, [
+    task.name,
+    task.persona ?? "",
+    task.place,
+    shownOf(task)?.word ?? "",
+    task.outcome,
+  ]);
 }
 
 /**
