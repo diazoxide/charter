@@ -703,7 +703,7 @@ impl Standing {
     pub fn word(self) -> &'static str {
         match self {
             Self::Running => "running",
-            Self::WaitingOnOperator => "waiting on the operator",
+            Self::WaitingOnOperator => "waiting on the person",
             Self::Reported => "reported",
             Self::Ended => "ended without a report",
         }
@@ -2383,10 +2383,7 @@ mod tests {
             standing(Owed::Due, false, true),
             Standing::WaitingOnOperator
         );
-        assert_eq!(
-            Standing::WaitingOnOperator.word(),
-            "waiting on the operator"
-        );
+        assert_eq!(Standing::WaitingOnOperator.word(), "waiting on the person");
         assert_eq!(standing(Owed::Due, false, false), Standing::Running);
         assert_eq!(Standing::Running.word(), "running");
     }

@@ -1741,9 +1741,9 @@ mod tests {
             listed,
             format!(
                 "2 tasks under this chat:\n\
-                 - chat 8 · 'check prod' · devops · workspace 'alpha' · waiting on the operator · \
+                 - chat 8 · 'check prod' · devops · workspace 'alpha' · waiting on the person · \
                  started 1m ago\n\
-                 - chat 9 · 'check prod' · devops · workspace 'alpha' · waiting on the operator · \
+                 - chat 9 · 'check prod' · devops · workspace 'alpha' · waiting on the person · \
                  started 1m ago{STARTED_BY_THE_PERSON}"
             )
         );
@@ -2140,7 +2140,7 @@ mod tests {
             State::Reported(Some(Outcome::Blocked)).say(),
             "reported: blocked"
         );
-        assert_eq!(State::NeedsThePerson.say(), "waiting on the operator");
+        assert_eq!(State::NeedsThePerson.say(), "waiting on the person");
     }
 
     #[test]

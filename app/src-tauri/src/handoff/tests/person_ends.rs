@@ -218,6 +218,35 @@ fn stop_and_get_its_report_ends_the_turn_asks_once_and_tells_the_asking_chat_it_
         }
         other => panic!("its report, not {other:?}"),
     }
+    // **Stopped by the person is no failure, whatever its one report says** (#1491): it said
+    // blocked, which is what the stop's own line asks for first, and the chat that asked is
+    // flagged for nothing.
+    assert!(held.hooks().board().failed_tasks(steward).is_empty());
+    assert!(!held.hooks().board().needs_you().contains(&steward));
+}
+
+#[test]
+fn a_task_the_person_stopped_that_says_it_failed_raises_no_failure_on_the_chat_that_asked() {
+    let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
+    works(&held, task);
+    ends(&held, task, Way::Report, false).expect("stopping");
+    its_turn_has_stopped(&held, task);
+    a_turn_begins(&held, task);
+
+    let said = tasks_report(&held, &id, &Tickets::default(), task, Outcome::Failed, None);
+    assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+    its_turn_ends(&held, task);
+
+    // Its row says the person stopped it, and nobody is flagged for a failure.
+    assert_eq!(
+        finished_under(&held, steward)
+            .iter()
+            .map(|row| row.how)
+            .collect::<Vec<_>>(),
+        [crate::finished::How::StoppedByPerson]
+    );
+    assert!(held.hooks().board().failed_tasks(steward).is_empty());
+    assert!(!held.hooks().board().needs_you().contains(&steward));
 }
 
 #[test]

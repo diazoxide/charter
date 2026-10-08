@@ -232,8 +232,8 @@ when its chat closed goes the same way. A report with nowhere to go is the one t
 the chat that wrote it becomes a needs-you item that says so.
 
 **A chat you stop from the window** gets one short turn to write what it did, and may send one
-report in it, whatever it owed before. The chat that asked is then told the operator stopped
-it, on its next turn, as a line of purlis's own (`purlis: the operator stopped …`) that quotes
+report in it, whatever it owed before. The chat that asked is then told the person stopped
+it, on its next turn, as a line of purlis's own (`purlis: the person stopped …`) that quotes
 nothing: a report is what a chat said, and this is not one, so no report can pass for it. It is
 the same line however you stopped it: **Stop** on the chat or on a chat above it, or *Stop them*
 as you close the chat that asked.
@@ -611,7 +611,7 @@ purlis dispatch cancel <chat>
 
 `list` prints the tasks under this chat, one a line: the chat's number, the task's name, its
 persona, where it works, its state and how long ago it started. The states are `running`,
-`idle, with no report yet`, `waiting on the operator`, `asking this chat a question`,
+`idle, with no report yet`, `waiting on the person`, `asking this chat a question`,
 `cancelling`, `reported: <outcome>` and `ended without a report`. A task that was given a
 worktree of its own says so after where it works: the branch purlis cut for it, and whether
 its worktree is kept, was merged and removed, or was discarded. A task is listed until its
@@ -683,7 +683,7 @@ The next one is refused with the limit. There is no cap on the total: two chats 
 other going at that rate until the task reports. A message is held to a report's bounds: 4,096
 bytes, and no control character other than a line break.
 
-**If you typed in a task's chat, its report says so.** It carries `The operator stepped in`,
+**If you typed in a task's chat, its report says so.** It carries `The person stepped in`,
 so the chat that asked knows the result is not from its brief alone, and nothing of what you
 typed. Picking an option of a prompt the task put to you is not stepping in; words are, at a
 prompt or anywhere else.
@@ -745,7 +745,7 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   its report is not handed to the next chat in that workspace: it stays with the persona
   chat, which is marked as needing you.
 - **A persona chat that is waiting on you** (a permission prompt, a question, in its own tab)
-  reads `waiting on the operator` to the chat that asked. That chat cannot answer for you,
+  reads `waiting on the person` to the chat that asked. That chat cannot answer for you,
   and is told the wait is not its own to end.
 
 ### When a task does not start
@@ -784,7 +784,7 @@ is still a task: same chat, same number, its report still owed. It stays recorde
 tried again at the next launch. Where the chat that asked came back, the task is drawn under
 it with the reason, and its row offers Try to start again, Review and approve… where its
 profile waits on that, and End task. The chat that asked is sent nothing: `purlis dispatch
-wait <chat>` on it answers at once with `waiting on the operator: it did not start again
+wait <chat>` on it answers at once with `waiting on the person: it did not start again
 (<reason>)`, and `list` says the same. **Only End task ends it**: its record then ends failed
 with the reason and keeps its conversation, so Reopen on the row carries it on as an ordinary
 chat; it leaves the reopen record; and the chat that asked is told once, as a failed report.

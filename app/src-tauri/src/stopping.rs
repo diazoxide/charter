@@ -3,7 +3,10 @@
 //!
 //! **Only the person can stop a chat they did not ask it to start.** The two are one window
 //! command ([`stop_chat`]), and ending a task is another ([`end_task`]); they are the only
-//! callers of `press`, which is private to this file: the compiler holds that. The close dialog's "Stop them" (#1443) is the same stop
+//! callers of `press`, which is private to this file: the compiler holds that. Every command
+//! that ends a chat on the person's word is the window's alone and is served on no link
+//! (`purlis_session_protocol::ui::WINDOW_ONLY`, which says the rule and holds the list). The
+//! close dialog's "Stop them" (#1443) is the same stop
 //! ([`press_below`]), begun by the window's close and by nothing else. No line on the hook
 //! socket reads as a stop, so no chat can stop another, or itself, or have a brief do it. What
 //! a chat has is `purlis dispatch cancel` (#1441), for a task it dispatched itself and for no

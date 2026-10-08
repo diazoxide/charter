@@ -276,7 +276,8 @@ export function TaskEndConfirm({
         onKeep();
       }}
     >
-      <span className="task-end-says" id={asked}>
+      {/* The whole question is its tooltip: on a narrow pane's line its end is cut. */}
+      <span className="task-end-says" id={asked} title={says}>
         {says}
       </span>
       <button type="button" className="ends-it" tabIndex={0} disabled={busy} onClick={onAnswer}>

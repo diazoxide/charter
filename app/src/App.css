@@ -1201,6 +1201,16 @@ button.show-more:focus-visible {
   overflow: hidden;
 }
 
+/* **Where the line also holds the two ways to end the task** (#1488), what it gives up comes
+   in an order: the gauge and the harness's name first, cut at their right edge; then the two
+   ways, each whole or not at all; and the path and its state only after those. A line that
+   is a little short keeps both ways and loses the end of the harness's name. Measured in a
+   real engine, the two ways were the only thing a short line gave up, so a pane of half a
+   1280px window never drew both. */
+.pane-chips:has(.pane-task-ends) > :not(.pane-crumbs):not(.pane-task-ends) {
+  flex-shrink: 1000000;
+}
+
 /* **What gives way inside the breadcrumb, in order.**
 
    - `in <workspace>` first, to nothing: it is in the tooltip.
@@ -1243,12 +1253,15 @@ button.show-more:focus-visible {
    own quiet colours, and no cross.
 
    **Each is drawn whole or not at all, never cut mid-word.** The group is one line tall and
-   wraps: a button the line has no room for goes to a second line, which is not drawn. And the
-   group is the first thing the line gives up (it shrinks a thousand times faster than the
-   path), because the same two rows are on the task's row in the Chats list and in the
-   palette. So the breadcrumb's own thresholds above hold as they are once the two are gone:
-   with both drawn the line wants about 7rem more ("Stop", "Close now" and their gaps), "Close
-   now" goes under about 31rem of pane and "Stop" under about 27rem, with the longest state. */
+   wraps: a button the line has no room for goes to a second line, which is not drawn. **Also
+   the first one**: a wrapping line never moves its first item down, so the group starts with
+   an item of no width (`::before`), and "Stop" is then the second and wraps like the other.
+   Without it a group narrower than "Stop" drew "Stop" over its own edge, cut.
+
+   The group gives way before the path does (it shrinks a thousand times faster), because the
+   same two rows are on the task's row in the Chats list and in the palette; and after the
+   gauge and the harness's name (above). So the breadcrumb's own thresholds hold as they are
+   once the two are gone. */
 .pane-task-ends {
   display: flex;
   flex: 0 1000 auto;
@@ -1260,6 +1273,13 @@ button.show-more:focus-visible {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.pane-task-ends::before {
+  flex: none;
+  width: 0;
+  height: 1.25rem;
+  content: "";
 }
 
 .pane-task-ends .task-end,
@@ -1293,10 +1313,35 @@ button.show-more:focus-visible {
    question that is asked is drawn. On a row of the Chats list it is a line of its own under
    the row, which is the one time a row grows: the person asked for it, on that row. */
 .pane-task-ends.asking {
-  flex: none;
+  /* **Its two buttons are never pushed out of the line**: the question's words give way, to
+     an ellipsis, with the whole of them in their tooltip; "Stop it" and "Keep" stay whole.
+     The least it is drawn at is the two buttons' width. */
+  flex: 0 1 auto;
   flex-wrap: nowrap;
+  min-width: 9rem;
   height: auto;
-  overflow: visible;
+  overflow: hidden;
+}
+
+.pane-task-ends.asking::before {
+  content: none;
+}
+
+.pane-task-ends.asking .task-end-confirm {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.pane-task-ends.asking .task-end-says {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-task-ends.asking .task-end-confirm button {
+  flex: none;
 }
 
 .task-end-confirm {

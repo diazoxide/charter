@@ -616,8 +616,13 @@ pub(crate) fn deliver(
     if parent_open {
         // **A task that came to nothing is a needs-you item on the chat that asked** (#1491,
         // V100-15): it failed, was blocked, or ended without a report. One that finished as
-        // done or cancelled, and one the person stopped, change that chat's count and no more.
-        if let Some(failed) = came_to_nothing(held, chat, report.task.as_ref(), &report.summary) {
+        // done or cancelled changes that chat's count and no more. **And so does one the
+        // person stopped, whatever its one short report says of itself** (#1488): the stop's
+        // own line asks it to say what is left undone, so "blocked" is the ordinary answer,
+        // and the person who stopped it is not then flagged for a failure.
+        if !was_stopped
+            && let Some(failed) = came_to_nothing(held, chat, report.task.as_ref(), &report.summary)
+        {
             held.task_failed(from.chat, failed);
         }
         if was_stopped {
@@ -897,7 +902,7 @@ pub struct PersonaChat {
     pub persona: Option<String>,
     pub state: PersonaChatState,
     /// [`PersonaChatState`] in the words a chat's list of its dispatches says: `running`,
-    /// `waiting on the operator`, `reported`, `ended without a report`.
+    /// `waiting on the person`, `reported`, `ended without a report`.
     pub said: String,
     /// Whether closing the chat that asked for it closes it too: it has reported, it is not
     /// at work, and its session record is written or can be asked for ([`close_reported`]).
@@ -2390,24 +2395,10 @@ pub fn answered(
         crate::unstarted::allowed(held, &task, row.is_some(), &detail);
         return;
     }
+    // A handoff is told in the app's word on a held dispatch, and that is all: it is no task,
+    // so nothing here says a task failed (a task took the road above, `unstarted::allowed`,
+    // which flags the chat that asked by the task's own record).
     tell_the_asker(held, &wanted, how, &detail);
-    // **Allowed, and it still did not start**: the person said yes and nothing is running, so
-    // the chat that asked is flagged for it (#1491, V100-15). Kept blocked is the person's own
-    // answer and flags nothing.
-    if how == Answered::NotStarted
-        && let Some(task) = wanted.shown()
-    {
-        held.task_failed(
-            wanted.chat,
-            purlis_core::state::FailedTask::new(
-                // It never had a chat or a record: an id of its own.
-                &format!("not-started-{}", purlis_core::reopen::mint()),
-                &task,
-                purlis_core::state::HowFailed::DidNotStart,
-                &detail,
-            ),
-        );
-    }
 }
 
 /// The workspace chat `chat` works in, by this app's record of it; none at the project's root.
@@ -6567,7 +6558,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_s_report_waits_for_the_asking_chats_next_turn_and_is_no_needs_you_item() {
+    fn a_task_s_report_waits_for_the_asking_chats_next_turn_and_only_its_failure_is_an_item() {
         let plane = a_plane_with_personas();
         let planes = planes();
         let id = planes.open(&plane.root);
@@ -6624,7 +6615,21 @@ mod tests {
             held.hooks().board().reports(asking),
             vec!["check the queue".to_owned()]
         );
-        assert!(!held.hooks().board().needs_you().contains(&asking));
+        // **The report landing is no item; that the task came to nothing is** (#1491,
+        // V100-15): it reported blocked, so the chat that asked is flagged for that one task,
+        // by its record, and for nothing else. A report that came out done flags nobody
+        // (`waiting_on_tasks::a_failed_task_puts_the_hand_on_the_chat_that_asked_and_a_done_one_does_not`).
+        let failed = held.hooks().board().failed_tasks(asking);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(
+            (failed[0].task.as_str(), failed[0].how, failed[0].chat),
+            (
+                "check the queue",
+                purlis_core::state::HowFailed::Failed,
+                Some(child)
+            )
+        );
+        assert!(held.hooks().board().needs_you().contains(&asking));
         // One report: the task is no longer one the asking chat has running.
         assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 0);
         let again = tasks_report(
@@ -7335,7 +7340,16 @@ mod tests {
         );
         assert!(told.is_none());
         assert_eq!(held.chats().open_now().len(), before, "nothing started");
-        assert!(dispatch_records(&held).is_empty(), "nothing is recorded");
+        // **What is recorded is that it did not start, and nothing else** (#1497): the one
+        // record of the dispatch, ended, so the asking chat has its failed row. Nothing is
+        // left running by it, and no folder was cut.
+        let records = dispatch_records(&held);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert!(
+            records[0].did_not_start && !records[0].running(),
+            "{:?}",
+            records[0]
+        );
         assert!(!held.root().join("workspaces/alpha/.worktrees").exists());
         // The slot it held is let go: the asking chat has nothing running.
         assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 0);
@@ -9453,7 +9467,7 @@ mod tests {
             stands(&held, steward, task),
             Some((
                 PersonaChatState::WaitingOnOperator,
-                "waiting on the operator".to_owned()
+                "waiting on the person".to_owned()
             ))
         );
         // The person answers there, and it is at work again.
@@ -10277,7 +10291,7 @@ mod tests {
             panic!("a list, not {listed:?}")
         };
         assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0].state, "waiting on the operator");
+        assert_eq!(rows[0].state, "waiting on the person");
         assert!(!rows[0].by_person);
     }
 
@@ -11598,7 +11612,7 @@ mod tests {
     }
 
     #[test]
-    fn a_report_from_a_task_the_person_typed_in_says_the_operator_stepped_in_and_no_more() {
+    fn a_report_from_a_task_the_person_typed_in_says_the_person_stepped_in_and_no_more() {
         let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
         // The terminal's own answer and the mouse are not the person; their keys are.
         held.operator_input(task, b"\x1b[<64;10;10M").expect("sent");
@@ -11631,7 +11645,7 @@ mod tests {
             Some(true)
         );
         let told = purlis_core::handback::context(&waiting, false).expect("a report");
-        assert!(told.contains("The operator stepped in"), "{told}");
+        assert!(told.contains("The person stepped in"), "{told}");
         assert!(!told.contains("staging"), "{told}");
     }
 

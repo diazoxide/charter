@@ -534,6 +534,77 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
     });
   }
 
+  it("keeps the second step's two buttons whole in a narrow pane, and cuts its words", async () => {
+    // The question asked in the two buttons' place (`TaskEndConfirm`): the answer and Keep are
+    // what the person needs, so they are never the part a short line gives up.
+    await windowIs(560, 800);
+    await asATaskPane(0);
+    expect(await draw(0, { path: LONG_PATH, state: LONGEST_STATE })).toBe(true);
+    const asked = await browser.execute(() => {
+      const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+        frame.querySelector('[data-testid="pane"]'),
+      );
+      const crumbs = frames[0]?.querySelector('[data-drawn="pane-crumbs.e2e"]');
+      if (!crumbs) return false;
+      const group = document.createElement("span");
+      group.className = "pane-task-ends asking";
+      group.dataset.drawn = "pane-crumbs.e2e";
+      const confirm = document.createElement("span");
+      confirm.className = "task-end-confirm";
+      const says = document.createElement("span");
+      says.className = "task-end-says";
+      says.textContent = "Stop live check talk and get its report?";
+      confirm.append(says);
+      for (const words of ["Stop it", "Keep"]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = words;
+        confirm.append(button);
+      }
+      group.append(confirm);
+      crumbs.after(group);
+      return true;
+    });
+    expect(asked).toBe(true);
+
+    const seen = await measured(0);
+    const drawn = await browser.execute(() => {
+      const box = (el: Element) => {
+        const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
+        return { left, right, top, bottom, width, height };
+      };
+      const group = document.querySelector(".pane-task-ends.asking");
+      if (!group) return null;
+      return {
+        group: box(group),
+        buttons: [...group.querySelectorAll<HTMLElement>("button")].map((button) => ({
+          words: button.textContent ?? "",
+          box: box(button),
+          cut: button.scrollWidth > button.clientWidth + 1,
+        })),
+      };
+    });
+    check("the second step was not drawn", drawn !== null, "is", true);
+    if (drawn === null) return;
+    expect(drawn.buttons.map((button) => button.words)).toEqual(["Stop it", "Keep"]);
+    for (const button of drawn.buttons) {
+      check(`"${button.words}" is cut mid-word`, button.cut, "is", false);
+      check(
+        `"${button.words}" runs past its group`,
+        button.box.right,
+        "atMost",
+        drawn.group.right + 1,
+      );
+      check(
+        `"${button.words}" runs past the top line`,
+        button.box.right,
+        "atMost",
+        (seen.line as Box).right + 1,
+      );
+    }
+    check("the top line wrapped", (seen.line as Box).height, "atMost", seen.rem * 2);
+  });
+
   it("draws both ways to end the task where there is room", async () => {
     await windowIs(1280, 800);
     expect(await draw(0, { path: ["steward 4", "talk"], state: "working" })).toBe(true);

@@ -188,8 +188,28 @@ struct Told<'a> {
 /// written; otherwise it was refused before a start was tried (a limit filled meanwhile, the
 /// grant no longer covers it) and its row is written here. Either way the asking chat is told
 /// once, as a failed report.
+///
+/// **And the chat that asked is flagged for it** (#1491, V100-15): the person pressed Allow and
+/// nothing started, so they are told. Named by the task's dispatch record, the id its failed
+/// row carries, so going to the item finds that row and clearing the row clears the item.
+/// Only here: a task the person ends themselves (`end`) flags nobody, and a launch that could
+/// not start one again ends nothing and flags nothing (D-1497-14).
 pub(crate) fn allowed(held: &Held, task: &Unstarted, row: bool, why: &str) {
-    if !row && recorded(held, task, why).is_none() {
+    let record = if row {
+        // Its start was refused and its row is written already: the newest record of a task
+        // that did not start under that number and name.
+        dispatchrecord::list(held.root())
+            .into_iter()
+            .find(|record| {
+                record.did_not_start
+                    && record.worker.chat.chat == task.number
+                    && record.task.as_deref() == Some(task.name.as_str())
+            })
+            .map(|record| record.id)
+    } else {
+        recorded(held, task, why).map(|record| record.id)
+    };
+    if record.is_none() {
         // No row could be kept: the report still says it, and is what the chat acts on.
         tracing::warn!("purlis: '{}' did not start, and has no row", task.name);
     }
@@ -204,6 +224,19 @@ pub(crate) fn allowed(held: &Held, task: &Unstarted, row: bool, why: &str) {
         },
         why,
     );
+    if let Some(record) = record
+        && held.chats().shown_name(task.asker).is_some()
+    {
+        held.task_failed(
+            task.asker,
+            purlis_core::state::FailedTask::new(
+                &record,
+                &task.name,
+                purlis_core::state::HowFailed::DidNotStart,
+                why,
+            ),
+        );
+    }
 }
 
 // ----------------------------------------------------------------------------------------
@@ -464,8 +497,8 @@ pub(crate) fn end(held: &Held, id: &str) -> Result<(), String> {
             record.id
         }),
     };
-    let record = match ended {
-        Ok(record) => record,
+    match ended {
+        Ok(_) => {}
         Err(why) => {
             // Still a task waiting to start, as it was: nothing ended, so nothing is
             // forgotten.
@@ -495,20 +528,7 @@ pub(crate) fn end(held: &Held, id: &str) -> Result<(), String> {
         },
         &task.why,
     );
-    // **Only now is it a failure the chat that asked is flagged for** (#1491, V100-15): the
-    // person ended it. A launch ends nothing and so flags nothing (D-1497-14); until this,
-    // the task was waiting to start and its row said so. Named by its dispatch record, as
-    // its finished row is, so going to the item finds that row.
-    if held.chats().shown_name(task.asker).is_some() {
-        held.task_failed(
-            task.asker,
-            purlis_core::state::FailedTask::new(
-                &record,
-                &task.name,
-                purlis_core::state::HowFailed::DidNotStart,
-                &task.why,
-            ),
-        );
-    }
+    // The chat that asked is flagged for nothing (#1491): the person pressed End task
+    // themselves, and has just seen its row.
     Ok(())
 }

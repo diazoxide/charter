@@ -6593,7 +6593,7 @@ mod tests {
             Some(true)
         );
         let told = purlis_core::handback::context(&waiting, false).expect("a report");
-        assert!(told.contains("The operator stepped in"), "{told}");
+        assert!(told.contains("The person stepped in"), "{told}");
         assert!(
             !told.contains("staging"),
             "what was typed is in the report: {told}"

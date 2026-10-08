@@ -585,13 +585,6 @@ export const commands = {
 	 */
 	forgetChatThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, id })),
 	/**
-	 *  **End task** (#1497): the person ends a task a launch could not start again, by its chat's
-	 *  id. Its dispatch ends failed with the reason, the chat that asked is told once as it is
-	 *  told a task's report, and it is no longer tried at a launch. Its row stays, as a finished
-	 *  one, with Reopen where its conversation is known.
-	 */
-	endTaskThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("end_task_that_did_not_start", { plane, id })),
-	/**
 	 *  Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
 	 *  now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
 	 *  new one as the window draws it. The old one is ended here once the new one has started; a
@@ -632,41 +625,15 @@ export const commands = {
 	chats: OnOlderSandbox[],
 } | null, string>(__TAURI_INVOKE("chats_on_older_sandbox", { plane })),
 	/**
-	 *  **Starts chat `session` again without the sandbox** (#1342): the person's choice on a block's
-	 *  Notice that purlis grants nothing for, for this one chat's next run, on its conversation.
-	 *  Audited as any opt-out is (`trust.sandbox.off`) and never inherited: a later start of the
-	 *  chat is sandboxed again.
-	 */
-	restartChatWithoutSandbox: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat_without_sandbox", { plane, session, columns, rows })),
-	/**
 	 *  What "Ask <persona>…" offers on this project's chats: its finished personas, or why it
 	 *  offers none, and the asks policy takes off one chat's tab.
 	 */
 	askPersonaOffer: (plane: PlaneId) => typedError<AskOffer, string>(__TAURI_INVOKE("ask_persona_offer", { plane })),
 	/**
-	 *  Ask `persona` from chat `session`'s tab: starts a chat as that persona, under that chat, on
-	 *  what you typed. Its report goes to that chat, marked as started by you. Answers the new
-	 *  chat's number; the window is told of it as it is told of any chat another chat started.
-	 * 
-	 *  `place` is where it works (#1453): `null` for that chat's folder, `worktree` for a branch of
-	 *  its own cut from the repo that chat works in, or `workspace:<name>` for another workspace.
-	 */
-	askPersonaChat: (plane: PlaneId, session: number, persona: string, name: string, ask: string, place: string | null, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("ask_persona_chat", { plane, session, persona, name, ask, place, columns, rows })),
-	/**
 	 *  What closing chat `session` would do with the chats below it: its persona chats, each with
 	 *  where it stands and whether it closes too, and every chat below it that is at work.
 	 */
 	personaChatsOf: (plane: PlaneId, session: number) => typedError<ClosingChat, string>(__TAURI_INVOKE("persona_chats_of", { plane, session })),
-	/**
-	 *  **Stop them**, your answer to what closing chat `session` asks: every chat at work below
-	 *  it is stopped, and then it is closed (`then: close`), in one step, so it
-	 *  cannot start another in between. For a Smart close (`then: smart_close`) the chats below
-	 *  are stopped now, and any it starts while it writes its record are stopped as it closes.
-	 *  Each chat below gets one short turn to write what it did, as any stopped chat does, and
-	 *  the chat that asked for it is told the operator stopped it. Answers the chats this closed
-	 *  at once: the chat itself, where it was closed.
-	 */
-	closeChatStopping: (plane: PlaneId, session: number, then: ThenClose) => typedError<number[], string>(__TAURI_INVOKE("close_chat_stopping", { plane, session, then })),
 	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
@@ -4465,7 +4432,7 @@ export type PersonaChat = {
 	state: PersonaChatState,
 	/**
 	 *  [`PersonaChatState`] in the words a chat's list of its dispatches says: `running`,
-	 *  `waiting on the operator`, `reported`, `ended without a report`.
+	 *  `waiting on the person`, `reported`, `ended without a report`.
 	 */
 	said: string,
 	/**
