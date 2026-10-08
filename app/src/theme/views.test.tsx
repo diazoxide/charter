@@ -44,6 +44,7 @@ import { OWN_MARKS, ViewPane } from "../Views";
 import type { Offer } from "../actions";
 import { DRAFT, forgetDrafts, wantEdit } from "../memories";
 import type {
+  Activity,
   DispatchRow,
   HarnessPlugins,
   InstructionFile,
@@ -727,6 +728,39 @@ const NO_HARNESS = {
 
 /** What the core answers, by command; a function to answer from the arguments, an `Error` to
  *  refuse with its message. */
+/** A chat's Activity (#1495): a task that asked, was answered and reported, with a file another
+ *  task's report names too, a line long enough to be clipped, and a chat that has closed. */
+const ACTIVITY: Activity = {
+  name: "steward 3",
+  key: "01K6STEWARD",
+  unkept: 2,
+  undrawn: 1,
+  lines: (
+    [
+      ["01K6D1", 0, "dispatched", "steward 3", "check prod", "Is the rollout healthy?"],
+      ["01K6D2", 0, "dispatched", "steward 3", "lint", "Lint it. ".repeat(80)],
+      ["01K6D1", 1, "question", "check prod", "steward 3", "Which host?"],
+      ["01K6D1", 2, "answer", "steward 3", "check prod", "prod-2."],
+      ["01K6D1", 3, "report", "check prod", "steward 3", "Scaled it up."],
+      ["01K6D2", 1, "stopped", "lint", "steward 3", "stopped by the operator"],
+    ] as const
+  ).map(([dispatch, n, kind, from, to, text], at) => ({
+    dispatch,
+    n,
+    at: `2026-10-08T09:0${at}:00+00:00`,
+    kind,
+    from,
+    from_key: from === "steward 3" ? "01K6STEWARD" : `01K6${from}`,
+    from_session: from === "lint" ? null : 3,
+    to,
+    to_key: to === "steward 3" ? "01K6STEWARD" : `01K6${to}`,
+    text,
+    outcome: kind === "report" ? "done" : kind === "stopped" ? "stopped" : null,
+    files: kind === "report" || kind === "stopped" ? ["deploy/values.yaml"] : [],
+    task: dispatch === "01K6D1" ? "check prod" : "lint",
+  })),
+};
+
 type Answers = Record<string, unknown>;
 
 /** The core answering every question a view asks, as an ordinary plane would. */
@@ -744,6 +778,7 @@ const ORDINARY: Answers = {
   workspace_saving: REPO_SAVING,
   session_record: RECORD,
   dispatches: { rows: DISPATCHES, undrawn: 1 },
+  activity: ACTIVITY,
   memory_read: MEMORY,
   todo_read: {
     workspace: "alpha",
@@ -924,6 +959,26 @@ const STATES: State[] = [
         }),
       );
     },
+  },
+  {
+    name: "a chat's activity, a long line opened",
+    view: { from: null, view: "activity", key: "3" },
+    drawn: /also changed by lint/,
+    then: async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Show all" }));
+    },
+  },
+  {
+    name: "a chat's activity, none yet",
+    view: { from: null, view: "activity", key: "3" },
+    answers: { activity: { ...ACTIVITY, lines: [], unkept: 0, undrawn: 0 } },
+    drawn: /No activity yet/,
+  },
+  {
+    name: "a chat's activity that could not be read",
+    view: { from: null, view: "activity", key: "3" },
+    answers: { activity: new Error("chat 3 is not one this app has open") },
+    drawn: /could not read this chat's activity/,
   },
   {
     name: "the project's dispatches, none yet",

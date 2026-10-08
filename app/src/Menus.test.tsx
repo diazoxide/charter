@@ -102,6 +102,8 @@ describe("what a menu lists", () => {
       "Switch to tab 3 steward",
       "Rename chat 3 steward…",
       "Pin chat 3 steward",
+      // Its Activity only reads (#1495).
+      "Activity",
     ]);
     expect(chat.below).toEqual(["End chat 3 steward"]);
   });
@@ -237,6 +239,7 @@ describe("a menu on screen", () => {
       "Switch to tab 3 steward",
       "Rename chat 3 steward…",
       "Pin chat 3 stewardDraws it first on its strip. Yours, on this machine only.",
+      "ActivityChat 3 steward: what it and its tasks said to each other, in a tab of its own.",
       "End chat 3 stewardEnds the program it runs. There is no undo.",
     ]);
   });

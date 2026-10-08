@@ -2,6 +2,7 @@
 
 pub mod acp;
 pub mod active;
+pub mod activity;
 pub mod adopt;
 pub mod alerts;
 pub mod applog;

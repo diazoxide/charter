@@ -462,6 +462,7 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         report: None,
         needed_you: 0,
         messages: 0,
+        talk: Vec::new(),
         usage: None,
     }
 }

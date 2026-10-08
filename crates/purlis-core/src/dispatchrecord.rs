@@ -30,10 +30,11 @@
 //!
 //! # Who writes it
 //!
-//! **The app, and nothing else.** [`open`], [`note`] and [`close`] are called by the app with
-//! facts from its own record of the chats: no line on the hook channel names a record, an
-//! asker, an outcome or a cost. Three things in a record are still a chat's. The brief and the
-//! report's text are its words, stored as written and held to a cap ([`cut`]). And what its
+//! **The app, and nothing else.** [`open`], [`note`], [`said`] and [`close`] are called by the
+//! app with facts from its own record of the chats: no line on the hook channel names a
+//! record, an asker, an outcome or a cost. Three things in a record are still a chat's. The
+//! brief, the report's text and each message the two chats sent each other ([`Said`], #1495)
+//! are its words, stored as written and held to a cap ([`cut`]). And what its
 //! harness reported of tokens and cost ([`crate::usage::spent`]) is relayed by the chat's
 //! status line through a file a chat can write: **a chat can alter that figure**, so it is
 //! shown as reported and decides nothing. It is absent where the harness reports none, and
@@ -232,6 +233,23 @@ pub struct Report {
 /// none: never a zero.
 pub use crate::usage::Spent as Usage;
 
+/// One message that passed between the two chats after the brief (#1495): a follow-up or an
+/// answer from the asking chat, a progress note or a question from the persona chat. **Which
+/// chat said it is its kind's to say**, so a line names no chat: the two are the record's own
+/// `asker` and `worker`.
+///
+/// Kept because the message itself is not: it waits in the project only until the chat it is
+/// for reads it ([`crate::dispatchtalk`]), and the Activity view ([`crate::activity`]) is read
+/// afterwards. It is the message's text and nothing of either chat's conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Said {
+    /// When the app took it, UTC ([`crate::dispatch::stamp`]).
+    pub at: String,
+    pub kind: crate::dispatchtalk::Kind,
+    /// What it said, as [`crate::dispatchtalk::text`] passed it, held to a cap ([`cut`]).
+    pub text: String,
+}
+
 /// One dispatch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -268,6 +286,12 @@ pub struct Record {
     /// How many messages passed between the two chats after the brief.
     #[serde(default)]
     pub messages: u32,
+    /// Those messages, oldest first, as far as the record keeps them ([`said`]): at most
+    /// [`MOST_SAID`], and [`MOST_SAID_BYTES`] of text between them. `messages` counts every
+    /// one, kept or not. Absent for a dispatch nothing was said in, which is every record
+    /// written before the key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub talk: Vec<Said>,
     /// What the harness said it cost; absent for a harness that reports none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
@@ -356,6 +380,7 @@ pub fn open_as(
         report: None,
         needed_you: 0,
         messages: 0,
+        talk: Vec::new(),
         usage: None,
     };
     // As it is stored, so what the caller holds is what a read gives back.
@@ -404,6 +429,43 @@ pub fn note(root: &Path, id: &str, event: Event) -> io::Result<bool> {
         }
         true
     })
+}
+
+/// A message of `kind` passed between the two chats of the running dispatch `id` at `now`: it
+/// counts one more ([`Event::Message`]) and its `text` is kept on the record, in the one write
+/// (#1495). The record as it now stands where the text was kept, which is what a timeline's
+/// new line is drawn from.
+///
+/// `None` for a record that is not there or has ended, and for a message past what a record
+/// keeps ([`MOST_SAID`], [`MOST_SAID_BYTES`]): **that one is still counted, and only its text
+/// is not kept**, so `messages` above `talk`'s length says how many are missing. The first
+/// messages are the ones kept: a record is never rewritten to drop what it already says.
+pub fn said(
+    root: &Path,
+    id: &str,
+    kind: crate::dispatchtalk::Kind,
+    text: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<Option<Record>> {
+    let mut kept = None;
+    change(root, id, |record| {
+        if !record.running() {
+            return false;
+        }
+        record.messages = record.messages.saturating_add(1);
+        let text = cut(text, MOST_MESSAGE_BYTES);
+        let held: usize = record.talk.iter().map(|said| said.text.len()).sum();
+        if record.talk.len() < MOST_SAID && held + text.len() <= MOST_SAID_BYTES {
+            record.talk.push(Said {
+                at: crate::dispatch::stamp(now),
+                kind,
+                text,
+            });
+            kept = Some(record.clone());
+        }
+        true
+    })?;
+    Ok(kept)
 }
 
 /// Closes dispatch `id` at `now`. `false` for a record that is not there or has already
@@ -539,6 +601,15 @@ pub const MOST_NAME_BYTES: usize = 512;
 pub const MOST_PATH_BYTES: usize = 1024;
 /// The most files, and the most commits, a report's changes list.
 pub const MOST_LISTED: usize = 100;
+/// The most of one message's text a record keeps, in bytes: what a message may be
+/// ([`crate::handoff::MOST_REPORT_BYTES`]), so one the app took is kept whole.
+pub const MOST_MESSAGE_BYTES: usize = crate::handoff::MOST_REPORT_BYTES;
+/// The most messages a record keeps the text of.
+pub const MOST_SAID: usize = 500;
+/// The most text those messages hold between them, in bytes: with the brief and the report,
+/// well inside what a record is read back at ([`crate::reopen::MAX_BYTES`]) however it is
+/// escaped.
+pub const MOST_SAID_BYTES: usize = 256 * 1024;
 /// The room [`cut`]'s mark may take past a cap, which a read allows for.
 const MARK_ROOM: usize = 48;
 
@@ -605,6 +676,7 @@ fn capped(record: &Record) -> Record {
         report: record.report.as_ref().map(capped_report),
         needed_you: record.needed_you,
         messages: record.messages,
+        talk: record.talk.clone(),
         usage: record.usage,
     }
 }
@@ -679,6 +751,11 @@ pub fn sound(record: &Record) -> bool {
         && prose(&record.brief, MOST_BRIEF_BYTES)
         && name(&record.started)
         && maybe(&record.ended, &name)
+        && record.talk.len() <= MOST_SAID
+        && record
+            .talk
+            .iter()
+            .all(|said| name(&said.at) && prose(&said.text, MOST_MESSAGE_BYTES))
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
                 && report

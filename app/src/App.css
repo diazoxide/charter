@@ -5050,6 +5050,74 @@ h2.sidebar-title .node-icon {
   overflow-wrap: anywhere;
 }
 
+/* One chat's Activity (#1495): a timeline of lines, each its time, its kind, who said it to
+   whom, and what was said. A task's lines are set in under the chat that asked (inline, by
+   depth). */
+.activity {
+  max-width: 70rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.activity-line {
+  display: grid;
+  grid-template-columns: 4.5rem 7.5rem minmax(0, 1fr);
+  gap: 0.1rem 0.75rem;
+  align-items: baseline;
+  padding-block: 0.35rem;
+  padding-inline-end: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.activity-at {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-kind {
+  color: var(--text-muted);
+}
+
+.activity-who {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.activity-gone {
+  color: var(--text-primary);
+}
+
+/* A chat's own words, as text: its line breaks kept, and a long word broken, never the row. */
+.activity-text {
+  grid-column: 3;
+  margin: 0;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-more {
+  grid-column: 3;
+  justify-self: start;
+  padding: 0.1rem 0;
+  border: 0;
+  background: none;
+  color: var(--accent-base);
+  font: inherit;
+}
+
+/* A file two tasks say they changed (V100-68): a warning's mark and the sentence. */
+.activity-shared {
+  display: flex;
+  grid-column: 3;
+  gap: 0.3rem;
+  align-items: center;
+  margin: 0;
+  color: var(--state-waiting);
+}
+
 /* The dispatches a session record's chat made, above the record's own text. */
 .session-dispatches {
   max-width: 60rem;

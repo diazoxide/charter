@@ -286,7 +286,7 @@ fn tell(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, String> 
     dispatchtalk::leave(held.root(), to, &message).map_err(kept)?;
     held.tasks().ledger().landed(to, Landed::FollowUp);
     // One more message on the task's dispatch record (#1452), now that it is kept.
-    crate::dispatches::message(held, to);
+    crate::dispatches::message(held, to, &message);
     tell_the_chat(held, to);
     Ok(task(Answered::Sent {
         kind: Kind::FollowUp,
@@ -339,7 +339,7 @@ fn send_up(held: &Held, sender: u32, kind: Kind, said: &str) -> Result<Answer, S
         }
     }
     // Kept, so it counts on this task's dispatch record (#1452): a note as a question does.
-    crate::dispatches::message(held, sender);
+    crate::dispatches::message(held, sender, &message);
     if kind == Kind::Question {
         // A command of the asking chat's that waits on this task is answered with it; a chat
         // that is waiting for the person is typed the line. A note is neither: it is read on
@@ -391,7 +391,7 @@ fn answer_it(held: &Held, asker: u32, to: u32, said: &str) -> Result<Answer, Str
         ledger.talk.answer(to, &name, given)?;
         ledger.landed(to, Landed::Answer);
     }
-    crate::dispatches::message(held, to);
+    crate::dispatches::message(held, to, &message);
     held.tasks().changed();
     tell_the_chat(held, to);
     Ok(task(Answered::Sent {

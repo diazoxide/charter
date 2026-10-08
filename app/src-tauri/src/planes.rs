@@ -241,6 +241,8 @@ pub struct Held {
     stopping: crate::stopping::Stopping,
     /// The window, for each step of a stop.
     stops: crate::stopping::Teller,
+    /// The window, for each line of a dispatch as it is recorded (#1495).
+    activity: crate::activity::Teller,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
     /// The vaults each chat was refused for its persona, until the person answers (#1430).
@@ -478,6 +480,15 @@ impl Held {
             plane: self.id.clone(),
             session,
             phase,
+        });
+    }
+
+    /// Tells the window `line`, which the app has just recorded on a dispatch of this project
+    /// (#1495).
+    pub fn tell_activity(&self, line: crate::activity::ActivityLine) {
+        (self.activity)(crate::activity::ActivityHeard {
+            plane: self.id.clone(),
+            line,
         });
     }
 
@@ -1162,6 +1173,8 @@ pub struct Planes {
     smart: crate::smartclose::Teller,
     /// Told each step of a stop in any plane (#1448).
     stops: crate::stopping::Teller,
+    /// Told each line of a dispatch in any plane as it is recorded (#1495).
+    activity: crate::activity::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
     asks: crate::asking::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
@@ -1261,6 +1274,7 @@ impl Planes {
             vault_refused: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             stops: Arc::new(|_| {}),
+            activity: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
@@ -1376,6 +1390,13 @@ impl Planes {
     /// a chat is stopping and take its tab away when it has ended (#1448).
     pub fn telling_stops(mut self, stops: crate::stopping::Teller) -> Self {
         self.stops = stops;
+        self
+    }
+
+    /// Tells `activity` each line of a dispatch in a plane this registry holds as the app
+    /// records it, so an open Activity tab follows the work (#1495).
+    pub fn telling_activity(mut self, activity: crate::activity::Teller) -> Self {
+        self.activity = activity;
         self
     }
 
@@ -2387,6 +2408,7 @@ impl Planes {
             smart: Arc::clone(&self.smart),
             stopping: crate::stopping::Stopping::default(),
             stops: Arc::clone(&self.stops),
+            activity: Arc::clone(&self.activity),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),

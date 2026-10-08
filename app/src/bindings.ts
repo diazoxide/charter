@@ -879,6 +879,12 @@ export const commands = {
 	 */
 	dispatchWorktreeDiscard: (plane: PlaneId, id: string, seen: WorktreeLoss) => typedError<null, string>(__TAURI_INVOKE("dispatch_worktree_discard", { plane, id, seen })),
 	/**
+	 *  One chat's Activity (#1495): what it and its tasks said to each other, and the tasks of
+	 *  its tasks, as one timeline, oldest first. Read-only. On a blocking thread, as it reads
+	 *  every dispatch record.
+	 */
+	activity: (plane: PlaneId, session: number) => typedError<Activity, string>(__TAURI_INVOKE("activity", { plane, session })),
+	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
 	 *  (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
@@ -1985,6 +1991,58 @@ export type ActionAnswer = {
 	took_ms: number,
 	/**  As [`ViewAnswer::Answered`]'s: what changed outside its declared paths, named. */
 	overreach: string | null,
+};
+
+/**  What the Activity tab of one chat is handed. */
+export type Activity = {
+	/**  The chat, by the name the person sees it under. */
+	name: string,
+	/**  Which chat it is ([`ActivityLine::from_key`]): what a line heard later is matched to. */
+	key: string,
+	/**  Oldest first. */
+	lines: ActivityLine[],
+	/**  How many messages its tasks' records counted and did not keep the text of. */
+	unkept: number,
+	/**  How many records in the store purlis will not draw. */
+	undrawn: number,
+};
+
+/**  A line the app has just recorded, and the project it is in. */
+export type ActivityHeard = {
+	plane: PlaneId,
+	line: ActivityLine,
+};
+
+/**  One line of a timeline, as the Activity tab draws it. */
+export type ActivityLine = {
+	/**  The dispatch it belongs to, by its record's id. */
+	dispatch: string,
+	/**
+	 *  Its place among that dispatch's lines, from 0. With `dispatch`, what names the line: a
+	 *  line heard twice is drawn once.
+	 */
+	n: number,
+	/**  When, as the record keeps it (UTC, RFC 3339). */
+	at: string,
+	/**  `dispatched`, `follow-up`, `note`, `question`, `answer`, `report` or `stopped`. */
+	kind: string,
+	/**  The chat that said it, by the name the person saw. */
+	from: string,
+	/**  Which chat that is: its id, or `#<number>` for one given none. */
+	from_key: string,
+	/**  That chat's session, while it is still open: what the line opens. */
+	from_session: number | null,
+	/**  The chat it was said to, the same two ways. */
+	to: string,
+	to_key: string,
+	/**  What was said, **as text**: a chat's own words, never drawn as markup. */
+	text: string,
+	/**  How the task ended, in the report's word, on the line that ends it. */
+	outcome: string | null,
+	/**  The files that line's report says the task changed, as far as its words name them. */
+	files: string[],
+	/**  The task's name, else its chat's. */
+	task: string,
 };
 
 /**  How far a branch is from the branch it was cut from: the branch cockpit's header (FM-5). */

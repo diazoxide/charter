@@ -1327,6 +1327,9 @@ describe("carrying out a row", () => {
         "openView:charter/shared-memory/,Shared memory",
         // #1452: the project's dispatches, in a tab of their own.
         "openView:charter/dispatches/,Dispatches",
+        // A chat's Activity, one row per chat tab (#1495).
+        "openView:charter/activity/7,Activity · one",
+        "openView:charter/activity/8,Activity · two",
         "openView:charter/todo/alpha/20260302-091400-review,Review the plan",
         "pickVault",
         "createVault",
@@ -1591,6 +1594,9 @@ describe("the catalogue as the tabs change", () => {
       // Renaming is an arrangement too, and ends nothing (charter-app#254).
       "tab.rename:1",
       "tab.rename:2",
+      // A chat's Activity only reads (#1495), so it is above the line too.
+      "tab.activity:1",
+      "tab.activity:2",
       "tab.close:1",
       "tab.close:2",
     ]);
@@ -1903,8 +1909,9 @@ describe("the palette at fifty chats", () => {
     // 593 since SE-23: Your settings…, one row.
     // 601 since #1445: Set <persona>'s profile…, one row per persona.
     // 602 since #1452: Open dispatches, one row.
+    // 652 since #1495: Activity, one row per chat.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(602);
+    expect(offers).toHaveLength(652);
   });
 
   /**
@@ -1946,18 +1953,18 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for nine rows per tab and never walks the list", () => {
+    it("asks for ten rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the nine ids a chat menu lists (the two work link rows are V60's, Start
-      // fresh is NO-3's, Restart chat is #1428's).
+      // 50 tabs × the ten ids a chat menu lists (the two work link rows are V60's, Start
+      // fresh is NO-3's, Restart chat is #1428's, Activity is #1495's).
       // **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(450);
+      expect(strip(offers)).toBe(500);
     });
 
-    it("is the same 450 whether the catalogue carries the pieces or not", () => {
+    it("is the same 500 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -1966,7 +1973,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(450);
+      expect(strip(small)).toBe(500);
     });
   });
 });

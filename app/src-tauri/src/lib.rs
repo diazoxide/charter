@@ -17,6 +17,7 @@ macro_rules! tauri_context {
 }
 
 mod about;
+mod activity;
 mod alerts;
 mod asking;
 mod autosave;
@@ -2210,6 +2211,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<smartclose::SmartClosing>()
         // What `chat-stop` carries (#1448).
         .typ::<stopping::ChatStop>()
+        // What `activity-line` carries (#1495).
+        .typ::<activity::ActivityHeard>()
         // The event a launch without the session bus is told the bus answers on (`portal.rs`),
         // named once for both sides.
         .constant("SESSION_BUS_ANSWERS", portal::ANSWERS)
@@ -2887,6 +2890,19 @@ pub fn run() {
                             &step.plane.clone(),
                             stopping::EVENT,
                             &step,
+                        );
+                    })
+                })
+                // Each line of a dispatch as the app records it: an open Activity tab adds
+                // it without reading the records again (#1495).
+                .telling_activity({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |heard: activity::ActivityHeard| {
+                        windows::emit_for_plane(
+                            &window,
+                            &heard.plane.clone(),
+                            activity::EVENT,
+                            &heard,
                         );
                     })
                 })
