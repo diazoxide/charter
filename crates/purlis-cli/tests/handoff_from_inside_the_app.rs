@@ -681,7 +681,7 @@ fn a_reporting_handoff_the_app_refuses_says_why_and_still_names_the_route() {
     let (app, _reading, _asked) = an_app(&tmp, |tickets, connection, ask| match ask {
         Ask::Ticket { .. } => opens_as_nine(tickets, connection, ask),
         _ => Answer::No {
-            why: "this chat already waits on 6 tasks".to_owned(),
+            why: "this chat already waits on 6 tasks.".to_owned(),
         },
     });
 
@@ -691,7 +691,7 @@ fn a_reporting_handoff_the_app_refuses_says_why_and_still_names_the_route() {
     assert_eq!(text(&out.stdout), "");
     let said = text(&out.stderr);
     assert!(
-        said.contains("this chat already waits on 6 tasks")
+        said.contains("this chat already waits on 6 tasks. Nothing was started.")
             && said.ends_with(&format!("\u{2022} {THE_ROUTE}\n")),
         "{said}"
     );
@@ -721,7 +721,10 @@ fn a_reporting_handoff_cannot_create_its_workspace_and_says_what_to_run() {
     let said = text(&out.stderr);
     assert!(
         said.contains("--create cannot go with it")
-            && said.contains("purlis workspace create gamma")
+            && said.contains(
+                "Create 'gamma' first (purlis workspace create gamma --vision \"<what it is \
+                 for>\"), then dispatch into it"
+            )
             && said.contains("purlis dispatch --name \"<task>\" --in workspace:gamma"),
         "{said}"
     );
@@ -730,6 +733,33 @@ fn a_reporting_handoff_cannot_create_its_workspace_and_says_what_to_run() {
         "refused before any app is looked for: {said}"
     );
     assert!(!root(&tmp).join("workspaces").join("gamma").exists());
+}
+
+/// A workspace that is not there is not answered with `--create`, which `--report` refuses:
+/// the same two commands are named, and nothing is asked or made.
+#[test]
+fn a_reporting_handoff_into_a_workspace_that_is_not_there_is_not_pointed_at_create() {
+    let tmp = daily();
+
+    let out = charter(&root(&tmp), None, &["handoff", "gamma", "--report"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(
+        text(&out.stderr),
+        "\u{2717} purlis handoff: no workspace 'gamma' on this plane — nothing was opened. \
+         --report makes this a task, and a task works in a workspace that exists. Create \
+         'gamma' first (purlis workspace create gamma --vision \"<what it is for>\"), then \
+         dispatch into it: purlis dispatch --name \"<task>\" --in workspace:gamma.\n"
+    );
+    assert!(!root(&tmp).join("workspaces").join("gamma").exists());
+    // Without `--report` the answer is the one it always was.
+    let plain = charter(&root(&tmp), None, &["handoff", "gamma"]);
+    assert!(
+        text(&plain.stderr).contains("Create it in the same call: charter handoff gamma --create"),
+        "{}",
+        text(&plain.stderr)
+    );
 }
 
 /// With no app behind the chat it is the dispatch that has nobody to ask, and it says so in

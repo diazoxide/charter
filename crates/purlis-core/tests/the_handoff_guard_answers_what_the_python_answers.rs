@@ -284,6 +284,102 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
 /// A recording can fail in one direction the replay above cannot see — if the rows stop covering
 /// the rules, it passes while proving nothing. So each spelling `docs/handoff.md` records as
 /// having run with no prompt is asserted BY NAME, the way stages 1 to 4 did it.
+/// What the frozen Python answers a handoff that is fed no heredoc at all, whatever else its
+/// line says: it has no help arm.
+const PYTHON_REFUSES_A_HANDOFF_WITH_NO_BRIEF: Option<&str> = Some("handoff-brief-source");
+
+/// **The one place this guard answers differently from the Python on purpose since the
+/// recording: asking for the command's help** (#1515).
+///
+/// The recording holds no handoff with a help flag (asserted below, so the wide replay cannot
+/// be what covers the arm), and a corpus row cannot be written by hand: it carries the
+/// answer of every reader, with the recorder's own probes, and the recorder is retired
+/// (`fixtures/corpora/README.md`). So the divergence is held here, row for row, in the form
+/// that README asks a changed answer to be said in: the command, what the Python answers,
+/// what this guard answers, and why.
+///
+/// The Python's answer is known without it: its brief-source arm refuses every handoff it
+/// reads that no quoted heredoc feeds, and none of these has one.
+#[test]
+fn asking_for_help_is_the_one_answer_that_moved_from_the_pythons_and_only_where_it_is_help() {
+    purlis_core::unsteered!();
+    let caller = PROBE_CALLERS[0];
+    assert_eq!(caller, (None, Some("claude-code"), Some("default")));
+    let recorded = oracle_corpus::shellseg();
+    let reads_as_help = |cmd: &str| {
+        cmd.split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair[0].ends_with("handoff") && (pair[1] == "--help" || pair[1] == "-h"))
+    };
+    assert!(
+        !recorded
+            .iter()
+            .any(|r| reads_as_help(r.row["cmd"].as_str().unwrap_or_default())),
+        "the recording now holds a help ask: it is a row to answer, not a table to keep"
+    );
+
+    // Moved, on purpose: the program prints its help and reads no brief, so there is no
+    // brief whose source could be wrong. The Python refused each for lacking a heredoc.
+    for cmd in [
+        "charter handoff --help",
+        "charter handoff -h",
+        "purlis handoff --help",
+        "/usr/local/bin/charter handoff --help",
+        "python3 -m charter handoff -h",
+        "charter handoff --help | head -40",
+        "cd /tmp && charter handoff --help",
+    ] {
+        assert_eq!(
+            refusal(cmd, caller).map(|(reason, _)| reason),
+            None,
+            "{cmd:?}: python={PYTHON_REFUSES_A_HANDOFF_WITH_NO_BRIEF:?}"
+        );
+    }
+
+    // Not moved: every shape that only looks like a help ask is answered as the Python
+    // answers it. A flag the program does not receive as its help flag (a redirection's
+    // operand, a word behind `--`, a word further along), and a help ask with another handoff
+    // in the same call.
+    for cmd in [
+        "charter handoff beta > -h",
+        "charter handoff beta 2> --help",
+        "{ charter handoff beta > -h; } < brief.txt",
+        "exec < brief.txt; charter handoff beta 2> -h",
+        "cat brief.txt | { :; charter handoff beta > -h; }",
+        "charter handoff -- --help",
+        "charter handoff '--' --help",
+        "charter handoff \\-- --help",
+        "charter handoff beta --help",
+        "charter handoff --name x --help",
+        "charter handoff '--help'",
+        "charter handoff --help; charter handoff beta < brief.txt",
+        "charter handoff -h && charter handoff beta <<BRIEF\n$HOME\nBRIEF",
+        "charter handoff --help\ncat brief.txt | charter handoff beta",
+        "charter handoff --help\ncharter handoff beta <<'BRIEF'\nx\nBRIEF",
+        "charter handoff --help; charter ${x:-handoff} beta < brief.txt",
+        "charter handoff --help < brief.txt",
+        "cat brief.txt | charter handoff --help",
+        "charter handoff --help \"$(cat name)\"",
+    ] {
+        assert_eq!(
+            refusal(cmd, caller).map(|(reason, _)| reason),
+            PYTHON_REFUSES_A_HANDOFF_WITH_NO_BRIEF,
+            "{cmd:?}"
+        );
+    }
+
+    // And a help ask moves nothing for a caller the Python refused first: a sub-agent.
+    let helper = PROBE_CALLERS
+        .iter()
+        .find(|c| c.0 == Some("sub-1") && c.1 == Some("claude-code"))
+        .expect("a measured sub-agent among the probes");
+    assert_eq!(
+        refusal("charter handoff --help", *helper).map(|(reason, _)| reason),
+        Some("handoff-subagent")
+    );
+}
+
 #[test]
 fn the_recording_still_covers_the_rules() {
     purlis_core::unsteered!();

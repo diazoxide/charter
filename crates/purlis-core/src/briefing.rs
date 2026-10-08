@@ -253,13 +253,31 @@ pub const BRANCH_FOLDER_COMMIT_NOTE: &str = "⬢ **Committing here.** This folde
 /// and a chat told "dispatch to devops" reached for the handoff skill; this line is there from
 /// the first turn.
 ///
+/// **It is a route, not a reason to give work away.** The sentence is said under a condition
+/// ([`ONE_ROUTE_IF`]) and followed by what it does not mean ([`ONE_ROUTE_ONLY_THEN`]), both
+/// outside the pinned sentence: a chat that read it bare could take every piece of work for
+/// one to dispatch.
+///
 /// Only for a chat the app started, which is the one place its hook socket is named
 /// ([`crate::hookwire::SOCKET_ENV`]): in a terminal neither command starts a chat.
 fn one_route_note(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     env(crate::hookwire::SOCKET_ENV)
         .filter(|socket| !socket.is_empty())
-        .map(|_| format!("⬢ **Work for another chat.** {}", crate::handoff::ONE_ROUTE))
+        .map(|_| {
+            format!(
+                "{ONE_ROUTE_IF} {} {ONE_ROUTE_ONLY_THEN}",
+                crate::handoff::ONE_ROUTE
+            )
+        })
 }
+
+/// What stands in front of [`crate::handoff::ONE_ROUTE`] in a chat's briefing: when it applies.
+pub const ONE_ROUTE_IF: &str = "⬢ **If work has to go to another chat.**";
+
+/// What stands after it: the route is for work that must come back as an answer and that
+/// another chat has to do, and says nothing about work this chat can do itself.
+pub const ONE_ROUTE_ONLY_THEN: &str = "This says where such work goes, not that work should \
+     go: what this chat can do itself, it does.";
 
 /// [`SANDBOXED_NOTE`] for a chat the app started under a sandbox, read through `env`; none for
 /// any other.

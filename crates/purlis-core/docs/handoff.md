@@ -180,7 +180,7 @@ dispatch, so:
 - its report is delivered as a task's is, and where purlis may type into this chat, the line
   that starts its next turn is typed when the report lands;
 - a task's rules hold: a draft persona runs no chat, a task needs a name (one given none is
-  called `handoff to <workspace>`), and a chat nobody is at crosses into another workspace
+  called `handoff to <workspace>`, cut to a name's length), and a chat nobody is at crosses into another workspace
   only under a grant that already stands;
 - it leaves no todo in the workspace and no `handoff` row in the dispatch log. Its dispatch
   record is the app's.
@@ -188,7 +188,9 @@ dispatch, so:
 The command's result is the dispatch's own, and a line under it says that the work was
 carried out as a task and that the route from now on is `purlis dispatch`. `--create` cannot
 go with `--report`: a task works in a workspace that exists, and the refusal names the two
-commands that do it.
+commands that do it (`purlis workspace create <name> --vision "<what it is for>"`, then the
+dispatch). A workspace that is not there is answered the same way, and not with `--create`.
+No extension is told of it: an extension hears of a handoff, and this is a task.
 
 **Why.** A reporting handoff was a second route to a task with none of a task's handles. Its
 report was left for the asking chat's next turn and nothing started that turn, so a chat
@@ -928,9 +930,18 @@ guards*). None of them is about consent, which is the app's:
   call, and the dispatch record keeps the same.
 
 **Asking for the command's help is not a handoff.** `purlis handoff --help`, or `-h`, prints
-the help and reads no brief, so it is not refused for lacking a heredoc, where nothing is fed
-to it: no heredoc, here-string, file or pipe, and no live substitution in the call. Every
-other refusal above stands in front of it.
+the help and reads no brief, so it is not refused for lacking a heredoc. Three things must
+hold, and where one does not the call is judged as the handoff it may be:
+
+- the flag is the bare word **right after `handoff`**. Anywhere else the program may not
+  receive it as its help flag: `purlis handoff beta > -h` writes to a file called `-h`, and a
+  word behind a `--`, however that is quoted, is a word;
+- nothing is fed to the command: no heredoc, here-string, file or pipe, and no live
+  substitution in the call;
+- **the call holds no other handoff.** purlis judges the first handoff of a call, and a help
+  ask in front of a second one does not get that second one past its brief's rule.
+
+Every other refusal above stands in front of it.
 
 An unattended run is no longer refused here. Whether anybody answers a chat's prompts is the
 app's own mark on that chat, weighed where the handoff is decided.

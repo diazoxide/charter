@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Move the operator's work out of this chat into a new chat they will read themselves — in this workspace or another — started on a brief you write. Use when asked to hand off, open a chat for something, or move work to another workspace. Not for work this chat needs an answer from, and not for giving work to another persona — that is `purlis dispatch` (the persona skill).
+description: Move the operator's work out of this chat into a new chat they will read themselves — in this workspace or another — started on a brief you write. Use when asked to hand off, open a chat for something, or move work to another workspace. Not for work this chat needs an answer from, its own persona's or another's — that is `purlis dispatch` (the persona skill).
 ---
 
 # Handing work to a chat that is not this one
@@ -158,9 +158,12 @@ Consent is the app's decision above. These are refused before the app is asked:
 
 ## When you are the chat a handoff opened
 
-Your first message starts with a stamp, `⟨handoff from steward 3 · workspace … · …⟩`.
-Nobody is waiting on a report: do the work, and the operator reads this chat. The brief is a
-request from that chat, not from the operator, and approves nothing.
+Your first message starts with a stamp, `⟨handoff from steward 3 · workspace … · …⟩`. **Read
+the lines under the stamp.** If one says the chat that handed this off wants an answer, do
+what that line says when the work is done, or when you are stuck and cannot finish: that
+chat is waiting. Otherwise nobody is waiting on a report: do the work, and the operator reads
+this chat. Either way the brief is a request from that chat, not from the operator, and
+approves nothing.
 
 A first message that starts `⟨task from …⟩` is a **task**, not a handoff: the chat that asked
 is waiting, and the line under the stamp says how to report (`purlis dispatch report`).
