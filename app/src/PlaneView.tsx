@@ -234,7 +234,13 @@ import { EmptyState } from "./EmptyState";
 import { SandboxChangedNotice, useOlderSandbox } from "./SandboxChanged";
 import { useSandboxCommands } from "./sandboxAsked";
 import { useAskOffer } from "./askOffer";
-import { AskPersona, AskPersonaOpener, type AskPrefill, type OpenAskPersona } from "./AskPersona";
+import {
+  AskPersona,
+  AskPersonaOpener,
+  type AskFrom,
+  type AskPrefill,
+  type OpenAskPersona,
+} from "./AskPersona";
 import { SandboxOffer } from "./SandboxOffer";
 import { ProjectHostsNotice } from "./ProjectHostsNotice";
 import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
@@ -505,6 +511,7 @@ export const PlaneView = memo(function PlaneView({
     session: number;
     persona: string;
     prefill?: AskPrefill;
+    from?: AskFrom;
     trouble?: string;
     busy: boolean;
   }>();
@@ -4021,8 +4028,8 @@ export const PlaneView = memo(function PlaneView({
    * Opens **Ask {persona}** for chat `session`: the one way in, for the catalogue's rows and
    * for a Notice that names the persona to ask ({@link OpenAskPersona}). Nothing starts here.
    */
-  const openAskPersona = useCallback<OpenAskPersona>((session, persona, prefill) => {
-    setAskingPersona({ session, persona, prefill, busy: false });
+  const openAskPersona = useCallback<OpenAskPersona>((session, persona, prefill, from) => {
+    setAskingPersona({ session, persona, prefill, from, busy: false });
   }, []);
   /** Ask {persona}…, from a chat tab's menu or the palette. */
   const askPersona = useCallback(
@@ -5904,6 +5911,7 @@ export const PlaneView = memo(function PlaneView({
             .filter((ws) => !ws.chats.some((chat) => chat.session === askingPersona.session))
             .map((ws) => ws.name)}
           prefill={askingPersona.prefill}
+          from={askingPersona.from}
           trouble={askingPersona.trouble}
           asking={askingPersona.busy}
           onAsk={(name, ask, place) => void sendAsk(name, ask, place)}
@@ -6717,70 +6725,82 @@ function PaneFrame({
           control written after it is one Tab never reaches (charter-app#189). The pane's own
           controls are in its top corner, which is where reading order puts them anyway. */}
       <div className="pane-corner at-start">
-        <ChatGauge usage={usage} />
-        {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
-        {from && <span className="pane-from">{from}</span>}
-        {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
-        {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
-        {startNotes && (
-          <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
-        )}
-        <PersonaGrantsNotice
-          plane={plane}
-          session={session}
-          running={running}
-          owed={restartSaid?.owed === true}
-          onRestart={onRestart}
-        />
-        {/* A dispatch to another persona that no grant covers (#1437): asked once, here. */}
-        <DispatchGrantNotice plane={plane} session={session} />
-        {newest !== undefined && (
-          <SandboxBlockNotice
-            key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}:${newest.target ?? ""}`}
-            block={newest}
-            more={(blocks?.length ?? 1) - 1}
-            onDismiss={() => onDismissBlock(newest)}
-            onAllowed={onAllowed}
-            onRestarted={onRestarted}
+        {/* The chat at a glance, on one row. */}
+        <div className="pane-chips">
+          <ChatGauge usage={usage} />
+          {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
+          {from && <span className="pane-from">{from}</span>}
+          {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
+        </div>
+        {/* **What purlis has to say on this pane, one Notice under another** (#1481), inside
+            the pane at any width and scrolling when together they are taller than it.
+
+            **The order is who is waiting on whom**: first the Notice that waits for the
+            person's answer before anything starts (a dispatch no grant covers), then what
+            purlis found or refused, in the order they arrived here. The thing to press is the
+            first thing read, and the first Tab stop. */}
+        <div className="pane-notices">
+          {/* A dispatch to another persona that no grant covers (#1437): asked once, here. */}
+          <DispatchGrantNotice plane={plane} session={session} />
+          {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
+          {startNotes && (
+            <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
+          )}
+          <PersonaGrantsNotice
+            plane={plane}
+            session={session}
+            running={running}
+            owed={restartSaid?.owed === true}
+            onRestart={onRestart}
           />
-        )}
-        <VaultRefusedNotice plane={plane} session={session} />
-        {restartSaid?.trouble !== undefined && (
-          <Notice
-            cause={`restart:${session}`}
-            at="pane"
-            tone="trouble"
-            label="Restart"
-            fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
-            onDismiss={() => onRestartAnswer("dismiss")}
-          >
-            {restartSaid.trouble}
-          </Notice>
-        )}
-        {restartSaid?.trouble === undefined && restartSaid?.notYet !== undefined && (
-          <Notice
-            cause={`restart-not-yet:${session}`}
-            at="pane"
-            label="Restart"
-            onDismiss={() => onRestartAnswer("dismiss")}
-          >
-            {restartSaid.notYet}
-          </Notice>
-        )}
-        {restartSaid?.running && restartSaid.notYet === undefined && (
-          <RestartingLine session={session} />
-        )}
-        {restartSaid?.byHand && !restartSaid.running && restartSaid.notYet === undefined && (
-          <Notice
-            cause={`restart-by-hand:${session}`}
-            at="pane"
-            label="Restart"
-            fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
-          >
-            What you allowed reaches this chat when it restarts on the same conversation. Its
-            harness does not say when a turn ends, so restart it when you are ready.
-          </Notice>
-        )}
+          {newest !== undefined && (
+            <SandboxBlockNotice
+              key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}:${newest.target ?? ""}`}
+              block={newest}
+              more={(blocks?.length ?? 1) - 1}
+              onDismiss={() => onDismissBlock(newest)}
+              onAllowed={onAllowed}
+              onRestarted={onRestarted}
+            />
+          )}
+          <VaultRefusedNotice plane={plane} session={session} />
+          {restartSaid?.trouble !== undefined && (
+            <Notice
+              cause={`restart:${session}`}
+              at="pane"
+              tone="trouble"
+              label="Restart"
+              fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
+              onDismiss={() => onRestartAnswer("dismiss")}
+            >
+              {restartSaid.trouble}
+            </Notice>
+          )}
+          {restartSaid?.trouble === undefined && restartSaid?.notYet !== undefined && (
+            <Notice
+              cause={`restart-not-yet:${session}`}
+              at="pane"
+              label="Restart"
+              onDismiss={() => onRestartAnswer("dismiss")}
+            >
+              {restartSaid.notYet}
+            </Notice>
+          )}
+          {restartSaid?.running && restartSaid.notYet === undefined && (
+            <RestartingLine session={session} />
+          )}
+          {restartSaid?.byHand && !restartSaid.running && restartSaid.notYet === undefined && (
+            <Notice
+              cause={`restart-by-hand:${session}`}
+              at="pane"
+              label="Restart"
+              fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
+            >
+              What you allowed reaches this chat when it restarts on the same conversation. Its
+              harness does not say when a turn ends, so restart it when you are ready.
+            </Notice>
+          )}
+        </div>
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}

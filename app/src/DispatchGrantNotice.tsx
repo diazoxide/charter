@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useId, useState } from "react";
-import { commands, type DispatchPending, type GrantLevel, type PlaneId } from "./bindings";
-import { listen } from "./here";
+import { useId, useState } from "react";
+import { commands, type GrantLevel, type PlaneId } from "./bindings";
+import { useDispatchesHeld } from "./dispatchesHeld";
 import { Notice, type NoticeAction } from "./Notice";
 
-/** About how many lines the brief's box shows before it scrolls. */
-const SHOWN_LINES = 12;
+/** About how many lines the brief's box shows before it scrolls (`App.css`,
+ *  `.block-report-brief`). */
+const SHOWN_LINES = 8;
 
 /** What each level's Allow says, in the order they read. */
 const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
@@ -20,6 +21,11 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * **Allow for everyone in this project**, or **Keep blocked**. After an Allow the dispatch
  * starts, and so does every later one the grant covers, with no prompt.
  *
+ * **It reads top to bottom as it is answered** (#1481): the sentence, then the ways out in the
+ * order above, then the brief in a box of about eight lines that scrolls. The brief is under
+ * the buttons and never beside or above them: a long brief must not push the answer out of
+ * sight. On a pane it is the first Notice, above what purlis only reports (`PaneFrame`).
+ *
  * **The brief is the chat's text, never purlis's.** It is drawn in its own block, under a line
  * that says so, as plain text: nothing in it is markup, a control or a sentence of the
  * Notice's. An Allow sends the held dispatch's number and the level, and nothing of the pair:
@@ -30,44 +36,11 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  */
 export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
-  const [waiting, setWaiting] = useState<readonly DispatchPending[]>([]);
+  const { waiting, read } = useDispatchesHeld(plane, session);
   /** What the last Allow answered, until it is put away. */
   const [allowed, setAllowed] = useState<{ target: string; said: string }>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
-
-  const read = useCallback(() => {
-    void commands
-      .dispatchGrantsNeeded(plane, session)
-      .then((held) => {
-        // A core that answers nothing holds nothing.
-        if (held.status === "ok") setWaiting(held.data ?? []);
-      })
-      // A chat whose held dispatches cannot be read shows none: nothing starts unasked.
-      .catch(() => {});
-  }, [plane, session]);
-
-  useEffect(() => {
-    let gone = false;
-    let stop: (() => void) | undefined;
-    read();
-    void (async () => {
-      try {
-        const unlisten = await listen<DispatchPending>("dispatch-grant-needed", (event) => {
-          if (gone || event.payload.plane !== plane || event.payload.session !== session) return;
-          read();
-        });
-        if (gone) unlisten();
-        else stop = unlisten;
-      } catch {
-        // No window to listen in: a unit test, or a webview being torn down.
-      }
-    })();
-    return () => {
-      gone = true;
-      stop?.();
-    };
-  }, [plane, session, read]);
 
   if (allowed !== undefined)
     return (
@@ -107,7 +80,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     <div className="block-report" id={id}>
       <p>The brief, as the chat wrote it. purlis did not write it.</p>
       <section aria-label="Brief from the chat">
-        <pre className="block-report-draft">{first.brief}</pre>
+        <pre className="block-report-draft block-report-brief">{first.brief}</pre>
       </section>
       {first.brief_lines > SHOWN_LINES && (
         <p>

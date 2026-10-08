@@ -38,6 +38,13 @@ import { PersonaMark } from "./PersonaMark";
  * default), in a pane's corner over its terminal, where it takes no row (`pane`), or as a row of
  * the Alerts drawer (`drawer`, NO-6).
  *
+ * **A Notice in a pane's corner fits its pane, whatever it says** (#1481). It began as one short
+ * line; it now also carries a long sentence, three long buttons and what one of them opens. So
+ * `at="pane"` draws one box (`notice-pane-box`) holding the line and, under it, what a way out
+ * opened. The sentence has the row; the ways out share it only when all of it fits unwrapped,
+ * and otherwise go under the sentence; nothing is ever wider or taller than the pane
+ * (`App.css`, `.pane-notices`).
+ *
  * `guard.test` in this folder fails on a standing line built any other way, so a new dead end
  * cannot come back in.
  */
@@ -103,8 +110,13 @@ export function Notice(props: NoticeProps) {
     .join(" ");
   const line = (
     <div className={classes} role="status" aria-label={label} data-cause={cause}>
-      {persona != null && <PersonaMark persona={persona} />}
-      <div className="notice-says">{children}</div>
+      {/* In a pane the mark is the sentence's first word, so it is never left alone on a row
+          above a sentence that takes the next one whole (#1481). */}
+      {persona != null && at !== "pane" && <PersonaMark persona={persona} />}
+      <div className="notice-says">
+        {persona != null && at === "pane" && <PersonaMark persona={persona} />}
+        {children}
+      </div>
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#186). */}
       {fixes?.map((fix) => (
         <button
@@ -142,15 +154,24 @@ export function Notice(props: NoticeProps) {
       )}
     </div>
   );
-  // What a way out opened is drawn beside the line, never inside it: the line is a live region,
+  // What a way out opened is drawn after the line, never inside it: the line is a live region,
   // and a form in one would be read out again on every keystroke and every refusal.
+  const opened =
+    under === undefined ? null : <div className={`notice-under notice-under-${at}`}>{under}</div>;
+  // **In a pane's corner the line and what it opened are one box** (#1481): the corner lays its
+  // Notices out one under another, and a box of its own is what keeps what a way out opened
+  // under its line and at its width, whatever the pane's width. Under the strip and in the
+  // drawer the two stay siblings, as the band moves them.
   const drawn =
-    under === undefined ? (
-      line
+    at === "pane" ? (
+      <div className={opened === null ? "notice-pane-box" : "notice-pane-box notice-opened"}>
+        {line}
+        {opened}
+      </div>
     ) : (
       <>
         {line}
-        <div className={`notice-under notice-under-${at}`}>{under}</div>
+        {opened}
       </>
     );
   return stacked ? createPortal(drawn, host) : drawn;

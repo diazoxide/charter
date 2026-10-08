@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { commands, type PlaneId, type VaultRefused } from "./bindings";
 import { listen } from "./here";
 import { useAskPersona } from "./AskPersona";
+import { useDispatchesHeld } from "./dispatchesHeld";
 import { Notice, type NoticeAction } from "./Notice";
 
 /** What a press answers: the sentence the Notice then says, or nothing for Keep blocked. */
@@ -26,7 +27,14 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  *
  * **The dialog opens empty.** What is typed there reaches the new chat as your own words, so
  * this Notice hands it nothing a chat produced: not the command that was refused, and not the
- * vault's name. It names the chat and the persona, which are purlis's own records.
+ * vault's name. It names the chat and the persona, which are purlis's own records. The dialog
+ * says so when it is opened from here.
+ *
+ * - **Show the request**, in place of Dispatch to {persona}…, where this chat has already asked
+ *   that persona and its dispatch is held for you (#1481): the Notice says so and the button
+ *   goes to that question, on this pane. Dispatching is the chat's own work; the manual way is
+ *   for when the chat has not asked, and offering both sent the person to an empty form while
+ *   the chat's own request waited for an answer.
  *
  * Only a press does any of it. Where an administrator's policy forbids Allow, it is not
  * offered, and the Notice says what policy forbids and who set it.
@@ -43,6 +51,7 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
   const askPersona = useAskPersona();
+  const { waiting } = useDispatchesHeld(plane, session);
 
   const read = useCallback(() => {
     void commands
@@ -123,17 +132,24 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
   // Ask the vault's own persona, where the project defines it: the dialog, and nothing typed
   // for you (see above). Policy that forbids Allow does not forbid this; what it does forbid
   // of dispatch, the dialog's answer says.
+  // Unless this chat has already asked that persona: then the way forward is its own request,
+  // waiting on this pane, and the button goes there.
+  const asked =
+    newest.dispatch_to !== null && waiting.some((one) => one.target === newest.dispatch_to);
   const dispatchTo: NoticeAction[] =
     newest.dispatch_to === null
       ? []
-      : [
-          {
-            label: `Dispatch to ${newest.dispatch_to}…`,
-            onPress: () => {
-              if (newest.dispatch_to !== null) askPersona(session, newest.dispatch_to);
+      : asked
+        ? [{ label: "Show the request", onPress: () => showTheRequest(session) }]
+        : [
+            {
+              label: `Dispatch to ${newest.dispatch_to}…`,
+              onPress: () => {
+                if (newest.dispatch_to !== null)
+                  askPersona(session, newest.dispatch_to, undefined, "notice");
+              },
             },
-          },
-        ];
+          ];
   const fixes: readonly [NoticeAction, ...NoticeAction[]] =
     newest.locked === null
       ? [
@@ -160,11 +176,17 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
             This chat does not restart. You can revoke it in Settings › Sandbox › Granted.
           </p>
         )}
-        {dispatch !== null && (
+        {dispatch !== null && !asked && (
           <p>
             {newest.locked === null ? "The other way" : "The way forward"} is to have {dispatch} do
             the work. Dispatch to {dispatch}… asks it from this chat, in your words. purlis also
             told this chat how to dispatch to it.
+          </p>
+        )}
+        {dispatch !== null && asked && (
+          <p>
+            {newest.locked === null ? "The other way" : "The way forward"} is to have {dispatch} do
+            the work, and this chat has asked it to. Nothing starts until you answer that request.
           </p>
         )}
       </div>
@@ -182,8 +204,24 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
       This chat runs as {persona}, and vault <code className="block-allow-target">{vault}</code> is{" "}
       {theirs === null ? "tagged for no persona" : `tagged for ${theirs}`}, so purlis did not open
       it.{newest.locked !== null && ` ${newest.locked}`}
+      {asked && ` This chat has already asked ${newest.dispatch_to}: answer that above.`}
       {said !== undefined && ` ${said}`}
       {behind}
     </Notice>
   );
+}
+
+/**
+ * **Show the request**: brings this chat's held dispatch, the Notice that asks about it on the
+ * same pane, into view and puts the keyboard on it.
+ *
+ * On its line, never on one of its buttons: the focus moves on a press, and the next key must
+ * not be able to answer the question.
+ */
+function showTheRequest(session: number) {
+  const request = document.querySelector<HTMLElement>(`[data-cause^="dispatch-grant:${session}:"]`);
+  if (request === null) return;
+  request.scrollIntoView?.({ block: "nearest" });
+  request.tabIndex = -1;
+  request.focus();
 }
