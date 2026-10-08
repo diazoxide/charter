@@ -24,13 +24,15 @@
 //! Everything here reads the record from the **LOCAL half only**. The keyring is this machine's,
 //! and so is every decision that hands a keyring item to a subprocess.
 //!
-//! **One token serves every vault read through the same variable** (#1526). A variable names an
-//! identity, and several vaults are commonly read through one. So the operator's one action
-//! writes a record, and an item of its own, for each vault of the project read the same way
-//! ([`read_alike`]) as the registry stands at that moment. Nothing is shared between them: each
-//! record pins its own vault's binding, and a read still honours only the record of the vault it
-//! reads. No item is ever found by a variable's name, so a vault registered or changed
-//! afterwards is given nothing until the operator stores the token again.
+//! **A token is stored per vault, from that vault's own tab** (#1526, D-1526-7). A store marks
+//! the one vault the person is in and no other, however many vaults are read through the same
+//! variable: a vault the committed half names is never given a token the person did not put in
+//! from its tab. [`unset_alike`] only NAMES the other vaults that still have none, for the tab
+//! to point at.
+//!
+//! **A replaced token does not stay behind.** Once a new record is saved, the items the
+//! previous record named are deleted. A store that fails part way deletes what it had stored
+//! and leaves the record as it was.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -539,13 +541,13 @@ fn sole_source(vault: &Vault) -> Result<String, VaultError> {
     }
 }
 
-/// Every other vault of the project read the way `vault` is: by the same provider, through
-/// exactly the same identity bindings. What one stored token serves beside `vault` itself
-/// (#1526). Read from the merged registry as it stands now; empty for a vault that declares no
-/// identity, and for a registry that cannot be read.
-pub fn read_alike(ctx: &Ctx, vault: &Vault) -> Vec<Vault> {
-    let env: BTreeMap<String, String> = bindings(vault).into_iter().collect();
-    if env.is_empty() {
+/// The other vaults of the project read through one of `vault`'s identity variables whose token
+/// is found nowhere, by name, sorted: what the tab points at after a store (#1526). **Names
+/// only, and nothing is written for them**: each takes its token from its own tab. Empty for a
+/// vault that declares no identity, and for a registry that cannot be read. Reads no keyring.
+pub fn unset_alike(ctx: &Ctx, vault: &Vault) -> Vec<String> {
+    let mine: Vec<String> = bindings(vault).into_iter().map(|(_, s)| s).collect();
+    if mine.is_empty() {
         return Vec::new();
     }
     let Ok(doc) = registry::load_registry(ctx) else {
@@ -554,38 +556,89 @@ pub fn read_alike(ctx: &Ctx, vault: &Vault) -> Vec<Vault> {
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
     names
-        .iter()
-        .filter(|name| **name != vault.name)
-        .filter_map(|name| registry::vault_in(&doc, name).ok())
-        .filter(|other| {
-            other.provider == vault.provider
-                && bindings(other).into_iter().collect::<BTreeMap<_, _>>() == env
+        .into_iter()
+        .filter(|name| *name != vault.name)
+        .filter(|name| {
+            registry::vault_in(&doc, name).is_ok_and(|other| {
+                held(ctx, &other)
+                    .iter()
+                    .any(|b| b.held == Held::Unset && mine.contains(&b.source))
+            })
         })
         .collect()
 }
 
-/// Keep `tokens` (`(source, token)`) for `vault` and for every vault read alike: an item of its
-/// own for each, and its own pinned record. `vault` first, so a keyring that fails part way has
-/// stored the one the operator asked about. Answers `vault`'s sources.
+/// The keyring items this machine's record of `vault` names now, as `(service, account)`:
+/// what a new record replaces. Read from the local half whether or not the record still
+/// matches the vault's binding, since an item nothing honours is still a token in the keyring.
+fn items_recorded(ctx: &Ctx, vault: &Vault) -> Vec<(String, String)> {
+    let Some(rec) = record(ctx, vault) else {
+        return Vec::new();
+    };
+    let (Ok(base), Some(ids)) = (base_of(&rec, vault), ids_of(&rec)) else {
+        return Vec::new();
+    };
+    ids.into_iter()
+        .map(|(source, id)| (format!("{base}/{id}"), source))
+        .collect()
+}
+
+/// Delete `items` from the keyring, best effort, and answer how many could not be deleted. A
+/// failure never refuses the store that asked: the new token is already in place.
+fn forget(ctx: &Ctx, items: &[(String, String)]) -> usize {
+    let store = keyring::store(ctx);
+    items
+        .iter()
+        .filter(|(service, account)| store.delete(service, account).is_err())
+        .count()
+}
+
+/// Keep `tokens` (`(source, token)`) for `vault`, and for no other vault: an item for each,
+/// then the pinned record, then the items of the record it replaces are deleted (#1526).
+///
+/// **All or nothing.** A keyring that fails part way, or a record that cannot be saved, has the
+/// items stored so far deleted again and the error answered: the record is the one that was
+/// there, and no token is left that nothing refers to.
 fn keep(ctx: &Ctx, vault: &Vault, tokens: &[(String, String)]) -> Result<Vec<String>, VaultError> {
     let (op_cmd, op_team) = resolve_op_now(ctx);
-    let mut sources = Vec::new();
-    for one in std::iter::once(vault.clone()).chain(read_alike(ctx, vault)) {
-        let mut ids = BTreeMap::new();
-        for (source, token) in tokens {
-            ids.insert(source.clone(), store_token(ctx, source, token)?);
+    let before = items_recorded(ctx, vault);
+    let mut ids = BTreeMap::new();
+    let mut stored: Vec<(String, String)> = Vec::new();
+    let undo = |stored: &[(String, String)], why: VaultError| {
+        if forget(ctx, stored) > 0 {
+            return VaultError::new(format!(
+                "{} A token purlis had just stored could not be removed again from {}.",
+                why.message,
+                keyring::STORE_NAME
+            ));
         }
-        let written = write_record(ctx, &one, ids, &op_cmd, &op_team)?;
-        if one.name == vault.name {
-            sources = written;
+        why
+    };
+    for (source, token) in tokens {
+        match store_token(ctx, source, token) {
+            Ok(id) => {
+                stored.push((item_service(&id), source.clone()));
+                ids.insert(source.clone(), id);
+            }
+            Err(why) => return Err(undo(&stored, why)),
         }
+    }
+    let sources =
+        write_record(ctx, vault, ids, &op_cmd, &op_team).map_err(|why| undo(&stored, why))?;
+    // The new token is in place whatever happens to the old one, so this never refuses.
+    let left = forget(ctx, &before);
+    if left > 0 {
+        tracing::warn!(
+            "purlis: {left} replaced identity item(s) of vault '{}' could not be deleted from {}",
+            crate::personas::one_line(&vault.name),
+            keyring::STORE_NAME
+        );
     }
     Ok(sources)
 }
 
 /// **The password-box path (#237, #271 review U3).** Store the token the operator pasted for the
-/// vault's one identity variable straight into the keyring, and pin the binding, for this vault
-/// and every vault read alike ([`read_alike`]). The token is
+/// vault's one identity variable straight into the keyring, and pin the binding. The token is
 /// taken here and nowhere else: it never sits in the app's environment, so no chat can read it
 /// from there. `op` is pinned from the environment charter runs in — the operator's, resolved on
 /// the trusted thread that handles the command.
@@ -601,8 +654,7 @@ pub fn put_in_keyring(ctx: &Ctx, vault: &Vault, token: &str) -> Result<Vec<Strin
 }
 
 /// **The move-from-environment path.** Read each identity variable the vault declares from this
-/// process's environment, store it, and pin the binding, for this vault and every vault read
-/// alike ([`read_alike`]). Refused, with nothing stored, when the
+/// process's environment, store it, and pin the binding. Refused, with nothing stored, when the
 /// vault declares no identity or any variable is unset — a half-moved identity would read one
 /// token from the keyring and look for the other in an environment about to lose it.
 ///

@@ -872,61 +872,135 @@ fn read_through(ctx: &Ctx, name: &str, op_vault: &str, source: &str) -> registry
 }
 
 #[test]
-fn one_pasted_token_serves_every_vault_read_through_the_same_variable() {
+fn a_store_marks_the_one_vault_and_names_the_others_read_through_the_same_variable() {
+    // D-1526-7: no vault is given a token the person did not put in from its own tab, whichever
+    // half of the registry names it.
     let (tmp, bin, _op, team) = pinned_plane("");
     let ctx = on_path(tmp.path(), bin.path());
     read_through(&ctx, "edge", "Edge", "OP_TEAM_TOKEN");
     read_through(&ctx, "prod", "Prod", "OP_PROD_TOKEN");
+    // One only the committed half names.
+    let mut shared = registry::load_shared(&ctx).unwrap();
+    shared.insert(
+        "vaults".into(),
+        serde_json::json!({"pulled": {"provider": "1password", "persona": null, "config": {
+            "op-vault": "Pulled", "env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}}}}),
+    );
+    registry::save_shared(&ctx, &shared).unwrap();
 
     identity::put_in_keyring(&ctx, &team, PASTED_TOKEN).unwrap();
 
-    // A chat's purlis, which carries neither variable.
     let bare = Ctx::new(tmp.path(), Env::of(&[]));
-    let edge = registry::vault(&bare, "edge").unwrap();
-    assert_eq!(
-        held_at(&bare, &edge),
-        [("OP_TEAM_TOKEN".to_string(), identity::Held::Keyring)]
-    );
-    assert_eq!(
-        env_overlay(&bare, &edge).unwrap(),
-        vec![(
-            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
-            PASTED_TOKEN.to_string()
-        )]
-    );
-    // Its record is its own, in this machine's half: pinned to ITS binding, under its own item.
     let local = registry::load_local(&bare).unwrap();
-    let of = |name: &str| local["vaults"][name]["config"]["identity"].clone();
-    assert_eq!(of("edge")["op_vault"], "Edge");
-    assert_eq!(of("edge")["account"], serde_json::Value::Null);
-    assert_eq!(of("team")["op_vault"], "Fixture");
-    assert_ne!(of("edge")["ids"], of("team")["ids"]);
+    for other in ["edge", "pulled"] {
+        let v = registry::vault(&bare, other).unwrap();
+        assert_eq!(
+            held_at(&bare, &v),
+            [("OP_TEAM_TOKEN".to_string(), identity::Held::Unset)],
+            "{other}"
+        );
+        assert!(env_overlay(&bare, &v).is_err(), "{other}");
+        assert_eq!(
+            local["vaults"][other]["config"]["identity"],
+            serde_json::Value::Null,
+            "{other}"
+        );
+    }
+    // One item in the keyring: team's.
+    let stub: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".charter/keyring-stub.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stub.len(), 1, "{:?}", stub.keys());
 
-    // A vault read through another variable is given nothing.
+    // The others are named for the tab to point at, and the one read through another variable
+    // is not. A vault whose token is kept is no longer named.
+    let team = registry::vault(&bare, "team").unwrap();
+    assert_eq!(identity::unset_alike(&bare, &team), ["edge", "pulled"]);
+    let edge = registry::vault(&bare, "edge").unwrap();
+    assert_eq!(identity::unset_alike(&bare, &edge), ["pulled"]);
     let prod = registry::vault(&bare, "prod").unwrap();
-    assert_eq!(
-        held_at(&bare, &prod),
-        [("OP_PROD_TOKEN".to_string(), identity::Held::Unset)]
-    );
-    assert!(env_overlay(&bare, &prod).is_err());
-    assert_eq!(of("prod"), serde_json::Value::Null);
+    assert!(identity::unset_alike(&bare, &prod).is_empty());
+}
+
+/// The stub keyring's items, as `service\naccount` to value.
+fn stub_items(tmp: &tempfile::TempDir) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".charter/keyring-stub.json")).unwrap(),
+    )
+    .unwrap()
 }
 
 #[test]
-fn a_token_moved_from_the_environment_serves_every_vault_read_through_the_same_variable() {
-    let (tmp, team) = team_plane();
-    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
-    read_through(&carrying, "edge", "Edge", "OP_TEAM_TOKEN");
+fn a_replaced_token_is_deleted_from_the_keyring_once_the_new_one_is_in_place() {
+    const REPLACEMENT: &str = "ops_fixture-replacement-1526-9d";
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let old = identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
-    identity::move_to_keyring(&carrying, &team).unwrap();
+    identity::put_in_keyring(&ctx, &v, REPLACEMENT).unwrap();
 
-    let bare = Ctx::new(tmp.path(), Env::of(&[]));
-    let edge = registry::vault(&bare, "edge").unwrap();
+    let new = identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(old, new);
     assert_eq!(
-        env_overlay(&bare, &edge).unwrap(),
-        vec![(
-            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
-            MOVED_TOKEN.to_string()
-        )]
+        serde_json::Value::Object(stub_items(&tmp)),
+        serde_json::json!({ format!("purlis/@identity/{new}\nOP_TEAM_TOKEN"): REPLACEMENT })
     );
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    assert_eq!(
+        identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN")
+            .unwrap()
+            .as_deref(),
+        Some(REPLACEMENT)
+    );
+}
+
+#[test]
+fn a_replaced_token_kept_under_the_old_base_is_deleted_there() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let old = identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A record made before the rename: no base, and its item under the old one.
+    set_base(&ctx, None);
+    plant(&tmp, &[(format!("charter/@identity/{old}"), PASTED_TOKEN)]);
+
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+
+    let items = stub_items(&tmp);
+    assert_eq!(items.len(), 1, "{:?}", items.keys());
+    assert!(
+        items.keys().all(|k| k.starts_with("purlis/@identity/")),
+        "{:?}",
+        items.keys()
+    );
+}
+
+#[test]
+fn a_store_whose_record_cannot_be_saved_leaves_no_token_and_no_half_record() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    // This machine's half cannot be read, so the record cannot be written beside it.
+    let half = ctx.local_registry();
+    let was = std::fs::read_to_string(&half).unwrap();
+    std::fs::write(&half, "not json").unwrap();
+
+    let err = identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap_err();
+
+    assert!(!err.message.contains(PASTED_TOKEN), "{}", err.message);
+    let kept =
+        std::fs::read_to_string(tmp.path().join(".charter/keyring-stub.json")).unwrap_or_default();
+    assert!(!kept.contains(PASTED_TOKEN), "a token nothing refers to");
+    std::fs::write(&half, was).unwrap();
+    assert_eq!(identity_record(&ctx), serde_json::Value::Null);
 }

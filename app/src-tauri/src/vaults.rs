@@ -218,6 +218,33 @@ pub(crate) struct VaultIdentity {
     pub held: IdentityHeld,
 }
 
+/// What kept a vault's contents from being read, as far as purlis can tell: what the tab says
+/// about the token depends on it, since most failures are not the token's (#1526).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum UnreadFor {
+    /// The identity variable is found nowhere: there is no token to read with.
+    NoToken,
+    /// The provider's program is missing, or the one pinned with the token is gone or changed.
+    /// Storing the token again pins the program found now.
+    Program,
+    /// No network, a rate limit, a program that did not finish: try again. Nothing says the
+    /// token is wrong.
+    TryAgain,
+    /// The provider refused the sign-in: the token is the likely cause.
+    SignIn,
+    /// Anything else. The token may or may not be the cause.
+    Other,
+}
+
+/// Why a vault read through an identity variable could not be read: the core's own sentence,
+/// which holds names and never a value, and what kind of failure it is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct Unread {
+    pub why: String,
+    pub kind: UnreadFor,
+}
+
 /// One vault, opened.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct VaultContents {
@@ -229,9 +256,12 @@ pub(crate) struct VaultContents {
     /// Why the vault's contents could not be read, for a vault read through an identity
     /// variable; `None` for a vault that was read. `secrets` is then empty and says nothing of
     /// what the vault holds. Answered rather than refused, because `identity` below is what the
-    /// tab draws the way out from: the box that stores the token (#1526). The core's sentence:
-    /// names, never a value.
-    pub refused: Option<String>,
+    /// tab draws the way out from: the box that stores the token (#1526).
+    pub refused: Option<Unread>,
+    /// The OTHER vaults of the project read through one of this vault's identity variables
+    /// whose token is nowhere, by name: what the tab points at, each a link to that vault's own
+    /// tab, where its token is put in. A pointer and never a write (#1526, D-1526-7).
+    pub identity_unset_elsewhere: Vec<String>,
     /// The identity variables it is read through; empty for a vault that declares none. Said
     /// from the registry's mark and the environment, never by reading the keyring.
     pub identity: Vec<VaultIdentity>,
@@ -290,30 +320,95 @@ fn unset_in_the_tab(refusal: &VaultError) -> String {
     )
 }
 
+/// Whether a program `v`'s provider runs cannot be run here, asked before the provider is: the
+/// one pinned with a keyring-held token is gone or changed, or the lookup finds none. The
+/// refusal the read itself gives then says which, and where it looked.
+fn program_cannot_run(ctx: &Ctx, v: &Vault) -> bool {
+    purlis_core::secrets::program::needed_by(ctx, v)
+        .into_iter()
+        .any(|program| {
+            let pinned = match program {
+                "op" => identity::pinned_op(ctx, v),
+                _ => Ok(None),
+            };
+            match pinned {
+                Err(_) => true,
+                Ok(Some(_)) => false,
+                Ok(None) => ctx.program(program).is_err(),
+            }
+        })
+}
+
+/// What kind of failure the core's sentence `why` is, for a read that ran the provider. Matched
+/// on the core's own fixed sentences (`secrets::onepassword`'s diagnoses and `op_run`), never on
+/// what a provider printed, which the core withholds. A sentence this does not know is
+/// [`UnreadFor::Other`], which blames nothing.
+fn kind_of(why: &str) -> UnreadFor {
+    const TRY_AGAIN: [&str; 3] = [
+        "rate-limited this client",
+        "could not reach 1Password",
+        "did not finish and was stopped",
+    ];
+    const SIGN_IN: [&str; 2] = ["refused this as unauthorised", "has no account configured"];
+    if TRY_AGAIN.iter().any(|said| why.contains(said)) {
+        UnreadFor::TryAgain
+    } else if SIGN_IN.iter().any(|said| why.contains(said)) {
+        UnreadFor::SignIn
+    } else {
+        UnreadFor::Other
+    }
+}
+
+/// The vault's secrets, or why they could not be read. The provider is run at most once.
+fn read(ctx: &Ctx, v: &Vault) -> Result<Vec<VaultSecret>, Unread> {
+    // Asked before the provider is: a vault whose token is nowhere runs no program at all.
+    if let Some(unset) = identity_missing(ctx, v) {
+        return Err(Unread {
+            why: unset_in_the_tab(&unset),
+            kind: UnreadFor::NoToken,
+        });
+    }
+    let program = program_cannot_run(ctx, v);
+    secrets_of(ctx, v).map_err(|e| Unread {
+        kind: if program {
+            UnreadFor::Program
+        } else {
+            kind_of(&e.message)
+        },
+        why: e.message,
+    })
+}
+
 /// One vault's secrets, by name.
 ///
 /// **A vault read through an identity variable is answered even when its contents cannot be
 /// read** (#1526): with [`VaultContents::refused`] saying why, no secrets, and the identity it
 /// declares. Reading such a vault takes its token, so a refusal alone would hide the one thing
 /// the tab needs to offer the way out. A vault that declares no identity is refused as before.
+///
+/// **An unread vault's health line is its refusal**, not a second run of the provider to hear
+/// the same thing again.
 pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
     let v = cmd::provider(ctx, vault).map_err(message_of)?;
     let identity = identity_of(ctx, &v);
-    // Asked before the provider is: a vault whose token is nowhere runs no program at all.
-    let listed = match identity_missing(ctx, &v) {
-        Some(unset) => Err(unset_in_the_tab(&unset)),
-        None => secrets_of(ctx, &v).map_err(message_of),
-    };
-    let (secrets, refused) = match listed {
+    let (secrets, refused) = match read(ctx, &v) {
         Ok(secrets) => (secrets, None),
-        Err(why) if !identity.is_empty() => (Vec::new(), Some(why)),
-        Err(why) => return Err(why),
+        Err(unread) if !identity.is_empty() => (Vec::new(), Some(unread)),
+        Err(unread) => return Err(unread.why),
+    };
+    let health = match &refused {
+        Some(unread) => VaultHealth {
+            ok: false,
+            detail: unread.why.lines().next().unwrap_or_default().to_owned(),
+        },
+        None => health(ctx, &v),
     };
     Ok(VaultContents {
         count: counted(secrets.len()),
-        health: health(ctx, &v),
+        health,
         refused,
         identity,
+        identity_unset_elsewhere: identity::unset_alike(ctx, &v),
         identity_in_app_env: identity::app_env_holds_a_token(ctx, &v),
         name: v.name,
         provider: v.provider,
@@ -1637,7 +1732,7 @@ mod tests {
 
         // Its keys are `op`'s to list, and `op` is not run under an identity nobody declared.
         let opened = open(&ctx, "team").unwrap();
-        let refused = opened.refused.as_deref().unwrap_or_default();
+        let refused = opened.refused.as_ref().map_or("", |r| r.why.as_str());
         assert!(
             refused.contains("$OP_TEAM_TOKEN, which is unset"),
             "{opened:?}"
@@ -1648,16 +1743,34 @@ mod tests {
 
     // --- #1526: the identity is answered when the contents cannot be read ------------------ //
 
+    /// Replace the project's stand-in `op` with one that runs `script`, and counts its runs in
+    /// the file answered.
+    fn op_now(dir: &tempfile::TempDir, script: &str) -> std::path::PathBuf {
+        let ran = dir.path().join("op-ran");
+        std::fs::write(
+            dir.path().join("bin/op"),
+            format!("#!/bin/sh\necho ran >> '{}'\n{script}\n", ran.display()),
+        )
+        .unwrap();
+        ran
+    }
+
+    /// A second 1Password vault `name`, read through `$OP_TEAM_TOKEN` as `team` is.
+    fn alike(ctx: &Ctx, name: &str) {
+        let mut config = serde_json::Map::new();
+        config.insert("op-vault".into(), serde_json::json!("Edge"));
+        config.insert(
+            "env".into(),
+            serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+        );
+        registry::add_vault(ctx, name, "1password", config, None, false, false).unwrap();
+    }
+
     #[test]
     fn a_vault_whose_token_is_nowhere_still_answers_the_identity_it_declares() {
         let (dir, ctx) = team(&[]);
         // An `op` that would betray being run at all.
-        let ran = dir.path().join("op-ran");
-        std::fs::write(
-            dir.path().join("bin/op"),
-            format!("#!/bin/sh\necho ran >> '{}'\nexit 1\n", ran.display()),
-        )
-        .unwrap();
+        let ran = op_now(&dir, "exit 1");
 
         let opened = open(&ctx, "team").unwrap();
 
@@ -1666,14 +1779,16 @@ mod tests {
             [("OP_TEAM_TOKEN", IdentityHeld::Unset)]
         );
         assert_eq!(
-            opened.refused.as_deref(),
-            Some(
-                "vault 'team' is read through $OP_TEAM_TOKEN, which is unset. purlis will not \
-                 fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN: that would read this vault \
-                 under an identity it does not declare, and the failure would look like a \
-                 missing secret rather than a wrong credential. Paste the token into the box \
-                 below: it goes straight into the Keychain."
-            )
+            opened.refused,
+            Some(Unread {
+                why: "vault 'team' is read through $OP_TEAM_TOKEN, which is unset. purlis will \
+                      not fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN: that would read \
+                      this vault under an identity it does not declare, and the failure would \
+                      look like a missing secret rather than a wrong credential. Paste the \
+                      token into the box below: it goes straight into the Keychain."
+                    .into(),
+                kind: UnreadFor::NoToken,
+            })
         );
         assert!(opened.secrets.is_empty() && opened.count == 0, "{opened:?}");
         assert!(!opened.health.ok, "{opened:?}");
@@ -1702,43 +1817,59 @@ mod tests {
     }
 
     #[test]
-    fn a_second_vault_read_through_the_same_variable_needs_no_second_paste() {
+    fn a_store_gives_no_other_vault_the_token_and_names_those_that_still_have_none() {
+        // D-1526-7: a token is stored per vault, from its own tab. The answer only points.
         let (_dir, ctx) = team(&[]);
-        let mut config = serde_json::Map::new();
-        config.insert("op-vault".into(), serde_json::json!("Edge"));
-        config.insert(
-            "env".into(),
-            serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
-        );
-        registry::add_vault(&ctx, "edge", "1password", config, None, false, false).unwrap();
-        assert!(open(&ctx, "edge").unwrap().refused.is_some());
+        alike(&ctx, "edge");
 
-        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+        let put = put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
 
+        assert_eq!(put.identity_unset_elsewhere, ["edge"]);
         let edge = open(&ctx, "edge").unwrap();
-        assert_eq!(edge.refused, None, "{edge:?}");
         assert_eq!(
-            identity_of(&edge),
-            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+            edge.refused.as_ref().map(|r| r.kind),
+            Some(UnreadFor::NoToken)
         );
-        assert_eq!(keys(&edge), ["DEPLOY"]);
+        assert_eq!(identity_of(&edge), [("OP_TEAM_TOKEN", IdentityHeld::Unset)]);
+        // team's token is kept, so edge has no other vault to point at.
+        assert!(edge.identity_unset_elsewhere.is_empty(), "{edge:?}");
+
+        // Put in from its own tab, it reads, and team has nothing left to point at.
+        let edge = put_identity(&ctx, "edge", &SecretValue::from(TOKEN)).unwrap();
+        assert_eq!(edge.refused, None, "{edge:?}");
+        assert!(
+            open(&ctx, "team")
+                .unwrap()
+                .identity_unset_elsewhere
+                .is_empty()
+        );
+    }
+
+    /// `team`, its token kept, opened against an `op` that now runs `script`: what kept it from
+    /// being read, and how many times `op` was run to find out.
+    fn unread_with(script: &str) -> (VaultContents, usize) {
+        let (dir, ctx) = team(&[]);
+        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+        let ran = op_now(&dir, script);
+        let opened = open(&ctx, "team").unwrap();
+        let runs = std::fs::read_to_string(ran)
+            .unwrap_or_default()
+            .lines()
+            .count();
+        (opened, runs)
     }
 
     #[test]
     fn a_stored_token_that_does_not_read_the_vault_still_answers_the_identity() {
-        // A wrong token, or an `op` that fails: the tab that stored the token must be able to
-        // replace it, so this is answered with why and the identity, not refused.
-        let (dir, ctx) = team(&[]);
-        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
-        std::fs::write(
-            dir.path().join("bin/op"),
-            "#!/bin/sh\necho '[ERROR] not signed in' >&2\nexit 1\n",
-        )
-        .unwrap();
+        // The tab that stored the token must be able to replace it, so this is answered with
+        // why and the identity, not refused.
+        let (opened, _) = unread_with("echo '[ERROR] something else' >&2; exit 1");
 
-        let opened = open(&ctx, "team").unwrap();
-
-        assert!(opened.refused.is_some(), "{opened:?}");
+        assert_eq!(
+            opened.refused.as_ref().map(|r| r.kind),
+            Some(UnreadFor::Other),
+            "{opened:?}"
+        );
         assert!(opened.secrets.is_empty(), "{opened:?}");
         assert_eq!(
             identity_of(&opened),
@@ -1747,20 +1878,84 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_that_is_not_the_tokens_is_not_called_the_tokens() {
+        for (stderr, kind) in [
+            ("[ERROR] 429: rate-limited", UnreadFor::TryAgain),
+            (
+                "[ERROR] dial tcp: lookup my.1password.com: no such host",
+                UnreadFor::TryAgain,
+            ),
+            (
+                "[ERROR] You do not have permission to do this",
+                UnreadFor::SignIn,
+            ),
+            ("[ERROR] no accounts configured", UnreadFor::SignIn),
+        ] {
+            let (opened, _) = unread_with(&format!("echo '{stderr}' >&2; exit 1"));
+            assert_eq!(
+                opened.refused.as_ref().map(|r| r.kind),
+                Some(kind),
+                "{stderr}: {opened:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinned_program_that_is_gone_is_said_to_be_the_program() {
+        let (dir, ctx) = team(&[]);
+        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+        std::fs::remove_file(dir.path().join("bin/op")).unwrap();
+
+        let opened = open(&ctx, "team").unwrap();
+
+        let unread = opened.refused.expect("unread");
+        assert_eq!(unread.kind, UnreadFor::Program);
+        assert!(unread.why.contains("pinned"), "{}", unread.why);
+    }
+
+    #[test]
+    fn an_unreadable_vault_is_opened_without_asking_the_provider_for_its_health_too() {
+        // The read asks for the item and, when that fails, whether the item is there: two runs.
+        // The health line is the refusal, not a third run to hear it again.
+        let (opened, runs) = unread_with("exit 1");
+        assert_eq!(runs, 2, "{opened:?}");
+        let unread = opened.refused.expect("unread");
+        assert_eq!(
+            opened.health,
+            VaultHealth {
+                ok: false,
+                detail: unread.why.lines().next().unwrap().to_owned()
+            }
+        );
+    }
+
+    #[test]
     fn no_answer_about_a_vault_that_cannot_be_read_carries_the_token() {
+        // A provider that prints the token it was handed, on both streams, failing and as a
+        // body that is not what was asked for: if any of it reached an answer, this would see.
+        const ECHO: &str = "printf '%s\n' \"$OP_SERVICE_ACCOUNT_TOKEN\"; \
+                            printf '%s\n' \"$OP_SERVICE_ACCOUNT_TOKEN\" >&2";
         let (dir, ctx) = team(&[]);
         let mut answers = vec![wire(&open(&ctx, "team")), wire(&list(&ctx))];
         answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
-        std::fs::write(dir.path().join("bin/op"), "#!/bin/sh\nexit 1\n").unwrap();
+        let ran = op_now(&dir, &format!("{ECHO}; exit 1"));
         answers.push(wire(&open(&ctx, "team")));
+        answers.push(wire(&list(&ctx)));
         answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
+        assert!(
+            ran.exists(),
+            "the provider was never run, so it echoed nothing"
+        );
+        op_now(&dir, &format!("{ECHO}; exit 0"));
+        answers.push(wire(&open(&ctx, "team")));
+        answers.push(wire(&list(&ctx)));
         // A keyring that cannot be written: the refusal comes with the token in hand.
         std::fs::write(ctx.state.join(keyring::STUB_FILE), "not json").unwrap();
         answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
         answers.push(wire(&open(&ctx, "team")));
         answers.extend(traced(&ctx).iter().map(ToString::to_string));
 
-        assert!(answers[0].contains("\"unset\""), "{}", answers[0]);
+        assert!(answers[0].contains("\"no-token\""), "{}", answers[0]);
         assert!(answers[2].contains("\"keyring\""), "{}", answers[2]);
         for answer in &answers {
             assert!(!answer.contains(TOKEN), "{answer}");

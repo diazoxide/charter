@@ -13,12 +13,14 @@
 //! sandboxed chat's `secret exec`.
 //!
 //! The `vault tokens` row (#1526): for each vault read through an identity variable, where its
-//! token is: in the system keyring, in this process's environment only, or nowhere. Printed
-//! only for a project with such a vault. Said from this machine's record and the environment
-//! ([`crate::secrets::identity::held`]): the keyring is not read, so the row makes it ask
-//! nothing, and no token is ever in hand here. A warning for a token found nowhere, and for one
-//! only this environment has, which is the app started from the Dock finding nothing where a
-//! terminal finds everything.
+//! token is: marked as kept in the system keyring, in this process's environment only, or
+//! nowhere. Printed only for a project with such a vault. Said from this machine's record and
+//! the environment ([`crate::secrets::identity::held`]): the keyring is not read, so the row
+//! makes it ask nothing, no token is ever in hand here, and "marked as kept" is what the record
+//! says, not a read that succeeded. A warning for a token found nowhere, and for one only this
+//! environment has, which is the app started from the Dock finding nothing where a terminal
+//! finds everything. **No row inside a chat**: no chat is given an identity variable, so from
+//! there an exported token cannot be told from one that is nowhere.
 
 use std::collections::BTreeMap;
 
@@ -222,8 +224,7 @@ fn program_row(ctx: &Ctx, program: &str, vaults: &[Vault]) -> Row {
 pub(super) const TOKENS: &str = "vault tokens";
 
 /// The `vault tokens` row for the project `d` answers for, or `None`. None for the preflight
-/// a chat's start runs: no chat is given an identity variable, so asked of a chat's environment
-/// the row would warn of every token still in a shell.
+/// a chat's start runs, as for any doctor run inside a chat ([`token_row`]).
 pub(super) fn identity_tokens(d: &Doctor) -> Option<Row> {
     if !d.has_plane || d.preflight {
         return None;
@@ -232,9 +233,18 @@ pub(super) fn identity_tokens(d: &Doctor) -> Option<Row> {
 }
 
 /// [`identity_tokens`] for the project `ctx` names: `None` where no vault declares an identity,
-/// or the registry cannot be read (`purlis vault list`'s to report). Names, never a value.
+/// where the registry cannot be read (`purlis vault list`'s to report), and inside a chat
+/// ([`crate::hookwire::CHAT_ENV`]), which is given no identity variable and so cannot tell an
+/// exported token from a missing one. Names, never a value.
 pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
     use crate::secrets::identity::{self, Held};
+    if ctx
+        .env
+        .get(crate::hookwire::CHAT_ENV)
+        .is_some_and(|chat| !chat.is_empty())
+    {
+        return None;
+    }
     let doc = registry::load_registry(ctx).ok()?;
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
@@ -245,8 +255,14 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
             continue;
         };
         for bound in identity::held(ctx, &vault) {
+            let source = crate::personas::one_line(&bound.source);
             let whereabouts = match bound.held {
-                Held::Keyring => format!("is in {}", crate::secrets::keyring::STORE_NAME),
+                Held::Keyring => {
+                    format!(
+                        "is marked as kept in {}",
+                        crate::secrets::keyring::STORE_NAME
+                    )
+                }
                 Held::Environment => {
                     here_only = true;
                     "is in this environment only".to_owned()
@@ -257,9 +273,8 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
                 }
             };
             said.push(format!(
-                "'{}': ${} {whereabouts}",
-                crate::personas::one_line(&vault.name),
-                crate::personas::one_line(&bound.source)
+                "'{}': ${source} {whereabouts}",
+                crate::personas::one_line(&vault.name)
             ));
         }
     }
@@ -270,15 +285,18 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
     if !nowhere && !here_only {
         return Some(Row::ok(TOKENS, detail));
     }
+    // True with a window and without one: the tab where the app is used, the export where it
+    // is not (a server, CI), which is the only way there.
     let mut hint = format!(
-        "Open the vault's tab in the app and paste the token into the box there: it goes into \
-         {}, where purlis finds it however it is started and no chat can read it.",
+        "Where the app is used, open each vault's tab and paste its token into the box there: \
+         it goes into {}, where purlis finds it however it is started and no chat can read it. \
+         On a machine with no window, export the variable where purlis runs.",
         crate::secrets::keyring::STORE_NAME
     );
     if here_only {
         hint.push_str(
-            " A token in this environment is found only by a purlis started from it, which the \
-             app opened from the Dock is not.",
+            " A token in this environment only is found by a purlis started from it, and not \
+             by the app opened from the Dock.",
         );
     }
     Some(Row::warn(TOKENS, detail, hint))
@@ -575,35 +593,54 @@ mod tests {
         assert_eq!(row.status, super::super::Status::Warn);
         assert_eq!(
             row.detail,
-            "'kept': $OP_KEPT_TOKEN is in the system keyring; 'lost': $OP_LOST_TOKEN is nowhere; \
-             'shell': $OP_SHELL_TOKEN is in this environment only"
+            "'kept': $OP_KEPT_TOKEN is marked as kept in the system keyring; 'lost': \
+             $OP_LOST_TOKEN is nowhere; 'shell': $OP_SHELL_TOKEN is in this environment only"
         );
-        assert!(
-            row.hint
-                .starts_with("Open the vault's tab in the app and paste the token into the box"),
-            "{}",
-            row.hint
+        assert_eq!(
+            row.hint,
+            "Where the app is used, open each vault's tab and paste its token into the box \
+             there: it goes into the system keyring, where purlis finds it however it is \
+             started and no chat can read it. On a machine with no window, export the variable \
+             where purlis runs. A token in this environment only is found by a purlis started \
+             from it, and not by the app opened from the Dock."
         );
         let all = format!("{row:?}");
         assert!(!all.contains(KEPT) && !all.contains(EXPORTED), "{all}");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_project_whose_tokens_are_all_in_the_keyring_gets_a_green_row() {
-        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+    fn a_project_whose_tokens_are_all_kept_with_a_program_pinned_gets_a_green_row() {
+        // The state a read works in: the token stored where a provider's program was found, so
+        // the record pins one. A record that pins none is the programs row's to warn of.
+        crate::secrets::program::stand_ins_live_in_temp_folders();
+        let bin = tempfile::tempdir().unwrap();
+        let op = stand_in::program(bin.path(), "op", "#!/bin/sh\n");
+        let plane = Plane::new(&[("PATH", &bin.path().to_string_lossy())]);
         read_through(&plane, "kept", "OP_KEPT_TOKEN");
-        read_through(&plane, "too", "OP_KEPT_TOKEN");
         let kept = registry::vault(&plane.ctx, "kept").unwrap();
         crate::secrets::identity::put_in_keyring(&plane.ctx, &kept, KEPT).unwrap();
+        assert_eq!(
+            crate::secrets::identity::pinned_op(&plane.ctx, &kept).unwrap(),
+            Some(op)
+        );
 
         let row = token_row(&plane.ctx).expect("a row");
 
         assert_eq!(row.status, super::super::Status::Ok);
         assert_eq!(
             row.detail,
-            "'kept': $OP_KEPT_TOKEN is in the system keyring; 'too': $OP_KEPT_TOKEN is in the \
-             system keyring"
+            "'kept': $OP_KEPT_TOKEN is marked as kept in the system keyring"
         );
+    }
+
+    #[test]
+    fn a_doctor_run_inside_a_chat_says_nothing_of_tokens_it_cannot_see() {
+        // No chat is given an identity variable, so a token the person's shell exports would
+        // be called "nowhere" from in here.
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin"), ("PURLIS_CHAT", "7")]);
+        read_through(&plane, "lost", "OP_LOST_TOKEN");
+        assert_eq!(token_row(&plane.ctx), None);
     }
 
     #[test]

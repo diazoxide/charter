@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { VaultTab } from "./VaultTab";
-import type { VaultContents, VaultSecret } from "./bindings";
+import type { UnreadFor, VaultContents, VaultSecret } from "./bindings";
 
 afterEach(() => {
   cleanup();
@@ -29,6 +29,7 @@ function contents(secrets: VaultSecret[], over: Partial<VaultContents> = {}): Va
     health: { ok: true, detail: `${secrets.length} secret(s) in the system keyring` },
     secrets,
     refused: null,
+    identity_unset_elsewhere: [],
     identity: [],
     identity_in_app_env: [],
     ...over,
@@ -56,8 +57,8 @@ function core(
   return asked;
 }
 
-function draw(onChanged = vi.fn()) {
-  render(<VaultTab plane={PLANE} vault="ops" onChanged={onChanged} />);
+function draw(onChanged = vi.fn(), onOpenVault?: (vault: string) => void) {
+  render(<VaultTab plane={PLANE} vault="ops" onChanged={onChanged} onOpenVault={onOpenVault} />);
   return onChanged;
 }
 
@@ -625,16 +626,22 @@ describe("a 1Password vault's token", () => {
   const PASTE_HERE =
     "Paste the service-account token for $OP_TEAM_TOKEN here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.";
 
-  /** `team` as the core answers it when its contents could not be read: no secrets, why, and the
-   *  identity it declares all the same. */
-  function unread(held: "unset" | "keyring", refused = UNSET): VaultContents {
+  /** `team` as the core answers it when its contents could not be read: no secrets, why and what
+   *  kind of failure, and the identity it declares all the same. */
+  function unread(
+    held: "unset" | "keyring",
+    why = UNSET,
+    kind: UnreadFor = held === "unset" ? "no-token" : "other",
+  ): VaultContents {
     return contents([], {
       provider: "1password",
-      health: { ok: false, detail: refused },
-      refused,
+      health: { ok: false, detail: why },
+      refused: { why, kind },
       identity: [{ variable: "OP_TEAM_TOKEN", held }],
     });
   }
+
+  const PUT_IT = "Put this vault's token in the Keychain";
 
   it("draws the refusal and the paste box when the token is nowhere, and no empty vault", async () => {
     core(unread("unset"));
@@ -643,9 +650,7 @@ describe("a 1Password vault's token", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(UNSET);
     expect(screen.getByText(PASTE_HERE)).toBeInTheDocument();
     expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toHaveAttribute("type", "password");
-    expect(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: PUT_IT })).toBeEnabled();
     // Nothing that would read as a vault with nothing in it, or offer to write to one.
     expect(screen.queryByTestId("vault-empty")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
@@ -660,9 +665,7 @@ describe("a 1Password vault's token", () => {
 
     const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
     await userEvent.type(box, PUT);
-    await userEvent.click(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: PUT_IT }));
 
     expect(asked.at(-1)).toEqual({
       cmd: "vault_identity_put",
@@ -691,27 +694,74 @@ describe("a 1Password vault's token", () => {
     noValueAnywhere(PUT);
   });
 
-  it("keeps the box when the stored token still cannot read the vault, and says why", async () => {
-    // A wrong token, an `op` that is gone: the tab that stored it is the tab that replaces it.
+  it("never says Stored beside a refusal: it says the token is kept and the read still failed", async () => {
     core(unread("unset"), {
-      vault_identity_put: unread("keyring", "op could not read vault 'ops': not signed in"),
+      vault_identity_put: unread("keyring", "reading vault 'ops' failed (op exit 1).", "other"),
     });
     draw();
 
     await userEvent.type(await screen.findByLabelText("Token for $OP_TEAM_TOKEN"), PUT);
-    await userEvent.click(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: PUT_IT }));
 
-    expect(await screen.findByText(/not signed in/)).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "purlis reads $OP_TEAM_TOKEN from the Keychain, and could not read the vault with it. Paste the token again to replace it.",
+      await screen.findByText(
+        "$OP_TEAM_TOKEN is stored in the Keychain, and the vault still could not be read: the reason is above.",
       ),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/^Stored /)).not.toBeInTheDocument();
+    expect(screen.getByText("reading vault 'ops' failed (op exit 1).")).toBeInTheDocument();
     expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     noValueAnywhere(PUT);
+  });
+
+  it("says what is known of a kept token that did not read the vault, and blames it only for a refused sign-in", async () => {
+    const cases: [UnreadFor, RegExp, RegExp | null][] = [
+      [
+        "program",
+        /could not run the program that reads this vault\. Nothing says the token is wrong\. Storing the token again here pins the program/,
+        /Paste the right token/,
+      ],
+      [
+        "try-again",
+        /Nothing says the token is wrong: read again in a moment/,
+        /Paste the right token|to replace it\.$/,
+      ],
+      [
+        "sign-in",
+        /the sign-in with it was refused\. Paste the right token here to replace it\./,
+        null,
+      ],
+      [
+        "other",
+        /If it is the token that is wrong, paste the right one here to replace it\./,
+        /Nothing says/,
+      ],
+    ];
+    for (const [kind, says, never] of cases) {
+      core(unread("keyring", `the provider's own reason (${kind})`, kind));
+      draw();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        `the provider's own reason (${kind})`,
+      );
+      expect(screen.getByText(says)).toBeInTheDocument();
+      if (never) expect(screen.queryByText(never)).not.toBeInTheDocument();
+      // The box in every case.
+      expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toBeInTheDocument();
+      expect(screen.queryByText(/could not read the vault with it/)).not.toBeInTheDocument();
+      cleanup();
+      clearMocks();
+    }
+  });
+
+  it("reads the vault again on Read again", async () => {
+    const asked = core(unread("keyring", "rate-limited", "try-again"));
+    draw();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Read again" }));
+
+    await waitFor(() => expect(asked.filter((one) => one.cmd === "vault_open")).toHaveLength(2));
   });
 
   it("says why when the core refuses to store it, beside the refusal and the box", async () => {
@@ -721,13 +771,93 @@ describe("a 1Password vault's token", () => {
     draw();
 
     await userEvent.type(await screen.findByLabelText("Token for $OP_TEAM_TOKEN"), PUT);
-    await userEvent.click(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: PUT_IT }));
 
     expect(await screen.findByText(/could not write/)).toBeInTheDocument();
     expect(screen.getByText(UNSET)).toBeInTheDocument();
     expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toBeInTheDocument();
     noValueAnywhere(PUT);
+  });
+
+  it("draws no box for a vault read through several variables, and says why", async () => {
+    core(
+      contents([], {
+        provider: "1password",
+        refused: { why: UNSET, kind: "no-token" },
+        identity: [
+          { variable: "OP_TEAM_TOKEN", held: "unset" },
+          { variable: "OP_CONNECT_TOKEN", held: "unset" },
+        ],
+      }),
+    );
+    draw();
+
+    expect(
+      await screen.findByText(
+        /Read through \$OP_TEAM_TOKEN, \$OP_CONNECT_TOKEN\. A box stores one token and this vault needs 2/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: PUT_IT })).not.toBeInTheDocument();
+    expect(document.querySelector("input[type=password]")).toBeNull();
+  });
+
+  // --- a token is stored per vault: the others are pointed at, never written -------------- //
+
+  it("names the other vaults that still have no token, each a link to its own tab", async () => {
+    const asked = core(unread("unset"), {
+      vault_identity_put: {
+        ...team("keyring"),
+        identity_unset_elsewhere: ["authz-master", "edge"],
+      },
+    });
+    const onOpenVault = vi.fn();
+    draw(vi.fn(), onOpenVault);
+
+    await userEvent.type(await screen.findByLabelText("Token for $OP_TEAM_TOKEN"), PUT);
+    await userEvent.click(screen.getByRole("button", { name: PUT_IT }));
+
+    expect(
+      await screen.findAllByText(
+        /also reads through \$OP_TEAM_TOKEN and has no token yet\. A token is stored per vault: put it in from that vault's tab\./,
+      ),
+    ).toHaveLength(2);
+    await userEvent.click(screen.getByRole("button", { name: "authz-master" }));
+    expect(onOpenVault).toHaveBeenCalledWith("authz-master");
+    expect(screen.getByRole("button", { name: "edge" })).toBeInTheDocument();
+    // A pointer: nothing was asked of the core for the other vaults.
+    expect(asked.map((one) => one.cmd)).toEqual(["vault_open", "vault_identity_put"]);
+    expect(asked.every((one) => one.args.vault === "ops")).toBe(true);
+  });
+
+  it("reads again when a token is stored in another vault's tab of the same project", async () => {
+    const asked = core(team("keyring"));
+    render(<VaultTab plane={PLANE} vault="ops" onChanged={vi.fn()} />);
+    render(<VaultTab plane={PLANE} vault="edge" onChanged={vi.fn()} />);
+    render(<VaultTab plane="/home/dev/other" vault="far" onChanged={vi.fn()} />);
+    await waitFor(() => expect(asked).toHaveLength(3));
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("purlis:vault-token-stored", { detail: { plane: PLANE, vault: "edge" } }),
+      );
+    });
+
+    await waitFor(() => expect(asked).toHaveLength(4));
+    // The other tab of that project, and neither the one that stored nor another project's.
+    expect(asked[3]).toEqual({ cmd: "vault_open", args: { plane: PLANE, vault: "ops" } });
+  });
+
+  it("does not read again for a store elsewhere when it is read through no token", async () => {
+    const asked = core(contents([secret("API_TOKEN")]));
+    draw();
+    await screen.findByRole("table", { name: "Secrets in ops" });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("purlis:vault-token-stored", { detail: { plane: PLANE, vault: "edge" } }),
+      );
+    });
+
+    expect(asked).toHaveLength(1);
   });
 });

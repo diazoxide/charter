@@ -47,9 +47,14 @@ const ITEM_PREFIX: &str = "charter";
 /// The category whose primary field is a concealed password.
 const CATEGORY: &str = "PASSWORD";
 
+/// What is said when `op` could not reach 1Password at all.
+const NO_NETWORK: &str = "`op` could not reach 1Password: this machine has no network, or \
+                          1Password did not answer. Its contents are UNKNOWN, and nothing says \
+                          the token is wrong. Try again when the network is back.";
+
 /// Failures of `op` charter recognises, each a FIXED sentence — `_DIAGNOSES`. `op`'s text is
 /// matched against and never interpolated.
-const DIAGNOSES: [(&str, &str); 4] = [
+const DIAGNOSES: [(&str, &str); 8] = [
     (
         "no accounts configured",
         "`op` has no account configured on this machine. Sign in (`op signin`), or set this \
@@ -66,6 +71,12 @@ const DIAGNOSES: [(&str, &str); 4] = [
         "1Password rate-limited this client. Its contents are UNKNOWN — this is not an empty \
          vault. Wait and retry rather than re-provisioning secrets that are probably there.",
     ),
+    // What a program that cannot reach the network says, in the words its runtime gives every
+    // such failure (#1526): so a vault that could not be reached is not read as a wrong token.
+    ("no such host", NO_NETWORK),
+    ("network is unreachable", NO_NETWORK),
+    ("dial tcp", NO_NETWORK),
+    ("i/o timeout", NO_NETWORK),
     (
         "provide the item category",
         "`op` did not parse the JSON template it was given on stdin — that template does declare \
