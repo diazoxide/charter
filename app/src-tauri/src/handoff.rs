@@ -1837,6 +1837,8 @@ fn dispatch_it(
             mode: wanted.mode(),
             depth: asked.depth,
             root: asked.root,
+            // Who is above it, from this app's record of the asking chat (#1521).
+            above: asked.above,
             by_person: wanted.by == By::Person,
         };
         // Its number is dealt here, so the slot is the chat it is about to be.
@@ -2543,6 +2545,14 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
         Refused::Limit(Limit::Loop(name)) => format!(
             "Persona '{}' is already above this chat in its own chain of chats, and a chain \
              never goes back to a persona above it. Ask from a chat that persona did not start.",
+            short(name)
+        ),
+        // An older version kept no chain for this chat, and a chat above it has closed
+        // (#1521): which personas are above it is not known.
+        Refused::Limit(Limit::ChainUnread(name)) => format!(
+            "An older version of purlis started this chat and kept no record of the chats \
+             above it, and one of them has closed, so persona '{}' may already be above it. \
+             A chain never goes back to a persona above it. Ask from a chat you started.",
             short(name)
         ),
         // What is off and which level set it are the core's words; what to do about it is
@@ -5711,6 +5721,8 @@ mod tests {
                     .chats()
                     .recorded_chat(asking)
                     .and_then(|chat| chat.identity.id),
+                // Who is above it, from the app's record of the asking chat (#1521).
+                above: Some(vec![Some("steward".to_owned())]),
                 by_person: false,
             })
         );
@@ -6024,6 +6036,7 @@ mod tests {
                 mode: Mode::Task,
                 depth: 1,
                 root: None,
+                above: None,
                 by_person: false,
             }),
             ..Default::default()
@@ -8545,6 +8558,8 @@ mod tests {
                 depth: 1,
                 // The lineage it joined is the steward chat's own.
                 root: from.root.clone(),
+                // The steward chat is above it, as for a chat's own ask (#1521).
+                above: Some(vec![Some("steward".to_owned())]),
                 by_person: true,
             }
         );
@@ -8567,6 +8582,37 @@ mod tests {
                 "{}\n\nIs prod healthy? Say what you checked.\n",
                 purlis_core::handoff::PERSON_TASK_NOTE
             )
+        );
+    }
+
+    #[test]
+    fn a_task_whose_asking_chat_has_closed_still_cannot_dispatch_back_to_its_persona() {
+        // #1521: the person asks devops from a steward chat's tab, then closes the steward
+        // chat. Devops asking for steward is a chain going back up with its first chat gone:
+        // still refused, read from the devops chat's own record and not from the chats open.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let devops = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
+            .expect("the devops chat starts")
+            .session;
+        held.chats().close(steward).unwrap();
+        assert!(held.chats().recorded_chat(steward).is_none(), "it closed");
+
+        let tickets = Tickets::default();
+        let (said, told) = dispatch(&held, &id, &tickets, devops, Some("steward"), "go up");
+
+        assert_eq!(told, None, "nothing started");
+        let Answer::No { why } = &said else {
+            panic!("refused, not {said:?}")
+        };
+        assert!(
+            why.contains("persona 'steward' is already in this chat's own chain"),
+            "{why}"
         );
     }
 
@@ -8797,6 +8843,7 @@ mod tests {
             Refused::Draft("intern".to_owned()),
             Refused::Locked("Policy forbids one chat dispatching to another.".to_owned()),
             Refused::Limit(Limited::Loop("steward".to_owned())),
+            Refused::Limit(Limited::ChainUnread("steward".to_owned())),
             Refused::Limit(Limited::TooDeep { limit: 3, depth: 3 }),
             Refused::Limit(Limited::TooManyRunning {
                 limit: 6,

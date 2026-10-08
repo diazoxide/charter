@@ -275,6 +275,17 @@ pub struct HandedFrom {
     /// goes; neither field says who may steer the chat (tell it, cancel it, wait on it), which
     /// is its own question and not answered by this record.
     pub root: Option<String>,
+    /// **The personas of the chats above this one, nearest first** (#1521): the asking chat's,
+    /// then the ones its own record keeps, each `None` for a chat on no persona. Written by the
+    /// app when it dispatches this chat, from its record of the asking chat and never from
+    /// anything a chat sent, so the loop rule and the person's never for a chat above still
+    /// hold when a chat in the middle has closed, finished or been cleared. One per dispatch
+    /// above it: as long as [`Self::depth`] says.
+    ///
+    /// `None` is a record written before this field: its chain is read from the chats still
+    /// open, and where that walk meets one that has closed, purlis cannot say who was there
+    /// ([`crate::dispatchlimits::Lineage::chain_unread`]).
+    pub above: Option<Vec<Option<String>>>,
     /// Whether the person started it, from that chat's tab (#1438), and not that chat itself.
     /// Its report still goes to that chat, and says so.
     pub by_person: bool,
@@ -1375,9 +1386,31 @@ struct FromOnDisk {
     /// The id of the chat the person started, which the lineage descends from, or absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     root: String,
+    /// The personas of the chats above, nearest first, `""` for a chat on no persona; absent
+    /// in a record written before it was kept (#1521).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    above: Option<Vec<String>>,
     /// `"person"` for a chat the person started from that chat's tab (#1438), or absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     by: String,
+}
+
+/// The personas above a chat as its record keeps them, held to what the app writes: one per
+/// dispatch above it (`depth` of them), each a persona's name or `""` for a chat on no
+/// persona. Anything else reads as a chain not kept (`None`), which the loop rule reads as one
+/// it cannot read whole: never as a shorter chain (#1521).
+fn chain_above(above: Vec<String>, depth: u32) -> Option<Vec<Option<String>>> {
+    if usize::try_from(depth).ok() != Some(above.len()) {
+        return None;
+    }
+    above
+        .into_iter()
+        .map(|persona| match persona.as_str() {
+            "" => Some(None),
+            name if crate::contain::persona_name_ok(name) => Some(Some(persona)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// What a record's `by` holds for a chat the person started from another chat's tab.
@@ -1396,6 +1429,12 @@ impl From<&HandedFrom> for FromOnDisk {
             },
             depth: from.depth,
             root: from.root.clone().unwrap_or_default(),
+            above: from.above.as_ref().map(|above| {
+                above
+                    .iter()
+                    .map(|persona| persona.clone().unwrap_or_default())
+                    .collect()
+            }),
             by: if from.by_person {
                 BY_PERSON.to_owned()
             } else {
@@ -1410,6 +1449,7 @@ impl FromOnDisk {
     /// takes, a workspace name that can be one. Anything else reads as no handoff at all — the
     /// note is drawn, and the pairing is what a report is checked against.
     fn sound(self) -> Option<HandedFrom> {
+        let depth = self.depth.min(crate::dispatchdecision::DEEPEST);
         Some(HandedFrom {
             chat: (self.chat > 0).then_some(self.chat)?,
             name: label(&self.name).ok().flatten()?,
@@ -1417,9 +1457,10 @@ impl FromOnDisk {
             report: Owed::of(&self.report),
             mode: Mode::of(&self.mode),
             // Held to the ceiling: a depth no chain can have never reads as a shallower one.
-            depth: self.depth.min(crate::dispatchdecision::DEEPEST),
+            depth,
             // Held to the one shape an id is minted in: anything else names no lineage.
             root: a_ulid(&self.root),
+            above: self.above.and_then(|above| chain_above(above, depth)),
             by_person: self.by == BY_PERSON,
         })
     }
@@ -3363,6 +3404,7 @@ pub(crate) mod tests {
             mode: Mode::Handoff,
             depth: 0,
             root: None,
+            above: None,
             by_person: false,
         }
     }
@@ -3484,6 +3526,7 @@ pub(crate) mod tests {
         let task = HandedFrom {
             mode: crate::dispatchdecision::Mode::Task,
             depth: 2,
+            above: None,
             by_person: false,
             ..handed()
         };
@@ -3575,12 +3618,91 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_personas_above_a_task_come_back_with_it_and_an_older_record_writes_no_key() {
+        // #1521: the chain the loop rule reads outlives a relaunch, as the depth does, and a
+        // chat on no persona above it comes back as one.
+        let plane = tempfile::tempdir().unwrap();
+        let below = HandedFrom {
+            mode: Mode::Task,
+            depth: 2,
+            above: Some(vec![Some("devops".to_owned()), None]),
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![
+                Chat {
+                    from: Some(below.clone()),
+                    ..claude("3", None)
+                },
+                Chat {
+                    from: Some(handed()),
+                    ..claude("4", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0].from, Some(below));
+        assert_eq!(back.chats[1].from, Some(handed()));
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"above\"").count(), 1, "{text}");
+        let squeezed: String = text.split_whitespace().collect();
+        assert!(squeezed.contains(r#""above":["devops",""]"#), "{text}");
+    }
+
+    #[test]
+    fn personas_above_that_the_app_would_not_have_written_read_as_a_chain_not_kept() {
+        // The record is the app's. One whose chain is not one per dispatch above, or names
+        // what cannot be a persona, is read as kept by no one: the loop rule then reads it as a
+        // chain it cannot read whole, never as a shorter one.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(path(plane.path()).parent().unwrap()).unwrap();
+        let steward = || Some(vec![Some("steward".to_owned())]);
+        for (depth, above, read_as) in [
+            (1, r#"["steward"]"#, steward()),
+            (1, r#"[""]"#, Some(vec![None])),
+            (0, "[]", Some(Vec::new())),
+            // Shorter or longer than the depth says.
+            (2, r#"["steward"]"#, None),
+            (1, "[]", None),
+            (1, r#"["steward","devops"]"#, None),
+            // Not a persona's name.
+            (1, r#"["../steward"]"#, None),
+            (1, r#"["Steward"]"#, None),
+        ] {
+            let from = format!(
+                r#"{{"chat":16,"name":"steward 3","workspace":"ops","mode":"task","depth":{depth},"above":{above}}}"#
+            );
+            std::fs::write(
+                path(plane.path()),
+                format!(
+                    r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","from":{from}}}]}}"#
+                ),
+            )
+            .unwrap();
+            let back = read(plane.path()).chats[0].from.clone().expect("it reads");
+            assert_eq!(back.above, read_as, "{depth} {above}");
+        }
+        // A record written before the key: no chain kept.
+        std::fs::write(
+            path(plane.path()),
+            r#"{"version":1,"at":0,"chats":[{"program":"claude","name":"3","from":{"chat":16,"name":"steward 3","workspace":"ops","mode":"task","depth":1}}]}"#,
+        )
+        .unwrap();
+        let back = read(plane.path()).chats[0].from.clone().expect("it reads");
+        assert_eq!(back.above, None);
+    }
+
+    #[test]
     fn a_chat_the_person_started_from_a_tab_comes_back_saying_so_and_no_other_writes_the_key() {
         // #1438: who a report is marked as started by outlives a relaunch.
         let plane = tempfile::tempdir().unwrap();
         let asked = HandedFrom {
             mode: crate::dispatchdecision::Mode::Task,
             depth: 1,
+            above: None,
             by_person: true,
             ..handed()
         };

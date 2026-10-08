@@ -1392,6 +1392,7 @@ mod tests {
             mode: Mode::Task,
             depth: 1,
             root: None,
+            above: None,
             by_person: false,
         }
     }
@@ -1468,6 +1469,7 @@ mod tests {
         // dispatched nothing and holds no grant for the pair: every power is `owned`, so it has
         // none of them, in the sentence any stranger is told.
         let theirs = HandedFrom {
+            above: None,
             by_person: true,
             ..dispatched_by(ASKER)
         };
@@ -3018,6 +3020,7 @@ mod tests {
                     13,
                     Some(HandedFrom {
                         report: Owed::Sent,
+                        above: None,
                         by_person: true,
                         ..dispatched_by(ASKER)
                     }),

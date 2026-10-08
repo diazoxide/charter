@@ -943,6 +943,23 @@ while nobody was there, and the reads of what stands, what waits, and those two 
 served to the person's own window over its own channel and on no link, whatever scope a link
 holds. The link's client is generated without them.
 
+**18. The chain is read from the record, not from the chats still open (V100-58).** #1521
+builds it. A task's record of open chats keeps the personas above it (`chats[].from.above`,
+`docs/plane-format.md`), written by the app when it starts the task, from its own record of
+the asking chat: the asking chat's persona, then the chain that chat's record keeps. The loop
+rule and the person's never for a chat above read it, so a chain holds where a chat in the
+middle has finished, closed or been cleared. Nothing a chat sends goes into it. A finished
+task reopened as an ordinary chat names no asking chat and starts a new chain.
+
+- **A record written before the key fails closed.** Its chain is read from the chats still
+  open, as before. Where that walk meets a chat that has closed, purlis cannot say who was
+  above, and refuses as if any persona were: every dispatch to another persona, and one to
+  its own where the person said never to any persona dispatching there. The refusal says that
+  an older version kept no record of the chain. Such a chat's tasks keep no chain either, and
+  are held the same way.
+- A kept chain whose length is not the record's depth, or that names what cannot be a
+  persona's name, reads as no chain kept: never as a shorter one.
+
 Still open, and not decided here:
 
 - telling a teammate's grant limited to one workspace, and a narrowing of one, on the Notice

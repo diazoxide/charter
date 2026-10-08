@@ -5647,6 +5647,7 @@ pub(crate) mod tests {
                     mode: purlis_core::reopen::Mode::Task,
                     depth: 1,
                     root: None,
+                    above: None,
                     by_person: false,
                 }),
                 ..record.chats[0].clone()
@@ -6377,6 +6378,7 @@ pub(crate) mod tests {
                 mode,
                 depth: 1,
                 root: None,
+                above: None,
                 by_person: false,
             }),
             ..chat(&a_claude(dir), name, None)
@@ -6647,6 +6649,7 @@ pub(crate) mod tests {
             mode: purlis_core::reopen::Mode::Task,
             depth: 2,
             root: Some(root.to_owned()),
+            above: None,
             by_person: false,
         };
         let task = Chat {

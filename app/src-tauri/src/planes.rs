@@ -6058,6 +6058,7 @@ mod tests {
             mode: purlis_core::dispatchdecision::Mode::Task,
             depth: 1,
             root: None,
+            above: None,
             by_person: false,
         });
         let session = held

@@ -312,6 +312,13 @@ impl InForce {
             .find(|above| self.refuses(Some(above), target))
     }
 
+    /// Whether you said never to any persona dispatching to `target`: what a chat whose chain
+    /// purlis cannot read whole is held to, since any of them may be above it (#1521,
+    /// [`crate::dispatchlimits::Lineage::chain_unread`]).
+    pub fn refuses_any_to(&self, target: &str) -> bool {
+        self.never.iter().any(|(_, to)| to == target)
+    }
+
     /// The widest **standing** level at which a grant **names** the pair `asking` to
     /// `target`: the project's or yours. Never "any persona", and never one chat's.
     pub fn named_level_of(&self, asking: Option<&str>, target: &str) -> Option<Level> {
