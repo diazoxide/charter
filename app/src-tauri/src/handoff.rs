@@ -6081,14 +6081,9 @@ mod tests {
             None,
         );
         // Handed to the chat, and kept for no workspace: a task whose report reaches an open
-        // asking chat is told it is finished (#1485), which is said only where it did.
-        assert!(
-            matches!(
-                &said,
-                Answer::Finished { .. } | Answer::Reported { kept_for: None, .. }
-            ),
-            "{said:?}"
-        );
+        // asking chat is told it is finished (#1485), which is said only where it did. A
+        // done task of a chat's own asking is one to end, so it is never only reported.
+        assert!(matches!(&said, Answer::Finished { .. }), "{said:?}");
     }
 
     #[test]
