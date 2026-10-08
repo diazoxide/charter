@@ -36,9 +36,9 @@
 //! report's text are its words, stored as written and held to a cap ([`cut`]). And what its
 //! harness reported of tokens and cost ([`crate::usage::spent`]) is relayed by the chat's
 //! status line through a file a chat can write: **a chat can alter that figure**, so it is
-//! shown as reported, and the one thing it decides is the person's optional token limit
-//! (#1512), a brake and not a boundary. It is absent where the harness reports none, and
-//! never a zero.
+//! shown as reported and decides nothing: the person's optional token limit (#1512) is shown
+//! against it and not enforced. It is absent where the harness reports none, and never a
+//! zero.
 //!
 //! A record is one JSON object, written whole and private ([`crate::rewrite::replace`]) under
 //! purlis's lock on the directory. A closed record takes no further report: the first
@@ -311,6 +311,20 @@ pub struct Record {
     /// ([`crate::didnotstart::record`]). Absent for one.
     #[serde(default, skip_serializing_if = "one_or_none")]
     pub attempts: u32,
+    /// **How long the task has worked, in seconds** (#1512): its working time as the app's
+    /// clock saw it, never time waiting on the person or on its own tasks, nor time purlis was
+    /// not running. Kept here so a task restored after a restart keeps the working time it had,
+    /// and what `minutes-per-task` is held to. Absent while it is 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub worked: u64,
+    /// **The limit purlis stopped it at** (#1512), beside `ended_by: limit`: the app's own
+    /// record of which limit and the figure, which its finished row names. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<crate::dispatchlimits::Reached>,
+}
+
+fn is_zero(worked: &u64) -> bool {
+    *worked == 0
 }
 
 fn one_or_none(attempts: &u32) -> bool {
@@ -440,6 +454,8 @@ pub fn open_as(
         kept_open: false,
         did_not_start: false,
         attempts: 0,
+        worked: 0,
+        limit: None,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -535,6 +551,35 @@ pub fn close_as(
     })
 }
 
+/// **Dispatch `id` has worked `secs` seconds in all** (#1512): the app's clock keeps it, so a
+/// task restored after a restart keeps its working time. `false` for a record that is not
+/// there, has ended, or already says it.
+pub fn worked(root: &Path, id: &str, secs: u64) -> io::Result<bool> {
+    change(root, id, |record| {
+        if !record.running() || record.worked == secs {
+            return false;
+        }
+        record.worked = secs;
+        true
+    })
+}
+
+/// **purlis is stopping dispatch `id` at `reached`** (#1512): kept before its end, so its
+/// finished row says which limit. `false` for a record that is not there or has ended.
+pub fn stopped_at(
+    root: &Path,
+    id: &str,
+    reached: crate::dispatchlimits::Reached,
+) -> io::Result<bool> {
+    change(root, id, |record| {
+        if !record.running() {
+            return false;
+        }
+        record.limit = Some(reached);
+        true
+    })
+}
+
 /// Dispatch `id` ended with its persona chat in `conversation` (#1485): kept, so the finished
 /// task can be reopened on it. `false` for a record that is not there, is still running, or
 /// already names the same one. Held to a name's cap, as every id a record keeps is.
@@ -594,9 +639,11 @@ pub enum Finished {
     StoppedByThePerson,
     /// The person closed it: its program was ended with no report from it.
     ClosedByThePerson,
-    /// purlis stopped it at a limit the person set (#1512), with or without the one short
-    /// report it was given a turn for.
-    StoppedAtALimit,
+    /// purlis stopped it at its time limit (#1512), with or without the one short report it
+    /// was given a turn for.
+    StoppedAtItsTimeLimit,
+    /// purlis stopped it with the task above it, which reached its time limit (#1512).
+    StoppedWithTheTaskAbove,
 }
 
 impl Finished {
@@ -618,7 +665,14 @@ impl Finished {
                 });
             }
             Some(EndedBy::Unreported) => return Some(Self::EndedWithoutAReport),
-            Some(EndedBy::Limit) => return Some(Self::StoppedAtALimit),
+            Some(EndedBy::Limit) => {
+                return Some(match record.limit {
+                    Some(crate::dispatchlimits::Reached::Above { .. }) => {
+                        Self::StoppedWithTheTaskAbove
+                    }
+                    _ => Self::StoppedAtItsTimeLimit,
+                });
+            }
             None => {}
         }
         Some(match report.outcome {
@@ -651,7 +705,8 @@ impl Finished {
             Self::EndedWithoutAReport => ENDED_WITHOUT_A_REPORT,
             Self::StoppedByThePerson => "stopped by the person",
             Self::ClosedByThePerson => "closed by the person",
-            Self::StoppedAtALimit => "stopped at a limit",
+            Self::StoppedAtItsTimeLimit => "stopped at its time limit",
+            Self::StoppedWithTheTaskAbove => "stopped with the task above it",
         }
     }
 
@@ -666,7 +721,8 @@ impl Finished {
             Self::EndedWithoutAReport => "unreported",
             Self::StoppedByThePerson => "stopped_by_person",
             Self::ClosedByThePerson => "closed_by_person",
-            Self::StoppedAtALimit => "stopped_at_limit",
+            Self::StoppedAtItsTimeLimit => "stopped_at_limit",
+            Self::StoppedWithTheTaskAbove => "stopped_with_above",
         }
     }
 
@@ -956,6 +1012,8 @@ fn capped(record: &Record) -> Record {
         kept_open: record.kept_open,
         did_not_start: record.did_not_start,
         attempts: record.attempts,
+        worked: record.worked,
+        limit: record.limit,
     }
 }
 

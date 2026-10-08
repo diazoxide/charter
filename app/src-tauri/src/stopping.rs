@@ -79,13 +79,15 @@
 //! below it has ended, so each chat's last turn is handed what the chats under it wrote, and
 //! no chat ends before one it started.
 //!
-//! **purlis stops a task at a limit the person set the same way** (#1512, V100-59): a task
-//! past its time, and every task at work of a session past its tokens, get this one stop with
+//! **purlis stops a task at its time limit the same way** (#1512, V100-59): a task past the
+//! working time the person set, with everything below it, gets this one stop with
 //! [`Way::Report`] ([`stop_at_a_limit`]). The person's word is the limit they wrote in
-//! Settings, and the app's own clock is the only caller: no line from a chat reads as one.
-//! What changes is what is said, never how it ends: the task's last-turn line says purlis
-//! stops it at a limit ([`TASK_AT_A_LIMIT_PROMPT`]), and the chat that asked is told which
-//! limit, with the figure, and not that the person stopped it.
+//! Settings, and the app's own clock is the only caller: no line from a chat reads as one, and
+//! the clock leaves a task the person is in the middle of for its next look. What changes is
+//! what is said, never how it ends: the task's last-turn line says purlis stops it at its time
+//! limit ([`TASK_AT_A_LIMIT_PROMPT`], [`TASK_ABOVE_AT_A_LIMIT_PROMPT`] for a task below it), and
+//! the chat that asked is told which limit, with the figure, and not that the person stopped
+//! it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -126,11 +128,19 @@ pub const TASK_PROMPT: &str = "The person stopped this task. Start nothing new. 
 
 /// [`TASK_PROMPT`], for a task purlis stops at a limit the person set (#1512): the same one
 /// short turn, and the truth of who stops it.
-pub const TASK_AT_A_LIMIT_PROMPT: &str = "purlis is stopping this task: it reached a limit the \
-     person set for a task's time or a session's tokens. Start nothing new. In this one turn, \
-     report what you did and what is left undone in a few lines, with `purlis dispatch report \
-     --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
-     chat ends when the turn does.";
+pub const TASK_AT_A_LIMIT_PROMPT: &str = "purlis is stopping this task: it reached the time \
+     limit the person set for a task. Start nothing new. In this one turn, report what you did \
+     and what is left undone in a few lines, with `purlis dispatch report --outcome blocked \
+     \"<summary>\"` (or --outcome done or failed, whichever is true). This chat ends when the \
+     turn does.";
+
+/// [`TASK_AT_A_LIMIT_PROMPT`], for a task below one purlis stops at its time limit: its own
+/// time is not what is up.
+pub const TASK_ABOVE_AT_A_LIMIT_PROMPT: &str = "purlis is stopping this task: the task above it, \
+     which dispatched it, reached the time limit the person set, and a task's own tasks stop \
+     with it. Start nothing new. In this one turn, report what you did and what is left undone \
+     in a few lines, with `purlis dispatch report --outcome blocked \"<summary>\"` (or --outcome \
+     done or failed, whichever is true). This chat ends when the turn does.";
 
 /// The bytes the prompt is sent as, to a task when `task` and to a handoff otherwise: one
 /// bracketed paste, then Enter, in one write.
@@ -139,9 +149,14 @@ pub fn sent_as(task: bool) -> String {
     format!("{}\r", crate::curation::bracketed(prompt))
 }
 
-/// [`sent_as`] for a task purlis stops at a limit ([`TASK_AT_A_LIMIT_PROMPT`]).
-pub fn sent_at_a_limit() -> String {
-    format!("{}\r", crate::curation::bracketed(TASK_AT_A_LIMIT_PROMPT))
+/// [`sent_as`] for a task purlis stops at `reached` ([`TASK_AT_A_LIMIT_PROMPT`], or
+/// [`TASK_ABOVE_AT_A_LIMIT_PROMPT`] for a task below the one that reached it).
+pub fn sent_at_a_limit(reached: purlis_core::dispatchlimits::Reached) -> String {
+    let prompt = match reached {
+        purlis_core::dispatchlimits::Reached::Time { .. } => TASK_AT_A_LIMIT_PROMPT,
+        purlis_core::dispatchlimits::Reached::Above { .. } => TASK_ABOVE_AT_A_LIMIT_PROMPT,
+    };
+    format!("{}\r", crate::curation::bracketed(prompt))
 }
 
 /// One step of one chat's stop, as the window is told it.
@@ -1269,10 +1284,9 @@ fn carry_out(held: &Arc<Held>, acts: Vec<Act>) {
                     .chats()
                     .handed_from(session)
                     .is_some_and(|from| from.mode == purlis_core::dispatchdecision::Mode::Task);
-                let line = if task && held.stopping().limit_of(session).is_some() {
-                    sent_at_a_limit()
-                } else {
-                    sent_as(task)
+                let line = match held.stopping().limit_of(session).filter(|_| task) {
+                    Some(reached) => sent_at_a_limit(reached),
+                    None => sent_as(task),
                 };
                 let sent = held.chats().sessions().input(session, line.as_bytes());
                 if sent.is_err() {
@@ -1550,79 +1564,69 @@ pub(crate) fn stop_all_tasks_in_a_test(
     stop_all_tasks_of(held, session, asked)
 }
 
-/// **purlis stops `tasks` at a limit the person set** (#1512, V100-59): each with everything
-/// below it, deepest first, by the stop Stop and get its report is ([`Way::Report`]). A task
-/// that is not open, not a task, or already being stopped is left as it is: a stop already
-/// under way has its one short turn, and this begins no second one. Answers how many it stops.
-///
-/// `session` is the session whose token limit was reached, where it was: it is then typed one
-/// line once the last of its tasks has ended, as Stop all tasks types it
-/// ([`Stopping::holds_word_for`]). For a task past its time it is `None`, and the chat that
-/// asked is woken by its word as by any report.
+/// **purlis stops `task` at its time limit** (#1512, V100-59), with everything below it,
+/// deepest first, by the stop Stop and get its report is ([`Way::Report`]). A chat below it
+/// is stopped as "with the task above it" ([`Reached::Above`]), never as past a time of its
+/// own. A task that is not open, not a task, or already being stopped is left as it is: a stop
+/// already under way has its one short turn, and this begins no second one. Answers how many it
+/// stops. Each stopped chat's record keeps which limit, so its finished row says it.
 ///
 /// **Only the app's own clock calls it** ([`crate::overlimit`]), from the limits the person
 /// wrote: no line a chat sends reads as one.
+///
+/// [`Reached::Above`]: purlis_core::dispatchlimits::Reached::Above
 pub(crate) fn stop_at_a_limit(
     held: &Arc<Held>,
-    tasks: &[u32],
+    task: u32,
     reached: purlis_core::dispatchlimits::Reached,
-    session: Option<u32>,
 ) -> u32 {
+    use purlis_core::dispatchlimits::Reached;
+    let above = match reached {
+        Reached::Time { limit, .. } | Reached::Above { limit } => Reached::Above { limit },
+    };
     let (acts, count) = {
         let _deciding = held.chats().deciding();
         let lineage = lineage_of(held);
-        let mut order: Vec<u32> = Vec::new();
-        for task in tasks {
-            let is_a_task = held.chats().handed_from(*task).is_some_and(|from| {
-                from.mode == purlis_core::dispatchdecision::Mode::Task && from.chat != *task
-            });
-            if !is_a_task || held.stopping().is_stopping(*task) {
-                continue;
-            }
-            for chat in subtree(&lineage, *task, true) {
-                if !order.contains(&chat) && !held.stopping().is_stopping(chat) {
-                    order.push(chat);
-                }
-            }
-        }
-        if order.is_empty() {
+        let is_a_task = held.chats().handed_from(task).is_some_and(|from| {
+            from.mode == purlis_core::dispatchdecision::Mode::Task && from.chat != task
+        });
+        if !is_a_task || held.stopping().is_stopping(task) {
             return 0;
         }
-        // Deepest first, as one press orders a subtree: each chat's own stop begins only once
-        // every chat below it has ended.
-        let depth = |chat: u32| {
-            let mut depth = 0_u32;
-            let mut at = started_in(&lineage, chat);
-            while let Some(up) = at {
-                depth += 1;
-                if depth > 64 {
-                    break;
-                }
-                at = started_in(&lineage, up);
-            }
-            depth
-        };
-        order.sort_by_key(|chat| std::cmp::Reverse(depth(*chat)));
+        // Deepest first, and the task itself last: `subtree`'s order.
+        let order: Vec<u32> = subtree(&lineage, task, true)
+            .into_iter()
+            .filter(|chat| !held.stopping().is_stopping(*chat))
+            .collect();
         {
             let mut named = held.stopping().named();
-            for task in &order {
-                let below: Vec<String> = subtree(&lineage, *task, true)
+            for chat in &order {
+                let below: Vec<String> = subtree(&lineage, *chat, true)
                     .into_iter()
-                    .filter(|chat| chat != task && order.contains(chat))
-                    .filter(|chat| held.chats().owed_task_report(*chat).is_some())
-                    .filter_map(|chat| held.chats().shown_name(chat))
+                    .filter(|one| one != chat && order.contains(one))
+                    .filter(|one| held.chats().owed_task_report(*one).is_some())
+                    .filter_map(|one| held.chats().shown_name(one))
                     .map(|name| purlis_core::handback::in_purlis_s_line(&name))
                     .take(purlis_core::handback::MOST_NAMED_BELOW)
                     .collect();
                 if !below.is_empty() {
-                    named.entry(*task).or_default().extend(below);
+                    named.entry(*chat).or_default().extend(below);
                 }
             }
         }
         {
             let mut limited = held.stopping().limited();
             for chat in &order {
-                limited.insert(*chat, reached);
+                let why = if *chat == task { reached } else { above };
+                limited.insert(*chat, why);
+                // Kept on its record before its end, so its finished row says which limit.
+                if let Some(me) = crate::dispatches::chat_ref(held, *chat)
+                    && let Some(record) = purlis_core::dispatchrecord::running_for(held.root(), &me)
+                    && let Err(err) =
+                        purlis_core::dispatchrecord::stopped_at(held.root(), &record.id, why)
+                {
+                    tracing::warn!("purlis: a task's record did not keep its limit ({err})");
+                }
             }
         }
         let started = started_of(held);
@@ -1633,21 +1637,9 @@ pub(crate) fn stop_at_a_limit(
             |chat| facts_of(held, chat),
         );
         cancels_stand_down(held, &order);
-        if let Some(session) = session {
-            held.stopping()
-                .all
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .entry(session)
-                .or_default()
-                .extend(order.iter().copied());
-        }
         (acts, u32::try_from(order.len()).unwrap_or(u32::MAX))
     };
     carry_out(held, acts);
-    if let Some(session) = session {
-        crate::dispatched::told_or_settled(held, session);
-    }
     count
 }
 

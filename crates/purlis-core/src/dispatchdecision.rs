@@ -298,10 +298,6 @@ pub struct Moment<'a> {
     /// worktree in one (#1453, [`crate::dispatchplace::Ground::workspace`]). `None` is the
     /// asking chat's own.
     pub works_in: Option<&'a str>,
-    /// **The tokens the asking chat's session has used** (#1512, [`Lineage::tokens`]), as the
-    /// app reads them from what its chats' harnesses reported. Asked only where a
-    /// `tokens-per-session` limit is in force, since the reading walks the session's records.
-    pub session_tokens: &'a dyn Fn() -> u64,
 }
 
 /// What a chat's dispatch comes to: the decision, and the facts the app starts the persona
@@ -354,7 +350,7 @@ pub fn asked_by_a_chat(
         pair.asking.as_deref(),
         pair.to.as_deref(),
     );
-    let mut lineage = lineage_counting(
+    let lineage = lineage_counting(
         number,
         moment.open,
         moment.default,
@@ -362,25 +358,6 @@ pub fn asked_by_a_chat(
         &pair,
         moment.counted,
     );
-    let elsewhere = moment
-        .works_in
-        .filter(|there| Some(*there) != workspace.as_deref());
-    let theirs = elsewhere.map(|there| {
-        crate::dispatchlimits::of(
-            root,
-            Some(there),
-            pair.asking.as_deref(),
-            pair.to.as_deref(),
-        )
-    });
-    // The session's tokens, read only where a limit of them is in force here or there.
-    if limits.tokens_per_session.is_some()
-        || theirs
-            .as_ref()
-            .is_some_and(|theirs| theirs.tokens_per_session.is_some())
-    {
-        lineage.tokens = (moment.session_tokens)();
-    }
     let locks = crate::sandbox::policy::Locks::of(root);
     let grant = match pair.to.as_deref() {
         Some(to) => crate::dispatchgrant::covers(pair.asking.as_deref(), to, moment.grants, &locks),
@@ -413,9 +390,16 @@ pub fn asked_by_a_chat(
         lineage: &lineage,
     };
     let mut decision = decide(&request);
-    if let (Some(there), Some(theirs), false) =
-        (elsewhere, theirs, matches!(decision, Decision::Refused(_)))
-    {
+    let elsewhere = moment
+        .works_in
+        .filter(|there| Some(*there) != workspace.as_deref());
+    if let (Some(there), false) = (elsewhere, matches!(decision, Decision::Refused(_))) {
+        let theirs = crate::dispatchlimits::of(
+            root,
+            Some(there),
+            pair.asking.as_deref(),
+            pair.to.as_deref(),
+        );
         let held_there = decide(&Request {
             limits: &theirs,
             ..request
@@ -696,8 +680,6 @@ pub fn lineage_counting(
         lineage: counted(lineage),
         as_target: counted(as_target),
         by_asking: counted(by_asking),
-        // The app's to read, and only where a limit of them is in force.
-        tokens: 0,
     }
 }
 
@@ -877,7 +859,6 @@ mod tests {
                 // Itself: one chat is running as the persona it would dispatch to.
                 as_target: 1,
                 by_asking: 0,
-                tokens: 0,
             }
         );
     }
@@ -1156,7 +1137,6 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
-                session_tokens: &|| 0,
             },
         )
     }
@@ -1179,7 +1159,6 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
-                session_tokens: &|| 0,
             },
         )
     }
@@ -1392,7 +1371,6 @@ mod tests {
                     mode: Mode::Task,
                     counted: Counted::Tasks,
                     works_in,
-                    session_tokens: &|| 0,
                 },
             )
         };
@@ -1461,7 +1439,6 @@ mod tests {
                     mode: Mode::Handoff,
                     counted,
                     works_in,
-                    session_tokens: &|| 0,
                 },
             )
         };

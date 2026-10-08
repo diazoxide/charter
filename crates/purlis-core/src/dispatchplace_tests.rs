@@ -470,6 +470,8 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         kept_open: false,
         did_not_start: false,
         attempts: 0,
+        worked: 0,
+        limit: None,
     }
 }
 

@@ -417,11 +417,14 @@ function useDispatchTable(
           /* #1512: where the two limits that are off until set are written, say what binds
              them and what cannot. */
           <p className="granted-note" data-testid="dispatch-tokens-time-note">
-            Tokens per session and minutes per task are off until set. At a session&apos;s token
-            limit no new task starts and its tasks at work are asked for their report; a task past
-            its minutes is asked for its report and ended. Tokens are counted as each harness
-            reports them: a harness that reports no tokens is not counted, so the token limit cannot
-            stop its chats.
+            Minutes per task and tokens per session are off until set, and each is 1 or more.
+            Minutes per task counts a task&apos;s working time only, not time it waits on you or on
+            its own tasks, nor time purlis was closed; a task past it is asked for its report and
+            ended, and its own tasks with it, though never while you are answering or typing in it.
+            Tokens per session is not enforced yet: a session&apos;s row shows its figure against
+            the limit, and nothing is refused or stopped by it, because a chat can alter the figure
+            it counts. Tokens are counted as each harness reports them: a harness that reports no
+            tokens is not counted.
           </p>
         )}
         {!held && (
@@ -563,12 +566,12 @@ export function dispatchGroup(plane: PlaneId, file = "the project's settings fil
   return {
     id: DISPATCH,
     label: "Dispatch",
-    help: "How many tasks a chat may start, how deep a chain may go, how fast chats may message each other, and how many tokens a session and how long a task may use.",
+    help: "How many tasks a chat may start, how deep a chain may go, how fast chats may message each other, how long a task may work, and a session's tokens, shown and not enforced yet.",
     settings: [
       {
         id: `${DISPATCH}.limits`,
         label: "Limits",
-        help: "A dispatch past a limit is refused, and the chat is told which limit. A task past its time, or a session past its tokens, is asked for its report.",
+        help: "A dispatch past a limit is refused, and the chat is told which limit. A task past its working time is asked for its report.",
         useControl: function useLimits() {
           // The row draws the last change's Undo, as it does for every setting.
           return { grouped: true, ...useDispatchTable(plane) };

@@ -768,7 +768,7 @@ fn at_a_limit(
 ) -> String {
     let whose = whose_task(report, stopped.by_person, gone);
     let mut said = format!(
-        "⬢ **`{}`: stopped at {}** ({whence}), on {whose}. {} {LIMIT_ENDED} purlis says this, \
+        "⬢ **`{}`: stopped {}** ({whence}), on {whose}. {} {LIMIT_ENDED} purlis says this, \
          not that chat.",
         report.from,
         reached.named(),
@@ -1527,7 +1527,8 @@ mod tests {
             told.starts_with(
                 "⬢ **`drop commons`: stopped at its time limit** (workspace `platform-next`), \
                  on the task you dispatched to it. It had worked 31 minutes and a task may work \
-                 30 minutes here (minutes per task). The person sets that limit in Settings › \
+                 30 minutes here (minutes per task: working time only, not time waiting on the \
+                 person or on its own tasks). The person sets that limit in Settings › \
                  Project › Dispatch."
             ),
             "{told}"
@@ -1544,16 +1545,16 @@ mod tests {
 
         // One that sent nothing in its turn is said to have sent nothing.
         let mut closed = closed_by_the_person();
-        closed.stopped.as_mut().unwrap().limit = Some(crate::dispatchlimits::Reached::Tokens {
-            limit: 1_000_000,
-            used: 1_200_000,
-        });
+        closed.stopped.as_mut().unwrap().limit =
+            Some(crate::dispatchlimits::Reached::Above { limit: 30 });
         let told = context(&[closed], false).unwrap();
         assert!(
-            told.starts_with("⬢ **`drop commons`: stopped at its session's token limit**"),
+            told.starts_with(
+                "⬢ **`drop commons`: stopped with the task above it, at that task's time limit**"
+            ),
             "{told}"
         );
-        assert!(told.contains("used 1.2M tokens"), "{told}");
+        assert!(told.contains("The task above it"), "{told}");
         assert!(told.contains("it sent no report"), "{told}");
         assert!(!told.contains(PERSON_ENDED), "{told}");
         assert!(!told.contains("\n>"), "{told}");

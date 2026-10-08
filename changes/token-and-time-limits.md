@@ -1,9 +1,11 @@
 ### Added
 
-- **Optional limits on a session's tokens and on one task's time.** Settings › Project ›
-  Dispatch has two more limits, off until set, at the same levels as the others: *Tokens per
-  session* (its own chat and all its tasks, as their harnesses report them) and *Minutes per
-  task*. At the token limit a new task is refused with the figure, the session's row says
-  `at its token limit`, and its tasks at work are asked for their report; a task past its
-  minutes is asked for its report and ended. The chat that asked is told which limit stopped
-  it. A harness that reports no tokens is not counted, and Settings says so (#1512).
+- **An optional limit on one task's working time, and a session's tokens shown against a
+  limit.** Settings › Project › Dispatch has two more limits, off until set, at the same levels
+  as the others. *Minutes per task* counts a task's working time only (not time it waits on you
+  or on its own tasks, nor time purlis was closed, and a task put back after a restart keeps
+  what it had); a task past it is asked for its report and ended with its own tasks, never while
+  you are answering or typing in it, and the chat that asked is told it was its time limit.
+  *Tokens per session* is not enforced yet: a session's row shows its figure against the limit,
+  and nothing is refused or stopped by it, because a chat can alter the figure it counts. A
+  harness that reports no tokens is not counted, and Settings says so (#1512).

@@ -1044,7 +1044,6 @@ impl StandIn {
                 mode: dispatchdecision::Mode::Task,
                 counted: dispatchdecision::Counted::Tasks,
                 works_in: None,
-                session_tokens: &|| 0,
             },
         );
         match asked.decision {

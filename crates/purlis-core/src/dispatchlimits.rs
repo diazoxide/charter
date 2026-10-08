@@ -78,17 +78,16 @@
 //! same levels and by the same rules as the others ([`Limit::off_until_set`]). Each is a
 //! whole number of 1 or more: a 0 would not switch anything off, so it is refused as written.
 //!
-//! - **Tokens per session**: the tokens one session has used, the chat the person started and
-//!   every task below it, open or ended, as their harnesses reported them
-//!   ([`Lineage::tokens`]). At the limit a new dispatch is refused with the figure
-//!   ([`Refused::SessionTokens`]), and the app asks the session's tasks at work for their
-//!   report. **A figure a harness did not report is not counted**, so the limit cannot bind on
-//!   a chat whose harness reports none; Settings says so beside it. And the figure is the
-//!   harness's as relayed through a file a chat can write: this is a brake on work nobody is
-//!   watching, not a boundary a chat cannot cross.
-//! - **Minutes per task**: how long one task may work, from its dispatch. The app asks a task
-//!   past it for its report and ends it, as Stop and get its report does ([`Reached`]); a
-//!   dispatch is never refused for it.
+//! - **Minutes per task**: how long one task may *work* (its working time: not time waiting on
+//!   the person or on its own tasks, nor time purlis was not running). The app asks a task
+//!   past it for its report and ends it, with its own tasks, as Stop and get its report does
+//!   ([`Reached`]); a dispatch is never refused for it.
+//! - **Tokens per session**: **read and shown, and not enforced yet** (#1512, #1457). The
+//!   figure it would count is what each chat's harness reported, relayed through a file a chat
+//!   can write, for its own conversation or another's. A limit that refused or stopped by it
+//!   would let one chat refuse or stop another's work, so it refuses no dispatch and stops no
+//!   task: the session's row shows its figure against the limit ([`tokens_past`]) until the
+//!   figure is out of a chat's reach.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -195,13 +194,14 @@ impl Limit {
             Self::MayRunAtOnce => "The chats that may run as this persona at once, in the project.",
             Self::TokensPerSession => {
                 "The tokens one session may use, its own chat and all its tasks, as their \
-                 harnesses report them. At the limit no new task starts, and the tasks at work \
-                 are asked for their report. A harness that reports no tokens is not counted, so \
-                 this cannot stop its chats. Off until set."
+                 harnesses report them. Not enforced yet: a session's row shows its figure \
+                 against it, and nothing is refused or stopped, because a chat can alter the \
+                 figure. A harness that reports no tokens is not counted. Off until set."
             }
             Self::MinutesPerTask => {
-                "How long one task may work, from its dispatch. A task past it is asked for its \
-                 report and ended. Off until set."
+                "How long one task may work: its working time, not time waiting on you or on its \
+                 own tasks, nor time purlis was closed. A task past it is asked for its report \
+                 and ended, and its own tasks with it. Off until set."
             }
         }
     }
@@ -383,7 +383,8 @@ pub struct Limits {
     pub may_dispatch: Option<u32>,
     /// The chats that may run as the target persona at once; `None` is no cap.
     pub may_run_at_once: Option<u32>,
-    /// The tokens the asking chat's session may use; `None`, as it is until set, is no cap.
+    /// The tokens the asking chat's session may use; `None`, as it is until set, is none.
+    /// Shown, and not enforced yet ([`tokens_past`]).
     pub tokens_per_session: Option<u32>,
     /// How many minutes one task may work; `None`, as it is until set, is no cap.
     pub minutes_per_task: Option<u32>,
@@ -552,11 +553,6 @@ pub struct Lineage {
     /// still running, in every workspace of the project, the asking chat's own among them:
     /// what `may-dispatch` counts.
     pub by_asking: u32,
-    /// **The tokens the asking chat's session has used** (#1512): the chat the person started
-    /// and every task below it, open or ended, as their harnesses reported them, each chat
-    /// once. What `tokens-per-session` is held to. A chat whose harness reported nothing adds
-    /// nothing: never a guess. The app reads it only where that limit is set.
-    pub tokens: u64,
 }
 
 /// **Why a dispatch is refused**: which limit or rule, with its number. [`Refused::say`] is the
@@ -594,9 +590,6 @@ pub enum Refused {
     },
     /// The asking chat has sent as many messages this minute as it may: `sent` of them.
     TooManyMessages { limit: u32, sent: u32 },
-    /// The asking chat's session has used as many tokens as it may (#1512): `used` of them, as
-    /// its chats' harnesses reported them. `by` is the level that set the limit.
-    SessionTokens { limit: u32, used: u64, by: Source },
 }
 
 /// What a chat is told to do about a limit of 0: only the person changes a limit.
@@ -643,7 +636,6 @@ impl Refused {
             Self::PersonaDispatches { .. } => Some(Limit::MayDispatch),
             Self::PersonaFull { .. } => Some(Limit::MayRunAtOnce),
             Self::TooManyMessages { .. } => Some(Limit::MessagesPerMinute),
-            Self::SessionTokens { .. } => Some(Limit::TokensPerSession),
         }
     }
 
@@ -723,17 +715,6 @@ impl Refused {
                 "this chat has sent that chat {} in the last minute, and it may send {limit}. \
                  {WAIT_TO_SEND}",
                 counted(*sent, "message", "messages")
-            ),
-            Self::SessionTokens { limit, used, by } => format!(
-                "this chat's session has used {} tokens, its own chat and its tasks together as \
-                 their harnesses reported them, and a session may use {} here. {} {DO_IT_HERE}",
-                spelled(*used),
-                spelled(u64::from(*limit)),
-                if matches!(by, Source::Policy | Source::PolicyRefused) {
-                    ASK_AN_ADMINISTRATOR
-                } else {
-                    ASK_THE_PERSON
-                },
             ),
         }
     }
@@ -834,34 +815,20 @@ pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
             running: lineage.as_target,
         });
     }
-    if let Some(reached) = tokens_reached(limits, lineage.tokens) {
-        return Decision::Refused(reached);
-    }
     Decision::Allowed
 }
 
-/// The refusal `tokens-per-session` gives a session that has used `used` tokens, where it is
-/// set and they reach it.
-fn tokens_reached(limits: &Limits, used: u64) -> Option<Refused> {
-    let limit = limits.tokens_per_session?;
-    (used >= u64::from(limit)).then(|| Refused::SessionTokens {
-        limit,
-        used,
-        by: limits.set_by(Limit::TokensPerSession).clone(),
-    })
-}
-
-/// **A limit a task or a session has reached while at work** (#1512): what the app stops the
-/// tasks at work for, and what the chat that asked is told, in purlis's own words
-/// ([`crate::handback::Stopped::limit`]). Kept in the word the asking chat is left, so it
-/// is written by the app and read back as it wrote it.
+/// **A limit a task has reached while at work** (#1512): what the app stops it for, and what
+/// the chat that asked is told, in purlis's own words ([`crate::handback::Stopped::limit`]).
+/// Kept in the word the asking chat is left and on the task's record, written by the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reached {
     /// The task worked `worked` minutes, and a task may work `limit` here.
     Time { limit: u32, worked: u32 },
-    /// The session the task works for used `used` tokens, as reported, and may use `limit`.
-    Tokens { limit: u32, used: u64 },
+    /// The task above it, which dispatched it, reached its time limit of `limit` minutes, and
+    /// a task's own tasks stop with it.
+    Above { limit: u32 },
 }
 
 impl Reached {
@@ -870,45 +837,51 @@ impl Reached {
     pub fn say(self) -> String {
         let reached = match self {
             Self::Time { limit, worked } => format!(
-                "It had worked {} and a task may work {} here (minutes per task).",
+                "It had worked {} and a task may work {} here (minutes per task: working time \
+                 only, not time waiting on the person or on its own tasks).",
                 counted(worked, "minute", "minutes"),
                 counted(limit, "minute", "minutes"),
             ),
-            Self::Tokens { limit, used } => format!(
-                "Its session had used {} tokens, its own chat and its tasks together as their \
-                 harnesses reported them, and a session may use {} here (tokens per session).",
-                spelled(used),
-                spelled(u64::from(limit)),
+            Self::Above { limit } => format!(
+                "The task above it, which dispatched it, reached its time limit of {}, and a \
+                 task's own tasks stop with it.",
+                counted(limit, "minute", "minutes"),
             ),
         };
         format!("{reached} The person sets that limit in Settings › Project › Dispatch.")
     }
 
-    /// The limit it is of, as its row and its heading name it.
+    /// The limit it is of, as its heading names it.
     pub fn named(self) -> &'static str {
         match self {
-            Self::Time { .. } => "its time limit",
-            Self::Tokens { .. } => "its session's token limit",
+            Self::Time { .. } => "at its time limit",
+            Self::Above { .. } => "with the task above it, at that task's time limit",
         }
     }
 }
 
 /// **Whether a task that has worked `worked_secs` is past the time a task may work**
 /// (#1512), by `limits` as they stand now: read afresh each time, so a limit raised in
-/// Settings lets a task go on and one lowered stops it.
-pub fn time_reached(limits: &Limits, worked_secs: i64) -> Option<Reached> {
+/// Settings lets a task go on and one lowered stops it. `worked_secs` is its working time.
+pub fn time_reached(limits: &Limits, worked_secs: u64) -> Option<Reached> {
     let limit = limits.minutes_per_task?;
-    let worked = u32::try_from(worked_secs.max(0) / 60).unwrap_or(u32::MAX);
+    let worked = u32::try_from(worked_secs / 60).unwrap_or(u32::MAX);
     (worked >= limit).then_some(Reached::Time { limit, worked })
 }
 
-/// **Whether a session that has used `used` tokens is at the tokens a session may use**
-/// (#1512): the tasks at work are then asked for their report. The same test a dispatch is
-/// refused by ([`decide`]).
-pub fn tokens_reached_at_work(limits: &Limits, used: u64) -> Option<Reached> {
-    match tokens_reached(limits, used)? {
-        Refused::SessionTokens { limit, used, .. } => Some(Reached::Tokens { limit, used }),
-        _ => None,
+/// **The token limit a session that has used `used` tokens is past**, where it is set and
+/// reached (#1512): shown on the session's row with its figure, and **not enforced yet**.
+/// Nothing refuses or stops by it until the figure is out of a chat's reach (#1457).
+pub fn tokens_past(limits: &Limits, used: u64) -> Option<u32> {
+    let limit = limits.tokens_per_session?;
+    (used >= u64::from(limit)).then_some(limit)
+}
+
+/// The stricter of two limits of the same kind, where either is set.
+pub fn stricter(one: Option<u32>, other: Option<u32>) -> Option<u32> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (one, other) => one.or(other),
     }
 }
 
@@ -1225,6 +1198,23 @@ impl Files {
             mine: mine.table,
             refused: shared.refused.into_iter().chain(mine.refused).collect(),
         }
+    }
+
+    /// **Whether any level of these files, or `policy`, sets `limit`** (#1512): where none
+    /// does, nothing that limit would read is read at all.
+    pub fn sets(&self, limit: Limit, policy: &Level) -> bool {
+        let table_sets = |table: &Table| {
+            table.project.get(limit).is_some()
+                || table
+                    .workspaces
+                    .values()
+                    .any(|level| level.get(limit).is_some())
+                || table
+                    .personas
+                    .values()
+                    .any(|level| level.get(limit).is_some())
+        };
+        table_sets(&self.project) || table_sets(&self.mine) || policy.get(limit).is_some()
     }
 
     /// The limits in force for a dispatch in the project these were read from, under `policy`.

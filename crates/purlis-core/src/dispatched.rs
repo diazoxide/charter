@@ -271,6 +271,26 @@ pub fn being_stopped(name: &str, of: u32) -> String {
     )
 }
 
+/// [`being_stopped`], for a task purlis is stopping at a limit the person set (#1512): never
+/// "by the person".
+pub fn being_stopped_at_a_limit(
+    name: &str,
+    of: u32,
+    reached: crate::dispatchlimits::Reached,
+) -> String {
+    format!(
+        "'{name}' (chat {of}) is {}, so there is nothing to cancel. This chat is told when it \
+         has ended.",
+        being_stopped_as(reached)
+    )
+}
+
+/// What a listed task says while purlis stops it at a limit the person set (#1512): "being
+/// stopped at its time limit", or with the task above it. Never "by the person".
+pub fn being_stopped_as(reached: crate::dispatchlimits::Reached) -> String {
+    format!("being stopped {}", reached.named())
+}
+
 // ---- where a task stands ----------------------------------------------------------------------
 
 /// A chat as the app has it at this moment: what its board says, and what its harness is.

@@ -14,12 +14,6 @@
 //! ([`purlis_core::dispatchdecision::lineage_counting`], [`purlis_core::dispatchlimits::decide`]).
 //! A task that reports or ends, a limit raised in Settings, and the chat's own close all clear
 //! it at the next read. Held in memory: a launch starts with none, as no chat is refused yet.
-//!
-//! **And a session at its token limit** (#1512, V100-59): no slot frees that, since what a
-//! session used only grows, but the person raising the limit does. So it is marked as a count
-//! is, on a refusal and when the app's clock stops its tasks for it
-//! ([`AtLimits::at_its_tokens`]), and re-decided the same way at every read: the row says
-//! `at its token limit` with the figure until the limit is raised or taken out.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -62,25 +56,8 @@ pub fn row_words(why: &Limited) -> Option<String> {
             "{} is full ({limit} at once), not this chat's limit",
             short(persona)
         ),
-        // A session's tokens (#1512): its own chat and its tasks together.
-        Limited::SessionTokens { limit, .. } => format!(
-            "at its token limit ({})",
-            dispatchlimits::spelled(u64::from(*limit))
-        ),
         _ => return None,
     })
-}
-
-/// The number of the limit `why` names, where the row says one.
-fn limited_number(why: &Limited) -> Option<u32> {
-    match why {
-        Limited::TooManyRunning { limit, .. }
-        | Limited::LineageFull { limit, .. }
-        | Limited::PersonaDispatches { limit, .. }
-        | Limited::PersonaFull { limit, .. }
-        | Limited::SessionTokens { limit, .. } => Some(*limit),
-        _ => None,
-    }
 }
 
 /// Whether `why` is a refusal a slot frees: a count of tasks at work, which falls as one of
@@ -95,12 +72,6 @@ pub fn frees_with_a_slot(why: &Refused) -> bool {
                 | Limited::PersonaFull { .. }
         )
     )
-}
-
-/// Whether `why` is said on the asking chat's row until it no longer binds: a count a slot
-/// frees, or a session's tokens, which the person raising the limit frees (#1512).
-pub fn shown_on_its_row(why: &Refused) -> bool {
-    frees_with_a_slot(why) || matches!(why, Refused::Limit(Limited::SessionTokens { .. }))
 }
 
 /// The marks of one plane: by the chat refused, the persona its dispatch was to and which of
@@ -152,7 +123,7 @@ impl AtLimits {
     /// Chat `chat`'s dispatch to `to` was refused for `why`: marked where a slot frees it.
     /// Answers whether it was marked.
     pub fn refused(&self, chat: u32, to: Option<String>, counted: Counted, why: &Refused) -> bool {
-        if !shown_on_its_row(why) {
+        if !frees_with_a_slot(why) {
             return false;
         }
         let mut marks = self.marks();
@@ -167,25 +138,6 @@ impl AtLimits {
             },
         );
         true
-    }
-
-    /// The app's clock stopped session `chat`'s tasks at its token limit (#1512): its row says
-    /// so, as a refusal for it would, until the limit no longer binds.
-    pub fn at_its_tokens(&self, chat: u32) {
-        let mut marks = self.marks();
-        if marks.by_chat.contains_key(&chat) {
-            return;
-        }
-        marks.set += 1;
-        let number = marks.set;
-        marks.by_chat.insert(
-            chat,
-            Mark {
-                to: None,
-                counted: Counted::Tasks,
-                number,
-            },
-        );
     }
 
     /// Whether chat `chat` carries a mark, bound or not: a test reads it.
@@ -215,10 +167,10 @@ pub(crate) fn still(held: &Held, chat: u32) -> Option<AtLimit> {
 fn binds(held: &Held, chat: u32, to: Option<&str>, counted: Counted) -> Option<AtLimit> {
     let root = held.root();
     let default = purlis_core::start::persona_for_a_new_chat(root);
-    let (limits, lineage) = held.chats().deciding_over(|open, starting| {
+    let (pair, cwd, lineage) = held.chats().deciding_over(|open, starting| {
         let (_, asking) = open.iter().find(|(number, _)| *number == chat)?;
         let pair = dispatchdecision::pair_of(asking, to, default.as_deref());
-        let mut lineage = dispatchdecision::lineage_counting(
+        let lineage = dispatchdecision::lineage_counting(
             chat,
             open,
             default.as_deref(),
@@ -226,33 +178,34 @@ fn binds(held: &Held, chat: u32, to: Option<&str>, counted: Counted) -> Option<A
             &pair,
             counted,
         );
-        let workspace = asking
-            .cwd
-            .as_deref()
-            .and_then(|cwd| purlis_core::active::workspace_of_tree(root, cwd));
-        let limits = dispatchlimits::of(
-            root,
-            workspace.as_deref(),
-            pair.asking.as_deref(),
-            pair.to.as_deref(),
-        );
-        // What the session used, read only where a limit of it is in force (#1512).
-        if limits.tokens_per_session.is_some() {
-            lineage.tokens = crate::overlimit::session_tokens(root, held.board(), open, chat);
-        }
-        Some((limits, lineage))
+        Some((pair, asking.cwd.clone(), lineage))
     })?;
+    let workspace = cwd
+        .as_deref()
+        .and_then(|cwd| purlis_core::active::workspace_of_tree(root, cwd));
+    let limits = dispatchlimits::of(
+        root,
+        workspace.as_deref(),
+        pair.asking.as_deref(),
+        pair.to.as_deref(),
+    );
     match dispatchlimits::decide(&limits, &lineage) {
         Decision::Refused(why) => {
             let why = Refused::Limit(why);
-            if !shown_on_its_row(&why) {
+            if !frees_with_a_slot(&why) {
                 return None;
             }
-            let Refused::Limit(limited) = &why else {
+            let Refused::Limit(
+                limited @ (Limited::TooManyRunning { limit, .. }
+                | Limited::LineageFull { limit, .. }
+                | Limited::PersonaDispatches { limit, .. }
+                | Limited::PersonaFull { limit, .. }),
+            ) = &why
+            else {
                 return None;
             };
             Some(AtLimit {
-                limit: limited_number(limited)?,
+                limit: *limit,
                 row: row_words(limited)?,
                 said: crate::handoff::said_to_the_person(&why),
             })

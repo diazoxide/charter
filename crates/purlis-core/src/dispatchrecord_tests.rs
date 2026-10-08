@@ -1524,17 +1524,27 @@ fn a_task_the_person_ended_says_which_way_in_words_of_its_own_and_never_folds() 
         Some(EndedBy::Limit),
         Some(EndedWay::Stopped),
     );
-    assert_eq!(limited, Finished::StoppedAtALimit);
+    assert_eq!(limited, Finished::StoppedAtItsTimeLimit);
     assert_eq!(record.ended_way, Some(EndedWay::Stopped));
     assert_eq!(
         (limited.word(), limited.said_to_a_chat(), limited.key()),
         (
-            "stopped at a limit",
-            "stopped at a limit",
+            "stopped at its time limit",
+            "stopped at its time limit",
             "stopped_at_limit"
         )
     );
     assert!(!limited.folds());
+    // Which limit is the record's own, kept before its end: a task below it says so.
+    let below = Record {
+        limit: Some(crate::dispatchlimits::Reached::Above { limit: 30 }),
+        ..record
+    };
+    let how = Finished::of(&below).unwrap();
+    assert_eq!(
+        (how.word(), how.key()),
+        ("stopped with the task above it", "stopped_with_above")
+    );
 
     // A cancel its asking chat asked for stays a cancel, and folds.
     let (cancelled, _) = ended_as(Outcome::Cancelled, "Stopped half way.", None, None);

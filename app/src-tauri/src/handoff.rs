@@ -301,8 +301,13 @@ fn report_it(
     let deciding = held.chats().deciding();
     // Asked under the lock a stop is recorded under, so it is one or the other.
     if voice == Voice::Purlis && held.stopping().is_stopping(chat) {
+        let how = match held.stopping().limit_of(chat) {
+            // purlis's stop at a limit says so, never "by the person" (#1512).
+            Some(reached) => purlis_core::dispatched::being_stopped_as(reached),
+            None => "being stopped by the person".to_owned(),
+        };
         return Err(format!(
-            "chat {chat} is being stopped by the person, and its stop tells the chat that asked"
+            "chat {chat} is {how}, and its stop tells the chat that asked"
         ));
     }
     // The one report a stop asks for, tested and taken in one call.
@@ -1959,9 +1964,6 @@ fn dispatch_noting(
                         Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
                     },
                     works_in: moves_into.as_deref().or(ground.workspace()),
-                    session_tokens: &|| {
-                        crate::overlimit::session_tokens(root, held.board(), open, from)
-                    },
                 },
             )
         });
@@ -2885,13 +2887,6 @@ pub(crate) fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
             "As many chats already run as {} as may at once, which is {limit}. Wait for one to \
              finish, or raise the limit {IN_SETTINGS}.",
             short(persona)
-        ),
-        Refused::Limit(Limit::SessionTokens { limit, used, .. }) => format!(
-            "This chat's session has used {} tokens, its own chat and its tasks together as \
-             their harnesses reported them, and a session may use {} here. Raise or take out \
-             the limit {IN_SETTINGS}.",
-            purlis_core::dispatchlimits::spelled(*used),
-            purlis_core::dispatchlimits::spelled(u64::from(*limit)),
         ),
         // Never the person's: a helper is not a tab, a held chat's tab may ask, the person's
         // ask always names a persona, and it sends no message between chats. Said as the chat
