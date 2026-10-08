@@ -44,7 +44,7 @@ function forgive() {
 
 /** Whether a dialog has the keyboard: a question the person is answering keeps it, whatever a
  *  pane behind it is drawn as. */
-function inADialog(): boolean {
+export function inADialog(): boolean {
   const at = document.activeElement;
   return at instanceof Element && at.closest('[role="dialog"], [role="alertdialog"]') !== null;
 }

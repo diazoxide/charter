@@ -31,6 +31,7 @@ import type {
   Curations,
   ExtensionCommand,
   ExtensionView,
+  FinishedTask,
   MemoryScope,
   PanelBlock,
   RowAction,
@@ -58,6 +59,9 @@ import { pieceFilesTitle, pieceFilesView } from "./pieceViews";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { switcherKeySaid } from "./switcherKey";
+import { chatsOfTab } from "./tabChats";
+import { neighbour } from "./tabTasks";
+import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
 import {
@@ -65,6 +69,7 @@ import {
   changesView,
   chatOf,
   contentsOf,
+  focusedChat,
   focusedContent,
   panesOf,
   viewKey,
@@ -218,6 +223,9 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
+  /** Opens the menu of the chats that live in a tab: its session's and its tasks' (#1487).
+   *  It shows nothing by itself: a row of that menu does. */
+  | { verb: "showTabTasks"; tab: number }
   /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
    *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
   | { verb: "ignoreNeedsYou"; session: number }
@@ -639,6 +647,9 @@ export type Now = {
   listed?: readonly ListedChat[];
   /** The chats being stopped (#1448): each one's Stop row ends it now. */
   stopping?: readonly number[];
+  /** Each chat's finished tasks, by its number (#1485): a tab whose tasks have all finished
+   *  still has a task menu to open (#1487). */
+  finished?: ReadonlyMap<number, readonly FinishedTask[]>;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -677,6 +688,8 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
+  /** Opens the menu of that tab's chats, with the keyboard on the chat it shows. */
+  showTabTasks: (tab: number) => void;
   /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
   ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
@@ -1932,6 +1945,10 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // The chats inside the tab in front (#1487). Here, beside the other rows about what is in
+  // front and above the line: none of them ends anything.
+  offers.push(...tabChatRows(now));
+
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
   const inFront = frontWorktree(now, chatInFocus);
@@ -2258,6 +2275,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "showChat":
       doing.showChat(does.session);
+      return DID;
+    case "showTabTasks":
+      doing.showTabTasks(does.tab);
       return DID;
     case "ignoreNeedsYou":
       return doing.ignoreNeedsYou(does.session);
@@ -2785,6 +2805,78 @@ export function paneCloseOf(
     ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
     note: ENDS_IT,
   };
+}
+
+/** The four rows' ids, which their keys press (`taskKeys.TASK_KEY_ROW`). */
+export const TAB_TASKS_ID = "tasks.menu";
+export const NEXT_CHAT_ID = "tasks.next";
+export const PREVIOUS_CHAT_ID = "tasks.previous";
+export const OWN_CHAT_ID = "tasks.own";
+
+/**
+ * **The chats inside the tab in front** (#1487, V100-33, V100-36): its menu, the next and the
+ * previous chat in it, and back to its session's own chat. Rows, so the palette lists them and
+ * says their keys, and the keys press these rows and nothing of their own (`taskKeys.ts`).
+ *
+ * Next and previous are neighbours in the menu's order (`tabChats.chatsOfTab`), from the chat
+ * the focused pane shows. Each is an ordinary `showChat`: the tab is switched and the chat's
+ * terminal takes the keyboard, as a press on its row does. A tab with no tasks has all four,
+ * unable to run and saying why.
+ */
+function tabChatRows(now: Now): Offer[] {
+  const mac = onAMac();
+  const titles = {
+    tasks: "Show this tab's tasks",
+    next: "Next chat in this tab",
+    previous: "Previous chat in this tab",
+    own: "Back to this tab's own chat",
+  };
+  const front = now.tabs.inFront === undefined ? undefined : now.tabs.byId[now.tabs.inFront];
+  const pane = front && panesOf(now.tabs, front.id).find((one) => one.pane === front.focused);
+  if (front === undefined || pane === undefined) {
+    const why =
+      front === undefined
+        ? "No chat is in front."
+        : "The pane in focus shows a view, not a chat, so it has no tasks.";
+    return [
+      cannot(TAB_TASKS_ID, titles.tasks, why),
+      cannot(NEXT_CHAT_ID, titles.next, why),
+      cannot(PREVIOUS_CHAT_ID, titles.previous, why),
+      cannot(OWN_CHAT_ID, titles.own, why),
+    ];
+  }
+  const rows = chatsOfTab(now.tabs, front.id, now.listed ?? []);
+  const shown = focusedChat(now.tabs);
+  const showsTask = front.shows?.[pane.pane] !== undefined;
+  const hasTasks =
+    rows.some((row) => row.level > 1 || (now.finished?.get(row.session)?.length ?? 0) > 0) ||
+    front.shows !== undefined;
+  const none = `${front.name} has no tasks.`;
+  const step = (id: string, title: string, by: 1 | -1, key: "next" | "previous"): Offer => {
+    const to = hasTasks ? neighbour(rows, shown, by) : undefined;
+    return to === undefined || to === shown
+      ? cannot(id, title, hasTasks ? `${front.name} is the only chat in this tab.` : none)
+      : {
+          ...can(id, title, { verb: "showChat", session: to }),
+          note: `${taskKeySaid(key, mac)}.${taskKeyNote(key, mac)}`,
+        };
+  };
+  return [
+    hasTasks
+      ? {
+          ...can(TAB_TASKS_ID, titles.tasks, { verb: "showTabTasks", tab: front.id }),
+          note: `${front.name} and the tasks it asked for, to switch between. ${taskKeySaid("menu", mac)}.`,
+        }
+      : cannot(TAB_TASKS_ID, titles.tasks, none),
+    step(NEXT_CHAT_ID, titles.next, 1, "next"),
+    step(PREVIOUS_CHAT_ID, titles.previous, -1, "previous"),
+    showsTask
+      ? {
+          ...can(OWN_CHAT_ID, titles.own, { verb: "showChat", session: pane.session }),
+          note: `Shows ${now.nameOf(pane.session)} again. The task goes on. ${taskKeySaid("own", mac)}.`,
+        }
+      : cannot(OWN_CHAT_ID, titles.own, "This tab is showing its own chat."),
+  ];
 }
 
 /** The tab holding a session, or nothing when no tab does. */

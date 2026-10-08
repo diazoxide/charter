@@ -87,6 +87,7 @@ function doing(): Doing & { calls: string[] } {
     createWorkspace: note("createWorkspace"),
     removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
+    showTabTasks: note("showTabTasks"),
     pickVault: note("pickVault"),
     createVault: note("createVault"),
     removeVault: note("removeVault"),
@@ -1738,7 +1739,7 @@ describe("the palette at fifty chats", () => {
     // and within that group the catalogue's own order stands. Every row here is a verb.
     const rows = narrow("re", loaded());
 
-    const verbs = rows.slice(0, 11).map((row) => row.title);
+    const verbs = rows.slice(0, 12).map((row) => row.title);
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
@@ -1748,6 +1749,9 @@ describe("the palette at fifty chats", () => {
       // `shared` has `re` in it, and `memory.shared` is charter's word (SI-9c).
       "Open shared memory",
       "New vault…",
+      // `Previous` has `re` in it, and the row is about the tab in front (#1487): it stands
+      // with the rows about what is in front, in the catalogue's order.
+      "Previous chat in this tab",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
       // what the operator is looking at, and fifty rows about other worktrees do not get to
@@ -1831,8 +1835,10 @@ describe("the palette at fifty chats", () => {
       // took `Preferences…`'s place, and has neither an `re` nor an `r`. One more under `r`
       // since SE-23: `Your settings…` (`your` has an `r`). One more under `r` since #1499:
       // `Open a chat beside the one in front` (`front` has an `r`).
-      expect(at("re", loaded())).toBe(7);
-      expect(at("r", loaded())).toBe(13);
+      // One more under both since #1487: `Previous chat in this tab`, a row about the tab in
+      // front, before the branch's two in the catalogue.
+      expect(at("re", loaded())).toBe(8);
+      expect(at("r", loaded())).toBe(14);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1945,8 +1951,10 @@ describe("the palette at fifty chats", () => {
     // 601 since #1445: Set <persona>'s profile…, one row per persona.
     // 602 since #1452: Open dispatches, one row.
     // 603 since #1499: Open a chat beside the one in front, one row and not one per chat.
+    // 607 since #1487: the tab in front's task menu, its next and previous chat, and back to
+    // its own chat. Four rows, however many tabs and tasks there are.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(603);
+    expect(offers).toHaveLength(607);
   });
 
   /**
@@ -2800,5 +2808,153 @@ describe("what a queued chat's row says first (#1448)", () => {
     expect(title(["chat 4"], [], [], ["a key in config.env"])).toBe(
       "Show chat 3: chat 4 reported back",
     );
+  });
+});
+
+describe("the chats inside the tab in front (#1487)", () => {
+  /** Chat 1 has a tab and asked for 2 and 3; 2 asked for 4. Chat 9 has a tab and no tasks. */
+  const chats = [
+    listed(1),
+    listed(2, 1, false),
+    listed(3, 1, false),
+    listed(4, 2, false),
+    listed(9),
+  ];
+  const askedBy = (session: number) =>
+    chats.find((chat) => chat.session === session)?.parent ?? undefined;
+  /** Tabs for 1 and 9, with 1's in front. */
+  const two = () => selectTab(openTab(openTab(noTabs(), 1), 9), 1);
+  const rows = (tabs: Tabs) =>
+    catalogue(now({ tabs, listed: chats, nameOf: (session) => `chat ${session}` }));
+  const frontTab = (tabs: Tabs) => tabs.inFront as number;
+
+  it("offers the tab's task menu, and says its key", () => {
+    const tabs = two();
+
+    expect(by(rows(tabs), "tasks.menu")).toMatchObject({
+      title: "Show this tab's tasks",
+      available: true,
+      does: { verb: "showTabTasks", tab: frontTab(tabs) },
+    });
+    expect(by(rows(tabs), "tasks.menu")?.note).toContain("Ctrl+Shift+J");
+
+    const hands = doing();
+    void run(rows(tabs), "tasks.menu", hands);
+    expect(hands.calls).toEqual([`showTabTasks:${frontTab(tabs)}`]);
+  });
+
+  it("goes to the next and the previous chat in the menu's order, round its ends", () => {
+    // The menu's order: 1, then 2, then 4 under 2, then 3.
+    const own = two();
+    expect(by(rows(own), "tasks.next")).toMatchObject({
+      available: true,
+      does: { verb: "showChat", session: 2 },
+      // The key, and that a keyboard whose ] needs AltGr has it where a US keyboard does.
+      note: "Ctrl+Shift+]. Where ] needs AltGr, it is the key in its place on a US keyboard.",
+    });
+    expect(by(rows(own), "tasks.previous")).toMatchObject({
+      available: true,
+      does: { verb: "showChat", session: 3 },
+      note: "Ctrl+Shift+[. Where [ needs AltGr, it is the key in its place on a US keyboard.",
+    });
+
+    const onFour = switchTabTo(own, 4, askedBy);
+    expect(by(rows(onFour), "tasks.next")?.does).toEqual({ verb: "showChat", session: 3 });
+    expect(by(rows(onFour), "tasks.previous")?.does).toEqual({ verb: "showChat", session: 2 });
+
+    const onThree = switchTabTo(own, 3, askedBy);
+    expect(by(rows(onThree), "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
+  });
+
+  it("goes back to the session's own chat only while the tab shows a task", () => {
+    const own = two();
+    expect(by(rows(own), "tasks.own")).toMatchObject({
+      available: false,
+      reason: "This tab is showing its own chat.",
+    });
+
+    const onTask = switchTabTo(own, 4, askedBy);
+    const back = by(rows(onTask), "tasks.own");
+    expect(back).toMatchObject({
+      title: "Back to this tab's own chat",
+      available: true,
+      does: { verb: "showChat", session: 1 },
+    });
+    expect(back?.note).toContain("Shows chat 1 again.");
+    expect(back?.note).toContain("Ctrl+Shift+H");
+  });
+
+  it("lists all four on a tab with no tasks, unable to run and saying why", () => {
+    const tabs = selectTab(two(), 2);
+    const offers = rows(tabs);
+    // Named as its tab is named.
+    const why = `${tabs.byId[2].name} has no tasks.`;
+
+    for (const id of ["tasks.menu", "tasks.next", "tasks.previous"])
+      expect(by(offers, id)).toMatchObject({ available: false, reason: why });
+    expect(by(offers, "tasks.own")?.available).toBe(false);
+  });
+
+  it("offers the menu of a tab whose tasks have all finished, and no next chat to go to", () => {
+    const tabs = selectTab(two(), 2);
+    const offers = catalogue(
+      now({
+        tabs,
+        listed: chats,
+        nameOf: String,
+        finished: new Map([
+          [
+            9,
+            [
+              {
+                chat: null,
+                id: "01K6",
+                asker: 9,
+                name: "old",
+                persona: null,
+                how: "done",
+                outcome: "done",
+                folds: true,
+                report: "",
+                changed: null,
+                ended: null,
+                place: "alpha",
+                branch: null,
+                reopens: false,
+                not_reopened: null,
+              },
+            ],
+          ],
+        ]),
+      }),
+    );
+
+    expect(by(offers, "tasks.menu")).toMatchObject({
+      available: true,
+      does: { verb: "showTabTasks", tab: 2 },
+    });
+    expect(by(offers, "tasks.next")).toMatchObject({
+      available: false,
+      reason: `${tabs.byId[2].name} is the only chat in this tab.`,
+    });
+  });
+
+  it("lists all four with no chat in front, and says so", () => {
+    const offers = catalogue(now());
+
+    for (const id of ["tasks.menu", "tasks.next", "tasks.previous", "tasks.own"])
+      expect(by(offers, id)).toMatchObject({ available: false, reason: "No chat is in front." });
+  });
+
+  it("goes from a task that is listed no more to the ends of what is", () => {
+    // The tab still shows 4, which has ended and is gone from the list.
+    const onFour = switchTabTo(two(), 4, askedBy);
+    const without = chats.filter((chat) => chat.session !== 4);
+    const offers = catalogue(now({ tabs: onFour, listed: without, nameOf: String }));
+
+    expect(by(offers, "tasks.menu")?.available).toBe(true);
+    expect(by(offers, "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
+    expect(by(offers, "tasks.previous")?.does).toEqual({ verb: "showChat", session: 3 });
+    expect(by(offers, "tasks.own")?.does).toEqual({ verb: "showChat", session: 1 });
   });
 });
