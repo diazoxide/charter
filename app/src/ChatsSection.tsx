@@ -21,7 +21,7 @@ import {
   type TaskEndWay,
 } from "./actions";
 import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
-import type { FinishedTask } from "./bindings";
+import type { AtLimit, FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
 import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
 import { HelpersSaid } from "./ExplorerChats";
@@ -62,6 +62,8 @@ import { useRevealedTask, type Reveal } from "./revealTask";
 import { useTabStop } from "./roving";
 import { stateClock, useStateSince, type StateClock } from "./stateClock";
 import { deletes } from "./tabKeys";
+import { askSettingsLink } from "./settings/links";
+import { DISPATCH } from "./settings/dispatch";
 
 /** A row's id in the section's roving focus. */
 const rowId = (session: number) => `chats:${session}`;
@@ -430,6 +432,11 @@ export function ChatsSection({
   // or not, so a row that was folded away says the same time when it is drawn again. One clock
   // per project: chats are numbered per project.
   const { store, plane } = chats;
+  /** **Where a limit is changed** (#1498): Settings › Project › Dispatch, which a row at its
+   *  task limit links to. */
+  const limits = useCallback(() => {
+    if (plane !== undefined) askSettingsLink(plane, { group: DISPATCH });
+  }, [plane]);
   const own = useMemo(() => {
     void plane;
     return stateClock();
@@ -758,6 +765,8 @@ export function ChatsSection({
                       busy={second?.session === row.session && second.busy}
                       trouble={second?.session === row.session ? (second.trouble ?? null) : null}
                       onConfirm={confirm}
+                      atLimit={row.atLimit ?? null}
+                      onLimits={limits}
                       offers={offers}
                       clock={clock}
                       onOpen={onOpen}
@@ -867,6 +876,8 @@ const Row = memo(function Row({
   busy,
   trouble,
   onConfirm,
+  atLimit,
+  onLimits,
   offers,
   clock,
   onOpen,
@@ -924,6 +935,11 @@ const Row = memo(function Row({
   /** The core's refusal of the answer, which stays on the row. */
   trouble: string | null;
   onConfirm: (yes: boolean) => void;
+  /** Its last dispatch was refused for a limit and no slot has freed since (#1498): the
+   *  number, and the core's sentence of which limit and where it is changed. */
+  atLimit: AtLimit | null;
+  /** Opens Settings where the limits are changed. */
+  onLimits: () => void;
   offers: Catalogued;
   clock: StateClock;
   onOpen: (session: number) => void;
@@ -1116,6 +1132,17 @@ const Row = memo(function Row({
           </button>
         </RovingFocusGroup.Item>
       </Menued>
+      {atLimit !== null && (
+        /* **At its task limit** (#1498, V100-54): said where the limit binds, on a refusal,
+           until a slot frees; with the number and the way to where it is changed. */
+        <span className="at-limit" data-testid={`at-limit-${session}`} title={atLimit.said}>
+          {/* Which limit binds, with its number: only its own is "its task limit". */}
+          <span>{atLimit.row}</span>
+          <button type="button" className="at-limit-settings" onClick={onLimits}>
+            Dispatch settings
+          </button>
+        </span>
+      )}
       {asks !== null && answer !== null && (
         /* **The second step of ending this task, on its own row** (#1488): nothing ends on
            one press. Keep has the keyboard, and gives it back to the row. */

@@ -107,6 +107,13 @@ type Props = {
   /** Presses one of those rows: the window asks its second step, and nothing ends on the
    *  press (`TaskEnd.tsx`). */
   onPress?: (offer: Offer) => void;
+  /**
+   * Stop all tasks of session `session`, from the window's catalogue (#1498,
+   * `actions.stopAllId`): the last row of "End a task", under a line of its own. Pressed
+   * through `onPress`, so the window asks its one question first. Left out, or not available,
+   * it is not drawn.
+   */
+  stopAll?: (session: number) => Offer | undefined;
 };
 
 /** Where a task's line in a tab's menu offers to move it (#1489). */
@@ -195,6 +202,7 @@ function sameChip(was: Props, now: Props): boolean {
     was.used === now.used &&
     was.ends === now.ends &&
     was.onPress === now.onPress &&
+    was.stopAll === now.stopAll &&
     sameRows(was.rows, now.rows) &&
     sameEnded(was.ended, now.ended) &&
     sameNeeds(was.needs, now.needs)
@@ -256,6 +264,7 @@ function Chip({
   used,
   ends,
   onPress,
+  stopAll,
 }: Props) {
   // One reading of the store for the chip and its menu: each row's state, redrawn only when
   // one of them changes.
@@ -418,6 +427,11 @@ function Chip({
             ? [{ key: one.key, offers: ends(one.row.session) }]
             : [],
         );
+  /** Stop all tasks of the tab's own session, where its catalogue row can run (#1498). */
+  const own = rows.find((row) => row.level === 1)?.session;
+  const all =
+    stopAll === undefined || onPress === undefined || own === undefined ? undefined : stopAll(own);
+  const allOffer = all?.available === true ? all : undefined;
   const line = (one: Line) => (
     <TaskLine
       key={one.key}
@@ -586,7 +600,7 @@ function Chip({
               })}
             >
               {lines.map(line)}
-              {endable.some((task) => task.offers.length > 0) && (
+              {(endable.some((task) => task.offers.length > 0) || allOffer !== undefined) && (
                 /* **Ending a task from here** (#1488): the two rows the catalogue has for each
                    open task, by their own titles, so this menu, a row's menu, the breadcrumb
                    and the palette say one thing. One line of this menu, which opens to them:
@@ -660,6 +674,24 @@ function Chip({
                             {!offer.available && <span className="where"> {offer.reason}</span>}
                           </Menu.Item>
                         )),
+                      )}
+                      {allOffer !== undefined && (
+                        /* **Stop all tasks** (#1498, V100-53): its own row, last, under a line,
+                           since it ends every task above it. The session keeps running. A
+                           press stops nothing: the window asks once, naming how many. */
+                        <>
+                          <Menu.Separator className="tasks-menu-line" />
+                          <Menu.Item
+                            className="tasks-menu-row tasks-menu-stop-all"
+                            textValue="Stop all tasks"
+                            onSelect={() => {
+                              picked.current = true;
+                              onPress?.(allOffer);
+                            }}
+                          >
+                            <span className="name">Stop all tasks</span>
+                          </Menu.Item>
+                        </>
                       )}
                     </Menu.SubContent>
                   </Menu.Portal>

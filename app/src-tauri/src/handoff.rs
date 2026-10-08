@@ -980,7 +980,7 @@ fn at_work(held: &Held, chat: u32, from: &HandedFrom) -> bool {
 /// tree are: a handoff moved the work to a session of its own, which is below no chat. So
 /// closing `asker` does not ask about it, "Stop them" does not stop it, and a task that
 /// handed off is not held from ending by it.
-fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
+pub(crate) fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
     let mut found = Vec::new();
     tasks_below(held, asker, &|_| true, &mut |_, chat, from| {
         if at_work(held, chat, from) {
@@ -1946,6 +1946,18 @@ fn dispatch_noting(
             )
         });
         if let Decision::Refused(why) = &asked.decision {
+            // A limit a slot frees is said on the asking chat's row too, until one does
+            // (#1498): the person sees why a chat they are not reading dispatched nothing.
+            let counted = match attended {
+                Attendance::Attended => dispatchdecision::Counted::Tasks,
+                Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
+            };
+            if held
+                .at_limits()
+                .refused(from, asked.to.clone(), counted, why)
+            {
+                held.rows_changed();
+            }
             // Said to whoever asked: a chat reads what to do instead, and the person
             // reading the dialog is not that chat.
             return Err(match wanted.by {
@@ -1954,6 +1966,9 @@ fn dispatch_noting(
             }
             .into());
         }
+        // Let past every limit: a slot is free for it, and a line its last refusal put on its
+        // row goes (#1498).
+        held.at_limits().clear(from);
         // The decision refused where no profile was chosen.
         let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
         // **No chat is started for another chat on a profile whose own command switches the
@@ -2793,7 +2808,7 @@ fn runs_as(held: &Held, chat: u32) -> Option<String> {
 /// what is true of the chat whose tab they asked from, and what they can do.
 ///
 /// [`Refused::say`]: dispatchdecision::Refused::say
-fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
+pub(crate) fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
     use dispatchdecision::Refused;
     use purlis_core::dispatchlimits::{ASK_THE_PERSON, Refused as Limit};
     use purlis_core::personaprofile::Refused as Profile;
@@ -12604,4 +12619,8 @@ mod tests {
 
     /// The person ends a task: Stop and get its report, or Close now (#1488).
     mod person_ends;
+
+    /// Limits are shown where they bind, and a session's tasks can all be stopped at once
+    /// (#1498).
+    mod limits_where_they_bind;
 }

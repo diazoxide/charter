@@ -256,6 +256,15 @@ nothing**: the tab goes, and the task goes back to the Chats list and keeps work
 you are closing is in its stop until its program is gone: a report it still gets in is the
 stop's report, and it starts no chat. If you quit while a task is being stopped, it is closed.
 
+**Stop all tasks** stops every task at work below a session, at any depth, and keeps the
+session running. It is on the session's row menu and its tab menu, beside Stop with everything
+below it, and on the last line of the tab's task menu, under "End a task". It asks once, naming
+how many it ends, and ends those and no more: a task started after you were asked is not
+stopped by your answer. Each is stopped as Stop and get its report stops one, deepest first,
+and the chat that asked for each is told `stopped by the person` (or `closed by the person`
+where it could not be given a turn). The session is typed one line, once the last of them has
+ended, at whatever depth and by whatever road it ended, and reads every word in that turn.
+
 Both add one sentence: "The person ended this task. Do not dispatch it again unless they ask."
 A task whose program ends on its own is told of as `ended without a report`, and has no such
 sentence. Where purlis may not type into a task (it is showing a prompt, you are typing in it,
@@ -531,6 +540,18 @@ A chat that has dispatched tasks and then ends its turn is waiting on them, not 
   counts them: `2 working · 1 waiting`, with `· 1 failed` when any did, then `· 3 done`.
   Working is a task at work or asking the chat that asked; waiting is one that needs you or
   is at rest. At the most tasks it may have running, the row says `6 of 6 tasks`.
+- **A limit is said where it binds.** Its tab's menu ends with how many of its tasks run
+  against the limit in force for it: `4 of 6 running`. A dispatch from it that a count refused
+  (how many it may have running, how many its lineage may hold, or a persona's two counts)
+  puts a line under its row naming which limit binds, with its number, the whole sentence on
+  it and a way to Settings › Project › Dispatch. Only its own running limit is `at its task
+  limit (6)`, the number its tab menu counts against; its chain's says `at its chain's limit
+  (16 live)`, and a persona's says it is that persona's, across the project (`devops is full
+  (1 at once), not this chat's limit`). The line goes as soon as a slot frees: a task reports
+  or ends, you raise the limit, the chat dispatches again and is let through, or it closes. A
+  refusal no slot frees (the depth, a limit of 0) is said to whoever asked, and puts nothing on
+  the row. The line is held in memory only: after a restart it comes back with the next
+  refusal.
 - **It becomes one only when every task has reported or ended and it has then stopped with
   nothing to do.** A report that lands types the chat its one line; it reads the report in a
   turn of its own, and the end of that turn is the item. A turn that ends with a report it

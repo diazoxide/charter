@@ -254,6 +254,8 @@ pub struct Held {
     dispatch_grants: crate::dispatchgrants::Store,
     /// The dispatches waiting on the person, as each was asked (#1437): what an Allow starts.
     held_dispatches: crate::handoff::HeldDispatches,
+    /// The chats a dispatch was refused for a limit a slot frees, until one does (#1498).
+    at_limits: crate::atlimit::AtLimits,
     /// Which chats run with their harness's permission prompts off (#1446).
     unattended: crate::handoff::Unattended,
     /// Which chats were waiting on the person at their last report: what counts a dispatch's
@@ -472,6 +474,11 @@ impl Held {
     /// This project, as the window names it.
     pub fn plane_id(&self) -> &PlaneId {
         &self.id
+    }
+
+    /// The chats a dispatch was refused for a limit a slot frees (#1498).
+    pub fn at_limits(&self) -> &crate::atlimit::AtLimits {
+        &self.at_limits
     }
 
     /// The chats the person is stopping (#1448).
@@ -2555,6 +2562,7 @@ impl Planes {
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),
             held_dispatches: crate::handoff::HeldDispatches::default(),
+            at_limits: crate::atlimit::AtLimits::default(),
             unattended: crate::handoff::Unattended::default(),
             dispatches: crate::dispatches::Waiting::default(),
             me,

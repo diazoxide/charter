@@ -1379,6 +1379,34 @@ button.show-more:focus-visible {
   padding: 0.15rem 0.5rem 0.3rem 1.6rem;
 }
 
+/* **A session at its task limit** (#1498, V100-54): one line under its row, while a dispatch
+   it was refused waits for a slot, with the number and the way to Settings. Under the row and
+   not in it: the row is a button, and a button holds no button. */
+.chats-section li:has(> .at-limit) {
+  flex-wrap: wrap;
+}
+
+.chats-section li > .at-limit {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0 0.5rem 0.25rem 1.6rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.at-limit .at-limit-settings {
+  padding: 0;
+  font: inherit;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* What becomes of the tasks at work below a task being ended (#1488): one choice, in the
    question. */
 .task-end-below {
@@ -1861,6 +1889,13 @@ button.show-more:focus-visible {
 /* The rows that end a task: their titles are whole sentences, so they wrap and none is cut. */
 .tasks-menu-ends .tasks-menu-row .name {
   white-space: normal;
+}
+
+/* Stop all tasks: the last row of "End a task", under a line of its own (#1498). */
+.tasks-menu-line {
+  height: 1px;
+  margin: 0.25rem 0.3rem;
+  background: var(--border-subtle);
 }
 
 /* **The buttons at the end of a task's line, which move it** (#1489): to a tab of its own,

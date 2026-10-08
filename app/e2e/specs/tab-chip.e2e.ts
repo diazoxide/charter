@@ -641,13 +641,22 @@ describe("the chip a session's tab wears for its tasks", () => {
       ways: [...document.querySelectorAll('.tasks-menu-ends [role="menuitem"] .name')].map(
         (row) => row.textContent ?? "",
       ),
+      // What stands just before the last row: the line Stop all tasks sits under (#1498).
+      beforeLast:
+        document
+          .querySelector(".tasks-menu-ends .tasks-menu-stop-all")
+          ?.previousElementSibling?.getAttribute("role") ?? null,
     }));
     expect(still.first).toBe(true);
     // Each open task's two ways, by the catalogue's own titles, and nothing was ended.
-    expect(still.ways).toHaveLength(4);
-    expect(
-      still.ways.every((title) => /^(Stop and get its report|Close now): task /.test(title)),
-    ).toBe(true);
+    const each = still.ways.slice(0, -1);
+    expect(each).toHaveLength(4);
+    expect(each.every((title) => /^(Stop and get its report|Close now): task /.test(title))).toBe(
+      true,
+    );
+    // Then Stop all tasks, last and under a line of its own (#1498, D-1498-8).
+    expect(still.ways.at(-1)).toBe("Stop all tasks");
+    expect(still.beforeLast).toBe("separator");
     await browser.keys("Escape");
     await browser.keys("Escape");
   });

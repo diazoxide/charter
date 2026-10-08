@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render as renderBare,
   screen,
   waitFor,
@@ -133,6 +134,9 @@ function core(open: OpenChat[], rows: FinishedTask[] = []) {
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
+    // The Settings tab a limit's link opens reads the project's files; this core has none to
+    // read, and says so, as a project that cannot be read does (#1498).
+    if (cmd === "project_settings") throw "This test's project has no settings files to read.";
     if (cmd === "plugin:event|listen") {
       const { event, handler } = args as { event: string; handler: number };
       listeners.set(event, handler);
@@ -456,6 +460,68 @@ describe("the count on a session's row", () => {
     await reports(7, "done");
 
     await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("5 working · 1 done"));
+  });
+});
+
+describe("a limit, said where it binds (#1498)", () => {
+  const SAID =
+    "This chat already has 6 tasks that have not reported, which is as many as it may have at once. Close one or wait for one to report, or raise the limit in Settings › Project › Dispatch.";
+
+  it("says at its task limit on a refused session's row, with the way to Settings, until a slot frees", async () => {
+    const six = [2, 3, 4, 5, 6, 7].map((session) => task(session, `check ${session}`));
+    const session = chat(1, {
+      tasks_limit: 6,
+      tasks_running: 6,
+      at_limit: { limit: 6, row: "at its task limit (6)", said: SAID },
+    });
+    const { reports, running } = core([session, ...six]);
+    render(<App />);
+    await rows(7);
+
+    const line = await screen.findByTestId("at-limit-1");
+    expect(line.textContent).toContain("at its task limit (6)");
+    // The whole sentence, which says which limit and where it is changed.
+    expect(line.getAttribute("title")).toBe(SAID);
+    const linked: unknown[] = [];
+    const heard = (event: Event) => linked.push((event as CustomEvent).detail);
+    window.addEventListener("charter-settings-link", heard);
+    try {
+      await userEvent.click(within(line).getByRole("button", { name: "Dispatch settings" }));
+    } finally {
+      window.removeEventListener("charter-settings-link", heard);
+    }
+    expect(linked).toEqual([{ plane: PLANE, link: { group: "project.dispatch" } }]);
+    // A task's own row says nothing of its asker's limit.
+    expect(screen.queryByTestId("at-limit-2")).toBeNull();
+
+    // A slot frees: the core says no limit binds now, and the line goes.
+    session.at_limit = null;
+    running(1, 5);
+    await reports(7, "done");
+
+    await waitFor(() => expect(screen.queryByTestId("at-limit-1")).toBeNull());
+  });
+
+  it("ends the session's tab menu with how many of its tasks run against its limit", async () => {
+    core([chat(1, { tasks_limit: 6, tasks_running: 2 }), task(2, "check prod"), task(3, "x")]);
+    render(<App />);
+    await rows(3);
+
+    // Pressed plainly, as the chip's own window tests press it.
+    fireEvent.click(await screen.findByRole("button", { name: /^Tasks of steward 1/ }));
+    const menu = await screen.findByRole("menu", { name: /^Tasks of steward 1/ });
+
+    expect(menu.querySelector(".tasks-menu-limits")?.textContent).toBe("2 of 6 running");
+  });
+
+  it("says nothing at the limit where no dispatch was refused", async () => {
+    const six = [2, 3, 4, 5, 6, 7].map((session) => task(session, `check ${session}`));
+    core([chat(1, { tasks_limit: 6, tasks_running: 6 }), ...six]);
+    render(<App />);
+    const tree = await rows(7);
+
+    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("6 of 6 tasks"));
+    expect(screen.queryByTestId("at-limit-1")).toBeNull();
   });
 });
 

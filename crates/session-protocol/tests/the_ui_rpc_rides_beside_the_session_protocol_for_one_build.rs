@@ -149,6 +149,8 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     for command in [
         "end_task",
         "task_ending",
+        "stop_all_tasks",
+        "all_tasks_ending",
         "stop_chat",
         "close_session",
         "close_chat_stopping",
@@ -180,7 +182,7 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     }
     // And the list is exactly that rule's, with what a task was sent (#1494) and the person's
     // answer to a task (#1496): nothing else is kept from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 31);
+    assert_eq!(ui::WINDOW_ONLY.len(), 33);
 }
 
 #[tokio::test]

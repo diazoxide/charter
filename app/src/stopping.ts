@@ -133,3 +133,36 @@ export function stopAnswer(asked: StopAsked): string {
     return asked.under === 1 ? "Stop 1 chat" : `Stop ${asked.under} chats`;
   return asked.below ? `Stop ${asked.under + 1} chats` : "Stop chat";
 }
+
+/**
+ * **What the person is asked before Stop all tasks** (#1498, V100-53): the session, and the
+ * tasks at work below it that the answer ends, as the core read them (`all_tasks_ending`). The
+ * answer ends those and no more, so the count the question names is the count that ends.
+ */
+export type StopAllAsked = {
+  /** The session, as its row names it. */
+  name: string;
+  /** The tasks the answer ends, by number. */
+  tasks: readonly number[];
+};
+
+function tasksSaid(count: number): string {
+  return count === 1 ? "1 task" : `${count} tasks`;
+}
+
+/** The question's title. */
+export function stopAllTitle(asked: StopAllAsked): string {
+  return `Stop ${asked.tasks.length === 1 ? "the 1 task" : `all ${asked.tasks.length} tasks`} of ${asked.name}?`;
+}
+
+/** What the answer does, said plainly, with its cost last. */
+export function stopAllSays(asked: StopAllAsked): string {
+  const { name } = asked;
+  const count = asked.tasks.length;
+  return `The ${tasksSaid(count)} at work below ${name} ${count === 1 ? "ends" : "end, deepest first"}. Each gets one short turn to say what it did, where it can be given one, and the chat that asked is told you stopped it. ${name} keeps running. There is no undo.`;
+}
+
+/** The button that does it. */
+export function stopAllAnswer(asked: StopAllAsked): string {
+  return `Stop ${tasksSaid(asked.tasks.length)}`;
+}

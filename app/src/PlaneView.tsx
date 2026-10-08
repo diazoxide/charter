@@ -77,6 +77,7 @@ import {
   stoppedRows,
   taskCloseId,
   taskEndIds,
+  stopAllId,
   taskStopId,
   workItemSaid,
   PASS_THROUGH_BYTES,
@@ -253,6 +254,7 @@ import {
 } from "./tabChats";
 import { chatsListPrefs } from "./chatsListPrefs";
 import { placeRowId, TabTasks, type Place as TaskPlace } from "./TabChip";
+import { runningByTab } from "./taskLimits";
 import { hasTasks, type Ended, type Needing } from "./tabTasks";
 import { readUsed, type UsedAsk } from "./tasksUsed";
 import { finishedBucketOf, taskBucketOf } from "./taskBuckets";
@@ -336,7 +338,17 @@ import {
   type ChatRow,
   type ListedChat,
 } from "./chatsTree";
-import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
+import {
+  stopAllAnswer,
+  stopAllSays,
+  stopAllTitle,
+  stopAnswer,
+  stopSays,
+  stopTitle,
+  useStopping,
+  type StopAllAsked,
+  type StopAsked,
+} from "./stopping";
 import { HarnessChip } from "./HarnessCard";
 import { DoingsHere, useDoings, type DoingsOf } from "./chatDoing";
 import {
@@ -638,6 +650,8 @@ export const PlaneView = memo(function PlaneView({
   }>();
   /** The stop the person is being asked about, before anything is stopped (#1448). */
   const [stopAsk, setStopAsk] = useState<StopAsking>();
+  /** The Stop all tasks the person is being asked about, before anything is stopped (#1498). */
+  const [stopAllAsk, setStopAllAsk] = useState<StopAllAsking>();
   /** The task the person is being asked about ending, before anything is ended (#1488). */
   const [taskEndAsk, setTaskEndAsk] = useState<TaskEndAsked>();
   /** The second step of ending an idle task, asked where the press was made (#1488). */
@@ -1619,6 +1633,47 @@ export const PlaneView = memo(function PlaneView({
       said.status === "error" ? { ...asked, busy: false, trouble: said.error } : undefined,
     );
   }, [plane, stopAsk]);
+  /**
+   * **Stop all tasks asks once, naming how many** (#1498, V100-53): the core says which tasks
+   * below the session are at work, and the answer stops those and no more. A session with none
+   * left is said so on the window's report line, and nothing is asked.
+   */
+  const askToStopAll = useCallback(
+    async (session: number) => {
+      const read = await commands
+        .allTasksEnding(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (read.status === "error") {
+        setReport({ from: `chat.stop.tasks:${session}`, refused: true, words: read.error });
+        return;
+      }
+      const ending = read.data;
+      // No answer is no leave to stop anything: nothing is guessed about a task.
+      if (ending === null || typeof ending !== "object" || !Array.isArray(ending.tasks)) return;
+      if (ending.tasks.length === 0) {
+        setReport({
+          from: `chat.stop.tasks:${session}`,
+          refused: true,
+          words: `No task below ${ending.name} is at work, so there is nothing to stop.`,
+        });
+        return;
+      }
+      setStopAllAsk({ session, name: ending.name, tasks: ending.tasks, busy: false });
+    },
+    [plane],
+  );
+  /** The person answered: the core stops the tasks the question named, or says why not. */
+  const stopAllAsked = useCallback(async () => {
+    const asked = stopAllAsk;
+    if (asked === undefined) return;
+    setStopAllAsk({ ...asked, busy: true, trouble: undefined });
+    const said = await commands
+      .stopAllTasks(plane, asked.session, [...asked.tasks])
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setStopAllAsk(
+      said.status === "error" ? { ...asked, busy: false, trouble: said.error } : undefined,
+    );
+  }, [plane, stopAllAsk]);
   /**
    * **Ends a task the way the person chose**, by the core (`end_task`), which tells the chat
    * that asked which way it was. A refusal is said where the answer was given: in the
@@ -4924,6 +4979,7 @@ export const PlaneView = memo(function PlaneView({
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
       stopChat: askToStop,
+      stopAllTasks: (session: number) => void askToStopAll(session),
       endTask: (session: number, way: TaskEndWay) => void askToEndTask(session, way, "elsewhere"),
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
@@ -4978,6 +5034,7 @@ export const PlaneView = memo(function PlaneView({
       askStartFresh,
       askPersona,
       askToStop,
+      askToStopAll,
       askToEndTask,
       bringToFront,
       cancelSmartClose,
@@ -5098,6 +5155,8 @@ export const PlaneView = memo(function PlaneView({
   }, [nameOfListed, pretended, sidebar, tabs]);
   /** The chats of each tab, as its chip counts them and its menu lists them (#1487). */
   const chatsByTab = useMemo(() => chatsOfTabs(tabs, listedChats), [listedChats, tabs]);
+  /** Each tab menu's footer: how many of its session's tasks run against its limit (#1498). */
+  const runningOfTab = useMemo(() => runningByTab(chatsByTab), [chatsByTab]);
   useEffect(() => {
     chatsListed.current = listedChats;
   }, [listedChats]);
@@ -5914,6 +5973,9 @@ export const PlaneView = memo(function PlaneView({
     pressNow.current = press;
   }, [by, press]);
   const pressTaskEnd = useCallback((offer: Offer) => pressNow.current(offer), []);
+  /** Stop all tasks of a session, for its tab chip's menu (#1498): the catalogue's row, read
+   *  as the menu is drawn, and one function for the life of the view. */
+  const stopAllOf = useCallback((session: number) => byNow.current(stopAllId(session)), []);
   const taskEndsOf = useCallback(
     (session: number) =>
       taskEndIds(session).flatMap((id) => {
@@ -6734,6 +6796,8 @@ export const PlaneView = memo(function PlaneView({
                               onPress={pressTaskEnd}
                               onPlace={placeFromChip}
                               used={usedFromChip}
+                              limits={runningOfTab.get(id)}
+                              stopAll={stopAllOf}
                             />
                             <FreshMark
                               id={freshMarkOf(id)}
@@ -7483,6 +7547,17 @@ export const PlaneView = memo(function PlaneView({
           busy={stopAsk.busy}
           onAnswer={() => void stopAsked()}
           onCancel={() => setStopAsk(undefined)}
+        />
+      )}
+      {stopAllAsk && (
+        <ChatAsk
+          title={stopAllTitle(stopAllAsk)}
+          says={stopAllSays(stopAllAsk)}
+          answer={stopAllAnswer(stopAllAsk)}
+          trouble={stopAllAsk.trouble}
+          busy={stopAllAsk.busy}
+          onAnswer={() => void stopAllAsked()}
+          onCancel={() => setStopAllAsk(undefined)}
         />
       )}
       {taskEndAsk && (
@@ -8768,6 +8843,7 @@ export type Hidden = {
 /** The stop the person is being asked about (#1448): what was asked, of which chat, and how
  *  the answer is going. */
 type StopAsking = StopAsked & { session: number; busy: boolean; trouble?: string };
+type StopAllAsking = StopAllAsked & { session: number; busy: boolean; trouble?: string };
 
 /** What a chat with no tab is called: what its tab would say, were it opened (#1447). */
 function untabbedName(chat: OpenChat): string {
