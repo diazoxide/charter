@@ -239,6 +239,12 @@ export type Does =
    *  itself**: the window asks first, and the core's `stop_chat` is what ends anything. Only a
    *  person's press reaches it: no chat has a way to this verb. */
   | { verb: "stopChat"; session: number; below: boolean }
+  /** Ends a task one of the two ways a person ends one (#1488, V100-5): `report` is Stop and
+   *  get its report, `now` is Close now. **It ends nothing by itself**: the window asks the
+   *  core what ending it would do, asks the person where the task is mid-turn or has tasks at
+   *  work below it, and the core's `end_task` is what ends anything. Only a person's press
+   *  reaches it: no chat has a way to this verb. */
+  | { verb: "endTask"; session: number; way: TaskEndWay }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -698,6 +704,9 @@ export type Doing = {
   /** Opens the question a stop asks first, or ends at once a chat that is already stopping.
    *  Nothing is stopped until it is answered, so it answers no `Ran`. */
   stopChat: (session: number, below: boolean) => void;
+  /** Ends a task the way pressed, asking first where V100-18 says to. It answers no `Ran`:
+   *  what it does is said by the question, or by the task's row going. */
+  endTask: (session: number, way: TaskEndWay) => void;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -2017,7 +2026,11 @@ export function catalogue(now: Now): Offer[] {
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   // A pane showing a view closes and ends nothing, so it says so and is not asked about.
-  offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf));
+  /** The chats that are tasks, by number: a close never ends one. */
+  const tasks = new Set(
+    (now.listed ?? []).filter((chat) => chat.mode === "task").map((chat) => chat.session),
+  );
+  offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf, (session) => tasks.has(session)));
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
   // the program and takes the chat off the board — correct, and what the `×` has always done.
@@ -2038,6 +2051,21 @@ export function catalogue(now: Now): Offer[] {
       );
       continue;
     }
+    // **A task's own tab ends nothing when it closes** (#1488, V100-38): the tab goes, and
+    // the task goes back to the Chats list and keeps working. So its row says that, is not
+    // asked about, and is not drawn as a row that ends a chat.
+    if (panesOf(now.tabs, tab).every((pane) => tasks.has(pane.session))) {
+      offers.push({
+        ...can(
+          `tab.close:${tab}`,
+          `Send ${name} back to the Chats list`,
+          { verb: "closeTab", tab, ends: false },
+          name,
+        ),
+        note: BACK_TO_THE_LIST,
+      });
+      continue;
+    }
     const title =
       chatOf(now.tabs, tab) === undefined
         ? `Close ${name} and end the chat beside it`
@@ -2049,6 +2077,7 @@ export function catalogue(now: Now): Offer[] {
   }
 
   offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
+  offers.push(...taskEndRows(now.listed ?? [], now.stopping ?? []));
   offers.push(...taskRows(now.listed ?? []));
   offers.push(...handedOffRows(now.listed ?? []));
   offers.push(BESIDE);
@@ -2286,6 +2315,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.cancelSmartClose(does.session);
     case "dismissStopped":
       doing.dismissStopped(does.session);
+      return DID;
+    case "endTask":
+      doing.endTask(does.session, does.way);
       return DID;
     case "stopChat":
       doing.stopChat(does.session, does.below);
@@ -2527,59 +2559,155 @@ export function stoppedRows(
 export function stopRows(listed: readonly ListedChat[], stopping: readonly number[]): Offer[] {
   // What is below a chat is the tasks it asked for: a handoff is a session of its own (#1492).
   const started = tasksOf(listed);
-  return listed.flatMap((chat) => {
-    const { session, name } = chat;
-    const below = `Stop chat ${name} and everything below it`;
-    if (stopping.includes(session))
+  // **A task is not stopped by these** (#1488): it is ended one of its own two ways
+  // (`taskEndRows`), which say what the chat that asked is told.
+  return listed
+    .filter((chat) => chat.mode !== "task")
+    .flatMap((chat) => {
+      const { session, name } = chat;
+      const below = `Stop chat ${name} and everything below it`;
+      if (stopping.includes(session))
+        return [
+          {
+            ...can(
+              stopId(session),
+              `End chat ${name} now`,
+              { verb: "stopChat", session, below: false },
+              name,
+            ),
+            note: "It is being stopped. This ends it without waiting.",
+          },
+          // The chats under it are still running when it was stopped alone: this stops them
+          // too, each in the ordinary way.
+          ...(started.has(session)
+            ? [
+                {
+                  ...can(
+                    stopBelowId(session),
+                    below,
+                    { verb: "stopChat", session, below: true },
+                    name,
+                  ),
+                  note: BELOW_TOO,
+                },
+              ]
+            : []),
+        ];
       return [
         {
           ...can(
             stopId(session),
-            `End chat ${name} now`,
+            `Stop chat ${name}`,
             { verb: "stopChat", session, below: false },
             name,
           ),
-          note: "It is being stopped. This ends it without waiting.",
+          note: STOPS_IT,
         },
-        // The chats under it are still running when it was stopped alone: this stops them
-        // too, each in the ordinary way.
-        ...(started.has(session)
-          ? [
-              {
+        started.has(session)
+          ? {
+              ...can(stopBelowId(session), below, { verb: "stopChat", session, below: true }, name),
+              note: BELOW_TOO,
+            }
+          : cannot(
+              stopBelowId(session),
+              below,
+              `${name} started no chat that is still running.`,
+              name,
+            ),
+      ];
+    });
+}
+
+/** Which of the two ways a person ends a task (the core's `Way`). */
+export type TaskEndWay = "report" | "now";
+
+/** The catalogue's id for a task's Stop and get its report row (#1488). */
+export function taskStopId(session: number): string {
+  return `task.stop:${session}`;
+}
+
+/** The catalogue's id for a task's Close now row (#1488). */
+export function taskCloseId(session: number): string {
+  return `task.close:${session}`;
+}
+
+/**
+ * **The two rows that end a task, by id, in the order a menu lists them** (#1488): Stop and
+ * get its report, then Close now. What a task's row menu lists under its line, what the
+ * breadcrumb's two buttons are, and what a tab chip's menu mounts for a task (#1487). Both end
+ * a task, so a menu draws them below its line.
+ */
+export function taskEndIds(session: number): [string, string] {
+  return [taskStopId(session), taskCloseId(session)];
+}
+
+/** What Stop and get its report does that its title cannot fit. */
+export const STOPS_THE_TASK =
+  "Its turn is ended and it gets one short turn to say what it did, then it ends. The chat that asked is told you stopped it, with that report.";
+
+/** What Close now does that its title cannot fit. */
+export const CLOSES_THE_TASK =
+  "Its program ends at once, with no report from it. The chat that asked is told you closed it.";
+
+/**
+ * **A task's two ending rows** (#1488, V100-5): `task.stop:<session>`, Stop and get its
+ * report, and `task.close:<session>`, Close now. One pair per task the Chats section lists,
+ * so a task with no tab has them, the palette finds them, and the key that asks to stop a
+ * task (Delete on its row) presses the first.
+ *
+ * **Neither is the tab's close, and neither offers a Smart close**: a task writes its record
+ * before it reports, and what a close would lose here is said by the row. **Neither ends
+ * anything by being pressed**: the window asks the core what ending the task would do, and
+ * then asks the person, in place for an idle task and in the one modal question for a task
+ * mid-turn or with tasks at work below it (`endTask`).
+ *
+ * **On a harness purlis types nothing into, Stop is not offered** (V100-71): its row says
+ * why, and Close now is the way. Where purlis may not type for a reason of the moment (a
+ * prompt, the person's keys), the row is offered and the answer says so.
+ *
+ * **A task already being stopped is not stopped a second time**: its first row says why, and
+ * Close now ends it without waiting for its turn.
+ */
+export function taskEndRows(listed: readonly ListedChat[], stopping: readonly number[]): Offer[] {
+  return listed
+    .filter((chat) => chat.mode === "task")
+    .flatMap((chat) => {
+      const { session, name } = chat;
+      // Each begins with the words its button on the breadcrumb's line draws.
+      const stop = `Stop and get its report: task ${name}`;
+      const close = `Close now: task ${name}`;
+      return [
+        stopping.includes(session)
+          ? cannot(
+              taskStopId(session),
+              stop,
+              `${name} is being stopped already, and has one short turn to say what it did. Close now ends it without waiting.`,
+              name,
+            )
+          : chat.typed === false
+            ? // V100-71: purlis types nothing into this harness, so there is no turn to give
+              // it. Said on the row, which is not offered; Close now is.
+              cannot(
+                taskStopId(session),
+                stop,
+                `purlis does not type into ${chat.harness ?? "the program this task runs"}, so it cannot ask ${name} for a report. Close now ends it.`,
+                name,
+              )
+            : {
                 ...can(
-                  stopBelowId(session),
-                  below,
-                  { verb: "stopChat", session, below: true },
+                  taskStopId(session),
+                  stop,
+                  { verb: "endTask", session, way: "report" },
                   name,
                 ),
-                note: BELOW_TOO,
+                note: STOPS_THE_TASK,
               },
-            ]
-          : []),
+        {
+          ...can(taskCloseId(session), close, { verb: "endTask", session, way: "now" }, name),
+          note: CLOSES_THE_TASK,
+        },
       ];
-    return [
-      {
-        ...can(
-          stopId(session),
-          `Stop chat ${name}`,
-          { verb: "stopChat", session, below: false },
-          name,
-        ),
-        note: STOPS_IT,
-      },
-      started.has(session)
-        ? {
-            ...can(stopBelowId(session), below, { verb: "stopChat", session, below: true }, name),
-            note: BELOW_TOO,
-          }
-        : cannot(
-            stopBelowId(session),
-            below,
-            `${name} started no chat that is still running.`,
-            name,
-          ),
-    ];
-  });
+    });
 }
 
 /**
@@ -2810,6 +2938,8 @@ export function paneCloseOf(
   tabs: Tabs,
   pane: number | undefined,
   nameOf: (session: number) => string,
+  /** Whether a chat is a task: its pane's close sends it back to the list and ends nothing. */
+  isTask: (session: number) => boolean = () => false,
 ): Offer {
   const front = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
   const content =
@@ -2832,6 +2962,14 @@ export function paneCloseOf(
       `This pane shows a task of ${own}. Go back to ${own} to end its chat, or close the tab.`,
     );
   }
+  if (isTask(content.session))
+    return {
+      ...can("pane.close", "Send this pane's task back to the Chats list", {
+        verb: "closePane",
+        ends: false,
+      }),
+      note: BACK_TO_THE_LIST,
+    };
   return {
     ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
     note: ENDS_IT,
@@ -2909,6 +3047,10 @@ function tabChatRows(now: Now): Offer[] {
       : cannot(OWN_CHAT_ID, titles.own, "This tab is showing its own chat."),
   ];
 }
+
+/** What closing a task's own tab or pane does, which is not what closing a chat's does. */
+export const BACK_TO_THE_LIST =
+  "Its tab goes and nothing ends: the task keeps working, and is in the Chats list.";
 
 /** The tab holding a session, or nothing when no tab does. */
 function tabHolding(tabs: Tabs, session: number): number | undefined {
@@ -3121,7 +3263,11 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.restart:${what.tab}`,
           `tab.fresh:${what.tab}`,
           `tab.close:${what.tab}`,
-          ...(what.session === undefined ? [] : [stopId(what.session), stopBelowId(what.session)]),
+          // A task has its own two rows and no Stop rows, and every other chat the reverse:
+          // an id the catalogue does not have is not in the menu.
+          ...(what.session === undefined
+            ? []
+            : [stopId(what.session), stopBelowId(what.session), ...taskEndIds(what.session)]),
         ],
       };
     case "listed":
@@ -3130,7 +3276,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           showId(what.session),
           ...(what.handed ?? []).map((to) => handedOffId(what.session, to)),
         ],
-        below: [stopId(what.session), stopBelowId(what.session)],
+        below: [stopId(what.session), stopBelowId(what.session), ...taskEndIds(what.session)],
       };
     case "workspace":
       return {

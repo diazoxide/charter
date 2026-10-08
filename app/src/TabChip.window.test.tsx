@@ -329,10 +329,12 @@ const menus = () =>
       ?.replace(/:.*$/, ""),
   );
 
-/** The open menu's rows, as a person reads each. */
+/** The open menu's rows, as a person reads each: its chats and its fold. The one line that
+ *  opens the ways to end a task (#1488) is not a chat's, and is held in `TaskEnd.window.test.tsx`. */
 const lines = () =>
   within(menu() as HTMLElement)
     .getAllByRole("menuitem")
+    .filter((item) => !item.classList.contains("tasks-menu-end"))
     .map((item) => item.textContent?.replace(/\s+/g, " ").trim());
 
 const line = (name: string) => {
@@ -583,7 +585,8 @@ describe("the menu a chip opens", () => {
     const levels = within(menu() as HTMLElement)
       .getAllByRole("menuitem")
       .map((item) => item.getAttribute("data-level"));
-    expect(levels).toEqual(["1", "2", "3", "2", "2"]);
+    // The last is the line that opens the ways to end a task: no chat's, and at no level.
+    expect(levels).toEqual(["1", "2", "3", "2", "2", null]);
     // Each wears its persona's mark, and the chat the tab shows now is marked.
     expect(line("steward 1").hasAttribute("data-current")).toBe(true);
     expect(line("talk").hasAttribute("data-current")).toBe(false);
@@ -1171,8 +1174,8 @@ describe("tasks that have finished", () => {
   ];
   const failed = { how: "failed", outcome: "failed", folds: false } as const;
   const closed = {
-    how: "stopped_by_person",
-    outcome: "closed by the person",
+    how: "closed_by_person",
+    outcome: "closed by you",
     folds: false,
   } as const;
 
@@ -1212,7 +1215,7 @@ describe("tasks that have finished", () => {
       "steward 1, shown now running (no detail from claude)",
       "talk running (no detail from claude)",
       "probe in beta failed",
-      "halt cancelled closed by the person",
+      "halt closed by you",
       "Finished (1)",
     ]);
   });

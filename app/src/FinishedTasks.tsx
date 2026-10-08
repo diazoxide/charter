@@ -173,7 +173,7 @@ function FinishedRow({
           </span>
           {/* How it ended, as every row says a state: the mark and the word a chat's row
             wears (#1484). The core's own word follows where it says more than that word
-            does (blocked, closed by the person), so no end is said less exactly here. */}
+            does (blocked), so no end is said less exactly here. */}
           {state !== undefined && <StateShown shown={state} />}
           {more !== undefined && <span className="outcome">{more}</span>}
           {task.attempts > 1 && <span className="outcome">tried {task.attempts} times</span>}

@@ -85,7 +85,18 @@ pub struct Server {
 /// `answer_ask` answers a chat's ask as the operator (HP-6). Only a human scope answers one (V16,
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
-pub const WINDOW_ONLY: &[&str] = &["answer_ask"];
+///
+/// **Ending a chat is the person's too** (#1488, a delegated ruling): `end_task` writes a
+/// sentence in the person's name to the chat that asked ("The person ended this task. Do not
+/// dispatch it again unless they ask."), `task_ending` is the question it asks first, and
+/// `stop_chat` and `close_session` end a chat on the same authority. None is served on a link.
+pub const WINDOW_ONLY: &[&str] = &[
+    "answer_ask",
+    "end_task",
+    "task_ending",
+    "stop_chat",
+    "close_session",
+];
 
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host

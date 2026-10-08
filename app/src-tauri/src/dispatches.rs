@@ -164,7 +164,16 @@ impl<'a> Outcomes<'a> {
             !dispatchrecord::never_a_chat(record)
                 && dispatchrecord::same_chat(&record.worker.chat, &me)
         })?;
-        Some(newest.report.as_ref()?.outcome.word())
+        // **A task the person ended says which way** (#1488), by the app's own fact and never
+        // its report's word: `stopped_by_person` or `closed_by_person`. Every other end is its
+        // record's outcome word, as it was.
+        Some(match dispatchrecord::Finished::of(newest) {
+            Some(
+                how @ (dispatchrecord::Finished::StoppedByThePerson
+                | dispatchrecord::Finished::ClosedByThePerson),
+            ) => how.key(),
+            _ => newest.report.as_ref()?.outcome.word(),
+        })
     }
 }
 
@@ -227,8 +236,10 @@ pub(crate) fn reported(
     // Who ended it, where that was not the chat's own report alone (#1485): the person's
     // stop, or purlis saying it went without one.
     by: Option<dispatchrecord::EndedBy>,
+    // Which way the person ended it, where they did (#1488).
+    way: Option<dispatchrecord::EndedWay>,
 ) {
-    close_with_report(held, session, outcome, text, changed, by);
+    close_with_report(held, session, outcome, text, changed, by, way);
     held.rows_changed();
 }
 
@@ -239,6 +250,7 @@ fn close_with_report(
     text: &str,
     changed: Option<&str>,
     by: Option<dispatchrecord::EndedBy>,
+    way: Option<dispatchrecord::EndedWay>,
 ) {
     let Some(record) = running_for(held, session) else {
         return;
@@ -262,7 +274,7 @@ fn close_with_report(
         }),
         usage: spent(held, session),
     };
-    close(held, &record, ending, by);
+    close(held, &record, ending, by, way);
     ended_in(held, session, &record);
 }
 
@@ -314,7 +326,7 @@ pub(crate) fn ended(held: &Held, session: u32) {
     let by = record
         .report_owed
         .then_some(dispatchrecord::EndedBy::Unreported);
-    close(held, &record, ending, by);
+    close(held, &record, ending, by, None);
     ended_in(held, session, &record);
 }
 
@@ -403,9 +415,15 @@ fn running_for(held: &Held, session: u32) -> Option<Record> {
     dispatchrecord::running_for(held.root(), &chat_ref(held, session)?)
 }
 
-fn close(held: &Held, record: &Record, ending: Ending, by: Option<dispatchrecord::EndedBy>) {
+fn close(
+    held: &Held,
+    record: &Record,
+    ending: Ending,
+    by: Option<dispatchrecord::EndedBy>,
+    way: Option<dispatchrecord::EndedWay>,
+) {
     if let Err(why) =
-        dispatchrecord::close_by(held.root(), &record.id, ending, by, chrono::Utc::now())
+        dispatchrecord::close_as(held.root(), &record.id, ending, by, way, chrono::Utc::now())
     {
         tracing::warn!("purlis: a dispatch's record was not closed ({why})");
     }
@@ -992,6 +1010,7 @@ mod tests {
             conversation: None,
             cleared: false,
             ended_by: None,
+            ended_way: None,
             kept_open: false,
             did_not_start: false,
             attempts: 0,

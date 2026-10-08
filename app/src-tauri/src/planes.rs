@@ -714,6 +714,10 @@ impl Held {
             self.close_chat_held(session, &deciding)
         };
         self.stops_carry_on();
+        // **The chat that asked is woken as for any report** (#1488, V100-6): purlis's word
+        // that the person ended its task was left for its next turn, and where it may be typed
+        // a line it is typed one now, the lock let go; and it is looked at as a chat that may
+        // have nothing left to wait on (#1491). Nothing where nothing waits for it.
         self.told_of_a_close(above);
         closed
     }
@@ -733,7 +737,7 @@ impl Held {
 
     /// What a stop asked for while a close held the deciding lock is carried out now that it
     /// is let go (`crate::stopping::carry_pending`): ending the next chat takes that lock.
-    fn stops_carry_on(&self) {
+    pub(crate) fn stops_carry_on(&self) {
         if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
             crate::stopping::carry_pending(&me);
         }
@@ -758,7 +762,7 @@ impl Held {
         // told so, in the one word a stop is told in (D-T59-j3). One a stop has ended already
         // is settled, and nothing is said twice.
         if self.chats.owed_task_report(session).is_some() {
-            handoff::operator_stopped(self, session, false, true, deciding);
+            handoff::operator_stopped(self, session, false, true, Vec::new(), deciding);
         }
         // **Settled before the program is ended, whatever became of the word** (D-1443-13,
         // D-T59-j15): the end of a program waits for this lock only while the chat still owes

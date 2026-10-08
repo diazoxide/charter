@@ -744,6 +744,12 @@ export const commands = {
 	 */
 	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
 	/**
+	 *  The person sent a task chat's tab back to the Chats list: the tab goes, and the task keeps
+	 *  working. It ends nothing and tells no chat anything. Refused for a chat that is not a task.
+	 *  The record keeps it, so a reloaded window and the next launch draw no tab for it.
+	 */
+	closeChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_chat_tab", { plane, session })),
+	/**
 	 *  Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
 	 *  (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
 	 *  put each tab back on the chat it showed.
@@ -1629,6 +1635,19 @@ export const commands = {
 	stopChat: (plane: PlaneId, session: number, below: boolean) => typedError<null, string>(__TAURI_INVOKE("stop_chat", { plane, session, below })),
 	/**  Every chat of a plane being stopped, so a window that has just drawn it says so. */
 	stoppingChats: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("stopping_chats", { plane })),
+	/**
+	 *  What ending a task would do: whether it is mid-turn, whether it can be asked for a report
+	 *  and why not where it cannot, and the tasks still at work below it.
+	 */
+	taskEnding: (plane: PlaneId, session: number) => typedError<TaskEnding, string>(__TAURI_INVOKE("task_ending", { plane, session })),
+	/**
+	 *  Ends a task, the way you chose: `report` gives it one short turn to say what it did, where
+	 *  it can be given one, and then ends it; `now` ends its program at once, with no report.
+	 *  With `below`, the tasks still at work below it are ended the same way, deepest first;
+	 *  without, they are left to finish. The chat that asked is told which, in purlis's own
+	 *  words: stopped by the person, with the task's report, or closed by the person.
+	 */
+	endTask: (plane: PlaneId, session: number, way: Way, below: boolean) => typedError<null, string>(__TAURI_INVOKE("end_task", { plane, session, way, below })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
@@ -3208,7 +3227,7 @@ export type FinishedTask = {
 	how: How,
 	/**
 	 *  How it ended, in words: `done`, `cancelled`, `blocked`, `failed`, `ended without a
-	 *  report` or `closed by the person`.
+	 *  report`, `stopped by you` or `closed by you`.
 	 */
 	outcome: string,
 	/**
@@ -3648,8 +3667,10 @@ export type HostsChanged = {
 export type How = "done" | "cancelled" | "blocked" | "failed" | 
 /**  Its program ended before it reported, and purlis said so in its place. */
 "unreported" | 
-/**  The person stopped or closed it. */
-"stopped_by_person";
+/**  The person stopped it, and it sent the one short report it was given a turn for. */
+"stopped_by_person" | 
+/**  The person closed it: its program was ended with no report from it. */
+"closed_by_person";
 
 /**  How a task came to nothing (`purlis_core::state::HowFailed`), as the window is sent it. */
 export type HowFailed = 
@@ -5903,6 +5924,37 @@ export type SubjectCurations = {
 };
 
 /**
+ *  What ending a task would do, as the window asks before it does it (#1488, V100-18): what
+ *  decides whether the person is asked anything, and which of the two ways is offered.
+ */
+export type TaskEnding = {
+	/**  The task, as its row names it. */
+	name: string,
+	/**
+	 *  It is in the middle of a turn: ending it asks first. An idle task, and one that has
+	 *  reported, is ended without a question.
+	 */
+	working: boolean,
+	/**
+	 *  Why it cannot be given a turn to report, in one sentence for the person, where it
+	 *  cannot: then only Close now is offered. Nothing where it can.
+	 */
+	no_report: string | null,
+	/**
+	 *  The tasks below it that are still at work, by name, deepest first: the person is asked
+	 *  once whether they are stopped with it or kept.
+	 */
+	below: string[],
+	/**  It is being stopped already. */
+	stopping: boolean,
+	/**
+	 *  Its report is settled: it reported, or purlis said in its place that it went without
+	 *  one. Ending it then tells the chat that asked nothing more.
+	 */
+	reported: boolean,
+};
+
+/**
  *  Which project template the repo's project is laid out from: `purlis_core::firstrun::Choice`
  *  on the wire, which the core keeps free of serde and specta.
  */
@@ -6295,6 +6347,13 @@ export type Watching = {
 	 */
 	newline: string | null,
 };
+
+/**  Which of the two ways the person ends a chat (#1488). */
+export type Way = 
+/**  One short turn to write what it did, where it can be given one, then its end. */
+"report" | 
+/**  Its end, at once. */
+"now";
 
 /**  One file of a branch against the branch it was cut from: "Show what changed" (FM-11). */
 export type WhatChanged = {

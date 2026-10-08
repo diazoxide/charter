@@ -24,6 +24,8 @@ export type ShownKind =
   | "done"
   | "failed"
   | "cancelled"
+  | "stopped-by-you"
+  | "closed-by-you"
   | "unreported"
   | "reported"
   | "idle"
@@ -38,6 +40,8 @@ export type ShownShape =
   | "tick"
   | "cross"
   | "dash"
+  | "square"
+  | "octagon"
   | "triangle"
   | "dot"
   | "pause"
@@ -60,7 +64,8 @@ export type TaskFacts = {
    *  is purlis's word for a task that ended without one. */
   report: "owed" | "sent" | "failed";
   /** How it ended, in its dispatch record's word, where a record says: its own report's, or
-   *  the one purlis wrote in its place (`stopped` for a task the person stopped). */
+   *  the app's own fact that the person ended it and which way (`stopped_by_person`,
+   *  `closed_by_person`), which is never a word a task can report. */
   outcome: string | null;
   /** The chat it has a question open with, by name, while it has one. */
   asking: string | null;
@@ -101,6 +106,21 @@ const CANCELLED: Shown = {
   shape: "dash",
   token: "text.muted",
 };
+/** **The person stopped it and got its report** (#1488): the square of a stop button. Its own
+ *  word and shape, as the person's doing: never "cancelled", which is the asking chat's. */
+const STOPPED_BY_YOU: Shown = {
+  kind: "stopped-by-you",
+  word: "stopped by you",
+  shape: "square",
+  token: "text.muted",
+};
+/** **The person closed it**, with no report from it (#1488): the stop sign's eight sides. */
+const CLOSED_BY_YOU: Shown = {
+  kind: "closed-by-you",
+  word: "closed by you",
+  shape: "octagon",
+  token: "text.muted",
+};
 const UNREPORTED: Shown = {
   kind: "unreported",
   word: "ended without a report",
@@ -137,9 +157,17 @@ export function waitingOnTasks(tasks: number): Shown {
   };
 }
 
-/** The record's word for a task the person stopped before it reported: purlis wrote the
- *  report in its place, so the task itself sent none, and it did not die either. */
-const STOPPED = "stopped";
+/**
+ * **How a task the person ended reads**, by the core's own fact of who ended it and which way
+ * (`dispatchrecord::Finished::key`): never read from a report's words, so nothing a task says
+ * of itself reads as either. `stopped` is the outcome of a record written before the way was
+ * kept, and is read as closed.
+ */
+const BY_THE_PERSON: ReadonlyMap<string, Shown> = new Map([
+  ["stopped_by_person", STOPPED_BY_YOU],
+  ["closed_by_person", CLOSED_BY_YOU],
+  ["stopped", CLOSED_BY_YOU],
+]);
 
 /**
  * The state a chat's row shows, or nothing for a chat with none to show (a shell tab nothing
@@ -166,12 +194,15 @@ export function shownState({
   tasksAtWork = 0,
 }: Facts): Shown | undefined {
   if (needsYou) return NEEDS_YOU;
+  const byThePerson = task?.outcome == null ? undefined : BY_THE_PERSON.get(task.outcome);
   if (task?.report === "sent") {
     if (board === "running") return WORKING;
+    // The person stopped it, whatever it then said of itself in its one short report.
+    if (byThePerson !== undefined) return byThePerson;
     return (task.outcome === null ? undefined : BY_OUTCOME.get(task.outcome)) ?? REPORTED;
   }
-  // The person stopped it: not a task that died, though neither sent a report.
-  if (task?.report === "failed") return task.outcome === STOPPED ? CANCELLED : UNREPORTED;
+  // The person closed it: not a task that died, though neither sent a report.
+  if (task?.report === "failed") return byThePerson ?? UNREPORTED;
   // Its program ended owing its report: purlis tells the chat that asked, and the row says
   // the same without waiting to be told.
   if (task !== null && (board === "done" || board === "failed")) return UNREPORTED;

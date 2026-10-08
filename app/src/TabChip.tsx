@@ -20,6 +20,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import type { Offer } from "./actions";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect } from "./chatState";
 import { sinceSaid } from "./chatsList";
@@ -80,6 +81,15 @@ type Props = {
    *  tasks used (#1500). Nothing is drawn for a slot nobody fills. */
   limits?: ReactNode;
   totals?: ReactNode;
+  /**
+   * The two rows that end task `session`, from the window's catalogue (#1488,
+   * `actions.taskEndIds`): Stop and get its report, then Close now. Read as the menu is
+   * drawn. Left out, the menu offers no way to end a task.
+   */
+  ends?: (session: number) => readonly Offer[];
+  /** Presses one of those rows: the window asks its second step, and nothing ends on the
+   *  press (`TaskEnd.tsx`). */
+  onPress?: (offer: Offer) => void;
 };
 
 const ROW_FACTS = [
@@ -152,6 +162,8 @@ function sameChip(was: Props, now: Props): boolean {
     was.onShow === now.onShow &&
     was.limits === now.limits &&
     was.totals === now.totals &&
+    was.ends === now.ends &&
+    was.onPress === now.onPress &&
     sameRows(was.rows, now.rows) &&
     sameEnded(was.ended, now.ended) &&
     sameNeeds(was.needs, now.needs)
@@ -210,6 +222,8 @@ function Chip({
   onShow,
   limits,
   totals,
+  ends,
+  onPress,
 }: Props) {
   // One reading of the store for the chip and its menu: each row's state, redrawn only when
   // one of them changes.
@@ -348,6 +362,16 @@ function Chip({
     return true;
   };
   const said = chipSaid(name, counts);
+  /** The tab's open tasks, each with the rows that end it: what "End a task" lists. Never a
+   *  pane's own chat, which is no task, and never a task that has ended. */
+  const endable =
+    ends === undefined || onPress === undefined
+      ? []
+      : lines.flatMap((one) =>
+          one.row !== undefined && one.row.mode === "task"
+            ? [{ key: one.key, offers: ends(one.row.session) }]
+            : [],
+        );
   const line = (one: Line) => (
     <TaskLine
       key={one.key}
@@ -494,6 +518,56 @@ function Chip({
               })}
             >
               {lines.map(line)}
+              {endable.some((task) => task.offers.length > 0) && (
+                /* **Ending a task from here** (#1488): the two rows the catalogue has for each
+                   open task, by their own titles, so this menu, a row's menu, the breadcrumb
+                   and the palette say one thing. One line of this menu, which opens to them:
+                   a way to end a task is never one stray press from a way to go to it. A
+                   press ends nothing: the window asks its second step. */
+                <Menu.Sub>
+                  <Menu.SubTrigger
+                    className="tasks-menu-row tasks-menu-end"
+                    textValue="End a task"
+                    onPointerMove={quiet ? keepsNoKeyboard : undefined}
+                    onPointerLeave={quiet ? keepsNoKeyboard : undefined}
+                  >
+                    <span className="name">End a task</span>
+                    <ChevronRight aria-hidden="true" />
+                  </Menu.SubTrigger>
+                  <Menu.Portal>
+                    <Menu.SubContent
+                      // Named by the line that opened it, which is Radix's own doing.
+                      className="tasks-menu tasks-menu-ends"
+                      collisionPadding={8}
+                    >
+                      {endable.flatMap((task) =>
+                        task.offers.map((offer) => (
+                          <Menu.Item
+                            key={offer.id}
+                            className="tasks-menu-row"
+                            textValue={offer.title}
+                            // A row that cannot run stays in the arrows' way and says why.
+                            aria-disabled={offer.available ? undefined : true}
+                            onSelect={(event) => {
+                              if (!offer.available) {
+                                event.preventDefault();
+                                return;
+                              }
+                              // The keyboard goes to the question the press opens, not
+                              // back to where it was before the menu.
+                              picked.current = true;
+                              onPress?.(offer);
+                            }}
+                          >
+                            <span className="name">{offer.title}</span>
+                            {!offer.available && <span className="where"> {offer.reason}</span>}
+                          </Menu.Item>
+                        )),
+                      )}
+                    </Menu.SubContent>
+                  </Menu.Portal>
+                </Menu.Sub>
+              )}
               {finished.length > 0 && (
                 <Menu.Item
                   className="tasks-menu-row tasks-menu-fold"

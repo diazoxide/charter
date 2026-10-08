@@ -69,6 +69,9 @@ import {
   ROOT_TIP,
   showId,
   stoppedRows,
+  taskCloseId,
+  taskEndIds,
+  taskStopId,
   workItemSaid,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
@@ -81,6 +84,7 @@ import {
   type Offer,
   type Project,
   type Ran,
+  type TaskEndWay,
 } from "./actions";
 import { yourEditor } from "./yourEditor";
 import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
@@ -242,6 +246,17 @@ import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { PaneCrumbs } from "./PaneCrumbs";
+import {
+  asksInAModal,
+  inPlace,
+  TaskEndAsk,
+  TaskEndContext,
+  TaskEnds,
+  type TaskEndAsked,
+  type TaskEndFrom,
+  type TaskEndHand,
+  type TaskEndInline,
+} from "./TaskEnd";
 import { giveKeyboardTo, inADialog } from "./paneKeyboard";
 import { endedState, TaskAway, type Away } from "./TaskAway";
 import { StateShown } from "./StateShown";
@@ -606,6 +621,10 @@ export const PlaneView = memo(function PlaneView({
   }>();
   /** The stop the person is being asked about, before anything is stopped (#1448). */
   const [stopAsk, setStopAsk] = useState<StopAsking>();
+  /** The task the person is being asked about ending, before anything is ended (#1488). */
+  const [taskEndAsk, setTaskEndAsk] = useState<TaskEndAsked>();
+  /** The second step of ending an idle task, asked where the press was made (#1488). */
+  const [taskEndInline, setTaskEndInline] = useState<TaskEndInline>();
   /**
    * **Start fresh** (NO-3, charter#369): the tab whose chat is about to be started again on the
    * project's instructions as they are now, while the question is up. The tab mark and the
@@ -1486,6 +1505,106 @@ export const PlaneView = memo(function PlaneView({
       said.status === "error" ? { ...asked, busy: false, trouble: said.error } : undefined,
     );
   }, [plane, stopAsk]);
+  /**
+   * **Ends a task the way the person chose**, by the core (`end_task`), which tells the chat
+   * that asked which way it was. A refusal is said where the answer was given: in the
+   * question while one is up, else on the window's report line.
+   */
+  const endTaskNow = useCallback(
+    async (session: number, way: TaskEndWay, below: boolean, asked?: TaskEndAsked) => {
+      if (asked !== undefined) setTaskEndAsk({ ...asked, busy: true, trouble: undefined });
+      const said = await commands
+        .endTask(plane, session, way, below)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status !== "error") {
+        setTaskEndAsk(undefined);
+        return undefined;
+      }
+      if (asked !== undefined) setTaskEndAsk({ ...asked, busy: false, trouble: said.error });
+      // Where no question is up, whoever asked says the refusal where the answer was given.
+      return said.error;
+    },
+    [plane],
+  );
+  /**
+   * **Stop and get its report, or Close now** (#1488, V100-5, V100-18): every press to end a
+   * task comes here, and **none ends anything by itself**. The core is asked what ending the
+   * task would do, and then the person is asked:
+   *
+   * - a task mid-turn, or with tasks of its own at work below it, in the one modal question;
+   * - every other task **in place**, where the press was made: on its row for its menu and
+   *   Delete, on the breadcrumb for its two controls ("Stop it" or "Close it", and Keep, which
+   *   has the keyboard). A press from anywhere else is asked on the breadcrumb where a pane
+   *   shows the task, and in the modal question where none does, so it is never asked
+   *   somewhere the person is not looking.
+   *
+   * Where purlis may not type into the task, either says why and offers Close alone. The
+   * standard close dialog is never part of this.
+   */
+  const askToEndTask = useCallback(
+    async (session: number, way: TaskEndWay, from: TaskEndFrom) => {
+      const read = await commands
+        .taskEnding(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (read.status === "error") {
+        setReport({ from: `task.end:${session}`, refused: true, words: read.error });
+        return;
+      }
+      const ending = read.data;
+      // No answer is no leave to end anything: nothing is guessed about a task.
+      if (ending === null || typeof ending !== "object") return;
+      // Being stopped already: it has its one short turn, and is not asked a second time.
+      if (ending.stopping && way === "report") return;
+      const shown = now.current.order.some((id) =>
+        shownIn(now.current, id).some((one) => one.session === session),
+      );
+      const where = from === "elsewhere" ? (shown ? "crumb" : undefined) : from;
+      if (asksInAModal(ending) || where === undefined) {
+        setTaskEndInline(undefined);
+        setTaskEndAsk({ ...ending, session, belowToo: true, busy: false });
+        return;
+      }
+      setTaskEndInline({ session, where, busy: false, ...inPlace(ending, way) });
+    },
+    [plane],
+  );
+  /** The second step was answered: the task is ended the way it said, or kept. */
+  const answerTaskEnd = useCallback(
+    async (yes: boolean) => {
+      const asked = taskEndInline;
+      if (asked === undefined) return;
+      if (!yes) {
+        setTaskEndInline(undefined);
+        return;
+      }
+      setTaskEndInline({ ...asked, busy: true, trouble: undefined });
+      const refused = await endTaskNow(asked.session, asked.way, false);
+      // A refusal stays where the answer was given, in the core's words, and nothing ended.
+      setTaskEndInline(
+        refused === undefined ? undefined : { ...asked, busy: false, trouble: refused },
+      );
+    },
+    [endTaskNow, taskEndInline],
+  );
+  /** A way to end a task was pressed on its row in the Chats list: asked about on that row.
+   *  Held, so the list's rows are not drawn again for it. */
+  const endTaskOnRow = useCallback(
+    (session: number, way: TaskEndWay) => void askToEndTask(session, way, "row"),
+    [askToEndTask],
+  );
+  const answerTaskEndOnRow = useCallback(
+    (yes: boolean) => void answerTaskEnd(yes),
+    [answerTaskEnd],
+  );
+  /** What every breadcrumb's two controls are handed (`TaskEndContext`). */
+  const taskEndHand = useMemo<TaskEndHand>(
+    () => ({
+      confirming: taskEndInline,
+      onEnd: (session, way) => void askToEndTask(session, way, "crumb"),
+      onConfirm: (yes) => void answerTaskEnd(yes),
+    }),
+    [answerTaskEnd, askToEndTask, taskEndInline],
+  );
   /** A kept-open chat's Notice put away, by Dismiss or by its Close tab. */
   const forgetKeptOpen = useCallback(
     (session: number) => setKeptOpen((was) => was.filter((one) => one.session !== session)),
@@ -2474,6 +2593,34 @@ export const PlaneView = memo(function PlaneView({
 
   const split = useCallback((direction: Direction) => void ask({ split: direction }), [ask]);
 
+  /** Every chat the core lists, by session, as of the last read: what {@link showChat} opens a
+   *  tab from for a chat that has none. A ref, so a read of the list does not make a new
+   *  `showChat` for every row and catalogue entry holding one. */
+  const listedNow = useRef<ReadonlyMap<number, OpenChat>>(new Map());
+  useEffect(() => {
+    listedNow.current = new Map(
+      [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
+        (chat) => [chat.session, chat],
+      ),
+    );
+  }, [sidebar]);
+
+  /**
+   * **A close ends a chat, and never a task** (#1488, V100-38): where the chat a tab or a
+   * pane held is a task, its tab goes and the core is told it has none (`close_chat_tab`).
+   * The task keeps working and is in the Chats list. Every road to a close comes through
+   * here: a tab's cross, a pane's, the palette's rows, the close shortcut and a close of
+   * several tabs at once.
+   */
+  const endOrSendBack = useCallback(
+    (session: number) => {
+      if (listedNow.current.get(session)?.from?.task)
+        void commands.closeChatTab(plane, session).catch(() => undefined);
+      else void commands.closeSession(plane, session);
+    },
+    [plane],
+  );
+
   const closePane = useCallback(() => {
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
@@ -2482,16 +2629,16 @@ export const PlaneView = memo(function PlaneView({
     if (tab?.shows?.[tab.focused] !== undefined) return;
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
     change((tabs) => closeFocusedPane(tabs, filedIn, isPinned, isBackground));
-    if (going) void commands.closeSession(plane, going.session);
-  }, [change, filedIn, isBackground, isPinned, plane]);
+    if (going) endOrSendBack(going.session);
+  }, [change, endOrSendBack, filedIn, isBackground, isPinned]);
 
   const close = useCallback(
     (id: number) => {
       const ending = panesOf(now.current, id);
       change((tabs) => closeTab(tabs, id, filedIn, isPinned, isBackground));
-      for (const pane of ending) void commands.closeSession(plane, pane.session);
+      for (const pane of ending) endOrSendBack(pane.session);
     },
-    [change, filedIn, isBackground, isPinned, plane],
+    [change, endOrSendBack, filedIn, isBackground, isPinned],
   );
 
   /**
@@ -2515,18 +2662,6 @@ export const PlaneView = memo(function PlaneView({
     },
     [change, filedIn, sidebar],
   );
-
-  /** Every chat the core lists, by session, as of the last read: what {@link showChat} opens a
-   *  tab from for a chat that has none. A ref, so a read of the list does not make a new
-   *  `showChat` for every row and catalogue entry holding one. */
-  const listedNow = useRef<ReadonlyMap<number, OpenChat>>(new Map());
-  useEffect(() => {
-    listedNow.current = new Map(
-      [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
-        (chat) => [chat.session, chat],
-      ),
-    );
-  }, [sidebar]);
 
   /** Which chat a task is a task of, as the core lists it now: what says which tab a task is
    *  shown in. Task links only (V100-69). */
@@ -4539,6 +4674,7 @@ export const PlaneView = memo(function PlaneView({
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
       stopChat: askToStop,
+      endTask: (session: number, way: TaskEndWay) => void askToEndTask(session, way, "elsewhere"),
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`purlis_core::panel::Panel::key`), and it is written here because the catalogue
@@ -4592,6 +4728,7 @@ export const PlaneView = memo(function PlaneView({
       askStartFresh,
       askPersona,
       askToStop,
+      askToEndTask,
       bringToFront,
       cancelSmartClose,
       close,
@@ -5288,6 +5425,8 @@ export const PlaneView = memo(function PlaneView({
     running?: readonly string[];
     /** Its persona chats that have reported and close with it, by name. */
     closing?: readonly string[];
+    /** The tasks among what is closed, by name: sent back to the list, not ended (#1488). */
+    back?: readonly string[];
     /** For a close of several chats: whether any has chats at work below it, which keep
      *  running. */
     keeps?: boolean;
@@ -5315,7 +5454,14 @@ export const PlaneView = memo(function PlaneView({
   const run = useCallback(
     async (offer: Offer): Promise<Ran> => {
       if (offer.available && endsAChat(offer.does)) {
-        const ending = chatsEndedBy(offer.does, now.current);
+        // **A close ends no task** (#1488): the tasks among what it closes go back to the
+        // Chats list (`endOrSendBack`), are not asked about, and are named in one line.
+        const closed = chatsEndedBy(offer.does, now.current);
+        const isTask = (session: number) => listedNow.current.get(session)?.from?.task === true;
+        const ending = closed.filter((session) => !isTask(session));
+        const back = closed.filter(isTask).map((session) => nameOfNow.current(session));
+        // Nothing but tasks: there is no chat to end, so there is nothing to ask.
+        if (closed.length > 0 && ending.length === 0) return carryOut(offer);
         /** What closing chat `session` would do with the chats below it, as the core says. A
          *  core that answers nothing (an older one) has none below it. */
         const below = async (session: number) => {
@@ -5341,6 +5487,7 @@ export const PlaneView = memo(function PlaneView({
                 ? { available: false, why: MORE_THAN_ONE_CHAT, close_first: false }
                 : undefined,
             keeps: theirs.some((one) => one.running.length > 0),
+            back,
           });
           return { ok: true };
         }
@@ -5368,7 +5515,7 @@ export const PlaneView = memo(function PlaneView({
                 task: nameOfNow.current(task),
                 session: now.current.byId[does.tab]?.name ?? "",
               };
-        setEndingChat({ offer, session, smart, running, closing, shows });
+        setEndingChat({ offer, session, smart, running, closing, shows, back });
         return { ok: true };
       }
       return carryOut(offer);
@@ -5445,6 +5592,26 @@ export const PlaneView = memo(function PlaneView({
       void run(offer);
     },
     [run],
+  );
+  /**
+   * **The two rows that end a task, for a tab chip's menu** (#1487 mounting #1488's
+   * `taskEndIds`): read from the catalogue as the menu is drawn. One function for the life of
+   * the view, so a chip is not drawn again each time the catalogue is made anew.
+   */
+  const byNow = useRef(by);
+  const pressNow = useRef(press);
+  useEffect(() => {
+    byNow.current = by;
+    pressNow.current = press;
+  }, [by, press]);
+  const pressTaskEnd = useCallback((offer: Offer) => pressNow.current(offer), []);
+  const taskEndsOf = useCallback(
+    (session: number) =>
+      taskEndIds(session).flatMap((id) => {
+        const offer = byNow.current(id);
+        return offer === undefined ? [] : [offer];
+      }),
+    [],
   );
 
   /**
@@ -5580,7 +5747,13 @@ export const PlaneView = memo(function PlaneView({
    */
   /** The close of pane `pane` of the tab in front, decided for that pane (`paneCloseOf`). */
   const closeOfPane = useCallback(
-    (pane: number) => paneCloseOf(tabs, pane, nameOf),
+    (pane: number) =>
+      paneCloseOf(
+        tabs,
+        pane,
+        nameOf,
+        (session) => listedNow.current.get(session)?.from?.task === true,
+      ),
     [nameOf, tabs],
   );
   /** Pane `pane` of the tab in front goes back to its session's own chat (#1486): the person's
@@ -6232,6 +6405,8 @@ export const PlaneView = memo(function PlaneView({
                               clock={chatClock}
                               dragging={isDragging}
                               onShow={showFromChip}
+                              ends={taskEndsOf}
+                              onPress={pressTaskEnd}
                             />
                             <FreshMark
                               id={freshMarkOf(id)}
@@ -6540,6 +6715,9 @@ export const PlaneView = memo(function PlaneView({
                   reveal={revealed}
                   onRevealed={revealedSettled}
                   onLookFinished={lookedAtFinished}
+                  ending={taskEndInline}
+                  onEndTask={endTaskOnRow}
+                  onEndConfirm={answerTaskEndOnRow}
                 />
               </WaitingTaskWaysContext.Provider>
               <Explorer
@@ -6604,56 +6782,58 @@ export const PlaneView = memo(function PlaneView({
           <Menued on={{ on: "pane" }} offers={found} onPress={press}>
             <div className="panes">
               {frontTab ? (
-                <LayoutPanes
-                  plane={plane}
-                  // Each pane holding the chat it SHOWS (#1486): a task, in the pane of the
-                  // session that asked, while the tab is switched to it.
-                  layout={layoutShown(tabs, frontTab.id) ?? frontTab.layout}
-                  crumbs={frontCrumbs}
-                  away={frontAway}
-                  finished={frontFinished}
-                  others={frontOthers}
-                  closeOf={closeOfPane}
-                  onBack={backInPane}
-                  onShowChat={showChat}
-                  focused={frontTab.focused}
-                  onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-                  offerFor={by}
-                  onPaneDoes={onPaneDoes}
-                  name={frontTab.name}
-                  handedFrom={handedFrom}
-                  glances={glances}
-                  workItems={workItems}
-                  byHand={byHand}
-                  onByHand={answerByHand}
-                  startNotes={startNotes}
-                  onDismissStartNote={dismissStartNote}
-                  onRestartChat={askRestart}
-                  blocks={sandboxBlocks}
-                  onDismissBlock={dismissBlock}
-                  onRestarted={chatRestarted}
-                  onAllowed={oweRestart}
-                  restartsSaid={restartsSaid}
-                  onRestartAnswer={answerRestart}
-                  offered={views}
-                  onOpenView={showView}
-                  onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
-                  onVaultChanged={reloadVaults}
-                  memory={{
-                    // The views follow the disk themselves (`ViewPane`), so a memory saved
-                    // redraws the views and not this whole window (FD-10).
-                    changed: memoryEdits.changed,
-                    onSaved: memoryEdits.onSaved,
-                    onClose: closeView,
-                    showInstead: (from, to, title) =>
-                      change((tabs) => showInstead(tabs, from, to, title)),
-                  }}
-                  firstTask={firstTaskDoes}
-                  split={{
-                    of: (view) => splitOf(tabs, view),
-                    moved: (view, split) => change((tabs) => setSplit(tabs, view, split)),
-                  }}
-                />
+                <TaskEndContext.Provider value={taskEndHand}>
+                  <LayoutPanes
+                    plane={plane}
+                    // Each pane holding the chat it SHOWS (#1486): a task, in the pane of the
+                    // session that asked, while the tab is switched to it.
+                    layout={layoutShown(tabs, frontTab.id) ?? frontTab.layout}
+                    crumbs={frontCrumbs}
+                    away={frontAway}
+                    finished={frontFinished}
+                    others={frontOthers}
+                    closeOf={closeOfPane}
+                    onBack={backInPane}
+                    onShowChat={showChat}
+                    focused={frontTab.focused}
+                    onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+                    offerFor={by}
+                    onPaneDoes={onPaneDoes}
+                    name={frontTab.name}
+                    handedFrom={handedFrom}
+                    glances={glances}
+                    workItems={workItems}
+                    byHand={byHand}
+                    onByHand={answerByHand}
+                    startNotes={startNotes}
+                    onDismissStartNote={dismissStartNote}
+                    onRestartChat={askRestart}
+                    blocks={sandboxBlocks}
+                    onDismissBlock={dismissBlock}
+                    onRestarted={chatRestarted}
+                    onAllowed={oweRestart}
+                    restartsSaid={restartsSaid}
+                    onRestartAnswer={answerRestart}
+                    offered={views}
+                    onOpenView={showView}
+                    onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
+                    onVaultChanged={reloadVaults}
+                    memory={{
+                      // The views follow the disk themselves (`ViewPane`), so a memory saved
+                      // redraws the views and not this whole window (FD-10).
+                      changed: memoryEdits.changed,
+                      onSaved: memoryEdits.onSaved,
+                      onClose: closeView,
+                      showInstead: (from, to, title) =>
+                        change((tabs) => showInstead(tabs, from, to, title)),
+                    }}
+                    firstTask={firstTaskDoes}
+                    split={{
+                      of: (view) => splitOf(tabs, view),
+                      moved: (view, split) => change((tabs) => setSplit(tabs, view, split)),
+                    }}
+                  />
+                </TaskEndContext.Provider>
               ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
                 // "no sessions" here would be charter telling the operator that what it is
@@ -6957,6 +7137,21 @@ export const PlaneView = memo(function PlaneView({
           onCancel={() => setStopAsk(undefined)}
         />
       )}
+      {taskEndAsk && (
+        <TaskEndAsk
+          asked={taskEndAsk}
+          onBelow={(belowToo) => setTaskEndAsk({ ...taskEndAsk, belowToo })}
+          onAnswer={(way) =>
+            void endTaskNow(
+              taskEndAsk.session,
+              way,
+              taskEndAsk.belowToo && taskEndAsk.below.length > 0,
+              taskEndAsk,
+            )
+          }
+          onCancel={() => setTaskEndAsk(undefined)}
+        />
+      )}
       {freshening && (
         <ChatAsk
           title={`Start ${freshening.name} fresh?`}
@@ -6977,6 +7172,7 @@ export const PlaneView = memo(function PlaneView({
           closing={endingChat.closing}
           keeps={endingChat.keeps}
           shows={endingChat.shows}
+          back={endingChat.back}
           onEnd={(stop) => {
             const { offer: ending, session } = endingChat;
             setEndingChat(undefined);
@@ -7640,6 +7836,7 @@ function PaneFrame({
   plane,
   session,
   crumbs,
+  ending,
   onShowChat,
   from,
   harness,
@@ -7654,6 +7851,9 @@ function PaneFrame({
   session: number;
   /** While the pane shows a task of its tab's session: the path to it (#1486). */
   crumbs?: Crumbs;
+  /** While it does: the two ways to end that task, beside the path (#1488). The only ending
+   *  control a pane showing a task has. */
+  ending?: ReactNode;
   /** Goes to a chat: what a name in the breadcrumb does, and a hidden chat's Notice. */
   onShowChat: (session: number) => void;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
@@ -7701,6 +7901,7 @@ function PaneFrame({
           {/* **Which chat this is, while the tab shows a task** (#1486): first in the line, and
               in no row of its own. */}
           {crumbs && <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />}
+          {crumbs && ending}
           <ChatGauge usage={usage} />
           {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
           {from && <span className="pane-from">{from}</span>}
@@ -8502,6 +8703,17 @@ function LayoutPanes({
         plane={plane}
         session={content.session}
         crumbs={crumb}
+        ending={
+          crumb !== undefined && (
+            <TaskEnds
+              session={content.session}
+              stop={offerFor(taskStopId(content.session))}
+              close={offerFor(taskCloseId(content.session))}
+              // Keep gives the keyboard back to the task's terminal.
+              focusBack={() => giveKeyboardTo(plane, content.session)}
+            />
+          )
+        }
         onShowChat={onShowChat}
         from={crumb === undefined ? handedFrom[content.session] : undefined}
         harness={glances[content.session]}

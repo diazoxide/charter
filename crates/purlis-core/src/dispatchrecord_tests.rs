@@ -1288,9 +1288,10 @@ fn done_and_cancelled_fold_and_every_other_end_stays_a_row_of_its_own() {
         said(Outcome::Failed, crate::handback::UNREPORTED),
         ("failed", false)
     );
+    // A record from before the way was kept: the person ended it, and it is read as closed.
     assert_eq!(
         said(Outcome::Stopped, crate::handback::STOPPED),
-        ("closed by the person", false)
+        ("closed by you", false)
     );
     // Who ended it is the app's fact, written with the ending.
     let ended_by = |outcome: Outcome, text: &str, by: EndedBy| {
@@ -1326,7 +1327,7 @@ fn done_and_cancelled_fold_and_every_other_end_stays_a_row_of_its_own() {
     // A task the person stopped does not fold, whatever its own last report says.
     assert_eq!(
         ended_by(Outcome::Done, "All good, honest.", EndedBy::Person),
-        ("closed by the person", false)
+        ("closed by you", false)
     );
     assert_eq!(
         serde_json::to_string(&EndedBy::Person).unwrap(),
@@ -1447,4 +1448,102 @@ fn a_chat_the_person_took_over_is_marked_on_its_record_once() {
     assert!(kept.kept_open);
     assert!(!serde_json::to_string(&task).unwrap().contains("kept_open"));
     assert!(!serde_json::to_string(&task).unwrap().contains("ended_by"));
+}
+
+#[test]
+fn a_task_the_person_ended_says_which_way_in_words_of_its_own_and_never_folds() {
+    // #1488, V100-5, V100-9. Who ended it and which way are the app's facts, written with the
+    // ending: never read from the report's words, so a task cannot make its row read either
+    // way by what it says, and cannot make it fold.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let ended_as = |outcome: Outcome, text: &str, by: Option<EndedBy>, way: Option<EndedWay>| {
+        let opened = open(
+            &root,
+            Opening {
+                mode: Mode::Task,
+                ..a_handoff()
+            },
+            at("2026-10-08T12:10:00Z"),
+        )
+        .unwrap();
+        close_as(
+            &root,
+            &opened.id,
+            Ending {
+                report: Some(ended(outcome, text)),
+                usage: None,
+            },
+            by,
+            way,
+            at("2026-10-08T12:11:00Z"),
+        )
+        .unwrap();
+        let record = read(&root, &opened.id).unwrap();
+        (Finished::of(&record).unwrap(), record)
+    };
+    let person = Some(EndedBy::Person);
+
+    let (stopped, record) = ended_as(
+        Outcome::Done,
+        "All done, honest.",
+        person,
+        Some(EndedWay::Stopped),
+    );
+    assert_eq!(stopped, Finished::StoppedByThePerson);
+    assert_eq!(record.ended_by, person);
+    assert_eq!(record.ended_way, Some(EndedWay::Stopped));
+    assert_eq!(
+        (stopped.word(), stopped.said_to_a_chat(), stopped.key()),
+        (
+            "stopped by you",
+            "stopped by the person",
+            "stopped_by_person"
+        )
+    );
+    assert!(!stopped.folds());
+
+    let (closed, record) = ended_as(
+        Outcome::Stopped,
+        crate::handback::STOPPED,
+        person,
+        Some(EndedWay::Closed),
+    );
+    assert_eq!(closed, Finished::ClosedByThePerson);
+    assert_eq!(record.ended_way, Some(EndedWay::Closed));
+    assert_eq!(
+        (closed.word(), closed.said_to_a_chat(), closed.key()),
+        ("closed by you", "closed by the person", "closed_by_person")
+    );
+    assert!(!closed.folds());
+
+    // A cancel its asking chat asked for stays a cancel, and folds.
+    let (cancelled, _) = ended_as(Outcome::Cancelled, "Stopped half way.", None, None);
+    assert_eq!((cancelled.word(), cancelled.folds()), ("cancelled", true));
+
+    // A way is the person's alone: beside no other end is one kept, so a record cannot say
+    // "stopped by you" of a task nobody stopped.
+    let (plain, record) = ended_as(Outcome::Done, "Fine.", None, Some(EndedWay::Stopped));
+    assert_eq!(plain, Finished::Done);
+    assert_eq!(record.ended_way, None);
+    let (died, record) = ended_as(
+        Outcome::Failed,
+        "x",
+        Some(EndedBy::Unreported),
+        Some(EndedWay::Stopped),
+    );
+    assert_eq!(died, Finished::EndedWithoutAReport);
+    assert_eq!(record.ended_way, None);
+
+    // On disk: one key, absent where it does not apply.
+    assert_eq!(
+        serde_json::to_string(&EndedWay::Stopped).unwrap(),
+        r#""stopped""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EndedWay::Closed).unwrap(),
+        r#""closed""#
+    );
+    let text = serde_json::to_string(&record).unwrap();
+    assert!(!text.contains("ended_way"), "{text}");
 }
