@@ -120,6 +120,19 @@ function asListed(one: OpenChat & { workspace: string }): OpenChat {
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
+/** What the pretend core says chats used (#1500): task 3 reported, every other none yet. */
+function usedFor(a: Record<string, unknown>) {
+  return {
+    chats: ((a.chats as number[]) ?? []).map((session) =>
+      session === 3
+        ? { session, tokens: "12k in, 3k out", unsaid: null }
+        : { session, tokens: null, unsaid: "not_yet" },
+    ),
+    finished: [],
+    total: null,
+  };
+}
+
 /**
  * The core, holding `open` chats in two workspaces. It answers `open_chat_tab` the way the
  * record does: the chat has a tab from then on, so a second window on it draws one.
@@ -188,6 +201,7 @@ function core(open: (OpenChat & { workspace: string })[], finished: FinishedTask
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
+    if (cmd === "tasks_used") return usedFor(a);
     return null;
   });
   return {
@@ -448,6 +462,36 @@ describe("a task chat", () => {
     expect(tabNames()).toEqual(["steward 1"]);
     expect(row(tree, "devops 4").getAttribute("data-tab")).toBe("false");
     expect(row(tree, "steward 1").getAttribute("data-tab")).toBe("true");
+  });
+
+  it("says its tokens on its row's hover, read once the pointer rests and only for that row (#1500)", async () => {
+    const { asked } = core(sixTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(row(tree, "devops 3")).toBeInTheDocument());
+    const reads = () => asked.filter((one) => one.cmd === "tasks_used").map((one) => one.args);
+
+    // A pointer passing over a row reads nothing.
+    fireEvent.pointerEnter(row(tree, "devops 4"));
+    fireEvent.pointerLeave(row(tree, "devops 4"));
+    // One that rests reads that row's figure, for a hover: no time, no total.
+    fireEvent.pointerEnter(row(tree, "devops 3"));
+    await waitFor(() =>
+      expect(row(tree, "devops 3").getAttribute("title")).toContain("Tokens: 12k in, 3k out"),
+    );
+    expect(reads()).toEqual([
+      { plane: PLANE, scope: "hover", own: null, chats: [3], finished: [] },
+    ]);
+
+    fireEvent.pointerEnter(row(tree, "devops 5"));
+    await waitFor(() =>
+      expect(row(tree, "devops 5").getAttribute("title")).toContain(
+        "Tokens: — (nothing reported yet)",
+      ),
+    );
+    // The session's own row is no task, and says no tokens.
+    fireEvent.pointerEnter(row(tree, "steward 1"));
+    expect(reads().map((one) => one.chats)).toEqual([[3], [5]]);
   });
 
   it("is shown inside its asker's tab when its row is clicked, and no tab is added", async () => {

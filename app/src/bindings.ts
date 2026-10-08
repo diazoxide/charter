@@ -2044,6 +2044,14 @@ export const commands = {
 	 */
 	cold: number | null,
 } | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
+	/**
+	 *  **What the chats of a tab used** (#1500). `scope` says what for: a row's hover reads its
+	 *  one figure; a tab's menu reads every line, each task's time and the total. `own` is the
+	 *  session's own chat, said beside the total and not in it; `chats` its open tasks, and any it
+	 *  still shows that has ended; `finished` the dispatch records of its ended tasks. Never on a
+	 *  timer. On a blocking thread, as it reads files.
+	 */
+	tasksUsed: (plane: PlaneId, scope: Scope, own: number | null, chats: number[], finished: string[]) => typedError<TasksUsed, string>(__TAURI_INVOKE("tasks_used", { plane, scope, own, chats, finished })),
 	/**  The pin report for this plane. */
 	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
 	/**
@@ -2711,6 +2719,15 @@ export type ChatUsage = {
 	 *  (`_cache_hint`'s threshold) — the prefix churning, which is the expensive failure.
 	 */
 	cold: number | null,
+};
+
+/**  One open chat's tokens, by its number. */
+export type ChatUsed = {
+	session: number,
+	/**  Its tokens in and out as its harness counted them (`15k in, 4k out`); `null` where none. */
+	tokens: string | null,
+	/**  Why there are none, where there are none. */
+	unsaid: Unsaid | null,
 };
 
 /**  Where a chat is working, when it is working in a piece. */
@@ -3546,6 +3563,14 @@ export type FinishedTask = {
 	 *  name it by; it has no Reopen and no Clear. Null for every ended task.
 	 */
 	waits: WaitsToStart | null,
+};
+
+/**  One ended task's tokens, by its dispatch record's id. */
+export type FinishedUsed = {
+	id: string,
+	/**  What it used, as kept when it ended; `null` where none. */
+	tokens: string | null,
+	unsaid: Unsaid | null,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -5844,6 +5869,13 @@ export type SavingInForce = {
 	repos_left_out: string | null,
 };
 
+/**  What an ask is for. */
+export type Scope = 
+/**  A row's hover: its figure only. No time is looked for and no total is made. */
+"hover" | 
+/**  A tab's menu: every line's figure, each task's time, and the total. */
+"menu";
+
 /**  Why a page of a search ended. */
 export type SearchEnd = 
 /**  The whole scope is searched. */
@@ -6393,6 +6425,14 @@ export type TaskQuestion = {
 	question: string,
 };
 
+/**  What the window is answered for one ask. */
+export type TasksUsed = {
+	chats: ChatUsed[],
+	finished: FinishedUsed[],
+	/**  `null` for a hover's ask, and where the ask named no task. */
+	total: UsedTotal | null,
+};
+
 /**
  *  Which project template the repo's project is laid out from: `purlis_core::firstrun::Choice`
  *  on the wire, which the core keeps free of serde and specta.
@@ -6510,6 +6550,21 @@ export type UnreadFor =
 /**  Anything else. The token may or may not be the cause. */
 "other";
 
+/**  Why a chat's tokens are a dash: true in every case that leads to it. */
+export type Unsaid = 
+/**
+ *  An open chat whose conversation is known and whose harness has said nothing so far:
+ *  no turn has ended yet, or its harness reports none.
+ */
+"not_yet" | 
+/**  A task that ended with no figure kept: its harness said nothing. */
+"nothing" | 
+/**
+ *  purlis cannot tell: it does not know the chat's conversation, or the record could not
+ *  be read.
+ */
+"not_known";
+
 /**  One turn of the trend. */
 export type UsageTurn = {
 	/**  The share of that turn's input served from cache, in its tone. */
@@ -6518,6 +6573,16 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**  The menu's total line, and what it adds up. */
+export type UsedTotal = {
+	/**  How many tasks it counts. */
+	tasks: number,
+	/**  The line as drawn: `5 tasks · 310k tokens · 6m`. */
+	said: string,
+	/**  What the line adds up and what it leaves out, in sentences: its title. */
+	explained: string,
 };
 
 /**  What a press on the Notice answered: the sentence it then says. */
