@@ -7,6 +7,8 @@ import { TabTasks } from "./TabChip";
 import type { Shown } from "./shownState";
 import { stateClock } from "./stateClock";
 import { REST_MS, type Ended, type Needing } from "./tabTasks";
+import type { TasksUsed } from "./bindings";
+import type { UsedAsk, UsedReader } from "./tasksUsed";
 
 /**
  * **A tab's chip, drawn alone** (#1487): what it does that the window has no way to bring
@@ -76,7 +78,7 @@ function chip(
     needs?: Needing[];
     dragging?: () => boolean;
     limits?: ReactNode;
-    totals?: ReactNode;
+    used?: UsedReader;
   } = {},
 ) {
   const onShow = vi.fn();
@@ -96,7 +98,7 @@ function chip(
         dragging={over.dragging ?? (() => false)}
         onShow={onShow}
         limits={over.limits}
-        totals={over.totals}
+        used={over.used}
       />
     </ChatsHere.Provider>,
   );
@@ -341,17 +343,75 @@ describe("a tab's chip", () => {
     expect((menu() as HTMLElement).querySelector(".tasks-menu-foot")).toBeNull();
   });
 
-  it("draws the limits and the totals it is handed at the foot of its menu, under the rows", () => {
-    chip({ limits: "4 of 6 running", totals: "5 tasks · 310k tokens · 6m" });
+  it("draws the limits it is handed and what the tasks used at the foot of its menu, under the rows", async () => {
+    chip({ limits: "4 of 6 running", used: reader(USED) });
     fireEvent.click(counts());
 
     const foot = (menu() as HTMLElement).querySelector(".tasks-menu-foot") as HTMLElement;
     expect(foot.querySelector(".tasks-menu-limits")?.textContent).toBe("4 of 6 running");
-    expect(foot.querySelector(".tasks-menu-totals")?.textContent).toBe(
-      "5 tasks · 310k tokens · 6m",
+    await waitFor(() =>
+      expect(foot.querySelector(".tasks-menu-totals")?.textContent).toBe(
+        "2 tasks · 310k tokens · 6m",
+      ),
+    );
+    expect(foot.querySelector(".tasks-menu-totals")?.getAttribute("title")).toBe(
+      USED.total?.explained,
     );
     // After every row, and not a row: nothing in it is picked.
     expect((menu() as HTMLElement).lastElementChild).toBe(foot);
     expect(within(foot).queryByRole("menuitem")).toBeNull();
+  });
+});
+
+/** What the core answers for the tab of `ROWS` and one finished task. */
+const USED: TasksUsed = {
+  chats: [
+    { session: 1, tokens: "100k in, 20k out" },
+    { session: 2, tokens: "60k in, 10k out" },
+  ],
+  finished: [{ id: "report", tokens: null }],
+  total: {
+    tasks: 2,
+    said: "2 tasks · 310k tokens · 6m",
+    explained: "Tokens, as each harness reported them: 120k by the session's own chat.",
+  },
+};
+
+function reader(answer: TasksUsed) {
+  return vi.fn<(ask: UsedAsk) => Promise<TasksUsed | undefined>>(() => Promise.resolve(answer));
+}
+
+describe("what a session's tasks used (#1500)", () => {
+  it("is read as the menu opens, for the session, its open tasks and its ended ones, and not before", async () => {
+    const read = reader(USED);
+    chip({ used: read, ended: [finished("report", { folds: false, shown: FAILED })] });
+    expect(read).not.toHaveBeenCalled();
+
+    fireEvent.click(counts());
+
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    expect(read.mock.calls[0][0]).toEqual({ own: 1, chats: [2], finished: ["report"] });
+  });
+
+  it("says each task's tokens on its line's hover, and a dash where its harness reported none", async () => {
+    chip({
+      used: reader(USED),
+      ended: [finished("report", { folds: false, shown: FAILED })],
+    });
+    fireEvent.click(counts());
+
+    const talk = await screen.findByRole("menuitem", { name: /^talk/ });
+    await waitFor(() => expect(talk.getAttribute("title")).toBe("Tokens: 60k in, 10k out"));
+    const report = screen.getByRole("menuitem", { name: /^report/ });
+    expect(report.getAttribute("title")).toBe("Tokens: — (its harness reported none)");
+    expect(report.getAttribute("title")).not.toContain("0");
+  });
+
+  it("says nothing of tokens where the window hands it no reader", () => {
+    chip();
+    fireEvent.click(counts());
+
+    expect((menu() as HTMLElement).querySelector(".tasks-menu-totals")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /^talk/ }).getAttribute("title")).toBeNull();
   });
 });

@@ -290,6 +290,7 @@ macro_rules! app_commands {
                 settings::workspace_settings,
                 settings::save_workspace_settings,
                 usage::chat_usage,
+                tasksused::tasks_used,
                 pin::plane_pin,
                 about::about_charter,
                 clipath::install_cli_on_path,

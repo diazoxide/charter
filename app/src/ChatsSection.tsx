@@ -26,6 +26,7 @@ import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
 import { HelpersSaid } from "./ExplorerChats";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
+import { useTokensOnHover } from "./tasksUsed";
 import {
   arranged,
   filters,
@@ -959,6 +960,11 @@ const Row = memo(function Row({
     ownBranch,
     cameFrom,
   ].filter((one): one is string => one !== null);
+  // A task's tokens, on its row's hover (#1500): read as the pointer comes on, never polled.
+  const used = useTokensOnHover({ chat: session });
+  const hover = [lines === 1 ? second.join(" · ") : "", task ? (used.said ?? "") : ""]
+    .filter((one) => one !== "")
+    .join("\n");
   return (
     <li role="none" data-level={level}>
       {open === null ? (
@@ -1002,7 +1008,8 @@ const Row = memo(function Row({
             data-lines={lines}
             // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
             data-session={session}
-            title={lines === 1 && second.length > 0 ? second.join(" · ") : undefined}
+            title={hover || undefined}
+            onPointerEnter={task ? used.onPointerEnter : undefined}
             // The row goes to its chat, and the words that name another chat go to that one
             // (`ChatRowHandedOff`). Enter is a press on the row itself.
             onClick={(event) => onOpen(goesTo(event.target, event.currentTarget) ?? session)}
@@ -1020,7 +1027,10 @@ const Row = memo(function Row({
               )}
               {/* Cut short where the row is narrow, and whole here for a pointer that rests
                   on it; a screen reader is told the text, which is always the whole name. */}
-              <span className="session" title={name}>
+              <span
+                className="session"
+                title={task && used.said !== undefined ? `${name}\n${used.said}` : name}
+              >
                 {name}
               </span>
               {/* Its state, a mark and a word (#1484): the hand of a chat that needs you is

@@ -48,6 +48,8 @@ import {
   type Needing,
 } from "./tabTasks";
 import { TASK_BUCKETS, TASK_BUCKET_DRAWN, tasksIn, type TaskBucket } from "./taskBuckets";
+import type { TasksUsed } from "./bindings";
+import { askOf, tokensOfLine, tokensSaid, type UsedAsk, type UsedReader } from "./tasksUsed";
 import { property } from "./theme/theme";
 
 /** Each count's mark: its shape as it is drawn (`StateShown` draws the same four for a row). */
@@ -85,10 +87,15 @@ type Props = {
   /** Moves a task (#1489): to a tab of its own, beside its session, or back out of either.
    *  Left out, a task's line offers none of them. */
   onPlace?: (session: number, where: Place) => void;
-  /** The menu's footer, for what later says it: the limits that bind (#1498) and what the
-   *  tasks used (#1500). Nothing is drawn for a slot nobody fills. */
+  /** The menu's footer, for what later says it: the limits that bind (#1498). Nothing is
+   *  drawn for a slot nobody fills. */
   limits?: ReactNode;
-  totals?: ReactNode;
+  /**
+   * Reads what the tab's chats used (#1500): each line's tokens, on its hover, and the total
+   * line at the menu's foot. Read as the menu opens and when a chat of it changes state while
+   * it is open, never on a timer. Left out, the menu says nothing of tokens.
+   */
+  used?: UsedReader;
   /**
    * The two rows that end task `session`, from the window's catalogue (#1488,
    * `actions.taskEndIds`): Stop and get its report, then Close now. Read as the menu is
@@ -183,7 +190,7 @@ function sameChip(was: Props, now: Props): boolean {
     was.onShow === now.onShow &&
     was.onPlace === now.onPlace &&
     was.limits === now.limits &&
-    was.totals === now.totals &&
+    was.used === now.used &&
     was.ends === now.ends &&
     was.onPress === now.onPress &&
     sameRows(was.rows, now.rows) &&
@@ -244,7 +251,7 @@ function Chip({
   onShow,
   onPlace,
   limits,
-  totals,
+  used,
   ends,
   onPress,
 }: Props) {
@@ -365,6 +372,7 @@ function Chip({
   };
 
   const { lines, finished } = menuOf(rows, kinds, ended, current);
+  const figures = useUsed(used, open, [...lines, ...finished], kinds);
   // The fold is open where the chat on screen is in it, so its line is never hidden.
   const folded = !unfolded && !finished.some((line) => line.current);
   const quiet = how === "rest";
@@ -401,6 +409,7 @@ function Chip({
       line={one}
       clock={clock}
       quiet={quiet}
+      tokens={tokensSaid(tokensOfLine(figures, one))}
       reportOpen={reports.has(one.key)}
       onPick={pick}
       onPlace={
@@ -630,10 +639,20 @@ function Chip({
                 </Menu.Item>
               )}
               {!folded && finished.map(line)}
-              {(limits != null || totals != null) && (
+              {(limits != null || figures?.total != null) && (
                 <div className="tasks-menu-foot">
                   {limits != null && <div className="tasks-menu-limits">{limits}</div>}
-                  {totals != null && <div className="tasks-menu-totals">{totals}</div>}
+                  {/* What the tab's chats used (#1500, V100-43): one line, added up and
+                      spelled by the core, with what it adds up on its title. No money. */}
+                  {figures?.total != null && (
+                    <div
+                      className="tasks-menu-totals"
+                      data-testid="tasks-used"
+                      title={figures.total.explained}
+                    >
+                      {figures.total.said}
+                    </div>
+                  )}
                 </div>
               )}
             </Menu.Content>
@@ -680,6 +699,7 @@ function TaskLine({
   line,
   clock,
   quiet,
+  tokens,
   reportOpen,
   onPick,
   onPlace,
@@ -688,6 +708,8 @@ function TaskLine({
   clock: StateClock;
   /** Whether the menu took no keyboard (a rest opened it). */
   quiet: boolean;
+  /** What the line's chat used, as its hover says it (#1500); nothing before it is read. */
+  tokens: string | undefined;
   reportOpen: boolean;
   /** Answers whether the menu is done with: it went to a chat. */
   onPick: (line: Line) => boolean;
@@ -709,6 +731,7 @@ function TaskLine({
         data-current={line.current ? "" : undefined}
         aria-expanded={line.report === undefined ? undefined : reportOpen}
         textValue={line.name}
+        title={tokens}
         onPointerMove={quiet ? keepsNoKeyboard : undefined}
         onPointerLeave={quiet ? keepsNoKeyboard : undefined}
         // **The keyboard's way to move a task from its line** (#1489): Enter goes to it, and
@@ -738,7 +761,7 @@ function TaskLine({
         )}
         {/* The spaces are for whoever reads the row as text: a screen reader says the name,
             then the state, and not the two run together. The row lays them out itself. */}
-        <span className="name" title={line.name}>
+        <span className="name" title={tokens === undefined ? line.name : `${line.name}\n${tokens}`}>
           {line.name}
         </span>
         {line.current && <span className="hidden-words">, shown now</span>}
@@ -875,4 +898,34 @@ function Since({ clock, session }: { clock: StateClock; session: number }) {
       </span>
     </>
   );
+}
+
+/**
+ * **What the open menu's chats used** (#1500): asked as the menu opens, and again when a chat
+ * of it changes state while it is open (a turn ending is when a harness's figure moves). Never
+ * on a timer, and never while the menu is closed. An answer to an ask that was replaced is
+ * dropped.
+ */
+function useUsed(
+  read: UsedReader | undefined,
+  open: boolean,
+  lines: readonly Line[],
+  kinds: readonly (string | undefined)[],
+): TasksUsed | undefined {
+  const [figures, setFigures] = useState<TasksUsed>();
+  const asked = JSON.stringify(askOf(lines));
+  const moved = kinds.join(",");
+  useEffect(() => {
+    if (read === undefined || !open) return;
+    let gone = false;
+    void read(JSON.parse(asked) as UsedAsk).then((used) => {
+      if (!gone && used !== undefined) setFigures(used);
+    });
+    return () => {
+      gone = true;
+    };
+  }, [read, open, asked, moved]);
+  // The last answer stays drawn until the next lands, so a line's figure does not blink out
+  // as a state moves; a line it does not name says nothing.
+  return open ? figures : undefined;
 }
