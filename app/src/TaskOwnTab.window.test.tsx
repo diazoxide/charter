@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
@@ -104,7 +105,17 @@ const ENDS = [
   "smart_close",
 ];
 
-function core(open: Listed[], running: string[] = []) {
+/** What a test's core does beside the ordinary. */
+type Core = {
+  /** The chats at work below a closing chat, by name: what its close asks about. */
+  running?: string[];
+  /** The chats a stop of everything below does not end. */
+  spared?: number[];
+  /** The chats the project's instructions changed under, with the files. */
+  updated?: { session: number; files: string[] }[];
+};
+
+function core(open: Listed[], { running = [], spared = [], updated = [] }: Core = {}) {
   const asked: Asked[] = [];
   mockIPC(
     (cmd, args) => {
@@ -140,7 +151,9 @@ function core(open: Listed[], running: string[] = []) {
           open
             .filter((chat) => chat.from?.task && chat.from.chat === session)
             .flatMap((chat) => [...below(chat.session), chat.session]);
-        const gone = [...below(a.session as number), a.session as number];
+        const gone = [...below(a.session as number), a.session as number].filter(
+          (session) => !spared.includes(session),
+        );
         for (const session of gone)
           open.splice(
             open.findIndex((chat) => chat.session === session),
@@ -149,6 +162,15 @@ function core(open: Listed[], running: string[] = []) {
         return gone;
       }
       if (cmd === "smart_close_offer") return { available: false, why: null, close_first: false };
+      if (cmd === "chats_plane_updated") return updated;
+      if (cmd === "ask_chat_restart") return null;
+      if (cmd === "restart_chat") {
+        // The same chat on its conversation, under a new number.
+        const one = open.find((chat) => chat.session === a.session);
+        if (!one) throw new Error(`no chat ${String(a.session)} is open`);
+        one.session = (a.session as number) + 20;
+        return { chat: asListed(one), notices: [], not_yet: null };
+      }
       if (cmd === "dispatch_grants_needed") return [];
       if (cmd === "vault_refusals") return [];
       if (cmd === "owed_restarts") return [];
@@ -251,8 +273,8 @@ const withTasks = () => [
   chat(7, "alpha", { persona: "devops", label: "deep", from: taskOf(4, { name: "talk" }) }),
 ];
 
-async function drawn(open: Listed[], running: string[] = []) {
-  const held = core(open, running);
+async function drawn(open: Listed[], how: Core = {}) {
+  const held = core(open, how);
   render(<App />);
   const tree = await section();
   await waitFor(() => expect(rows(tree)).toHaveLength(open.length));
@@ -627,7 +649,9 @@ describe("opening a task beside its session", () => {
   });
 
   it("closes the session's tab without ending the task beside it, which goes back to the list", async () => {
-    const { tree, asked } = await drawn(withTasks(), ["talk", "sweep", "probe", "deep"]);
+    const { tree, asked } = await drawn(withTasks(), {
+      running: ["talk", "sweep", "probe", "deep"],
+    });
     row(tree, "talk").focus();
     await userEvent.keyboard(" ");
     await waitFor(() => expect(onScreen()).toEqual([1, 4]));
@@ -676,7 +700,9 @@ describe("the setting that opens tasks in their own tabs", () => {
 
 describe("the session's close, the only close on the strip", () => {
   it("says how many of its tasks have a tab of their own, and sends them back when they are kept", async () => {
-    const { tree, asked } = await drawn(withTasks(), ["talk", "sweep", "probe", "deep"]);
+    const { tree, asked } = await drawn(withTasks(), {
+      running: ["talk", "sweep", "probe", "deep"],
+    });
     await toOwnTab(tree, "talk");
     await toOwnTab(tree, "sweep");
 
@@ -707,7 +733,9 @@ describe("the session's close, the only close on the strip", () => {
   });
 
   it("takes their tabs with it when the answer is to stop them", async () => {
-    const { tree, asked } = await drawn(withTasks(), ["talk", "sweep", "probe", "deep"]);
+    const { tree, asked } = await drawn(withTasks(), {
+      running: ["talk", "sweep", "probe", "deep"],
+    });
     await toOwnTab(tree, "talk");
 
     await userEvent.click(ender("steward 1") as HTMLElement);
@@ -722,7 +750,7 @@ describe("the session's close, the only close on the strip", () => {
   });
 
   it("says nothing of tabs for a session none of whose tasks has one", async () => {
-    await drawn(withTasks(), ["talk"]);
+    await drawn(withTasks(), { running: ["talk"] });
     await userEvent.click(ender("steward 1") as HTMLElement);
     const question = await screen.findByRole("alertdialog", { name: "End chat steward 1?" });
     expect(question.textContent).not.toContain("of its own");
@@ -768,5 +796,239 @@ describe("after a relaunch", () => {
         { plane: PLANE, session: 12, shown: null, beside: null },
       ]),
     );
+  });
+});
+
+describe("nothing drawn on a task's tab ends it (fix round 1, M2)", () => {
+  const changed = { updated: [1, 4].map((session) => ({ session, files: ["CLAUDE.md"] })) };
+
+  it("draws no Start fresh mark on a task's own tab, where a session's tab has one", async () => {
+    const { tree } = await drawn(withTasks(), changed);
+    await toOwnTab(tree, "talk");
+
+    // The session's tab wears the mark: the project's instructions changed under it.
+    await userEvent.click(tab("steward 1"));
+    await waitFor(() =>
+      expect(within(cell("steward 1")).queryByRole("button", { name: /fresh/i })).not.toBeNull(),
+    );
+    // The task's tab does not, though they changed under it too.
+    const said = [...cell("talk").querySelectorAll("button")].map(
+      (button) => button.getAttribute("aria-label") ?? button.textContent ?? "",
+    );
+    expect(said.filter((name) => /\b(fresh|end|close|stop|restart)\b/i.test(name))).toEqual([]);
+  });
+
+  it("keeps Start fresh in the tab's menu as a row that cannot run, and says why", async () => {
+    const { tree, asked } = await drawn(withTasks(), changed);
+    await toOwnTab(tree, "talk");
+
+    fireEvent.contextMenu(tab("talk"));
+    const row = await screen.findByRole("menuitem", { name: /^Start chat .*talk fresh/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.title).toContain("This chat is a task");
+    expect(commandsOf(asked, "start_chat_fresh")).toEqual([]);
+  });
+
+  it("asks before a task's Restart chat, and restarts nothing until the person says so", async () => {
+    const { tree, asked } = await drawn(withTasks());
+    await toOwnTab(tree, "talk");
+
+    fireEvent.contextMenu(tab("talk"));
+    await pick(/^Restart chat .*talk/);
+
+    const question = await screen.findByRole("alertdialog", { name: "Restart talk?" });
+    expect(question.textContent).toContain("It stays a task of the chat that asked for it");
+    expect(commandsOf(asked, "ask_chat_restart")).toEqual([]);
+    await userEvent.click(within(question).getByRole("button", { name: "Restart chat" }));
+    await waitFor(() =>
+      expect(commandsOf(asked, "ask_chat_restart")).toEqual([{ plane: PLANE, session: 4 }]),
+    );
+  });
+
+  it("lists a task's Send back above the line of its tab's menu: it ends nothing", async () => {
+    const { tree } = await drawn(withTasks());
+    await toOwnTab(tree, "talk");
+
+    fireEvent.contextMenu(tab("talk"));
+    const menu = await screen.findByRole("menu");
+    const items = [...menu.querySelectorAll('[role="menuitem"], [role="separator"]')];
+    const back = items.findIndex((one) => one.textContent?.includes("Send talk back"));
+    const line = items.findIndex((one) => one.getAttribute("role") === "separator");
+    expect(back).toBeGreaterThanOrEqual(0);
+    expect(line < 0 || back < line).toBe(true);
+  });
+});
+
+describe("a session's pane goes: its tasks' own tabs go back to the list, by every path (M3)", () => {
+  /** talk in a tab of its own, and the session's tab in front. */
+  async function withTalkInItsTab(how: Core = {}) {
+    const held = await drawn(withTasks(), how);
+    await toOwnTab(held.tree, "talk");
+    await userEvent.click(tab("steward 1"));
+    await waitFor(() => expect(onScreen()).toEqual([1]));
+    return held;
+  }
+  /** talk's tab is gone, talk is not ended, and the core is told it has no tab. */
+  async function talkWentBack({ asked, tree }: { asked: Asked[]; tree: HTMLElement }) {
+    await waitFor(() => expect(tabNames()).toEqual(["steward 2"]));
+    expect(row(tree, "talk")).toBeTruthy();
+    expect(commandsOf(asked, "open_chat_tab").at(-1)).toEqual({
+      plane: PLANE,
+      session: 4,
+      opened: false,
+    });
+    expect(ended(asked).filter((one) => one.args.session === 4 || one.cmd === "stop_chat")).toEqual(
+      [],
+    );
+  }
+
+  it("a close of the session's pane", async () => {
+    const held = await withTalkInItsTab({ running: ["talk"] });
+    await userEvent.click(screen.getByRole("button", { name: "End this pane's chat" }));
+    const question = await screen.findByRole("alertdialog");
+    // The sentence is said for this close too, and is true of it.
+    expect(question.textContent).toContain("1 of its tasks has a tab of its own");
+    await userEvent.click(within(question).getByRole("button", { name: "Close" }));
+    await talkWentBack(held);
+    expect(commandsOf(held.asked, "close_session")).toEqual([{ plane: PLANE, session: 1 }]);
+  });
+
+  it("a Smart close whose record has landed", async () => {
+    const held = await withTalkInItsTab();
+    held.open.splice(0, 1);
+    await act(() =>
+      emit("smart-close", { plane: PLANE, session: 1, phase: "closed", record: null }),
+    );
+    await talkWentBack(held);
+  });
+
+  it("the session ending, as a stop ends it", async () => {
+    const held = await withTalkInItsTab();
+    held.open.splice(0, 1);
+    await act(() => emit("chat-stop", { plane: PLANE, session: 1, phase: "stopped" }));
+    await talkWentBack(held);
+  });
+
+  it("a close that stops what is below, for a task the core did not end", async () => {
+    const held = await withTalkInItsTab({ running: ["sweep"], spared: [4, 7] });
+    await userEvent.click(ender("steward 1") as HTMLElement);
+    const question = await screen.findByRole("alertdialog", { name: "End chat steward 1?" });
+    await userEvent.click(within(question).getByRole("radio", { name: "Stop them" }));
+    await userEvent.click(within(question).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(tabNames()).toEqual(["steward 2"]));
+    expect(commandsOf(held.asked, "open_chat_tab").at(-1)).toEqual({
+      plane: PLANE,
+      session: 4,
+      opened: false,
+    });
+  });
+
+  it("the session's pane closed in a split: the task beside it goes back too, and is never the tab's own chat", async () => {
+    const { tree, asked } = await drawn(withTasks(), { running: ["talk"] });
+    row(tree, "talk").focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(onScreen()).toEqual([1, 4]));
+
+    await userEvent.click(screen.getByRole("button", { name: "End this pane's chat" }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Close" }),
+    );
+
+    await waitFor(() => expect(tabNames()).toEqual(["steward 2"]));
+    expect(commandsOf(asked, "close_session")).toEqual([{ plane: PLANE, session: 1 }]);
+    expect(row(tree, "talk")).toBeTruthy();
+    // The core is not left believing the closed session is in front, or the task beside it.
+    expect(commandsOf(asked, "chat_in_front").at(-1)).toEqual({ plane: PLANE, session: 2 });
+    expect(commandsOf(asked, "tab_shows").at(-1)).toEqual({
+      plane: PLANE,
+      session: 4,
+      shown: null,
+      beside: null,
+    });
+  });
+});
+
+describe("what the core is told is on screen (M1, M4)", () => {
+  it("says the chat in front when the tab in front comes to be another chat's without changing", async () => {
+    const { open, asked } = await drawn(withTasks());
+    expect(tab("steward 1").getAttribute("aria-selected")).toBe("true");
+
+    // steward 1 is started again on its conversation: the same tab, in front, is chat 21's.
+    fireEvent.contextMenu(tab("steward 1"));
+    await pick(/^Restart chat .*steward 1/);
+    await waitFor(() => expect(open[0].session).toBe(21));
+
+    await waitFor(() =>
+      expect(commandsOf(asked, "chat_in_front").at(-1)).toEqual({ plane: PLANE, session: 21 }),
+    );
+    expect(tabNames()).toEqual(["steward 1", "steward 2"]);
+  });
+
+  it("stops the session's pane showing a task of the task that is moved, and tells the core", async () => {
+    const { tree, asked } = await drawn(withTasks());
+    // steward 1's tab shows deep, a task of talk.
+    await userEvent.click(row(tree, "deep"));
+    await waitFor(() => expect(onScreen()).toEqual([7]));
+    await waitFor(() =>
+      expect(commandsOf(asked, "tab_shows").at(-1)).toEqual({
+        plane: PLANE,
+        session: 1,
+        shown: 7,
+        beside: null,
+      }),
+    );
+
+    await toOwnTab(tree, "talk");
+
+    // deep went with talk: the session's pane shows its own chat, and the core is told so.
+    await waitFor(() =>
+      expect(commandsOf(asked, "tab_shows").at(-1)).toEqual({
+        plane: PLANE,
+        session: 1,
+        shown: null,
+        beside: null,
+      }),
+    );
+    await userEvent.click(tab("steward 1"));
+    await waitFor(() => expect(onScreen()).toEqual([1]));
+    expect(screen.queryByTestId("task-away")).toBeNull();
+  });
+
+  it("keeps the minimise on a task's own pane while that pane shows a task of its own", async () => {
+    const { tree } = await drawn(withTasks());
+    row(tree, "talk").focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(onScreen()).toEqual([1, 4]));
+
+    await userEvent.click(row(tree, "deep"));
+    await waitFor(() => expect(onScreen()).toEqual([1, 7]));
+
+    expect(
+      screen.getByRole("button", { name: "Send talk back among steward 1's tasks" }),
+    ).toBeTruthy();
+  });
+
+  it("draws a task's tab as a task's from the launch's own word, before the list is read", async () => {
+    const open = withTasks();
+    open[2].from = taskOf(1, { tab: true });
+    core(open);
+    render(<App />);
+
+    // The first frame the tab is in: a minimise, never a session's close.
+    await waitFor(() => expect(tabNames()).toContain("talk"));
+    expect(ender("talk")?.hasAttribute("data-minimise")).toBe(true);
+  });
+
+  it("says the key in the tooltip of a line's own buttons", async () => {
+    await drawn(withTasks());
+    press(within(cell("steward 1")).getByRole("button", { name: /^Tasks of steward 1/ }));
+    const menu = await screen.findByRole("menu", { name: /^Tasks of steward 1/ });
+    const titles = [...menu.querySelectorAll<HTMLElement>(".tasks-menu-place")]
+      .slice(0, 2)
+      .map((one) => one.title);
+    expect(titles).toEqual([
+      "Move talk to its own tab (Ctrl+Enter on its line)",
+      "Open talk beside its session (Alt+Enter on its line)",
+    ]);
   });
 });

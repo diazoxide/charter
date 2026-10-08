@@ -225,7 +225,9 @@ export type Does =
    *  second press on a sentence the operator has read. A `force` here would be a row that
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
-  | { verb: "showChat"; session: number }
+  /** `inside` is the next and the previous chat in a tab (V100-36): the tab is switched to it
+   *  whatever the person set for a pressed task, so the key never gives a task a tab. */
+  | { verb: "showChat"; session: number; inside?: true }
   /** Gives a task a tab of its own (#1489). Nothing ends, and nothing is asked. */
   | { verb: "ownTab"; session: number }
   /** Opens a task beside the session that asked for it, inside that session's tab (#1489). */
@@ -655,6 +657,10 @@ export type Now = {
   /** Every running chat of the project, with or without a tab, as the Chats section lists it
    *  (#1447): each is offered Stop (#1448). */
   listed?: readonly ListedChat[];
+  /** Which chat a task is a task of, where the window knows it before `listed` is read (at a
+   *  launch, from what was put back): what makes a task's own tab a task's from its first
+   *  frame (#1489). Left out, it is read off `listed`. */
+  askedBy?: AskedBy;
   /** The chats being stopped (#1448): each one's Stop row ends it now. */
   stopping?: readonly number[];
   /** Each chat's finished tasks, by its number (#1485): a tab whose tasks have all finished
@@ -697,7 +703,7 @@ export type Doing = {
    *  what deletes is `workspace_remove` — never a lower-level call that would be past the
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
-  showChat: (session: number) => void;
+  showChat: (session: number, inside?: boolean) => void;
   /** Gives a task a tab of its own, in front. */
   ownTab: (session: number) => void;
   /** Opens a task beside its session, in the session's tab, with the keyboard in it. */
@@ -1346,6 +1352,13 @@ export function catalogue(now: Now): Offer[] {
     const files = chat === undefined ? undefined : now.planeUpdated?.[chat];
     if (files === undefined || files.length === 0) continue;
     const name = now.tabs.byId[tab].name;
+    // **Not for a task** (#1489): a fresh start is a new conversation, and a task's brief is in
+    // the one it has. The core refuses it too (`Held::start_chat_fresh`); the row stays, and
+    // says why, so its tab's menu answers the question instead of losing the row.
+    if (chat !== undefined && (now.askedBy ?? askedByOf(now.listed ?? []))(chat) !== undefined) {
+      offers.push(cannot(`tab.fresh:${tab}`, `Start chat ${name} fresh`, TASK_NOT_FRESH, name));
+      continue;
+    }
     offers.push({
       ...can(`tab.fresh:${tab}`, `Start chat ${name} fresh`, { verb: "startFresh", tab }, name),
       note: `Changed since it started: ${files.join(", ")}`,
@@ -2033,7 +2046,7 @@ export function catalogue(now: Now): Offer[] {
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   // A pane showing a view closes and ends nothing, so it says so and is not asked about.
-  const askedBy = askedByOf(now.listed ?? []);
+  const askedBy = now.askedBy ?? askedByOf(now.listed ?? []);
   offers.push(paneCloseOf(now.tabs, front?.focused, now.nameOf, askedBy));
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
@@ -2308,7 +2321,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       doing.removeWorkspace(does.workspace);
       return DID;
     case "showChat":
-      doing.showChat(does.session);
+      if (does.inside) doing.showChat(does.session, true);
+      else doing.showChat(does.session);
       return DID;
     case "ownTab":
       doing.ownTab(does.session);
@@ -2668,6 +2682,10 @@ export function ownTabId(session: number): string {
 export function backId(session: number): string {
   return `chat.back:${session}`;
 }
+
+/** Why a task is not started fresh: the core's own sentence (`A_TASK_IS_NOT_STARTED_FRESH`). */
+export const TASK_NOT_FRESH =
+  "This chat is a task, and a fresh start would drop the brief it was given. Restart chat keeps its conversation. To change what it was asked, stop it and ask again.";
 
 /** What moving a task to its own tab does that its title cannot fit. */
 export const OWN_TAB_NOTE =
@@ -3055,7 +3073,7 @@ function tabChatRows(now: Now): Offer[] {
     return to === undefined || to === shown
       ? cannot(id, title, hasTasks ? `${front.name} is the only chat in this tab.` : none)
       : {
-          ...can(id, title, { verb: "showChat", session: to }),
+          ...can(id, title, { verb: "showChat", session: to, inside: true }),
           note: `${taskKeySaid(key, mac)}.${taskKeyNote(key, mac)}`,
         };
   };
@@ -3532,7 +3550,13 @@ export function menuRows(what: MenuOn, offers: Catalogued): { above: Offer[]; be
   const found = (ids: readonly string[]) =>
     ids.map((id) => offers.get(id)).filter((row) => row !== undefined);
   const { above, below } = menuOn(what);
-  return { above: found(above), below: found(below) };
+  // **A row that sends a task back ends nothing, so it is above the line** (#1489): a task's
+  // own tab keeps the close's id for its minimise, and the close's id is listed below.
+  const under = found(below);
+  return {
+    above: [...found(above), ...under.filter((row) => row.does.verb === "sendBack")],
+    below: under.filter((row) => row.does.verb !== "sendBack"),
+  };
 }
 
 // ----------------------------------------------------------------------------------------

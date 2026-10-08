@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { backId, besideId, ownTabId } from "./actions";
+import { onAMac } from "./tabKeys";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect } from "./chatState";
 import { sinceSaid } from "./chatsList";
@@ -706,6 +707,7 @@ function TaskLine({
             {line.placed !== "tab" && (
               <PlaceButton
                 says={`Move ${line.name} to its own tab`}
+                keys={onAMac() ? "⌘Enter" : "Ctrl+Enter"}
                 onPress={() => onPlace(moves.session, "own")}
               >
                 <SquareArrowOutUpRight />
@@ -714,6 +716,7 @@ function TaskLine({
             {line.placed !== "beside" && (
               <PlaceButton
                 says={`Open ${line.name} beside its session`}
+                keys={onAMac() ? "⌥Enter" : "Alt+Enter"}
                 onPress={() => onPlace(moves.session, "beside")}
               >
                 <PanelRight />
@@ -752,10 +755,14 @@ function TaskLine({
  */
 function PlaceButton({
   says,
+  keys,
   onPress,
   children,
 }: {
   says: string;
+  /** The line's own key for the same thing, said in the tooltip: where the keyboard's way to
+   *  it is learned. None for a move the line has no key for. */
+  keys?: string;
   onPress: () => void;
   children: ReactNode;
 }) {
@@ -765,7 +772,7 @@ function PlaceButton({
       type="button"
       className="tasks-menu-place"
       tabIndex={-1}
-      title={says}
+      title={keys === undefined ? says : `${says} (${keys} on its line)`}
       data-says={says}
       onPointerDown={own}
       onPointerUp={own}

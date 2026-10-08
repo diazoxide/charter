@@ -9,6 +9,7 @@ import {
   ownTabId,
   paneCloseOf,
   perform,
+  TASK_NOT_FRESH,
   taskRows,
   taskShowId,
   type Doing,
@@ -218,6 +219,46 @@ describe("where a task is drawn, as rows of the catalogue (#1489, V100-38)", () 
       await perform(row, doing);
     }
     expect(calls).toEqual(["ownTab:3", "beside:3", "sendBack:2"]);
+  });
+});
+
+describe("the next and the previous chat in a tab (fix round 1)", () => {
+  it("move inside the tab whatever the person set for a pressed task", async () => {
+    const rows = rowsOf(sessions());
+    const next = rows.get("tasks.next");
+    expect(next?.does).toEqual({ verb: "showChat", session: 2, inside: true });
+    const calls: unknown[][] = [];
+    const doing = new Proxy({} as Doing, {
+      get:
+        (_, verb: string) =>
+        (...args: unknown[]) => {
+          calls.push([verb, ...args]);
+        },
+    });
+    if (next === undefined) throw new Error("no row");
+    await perform(next, doing);
+    expect(calls).toEqual([["showChat", 2, true]]);
+  });
+});
+
+describe("starting a task fresh (fix round 1, M2)", () => {
+  it("is a row that cannot run on a task's own tab, with the core's own sentence", () => {
+    const tabs = moveToOwnTab(sessions(), 2, "talk", "devops", null);
+    const rows = catalogued(
+      catalogue({
+        tabs,
+        workspaces: [],
+        needsYou: [],
+        nameOf: (number) => names[number] ?? String(number),
+        listed: all,
+        planeUpdated: { 1: ["CLAUDE.md"], 2: ["CLAUDE.md"] },
+      }),
+    );
+    expect(rows.get(`tab.fresh:${tabOf(tabs, 2)}`)).toMatchObject({
+      available: false,
+      reason: TASK_NOT_FRESH,
+    });
+    expect(rows.get(`tab.fresh:${tabOf(tabs, 1)}`)?.available).toBe(true);
   });
 });
 

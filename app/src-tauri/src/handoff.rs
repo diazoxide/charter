@@ -8951,22 +8951,25 @@ mod tests {
     }
 
     #[test]
-    fn a_persona_chat_restarted_in_its_own_place_still_owes_its_report() {
-        // Restart chat ends the old run and starts the same chat again: that is the chat
-        // going on, and nothing is reported for it.
+    fn a_task_is_not_started_fresh_and_goes_on_owing_its_report() {
+        // **A fresh start is refused for a task** (#1489): it would be a new conversation with
+        // no brief in it, still its asker's task and still owing a report on work it was never
+        // told of. Nothing is started, nothing ends, and nothing is reported for it.
         let plane = a_plane_with_personas();
         let host = Pretend::default();
         let (planes, id, steward) = a_steward_chat(&host, &plane);
         let held = planes.held(&id).expect("held");
         let task = a_task_of(&held, &id, steward, "check prod");
 
-        let again = held
-            .start_chat_fresh(task, STARTING)
-            .expect("it starts again");
+        assert_eq!(
+            held.start_chat_fresh(task, STARTING),
+            Err(crate::planes::A_TASK_IS_NOT_STARTED_FRESH.to_owned())
+        );
 
+        assert_eq!(open_chats(&held), vec![steward, task]);
         assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
         assert_eq!(
-            held.chats().handed_from(again).map(|from| from.report),
+            held.chats().handed_from(task).map(|from| from.report),
             Some(Owed::Due)
         );
         assert_eq!(held.chats().lineage(steward, None, &|_| true).running, 1);

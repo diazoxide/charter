@@ -307,6 +307,9 @@ pub struct PlaneUpdated {
     pub files: Vec<String>,
 }
 
+/// Why a task is not started fresh (#1489): what the window's question and the row say.
+pub const A_TASK_IS_NOT_STARTED_FRESH: &str = "This chat is a task, and a fresh start would drop the brief it was given. Restart chat keeps its conversation. To change what it was asked, stop it and ask again.";
+
 impl Held {
     pub fn root(&self) -> &Path {
         &self.root
@@ -859,8 +862,20 @@ impl Held {
     /// ([`crate::chats::Chats::start_fresh`]), and then the old one ended here, as a close ends
     /// it — off the board, its program gone — so nothing the window does or fails to do can leave
     /// it running. A refused start ends nothing. The new one takes the old one's place in front.
+    ///
+    /// **Refused for a task** (#1489): a fresh start is a new conversation, and a task's brief
+    /// is in the one it has. Started fresh it would still be its asker's task, still owing its
+    /// report, with nothing to say what it was asked. So nothing is started and nothing ends,
+    /// from whichever surface it was asked.
     pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
         self.not_while_stopping(session)?;
+        if self
+            .chats
+            .handed_from(session)
+            .is_some_and(|from| from.mode == purlis_core::reopen::Mode::Task)
+        {
+            return Err(A_TASK_IS_NOT_STARTED_FRESH.to_owned());
+        }
         let started = self.chats.start_fresh(session, size)?;
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat

@@ -33,6 +33,14 @@
   session's tasks have a tab of their own: those tabs close with the session's, and a task you
   keep running stays in the Chats list. A task beside its session is not ended by the
   session's close either (#1489).
+- **Whenever a session's pane goes, its tasks' own tabs go back to the list.** The tab's close,
+  a close of the session's pane, a Smart close and the session ending all do the same: a task
+  the session leaves running has no tab left, a task beside it included, and is in the Chats
+  list. None is ended by that (#1489).
+- **A task is not started fresh.** A fresh start is a new conversation, and a task's brief is in
+  the one it has. Its tab draws no Start fresh mark, the row in its tab's menu says why it
+  cannot run, and purlis refuses it from anywhere else. Restart chat keeps the conversation,
+  and on a task it asks first (#1489).
 - **A task you are reading is not ended under you in any pane.** A task that has reported is
   held while it is on screen in the tab in front: inside its session's tab, beside its session,
   or in a tab of its own. It is ended once you look away. No system notification is sent about

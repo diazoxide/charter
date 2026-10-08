@@ -87,6 +87,29 @@ describe("moving a task to a tab of its own", () => {
     expect(placedOf(tabs, 6, askedBy)).toBeUndefined();
   });
 
+  it("takes a task of its own out of the pane that was showing that, too", () => {
+    // The session's pane shows 6, a task of 4. Moved, 4 is 6's home: the pane it leaves could
+    // not draw 6, and would go on saying to the core that 6 is on screen.
+    const shown = switchTabTo(twoSessions(), 6, askedBy);
+    expect(visibleSessions(shown)).toEqual([6]);
+
+    const own = moveToOwnTab(shown, 4, "talk", "devops", null, askedBy);
+    expect(own.byId[tabOf(own, 1)].shows).toBeUndefined();
+    const beside = openBeside(shown, 4, askedBy, "talk");
+    expect(visibleSessions(beside)).toEqual([1, 4]);
+    expect(beside.byId[tabOf(beside, 1)].shows).toBeUndefined();
+    // A task that is not below the one moved stays where it is shown.
+    const other = moveToOwnTab(
+      switchTabTo(twoSessions(), 5, askedBy),
+      4,
+      "talk",
+      "devops",
+      null,
+      askedBy,
+    );
+    expect(shownIn(other, tabOf(other, 1))[0].session).toBe(5);
+  });
+
   it("brings its tab forward when it already has one, and adds none", () => {
     const once = selectTab(moveToOwnTab(twoSessions(), 4, "talk", "devops", null), 1);
     const twice = moveToOwnTab(once, 4, "talk", "devops", null);

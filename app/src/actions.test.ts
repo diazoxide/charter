@@ -2865,11 +2865,23 @@ describe("the chats inside the tab in front (#1487)", () => {
     });
 
     const onFour = switchTabTo(own, 4, askedBy);
-    expect(by(rows(onFour), "tasks.next")?.does).toEqual({ verb: "showChat", session: 3 });
-    expect(by(rows(onFour), "tasks.previous")?.does).toEqual({ verb: "showChat", session: 2 });
+    expect(by(rows(onFour), "tasks.next")?.does).toEqual({
+      verb: "showChat",
+      session: 3,
+      inside: true,
+    });
+    expect(by(rows(onFour), "tasks.previous")?.does).toEqual({
+      verb: "showChat",
+      session: 2,
+      inside: true,
+    });
 
     const onThree = switchTabTo(own, 3, askedBy);
-    expect(by(rows(onThree), "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
+    expect(by(rows(onThree), "tasks.next")?.does).toEqual({
+      verb: "showChat",
+      session: 1,
+      inside: true,
+    });
   });
 
   it("goes back to the session's own chat only while the tab shows a task", () => {
@@ -2958,8 +2970,12 @@ describe("the chats inside the tab in front (#1487)", () => {
     const offers = catalogue(now({ tabs: onFour, listed: without, nameOf: String }));
 
     expect(by(offers, "tasks.menu")?.available).toBe(true);
-    expect(by(offers, "tasks.next")?.does).toEqual({ verb: "showChat", session: 1 });
-    expect(by(offers, "tasks.previous")?.does).toEqual({ verb: "showChat", session: 3 });
+    expect(by(offers, "tasks.next")?.does).toEqual({ verb: "showChat", session: 1, inside: true });
+    expect(by(offers, "tasks.previous")?.does).toEqual({
+      verb: "showChat",
+      session: 3,
+      inside: true,
+    });
     expect(by(offers, "tasks.own")?.does).toEqual({ verb: "showChat", session: 1 });
   });
 });

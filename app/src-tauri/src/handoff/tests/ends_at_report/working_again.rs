@@ -306,6 +306,70 @@ fn a_task_in_a_tab_of_its_own_is_held_while_that_tab_is_in_front_and_ended_when_
 }
 
 #[test]
+fn a_task_moved_from_its_own_tab_to_beside_its_session_is_still_held_between_the_two_words() {
+    // Open beside, from a tab of its own: the window says the session is in front, and only
+    // then that the task is beside it. Between the two the task is looked at by nobody, and
+    // the look that falls there may only settle; the one after it reads again.
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().open_tab(task, true).expect("its own tab");
+    held.chats().bring_to_front(Some(task));
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task));
+
+    // The first word: the session's tab is in front. The task is on no screen the core knows.
+    held.chats().bring_to_front(Some(steward));
+    crate::dispatched::front_moved(&held);
+    assert!(!held.chats().looks_at(task));
+    // The second, inside the settle: it is beside the session.
+    held.chats()
+        .tab_shows(task, None, Some(steward))
+        .expect("beside");
+    crate::dispatched::front_moved(&held);
+    past_the_settle();
+
+    assert!(
+        open_chats(&held).contains(&task),
+        "ended between the window's two words, under the person"
+    );
+}
+
+#[test]
+fn a_task_left_as_its_tab_s_own_chat_is_looked_at_once_the_window_says_it_is_in_front() {
+    // The session's pane went from a tab that held it and its task: the tab's own chat is the
+    // task now, with the same tab in front. The window says so (it compares the chat in front,
+    // not the tab), and the task is then looked at: not ended under the person, and not
+    // notified about.
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats()
+        .tab_shows(task, None, Some(steward))
+        .expect("beside");
+    works(&held, task);
+
+    // What the window says when the session's pane has gone: the task is in front, beside
+    // nothing.
+    held.chats().bring_to_front(Some(task));
+    held.chats().tab_shows(task, None, None).expect("its own");
+    assert_eq!(held.chats().looked_at(), vec![task]);
+
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(
+        open_chats(&held).contains(&task),
+        "ended under the person, in the tab in front"
+    );
+    // Had the window gone on saying the session was in front, it would not be.
+    held.chats().bring_to_front(Some(steward));
+    assert!(!held.chats().looks_at(task));
+}
+
+#[test]
 fn a_working_task_sent_back_out_of_its_tab_goes_on_working() {
     // The minimise never ends a task: one that has not reported is as open after it as before.
     let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();

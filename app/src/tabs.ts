@@ -1402,6 +1402,24 @@ export function tasksPlacedBelow(
 }
 
 /**
+ * **`tabs` as a task leaves the pane it was shown in** (#1489): no pane goes on showing the
+ * task, **or any chat below it**. Those are at home wherever the task goes (`homeOf`), so a
+ * pane left showing one could not draw it, and the core would go on being told it is on
+ * screen there: its end held and its notifications withheld for a chat nobody can see.
+ */
+function leftBy(tabs: Tabs, task: number, askedBy: AskedBy): Tabs {
+  const goes = (shown: number): boolean => {
+    const seen = new Set<number>();
+    for (let at: number | undefined = shown; at !== undefined && !seen.has(at); at = askedBy(at)) {
+      if (at === task) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  return keepShown(tabs, (shown) => !goes(shown));
+}
+
+/**
  * `tabs` without chat `session`'s pane, wherever it is, and without its tab where that was its
  * only pane. **Nothing is put in front**: the caller says what is. Answers `tabs` itself for a
  * chat with no pane.
@@ -1436,14 +1454,13 @@ export function moveToOwnTab(
   chat = "",
   who: string | null = null,
   label: string | null = null,
+  /** Who asked whom: what says which shown chats are below the task, and go with it. */
+  askedBy: AskedBy = () => undefined,
 ): Tabs {
   const at = ownedIn(tabs).get(task);
   if (at !== undefined && chatOf(tabs, at.tab) === task) return selectTab(tabs, at.tab);
   const front = tabs.inFront;
-  const cleared = withoutPaneOf(
-    keepShown(tabs, (shown) => shown !== task),
-    task,
-  );
+  const cleared = withoutPaneOf(leftBy(tabs, task, askedBy), task);
   return openTab({ ...cleared, inFront: cleared.inFront ?? front }, task, chat, who, label);
 }
 
@@ -1479,10 +1496,7 @@ export function placeBeside(tabs: Tabs, task: number, askedBy: AskedBy, chat?: s
   if (before === undefined) return tabs;
   const had = ownedIn(tabs).get(task);
   if (had !== undefined && had.tab === before.tab) return tabs;
-  const cleared = withoutPaneOf(
-    keepShown(tabs, (shown) => shown !== task),
-    task,
-  );
+  const cleared = withoutPaneOf(leftBy(tabs, task, askedBy), task);
   const home = sessionOf(cleared, task, askedBy);
   if (home === undefined) return tabs;
   const tab = cleared.byId[home.tab];

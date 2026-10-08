@@ -1626,13 +1626,23 @@ button.show-more:focus-visible {
 }
 
 /* **The buttons at the end of a task's line, which move it** (#1489): to a tab of its own,
-   beside its session, back. Drawn only while the pointer is on the line, and taking no room
-   when they are not, so a line reads as it did and the menu is no wider. */
+   beside its session, back. Drawn only while the pointer is on the line, **over the line's
+   end and out of its flow**: a line is laid out the same with and without them, so nothing
+   moves under the pointer and the menu is no wider. They cover the end of the line while
+   they are there, on the row's own hover colour. */
+.tasks-menu-row {
+  position: relative;
+}
+
 .tasks-menu-places {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.3rem;
   display: none;
-  flex: none;
   gap: 0.15rem;
   align-items: center;
+  padding-inline-start: 0.4rem;
+  background: var(--tab-active);
 }
 
 .tasks-menu-row:hover .tasks-menu-places {
