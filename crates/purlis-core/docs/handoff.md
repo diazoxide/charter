@@ -639,7 +639,9 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   reported, and is a finished row when you close it. A task you have in front of you is not
   ended under you; it is ended when you move to another chat. A task reading the report of a
   task of its own is ended when that turn is over, and the bounded wait ends only the turn
-  that reported. Never while a task of its own is still at work. **Three reports end
+  that reported: a turn its harness starts by itself after that one is over is waited for
+  too. A wait that runs out while the task shows you a prompt starts again once you answer
+  it, since the turn that reported goes on. Never while a task of its own is still at work. **Three reports end
   nothing**: one that came out blocked (the task is waiting on something), the report of a
   persona chat you started yourself with Ask from a tab (it is your conversation), and one
   whose asking chat has gone. A task that had reported when the app quit is not started again
