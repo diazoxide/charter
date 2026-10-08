@@ -287,6 +287,7 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
             chat: Some("steward 3".to_owned()),
             locked: None,
             waiting: false,
+            declined: false,
         }]
     );
     assert_eq!(
@@ -344,6 +345,7 @@ fn allow_for_me_on_this_machine_is_kept_in_this_machine_s_record_and_covers_ever
             chat: Some("steward 3".to_owned()),
             locked: None,
             waiting: false,
+            declined: false,
         }]
     );
     assert_eq!(world.audited().len(), 1, "one Allow, one audit");
@@ -1762,6 +1764,7 @@ fn any_persona_is_granted_from_settings_audited_and_covers_a_persona_added_later
             asking: "steward".to_owned(),
             level: GrantLevel::You,
             waiting: false,
+            declined: false,
         }]
     );
     let (store, _) = store();
@@ -1844,6 +1847,7 @@ fn a_teammate_s_any_persona_waits_in_settings_and_covers_nothing_until_it_is_all
             asking: "steward".to_owned(),
             level: GrantLevel::Project,
             waiting: true,
+            declined: false,
         }]
     );
     // Asked on a chat's tab, Allow for everyone grants that pair and no more.
@@ -2034,3 +2038,6 @@ fn a_never_stands_whatever_becomes_of_this_machine_s_other_record() {
         refused
     );
 }
+
+#[path = "dispatchgrants_table_tests.rs"]
+mod table;

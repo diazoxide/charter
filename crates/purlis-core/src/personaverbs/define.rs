@@ -191,6 +191,12 @@ pub fn create(root: &Path, ask: &Create, register_vault: Option<RegisterVault>, 
         return 1;
     }
 
+    // A name that defines nothing yet is about to be taken: whatever dispatch grant still
+    // names it was an earlier persona's, and the new one does not inherit it (#1504).
+    if !existing.exists() {
+        set_aside_dispatch_grants(root, name, &mut *say);
+    }
+
     // Counted before anything is written, and only for a name that defines nothing yet: a
     // pointer naming a persona `--force` is overwriting was never stale.
     let revived = if existing.exists() {
@@ -326,6 +332,29 @@ fn dependents_of(root: &Path, name: &str) -> Vec<String> {
     out
 }
 
+/// **Sets aside the dispatch grants on this machine that name `name`** (#1504,
+/// [`crate::dispatchdormant`]): a persona that is removed leaves none in force, and one made
+/// under a name an earlier persona had inherits none. Says so where there were any. Never
+/// fails the command: a record that could not be written is said, and Settings sets the same
+/// grants aside the next time it reads them.
+fn set_aside_dispatch_grants(root: &Path, name: &str, say: Sink) {
+    match crate::dispatchdormant::persona_gone(root, name) {
+        Ok(moved) if moved.is_empty() => {}
+        Ok(moved) => say(Say::Info(format!(
+            "Set aside {} dispatch {} on this machine that named '{name}': in force for no \
+             chat until you give each back or remove it, in {}.",
+            moved.len(),
+            if moved.len() == 1 { "grant" } else { "grants" },
+            crate::dispatchgrant::SETTINGS
+        ))),
+        Err(why) => say(Say::Info(format!(
+            "purlis could not set aside the dispatch grants that name '{name}' ({why}). Open \
+             {} to do it.",
+            crate::dispatchgrant::SETTINGS
+        ))),
+    }
+}
+
 /// `charter persona remove <name>`, and its exit code. `selection` is what this shell
 /// resolves to now: the plane-wide file is dropped when it is what selects `name`.
 pub fn remove(
@@ -407,6 +436,7 @@ pub fn remove(
             "  also removed generated .claude/agents/{name}.md."
         )));
     }
+    set_aside_dispatch_grants(root, name, &mut *say);
     say(Say::Info(
         "Its local vault (if any) is left untouched — remove with `purlis vault remove \
          <vault>`."

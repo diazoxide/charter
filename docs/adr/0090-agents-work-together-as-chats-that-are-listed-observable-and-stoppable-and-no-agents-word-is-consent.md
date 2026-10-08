@@ -618,5 +618,24 @@ their machine, never committed, and it is the one deny among the records of disp
 **5. The audit** gains a never and its lifting beside a grant and its revoke; a grant for any
 persona is a grant whose target is `*`.
 
+**6. One table in Settings (V100-24).** Settings › Project › Dispatch lists each persona and
+whom it may dispatch to, with where every grant comes from (this chat, me on this machine, the
+project) and the action for that source, and it is the one place "any persona" is set and
+cleared. Taking a grant back stops new dispatches only: a task already running is left as it
+is. A project grant can be removed for everyone, which edits the committed file, or stopped on
+one machine (**Not on my machine**), which does not. #1504 builds it.
+
+**7. A persona removed, made again, or renamed (V100-61).** A grant is kept by name, so a name
+that changes hands carries nothing with it.
+
+- When a persona is removed, the person's grants on that machine that name it are set aside,
+  out of the records in force, and that machine's acceptance of the project's grants for the
+  name is dropped. They are shown greyed with Remove.
+- A persona made later under the same name gets none of them unless the person gives each
+  back in Settings.
+- **A never is not set aside.** It is the one deny, so it keeps holding for whichever persona
+  has the name, until the person lifts it.
+- A rename through purlis rewrites the name in every record and in `[dispatch.grants]`.
+
 Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
-(#1506), and what a persona removed and made again under the same name inherits (V100-61).
+(#1506).

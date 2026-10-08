@@ -68,6 +68,18 @@
 //! not "no nevers"**: no grant covers any pair of two personas until it reads
 //! ([`Covers::Unread`]).
 //!
+//! # Not on my machine, and a persona that is gone (#1504)
+//!
+//! **Not on my machine** ([`decline`]) stops this machine following one grant of the
+//! project's, a pair or "any persona", without touching the committed file. It takes away
+//! this machine's acceptance, which is what puts a project grant in force here, and remembers
+//! the grant as declined so it is not told as new again.
+//!
+//! **A removed persona's grants are set aside** ([`crate::dispatchdormant`]): out of the
+//! records read here, until the person removes each or gives it back in Settings. A persona
+//! made later under the same name inherits none of them. A rename through purlis rewrites
+//! every record.
+//!
 //! # Policy
 //!
 //! An administrator's policy can lock all dispatch, or a pair
@@ -651,9 +663,61 @@ pub fn change_between(seen: &[String], now: &[Pair]) -> Option<Change> {
 /// `None` when nothing did. A project first seen here with grants is a change. Whether the
 /// project's chats are sandboxed makes no difference: a grant is about whose vaults and hosts a
 /// chat can ask for, sandbox or none.
+///
+/// **A pair the person said "Not on my machine" to is no news** ([`decline`]): it is not told
+/// as added and is not in what the Notice sends back, so allowing what the Notice shows never
+/// accepts it. Settings is where it is accepted.
 pub fn changed(root: &Path) -> Option<Change> {
     let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
-    change_between(&seen, &committed_at(root))
+    let declined = crate::sandbox::local::dispatch_declined(root);
+    let mut change = change_between(&seen, &committed_at(root))?;
+    change.added.retain(|one| !declined.contains(one));
+    change.now.retain(|one| !declined.contains(one));
+    (!change.added.is_empty() || !change.removed.is_empty()).then_some(change)
+}
+
+// ---- not on my machine (#1504) ----------------------------------------------------------------
+
+/// The project's grants you said "Not on my machine" to in the project at `root`, each as
+/// [`Pair`] is displayed, or `<asking> -> *` for "any persona".
+pub fn declined(root: &Path) -> Vec<String> {
+    crate::sandbox::local::dispatch_declined(root)
+}
+
+/// A project grant as [`declined`] spells it: `target` is a persona's name or [`ANY`]. `None`
+/// for names no project grant could have.
+pub fn project_grant_said(asking: &str, target: &str) -> Option<String> {
+    if target == ANY {
+        crate::personas::valid_name(asking).then(|| format!("{asking} -> {ANY}"))
+    } else {
+        Pair::new(asking, target).ok().map(|pair| pair.to_string())
+    }
+}
+
+/// Whether the project's file at `root` grants `asking` to `target` now, [`ANY`] included.
+pub fn project_grants(root: &Path, asking: &str, target: &str) -> bool {
+    if target == ANY {
+        any_committed_at(root).iter().any(|one| one == asking)
+    } else {
+        committed_at(root)
+            .iter()
+            .any(|pair| pair.asking == asking && pair.target == target)
+    }
+}
+
+/// **Not on my machine**, for the project's grant of `asking` to `target` (a persona's name,
+/// or [`ANY`]): Settings' own action. The committed file is not touched, so teammates keep it.
+/// On this machine it covers nothing from now on, accepted before or not, and is not told as
+/// new again; **Accept** in Settings is how it comes back. Refused where the file does not
+/// hold the grant.
+pub fn decline(root: &Path, asking: &str, target: &str) -> Result<(), String> {
+    let said = project_grant_said(asking, target)
+        .filter(|_| project_grants(root, asking, target))
+        .ok_or_else(|| {
+            "purlis changed nothing: the project no longer has that grant.".to_owned()
+        })?;
+    crate::sandbox::local::decline_dispatch(root, &said)
+        .map_err(|why| format!("purlis could not record it: {why}"))
 }
 
 /// Records that the person allowed `shown`, the project's grants as the Notice showed them:
@@ -700,7 +764,7 @@ pub fn forget_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
 
 /// **A dispatch grant or revoke, or a never and its lifting, as the audit records it**
 /// (`trust.dispatch.grant`, `trust.dispatch.revoke`, `trust.dispatch.never`,
-/// `trust.dispatch.never.lift`; ADR 0075 §4): who (the person, by scope, never a login), the level
+/// `trust.dispatch.never.lift`, `trust.dispatch.decline`; ADR 0075 §4): who (the person, by scope, never a login), the level
 /// and the pair. Which chat it came from, when and on which machine are the envelope's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Audited<'a> {
@@ -723,6 +787,10 @@ pub enum Act {
     Never,
     /// A never lifted.
     LiftNever,
+    /// "Not on my machine" (#1504): the project's grant is no longer followed on this
+    /// machine. Always at [`Level::Project`], which is whose grant it is; the project's file
+    /// is not changed.
+    Decline,
 }
 
 impl Audited<'_> {
@@ -733,6 +801,7 @@ impl Audited<'_> {
             Act::Revoke => "trust.dispatch.revoke",
             Act::Never => "trust.dispatch.never",
             Act::LiftNever => "trust.dispatch.never.lift",
+            Act::Decline => "trust.dispatch.decline",
         }
     }
 
@@ -828,3 +897,7 @@ mod tests;
 #[cfg(test)]
 #[path = "dispatchgrant_never_tests.rs"]
 mod never_tests;
+
+#[cfg(test)]
+#[path = "dispatchgrant_declined_tests.rs"]
+mod declined_tests;

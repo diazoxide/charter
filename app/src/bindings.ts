@@ -469,6 +469,30 @@ export const commands = {
 	 */
 	revokeDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("revoke_dispatch_to_any", { plane, asking, level })),
 	/**
+	 *  **Accept** on Settings' table (#1504): this machine follows one grant of the project's from
+	 *  now on, a pair or any persona (`target` is `*`), a teammate's that was waiting or one
+	 *  declined here. Audited first; a dispatch waiting on the person that it covers starts.
+	 *  Answers what stands now.
+	 */
+	acceptProjectDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("accept_project_dispatch", { plane, asking, target })),
+	/**
+	 *  **Not on my machine** on Settings' table (#1504): this machine stops following one grant of
+	 *  the project's, a pair or any persona (`target` is `*`). The committed file is not changed,
+	 *  so teammates keep it. Audited first. Answers what stands now.
+	 */
+	declineProjectDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("decline_project_dispatch", { plane, asking, target })),
+	/**
+	 *  **Give back** on a grant Settings shows set aside (#1504): a grant of yours that named a
+	 *  persona which was removed is in force again, for the persona of that name now. Refused
+	 *  while a name in it is no persona. Audited first. Answers what stands now.
+	 */
+	reviveDormantDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("revive_dormant_dispatch", { plane, asking, target })),
+	/**
+	 *  **Remove** on a grant Settings shows set aside (#1504): it is taken out for good. It was in
+	 *  force for no chat, so nothing changes for any. Answers what stands now.
+	 */
+	removeDormantDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target })),
+	/**
 	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
 	 *  for Settings' list and the project's Notice.
 	 */
@@ -2545,6 +2569,27 @@ export type DispatchAny = {
 	 *  nothing here until it is allowed here, in Settings.
 	 */
 	waiting: boolean,
+	/**
+	 *  Whether it is the project's and the person said "Not on my machine" to it (#1504): it
+	 *  covers nothing here, and is not told as new, until it is accepted in Settings.
+	 */
+	declined: boolean,
+};
+
+/**
+ *  A grant of yours set aside because a persona it named was no longer the project's
+ *  (#1504): in force for no chat until the person gives it back or removes it.
+ */
+export type DispatchDormant = {
+	asking: string,
+	/**  The target persona's name, or `*` where `any`. */
+	target: string,
+	/**  Whether it was "any persona". Never read from `target`. */
+	any: boolean,
+	/**  The name that was no persona's when it was set aside. */
+	was: string,
+	/**  Whether every name in it is a persona of the project now, so it can be given back. */
+	revivable: boolean,
 };
 
 /**  One dispatch grant, as Settings lists it. */
@@ -2571,6 +2616,11 @@ export type DispatchGrant = {
 	 *  nothing here until the project's Notice, or a chat's, is answered (D-1437-R1).
 	 */
 	waiting: boolean,
+	/**
+	 *  Whether it is the project's and the person said "Not on my machine" to it (#1504): it
+	 *  is `waiting` too, and is not told as new until it is accepted in Settings.
+	 */
+	declined: boolean,
 };
 
 /**
@@ -2599,6 +2649,18 @@ export type DispatchGrantsChanged = {
 	removed: string[],
 	/**  The whole list now: what the Notice sends back once it is read. */
 	now: string[],
+};
+
+/**
+ *  A pair one chat was kept blocked for, as Settings lists it: read-only, and gone when the
+ *  chat closes (#1504).
+ */
+export type DispatchKeptBlocked = {
+	/**  The chat's name, as its tab showed it when the person answered. */
+	chat: string,
+	/**  The persona the chat runs as; null for a chat on no persona. */
+	asking: string | null,
+	target: string,
 };
 
 /**  One limit, as a column of the table. */
@@ -2809,6 +2871,16 @@ export type DispatchStanding = {
 	 *  the person mends it. `nevers` is then empty, and no dispatch grant counts.
 	 */
 	nevers_unread: string | null,
+	/**
+	 *  The project's personas now, sorted: the table has a row for each, and anything that
+	 *  names another is drawn as naming no persona (#1504). Null where they could not be
+	 *  listed, and then no name is called unknown.
+	 */
+	personas: string[] | null,
+	/**  The pairs kept blocked for one chat's life, read-only. */
+	kept_blocked: DispatchKeptBlocked[],
+	/**  Your grants set aside because a persona they named was removed. */
+	dormant: DispatchDormant[],
 };
 
 /**  What the Dispatches tab is handed. */

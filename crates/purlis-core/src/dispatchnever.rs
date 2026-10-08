@@ -228,6 +228,36 @@ pub fn lift(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
     Ok(true)
 }
 
+/// **Renames a persona in every never** (#1504): a persona renamed through purlis keeps what
+/// the person refused of it, as asking persona and as target. A never that would name one
+/// persona twice is kept as it then reads, and one said twice is kept once. Refused where the
+/// record does not read, and then nothing is written.
+pub fn rename(root: &Path, from: &str, to: &str) -> io::Result<()> {
+    let Nevers::Read(now) = read(root) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            unread_said(root),
+        ));
+    };
+    if !now
+        .iter()
+        .any(|(asking, target)| asking == from || target == from)
+    {
+        return Ok(());
+    }
+    let name = |one: &str| if one == from { to } else { one }.to_owned();
+    change(root, |pairs| {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (asking, target) in pairs.drain(..) {
+            let one = (name(&asking), name(&target));
+            if !out.contains(&one) {
+                out.push(one);
+            }
+        }
+        *pairs = out;
+    })
+}
+
 #[cfg(test)]
 #[path = "dispatchnever_tests.rs"]
 mod tests;

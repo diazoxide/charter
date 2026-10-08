@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
 import { sandboxCommandReturned } from "../sandboxAsked";
-import { DispatchGrantsList } from "./DispatchGrants";
 import type { RowIds } from "./components";
 import type { SettingsGroup } from "./groups";
 
@@ -309,11 +308,21 @@ export function grantedGroup(
         id: `${GRANTED}.dispatch`,
         // Its own words: "Dispatch grants" is the row of the Dispatch page, and a label is one row's.
         label: "Who may dispatch to whom",
-        help: `Which personas' chats may dispatch to which, and who allowed it. Revoke makes the next dispatch ask again. Everyone in this project is kept in ${file}, which your team follows.`,
+        help: "Which personas' chats may dispatch to which is one table, with where each grant comes from and how to take it back.",
         useControl: function useDispatchGrants() {
           return {
             grouped: true,
-            control: (ids) => <DispatchGrantsList plane={plane} file={file} ids={ids} />,
+            // One place lists and changes them (#1504): this row only says where.
+            control: (ids) => (
+              <p
+                id={ids.id}
+                className="ui-setting-status"
+                aria-labelledby={ids.labelledBy}
+                aria-describedby={ids.describedBy}
+              >
+                Dispatch grants are listed, revoked and lifted under Settings › Project › Dispatch.
+              </p>
+            ),
           };
         },
       },

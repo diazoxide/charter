@@ -6472,6 +6472,69 @@ h2.sidebar-title .node-icon {
   color: var(--text-secondary);
 }
 
+/* Settings › Project › Dispatch (#1504): the one table of who may dispatch to whom. A row group
+   per persona; under it each target, with a row for every grant that covers the pair. Every
+   cell wraps, so the table holds in a narrow settings tab without scrolling sideways. */
+.dispatch-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.4rem;
+}
+
+.dispatch-table caption {
+  padding: 0 0 0.3rem;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.dispatch-table th,
+.dispatch-table td {
+  padding: 0.2rem 0.6rem 0.2rem 0;
+  text-align: left;
+  font-weight: normal;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-table thead th {
+  color: var(--text-secondary);
+}
+
+.dispatch-table .dispatch-persona {
+  padding-top: 0.6rem;
+  border-bottom: 1px solid var(--border-subtle);
+  font-weight: 600;
+}
+
+.dispatch-table .dispatch-persona .granted-note {
+  font-weight: normal;
+}
+
+/* Greyed, and said in words beside it: in force for no chat. */
+.dispatch-dormant th,
+.dispatch-dormant td {
+  color: var(--text-secondary);
+}
+
+.dispatch-actions,
+.dispatch-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.dispatch-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.dispatch-grants:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 /* Settings › Sandbox (#1340): the mode as a status line with its one button; each preset's hosts
    behind a disclosure; and what chats can change and what is always protected, each with why. */
 .ui-setting-status {

@@ -81,6 +81,32 @@ struct OnDisk {
     /// puts one in force.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_any_seen: Vec<String>,
+    /// The grants of yours that named a persona the project no longer had (#1504): set aside,
+    /// in force for no chat, until you remove each or give it back in Settings
+    /// ([`crate::dispatchdormant`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_dormant: Vec<Dormant>,
+    /// The project's grants you said "Not on my machine" to (#1504), each as
+    /// [`crate::dispatchgrant::Pair`] is displayed, or `<asking> -> *` for any persona. None of
+    /// them is in `dispatch_seen` or `dispatch_any_seen`, which is what keeps them out of
+    /// force; this list only stops them being told as new.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_declined: Vec<String>,
+}
+
+/// One grant of yours set aside because a persona it named was no longer the project's
+/// (#1504): `was` is the name that was gone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Dormant {
+    pub asking: String,
+    /// The target persona's name; `*` where [`Dormant::any`].
+    pub target: String,
+    /// Whether it was "any persona". **Said by this key and never by `target`**: a `*` someone
+    /// wrote as the target of a named grant granted nothing, and set aside it is still a pair
+    /// nobody can be given.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub any: bool,
+    pub was: String,
 }
 
 /// One dispatch grant of yours, as the file keeps it: chats running as `asking` may dispatch
@@ -524,7 +550,11 @@ pub fn dispatch_seen(root: &Path) -> Option<Vec<String>> {
 /// Records that the person was told of `shown`, the project's dispatch grants as the Notice
 /// showed them.
 pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
-    change(root, |held| held.dispatch_seen = Some(shown.to_vec()))
+    change(root, |held| {
+        held.dispatch_seen = Some(shown.to_vec());
+        // A yes is the newer answer: what is allowed here is no longer declined here.
+        held.dispatch_declined.retain(|one| !shown.contains(one));
+    })
 }
 
 // ---- any persona, and what an earlier build left of nevers (#1503) -----------------------
@@ -609,6 +639,8 @@ pub fn acknowledge_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
         if !held.dispatch_any_seen.iter().any(|one| one == asking) {
             held.dispatch_any_seen.push(asking.to_owned());
         }
+        let said = format!("{asking} -> {}", crate::dispatchgrant::ANY);
+        held.dispatch_declined.retain(|one| *one != said);
     })
 }
 
@@ -616,6 +648,228 @@ pub fn acknowledge_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
 pub fn forget_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
     change(root, |held| {
         held.dispatch_any_seen.retain(|one| one != asking)
+    })
+}
+
+// ---- what was set aside, what was declined, and a rename (#1504) ----------------------------
+
+/// The asking and target names of a pair as [`crate::dispatchgrant::Pair`] is displayed.
+fn sides(said: &str) -> Option<(&str, &str)> {
+    said.split_once(" -> ")
+}
+
+/// `all`, each kept once, in order.
+fn once<T: PartialEq>(all: Vec<T>) -> Vec<T> {
+    let mut out = Vec::new();
+    for one in all {
+        if !out.contains(&one) {
+            out.push(one);
+        }
+    }
+    out
+}
+
+/// The grants of yours set aside in the project at `root`, oldest first.
+pub fn dormant_dispatch(root: &Path) -> Vec<Dormant> {
+    read(root).dispatch_dormant
+}
+
+/// **Sets aside every grant of yours that names a persona `gone` says is gone**, in one write:
+/// each pair of `dispatch_mine` and each name of `dispatch_any` goes to `dispatch_dormant`, and
+/// what this machine accepted of the project's grants for that name is forgotten, so a pair
+/// the project's file still holds waits for a yes again. Answers what was set aside. Nothing
+/// is written where nothing names such a persona.
+pub fn set_aside_dispatch(root: &Path, gone: &dyn Fn(&str) -> bool) -> io::Result<Vec<Dormant>> {
+    let now = read(root);
+    let touched =
+        now.dispatch_mine
+            .iter()
+            .any(|pair| gone(&pair.asking) || gone(&pair.target))
+            || now.dispatch_any.iter().any(|one| gone(one))
+            || now.dispatch_any_seen.iter().any(|one| gone(one))
+            || now.dispatch_seen.iter().flatten().any(|said| {
+                sides(said).is_some_and(|(asking, target)| gone(asking) || gone(target))
+            });
+    if !touched {
+        return Ok(Vec::new());
+    }
+    let mut moved = Vec::new();
+    change(root, |held| {
+        moved.clear();
+        let mut keep = Vec::new();
+        for pair in std::mem::take(&mut held.dispatch_mine) {
+            let was = if gone(&pair.asking) {
+                Some(pair.asking.clone())
+            } else if gone(&pair.target) {
+                Some(pair.target.clone())
+            } else {
+                None
+            };
+            match was {
+                Some(was) => moved.push(Dormant {
+                    asking: pair.asking,
+                    target: pair.target,
+                    any: false,
+                    was,
+                }),
+                None => keep.push(pair),
+            }
+        }
+        held.dispatch_mine = keep;
+        for asking in std::mem::take(&mut held.dispatch_any) {
+            if gone(&asking) {
+                moved.push(Dormant {
+                    was: asking.clone(),
+                    asking,
+                    target: crate::dispatchgrant::ANY.to_owned(),
+                    any: true,
+                });
+            } else {
+                held.dispatch_any.push(asking);
+            }
+        }
+        held.dispatch_any_seen.retain(|one| !gone(one));
+        if let Some(seen) = held.dispatch_seen.as_mut() {
+            seen.retain(|said| {
+                !sides(said).is_some_and(|(asking, target)| gone(asking) || gone(target))
+            });
+        }
+        // What the Granted record says of a grant goes with the grant.
+        held.granted.retain(|made| {
+            !(made.what == "dispatch"
+                && made.level == "you"
+                && moved
+                    .iter()
+                    .any(|one| made.target == format!("{} -> {}", one.asking, one.target)))
+        });
+        for one in &moved {
+            if !held.dispatch_dormant.contains(one) {
+                held.dispatch_dormant.push(one.clone());
+            }
+        }
+    })?;
+    Ok(moved)
+}
+
+/// Takes one grant off what was set aside: Settings' Remove. Answers whether it was there.
+pub fn forget_dormant_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_dormant.len();
+        held.dispatch_dormant
+            .retain(|one| !(one.asking == asking && one.target == target));
+        was = held.dispatch_dormant.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// **Puts one grant that was set aside back in force**, in one write: Settings' own action, on
+/// the person's press. `any` says which is meant, "any persona" for `asking` or the pair
+/// `asking` to `target`; only an entry set aside as that is taken. Answers whether it was
+/// there.
+pub fn revive_dormant_dispatch(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    any: bool,
+) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_dormant.len();
+        held.dispatch_dormant
+            .retain(|one| !(one.asking == asking && one.target == target && one.any == any));
+        was = held.dispatch_dormant.len() != before;
+        if !was {
+            return;
+        }
+        if any {
+            if !held.dispatch_any.iter().any(|one| one == asking) {
+                held.dispatch_any.push(asking.to_owned());
+            }
+        } else {
+            let pair = DispatchPair {
+                asking: asking.to_owned(),
+                target: target.to_owned(),
+            };
+            if !held.dispatch_mine.contains(&pair) {
+                held.dispatch_mine.push(pair);
+            }
+        }
+    })?;
+    Ok(was)
+}
+
+/// The project's grants you said "Not on my machine" to in the project at `root`.
+pub fn dispatch_declined(root: &Path) -> Vec<String> {
+    read(root).dispatch_declined
+}
+
+/// **Not on my machine**, for the project's grant `said` (a pair as it is displayed, or
+/// `<asking> -> *`): this machine's acceptance of it goes, and it is remembered as declined,
+/// in one write.
+pub fn decline_dispatch(root: &Path, said: &str) -> io::Result<()> {
+    change(root, |held| {
+        if let Some(seen) = held.dispatch_seen.as_mut() {
+            seen.retain(|one| one != said);
+        }
+        if let Some((asking, target)) = sides(said)
+            && target == crate::dispatchgrant::ANY
+        {
+            held.dispatch_any_seen.retain(|one| one != asking);
+        }
+        if !held.dispatch_declined.iter().any(|one| one == said) {
+            held.dispatch_declined.push(said.to_owned());
+        }
+    })
+}
+
+/// **Renames a persona in every record of dispatch this file keeps**, in one write: your
+/// grants, "any persona", what you accepted and declined of the project's, and what the
+/// Granted record says of them. A pair that would name one persona twice is dropped; one made
+/// twice is kept once. A grant set aside is renamed on the side that is not the name it was
+/// set aside for.
+pub fn rename_dispatch_persona(root: &Path, from: &str, to: &str) -> io::Result<()> {
+    let name = |one: &str| {
+        if one == from {
+            to.to_owned()
+        } else {
+            one.to_owned()
+        }
+    };
+    let said = |one: &str| match sides(one) {
+        Some((asking, target)) => format!("{} -> {}", name(asking), name(target)),
+        None => one.to_owned(),
+    };
+    change(root, |held| {
+        held.dispatch_mine = once(
+            std::mem::take(&mut held.dispatch_mine)
+                .into_iter()
+                .map(|pair| DispatchPair {
+                    asking: name(&pair.asking),
+                    target: name(&pair.target),
+                })
+                .filter(|pair| pair.asking != pair.target)
+                .collect(),
+        );
+        held.dispatch_any = once(held.dispatch_any.iter().map(|one| name(one)).collect());
+        held.dispatch_any_seen = once(held.dispatch_any_seen.iter().map(|one| name(one)).collect());
+        if let Some(seen) = held.dispatch_seen.as_mut() {
+            *seen = once(seen.iter().map(|one| said(one)).collect());
+        }
+        held.dispatch_declined = once(held.dispatch_declined.iter().map(|one| said(one)).collect());
+        for made in &mut held.granted {
+            if made.what == "dispatch" {
+                made.target = said(&made.target);
+            }
+        }
+        for one in &mut held.dispatch_dormant {
+            if one.was != from {
+                one.asking = name(&one.asking);
+                if !one.any {
+                    one.target = name(&one.target);
+                }
+            }
+        }
     })
 }
 
