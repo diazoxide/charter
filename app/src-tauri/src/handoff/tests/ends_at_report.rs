@@ -673,7 +673,12 @@ fn a_reopen_is_refused_where_the_project_no_longer_lists_the_task_s_profile_for_
     let refused = crate::finished::reopen(&held, &record.id, A_SIZE).unwrap_err();
     assert_eq!(
         Some(refused.clone()),
-        purlis_core::dispatchprofiles::task_reopen_refusal(held.root(), Some(&persona), &profile),
+        purlis_core::dispatchprofiles::task_reopen_refusal(
+            held.root(),
+            Some(&persona),
+            &profile,
+            false
+        ),
         "the core's own sentence"
     );
     assert!(

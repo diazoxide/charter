@@ -122,6 +122,12 @@ pub struct Refused {
     /// When the person dismissed it, where they did: not listed while this stands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dismissed: Option<u64>,
+    /// Whether it was refused as a crossing into another workspace (D-1453-16): a chat nobody
+    /// is at starting a chat as another persona there, which only a grant that names the pair
+    /// and covers that workspace carries. **Such an entry is settled by that grant alone**,
+    /// never by "any persona", which is what it was refused despite. Absent: not a crossing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub crossing: bool,
 }
 
 impl Refused {
@@ -344,6 +350,29 @@ pub fn keep(
     workspace: Option<&str>,
     at: u64,
 ) -> io::Result<Kept> {
+    keep_as(root, asking, target, workspace, at, false)
+}
+
+/// [`keep`], for a crossing into `workspace` refused for lack of a grant that names the pair
+/// and covers it ([`Refused::crossing`]).
+pub fn keep_crossing(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    workspace: &str,
+    at: u64,
+) -> io::Result<Kept> {
+    keep_as(root, asking, target, Some(workspace), at, true)
+}
+
+fn keep_as(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    workspace: Option<&str>,
+    at: u64,
+    crossing: bool,
+) -> io::Result<Kept> {
     if !a_pair(asking, target) {
         return Ok(Kept::NotAPair);
     }
@@ -360,6 +389,8 @@ pub fn keep(
         {
             there.times = there.times.saturating_add(1);
             there.latest = at;
+            // Once refused as a crossing, it is judged as one: the narrower rule.
+            there.crossing |= crossing;
             kept = match there.dismissed {
                 Some(when) if at.saturating_sub(when) < QUIET_SECS => Kept::Quiet,
                 _ => {
@@ -380,6 +411,7 @@ pub fn keep(
             latest: at,
             times: 1,
             dismissed: None,
+            crossing,
         });
         kept = Kept::New;
         true

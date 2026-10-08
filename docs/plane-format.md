@@ -5298,7 +5298,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   the app's own lookup of it, else the asking chat's own), absent for the project's root;
   `first` and `latest`, when it was first and last
   refused, in seconds since 1970; `times`, at least 1; `dismissed`, when the person dismissed
-  it, absent unless they did. **Nothing a chat wrote is kept**: not the brief, not the task's
+  it, absent unless they did; `crossing`, `true` for a refusal of a crossing into another
+  workspace (a chat nobody is at starting a chat as another persona there), absent
+  otherwise. **A crossing entry is settled only by a grant that names the pair and covers
+  that workspace**, never by "any persona", which is what it was refused despite. **Nothing a chat wrote is kept**: not the brief, not the task's
   name, not the chat's name or number. Every field is the app's own record, clock or count.
 - **Dismissed holds:** Dismiss keeps the entry and writes `dismissed`. While it stands the
   entry is not listed, further refusals for it are counted without listing it, the asking
