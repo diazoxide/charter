@@ -20,7 +20,8 @@ import type { Shown } from "./shownState";
 /**
  * **The Chats section, against the whole window** (#1447): every running chat of the project
  * in one tree in the left region, nested by which chat started which. A handoff has a tab; a
- * task chat is listed with none until its row is clicked.
+ * task is listed with none of its own, and its row shows it inside the tab of the session that
+ * asked for it (#1486, and `TaskInTab.window.test.tsx` for what that tab then says).
  *
  * Nothing starts a task chat yet, so the ones here are the core's answer as a fixture: a chat
  * whose `from` says `task: true` and `tab: false`. The record that says so is `reopen.rs`'s
@@ -45,6 +46,13 @@ vi.mock("./SessionPane", () => ({
     <div data-testid="pane">session {session}</div>
   ),
 }));
+
+/** The tab in front, by its session's name. */
+const frontTab = () =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .filter((tab) => tab.getAttribute("aria-selected") === "true")
+    .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
 declare global {
   interface Window {
@@ -434,7 +442,7 @@ describe("a task chat", () => {
     expect(row(tree, "steward 1").getAttribute("data-tab")).toBe("true");
   });
 
-  it("opens as an ordinary tab, in front, when its row is clicked, and the core is told", async () => {
+  it("is shown inside its asker's tab when its row is clicked, and no tab is added", async () => {
     const { asked } = core(sixTasks());
     render(<App />);
     const tree = await section();
@@ -442,25 +450,22 @@ describe("a task chat", () => {
 
     await userEvent.click(row(tree, "devops 4"));
 
-    await waitFor(() => expect(tabNames()).toEqual(["steward 1", "devops 4"]));
-    const front = within(strip())
-      .getAllByRole("tab")
-      .filter((tab) => tab.getAttribute("aria-selected") === "true")
-      .map((tab) => tab.querySelector(".tab-name")?.textContent);
-    expect(front).toEqual(["devops 4"]);
-    expect(screen.getByTestId("pane").textContent).toBe("session 4");
-    expect(asked.filter((one) => one.cmd === "open_chat_tab").map((one) => one.args)).toEqual([
-      { plane: PLANE, session: 4 },
-    ]);
-    await waitFor(() => expect(row(tree, "devops 4").getAttribute("data-tab")).toBe("true"));
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 4"));
+    expect(tabNames()).toEqual(["steward 1"]);
+    expect(frontTab()).toEqual(["steward 1"]);
+    // No tab of its own was made for it: the core is told of none, and its row still says so.
+    expect(asked.filter((one) => one.cmd === "open_chat_tab")).toEqual([]);
+    expect(row(tree, "devops 4").getAttribute("data-tab")).toBe("false");
 
-    // A second click brings the same tab forward and opens no other.
+    // A second click changes nothing, and another task takes the first one's place.
     await userEvent.click(row(tree, "devops 4"));
-    expect(tabNames()).toEqual(["steward 1", "devops 4"]);
-    expect(asked.filter((one) => one.cmd === "open_chat_tab")).toHaveLength(1);
+    expect(screen.getByTestId("pane").textContent).toBe("session 4");
+    await userEvent.click(row(tree, "devops 6"));
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 6"));
+    expect(tabNames()).toEqual(["steward 1"]);
   });
 
-  it("opens in the workspace it works in, when that is not the one in front", async () => {
+  it("is shown in its asker's tab when it works in another workspace, on the asker's strip", async () => {
     core(sixTasks());
     render(<App />);
     const tree = await section();
@@ -468,20 +473,27 @@ describe("a task chat", () => {
 
     await userEvent.click(row(tree, "devops 3"));
 
-    // Chat 3 works in beta: the strip is beta's now, and holds its tab alone.
-    await waitFor(() => expect(tabNames()).toEqual(["devops 3"]));
-    expect(screen.getByTestId("pane").textContent).toBe("session 3");
+    // Chat 3 works in beta. It is a task of steward 1 in alpha: the strip stays alpha's.
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 3"));
+    expect(tabNames()).toEqual(["steward 1"]);
   });
 
-  it("is still listed, and the one opened still a tab, after the window is loaded again", async () => {
+  it("is still listed, and still what its asker's tab shows, after the window is loaded again", async () => {
     // The same core across both windows: a reload, and a relaunch that put the chats back,
-    // both ask it what is open.
-    core(sixTasks());
+    // both ask it what is open and which chat was in front.
+    const open = sixTasks();
+    const { asked } = core(open);
     const first = render(<App />);
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(7));
     await userEvent.click(row(tree, "devops 4"));
-    await waitFor(() => expect(tabNames()).toEqual(["steward 1", "devops 4"]));
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 4"));
+    // The record of which chat is in front is the core's: it was told the task is.
+    expect(asked.filter((one) => one.cmd === "chat_in_front").at(-1)?.args).toEqual({
+      plane: PLANE,
+      session: 4,
+    });
+    for (const one of open) one.in_front = one.session === 4;
     first.unmount();
     forgetThisLaunch();
 
@@ -499,8 +511,26 @@ describe("a task chat", () => {
         "2 devops 7",
       ]),
     );
-    expect(tabNames()).toEqual(["steward 1", "devops 4"]);
+    expect(tabNames()).toEqual(["steward 1"]);
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 4"));
     expect(row(again, "devops 2").getAttribute("data-tab")).toBe("false");
+  });
+
+  it("comes back as the tab it was, for a task an earlier purlis opened as a tab of its own", async () => {
+    // The record says this task has a tab: one was opened for it before tasks lived inside
+    // their session's tab, or its session has gone. It is still a tab.
+    core([
+      chat(1, "alpha"),
+      chat(4, "alpha", { persona: "devops", from: { ...by(1, "task"), tab: true } }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(2));
+
+    expect(tabNames()).toEqual(["steward 1", "devops 4"]);
+    await userEvent.click(row(tree, "devops 4"));
+    await waitFor(() => expect(frontTab()).toEqual(["devops 4"]));
+    expect(tabNames()).toEqual(["steward 1", "devops 4"]);
   });
 
   it("arrives as a row and no tab, where a handoff arrives as a tab", async () => {
@@ -631,14 +661,15 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
     move(3, "waiting", 10, [3]);
 
+    const tabsBefore = tabNames();
     await userEvent.click(theRolledUp(tree, "steward 1"));
 
-    // Chat 3 is a task chat in beta with no tab: it gets one, in front, on beta's strip.
-    await waitFor(() => expect(tabNames()).toEqual(["devops 3"]));
-    expect(screen.getByTestId("pane").textContent).toBe("session 3");
-    expect(asked.filter((one) => one.cmd === "open_chat_tab").map((one) => one.args)).toEqual([
-      { plane: PLANE, session: 3 },
-    ]);
+    // Chat 3 is a task in beta, asked for by drop commons in alpha: that tab comes forward
+    // showing it, and no tab is added on either strip.
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 3"));
+    expect(tabNames()).toEqual(tabsBefore);
+    expect(frontTab()).toEqual(["drop commons"]);
+    expect(asked.filter((one) => one.cmd === "open_chat_tab")).toEqual([]);
   });
 
   it("folds and opens a row from the keyboard", async () => {
@@ -673,7 +704,7 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(screen.queryByLabelText(/need you in alpha/)).toBeNull();
   });
 
-  it("opens a chat with no tab from the title bar's list", async () => {
+  it("goes to a task from the title bar's list, inside its asker's tab", async () => {
     const { move } = core(threeDeep());
     render(<App />);
     const tree = await section();
@@ -681,9 +712,12 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     move(3, "waiting", 10, [3]);
 
     await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    const tabsBefore = tabNames();
     await userEvent.click(await screen.findByRole("menuitem", { name: /^Go to devops 3/ }));
 
-    await waitFor(() => expect(tabNames()).toEqual(["devops 3"]));
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 3"));
+    expect(tabNames()).toEqual(tabsBefore);
+    expect(frontTab()).toEqual(["drop commons"]);
   });
 });
 

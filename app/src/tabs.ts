@@ -36,6 +36,10 @@ import { archiveTitle } from "./memories";
  * list you read, the strip is a surface you aim at, and the boundary is whether the thing
  * moves under your hand.
  *
+ * **A session's tab shows one of several chats** (#1486): the session's own, or a task below
+ * it. Which one is the tab's own state (`Tab.shows`), and who asked whom is the core's, handed
+ * in as `AskedBy`. `switchTabTo` is the one way a tab is switched to a chat.
+ *
  * Everything here is a plain value, so the window's whole arrangement is one state to test.
  */
 
@@ -264,6 +268,18 @@ export type Tab = {
   layout: Layout;
   /** The pane a split or a close acts on. */
   focused: number;
+  /**
+   * **What a pane shows in place of its own chat** (#1486), by pane: a task below that chat,
+   * at any depth. Absent for a tab whose every pane shows its own chat, which is every tab of
+   * a session with no tasks.
+   *
+   * **The layout is not touched.** A pane's content stays the session's own chat, so what a
+   * tab IS — whose close it is, where it is filed, what it is named after — is read exactly as
+   * before ({@link panesOf}, {@link chatOf}); only what is DRAWN in the pane reads this
+   * ({@link shownIn}, {@link layoutShown}). It is the tab's, so it is remembered while another
+   * tab is in front and goes with the tab when it closes.
+   */
+  shows?: Readonly<Record<number, number>>;
 };
 
 /**
@@ -1038,7 +1054,8 @@ export function closeFocusedPane(
   const left = without(tab.layout, tab.focused);
   if (!left) return closeTab(tabs, tab.id, filedIn, pinned, background);
   const focused = panes(left)[0].pane;
-  return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout: left, focused } } };
+  const kept = showing({ ...tab, layout: left, focused }, tab.shows);
+  return { ...tabs, byId: { ...tabs.byId, [tab.id]: kept } };
 }
 
 /**
@@ -1057,13 +1074,16 @@ export function closeChat(
   const found = tabs.order
     .flatMap((id) => panesOf(tabs, id).map((one) => ({ id, ...one })))
     .find((one) => one.session === session);
-  if (found === undefined) return tabs;
+  // **A task that was shown in its session's tab** (#1486): the tab shows the session's own
+  // chat again, and stays. A chat is one or the other, so this is the whole of it.
+  if (found === undefined) return keepShown(tabs, (shown) => shown !== session);
   const { id, pane } = found;
   const tab = tabs.byId[id];
   const left = without(tab.layout, pane);
   if (!left) return closeTab(tabs, id, filedIn, pinned, background);
   const focused = tab.focused === pane ? panes(left)[0].pane : tab.focused;
-  return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout: left, focused } } };
+  const kept = showing({ ...tab, layout: left, focused }, tab.shows);
+  return { ...tabs, byId: { ...tabs.byId, [id]: kept } };
 }
 
 /**
@@ -1096,12 +1116,197 @@ export function replaceSession(tabs: Tabs, from: number, to: number): Tabs {
     const layout = replace(tab.layout, found.pane, (pane) => ({ ...pane, content }));
     return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout } } };
   }
+  // A task shown in its session's tab, started again: the tab shows the new one (#1486).
+  for (const id of tabs.order) {
+    const tab = tabs.byId[id];
+    const at = Object.entries(tab.shows ?? {}).find(([, shown]) => shown === from);
+    if (at === undefined) continue;
+    const kept = showing(tab, { ...tab.shows, [Number(at[0])]: to });
+    return { ...tabs, byId: { ...tabs.byId, [id]: kept } };
+  }
   return tabs;
 }
 
 /** The sessions with a pane on screen: the only ones a terminal is drawing. */
 export function visibleSessions(tabs: Tabs): number[] {
-  return tabs.inFront === undefined ? [] : panesOf(tabs, tabs.inFront).map((one) => one.session);
+  return tabs.inFront === undefined ? [] : shownIn(tabs, tabs.inFront).map((one) => one.session);
+}
+
+/**
+ * **Which chat started a chat**, by number, or nothing for one a person opened (#1486).
+ *
+ * A function rather than a field, for {@link FiledIn}'s reason: who asked whom is the core's
+ * answer, and the tabs keep only what each tab shows.
+ */
+export type AskedBy = (session: number) => number | undefined;
+
+/**
+ * **Where a chat is shown: the tab and pane of the nearest chat, itself or above it, that has
+ * a pane of its own** (#1486). A session's own chat is at home in its pane; a task is at home
+ * in the pane of the session that asked for it, and a task of a task in that same pane. A chat
+ * that was given a tab of its own is at home there, and so is everything below it.
+ *
+ * Nothing when no chat above it has a tab in this window: the session that asked was closed
+ * and left its tasks, or is in another window.
+ */
+export function homeOf(
+  tabs: Tabs,
+  chat: number,
+  askedBy: AskedBy,
+): { tab: number; pane: number; own: number } | undefined {
+  const owned = new Map<number, { tab: number; pane: number }>();
+  for (const tab of tabs.order)
+    for (const { pane, session } of panesOf(tabs, tab))
+      if (!owned.has(session)) owned.set(session, { tab, pane });
+  // A lineage that loops back on itself is walked once and no further.
+  const seen = new Set<number>();
+  for (let at: number | undefined = chat; at !== undefined && !seen.has(at); at = askedBy(at)) {
+    seen.add(at);
+    const home = owned.get(at);
+    if (home !== undefined) return { ...home, own: at };
+  }
+  return undefined;
+}
+
+/**
+ * **Switches a tab to chat `chat`** (#1486): the tab that is the chat's home ({@link homeOf})
+ * comes to the front, the pane of the session that asked shows the chat and takes the
+ * keyboard. **No tab is added.** The session's own chat is a chat like any other here, so
+ * this is also the way back to it.
+ *
+ * The one function every way of going to a chat inside a tab calls: a row of the Chats list,
+ * a name in the pane's breadcrumb, an item of the needs-you list. Answers `tabs` itself when
+ * the chat has no home in this window, or when it is already what is on screen.
+ */
+export function switchTabTo(tabs: Tabs, chat: number, askedBy: AskedBy): Tabs {
+  const home = homeOf(tabs, chat, askedBy);
+  if (home === undefined) return tabs;
+  const tab = tabs.byId[home.tab];
+  const shown = tab.shows?.[home.pane] ?? home.own;
+  if (shown === chat && tab.focused === home.pane && tabs.inFront === tab.id) return tabs;
+  const next = showing({ ...tab, focused: home.pane }, { ...tab.shows, [home.pane]: chat });
+  return { ...tabs, byId: { ...tabs.byId, [tab.id]: next }, inFront: tab.id };
+}
+
+/**
+ * **Tab `id` shows its session's own chat again**, in every pane (#1486): what pressing the
+ * tab does when it is already in front. Answers `tabs` itself for a tab that shows no task.
+ */
+export function showOwn(tabs: Tabs, id: number): Tabs {
+  const tab = tabs.byId[id];
+  if (tab?.shows === undefined) return tabs;
+  return { ...tabs, byId: { ...tabs.byId, [id]: showing(tab, undefined) } };
+}
+
+/**
+ * **What each chat pane of a tab shows**, left to right and top to bottom (#1486): `own` is
+ * the pane's own chat, the session the tab is, and `session` is the chat drawn in it, which is
+ * the same chat unless the pane shows a task. {@link panesOf} is the tab's own chats.
+ */
+export function shownIn(tabs: Tabs, id: number): { pane: number; own: number; session: number }[] {
+  const shows = tabs.byId[id]?.shows;
+  return panesOf(tabs, id).map(({ pane, session }) => ({
+    pane,
+    own: session,
+    session: shows?.[pane] ?? session,
+  }));
+}
+
+/**
+ * **The task tab `id` shows in place of its own chat**, or nothing when it shows that chat
+ * (#1486). The tab's own chat is its first pane's ({@link chatOf}), so this is what the tab's
+ * label says after the session's name.
+ */
+export function taskShownIn(tabs: Tabs, id: number): number | undefined {
+  const [lead] = contentsOf(tabs, id);
+  if (lead?.content.kind !== "session") return undefined;
+  return tabs.byId[id].shows?.[lead.pane];
+}
+
+/**
+ * **A tab's layout as it is drawn** (#1486): each pane holding the chat it shows. The tab's
+ * own layout, untouched, for a tab that shows no task.
+ */
+export function layoutShown(tabs: Tabs, id: number): Layout | undefined {
+  const tab = tabs.byId[id];
+  if (tab === undefined) return undefined;
+  const shows = tab.shows;
+  if (shows === undefined) return tab.layout;
+  const draw = (layout: Layout): Layout => {
+    if (layout.kind === "split")
+      return { ...layout, children: layout.children.map(draw) as [Layout, Layout] };
+    const shown = shows[layout.pane];
+    return shown === undefined || layout.content.kind !== "session"
+      ? layout
+      : { ...layout, content: { ...layout.content, session: shown } };
+  };
+  return draw(tab.layout);
+}
+
+/**
+ * **The chat that has the keyboard**: the one shown in the focused pane of the tab in front,
+ * or nothing when that pane shows a view or nothing is in front (#1486).
+ */
+export function focusedChat(tabs: Tabs): number | undefined {
+  const tab = frontTab(tabs);
+  return tab && shownIn(tabs, tab.id).find((one) => one.pane === tab.focused)?.session;
+}
+
+/**
+ * **Every tab stops showing a task that is not `open` any more** (#1486): it shows its
+ * session's own chat, which is what was under the task all along. Answers `tabs` itself when
+ * every shown task is still open, so a caller can tell.
+ */
+export function keepShown(tabs: Tabs, open: (session: number) => boolean): Tabs {
+  let dropped = false;
+  const byId = Object.fromEntries(
+    tabs.order.map((id) => {
+      const tab = tabs.byId[id];
+      if (tab.shows === undefined) return [id, tab];
+      const kept = Object.entries(tab.shows).filter(([, session]) => open(session));
+      if (kept.length === Object.keys(tab.shows).length) return [id, tab];
+      dropped = true;
+      return [id, showing(tab, Object.fromEntries(kept))];
+    }),
+  );
+  return dropped ? { ...tabs, byId } : tabs;
+}
+
+/**
+ * **Puts back what the tabs showed** (#1486): each chat of `shown` in its home, as the saved
+ * layout recorded it. Nothing comes to the front and no pane takes the keyboard: a launch
+ * decides what is in front once, from the whole record. A task whose session did not come
+ * back is left out. Answers `tabs` itself when nothing changed.
+ */
+export function restoreShown(tabs: Tabs, shown: readonly number[], askedBy: AskedBy): Tabs {
+  return shown.reduce((now, chat) => {
+    const home = homeOf(now, chat, askedBy);
+    if (home === undefined || home.own === chat) return now;
+    const tab = now.byId[home.tab];
+    if (tab.shows?.[home.pane] === chat) return now;
+    const next = showing(tab, { ...tab.shows, [home.pane]: chat });
+    return { ...now, byId: { ...now.byId, [tab.id]: next } };
+  }, tabs);
+}
+
+/**
+ * `tab` showing `shows`, kept true to the tab: only a chat pane the tab still has, and only a
+ * chat other than the pane's own. A tab showing no task carries no `shows` at all, so it is
+ * the value it was before any task was shown.
+ */
+function showing(tab: Tab, shows: Readonly<Record<number, number>> | undefined): Tab {
+  const kept = Object.fromEntries(
+    contents(tab.layout).flatMap(({ pane, content }) => {
+      const shown = shows?.[pane];
+      return content.kind === "session" && shown !== undefined && shown !== content.session
+        ? [[pane, shown]]
+        : [];
+    }),
+  ) as Record<number, number>;
+  if (Object.keys(kept).length > 0) return { ...tab, shows: kept };
+  const plain = { ...tab };
+  delete plain.shows;
+  return plain;
 }
 
 function frontTab(tabs: Tabs): Tab | undefined {

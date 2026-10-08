@@ -7,6 +7,7 @@ import { CHAT_KEYBOARD } from "./actions";
 import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
 import { FindBar } from "./FindBar";
+import { paneDrawn } from "./paneKeyboard";
 import { draw } from "./renderer";
 import { onAMac } from "./tabKeys";
 import { moveAlong } from "./tabSequence";
@@ -130,6 +131,8 @@ export function SessionPane({
       fit.fit();
     });
     terminal.current = pane;
+    // A tab switched to this chat owes its terminal the keyboard (#1486, `paneKeyboard.ts`).
+    const undrawn = paneDrawn(plane, session, () => pane.focus());
     bench.paneOpened(session, pane);
 
     let gone = false;
@@ -210,6 +213,7 @@ export function SessionPane({
 
     return () => {
       gone = true;
+      undrawn();
       unfollow();
       unsize();
       watching.disconnect();
