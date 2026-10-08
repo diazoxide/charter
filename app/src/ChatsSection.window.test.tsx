@@ -1069,6 +1069,8 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     await rowsChange(2, (from) => ({ ...from, reported: true, outcome: "done" }));
     await waitFor(() => expect(says(row(tree, "talk")).word).toBe("working"));
     move(2, "done", 11);
+    // Its one task is over, so the session folded by itself (#1499): opened by hand.
+    fireEvent.click(within(tree).getByTitle("Show the chats under steward 1"));
 
     const done = { word: "done", shape: "tick" };
     expect(says(row(tree, "talk"))).toEqual(done);
@@ -1082,6 +1084,8 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     ]);
     render(<App />);
     const tree = await section();
+    // Its one task is over, so the session folded by itself (#1499): opened by hand.
+    fireEvent.click(await within(tree).findByTitle("Show the chats under steward 1"));
     await waitFor(() => expect(shape(tree)).toHaveLength(2));
     const both = async (state: { word: string; shape: string }) => {
       expect(says(row(tree, "talk"))).toEqual(state);

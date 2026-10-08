@@ -235,7 +235,9 @@ has it; nothing reads the key after that.
 - **`size`** is how big the region's slot is, as a percentage of the window's width — of its
   height, for the bottom slot — above 0 and at most 100; leave it out for the default. Keep it
   inside the slot's own bounds, which a drag is held to as well: the left slot is 8–45%, the
-  right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`).
+  right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`). The left slot is also never
+  narrower than 11rem, whatever percentage that is of the window (#1499): under it a nested row
+  of the Chats list has no room for its state, and the floor follows the text size.
 - **`text`** is the two text sizes, in px (purlis#283): **`window`**, the root font size
   every `rem` in the stylesheet is measured by, and **`terminal`**, every chat's terminal. Each
   is a whole number from 10 to 24; leave one out for its default, 14 and 13. A size that is

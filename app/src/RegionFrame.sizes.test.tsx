@@ -200,7 +200,12 @@ describe("the constraints the group is registered with", () => {
     // which is the throw above. `SLOTS` is where they are written, once.
     render(<Harness from={DEFAULT_ARRANGEMENT} />);
 
-    expect(constraints(given.get("region-left"))).toMatchObject({ minSize: "8%", maxSize: "45%" });
+    // The left slot's floor is in the text's own unit (#1499): 8% of a narrow window leaves a
+    // nested row of the Chats list no room for its state.
+    expect(constraints(given.get("region-left"))).toMatchObject({
+      minSize: "11rem",
+      maxSize: "45%",
+    });
     expect(constraints(given.get("region-right"))).toMatchObject({
       minSize: "10%",
       maxSize: "45%",

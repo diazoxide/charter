@@ -91,8 +91,20 @@ function taskOf(asker: number, workspace = "alpha", name = `steward ${asker}`): 
   };
 }
 
+/** The core's typed end for each of its words for one (`FinishedTask.how`, #1485). */
+const HOW: Record<string, FinishedTask["how"]> = {
+  done: "done",
+  cancelled: "cancelled",
+  blocked: "blocked",
+  failed: "failed",
+  "ended without a report": "unreported",
+  "closed by the person": "stopped_by_person",
+};
+
 function finished(id: string, asker: number, more: Partial<FinishedTask> = {}): FinishedTask {
   return {
+    how: HOW[more.outcome ?? "done"],
+    not_reopened: null,
     id,
     asker,
     name: `check ${id}`,
@@ -176,8 +188,37 @@ function core(open: Filed[], ended: FinishedTask[] = []) {
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
     return null;
   });
+  const send = (event: string, payload: unknown) => {
+    const handler = listeners.get(event);
+    if (handler === undefined) throw new Error(`the window is not listening for ${event}`);
+    act(() => {
+      window.__TAURI_INTERNALS__.runCallback(handler, { event, id: 1, payload });
+    });
+  };
   return {
     asked: (cmd: string) => asked.filter((one) => one.cmd === cmd).map((one) => one.args),
+    /** The core says a chat another chat started has arrived. */
+    arrive: (one: Filed) => {
+      open.push(one);
+      send("handoff-arrived", {
+        plane: PLANE,
+        session: one.session,
+        name: one.name,
+        label: one.label,
+        from: one.from,
+        workspace: one.workspace,
+        persona: one.persona,
+        harness: one.harness,
+      });
+    },
+    /** The core says chat `session` was stopped and has ended: it is listed no more. */
+    end: (session: number) => {
+      open.splice(
+        open.findIndex((chat) => chat.session === session),
+        1,
+      );
+      send("chat-stop", { plane: PLANE, session, phase: "stopped" });
+    },
     /** The core says chat `session` moved to `state`, with `queue` asking for the person. */
     move: (session: number, state: State, queue: number[] = []) => {
       const handler = listeners.get("chat-moved");
@@ -248,6 +289,18 @@ const typed = async (text: string) => {
   act(() => box().focus());
   await userEvent.keyboard(text);
 };
+/** An animation on `mark` ends, by whichever name this engine gives the event. */
+const over = (mark: Element | null) => {
+  if (mark === null) throw new Error("no mark to end the animation of");
+  act(() => {
+    for (const name of ["animationend", "webkitAnimationEnd"])
+      mark.dispatchEvent(new Event(name, { bubbles: true }));
+  });
+};
+/** The chat drawn in the pane in front: a task is shown inside its session's tab (#1486). */
+const shownInFront = () => screen.getByTestId("pane").textContent;
+/** The word a row says its state in. */
+const word = (name: string) => row(name).querySelector(".shown-state .word")?.textContent;
 const hiddenSaid = () => document.querySelector(".chats-hidden")?.textContent;
 
 /** Three sessions, the first with a task, and each made to do what a test says. */
@@ -302,7 +355,7 @@ describe("the order of the Chats list (V100-47)", () => {
   });
 
   it("does not move a row while the pointer rests over the list, and does when it leaves", async () => {
-    const { move, asked } = await settled();
+    const { move } = await settled();
     const before = shape();
 
     await userEvent.hover(list());
@@ -311,10 +364,10 @@ describe("the order of the Chats list (V100-47)", () => {
 
     expect(shape()).toEqual(before);
     // The state itself is said at once: only the order waits.
-    expect(within(row("steward 1")).getByRole("img", { name: "needs you" })).toBeTruthy();
+    expect(word("steward 1")).toBe("needs you");
     // No row moved under the click: what is pressed is what was under the pointer.
     await userEvent.click(row("devops 4"));
-    await waitFor(() => expect(asked("open_chat_tab")).toEqual([{ plane: PLANE, session: 4 }]));
+    await waitFor(() => expect(shownInFront()).toBe("session 4"));
     expect(shape()).toEqual(before);
 
     act(() => row("devops 4").blur());
@@ -327,7 +380,10 @@ describe("the order of the Chats list (V100-47)", () => {
     const { move } = await settled();
     const before = shape();
 
-    act(() => row("steward 2").focus());
+    // The keyboard comes in: an arrow, from the first row to the second.
+    act(() => row("steward 3").focus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(row("steward 2"));
     move(1, "waiting", [3, 1]);
 
     expect(shape()).toEqual(before);
@@ -338,6 +394,95 @@ describe("the order of the Chats list (V100-47)", () => {
     act(() => row("steward 1").blur());
 
     expect(shape()).toEqual(["1 steward 1", "2 devops 4", "1 steward 3", "1 steward 2"]);
+  });
+
+  it("lets the keyboard's hold go when the row the keyboard was on is taken away", async () => {
+    const { move, end } = await settled();
+
+    // The keyboard is on the task's row, which holds the list.
+    act(() => row("steward 1").focus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(row("devops 4"));
+    // The task is stopped and ends: its row goes, and no blur says the keyboard left.
+    end(4);
+    await waitFor(() => expect(shape()).toHaveLength(3));
+
+    move(1, "waiting", [3, 1]);
+
+    // Not held for good: the order follows the chats again.
+    expect(shape()).toEqual(["1 steward 1", "1 steward 3", "1 steward 2"]);
+  });
+
+  it("is not held by a row a pointer's press focused, once the pointer has left", async () => {
+    const { move } = await settled();
+
+    // Focused, and not by the keyboard: what a click does on the WebViews that focus a button.
+    act(() => row("steward 2").focus());
+    move(1, "waiting", [3, 1]);
+
+    expect(shape()).toEqual(["1 steward 1", "2 devops 4", "1 steward 3", "1 steward 2"]);
+  });
+
+  it("lets go of what it holds when the window stops being the one in use", async () => {
+    const { move } = await settled();
+    const before = shape();
+    await userEvent.hover(list());
+    move(1, "waiting", [3, 1]);
+    expect(shape()).toEqual(before);
+
+    // The person went to another app with the pointer parked over the list: no leave is sent.
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+
+    expect(shape()).toEqual(["1 steward 1", "2 devops 4", "1 steward 3", "1 steward 2"]);
+  });
+
+  it("does not draw a task that arrives above a resting pointer until the pointer leaves", async () => {
+    const { arrive } = await settled();
+    const before = shape();
+
+    await userEvent.hover(list());
+    arrive(chat(5, "alpha", { persona: "devops", from: taskOf(3, "beta", "steward 3") }));
+    await act(async () => {});
+
+    // Steward 3 is the first row: a row drawn under it would move every row below.
+    expect(shape()).toEqual(before);
+
+    await userEvent.unhover(list());
+
+    await waitFor(() =>
+      expect(shape()).toEqual([
+        "1 steward 3",
+        "2 devops 5",
+        "1 steward 2",
+        "1 steward 1",
+        "2 devops 4",
+      ]),
+    );
+  });
+
+  it("knocks once for a chat that starts needing the person, and not again when rows move past it", async () => {
+    const { move } = await settled();
+    const state = (name: string) => row(name).querySelector(".shown-state");
+    move(2, "waiting", [3, 2]);
+    expect(state("steward 2")).toHaveClass("arrived");
+
+    // The knock plays, and is over.
+    over(row("steward 2").querySelector(".shown-state .shape"));
+    expect(state("steward 2")).not.toHaveClass("arrived");
+
+    // Another session comes to need the person and is put above it: the row is moved in the
+    // document, which would play a class left on it a second time.
+    move(1, "waiting", [3, 2, 1]);
+    expect(shape()).toEqual(["1 steward 1", "2 devops 4", "1 steward 2", "1 steward 3"]);
+    expect(state("steward 2")).not.toHaveClass("arrived");
+    expect(row("steward 2").isConnected).toBe(true);
+
+    // It knocks again only when it starts needing the person again.
+    move(2, "running", [3, 1]);
+    move(2, "waiting", [3, 1, 2]);
+    expect(state("steward 2")).toHaveClass("arrived");
   });
 
   it("groups the sessions by workspace where the person asked for that", async () => {
@@ -397,6 +542,23 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     expect(shape()).toEqual(["1 steward 1", "2 devops 2", "2 devops 3", "1 steward 4"]);
   });
 
+  it("knocks for a task that started needing the person while its session was folded over it", async () => {
+    const { move } = await up();
+    move(2, "done");
+    move(3, "done");
+    expect(shape()).toHaveLength(2);
+
+    move(3, "waiting", [3]);
+
+    // Its row is drawn for the first time in that state, and it is still a change: the hand
+    // knocks, as it would have on a row that was on screen.
+    expect(row("devops 3").querySelector(".shown-state")).toHaveClass("arrived");
+    expect(word("devops 3")).toBe("needs you");
+    // The task beside it is drawn again too, in the state it was folded away in: no motion
+    // for a state nothing changed to.
+    expect(row("devops 2").querySelector(".shown-state")).not.toHaveClass("arrived");
+  });
+
   it("keeps a fold set by hand when it would have opened the session by itself", async () => {
     const { move } = await up();
 
@@ -431,7 +593,7 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     await section();
 
     // Five done and nothing at work: folded by itself, with the count in the state's mark.
-    const summary = await within(theTree()).findByRole("img", { name: "5 done, folded" });
+    const summary = await within(theTree()).findByRole("img", { name: "5 done" });
     expect(summary.querySelector('[data-shape="tick"]')?.textContent).toBe("5");
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("group", { name: "Finished tasks of steward 1" })).toBeNull();
@@ -440,7 +602,7 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     fireEvent.keyDown(row("steward 1"), { key: "ArrowRight" });
     const group = await screen.findByRole("group", { name: "Finished tasks of steward 1" });
     expect(within(group).getByRole("button", { name: "Finished (5)" })).toBeTruthy();
-    expect(within(theTree()).queryByRole("img", { name: "5 done, folded" })).toBeNull();
+    expect(within(theTree()).queryByRole("img", { name: "5 done" })).toBeNull();
   });
 
   it("does not fold a failure away: a session with a task that did not come out done stays open", async () => {
@@ -455,7 +617,7 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
     // Folded by hand, it counts both ends.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
-    expect(within(theTree()).getByRole("img", { name: "1 done, 1 failed, folded" })).toBeTruthy();
+    expect(within(theTree()).getByRole("img", { name: "1 done, 1 failed" })).toBeTruthy();
   });
 });
 
@@ -517,6 +679,99 @@ describe("the filter over the Chats list (V100-49)", () => {
     expect(shape()).toEqual(["1 steward 1", "2 live check talk"]);
   });
 
+  it("finds, with the working chip, what the order puts with the working", async () => {
+    // Nothing has been heard from any of the four: each reads "running (no detail from …)",
+    // which the order counts as at work.
+    core(four());
+    render(<App />);
+    await section();
+    await waitFor(() => expect(shape()).toHaveLength(4));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "working" }));
+
+    expect(shape()).toHaveLength(4);
+    expect(hiddenSaid()).toBe("The filter hides no chat.");
+  });
+
+  it("has its chips as one stop of the keyboard, named as a group, with the arrows between them", async () => {
+    await up();
+    const chips = screen.getByRole("group", { name: "Show only" });
+    const [needs, working] = within(chips).getAllByRole("checkbox");
+
+    // One of them is the stop; the other is reached by an arrow and not by Tab.
+    expect([needs.tabIndex, working.tabIndex]).toEqual([0, -1]);
+    act(() => needs.focus());
+    await userEvent.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(working);
+
+    await userEvent.keyboard(" ");
+    expect(working).toBeChecked();
+  });
+
+  it("says a chat it hides needs the person, and goes to it", async () => {
+    const { move } = await up();
+    move(2, "running");
+    await userEvent.click(screen.getByRole("checkbox", { name: "working" }));
+    expect(shape()).toEqual(["1 steward 1", "2 live check talk"]);
+    expect(screen.queryByRole("button", { name: /the filter hides$/ })).toBeNull();
+
+    // The task stops working and asks for the person: the chip no longer finds it, and the
+    // session above it is hidden with it. No hand for it is drawn anywhere in the list.
+    move(2, "waiting", [2]);
+
+    expect(screen.queryByRole("tree", { name: "Chats of this project" })).toBeNull();
+    expect(hiddenSaid()).toBe("1 chat the filter hides needs you. No chat matches the filter.");
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Go to live check talk, which needs you and the filter hides",
+      }),
+    );
+    await waitFor(() => expect(shownInFront()).toBe("session 2"));
+  });
+
+  it("finds a finished task by how it ended, under the chat that asked for it", async () => {
+    core(four(), [
+      finished("a", 3, { name: "check staging", outcome: "failed", folds: false }),
+      finished("b", 3, { name: "count rows" }),
+      finished("c", 4, { name: "tidy up" }),
+    ]);
+    render(<App />);
+    await section();
+    await waitFor(() => expect(shape()).toHaveLength(4));
+
+    await typed("failed");
+
+    expect(shape()).toEqual(["1 release notes"]);
+    const group = await screen.findByRole("group", { name: "Finished tasks of release notes" });
+    expect(group.textContent).toContain("check staging");
+    // Only what was asked for: the done one beside it is not drawn, nor is its fold.
+    expect(within(group).queryByRole("button", { name: /^Finished/ })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Finished tasks of steward 4" })).toBeNull();
+  });
+
+  it("opens every row above what it found, whatever fold was set by hand, and puts the fold back", async () => {
+    await up();
+    fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
+    expect(shape()).toEqual(["1 steward 1", "1 release notes", "1 steward 4"]);
+
+    await typed("talk");
+
+    // Found means drawn: the fold set by hand does not hide it, and the count is of what is
+    // not drawn.
+    expect(shape()).toEqual(["1 steward 1", "2 live check talk"]);
+    expect(hiddenSaid()).toBe("The filter hides 2 of 4 chats.");
+    // A fold set while the filter is on is obeyed, for as long as the filter is.
+    fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
+    expect(shape()).toEqual(["1 steward 1"]);
+    fireEvent.keyDown(row("steward 1"), { key: "ArrowRight" });
+
+    await userEvent.clear(box());
+
+    // The fold set before the filter is back.
+    expect(shape()).toEqual(["1 steward 1", "1 release notes", "1 steward 4"]);
+    expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("is cleared by Escape, in its box and in the list", async () => {
     await up();
     await typed("talk");
@@ -546,8 +801,8 @@ describe("the filter over the Chats list (V100-49)", () => {
     expect(shape()).toEqual(["1 steward 1", "2 live check talk"]);
   });
 
-  it("is in the palette too: a task with no tab is found there, and shown from there", async () => {
-    const { asked } = await up();
+  it("is in the palette too: a task is found there, and shown from there", async () => {
+    await up();
 
     await userEvent.keyboard("{F2}");
     await userEvent.type(screen.getByRole("combobox"), "live check");
@@ -557,7 +812,7 @@ describe("the filter over the Chats list (V100-49)", () => {
       }),
     );
 
-    await waitFor(() => expect(asked("open_chat_tab")).toEqual([{ plane: PLANE, session: 2 }]));
+    await waitFor(() => expect(shownInFront()).toBe("session 2"));
   });
 });
 
@@ -622,6 +877,28 @@ describe("a row of the Chats list (V100-19, V100-50)", () => {
     expect(row("devops 3").querySelector(".since")).toBeNull();
   });
 
+  it("has its second line whether or not there is anything to say on it yet", async () => {
+    const { move } = await up();
+
+    // A task where its asker works, with no branch and no time yet: nothing to say.
+    expect(second("devops 2")).not.toBeNull();
+    expect(second("devops 2")?.textContent).toBe("");
+    move(2, "running");
+    move(2, "waiting");
+
+    // What it comes to say is said in the line that was already there.
+    expect(second("devops 2")?.textContent).toBe("just now");
+  });
+
+  it("keeps its two status lines in the tree while they have nothing to say", async () => {
+    await up();
+
+    const lines = [...document.querySelectorAll('.chats-notes [role="status"]')];
+    expect(lines.map((line) => line.textContent)).toEqual(["", ""]);
+    // Out of the rows' own box: saying something there pushes no row.
+    expect(list().contains(lines[0])).toBe(false);
+  });
+
   it("wears no badge for having no tab, and says nothing of tabs", async () => {
     await up();
 
@@ -660,16 +937,16 @@ describe("the keys of a row (#1499)", () => {
   const said = () => document.querySelector(".chats-said")?.textContent;
 
   it("opens a row on Enter", async () => {
-    const { asked } = await up();
+    await up();
 
     act(() => row("devops 2").focus());
     await userEvent.keyboard("{Enter}");
 
-    await waitFor(() => expect(asked("open_chat_tab")).toEqual([{ plane: PLANE, session: 2 }]));
+    await waitFor(() => expect(shownInFront()).toBe("session 2"));
   });
 
   it("asks for a row beside the chat in front on Space, and says why that cannot be done yet", async () => {
-    const { asked } = await up();
+    await up();
 
     act(() => row("devops 2").focus());
     await userEvent.keyboard(" ");
@@ -678,7 +955,7 @@ describe("the keys of a row (#1499)", () => {
       "purlis cannot open a chat beside another yet. Press Enter to open it in front.",
     );
     // Space did not press the row: nothing was opened.
-    expect(asked("open_chat_tab")).toEqual([]);
+    expect(shownInFront()).toBe("session 1");
   });
 
   it("asks to stop a task on Delete, and stops nothing until the person says so", async () => {
@@ -689,6 +966,43 @@ describe("the keys of a row (#1499)", () => {
 
     expect(await screen.findByRole("alertdialog", { name: "Stop chat devops 2?" })).toBeTruthy();
     expect(asked("stop_chat")).toEqual([]);
+  });
+
+  it("asks to stop a task on the key a Mac marks delete, which sends Backspace", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      await up();
+
+      act(() => row("devops 2").focus());
+      await userEvent.keyboard("{Backspace}");
+
+      expect(await screen.findByRole("alertdialog", { name: "Stop chat devops 2?" })).toBeTruthy();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("does not stop a task on Delete with a modifier held, or on Backspace off a Mac", async () => {
+    await up();
+
+    act(() => row("devops 2").focus());
+    await userEvent.keyboard("{Shift>}{Delete}{/Shift}");
+    await userEvent.keyboard("{Backspace}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("takes down what a key said at the next key that is not Space", async () => {
+    await up();
+    act(() => row("devops 2").focus());
+    await userEvent.keyboard(" ");
+    expect(said()).not.toBe("");
+
+    await userEvent.keyboard(" ");
+    expect(said()).not.toBe("");
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(said()).toBe("");
   });
 
   it("does nothing on Delete for a chat that is not a task", async () => {
@@ -711,10 +1025,9 @@ describe("the keys of a row (#1499)", () => {
     expect(place("steward 3")).toBe("2/2");
 
     await typed("devops");
-    // A fold set by hand is kept under a filter: the row above the match is drawn, folded.
-    expect(shape()).toEqual(["1 steward 1"]);
+    // The filter opens the row above what it found: the arrows walk into it.
+    expect(shape()).toEqual(["1 steward 1", "2 devops 2"]);
     act(() => row("steward 1").focus());
-    await userEvent.keyboard("{ArrowRight}");
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(row("devops 2"));
     expect(row("devops 2")).toHaveAttribute("aria-level", "2");
@@ -742,14 +1055,43 @@ describe("a chat moving, with fifty sessions and their tasks listed (SC-3)", () 
     move(51, "waiting");
     move(7, "running");
 
-    expect(within(row("devops 52")).getByRole("img", { name: "working" })).toBeTruthy();
-    expect(within(row("devops 51")).getByRole("img", { name: "idle" })).toBeTruthy();
+    expect(word("devops 52")).toBe("working");
+    expect(word("devops 51")).toBe("idle");
     expect(drawn.rows).toEqual([]);
 
-    // Session 40 needs the person: it goes to the top, which is the one thing that moves rows.
-    move(40, "waiting", [40]);
+    // Session 40 and its task go idle: it goes below the ones at work, which is the one
+    // thing that moves rows. Its task going idle first moves nothing.
+    move(90, "waiting");
+    expect(drawn.rows).toEqual([]);
+    move(40, "waiting");
 
-    expect(shape()[0]).toBe("1 steward 40");
-    expect(drawn.rows.length).toBeGreaterThan(0);
+    expect(shape().at(-2)).toBe("1 steward 40");
+    // Exactly the rows whose place changed are drawn again, once each: session 40 and the
+    // ten it moved past. No task's row, and no session's above where 40 stood.
+    expect([...drawn.rows].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 11 }, (_, at) => at + 40),
+    );
+  });
+
+  it("draws, for a word typed in the filter, the rows it leaves and none of the ones it hides", async () => {
+    core([
+      ...Array.from({ length: 50 }, (_, at) => chat(at + 1, at % 2 === 0 ? "alpha" : "beta")),
+      ...Array.from({ length: 50 }, (_, at) =>
+        chat(at + 51, "alpha", { persona: "devops", from: taskOf(at + 1) }),
+      ),
+    ]);
+    renderBare(<App />);
+    await section();
+    await waitFor(() => expect(shape()).toHaveLength(100));
+    for (let turn = 0; turn < 10; turn += 1) await act(async () => {});
+    drawn.rows.length = 0;
+
+    act(() => box().focus());
+    fireEvent.change(box(), { target: { value: "devops 60" } });
+
+    expect(shape()).toEqual(["1 steward 10", "2 devops 60"]);
+    // The two rows it leaves are drawn again, once each. The ninety-eight that left draw
+    // nothing.
+    expect([...drawn.rows].sort((a, b) => a - b)).toEqual([10, 60]);
   });
 });

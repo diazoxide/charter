@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BESIDE_ID, catalogue, taskRows, taskShowId } from "./actions";
 import type { ListedChat } from "./chatsTree";
-import { noTabs, openTab } from "./tabs";
+import { noTabs } from "./tabs";
 
 const listed = (session: number, more: Partial<ListedChat> = {}): ListedChat => ({
   session,
@@ -22,8 +22,8 @@ const listed = (session: number, more: Partial<ListedChat> = {}): ListedChat => 
 });
 
 describe("the palette's rows for tasks (#1499, V100-49)", () => {
-  it("has a row for each task with no tab, which shows it, and says where it works and who asked", () => {
-    const rows = taskRows([listed(2), listed(3, { name: "live check talk" })], noTabs());
+  it("has a row for each task, which shows it, and says where it works and who asked", () => {
+    const rows = taskRows([listed(2), listed(3, { name: "live check talk" })]);
 
     expect(rows.map((row) => [row.id, row.title, row.available, row.does])).toEqual([
       [
@@ -43,13 +43,10 @@ describe("the palette's rows for tasks (#1499, V100-49)", () => {
     expect(rows[1].name).toBe("live check talk");
   });
 
-  it("has none for a chat with a tab, which its Switch to tab row finds, or for a chat that is not a task", () => {
-    const tabs = openTab(noTabs(), 2, "devops 2");
-
-    expect(taskRows([listed(2)], tabs)).toEqual([]);
-    expect(taskRows([listed(4, { mode: "handoff" }), listed(5, { mode: null })], noTabs())).toEqual(
-      [],
-    );
+  it("has one for a task that is on screen too, and none for a chat that is not a task", () => {
+    // A task shown in its session's tab has no tab row of its own to be found by (#1486).
+    expect(taskRows([listed(2, { tab: true })])).toHaveLength(1);
+    expect(taskRows([listed(4, { mode: "handoff" }), listed(5, { mode: null })])).toEqual([]);
   });
 });
 
