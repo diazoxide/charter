@@ -163,12 +163,19 @@ nothing still runs `purlis secret exec`. The mark is honoured only in this machi
 committed `vaults.json` cannot tell purlis to hand a keyring item to `op`. `vault list`, the tab
 and `purlis doctor` say where each identity is from the mark, without reading the keyring.
 
-**One token serves every vault read through the same variable.** Storing a token marks each
-vault of the project that is read by the same provider through exactly the same variables, as
-the registry stands at that moment, so three vaults read through `$OP_TEAM_TOKEN` take one
-paste. Each gets its own keyring item and its own mark, pinned to its own vault's settings;
-nothing is found by the variable's name. A vault registered later, or one whose variables you
-change, is read through no stored token until you store it again from a tab.
+**A token is stored per vault: put it in from each vault's tab.** Storing a token marks the
+one vault whose tab you are in, however many vaults are read through the same variable; no
+vault is given a token you did not put in from its own tab. After a store the tab names the
+other vaults read through that variable that still have none, each a link to its tab. Storing
+a token again replaces it: the item the old one was kept under is deleted from the keyring
+once the new one is in place.
+
+**When a kept token does not read the vault**, the tab says the provider's own reason and
+keeps the box. Most reasons are not the token's: a provider's program that is missing or has
+moved (storing the token again pins the one found now), no network or a rate limit (read
+again), and a refused sign-in, which is the one case the tab says to replace the token for.
+A vault read through several variables has no box, since a box stores one token: start
+purlis from a shell that exports them and move them from the tab.
 
 **A chat starts from an allowlisted environment, not the app's whole one.** Whatever the app
 inherited — from a terminal it was started in, `launchctl setenv`, a login item — reaches a chat
@@ -258,9 +265,11 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
 
 `purlis doctor`'s vaults row does not check vaults yet. Its `op for vaults` and `vault for
 vaults` rows say only whether each provider's program is found. Its `vault tokens` row says,
-for each vault read through an identity variable, whether the token is in the system keyring,
-in this environment only, or nowhere. It warns for the last two, and it reads no keyring item
-to say so.
+for each vault read through an identity variable, whether the token is marked as kept in the
+system keyring, in this environment only, or nowhere. It warns for the last two. It says so
+from this machine's record and reads no keyring item, so "marked as kept" is not a read that
+succeeded. Run inside a chat it prints no such row: a chat is given no identity variable, so
+from there an exported token cannot be told from a missing one.
 
 ## Where a vault lives
 

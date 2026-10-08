@@ -19,6 +19,7 @@ const OPS: VaultContents = {
   health: { ok: true, detail: "" },
   secrets: [{ key: "API_TOKEN", size: null, updated: null }],
   refused: null,
+  identity_unset_elsewhere: [],
   identity: [],
   identity_in_app_env: [],
 };

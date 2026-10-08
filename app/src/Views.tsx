@@ -377,6 +377,7 @@ export function ViewPane({
         plane={plane}
         vault={view.key}
         onChanged={onVaultChanged}
+        onOpenVault={(name) => onOpenView({ from: null, view: "vault", key: name }, name)}
         actions={own}
       />
     );

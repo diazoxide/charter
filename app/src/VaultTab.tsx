@@ -8,6 +8,7 @@ import { EmptyState } from "./EmptyState";
 import {
   commands,
   type PlaneId,
+  type UnreadFor,
   type VaultContents,
   type VaultIdentity,
   type VaultSecret,
@@ -52,10 +53,17 @@ import { counted } from "./Vaults";
  *
  * **A vault whose contents could not be read still says whose token it needs** (#1526). Reading
  * a 1Password vault takes its token, so the tab of a vault whose token is nowhere is the one tab
- * that must draw the box that stores it: the core answers such a vault with `refused` (why), no
- * secrets and its identity all the same, and the tab draws the refusal, the box and nothing that
- * would read as an empty vault. A stored token's answer is the vault read again, so the table
- * follows by itself.
+ * that must draw the box that stores it: the core answers such a vault with `refused` (why, and
+ * what kind of failure), no secrets and its identity all the same, and the tab draws the
+ * refusal, the box and nothing that would read as an empty vault. A stored token's answer is the
+ * vault read again, so the table follows by itself. What is said beside the box follows the
+ * kind: a program that is missing, a network that is down and a refused sign-in are not the
+ * same advice, and only the last is the token's fault.
+ *
+ * **A token is stored for this vault alone.** Other vaults read through the same variable that
+ * still have none are named under it, each a link to its own tab, where its token is put in.
+ * A tab already open hears of a store made in another ({@link STORED}) and reads again, so
+ * what it points at is not stale.
  *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
@@ -65,10 +73,13 @@ export function VaultTab({
   plane,
   vault,
   onChanged,
+  onOpenVault,
   actions,
 }: {
   plane: PlaneId;
   vault: string;
+  /** Open another vault's tab: what a vault named as still having no token is a link to. */
+  onOpenVault?: (vault: string) => void;
   /** A write changed the vault: the window reads its vault list again. */
   onChanged: () => void;
   /** Buttons for the heading — Delete vault… (SI-3), the catalogue's row drawn by the view. */
@@ -80,6 +91,10 @@ export function VaultTab({
   const [shown, setShown] = useState<Shown>();
   const [note, setNote] = useState<{ said: string; trouble?: boolean }>();
   const [moving, setMoving] = useState(false);
+  /** Bumped to read the vault again: Read again, and a token stored in another vault's tab. */
+  const [again, setAgain] = useState(0);
+  /** Whether this vault is read through a token, for the listener below to ask. */
+  const declares = useRef(false);
   /** Which press of an eye is the latest, so an answer to an earlier one is dropped. */
   const pressed = useRef(0);
   /** The secret whose reveal is on its way, so a second press cancels it rather than asks again. */
@@ -151,15 +166,22 @@ export function VaultTab({
     }
     setSaid({ contents: answer.data });
     onChanged();
+    // The other open vault tabs of this project read again: what they point at has changed.
+    window.dispatchEvent(new CustomEvent<Stored>(STORED, { detail: { plane, vault } }));
     const names = named(answer.data.identity);
     const stillExported = answer.data.identity_in_app_env;
     const relaunch =
       stillExported.length > 0
         ? ` Your shell still exports ${stillExported.map((v) => `$${v}`).join(", ")}, which a chat can still read from purlis's own environment — quit and relaunch purlis from a shell that does not, and remove the export from your shell's startup files.`
         : "";
+    // Never "stored" alone beside a refusal: the token is in the Keychain and the read that
+    // followed still failed, and the reason for that is the sentence above the box.
+    const unread = answer.data.refused !== null;
     setNote({
-      said: `Stored ${names} in the Keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
-      trouble: relaunch !== "",
+      said: unread
+        ? `${names} is stored in the Keychain, and the vault still could not be read: the reason is above.${relaunch}`
+        : `Stored ${names} in the Keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
+      trouble: unread || relaunch !== "",
     });
     return true;
   };
@@ -186,6 +208,23 @@ export function VaultTab({
     return () => {
       gone = true;
     };
+  }, [plane, vault, again]);
+
+  useEffect(() => {
+    declares.current = (said?.contents?.identity.length ?? 0) > 0;
+  }, [said]);
+
+  useEffect(() => {
+    // A token stored in ANOTHER vault's tab of this project: a vault read through a token reads
+    // again, since which vaults still have none is part of what it shows.
+    const stored = (event: Event) => {
+      const from = (event as CustomEvent<Stored>).detail;
+      if (from.plane === plane && from.vault !== vault && declares.current) {
+        setAgain((was) => was + 1);
+      }
+    };
+    window.addEventListener(STORED, stored);
+    return () => window.removeEventListener(STORED, stored);
   }, [plane, vault]);
 
   /**
@@ -266,7 +305,7 @@ export function VaultTab({
           // read as a vault with nothing in it.
           <>
             <p className="trouble" role="alert">
-              {contents === undefined ? said.trouble : contents.refused}
+              {contents === undefined ? said.trouble : contents.refused?.why}
             </p>
             {/* Not read, and read through a token (#1526): under why, the box that stores the
                 token, which is the way out. No table, no search and no Add: none of them has
@@ -276,10 +315,12 @@ export function VaultTab({
                 <IdentityPanel
                   identity={contents.identity}
                   inAppEnv={contents.identity_in_app_env}
-                  unread
+                  unread={contents.refused?.kind ?? "other"}
+                  elsewhere={[]}
                   busy={moving}
                   onPut={(token) => void store("put", token)}
                   onMove={() => void store("move")}
+                  onAgain={() => setAgain((was) => was + 1)}
                 />
                 {noted}
               </>
@@ -295,7 +336,8 @@ export function VaultTab({
             <IdentityPanel
               identity={contents.identity}
               inAppEnv={contents.identity_in_app_env}
-              unread={false}
+              elsewhere={contents.identity_unset_elsewhere}
+              onOpenVault={onOpenVault}
               busy={moving}
               onPut={(token) => void store("put", token)}
               onMove={() => void store("move")}
@@ -423,24 +465,41 @@ function named(identity: VaultIdentity[]): string {
  *
  * **A vault that could not be read keeps the box** (`unread`, #1526), wherever its token is: with
  * the token nowhere the box is the only way to read the vault at all, and with a token in the
- * Keychain that did not read it, the box is how the token is replaced. The refusal is drawn above
- * by the tab. A vault read through no identity variable shows nothing here.
+ * Keychain it is how the token is replaced. **What is said beside it is what is known**
+ * ({@link KEPT_AND_UNREAD}): the refusal above is the provider's own reason, and most reasons are
+ * not the token's, so only a refused sign-in says to replace it.
+ *
+ * **A vault read through several variables has no box**: the box stores one token, and a press
+ * the core must refuse is not an offer. It says so, and offers the move where the app's
+ * environment has them.
+ *
+ * **Other vaults that still have no token are named, never written** (`elsewhere`): each is a
+ * link to its own tab. A vault read through no identity variable shows nothing here.
  */
 function IdentityPanel({
   identity,
   inAppEnv,
   unread,
+  elsewhere,
   busy,
   onPut,
   onMove,
+  onAgain,
+  onOpenVault,
 }: {
   identity: VaultIdentity[];
   inAppEnv: string[];
-  /** The vault's contents could not be read: the box is drawn wherever the token is. */
-  unread: boolean;
+  /** What kept the vault's contents from being read, when they were not: the box is then drawn
+   *  wherever the token is. */
+  unread?: UnreadFor;
+  /** Other vaults read through the same variable whose token is nowhere. */
+  elsewhere: string[];
   busy: boolean;
   onPut: (token: string) => void;
   onMove: () => void;
+  /** Read the vault again, for a failure that may pass. */
+  onAgain?: () => void;
+  onOpenVault?: (vault: string) => void;
 }) {
   const box = useRef<HTMLInputElement>(null);
   if (identity.length === 0) return null;
@@ -453,12 +512,31 @@ function IdentityPanel({
     ) : null;
 
   const inKeychain = identity.every((one) => one.held === "keyring");
-  if (inKeychain && !unread) {
+  if (inKeychain && unread === undefined) {
     return (
-      <p className="vault-identity">
-        {`purlis reads ${named(identity)} from the Keychain.`}
-        {stillExported}
-      </p>
+      <div className="vault-identity">
+        <p>
+          {`purlis reads ${named(identity)} from the Keychain.`}
+          {stillExported}
+        </p>
+        {elsewhere.map((other) => (
+          <p key={other}>
+            {onOpenVault ? (
+              <button
+                type="button"
+                className="panel-view"
+                tabIndex={0}
+                onClick={() => onOpenVault(other)}
+              >
+                {other}
+              </button>
+            ) : (
+              other
+            )}
+            {` also reads through ${named(identity)} and has no token yet. A token is stored per vault: put it in from that vault's tab.`}
+          </p>
+        ))}
+      </div>
     );
   }
 
@@ -469,11 +547,14 @@ function IdentityPanel({
   };
 
   const inEnv = identity.some((one) => one.held === "environment");
-  const say = inKeychain
-    ? `purlis reads ${named(identity)} from the Keychain, and could not read the vault with it. Paste the token again to replace it.`
-    : identity.every((one) => one.held === "unset")
-      ? `Paste the service-account token for ${named(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
-      : `Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`;
+  const several = identity.length > 1;
+  const say = several
+    ? `Read through ${named(identity)}. A box stores one token and this vault needs ${identity.length}, so there is none here: start purlis from a shell that exports them, then move them from this tab.`
+    : inKeychain
+      ? KEPT_AND_UNREAD[unread ?? "other"](named(identity))
+      : identity.every((one) => one.held === "unset")
+        ? `Paste the service-account token for ${named(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
+        : `Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`;
   return (
     <div className="vault-identity">
       <p>
@@ -481,21 +562,25 @@ function IdentityPanel({
         {stillExported}
       </p>
       <div className="vault-identity-put">
-        <input
-          ref={box}
-          type="password"
-          aria-label={`Token for ${named(identity)}`}
-          placeholder="Paste the token"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={busy}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") put();
-          }}
-        />
-        <button type="button" tabIndex={0} disabled={busy} onClick={put}>
-          Put this vault's token in the Keychain
-        </button>
+        {!several && (
+          <>
+            <input
+              ref={box}
+              type="password"
+              aria-label={`Token for ${named(identity)}`}
+              placeholder="Paste the token"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={busy}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") put();
+              }}
+            />
+            <button type="button" tabIndex={0} disabled={busy} onClick={put}>
+              Put this vault's token in the Keychain
+            </button>
+          </>
+        )}
         {inEnv && (
           <button
             type="button"
@@ -507,10 +592,46 @@ function IdentityPanel({
             Move the token from purlis's environment
           </button>
         )}
+        {unread !== undefined && onAgain && (
+          <button
+            type="button"
+            className="panel-view"
+            tabIndex={0}
+            disabled={busy}
+            onClick={onAgain}
+          >
+            Read again
+          </button>
+        )}
       </div>
     </div>
   );
 }
+
+/**
+ * What the box of a vault says when its token IS in the Keychain and its contents still could
+ * not be read, by what kept them (#1526). The reason itself is the core's sentence, drawn above;
+ * this says what the box is for in that case, and never blames the token for a failure that is
+ * not known to be the token's.
+ */
+const KEPT_AND_UNREAD: Record<UnreadFor, (names: string) => string> = {
+  // Not reached with a token in the Keychain; said plainly all the same.
+  "no-token": (names) => `Paste the token for ${names} here.`,
+  program: (names) =>
+    `purlis reads ${names} from the Keychain, and could not run the program that reads this vault. Nothing says the token is wrong. Storing the token again here pins the program purlis finds now.`,
+  "try-again": (names) =>
+    `purlis reads ${names} from the Keychain. Nothing says the token is wrong: read again in a moment. The box replaces the token, should you need it.`,
+  "sign-in": (names) =>
+    `purlis reads ${names} from the Keychain, and the sign-in with it was refused. Paste the right token here to replace it.`,
+  other: (names) =>
+    `purlis reads ${names} from the Keychain. If it is the token that is wrong, paste the right one here to replace it.`,
+};
+
+/** The window event a tab sends when it has stored a token, for the other vault tabs. */
+const STORED = "purlis:vault-token-stored";
+
+/** What {@link STORED} carries: whose token was stored. Names, never a value. */
+type Stored = { plane: PlaneId; vault: string };
 
 /** What the core answers every vault command with: the vault as it now is, or its refusal. */
 type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;

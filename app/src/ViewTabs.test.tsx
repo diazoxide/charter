@@ -142,6 +142,7 @@ const vaultOf = (name: string): VaultContents => ({
       ? held.map((key) => ({ key, size: "16–31 bytes", updated: "2026-09-24T11:32:17Z" }))
       : [],
   refused: null,
+  identity_unset_elsewhere: [],
   identity: [],
   identity_in_app_env: [],
 });

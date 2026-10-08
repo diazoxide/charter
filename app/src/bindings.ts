@@ -5921,6 +5921,37 @@ export type TodoView = {
 	body: string,
 };
 
+/**
+ *  Why a vault read through an identity variable could not be read: the core's own sentence,
+ *  which holds names and never a value, and what kind of failure it is.
+ */
+export type Unread = {
+	why: string,
+	kind: UnreadFor,
+};
+
+/**
+ *  What kept a vault's contents from being read, as far as purlis can tell: what the tab says
+ *  about the token depends on it, since most failures are not the token's (#1526).
+ */
+export type UnreadFor = 
+/**  The identity variable is found nowhere: there is no token to read with. */
+"no-token" | 
+/**
+ *  The provider's program is missing, or the one pinned with the token is gone or changed.
+ *  Storing the token again pins the program found now.
+ */
+"program" | 
+/**
+ *  No network, a rate limit, a program that did not finish: try again. Nothing says the
+ *  token is wrong.
+ */
+"try-again" | 
+/**  The provider refused the sign-in: the token is the likely cause. */
+"sign-in" | 
+/**  Anything else. The token may or may not be the cause. */
+"other";
+
 /**  One turn of the trend. */
 export type UsageTurn = {
 	/**  The share of that turn's input served from cache, in its tone. */
@@ -5947,10 +5978,15 @@ export type VaultContents = {
 	 *  Why the vault's contents could not be read, for a vault read through an identity
 	 *  variable; `None` for a vault that was read. `secrets` is then empty and says nothing of
 	 *  what the vault holds. Answered rather than refused, because `identity` below is what the
-	 *  tab draws the way out from: the box that stores the token (#1526). The core's sentence:
-	 *  names, never a value.
+	 *  tab draws the way out from: the box that stores the token (#1526).
 	 */
-	refused: string | null,
+	refused: Unread | null,
+	/**
+	 *  The OTHER vaults of the project read through one of this vault's identity variables
+	 *  whose token is nowhere, by name: what the tab points at, each a link to that vault's own
+	 *  tab, where its token is put in. A pointer and never a write (#1526, D-1526-7).
+	 */
+	identity_unset_elsewhere: string[],
 	/**
 	 *  The identity variables it is read through; empty for a vault that declares none. Said
 	 *  from the registry's mark and the environment, never by reading the keyring.
