@@ -79,6 +79,9 @@ export const FinishedTasks = memo(function FinishedTasks({
   );
 });
 
+/** Why a finished task has no Reopen. */
+const NO_CONVERSATION = "It cannot be reopened: its harness named no conversation to resume.";
+
 /** One finished task: its name and how it ended, its report on a press, and Reopen. A row
  *  that stands alone has a Clear of its own; a folded one is cleared with its fold. */
 function FinishedRow({
@@ -95,7 +98,12 @@ function FinishedRow({
   const [busy, setBusy] = useState(false);
   const state = shownOf(task);
   const more = qualifierOf(task);
+  /** Why Reopen does nothing, where it does nothing: said to a screen reader on the button,
+   *  which stays in the Tab order, and in the opened row. A disabled button takes no focus,
+   *  so its reason would reach nobody on a keyboard. */
+  const cannot = task.reopens ? undefined : NO_CONVERSATION;
   const reopen = () => {
+    if (cannot !== undefined || busy) return;
     setBusy(true);
     setRefused(undefined);
     void onReopen(task)
@@ -103,7 +111,7 @@ function FinishedRow({
       .finally(() => setBusy(false));
   };
   return (
-    <div className="finished-task" data-outcome={task.outcome}>
+    <div className="finished-task" data-how={task.how}>
       <div className="finished-line">
         <button
           type="button"
@@ -129,12 +137,12 @@ function FinishedRow({
           type="button"
           className="finished-reopen"
           tabIndex={0}
-          disabled={!task.reopens || busy}
+          aria-disabled={cannot !== undefined || busy || undefined}
           aria-label={`Reopen ${task.name}`}
+          aria-description={cannot}
           title={
-            task.reopens
-              ? "Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told."
-              : "Its harness named no conversation to resume."
+            cannot ??
+            "Resumes its conversation as an ordinary chat with a tab. It is no longer a task: it sends no report, and the chat that asked is not told."
           }
           onClick={reopen}
         >
@@ -158,6 +166,9 @@ function FinishedRow({
           {refused}
         </p>
       )}
+      {/* The last Reopen started a chat that ended at once: the core's sentence, kept on the
+          row until the next try. */}
+      {task.not_reopened !== null && <p className="finished-note">{task.not_reopened}</p>}
       {shown && (
         <div className="finished-report" role="region" aria-label={`Report of ${task.name}`}>
           {/* Text nodes, every one: a report is a chat's words, and is never markup here. */}
@@ -169,6 +180,7 @@ function FinishedRow({
             {task.place}
             {task.branch !== null && ` · own branch ${task.branch}`}
           </p>
+          {cannot !== undefined && <p className="report-where">{cannot}</p>}
         </div>
       )}
     </div>

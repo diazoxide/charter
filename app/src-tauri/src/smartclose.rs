@@ -475,6 +475,10 @@ pub fn offer_for(held: &Held, session: u32) -> Result<SmartCloseOffer, String> {
 /// the next `Stop` of a running one. Refused, with [`offer`]'s sentence, where it is not offered.
 /// A chat already being smart-closed is left as it is.
 pub fn begin(held: &Arc<Held>, session: u32) -> Result<Phase, String> {
+    // A task that had reported and was about to be ended is being asked for its session
+    // record, which is a turn of its own: its end stands down (#1485), and the close this
+    // begins is what ends it. Before this module's lock is taken: it writes a record.
+    crate::dispatched::stand_down(held, session);
     let closing = held.closing();
     let mut chats = closing.chats();
     if let Some(entry) = chats.get(&session) {

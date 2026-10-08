@@ -375,6 +375,7 @@ pub fn send(
             Answer::Ticket { .. }
             | Answer::Opened { .. }
             | Answer::Reported { .. }
+            | Answer::Finished { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
             | Answer::Said { .. }
@@ -523,12 +524,18 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
         &Ask::Report(Box::new(back)),
         crate::handoff::A_TICKET_TAKES_AT_MOST,
     ) {
-        // Delivered, so the task is over (#1485): the chat is told its program ends with this
-        // turn, so it starts nothing it would lose.
-        Ok(Answer::Reported { to, kept_for: None }) => Ok(format!(
+        // Delivered, and the app says the task is over (#1485): the chat is told its program
+        // ends with this turn, so it starts nothing it would lose. Only where the app says
+        // so: a handoff's chat, a blocked task and one the person started are not ended.
+        Ok(Answer::Finished { to }) => Ok(format!(
             "{REPORT_SAYS} sent to '{}' ({}). It reaches that chat as context on its next turn. \
              This task is finished: this chat's program is ended once this turn is over, so \
              start nothing more.",
+            purlis_core::personas::one_line(&to),
+            outcome.word()
+        )),
+        Ok(Answer::Reported { to, kept_for: None }) => Ok(format!(
+            "{REPORT_SAYS} sent to '{}' ({}). It reaches that chat as context on its next turn.",
             purlis_core::personas::one_line(&to),
             outcome.word()
         )),

@@ -72,6 +72,7 @@ function finished(id: string, name: string, more: Partial<FinishedTask> = {}): F
     asker: 4,
     name,
     persona: "devops",
+    how: "done",
     outcome: "done",
     folds: true,
     report: `${name}: all good.`,
@@ -80,6 +81,7 @@ function finished(id: string, name: string, more: Partial<FinishedTask> = {}): F
     place: "alpha",
     branch: null,
     reopens: true,
+    not_reopened: null,
     ...more,
   };
 }
@@ -89,6 +91,7 @@ const FIVE_DONE = ["talk", "listen", "read", "write", "count"].map((name, at) =>
   finished(`01K6DONE${at}`, `live check ${name}`),
 );
 const FAILED = finished("01K6FAILED", "check staging", {
+  how: "failed",
   outcome: "failed",
   folds: false,
   report: "The cluster refused the login.\nNothing was changed.",
@@ -215,11 +218,19 @@ describe("a chat's finished tasks", () => {
 
   it("folds a cancelled task with the done ones, and keeps every other end out of the fold", async () => {
     core([
-      finished("01K6A", "counted", { outcome: "done" }),
-      finished("01K6B", "called off", { outcome: "cancelled" }),
-      finished("01K6C", "stuck", { outcome: "blocked", folds: false }),
-      finished("01K6D", "died", { outcome: "ended without a report", folds: false }),
-      finished("01K6E", "shut", { outcome: "closed by the person", folds: false }),
+      finished("01K6A", "counted", { how: "done", outcome: "done" }),
+      finished("01K6B", "called off", { how: "cancelled", outcome: "cancelled" }),
+      finished("01K6C", "stuck", { how: "blocked", outcome: "blocked", folds: false }),
+      finished("01K6D", "died", {
+        how: "unreported",
+        outcome: "ended without a report",
+        folds: false,
+      }),
+      finished("01K6E", "shut", {
+        how: "stopped_by_person",
+        outcome: "closed by the person",
+        folds: false,
+      }),
     ]);
     render(<App />);
     const group = await theirs();
@@ -242,13 +253,26 @@ describe("a chat's finished tasks", () => {
     };
     core(
       [
-        finished("01K6A", "counted", { outcome: "done" }),
-        finished("01K6B", "called off", { outcome: "cancelled" }),
-        finished("01K6C", "stuck", { outcome: "blocked", folds: false }),
-        finished("01K6D", "died", { outcome: "ended without a report", folds: false }),
-        finished("01K6E", "shut", { outcome: "closed by the person", folds: false }),
-        finished("01K6F", "broke", { outcome: "failed", folds: false }),
-        finished("01K6G", "odd", { outcome: "a word from a later purlis", folds: false }),
+        finished("01K6A", "counted", { how: "done", outcome: "done" }),
+        finished("01K6B", "called off", { how: "cancelled", outcome: "cancelled" }),
+        finished("01K6C", "stuck", { how: "blocked", outcome: "blocked", folds: false }),
+        finished("01K6D", "died", {
+          how: "unreported",
+          outcome: "ended without a report",
+          folds: false,
+        }),
+        finished("01K6E", "shut", {
+          how: "stopped_by_person",
+          outcome: "closed by the person",
+          folds: false,
+        }),
+        finished("01K6F", "broke", { how: "failed", outcome: "failed", folds: false }),
+        // A value from a later purlis, which this window's types do not know.
+        finished("01K6G", "odd", {
+          how: "paused" as FinishedTask["how"],
+          outcome: "paused by a rule",
+          folds: false,
+        }),
       ],
       [STEWARD, reported],
     );
@@ -281,11 +305,11 @@ describe("a chat's finished tasks", () => {
       shape: "dash",
       more: "closed by the person",
     });
-    // A word this window does not know is not guessed at: it is drawn as the core said it.
+    // An end this window does not know is not guessed at: it is drawn as the core said it.
     expect(says(theRow(group, "odd"))).toEqual({
       word: "reported",
       shape: "dot",
-      more: "a word from a later purlis",
+      more: "paused by a rule",
     });
 
     // The task still open says the same of the same end as the finished row does.
@@ -336,6 +360,7 @@ describe("a chat's finished tasks", () => {
   it("shows a finished row's report on a press, as text and never as markup", async () => {
     core([
       finished("01K6X", "check prod", {
+        how: "failed",
         outcome: "failed",
         folds: false,
         report:
@@ -392,7 +417,7 @@ describe("a chat's finished tasks", () => {
   });
 
   it("says why on the row when a task cannot be reopened, and offers no Reopen where there is no conversation", async () => {
-    core(
+    const said = core(
       [FAILED, finished("01K6N", "no conversation", { folds: false, reopens: false })],
       [STEWARD],
       "'check staging' cannot be reopened: the folder it worked in is gone (workspaces/alpha). Its report is still here to read.",
@@ -400,7 +425,18 @@ describe("a chat's finished tasks", () => {
     render(<App />);
     const group = await theirs();
 
-    expect(within(group).getByRole("button", { name: "Reopen no conversation" })).toBeDisabled();
+    // Reopen where there is nothing to resume is still a button the keyboard reaches, and
+    // says why to whoever lands on it. Pressing it asks the core nothing.
+    const cannot = within(group).getByRole("button", { name: "Reopen no conversation" });
+    expect(cannot).not.toBeDisabled();
+    expect(cannot).toHaveAttribute("aria-disabled", "true");
+    expect(cannot).toHaveAccessibleDescription(
+      "It cannot be reopened: its harness named no conversation to resume.",
+    );
+    cannot.focus();
+    expect(cannot).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(said.asked("reopen_finished_task")).toEqual([]);
     await userEvent.click(within(group).getByRole("button", { name: "Reopen check staging" }));
 
     expect(await within(group).findByRole("alert")).toHaveTextContent(
@@ -431,6 +467,68 @@ describe("a chat's finished tasks", () => {
     );
     await userEvent.keyboard("{ArrowRight}");
     expect(await theirs()).toBeInTheDocument();
+  });
+
+  it("is worked by the keyboard: Tab reaches the fold, Enter and Space open and shut it, and Clear finished is reached and works", async () => {
+    const said = core([...FIVE_DONE, FAILED]);
+    render(<App />);
+    const group = await theirs();
+    const fold = within(group).getByRole("button", { name: "Finished (5)" });
+    const failed = theRow(group, "check staging");
+
+    // In the Tab order, in the order they are drawn: the row that stands alone, its Reopen
+    // and Clear, the fold, then Clear finished.
+    failed.focus();
+    await userEvent.tab();
+    expect(within(group).getByRole("button", { name: "Reopen check staging" })).toHaveFocus();
+    await userEvent.tab();
+    expect(within(group).getByRole("button", { name: "Clear check staging" })).toHaveFocus();
+    await userEvent.tab();
+    expect(fold).toHaveFocus();
+
+    // Enter opens it, Space shuts it, and focus stays on it.
+    await userEvent.keyboard("{Enter}");
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    expect(theRow(group, "live check talk")).toBeInTheDocument();
+    expect(fold).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(finishedRow(group, "live check talk")).toBeUndefined();
+    expect(fold).toHaveFocus();
+
+    // Clear finished is the next stop, and Enter presses it.
+    await userEvent.tab();
+    const clear = within(group).getByRole("button", { name: "Clear finished" });
+    expect(clear).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(said.asked("clear_finished_tasks")).toEqual([
+        { plane: PLANE, ids: FIVE_DONE.map((task) => task.id) },
+      ]),
+    );
+    await waitFor(() =>
+      expect(within(group).queryByRole("button", { name: /^Finished/ })).toBeNull(),
+    );
+    // The rows have gone, and the keyboard is not stranded: the row that stays is still
+    // there to Tab to, and its report opens on Enter.
+    const stays = theRow(group, "check staging");
+    stays.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("region", { name: "Report of check staging" })).toBeInTheDocument();
+  });
+
+  it("says on the row why the last Reopen did not hold, in the core's sentence", async () => {
+    const why =
+      "It could not be reopened: its harness ended at once, without bringing the conversation back (it may have been removed). Its report is still here.";
+    core([{ ...FAILED, not_reopened: why }]);
+    render(<App />);
+    const group = await theirs();
+
+    expect(within(group).getByText(why)).toBeInTheDocument();
+    // And Reopen is still offered: the next try may hold.
+    expect(within(group).getByRole("button", { name: "Reopen check staging" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("draws nothing for a chat with no finished tasks", async () => {

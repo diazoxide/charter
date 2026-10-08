@@ -3182,8 +3182,13 @@ export type FinishedTask = {
 	name: string,
 	persona: string | null,
 	/**
-	 *  How it ended: `done`, `cancelled`, `blocked`, `failed`, `ended without a report` or
-	 *  `closed by the person`.
+	 *  **How it ended, as a value** ([`How`]): what the window draws its state from. The
+	 *  window never reads the sentence in `outcome` to learn this.
+	 */
+	how: How,
+	/**
+	 *  How it ended, in words: `done`, `cancelled`, `blocked`, `failed`, `ended without a
+	 *  report` or `closed by the person`.
 	 */
 	outcome: string,
 	/**
@@ -3206,6 +3211,8 @@ export type FinishedTask = {
 	branch: string | null,
 	/**  Whether it can be reopened: its record names the conversation it ended in. */
 	reopens: boolean,
+	/**  Why the last Reopen of it did not hold, where one did not: said on its row. */
+	not_reopened: string | null,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -3453,8 +3460,9 @@ export type HandedFromNote = {
 	 */
 	tab: boolean,
 	/**
-	 *  Whether, as a task, it has sent its one report: it stays open, marked reported,
-	 *  until it is closed.
+	 *  Whether, as a task, it has sent its one report. purlis ends its program once that
+	 *  turn is over, and it is a finished row from then (#1485); until then it is listed as
+	 *  the open chat it is, marked reported.
 	 */
 	reported: boolean,
 	/**
@@ -3592,6 +3600,13 @@ export type HostsChanged = {
 	/**  The whole list now: what the Notice sends back once it is read. */
 	now: string[],
 };
+
+/**  How a finished task ended (`dispatchrecord::Finished`), as the window is sent it. */
+export type How = "done" | "cancelled" | "blocked" | "failed" | 
+/**  Its program ended before it reported, and purlis said so in its place. */
+"unreported" | 
+/**  The person stopped or closed it. */
+"stopped_by_person";
 
 /**  Where one of a vault's identity variables is read from now (#237). */
 export type IdentityHeld = 

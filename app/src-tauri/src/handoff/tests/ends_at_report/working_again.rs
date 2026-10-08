@@ -1,0 +1,253 @@
+//! What ends, and what does not, once a task has reported (#1485, fix round 1).
+//!
+//! **On the real clock.** Every test here turns the end's clock on (`Tasks::on_the_clock`), so
+//! the settle and the bound are the app's own threads: a flow that would be ended mid-turn is
+//! ended in these tests too, and none is green because the clock was off.
+
+use super::*;
+
+/// Longer than a reported task's moment to settle: had it been one to end, it would be gone.
+fn past_the_settle() {
+    std::thread::sleep(
+        purlis_core::dispatched::A_TURN_SETTLES_WITHIN + std::time::Duration::from_millis(900),
+    );
+}
+
+/// Waits until `task` is no longer an open chat, or fails after a bound.
+fn ends_within_moments(held: &Held, task: u32) {
+    let began = Instant::now();
+    let bound = purlis_core::dispatched::A_TURN_SETTLES_WITHIN + std::time::Duration::from_secs(10);
+    while open_chats(held).contains(&task) && began.elapsed() < bound {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!open_chats(held).contains(&task), "chat {task} never ended");
+}
+
+/// A steward chat and its one task, with the end's clock on.
+fn on_the_clock() -> (Plane, Pretend, Planes, PlaneId, Arc<Held>, u32, u32) {
+    let all = a_steward_and_its_task();
+    all.4.tasks().on_the_clock();
+    all
+}
+
+#[test]
+fn a_reported_task_the_person_types_into_stays_open_and_working() {
+    // The assertion this ticket's first commit took out, put back: typing `one more thing`
+    // into a task after its report must leave the chat open and working.
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    works(&held, task);
+    let said = reports(&held, &id, task);
+    assert!(matches!(said, Answer::Finished { .. }), "{said:?}");
+
+    // Mid-turn, after the report: the harness queues the line.
+    assert_eq!(held.operator_input(task, b"one more thing\r"), Ok(()));
+    // The reporting turn ends, and the queued line begins the next at once.
+    its_turn_ends(&held, task);
+    a_turn_begins(&held, task);
+    past_the_settle();
+
+    // Open, typeable, and still said to have reported: nothing ended it mid-turn.
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(held.operator_input(task, b"and this\r"), Ok(()));
+    assert_eq!(
+        stands(&held, steward, task).map(|(state, _)| state),
+        Some(PersonaChatState::Reported)
+    );
+    // Nor when that turn ends, nor at the bound.
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task));
+    // Its record says the person took it over, for the next launch.
+    assert!(record_of(&held, task).kept_open);
+    // It is a finished row once the person closes it.
+    assert_eq!(finished_under(&held, steward), Vec::new());
+    closes(&held, task).expect("closed");
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_key_typed_during_the_settle_keeps_the_chat_too() {
+    let (_plane, _host, _planes, id, held, _steward, task) = on_the_clock();
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+
+    // Inside its two seconds.
+    assert_eq!(held.operator_input(task, b"wait\r"), Ok(()));
+    past_the_settle();
+
+    assert!(open_chats(&held).contains(&task));
+}
+
+#[test]
+fn a_smart_close_of_a_reported_task_is_not_cut_by_its_pending_end() {
+    let (_plane, _host, _planes, id, held, _steward, task) = on_the_clock();
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+
+    // The chat is asked for its session record, which is a turn of its own. Whether the
+    // close is offered here or not, the end has stood down before anything is sent.
+    let _ = crate::smartclose::begin(&held, task);
+    a_turn_begins(&held, task);
+    past_the_settle();
+
+    assert!(open_chats(&held).contains(&task));
+    assert!(record_of(&held, task).kept_open);
+}
+
+#[test]
+fn a_task_reading_its_own_task_s_report_is_ended_only_when_that_turn_is_over() {
+    let (_plane, _host, _planes, id, held, steward, first) = on_the_clock();
+    let second = a_task_of(&held, &id, first, "read the logs");
+    // The first reports while the second, a task of its own, still works.
+    works(&held, first);
+    works(&held, second);
+    reports(&held, &id, first);
+    its_turn_ends(&held, first);
+    past_the_settle();
+    assert!(
+        open_chats(&held).contains(&first),
+        "held: a task of its own works"
+    );
+
+    // The second reports. The first is waiting, so purlis's line begins a turn in it.
+    reports(&held, &id, second);
+    a_turn_begins(&held, first);
+    // The second's turn ends and purlis ends it, which is when the first is looked at again:
+    // mid-turn, reading that report.
+    its_turn_ends(&held, second);
+    ends_within_moments(&held, second);
+    past_the_settle();
+    assert!(
+        open_chats(&held).contains(&first),
+        "ended while it read its own task's report"
+    );
+    // The bound set at its report is spent: it was the reporting turn's.
+    crate::dispatched::end_look(&held, first, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&first));
+
+    // It has read it, and its turn is over: now it is ended.
+    its_turn_ends(&held, first);
+    ends_within_moments(&held, first);
+    assert_eq!(
+        finished_under(&held, steward)
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["check prod"]
+    );
+}
+
+#[test]
+fn a_task_the_person_has_in_front_is_ended_when_they_move_away_and_not_before() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    // They opened its tab and are reading it.
+    held.chats().bring_to_front(Some(task));
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+
+    assert!(
+        open_chats(&held).contains(&task),
+        "ended under the person who was reading it"
+    );
+
+    // They bring another chat forward: it is ended then, as it would have been.
+    held.chats().bring_to_front(Some(steward));
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_blocked_task_stays_open_as_the_chat_it_is() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    works(&held, task);
+
+    let said = tasks_report(
+        &held,
+        &id,
+        &Tickets::default(),
+        task,
+        Outcome::Blocked,
+        None,
+    );
+
+    // Answered as any report, and told nothing of an end.
+    assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(finished_under(&held, steward), Vec::new());
+    // Closed by the person, it is a row of its own that says blocked.
+    closes(&held, task).expect("closed");
+    let rows = finished_under(&held, steward);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.how, row.folds))
+            .collect::<Vec<_>>(),
+        [(crate::finished::How::Blocked, false)]
+    );
+}
+
+#[test]
+fn a_task_the_person_started_from_a_tab_is_never_ended_by_its_report() {
+    let plane = a_plane_with_personas();
+    let host = Pretend::default();
+    let (planes, id, steward) = a_steward_chat(&host, &plane);
+    let held = planes.held(&id).expect("held");
+    held.tasks().on_the_clock();
+    let task = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
+        .expect("started")
+        .session;
+    works(&held, task);
+
+    let said = reports(&held, &id, task);
+
+    assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    // Their conversation: open until they close it, and a finished row from then.
+    assert!(open_chats(&held).contains(&task));
+    assert_eq!(finished_under(&held, steward), Vec::new());
+    closes(&held, task).expect("closed");
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_task_the_person_stopped_does_not_fold_whatever_its_last_report_says() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    rests(&held, task);
+    stops(&held, task, false).expect("stopping");
+
+    // Its one last turn: it says it is done.
+    works(&held, task);
+    crate::stopping::reported(&held, task);
+    let said = reports(&held, &id, task);
+    assert!(
+        matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+        "{said:?}"
+    );
+    its_turn_ends(&held, task);
+    crate::stopping::reported(&held, task);
+    ends_within_moments(&held, task);
+
+    let record = record_of(&held, task);
+    assert_eq!(
+        record.ended_by,
+        Some(purlis_core::dispatchrecord::EndedBy::Person)
+    );
+    let rows = finished_under(&held, steward);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.how, row.folds))
+            .collect::<Vec<_>>(),
+        [(crate::finished::How::StoppedByPerson, false)]
+    );
+}

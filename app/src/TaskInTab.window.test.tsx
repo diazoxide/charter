@@ -611,6 +611,7 @@ describe("a shown task that ends", () => {
     asker: 1,
     name,
     persona: "devops",
+    how: "done",
     outcome: "done",
     folds: true,
     report: "",
@@ -619,6 +620,7 @@ describe("a shown task that ends", () => {
     place: "alpha",
     branch: null,
     reopens: true,
+    not_reopened: null,
     ...more,
   });
 
@@ -630,6 +632,7 @@ describe("a shown task that ends", () => {
 
     finished.push(
       finishedRow("sweep", {
+        how: "blocked",
         outcome: "blocked",
         folds: false,
         report: "The queue is locked.\n<b>Nothing</b> was changed.",
