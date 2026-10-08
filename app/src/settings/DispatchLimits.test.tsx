@@ -24,6 +24,9 @@ const LIMITS: DispatchLimits["limits"] = [
   ["messages-per-minute", "Messages per minute", 10, false, 10000],
   ["may-dispatch", "May dispatch", null, true, 10000],
   ["may-run-at-once", "May run at once", null, true, 10000],
+  // The two that are off until set (#1512), as the core lists them.
+  ["tokens-per-session", "Tokens per session", null, false, 1000000000],
+  ["minutes-per-task", "Minutes per task", null, false, 10000],
 ].map(([word, label, standard, persona_only, most]) => ({
   word: word as string,
   label: label as string,
@@ -34,15 +37,18 @@ const LIMITS: DispatchLimits["limits"] = [
   ceiling: null,
 }));
 
-const DEFAULTS = [6, 16, 3, 10, null, null];
+const DEFAULTS = [6, 16, 3, 10, null, null, null, null];
+
+/** `values` as long as the core's limits: the two off until set left unwritten. */
+const eight = (values: (number | null)[]) => [...values, ...Array(8 - values.length).fill(null)];
 
 function row(
   scope: string,
   name: string,
-  values: (number | null)[] = [null, null, null, null, null, null],
+  values: (number | null)[] = [],
   beneath: (number | null)[] = DEFAULTS,
 ): DispatchLimitRow {
-  return { scope, name, values, beneath, ignored: [] };
+  return { scope, name, values: eight(values), beneath: eight(beneath), ignored: [] };
 }
 
 function page(over: Partial<DispatchLimits> = {}): DispatchLimits {
@@ -157,6 +163,8 @@ describe("Settings › Project › Dispatch", () => {
       "Messages per minute",
       "May dispatch",
       "May run at once",
+      "Tokens per session",
+      "Minutes per task",
       "",
     ]);
     expect(within(table).getByRole("rowheader", { name: "Project" })).toBeInTheDocument();
@@ -167,6 +175,19 @@ describe("Settings › Project › Dispatch", () => {
     expect(depth).toHaveAttribute("placeholder", "3");
     // A persona's limits are not the project's to set.
     expect(screen.queryByLabelText("May dispatch for the project")).not.toBeInTheDocument();
+  });
+
+  it("says where the token and time limits are set that a harness reporting no tokens is not counted", async () => {
+    // #1512: never a guess, said where the limit is set.
+    core(page({ rows: [row("project", "", [null, null, null, null, null, null])] }));
+    render(<Page />);
+
+    const note = await screen.findByTestId("dispatch-tokens-time-note");
+    expect(note.textContent).toContain("off until set");
+    expect(note.textContent).toContain("Tokens per session is not enforced yet");
+    expect(note.textContent).toContain("a chat can alter the figure it counts");
+    expect(note.textContent).toContain("a harness that reports no tokens is not counted");
+    expect(note.textContent).toContain("working time only");
   });
 
   it("draws a row per workspace and persona override, a persona's with its two own limits", async () => {

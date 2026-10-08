@@ -364,7 +364,8 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// **A reported figure, which a chat can alter.** It is kept in the project's per-session
 /// state, where a chat writes its own pointers, so a chat can write this file too, for its own
 /// conversation or another's. Show it as reported; decide nothing by it until its source is
-/// out of a chat's reach.
+/// out of a chat's reach (#1457). The optional `tokens-per-session` limit (#1512) is shown
+/// against it and, for that reason, refuses and stops nothing yet.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Spent {
     #[serde(default, skip_serializing_if = "Option::is_none")]

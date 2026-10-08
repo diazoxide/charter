@@ -4036,7 +4036,11 @@ export type How = "done" | "cancelled" | "blocked" | "failed" |
 /**  The person stopped it, and it sent the one short report it was given a turn for. */
 "stopped_by_person" | 
 /**  The person closed it: its program was ended with no report from it. */
-"closed_by_person";
+"closed_by_person" | 
+/**  purlis stopped it at its time limit (#1512). */
+"stopped_at_limit" | 
+/**  purlis stopped it with the task above it, at that task's time limit (#1512). */
+"stopped_with_above";
 
 /**  How a task came to nothing (`purlis_core::state::HowFailed`), as the window is sent it. */
 export type HowFailed = 

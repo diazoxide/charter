@@ -301,8 +301,13 @@ fn report_it(
     let deciding = held.chats().deciding();
     // Asked under the lock a stop is recorded under, so it is one or the other.
     if voice == Voice::Purlis && held.stopping().is_stopping(chat) {
+        let how = match held.stopping().limit_of(chat) {
+            // purlis's stop at a limit says so, never "by the person" (#1512).
+            Some(reached) => purlis_core::dispatched::being_stopped_as(reached),
+            None => "being stopped by the person".to_owned(),
+        };
         return Err(format!(
-            "chat {chat} is being stopped by the person, and its stop tells the chat that asked"
+            "chat {chat} is {how}, and its stop tells the chat that asked"
         ));
     }
     // The one report a stop asks for, tested and taken in one call.
@@ -470,12 +475,17 @@ fn report_under(
         // Its session record is named by the report's own part.
         record: None,
         below: held.stopping().ended_below(chat),
+        // purlis's stop at a limit the person set, where it was that (#1512).
+        limit: held.stopping().limit_of(chat),
     });
     let delivered = deliver(held, chat, &from, summary.clone(), task, the_stop_s)?;
     held.chats().owes(chat, Owed::Sent);
     // A report a chat sends in the one turn its stop gave it is still a stop's: the person
     // ended it, whatever it says of itself, and its row does not fold (#1485).
-    let by = last_words.then_some(purlis_core::dispatchrecord::EndedBy::Person);
+    let by = last_words.then_some(match held.stopping().limit_of(chat) {
+        Some(_) => purlis_core::dispatchrecord::EndedBy::Limit,
+        None => purlis_core::dispatchrecord::EndedBy::Person,
+    });
     let way = last_words.then_some(purlis_core::dispatchrecord::EndedWay::Stopped);
     crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by, way);
     if delivered.kept_for.is_none() {
@@ -800,6 +810,7 @@ pub(crate) fn operator_stopped(
                 .last_record(chat)
                 .and_then(|path| handback::record_path(&path)),
             below: if task { below } else { Vec::new() },
+            limit: held.stopping().limit_of(chat).filter(|_| task),
         };
         if let Err(why) = deliver(held, chat, &from, String::new(), None, Some(stopped)) {
             // Still owed where it was: the chat's close tries once more.
@@ -813,14 +824,25 @@ pub(crate) fn operator_stopped(
     if task && from.report == Owed::Due {
         held.chats().owes(chat, Owed::Failed);
         // Its dispatch's record ends here too, in the app's own words and under a word of
-        // its own (#1452, D-T59-j10): the person closed it, and it did not fail by itself.
+        // its own (#1452, D-T59-j10): the person closed it, or purlis did at a limit the
+        // person set (#1512), and it did not fail by itself.
+        let (by, text) = match held.stopping().limit_of(chat) {
+            Some(_) => (
+                purlis_core::dispatchrecord::EndedBy::Limit,
+                handback::CLOSED_AT_A_LIMIT,
+            ),
+            None => (
+                purlis_core::dispatchrecord::EndedBy::Person,
+                handback::CLOSED,
+            ),
+        };
         crate::dispatches::reported(
             held,
             chat,
             purlis_core::dispatchrecord::Outcome::Stopped,
-            handback::CLOSED,
+            text,
             None,
-            Some(purlis_core::dispatchrecord::EndedBy::Person),
+            Some(by),
             Some(purlis_core::dispatchrecord::EndedWay::Closed),
         );
     }
@@ -12667,4 +12689,7 @@ mod tests {
     /// Limits are shown where they bind, and a session's tasks can all be stopped at once
     /// (#1498).
     mod limits_where_they_bind;
+
+    /// A session's tokens and a task's time, held to the limits the person set (#1512).
+    mod limits_at_work;
 }

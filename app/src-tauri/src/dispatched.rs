@@ -1038,11 +1038,16 @@ fn list(held: &Held, asker: u32) -> Vec<Row> {
             let branch = crate::dispatches::branch_listed(held, listed.session);
             // And asked before it too: a stop is decided under a lock of its own.
             let being_stopped = held.stopping().is_stopping(listed.session);
+            // purlis's stop at a limit says so, never "by the person" (#1512).
+            let at_a_limit = held.stopping().limit_of(listed.session);
             let ledger = held.tasks().ledger();
             let own = dispatched::owned(asker, listed.session, Some(from)).is_ok();
             let state = match (own, listed.state) {
                 // The person is stopping it (#1488): said first, whoever's task it is.
-                _ if being_stopped => dispatched::BEING_STOPPED.to_owned(),
+                _ if being_stopped => match at_a_limit {
+                    Some(reached) => dispatched::being_stopped_as(reached),
+                    None => dispatched::BEING_STOPPED.to_owned(),
+                },
                 // Waiting on the person, by the board or by an ask the app holds open: the
                 // standing knows both, and is the word for it. A cancel under way is said
                 // first: that is what this chat asked for.
@@ -1096,7 +1101,10 @@ fn cancel(held: &Held, asker: u32, of: u32) -> Result<Answer, String> {
         // The person is stopping it already: that ends it and tells this chat, and a chat in
         // a stop is not cancelled as well (D-T59-j3).
         if held.stopping().is_stopping(of) {
-            return Err(dispatched::being_stopped(&name, of));
+            return Err(match held.stopping().limit_of(of) {
+                Some(reached) => dispatched::being_stopped_at_a_limit(&name, of, reached),
+                None => dispatched::being_stopped(&name, of),
+            });
         }
         (held.tasks().ledger().cancel(of, &name, &from)?, name)
     };
