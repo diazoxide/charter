@@ -18,7 +18,8 @@ import { commands, type BriefOf, type PlaneId, type TaskBrief } from "./bindings
  * in a `<pre>`: no link in it is live, no image is loaded, no tag is read. Where it holds a
  * character that draws as nothing or turns the words around it, the core hands it over written
  * out as well (`inert`), that is what is drawn, and the panel says so. **Copy gives the brief
- * as it was sent**, byte for byte, whatever was drawn.
+ * as it was sent**, byte for byte. Where the brief was drawn written out there are two, by
+ * name: **Copy as shown**, which is what was read, and **Copy as sent**.
  *
  * **Long briefs are whole**: the box scrolls, and nothing is cut by the panel. A brief the
  * record itself cut, and a record that holds none, are said in plain words.
@@ -136,34 +137,74 @@ function Facts({ said }: { said: TaskBrief }) {
 }
 
 /**
- * The element the last context menu was opened on: a chat's row, a tab. Kept so a panel opened
- * from a row of that menu can hand the keyboard back to it ({@link useKeyboardBack}).
+ * The element the last context menu was opened on: a chat's row, a tab. Noted so a panel opened
+ * from a row of that menu can hand the keyboard back to what opened it
+ * ({@link useKeyboardBack}), which trusts it only while that element says its menu is open.
  */
 let menuOpenedOn: Element | null = null;
 
+/** Whether `at` is in a surface that goes as the panel opens: a menu's row, the palette's box. */
+function goesWithItsSurface(at: Element): boolean {
+  return at.closest('[role="menu"], [role="dialog"], [role="alertdialog"]') !== null;
+}
+
 /**
  * **Where the keyboard was as the panel opened, handed back as it closes** (`useFocusBack`'s
- * rule, and one case more).
+ * rule, and the cases it leaves).
  *
  * The panel has no trigger of its own, so the element that had the focus as it opened gets it
- * back: the breadcrumb's button, a finished row's Brief. **Opened from a row of a menu, that
- * element is the menu's row, which goes with its menu.** The keyboard then goes to what the
- * menu was opened on (the task's row in the Chats list), which is where it was before the menu.
+ * back: the breadcrumb's button, a finished row's Brief.
+ *
+ * **Opened from a row of a menu or of the palette, that element goes with its surface.** Then,
+ * in order:
+ *
+ * 1. Where that surface itself hands the keyboard back to as it closes: the palette returns it
+ *    to the terminal, tab or panel the person was in, and a menu to what opened it. That
+ *    happens a moment after this panel is up, and the panel's trap takes the keyboard again;
+ *    the place is noted as it passes.
+ * 2. What the context menu was opened on (the task's row in the Chats list).
+ * 3. The terminal of the pane in front, so the keyboard is never left on the page.
  */
 function useKeyboardBack() {
-  const [had] = useState(() => {
+  // Read while the panel is first drawn, which is before the surface that opened it is gone:
+  // a menu's row still has the focus, and what the menu was opened on still says it is open.
+  const [start] = useState(() => {
     const at = document.activeElement;
-    if (!(at instanceof HTMLElement) || at.closest('[role="menu"]') === null) return at;
-    return menuOpenedOn?.closest<HTMLElement>("button, [tabindex]") ?? null;
+    if (at instanceof HTMLElement && at !== document.body && !goesWithItsSurface(at))
+      return { to: at, stays: true };
+    // **Only a menu that is open now**: what an earlier context menu was opened on says
+    // nothing about a menu of another kind.
+    const opener = at?.closest('[role="menu"]')
+      ? menuOpenedOn?.closest<HTMLElement>('[data-state="open"]')
+      : null;
+    return { to: opener ?? null, stays: false };
   });
+  const back = useRef<HTMLElement | null>(start.to);
+  useEffect(() => {
+    if (start.stays) return;
+    const passing = (event: FocusEvent) => {
+      const at = event.target;
+      if (at instanceof HTMLElement && at !== document.body && !goesWithItsSurface(at))
+        back.current = at;
+    };
+    document.addEventListener("focusin", passing, true);
+    // A closing surface hands back on a timer of no length; this is long past it.
+    const over = setTimeout(() => document.removeEventListener("focusin", passing, true), 1000);
+    return () => {
+      clearTimeout(over);
+      document.removeEventListener("focusin", passing, true);
+    };
+  }, [start]);
   return (event: Event) => {
     event.preventDefault();
-    if (had instanceof HTMLElement && had.isConnected) had.focus();
+    const to = back.current;
+    if (to !== null && to.isConnected) to.focus();
+    else document.querySelector<HTMLElement>(".pane.focused textarea")?.focus();
   };
 }
 
-/** What Copy last did, said to a screen reader too. */
-type Copied = "copied" | "refused" | undefined;
+/** What a Copy last did, said to a screen reader too. */
+type Copied = "sent" | "shown" | "refused" | undefined;
 
 /**
  * The panel: the brief of the task `of` names, read from the core as it opens.
@@ -204,15 +245,15 @@ export function BriefPanel({
     };
   }, [plane, chat, dispatch]);
 
-  const copy = () => {
-    if (said === undefined) return;
-    const put = navigator.clipboard?.writeText(said.brief);
+  /** Puts `text` on the clipboard, and says which of the two it was. */
+  const copy = (text: string, what: "sent" | "shown") => {
+    const put = navigator.clipboard?.writeText(text);
     if (put === undefined) {
       setCopied("refused");
       return;
     }
     void put.then(
-      () => setCopied("copied"),
+      () => setCopied(what),
       () => setCopied("refused"),
     );
   };
@@ -268,8 +309,10 @@ export function BriefPanel({
                     <p className="honest">
                       This brief holds characters that draw as nothing or change how the text around
                       them reads. Each is written out here as its code, such as{" "}
-                      <code>{"\\u202e"}</code>, and a backslash the brief wrote is doubled. Copy
-                      gives the brief exactly as it was sent.
+                      <code>{"\\u202e"}</code>, and a backslash the brief wrote is doubled.{" "}
+                      <strong>Copy as shown</strong> copies what you read here.{" "}
+                      <strong>Copy as sent</strong> copies the brief exactly as it was sent, with
+                      those characters in it.
                     </p>
                   )}
                   <p className="brief-whose">
@@ -284,7 +327,6 @@ export function BriefPanel({
                     tabIndex={0}
                     role="group"
                     aria-label={`${title}, as it was sent`}
-                    dir="auto"
                   >
                     {said.inert ?? said.brief}
                   </pre>
@@ -294,17 +336,42 @@ export function BriefPanel({
           )}
           <div className="answer">
             <span className="brief-copied" role="status">
-              {copied === "copied"
+              {copied === "sent"
                 ? "Copied, as it was sent."
-                : copied === "refused"
-                  ? "purlis could not put the brief on the clipboard."
-                  : ""}
+                : copied === "shown"
+                  ? "Copied, as it is shown here."
+                  : copied === "refused"
+                    ? "purlis could not put the brief on the clipboard."
+                    : ""}
             </span>
-            {said !== undefined && said.kept !== "missing" && (
-              <button type="button" tabIndex={0} onClick={copy}>
-                Copy
-              </button>
-            )}
+            {said !== undefined &&
+              said.kept !== "missing" &&
+              (said.inert === null ? (
+                <button type="button" tabIndex={0} onClick={() => copy(said.brief, "sent")}>
+                  Copy
+                </button>
+              ) : (
+                // What is pasted is what was read, unless the person asks for the other by
+                // name: the brief as sent holds characters this panel would not draw.
+                <>
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    title="The brief exactly as it was sent, with the characters this panel wrote out as codes."
+                    onClick={() => copy(said.brief, "sent")}
+                  >
+                    Copy as sent
+                  </button>
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    title="The text as it is shown here: nothing hidden, nothing that turns text around."
+                    onClick={() => copy(said.inert ?? said.brief, "shown")}
+                  >
+                    Copy as shown
+                  </button>
+                </>
+              ))}
             <Dialog.Close asChild>
               <button type="button" tabIndex={0} ref={close}>
                 Close

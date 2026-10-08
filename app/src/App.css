@@ -1196,7 +1196,16 @@ button.show-more:focus-visible {
   overflow: hidden;
 }
 
+/* **Everything on the line that is not the breadcrumb gives way first** (#1494): the gauge,
+   the harness's name, Brief, and whatever a later ticket puts here. A flex line takes the room
+   it lacks from each item in proportion to its width times this number, and the breadcrumb is
+   the widest item, so at 1 each it gave the most from the first missing pixel, and its state
+   word was pushed out under its neighbour while the harness's name still had room. At a
+   thousand to one the others are down to their padding before the breadcrumb has given a
+   pixel in a thousand; from there the breadcrumb's own order holds (below), the state last.
+   The selector outranks each item's own `flex`, so a new item obeys it without a rule. */
 .pane-chips:has(.pane-crumbs) > :not(.pane-crumbs) {
+  flex-shrink: 1000;
   min-width: 0;
   overflow: hidden;
 }
@@ -1304,10 +1313,12 @@ button.show-more:focus-visible {
 /* **Brief, on the breadcrumb line** (#1494, `Brief.tsx`): one small icon button after the
    breadcrumb, in the line's own quiet box, as tall as the breadcrumb beside it.
 
-   **An item of the line, and not part of the breadcrumb**, so the rule above already holds it:
-   it gives way with the gauge and the harness's name (`.pane-chips:has(.pane-crumbs) >
-   :not(.pane-crumbs)`), and is cut at its edge before the state word loses a letter. Its
-   padding does not shrink; the path's names give that room, never the state. */
+   **An item of the line, and not part of the breadcrumb**, so the line's rule for every such
+   item holds it (`.pane-chips:has(.pane-crumbs) > :not(.pane-crumbs)`, which outranks the
+   `flex` here): it gives way with the gauge and the harness's name, before the breadcrumb
+   gives anything, and is cut at its own edge. Its padding and border do not shrink. Only once
+   every such item is down to that does the breadcrumb shrink, by its own order: the names,
+   and the state word last. */
 .pane-brief {
   display: flex;
   flex: 0 1 auto;
@@ -3419,6 +3430,8 @@ h2.sidebar-title .node-icon {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* Each line takes its direction from its own first letter, and none from the line before. */
+  unicode-bidi: plaintext;
   color: var(--text-primary);
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
