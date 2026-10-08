@@ -341,7 +341,10 @@ fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
 /// Whether the operator is already looking at this chat.
 ///
 /// **Three questions, and all three have to be yes.** The window is on screen and has the
-/// keyboard; the window has THIS chat's plane in front; and that plane has this chat in front.
+/// keyboard; the window has THIS chat's plane in front; and that plane has this chat on screen:
+/// the chat in front, or the task its tab shows in place of it (`Chats::looked_at`, #1486). So
+/// a task shown inside its session's tab is not notified about, and the session's own chat,
+/// hidden behind it, is.
 ///
 /// The middle one is the half #111 named as the opener's to close, and it was not pedantry:
 /// every plane numbers its chats from one, so "is session 3 in front" has as many answers as
@@ -376,7 +379,7 @@ fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
     }
     app.try_state::<Planes>()
         .and_then(|planes| planes.held(&moved.plane).ok())
-        .is_some_and(|held| held.chats().front() == Some(moved.session))
+        .is_some_and(|held| held.chats().looked_at() == Some(moved.session))
 }
 
 /// The event a second launch sends the window: the directory it was run in, for the window to
@@ -2014,7 +2017,12 @@ fn tab_shows(
     session: u32,
     shown: Option<u32>,
 ) -> Result<(), String> {
-    planes.held(&plane)?.chats().tab_shows(session, shown)
+    let held = planes.held(&plane)?;
+    held.chats().tab_shows(session, shown)?;
+    // A reported task that was held because the person was reading it in this tab is looked
+    // at again, as it is when another chat is brought in front (#1485).
+    dispatched::front_moved(&held);
+    Ok(())
 }
 
 /// The order the chat strip draws this project's chats in, by session, so the record lists

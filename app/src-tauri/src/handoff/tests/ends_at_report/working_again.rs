@@ -164,6 +164,70 @@ fn a_task_the_person_has_in_front_is_ended_when_they_move_away_and_not_before() 
 }
 
 #[test]
+fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not_before() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    // The session's tab is in front, switched to its task (#1486): "in front" is the
+    // session's own chat, and the task is the one on screen.
+    held.chats().bring_to_front(Some(steward));
+    held.chats().tab_shows(steward, Some(task)).expect("shown");
+    assert_eq!(held.chats().looked_at(), Some(task));
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+
+    assert!(
+        open_chats(&held).contains(&task),
+        "ended under the person who was reading it in its session's tab"
+    );
+
+    // They go back to the session's own chat: it is ended then.
+    held.chats().tab_shows(steward, None).expect("its own chat");
+    assert_eq!(held.chats().looked_at(), Some(steward));
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_task_shown_in_a_tab_that_is_no_longer_in_front_is_ended() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    held.chats().tab_shows(steward, Some(task)).expect("shown");
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    past_the_settle();
+    assert!(open_chats(&held).contains(&task));
+
+    // Its tab still shows it, and is no longer the tab in front: nobody is reading it.
+    held.chats().bring_to_front(None);
+    assert_eq!(held.chats().looked_at(), None);
+    crate::dispatched::front_moved(&held);
+    ends_within_moments(&held, task);
+}
+
+#[test]
+fn the_chat_looked_at_is_the_one_a_tab_shows_and_not_the_session_hidden_behind_it() {
+    // What the notification's "already looking at it" asks (`already_looking_at`): a task on
+    // screen is not notified about, and the session's own chat behind it is.
+    let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();
+    held.chats().bring_to_front(Some(steward));
+    assert_eq!(held.chats().looked_at(), Some(steward));
+
+    held.chats().tab_shows(steward, Some(task)).expect("shown");
+    assert_eq!(held.chats().looked_at(), Some(task));
+    assert_ne!(held.chats().looked_at(), Some(steward));
+    // "In front" is still the session's own chat: the tab is its.
+    assert_eq!(held.chats().front(), Some(steward));
+
+    // A task brought in front in a tab of its own is looked at as any chat in front is.
+    held.chats().bring_to_front(Some(task));
+    assert_eq!(held.chats().looked_at(), Some(task));
+}
+
+#[test]
 fn a_blocked_task_stays_open_as_the_chat_it_is() {
     let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
     works(&held, task);
