@@ -285,13 +285,7 @@ import type { Reveal } from "./revealTask";
 import { tasksBelowOf, type TasksBelow } from "./taskCounts";
 import { TasksBelowLent } from "./TasksBelow";
 import { finishedOf, qualifierOf, shownOf, useFinishedTasks } from "./finished";
-import {
-  below as chatsBelow,
-  chatsTree,
-  listedChat,
-  startedElsewhere,
-  type ListedChat,
-} from "./chatsTree";
+import { below as chatsBelow, chatsTree, listedChat, type ListedChat } from "./chatsTree";
 import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
 import { HarnessChip } from "./HarnessCard";
 import {
@@ -4760,9 +4754,15 @@ export const PlaneView = memo(function PlaneView({
     const last = recalled.get(`${id}:${lead}:${task}`);
     return last?.path[last.path.length - 1].name;
   };
-  /** The chats each chat started that went to another workspace, which the explorer draws
-   *  under its row with that workspace named. */
-  const chatsStarted = useMemo(() => startedElsewhere(listedChats), [listedChats]);
+  /** The explorer's lines ask the Chats list for chats' own rows (#1490): the one line for a
+   *  session's tasks for the session's, and a line for the tasks working at a place for each
+   *  of theirs. The list opens them and puts the keyboard on the first (`revealTask.ts`). */
+  const revealChat = useCallback(
+    // A chat's own row is not something the list reveals yet: the next commit teaches it.
+    (session: number) =>
+      setRevealed((was) => ({ asker: session, task: "", at: (was?.at ?? 0) + 1 })),
+    [],
+  );
 
   /**
    * The focused workspace's worktrees, as the catalogue names them (charter-app#174).
@@ -6223,7 +6223,9 @@ export const PlaneView = memo(function PlaneView({
                 onFocus={setFocusedBranch}
                 cloning={cloning}
                 onReadAgain={rereadPanels}
-                started={chatsStarted}
+                listed={listedChats}
+                finished={finishedTasks}
+                onRevealChat={revealChat}
                 nameOf={nameOfListed}
               />
             </div>

@@ -1,19 +1,11 @@
 import { memo, type ReactNode } from "react";
 import { Hand, SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
-import {
-  childrenOf,
-  markOf,
-  sameChildren,
-  useChatsHere,
-  useChatsSelect,
-  type State,
-} from "./chatState";
+import { markOf, useChatsHere, useChatsSelect } from "./chatState";
 import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
 import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
 import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
-import type { ListedChat } from "./chatsTree";
 import { shownState, type Shown, type TaskFacts } from "./shownState";
 import { StateShown } from "./StateShown";
 import { taskCountOf } from "./taskCounts";
@@ -102,123 +94,6 @@ export const ChatShownState = memo(function ChatShownState({
     sameShown,
   );
   return shown === undefined ? null : <StateShown shown={shown} changed={changed} />;
-});
-
-/** How many characters of a harness's id for a helper its row shows: enough to tell
- *  apart two ids that differ late (`thread-1`, `thread-10`). The whole id is its tooltip. */
-const AGENT_ID_SHOWN = 16;
-
-/** A helper's id as its row shows it: whole when it fits, cut with an ellipsis when not. */
-function shownId(agent: string): string {
-  return agent.length > AGENT_ID_SHOWN ? `${agent.slice(0, AGENT_ID_SHOWN)}…` : agent;
-}
-
-/** The id of chat `session`'s list of helpers, which the chat's row is described by. The id
- *  keeps its first spelling: it is never shown. */
-export function childAgentsId(session: number): string {
-  return `sub-agents-of-${session}`;
-}
-
-/** The words a helper's state can be, as `ChatMark` draws them. */
-const CHILD_STATES: readonly string[] = ["running", "waiting", "done", "failed"];
-
-/**
- * **A chat's helpers, under its row** (FD-18, W8): each sub-agent or child its harness
- * spawned, by the harness's id for it, with what it is doing. The word shown is **helper**
- * (#1484): a sub-agent is the harness's word, and a row says the app's. Reads its own chat's children off
- * the project's store, as the state mark does (SC-3), and draws nothing for a chat with none.
- *
- * Not rows of the tree: a child is not something to bring forward or start in, so the arrows
- * stop on its chat and not on it. Its asks are its chat's, and a stop of the chat stops it.
- */
-export const ChildAgents = memo(function ChildAgents({
-  session,
-  name,
-}: {
-  session: number;
-  /** The chat's name, which the list is labelled by. */
-  name: string;
-}) {
-  const children = useChatsSelect(
-    useChatsHere(),
-    (states) => childrenOf(states, session),
-    sameChildren,
-  );
-  if (children.length === 0) return null;
-  return (
-    <ul
-      id={childAgentsId(session)}
-      className="child-agents"
-      role="list"
-      aria-label={`Helpers of ${name}`}
-    >
-      {children.map((child) => (
-        <li key={child.agent} className="child-agent">
-          <span className="agent" title={child.agent}>
-            helper {shownId(child.agent)}
-          </span>
-          <ChatMark
-            state={CHILD_STATES.includes(child.state) ? (child.state as State) : "unknown"}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-});
-
-/**
- * **The chats a chat started that work in another workspace, under its row in the explorer**
- * (#1447): each by its name, with what it is doing and **a badge naming the workspace it went
- * to**, since nothing else in this workspace's explorer would say where it is.
- *
- * A started chat that works in this workspace is not drawn here: it has a row of its own, at
- * the place it works. Beside the sub-agents and not instead of them: a sub-agent is a helper
- * inside the chat's own program, and these are chats of their own. Like them, not rows of the
- * tree, so the arrows stop on the chat; a press brings the started chat forward, and the Chats
- * section is where the keyboard reaches it.
- */
-export const StartedElsewhere = memo(function StartedElsewhere({
-  chats,
-  name,
-  onShow,
-}: {
-  chats: readonly ListedChat[] | undefined;
-  /** The chat that started them, which the list is labelled by. */
-  name: string;
-  onShow: (session: number) => void;
-}) {
-  if (chats === undefined || chats.length === 0) return null;
-  return (
-    <ul
-      className="started-chats"
-      role="list"
-      aria-label={`Chats ${name} started in other workspaces`}
-    >
-      {chats.map((chat) => (
-        <li key={chat.session} className="started-chat">
-          <button type="button" className="chat" tabIndex={-1} onClick={() => onShow(chat.session)}>
-            {chat.persona === null ? (
-              <SquareTerminal className="node-icon" aria-hidden="true" />
-            ) : (
-              <PersonaMark persona={chat.persona} />
-            )}
-            <span className="session">{chat.name}</span>
-            <ChatShownState
-              session={chat.session}
-              shell={chat.shell}
-              report={chat.report}
-              outcome={chat.outcome}
-              asking={chat.asking}
-              harness={chat.harness}
-            />
-            <span className="elsewhere" title={`Works in ${chat.workspace}`}>
-              {chat.workspace}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
 });
 
 /** No names: what a tab with no hidden task that needs you is handed. */

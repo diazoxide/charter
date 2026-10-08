@@ -304,7 +304,7 @@ describe("the explorer", () => {
     expect(onShowChat).toHaveBeenCalledWith(1);
   });
 
-  it("shows a chat's child agents under it, each with what it is doing (FD-18)", () => {
+  it("says a chat's helpers as a count on its row, and lists none until it is unfolded (FD-18, #1490)", () => {
     const states = moved(nothingKnown, {
       plane: "/home/dev/plane",
       session: 1,
@@ -323,36 +323,23 @@ describe("the explorer", () => {
     });
     draw({ chats: [chat(1, "ide.1", `${CUT}/one`), chat(2, "ide.2", `${CUT}/one`)], states });
 
-    const children = screen.getByRole("list", { name: "Helpers of ide.1" });
-    const rows = within(children).getAllByRole("listitem");
-    // Long enough to tell two ids apart that differ late, and the whole id on hover.
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "helper a1b2c3d4e5f6a7b8…",
-      "helper thread-1",
-      "helper thread-10",
-    ]);
-    expect(rows.map((row) => row.querySelector(".agent")?.getAttribute("title"))).toEqual([
-      "a1b2c3d4e5f6a7b8c9d0",
-      "thread-1",
-      "thread-10",
-    ]);
-    expect(
-      rows.map((row) => row.querySelector("[data-state]")?.getAttribute("data-state")),
-    ).toEqual(["failed", "done", "running"]);
-    // The chat's row is described by them, so a screen reader on it hears what it spawned.
-    expect(screen.getByRole("treeitem", { name: /ide\.1/ })).toHaveAccessibleDescription(
-      /helper thread-10/,
+    // A row of the tree, folded: what unfolds it and what it then lists is
+    // `Explorer.tasks.test.tsx`'s.
+    const count = screen.getByRole("treeitem", { name: "3 helpers of ide.1" });
+    expect(count).toHaveAttribute("aria-expanded", "false");
+    // The chat's row is described by it, so a screen reader on it hears how many it spawned.
+    expect(screen.getByRole("treeitem", { name: /^ide\.1/ })).toHaveAccessibleDescription(
+      /3 helpers/,
     );
-    expect(screen.getByRole("treeitem", { name: /ide\.2/ })).not.toHaveAccessibleDescription(
+    expect(screen.getByRole("treeitem", { name: /^ide\.2/ })).not.toHaveAccessibleDescription(
       /helper/,
     );
-    expect(screen.queryByRole("list", { name: "Helpers of ide.2" })).toBeNull();
-    // Not rows of the tree: a helper is drawn under its chat, and the chat is what the
-    // arrows stop on and what a press brings forward.
+    // No row of ids until it is asked for.
     expect(screen.queryByRole("treeitem", { name: /helper thread/ })).toBeNull();
+    expect(screen.getByTestId("explorer")).not.toHaveTextContent("a1b2c3d4");
   });
 
-  it("lists a task under the chat that asked for it, by name and state (#1436)", () => {
+  it("lists a task that has a tab of its own beside the chat that asked, by name and state (#1436, #1490)", () => {
     const states = moved(nothingKnown, {
       plane: "/home/dev/plane",
       session: 7,
@@ -365,7 +352,8 @@ describe("the explorer", () => {
       sequence: 1,
       children: [],
     });
-    // Each has a tab: a task has none until the person opens it from the Chats section.
+    // Each has a tab: a task has none unless the person gave it one, and one with none is
+    // counted on its session's line and not listed (`Explorer.tasks.test.tsx`).
     const asked = {
       name: "steward 1",
       workspace: "alpha",
@@ -387,20 +375,16 @@ describe("the explorer", () => {
 
     const asking = screen.getByRole("treeitem", { name: /steward 1/ });
     const task = screen.getByRole("treeitem", { name: /check the queue/ });
-    // Under its asking chat's row, one level down, and under no other chat's.
-    expect(asking.closest("li")).toContainElement(task);
-    expect(screen.getByRole("treeitem", { name: /steward 2/ }).closest("li")).not.toContainElement(
-      task,
-    );
-    expect(Number(task.getAttribute("aria-level"))).toBe(
-      Number(asking.getAttribute("aria-level")) + 1,
-    );
+    // A row of its own at the place it works. Who asked whom is the Chats list's to say.
+    expect(asking.closest("li")).not.toContainElement(task);
+    expect(task.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
     expect(task.querySelector("[data-state]")).toHaveAttribute("data-state", "working");
     expect(task.querySelector("[data-state]")).toHaveTextContent("working");
-    // The handoff is a sibling of the chat it came from.
     const handoff = screen.getByRole("treeitem", { name: /moved on/ });
     expect(handoff.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
     expect(asking.closest("li")).not.toContainElement(handoff);
+    // Nothing is counted: every chat here has its row.
+    expect(screen.queryByRole("treeitem", { name: /\d tasks?/ })).toBeNull();
   });
 
   it("lists a task whose asking chat is not at this spot beside the other chats", () => {

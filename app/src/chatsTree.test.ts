@@ -6,7 +6,6 @@ import {
   ownBranch,
   parentsIn,
   startedBy,
-  startedElsewhere,
   unfolded,
   type ListedChat,
 } from "./chatsTree";
@@ -100,18 +99,6 @@ describe("the project's chats as a tree", () => {
     const by = startedBy([listed(1), listed(2, 1), listed(3, 1), listed(8, 7)]);
     expect([...by.keys()]).toEqual([1]);
     expect(by.get(1)?.map((chat) => chat.session)).toEqual([2, 3]);
-  });
-
-  it("keeps, for the explorer, only the started chats that work in another workspace", () => {
-    const away = { ...listed(3, 1), workspace: "beta" };
-    const by = startedElsewhere([
-      listed(1),
-      listed(2, 1),
-      away,
-      { ...listed(4, 3), workspace: "beta" },
-    ]);
-    expect([...by.keys()]).toEqual([1]);
-    expect(by.get(1)).toEqual([away]);
   });
 });
 

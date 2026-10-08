@@ -363,12 +363,12 @@ describe("the Chats section", () => {
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
     expect(row(tree, "devops 2").querySelector(".workspace")?.textContent).toBe("beta");
 
-    // And under its asker's row in alpha's explorer, wearing the workspace it went to.
-    const started = await screen.findByRole("list", {
-      name: "Chats steward 1 started in other workspaces",
-    });
-    expect(within(started).getByText("devops 2")).toBeTruthy();
-    expect(started.querySelector(".elsewhere")?.textContent).toBe("beta");
+    // Alpha's explorer lists alpha's own chats (#1490): a chat that went to beta is beta's,
+    // and who started it is this list's to say.
+    const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+    await within(explorer).findByRole("treeitem", { name: /steward 1/ });
+    expect(within(explorer).queryByRole("treeitem", { name: /devops 2/ })).toBeNull();
+    expect(screen.queryByRole("list", { name: /started in other workspaces/ })).toBeNull();
   });
 
   it("draws a chat started in the same workspace by its own row in the explorer, with no badge", async () => {
@@ -576,15 +576,20 @@ describe("a chat moving, with fifty chats listed", () => {
 
     move(31, "running", 10);
 
-    // Chat 31 is a task chat in alpha with no tab: its row here, and its row where it works
-    // in alpha's explorer. Forty-nine other rows draw nothing.
-    expect(drawn.marks).toEqual(["working", "working"]);
+    // Chat 31 is a task chat with no tab: its row here draws its state, and forty-nine other
+    // rows draw nothing. The explorer has no row for it (#1490): the one line under its
+    // session counts it, and that line's counts are all of the explorer that is drawn again.
+    expect(drawn.marks).toEqual(["working"]);
     expect(within(row(tree, "steward 31")).getByText("working")).toBeTruthy();
+    const explorer = screen.getByRole("tree", { name: "Repos and branches" });
+    expect(within(explorer).getByRole("treeitem", { name: /49 tasks/ })).toHaveTextContent(
+      /^49 tasks 1 working$/,
+    );
   });
 });
 
 describe("an anonymous helper", () => {
-  it("still shows as a helper row under its chat in the explorer", async () => {
+  it("is counted on its chat's row in the explorer, and is a helper row once that is unfolded", async () => {
     const { move } = core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
     render(<App />);
     const tree = await section();
@@ -592,8 +597,14 @@ describe("an anonymous helper", () => {
 
     move(1, "running", 10, [], [{ agent: "thread-7", state: "running" }]);
 
-    const helpers = await screen.findByRole("list", { name: "Helpers of steward 1" });
-    expect(within(helpers).getByText("helper thread-7")).toBeTruthy();
+    const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+    const count = await within(explorer).findByRole("treeitem", { name: "1 helper of steward 1" });
+    expect(within(explorer).queryByText("helper thread-7")).toBeNull();
+    await userEvent.click(count);
+    const helpers = within(explorer).getByRole("group", { name: "Helpers of steward 1" });
+    expect(within(helpers).getByRole("treeitem", { name: /^helper thread-7/ })).toHaveTextContent(
+      "working",
+    );
   });
 });
 
@@ -929,6 +940,140 @@ describe("what the chat that asked is shown of a stop (#1448)", () => {
   });
 });
 
+/** The explorer's tree, and a row of it by its accessible name. */
+const explorerTree = () => screen.findByRole("tree", { name: "Repos and branches" });
+const inExplorer = async (name: RegExp | string) =>
+  within(await explorerTree()).findByRole("treeitem", { name });
+
+/** The operator's five: one session in alpha and five tasks of it, two named by a label. */
+const fiveTasks = () => [
+  chat(1, "alpha"),
+  chat(15, "alpha", { persona: "devops", label: "live check talk", from: by(1, "task") }),
+  chat(16, "alpha", { persona: "devops", label: "live check queue", from: by(1, "task") }),
+  chat(17, "alpha", { persona: "devops", from: by(1, "task") }),
+  chat(18, "beta", { persona: "devops", from: by(1, "task") }),
+  chat(19, "beta", { persona: "devops", from: by(1, "task") }),
+];
+
+describe("the explorer's one line for a session's tasks (#1490)", () => {
+  it("is one line for five tasks, which the Chats list goes on listing", async () => {
+    const { move } = core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+    move(15, "running", 10);
+    move(16, "running", 11);
+
+    const line = await inExplorer(/5 tasks/);
+    expect(line).toHaveTextContent(/^5 tasks 2 working$/);
+    const explorer = await explorerTree();
+    const named = within(explorer)
+      .getAllByRole("treeitem")
+      .map((one) => one.querySelector(".session")?.textContent);
+    // The session and its line, and no task by name or by number.
+    expect(named.filter((name) => name != null)).toEqual(["steward 1", "5 tasks"]);
+    expect(explorer).not.toHaveTextContent(/live check|devops 1[789]/);
+  });
+
+  it("puts the keyboard on the session's row in the Chats list, unfolded, when pressed", async () => {
+    core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+    // Folded by the person, so its tasks are out of sight.
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    expect(shape(tree)).toEqual(["1 steward 1"]);
+
+    await userEvent.click(await inExplorer(/5 tasks/));
+
+    await waitFor(() => expect(row(tree, "steward 1")).toHaveFocus());
+    expect(row(tree, "steward 1")).toHaveAttribute("aria-expanded", "true");
+    expect(shape(tree)).toHaveLength(6);
+    // It went to the list: no chat was opened and no tab added.
+    expect(screen.getByTestId("pane").textContent).toBe("session 1");
+    expect(tabNames()).toEqual(["steward 1"]);
+
+    // And again after the person folds it again: each press is its own ask.
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    (await inExplorer(/5 tasks/)).focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(row(tree, "steward 1")).toHaveFocus());
+    expect(shape(tree)).toHaveLength(6);
+  });
+
+  it("takes off a filter that hides the session's row, since the person asked to see it", async () => {
+    core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+    const filter = screen.getByRole("searchbox", {
+      name: "Filter chats by name, persona, workspace or state",
+    });
+    // With the keyboard brought to the box and no pointer: jsdom lays nothing out, so a
+    // pointer pressed anywhere lands on the regions' divider, which takes the keyboard.
+    act(() => filter.focus());
+    await userEvent.keyboard("no such chat");
+    await waitFor(() =>
+      expect(screen.queryByRole("tree", { name: "Chats of this project" })).toBeNull(),
+    );
+
+    await userEvent.click(await inExplorer(/5 tasks/));
+
+    const again = await section();
+    await waitFor(() => expect(row(again, "steward 1")).toHaveFocus());
+    expect(filter).toHaveValue("");
+    expect(shape(again)).toHaveLength(6);
+  });
+
+  it("gives a task asked for from another workspace a way in from the one it works in", async () => {
+    core([
+      chat(1, "alpha"),
+      chat(2, "beta", { persona: "devops" }),
+      chat(3, "alpha", { label: "check prod", from: by(2, "task", "devops 2", "beta") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 2", "2 check prod"]));
+    await userEvent.click(within(tree).getByTitle("Fold the chats under devops 2"));
+
+    // Alpha's explorer: its own session, and one line for what beta's chat has working here.
+    const line = await inExplorer(/1 task from other workspaces/);
+    expect(within(await explorerTree()).queryByRole("treeitem", { name: /check prod/ })).toBeNull();
+    await userEvent.click(line);
+
+    // The task's own row, with the row it was folded under opened.
+    await waitFor(() => expect(row(tree, "check prod")).toHaveFocus());
+    expect(tabNames()).toEqual(["steward 1"]);
+  });
+
+  it("keeps the hand for a task that needs you on its session's row, and the workspace's count", async () => {
+    const { asked, move } = core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+
+    move(18, "waiting", 10, [18]);
+
+    // The task works in beta and has no row in any explorer. Its session's row in alpha's
+    // wears the hand for it, as its row in the Chats list does.
+    const session = await inExplorer(/^steward 1/);
+    const hand = session.closest("li")?.querySelector<HTMLElement>("button.rolled-up");
+    expect(hand).toHaveAccessibleName("Go to devops 18, a task of steward 1, which needs you");
+    expect(session).toHaveAccessibleDescription(/devops 18.*needs you/);
+    expect(await inExplorer(/5 tasks/)).toHaveTextContent("1 needs you");
+    expect(rolledUp(tree, "steward 1")?.getAttribute("data-leads-to")).toBe("18");
+    // Counted once, on the workspace of the tab it lives in, as before.
+    expect(await screen.findByLabelText("1 chats need you in alpha")).toBeTruthy();
+    expect(screen.queryByLabelText(/need you in beta/)).toBeNull();
+
+    await userEvent.click(hand as HTMLElement);
+
+    await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 18"));
+    expect(tabNames()).toEqual(["steward 1"]);
+    expect(asked.filter((one) => one.cmd === "open_chat_tab")).toEqual([]);
+  });
+});
+
 /** The explorer's row for the chat it calls `name`. */
 const explorerRow = async (name: string) => {
   const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
@@ -942,16 +1087,23 @@ const explorerRow = async (name: string) => {
 /** A task of chat 1 as its record stands: how it reported, or whom it is asking. */
 const taskOf = (more: Partial<Lineage>): Lineage => ({ ...by(1, "task"), ...more });
 
+/**
+ * The same task with a tab of its own, as one the person gave a tab has: the explorer lists
+ * the chats that have one (#1490), so this is a task both lists draw a row for. A task with
+ * none is a row of the Chats list only, and is counted on its session's line in the explorer.
+ */
+const tabbed = (more: Partial<Lineage> = {}): Lineage => ({ ...taskOf(more), tab: true });
+
 describe("a chat's state, as a word and a shape (#1484)", () => {
   it("tells a finished task from a chat waiting on the person by word and by shape, in both lists", async () => {
     const { move } = core([
       chat(1, "alpha"),
-      chat(2, "alpha", { label: "talk", from: taskOf({ reported: true, outcome: "done" }) }),
-      chat(3, "alpha", { label: "sweep", from: taskOf({ reported: true, outcome: "cancelled" }) }),
-      chat(4, "alpha", { label: "probe", from: taskOf({ reported: true, outcome: "failed" }) }),
-      chat(5, "alpha", { label: "lost", from: taskOf({ unreported: true, outcome: "failed" }) }),
+      chat(2, "alpha", { label: "talk", from: tabbed({ reported: true, outcome: "done" }) }),
+      chat(3, "alpha", { label: "sweep", from: tabbed({ reported: true, outcome: "cancelled" }) }),
+      chat(4, "alpha", { label: "probe", from: tabbed({ reported: true, outcome: "failed" }) }),
+      chat(5, "alpha", { label: "lost", from: tabbed({ unreported: true, outcome: "failed" }) }),
       // Stopped by the person before it reported: purlis's own report, the record `stopped`.
-      chat(6, "alpha", { label: "halt", from: taskOf({ unreported: true, outcome: "stopped" }) }),
+      chat(6, "alpha", { label: "halt", from: tabbed({ unreported: true, outcome: "stopped" }) }),
     ]);
     render(<App />);
     const tree = await section();
@@ -982,19 +1134,26 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     expect(within(row(tree, "talk")).queryByRole("img", { name: "done" })).toBeNull();
   });
 
-  it("names a task with no tab the same in the Chats list and the explorer, never by its number", async () => {
+  it("names a task the same in the Chats list and the explorer, never by its number", async () => {
     core([
       chat(1, "alpha"),
-      chat(17, "alpha", { persona: "devops", label: "live check talk", from: by(1, "task") }),
-      chat(18, "alpha", { persona: "devops", from: by(1, "task") }),
+      chat(17, "alpha", { persona: "devops", label: "live check talk", from: tabbed() }),
+      chat(18, "alpha", { persona: "devops", from: tabbed() }),
+      // With no tab of its own it is a row of the Chats list only, and the explorer shows
+      // neither its name nor its number (V100-4).
+      chat(19, "alpha", { persona: "devops", from: by(1, "task") }),
     ]);
     render(<App />);
     const tree = await section();
 
     await waitFor(() =>
-      expect(shape(tree)).toEqual(["1 steward 1", "2 live check talk", "2 devops 18"]),
+      expect(shape(tree)).toEqual([
+        "1 steward 1",
+        "2 live check talk",
+        "2 devops 18",
+        "2 devops 19",
+      ]),
     );
-    expect(tabNames()).toEqual(["steward 1"]);
     expect(await explorerRow("live check talk")).toBeTruthy();
     expect(await explorerRow("devops 18")).toBeTruthy();
     const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
@@ -1004,6 +1163,9 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
       .filter((name) => name !== undefined && name !== null);
     expect(named).not.toContain("17");
     expect(named).not.toContain("18");
+    expect(named).not.toContain("19");
+    expect(named).not.toContain("devops 19");
+    expect(named).toContain("1 task");
   });
 
   it("names a task with no tab by its name where the title bar says it cannot tell purlis it is waiting", async () => {
@@ -1031,7 +1193,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
   it("says a task is asking the chat that dispatched it once the core says so, and stops when it is answered", async () => {
     const { move, rowsChange } = core([
       chat(1, "alpha"),
-      chat(2, "alpha", { label: "talk", from: by(1, "task") }),
+      chat(2, "alpha", { label: "talk", from: tabbed() }),
     ]);
     render(<App />);
     const tree = await section();
@@ -1058,7 +1220,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
   it("says done, never ended without a report, of a task whose program ends right after its report", async () => {
     const { move, rowsChange } = core([
       chat(1, "alpha"),
-      chat(2, "alpha", { label: "talk", from: by(1, "task") }),
+      chat(2, "alpha", { label: "talk", from: tabbed() }),
     ]);
     render(<App />);
     const tree = await section();
@@ -1080,7 +1242,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
   it("says needs you of a reported task the person has run again, as the title bar's list does", async () => {
     const { move } = core([
       chat(1, "alpha"),
-      chat(2, "alpha", { label: "talk", from: taskOf({ reported: true, outcome: "done" }) }),
+      chat(2, "alpha", { label: "talk", from: tabbed({ reported: true, outcome: "done" }) }),
     ]);
     render(<App />);
     const tree = await section();
@@ -1117,7 +1279,7 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     core([
       chat(1, "alpha", { label: "the release" }),
       // Dispatched while that chat was still called steward 1.
-      chat(2, "alpha", { label: "talk", from: taskOf({ asking: true }) }),
+      chat(2, "alpha", { label: "talk", from: tabbed({ asking: true }) }),
     ]);
     render(<App />);
     const tree = await section();
