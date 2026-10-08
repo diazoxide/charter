@@ -3858,12 +3858,24 @@ mod tests {
         let root = a_plane(&dir.path().join("plane"));
         let planes = planes();
         let first = planes.open(&root);
+        let began = std::time::Instant::now();
         planes.close(&first).expect("it closes");
+        // Its listener was woken without its path and went: a close waits on nothing.
+        assert!(began.elapsed() < std::time::Duration::from_secs(4));
 
         let again = planes.open(&root);
 
         assert_eq!(first, again);
-        assert!(socket_of(&planes, &again).is_some_and(|socket| socket.exists()));
+        let socket = socket_of(&planes, &again).expect("it listens");
+        assert!(socket.exists());
+        // And the socket at that path is the open plane's, which a hook reaches.
+        std::os::unix::net::UnixStream::connect(&socket).expect("the plane opened again listens");
+
+        // Closed and opened once more, the same: no close takes the next open's socket.
+        planes.close(&again).expect("it closes again");
+        let third = planes.open(&root);
+        let socket = socket_of(&planes, &third).expect("it listens");
+        std::os::unix::net::UnixStream::connect(&socket).expect("and listens a third time");
     }
 
     #[test]

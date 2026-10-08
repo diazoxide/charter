@@ -890,6 +890,17 @@ pub fn front_moved(held: &Held) {
 /// ([`end_look_after`]): a look for [`Looked::Moved`] answers at most "settle", so the thread
 /// that heard a hook or a program's end never closes a chat.
 pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
+    end_look_reading(held, task, looked, &is_held_back);
+}
+
+/// [`end_look`], reading whether the task is held back with `held_back`: [`is_held_back`] in
+/// the app, and a read a test can make change between the look's two reads of it.
+pub(crate) fn end_look_reading(
+    held: &Held,
+    task: u32,
+    looked: Looked,
+    held_back: &dyn Fn(&Held, u32) -> bool,
+) {
     if !held.tasks().ledger().ending(task) {
         return;
     }
@@ -903,7 +914,8 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
     // chat it started is at work, and while it is the chat the person is looking at: the chat
     // in front, or the task its session's tab shows (`Chats::looked_at`, #1486). It is not
     // ended under them, and is ended when they move away from it ([`front_moved`]).
-    let held_back = is_held_back(held, task);
+    let read = held_back;
+    let held_back = read(held, task);
     let step = held
         .tasks()
         .ledger()
@@ -914,10 +926,7 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
         // the look their move made found nothing held yet. Read once more, and look as that
         // move would have.
         Ends::Hold => {
-            if held_back
-                && held.tasks().ledger().held_back().contains(&task)
-                && !is_held_back(held, task)
-            {
+            if held_back && held.tasks().ledger().held_back().contains(&task) && !read(held, task) {
                 end_look(held, task, Looked::Moved);
             }
         }

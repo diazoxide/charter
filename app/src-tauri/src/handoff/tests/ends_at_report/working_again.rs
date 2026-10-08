@@ -164,6 +164,31 @@ fn a_task_the_person_has_in_front_is_ended_when_they_move_away_and_not_before() 
 }
 
 #[test]
+fn a_look_that_finds_the_task_held_reads_the_hold_once_more_after_its_answer() {
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    // They are reading the task as its turn ends: it is held.
+    held.chats().bring_to_front(Some(task));
+    works(&held, task);
+    reports(&held, &id, task);
+    its_turn_ends(&held, task);
+    assert_eq!(held.tasks().ledger().held_back(), [task]);
+
+    // They bring the session forward, and the look their move made is not had: a look that
+    // read "held" just before the move, and is answered "hold" just after it.
+    held.chats().bring_to_front(Some(steward));
+    let first = std::sync::atomic::AtomicBool::new(true);
+    crate::dispatched::end_look_reading(&held, task, Looked::Moved, &|held, task| {
+        first.swap(false, std::sync::atomic::Ordering::SeqCst)
+            || held.chats().looked_at() == Some(task)
+    });
+
+    // The hold is read once more after the answer, so the move is not lost: it is ended.
+    assert!(!first.load(std::sync::atomic::Ordering::SeqCst));
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
 fn a_task_shown_inside_its_session_s_tab_is_ended_when_the_tab_goes_back_and_not_before() {
     let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
     // The session's tab is in front, switched to its task (#1486): "in front" is the
