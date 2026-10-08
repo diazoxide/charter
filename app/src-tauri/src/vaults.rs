@@ -722,6 +722,9 @@ pub(crate) fn move_identity(ctx: &Ctx, vault: &str) -> Result<VaultContents, Str
 /// How long a token given to a set-up is held for it before it must be given again.
 const A_SETUP_IS_HELD_FOR: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
+/// How often a held set-up's timer looks at both clocks.
+const A_SETUP_IS_LOOKED_AT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Where a set-up is held for: the window that began it, by its label, and the project.
 /// Only that window may use it or let go of it, and it is dropped when that window goes or
 /// reloads ([`Setups::forget`]).
@@ -748,6 +751,20 @@ struct Pending {
     sign_in: setup::SignIn,
     account: Option<String>,
     since: std::time::Instant,
+    /// When it was given by the wall clock too: the monotonic clock stops while the machine
+    /// sleeps, and the limit is fifteen minutes of real time.
+    given_at: std::time::SystemTime,
+}
+
+impl Pending {
+    /// Whether the limit is reached, by either clock. A wall clock that went backwards is
+    /// taken as reached: no doubt keeps a token.
+    fn expired(&self, limit: std::time::Duration) -> bool {
+        self.since.elapsed() > limit
+            || std::time::SystemTime::now()
+                .duration_since(self.given_at)
+                .map_or(true, |real| real > limit)
+    }
 }
 
 /// The set-up a window has open, if one has. One at a time: a new one replaces the last,
@@ -781,8 +798,14 @@ impl Setups {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Hold a new set-up for `at` in place of whatever was held, and answer its number.
-    fn begin(&self, at: &At, sign_in: setup::SignIn, account: Option<String>) -> u32 {
+    /// Hold a new set-up for `at` in place of whatever was held, with its timer already
+    /// running, and answer its number. A held set-up never exists without its timer.
+    fn begin(
+        self: &std::sync::Arc<Self>,
+        at: &At,
+        sign_in: setup::SignIn,
+        account: Option<String>,
+    ) -> u32 {
         let number = self.made.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         *self.held() = Some(Pending {
             number,
@@ -790,7 +813,9 @@ impl Setups {
             sign_in,
             account,
             since: std::time::Instant::now(),
+            given_at: std::time::SystemTime::now(),
         });
+        self.expire_after(number, A_SETUP_IS_HELD_FOR);
         number
     }
 
@@ -799,7 +824,7 @@ impl Setups {
         let mut held = self.held();
         if held
             .as_ref()
-            .is_some_and(|p| p.since.elapsed() > A_SETUP_IS_HELD_FOR)
+            .is_some_and(|p| p.expired(A_SETUP_IS_HELD_FOR))
         {
             *held = None;
         }
@@ -829,14 +854,26 @@ impl Setups {
         }
     }
 
-    /// Let go of set-up `number` once `after` has passed, if it is still the one held.
+    /// Let go of set-up `number` once `after` has passed by either clock, if it is still the
+    /// one held. It looks every [`A_SETUP_IS_LOOKED_AT`] rather than sleeping the whole span
+    /// once: a sleep does not count the time the machine was asleep, so after a wake the
+    /// wall clock is what says the time is up.
     fn expire_after(self: &std::sync::Arc<Self>, number: u32, after: std::time::Duration) {
         let setups = std::sync::Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(after).await;
-            let mut held = setups.held();
-            if held.as_ref().is_some_and(|p| p.number == number) {
-                *held = None;
+            loop {
+                tokio::time::sleep(A_SETUP_IS_LOOKED_AT.min(after)).await;
+                let mut held = setups.held();
+                match held.as_ref() {
+                    Some(p) if p.number == number => {
+                        if p.expired(after) {
+                            *held = None;
+                            return;
+                        }
+                    }
+                    // Ended, or replaced by another set-up with a timer of its own.
+                    _ => return,
+                }
             }
         });
     }
@@ -1040,7 +1077,7 @@ pub(crate) fn setup_accounts(ctx: &Ctx) -> SetupAccounts {
 /// token when it is for a new one. No value is answered, and nothing is written.
 pub(crate) fn setup_begin(
     ctx: &Ctx,
-    setups: &Setups,
+    setups: &std::sync::Arc<Setups>,
     at: &At,
     token: Option<&SecretValue>,
     account: Option<&str>,
@@ -1467,8 +1504,7 @@ pub(crate) async fn vault_setup_begin(
 ) -> Result<SetupBegun, String> {
     let setups = std::sync::Arc::clone(&setups);
     let of = At::new(window.label(), plane.clone());
-    let timed = std::sync::Arc::clone(&setups);
-    let begun = blocking(ctx_of(&planes, &plane)?, move |ctx| {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
         setup_begin(
             ctx,
             &setups,
@@ -1478,10 +1514,7 @@ pub(crate) async fn vault_setup_begin(
             vault.as_deref(),
         )
     })
-    .await?;
-    // The token is let go of when the limit is reached, whatever the window does.
-    timed.expire_after(begun.setup, A_SETUP_IS_HELD_FOR);
-    Ok(begun)
+    .await
 }
 
 /// Test a set-up before anything is registered ([`setup_test`]): purlis signs in with what was
@@ -2590,7 +2623,7 @@ mod tests {
     fn a_set_up_is_given_its_token_once_tested_and_made_and_no_answer_holds_the_token() {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
-        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let (setups, plane) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
         let mut answers = Vec::new();
 
         let begun = setup_begin(
@@ -2649,7 +2682,7 @@ mod tests {
     fn a_token_that_does_not_sign_in_is_said_by_kind_and_nothing_is_made_by_the_test() {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
-        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let (setups, plane) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
 
         let begun = setup_begin(
             &ctx,
@@ -2690,7 +2723,7 @@ mod tests {
     fn a_set_up_is_held_for_its_own_project_and_until_another_is_begun_or_it_is_cancelled() {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
-        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let (setups, plane) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
         let first = setup_begin(
             &ctx,
             &setups,
@@ -2721,7 +2754,7 @@ mod tests {
     fn a_set_up_is_held_for_the_window_that_began_it_alone() {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
-        let (setups, main) = (Setups::default(), id_of(&ctx));
+        let (setups, main) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
         let split = At::new("window-2", main.plane.clone());
         let number = setup_begin(
             &ctx,
@@ -2796,6 +2829,68 @@ mod tests {
     }
 
     #[test]
+    fn a_set_up_is_let_go_of_after_fifteen_minutes_of_real_time_even_across_a_sleep() {
+        // The monotonic clock stops while the machine sleeps; the wall clock does not.
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let (setups, main) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
+        let number = setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+        assert!(setups.given(&main, number).is_ok());
+        // As after a lid closed for sixteen minutes: the wall clock moved, the other did not.
+        if let Some(held) = setups.held().as_mut() {
+            held.given_at -= std::time::Duration::from_secs(16 * 60);
+            assert!(held.since.elapsed() < A_SETUP_IS_HELD_FOR);
+        }
+        assert_eq!(setups.given(&main, number).unwrap_err(), SETUP_GONE);
+
+        // A wall clock set back before the token was given is a doubt, and keeps nothing.
+        let later = setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+        if let Some(held) = setups.held().as_mut() {
+            held.given_at += std::time::Duration::from_secs(60 * 60);
+        }
+        assert_eq!(setups.given(&main, later).unwrap_err(), SETUP_GONE);
+    }
+
+    #[test]
+    fn a_held_set_up_has_its_timer_from_the_moment_it_is_held() {
+        // The timer starts inside `begin`, not after the command's answer, so a window that
+        // reloads while the set-up is being begun cannot leave it held with no timer.
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let setups = std::sync::Arc::new(Setups::default());
+        let main = id_of(&ctx);
+        setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap();
+        // Two references: the one here, and the timer's.
+        assert_eq!(std::sync::Arc::strong_count(&setups), 2);
+    }
+
+    #[test]
     fn a_window_that_is_gone_or_reloaded_lets_go_of_the_set_up_it_began() {
         // What the app's `Destroyed` and page-load hooks call (`lib.rs`), on an app that holds
         // the set-ups as the real one does. Tauri's mock runtime sends no window events, so
@@ -2840,7 +2935,7 @@ mod tests {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
         alike(&ctx, "edge");
-        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let (setups, plane) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
         assert!(open(&ctx, "team").unwrap().refused.is_some());
 
         let begun = setup_begin(
@@ -2885,7 +2980,7 @@ mod tests {
         let (dir, ctx) = team(&[]);
         op_now(&dir, SIGNS_IN);
         alike(&ctx, "edge");
-        let (setups, plane) = (Setups::default(), id_of(&ctx));
+        let (setups, plane) = (std::sync::Arc::new(Setups::default()), id_of(&ctx));
         let begun = setup_begin(
             &ctx,
             &setups,
