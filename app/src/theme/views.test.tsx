@@ -733,7 +733,6 @@ const NO_HARNESS = {
 const ACTIVITY: Activity = {
   name: "steward 3",
   key: "01K6STEWARD",
-  unkept: 2,
   undrawn: 1,
   lines: (
     [
@@ -742,7 +741,8 @@ const ACTIVITY: Activity = {
       ["01K6D1", 1, "question", "check prod", "steward 3", "Which host?"],
       ["01K6D1", 2, "answer", "steward 3", "check prod", "prod-2."],
       ["01K6D1", 3, "report", "check prod", "steward 3", "Scaled it up."],
-      ["01K6D2", 1, "stopped", "lint", "steward 3", "stopped by the operator"],
+      ["01K6D2", 1, "not listed", "lint", "steward 3", ""],
+      ["01K6D2", 2, "stopped", "lint", "steward 3", "stopped by the operator"],
     ] as const
   ).map(([dispatch, n, kind, from, to, text], at) => ({
     dispatch,
@@ -754,7 +754,15 @@ const ACTIVITY: Activity = {
     from_session: from === "lint" ? null : 3,
     to,
     to_key: to === "steward 3" ? "01K6STEWARD" : `01K6${to}`,
-    text,
+    text: kind === "answer" || kind === "not listed" ? "" : text,
+    by_person: n === 0 && dispatch === "01K6D1",
+    by_purlis: kind === "stopped" || kind === "not listed",
+    // The answer's words were kept for 30 days and are gone.
+    expired: kind === "answer",
+    unkept: kind === "not listed" ? 2 : null,
+    unkept_why: kind === "not listed" ? "count" : null,
+    place: "alpha\u0000workspaces/alpha/svc",
+    depth: 1,
     outcome: kind === "report" ? "done" : kind === "stopped" ? "stopped" : null,
     files: kind === "report" || kind === "stopped" ? ["deploy/values.yaml"] : [],
     task: dispatch === "01K6D1" ? "check prod" : "lint",
@@ -963,7 +971,7 @@ const STATES: State[] = [
   {
     name: "a chat's activity, a long line opened",
     view: { from: null, view: "activity", key: "3" },
-    drawn: /also changed by lint/,
+    drawn: /lint's report also names deploy\/values\.yaml/,
     then: async () => {
       await userEvent.click(await screen.findByRole("button", { name: "Show all" }));
     },
@@ -971,14 +979,20 @@ const STATES: State[] = [
   {
     name: "a chat's activity, none yet",
     view: { from: null, view: "activity", key: "3" },
-    answers: { activity: { ...ACTIVITY, lines: [], unkept: 0, undrawn: 0 } },
+    answers: { activity: { ...ACTIVITY, lines: [], undrawn: 0 } },
     drawn: /No activity yet/,
   },
   {
     name: "a chat's activity that could not be read",
     view: { from: null, view: "activity", key: "3" },
-    answers: { activity: new Error("chat 3 is not one this app has open") },
+    answers: { activity: new Error("this project has been closed") },
     drawn: /could not read this chat's activity/,
+  },
+  {
+    name: "the activity of a chat that is not open",
+    view: { from: null, view: "activity", key: "3" },
+    answers: { activity: null },
+    drawn: /This chat is not open/,
   },
   {
     name: "the project's dispatches, none yet",

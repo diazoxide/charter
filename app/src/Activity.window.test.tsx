@@ -96,9 +96,16 @@ function line(
     from_session: up ? 7 : 3,
     to: up ? "steward 3" : "talk",
     to_key: up ? STEWARD_KEY : TALK_KEY,
+    by_person: false,
+    by_purlis: false,
+    expired: false,
+    unkept: null,
+    unkept_why: null,
     outcome: null,
     files: [],
     task: "talk",
+    place: "alpha\u0000workspaces/alpha/svc",
+    depth: 1,
     ...over,
   };
 }
@@ -113,7 +120,13 @@ const LINES: ActivityLine[] = [
 ];
 
 function core(
-  on: { lines?: ActivityLine[]; unkept?: number; undrawn?: number; reopened?: ViewTab[] } = {},
+  on: {
+    lines?: ActivityLine[];
+    undrawn?: number;
+    reopened?: ViewTab[];
+    /** The session each chat has now, by its key: what a press on a line's chat is answered. */
+    now?: Record<string, number | null>;
+  } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC(
@@ -142,15 +155,23 @@ function core(
       if (cmd === "extensions_on") return [];
       if (cmd === "project_theme_drawn") return null;
       if (cmd === "activity") {
-        if (given.session !== 3) throw `chat ${String(given.session)} is not one this app has open`;
+        // The pretend core has the steward's timeline; any other chat is one it has not open.
+        if (given.session !== 3) return null;
         const answer: Activity = {
           name: "steward 3",
           key: STEWARD_KEY,
           lines: on.lines ?? LINES,
-          unkept: on.unkept ?? 0,
           undrawn: on.undrawn ?? 0,
         };
         return answer;
+      }
+      if (cmd === "activity_chat") {
+        const now: Record<string, number | null> = {
+          [STEWARD_KEY]: 3,
+          [TALK_KEY]: 7,
+          ...on.now,
+        };
+        return now[String(given.key)] ?? null;
       }
       return null;
     },
@@ -200,12 +221,12 @@ describe("a session's Activity tab", () => {
     expect(selected()).toContain("Activity");
     expect(asked("activity")).toContainEqual({ plane: PLANE, session: 3 });
     expect(read(list)).toEqual([
-      "09:00:00 dispatched steward 3 → talk: Is the rollout healthy?",
-      "09:01:00 note talk → steward 3: Reading the config.",
-      "09:02:00 question talk → steward 3: Which host?",
-      "09:03:00 answer steward 3 → talk: prod-2.",
-      "09:04:00 follow-up steward 3 → talk: Check the cache too.",
-      "09:05:00 report · done talk → steward 3: Both are healthy.",
+      "2026-10-08 09:00 UTC dispatched steward 3 → talk: Is the rollout healthy?",
+      "2026-10-08 09:01 UTC note talk → steward 3: Reading the config.",
+      "2026-10-08 09:02 UTC question talk → steward 3: Which host?",
+      "2026-10-08 09:03 UTC answer steward 3 → talk: prod-2.",
+      "2026-10-08 09:04 UTC follow-up steward 3 → talk: Check the cache too.",
+      "2026-10-08 09:05 UTC report · done talk → steward 3: Both are healthy.",
     ]);
     // Read-only: nothing in it is typed into.
     expect(within(list).queryByRole("textbox")).toBeNull();
@@ -226,7 +247,7 @@ describe("a session's Activity tab", () => {
   });
 
   it("goes from a line to the chat it came from", async () => {
-    core();
+    const { asked } = core();
     render(<App />);
     const list = await opened();
     expect(selected()).toContain("Activity");
@@ -236,6 +257,78 @@ describe("a session's Activity tab", () => {
 
     await waitFor(() => expect(selected()).toContain("talk"));
     expect(selected()).not.toContain("Activity");
+    expect(asked("activity_chat")).toEqual([{ plane: PLANE, key: TALK_KEY }]);
+  });
+
+  it("reaches a chat that was restarted since the timeline was read, under its new number", async () => {
+    // The line was read while the task's chat was session 99; it is session 7 now.
+    core({ lines: [LINES[0], { ...LINES[1], from_session: 99 }] });
+    render(<App />);
+    const list = await opened();
+
+    const note = within(list).getAllByRole("listitem")[1];
+    await userEvent.click(within(note).getByRole("button", { name: "Show chat talk" }));
+
+    await waitFor(() => expect(selected()).toContain("talk"));
+  });
+
+  it("names a chat in plain text once a press finds it closed", async () => {
+    core({ now: { [TALK_KEY]: null } });
+    render(<App />);
+    const list = await opened();
+    const note = within(list).getAllByRole("listitem")[1];
+
+    await userEvent.click(within(note).getByRole("button", { name: "Show chat talk" }));
+
+    await waitFor(() =>
+      expect(within(note).getByText("talk")).toHaveAttribute("title", "Its chat is closed"),
+    );
+    expect(within(note).queryByRole("button", { name: /Show chat/ })).toBeNull();
+    // Every other line of that chat too, and the tab stays where it was.
+    expect(within(list).queryByRole("button", { name: "Show chat talk" })).toBeNull();
+    expect(selected()).toContain("Activity");
+  });
+
+  it("says a task the person dispatched is theirs, and an ending purlis wrote is purlis's", async () => {
+    core({
+      lines: [
+        { ...LINES[0], by_person: true },
+        LINES[1],
+        line({
+          n: 2,
+          kind: "stopped",
+          text: "stopped by the operator",
+          outcome: "stopped",
+          by_purlis: true,
+          from: "talk",
+          from_key: TALK_KEY,
+          from_session: 7,
+          to: "steward 3",
+          to_key: STEWARD_KEY,
+        }),
+      ],
+    });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(read(list)).toEqual([
+      "2026-10-08 09:00 UTC dispatched you, from steward 3 → talk: Is the rollout healthy?",
+      "2026-10-08 09:01 UTC note talk → steward 3: Reading the config.",
+      "2026-10-08 09:02 UTC stopped purlis, for talk → steward 3: stopped by the operator",
+    ]);
+  });
+
+  it("says the day, so two lines a day apart do not look a minute apart", async () => {
+    core({ lines: [LINES[0], { ...LINES[1], at: "2026-10-09T09:01:00+00:00" }] });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(read(list).map((one) => one.slice(0, 20))).toEqual([
+      "2026-10-08 09:00 UTC",
+      "2026-10-09 09:01 UTC",
+    ]);
   });
 
   it("names a chat that is closed in plain text", async () => {
@@ -277,7 +370,7 @@ describe("a session's Activity tab", () => {
     expect(report).not.toHaveTextContent("the end");
   });
 
-  it("marks a file two tasks say they changed", async () => {
+  it("marks a file another task's report also names", async () => {
     const lint = {
       dispatch: "01K6D2",
       task: "lint",
@@ -324,8 +417,8 @@ describe("a session's Activity tab", () => {
     const marks = within(list).getAllByTestId("activity-shared");
 
     expect(marks.map((mark) => mark.textContent)).toEqual([
-      "src/app.rs: also changed by lint",
-      "src/app.rs: also changed by talk",
+      "lint's report also names src/app.rs",
+      "talk's report also names src/app.rs",
     ]);
     // A file one task changed is not marked.
     expect(list).not.toHaveTextContent("docs/guide.md");
@@ -361,9 +454,9 @@ describe("a session's Activity tab", () => {
 
     await waitFor(() =>
       expect(read(list)).toEqual([
-        "09:00:00 dispatched steward 3 → talk: Is the rollout healthy?",
-        "09:01:00 note talk → steward 3: Reading the config.",
-        "09:02:00 question talk → steward 3: Which host?",
+        "2026-10-08 09:00 UTC dispatched steward 3 → talk: Is the rollout healthy?",
+        "2026-10-08 09:01 UTC note talk → steward 3: Reading the config.",
+        "2026-10-08 09:02 UTC question talk → steward 3: Which host?",
       ]),
     );
     expect(asked("activity")).toHaveLength(reads);
@@ -402,8 +495,8 @@ describe("a session's Activity tab", () => {
     const list = await screen.findByRole("list", { name: "Activity of steward 3" });
     await waitFor(() =>
       expect(read(list)).toEqual([
-        "09:00:00 dispatched steward 3 → talk: Is the rollout healthy?",
-        "09:01:00 dispatched talk → dig: Dig.",
+        "2026-10-08 09:00 UTC dispatched steward 3 → talk: Is the rollout healthy?",
+        "2026-10-08 09:01 UTC dispatched talk → dig: Dig.",
       ]),
     );
     const depths = within(list)
@@ -412,17 +505,116 @@ describe("a session's Activity tab", () => {
     expect(depths).toEqual(["1", "2"]);
   });
 
-  it("says how many messages were not kept, and how many records it will not draw", async () => {
-    core({ unkept: 3, undrawn: 1 });
+  it("says, in the task's place, how many messages are not listed and why, and follows the count", async () => {
+    const gap = line({
+      n: 2,
+      kind: "not listed",
+      text: "",
+      by_purlis: true,
+      unkept: 3,
+      unkept_why: "size",
+      from: "talk",
+      from_key: TALK_KEY,
+      from_session: 7,
+      to: "steward 3",
+      to_key: STEWARD_KEY,
+    });
+    core({ lines: [LINES[0], LINES[1], gap, { ...LINES[5], n: 3 }], undrawn: 1 });
     render(<App />);
-    await opened();
+    const list = await opened();
 
-    expect(screen.getByTestId("activity-unkept")).toHaveTextContent(
-      "3 messages are not listed: purlis keeps the first 500 of a task.",
+    // Before the report, where the messages would have stood.
+    const items = within(list).getAllByRole("listitem");
+    expect(items.map((item) => item.getAttribute("data-kind"))).toEqual([
+      "dispatched",
+      "note",
+      "not listed",
+      "report",
+    ]);
+    expect(within(items[2]).getByTestId("activity-unkept")).toHaveTextContent(
+      "3 messages of talk are not listed: purlis keeps the first 256 KiB of what a task and its asking chat say.",
     );
     expect(screen.getByTestId("activity-undrawn")).toHaveTextContent(
       "1 task is not listed: its record holds text purlis refuses to put on the screen.",
     );
+
+    // One more message the record did not keep: the same line says four, with no words of it.
+    await act(() => emit("activity-line", { plane: PLANE, line: { ...gap, unkept: 4 } }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-unkept")).toHaveTextContent(
+        "4 messages of talk are not listed",
+      ),
+    );
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("says of a record from before this build that its messages were sent before any were kept", async () => {
+    core({
+      lines: [
+        LINES[0],
+        line({
+          n: 1,
+          kind: "not listed",
+          text: "",
+          by_purlis: true,
+          unkept: 2,
+          unkept_why: "before",
+        }),
+      ],
+    });
+    render(<App />);
+    await opened();
+
+    expect(screen.getByTestId("activity-unkept")).toHaveTextContent(
+      "2 messages of talk are not listed: they were sent before purlis kept what tasks say.",
+    );
+    expect(screen.queryByText(/first 500/)).toBeNull();
+  });
+
+  it("keeps the line of a message whose words are no longer kept, and says for how long they were", async () => {
+    core({ lines: [LINES[0], { ...LINES[2], text: "", expired: true }] });
+    render(<App />);
+    const list = await opened();
+
+    const question = within(list).getAllByRole("listitem")[1];
+
+    expect(question).toHaveAttribute("data-kind", "question");
+    expect(within(question).getByTestId("activity-expired")).toHaveTextContent(
+      "Its words are no longer kept: purlis keeps what a task said for 30 days after the task ended.",
+    );
+  });
+
+  it("draws a line the core listed whatever its chats are keyed by", async () => {
+    // A task of a task, in a record that names its chats by number: the core matched it, and
+    // the window does not decide that again.
+    core({
+      lines: [
+        LINES[0],
+        line({
+          dispatch: "01K6D3",
+          n: 0,
+          kind: "dispatched",
+          text: "Dig.",
+          task: "dig",
+          from: "talk",
+          from_key: "#7",
+          from_session: 7,
+          to: "dig",
+          to_key: "#9",
+          depth: 2,
+        }),
+      ],
+    });
+    render(<App />);
+
+    const list = await opened();
+
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((item) => item.getAttribute("data-depth")),
+    ).toEqual(["1", "2"]);
   });
 
   it("is brought back with the window, and reads its chat's timeline again", async () => {
@@ -470,6 +662,8 @@ describe("a session's Activity tab", () => {
       within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Activity" }),
     );
 
-    expect(await screen.findByText(/chat 7 is not one this app has open/)).toBeInTheDocument();
+    expect(await screen.findByTestId("activity-closed")).toHaveTextContent("This chat is not open");
+    // Reading again would say the same, so it is not offered.
+    expect(screen.queryByRole("button", { name: "Read again" })).toBeNull();
   });
 });

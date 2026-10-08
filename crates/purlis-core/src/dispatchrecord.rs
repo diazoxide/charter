@@ -247,6 +247,8 @@ pub struct Said {
     pub at: String,
     pub kind: crate::dispatchtalk::Kind,
     /// What it said, as [`crate::dispatchtalk::text`] passed it, held to a cap ([`cut`]).
+    /// Empty once its dispatch ended [`TALK_KEPT_FOR`] ago ([`expire_talk`]): a message is
+    /// never taken empty, so an empty one is one whose words were kept and are gone.
     pub text: String,
 }
 
@@ -286,9 +288,9 @@ pub struct Record {
     /// How many messages passed between the two chats after the brief.
     #[serde(default)]
     pub messages: u32,
-    /// Those messages, oldest first, as far as the record keeps them ([`said`]): at most
-    /// [`MOST_SAID`], and [`MOST_SAID_BYTES`] of text between them. `messages` counts every
-    /// one, kept or not. Absent for a dispatch nothing was said in, which is every record
+    /// Those messages, oldest first, as far as the record keeps them ([`said`]): the first
+    /// ones, at most [`MOST_SAID`] and [`MOST_SAID_BYTES`] of text between them. `messages`
+    /// counts every one, kept or not. Absent for a dispatch nothing was said in, which is every record
     /// written before the key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub talk: Vec<Said>,
@@ -322,8 +324,6 @@ pub struct Opening {
 pub enum Event {
     /// The persona chat came to wait on the person.
     NeededYou,
-    /// A message passed between the two chats.
-    Message,
 }
 
 /// How a dispatch ended.
@@ -425,47 +425,110 @@ pub fn note(root: &Path, id: &str, event: Event) -> io::Result<bool> {
         }
         match event {
             Event::NeededYou => record.needed_you = record.needed_you.saturating_add(1),
-            Event::Message => record.messages = record.messages.saturating_add(1),
         }
         true
     })
 }
 
+/// What [`said`] did with a message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Taken {
+    /// Counted, and its text kept: the record as it now stands.
+    Kept(Record),
+    /// Counted, and its text not kept, because the record keeps no more ([`MOST_SAID`],
+    /// [`MOST_SAID_BYTES`]): the record as it now stands.
+    Counted(Record),
+    /// Nothing: the record is not there, or has ended.
+    Nothing,
+}
+
 /// A message of `kind` passed between the two chats of the running dispatch `id` at `now`: it
-/// counts one more ([`Event::Message`]) and its `text` is kept on the record, in the one write
-/// (#1495). The record as it now stands where the text was kept, which is what a timeline's
-/// new line is drawn from.
+/// counts one more and its `text` is kept on the record, in the one write (#1495).
 ///
-/// `None` for a record that is not there or has ended, and for a message past what a record
-/// keeps ([`MOST_SAID`], [`MOST_SAID_BYTES`]): **that one is still counted, and only its text
-/// is not kept**, so `messages` above `talk`'s length says how many are missing. The first
-/// messages are the ones kept: a record is never rewritten to drop what it already says.
+/// **The one place a message's text is stored.** Nothing else writes `talk`, so what a record
+/// keeps of a message is decided here and nowhere else.
+///
+/// **A record keeps the first messages, with no hole.** One that does not fit what a record
+/// keeps ([`MOST_SAID`], [`MOST_SAID_BYTES`]) is counted and its text is not kept, and after
+/// it no later message's is either, however small: `messages` above `talk`'s length is then
+/// exactly the messages after the last one kept. So a question is never dropped with its
+/// answer kept. A record is never rewritten to drop what it already says.
 pub fn said(
     root: &Path,
     id: &str,
     kind: crate::dispatchtalk::Kind,
     text: &str,
     now: chrono::DateTime<chrono::Utc>,
-) -> io::Result<Option<Record>> {
-    let mut kept = None;
+) -> io::Result<Taken> {
+    let mut taken = Taken::Nothing;
     change(root, id, |record| {
         if !record.running() {
             return false;
         }
+        // Every message so far is kept: none was sent before records kept any, and none was
+        // left out.
+        let whole = usize::try_from(record.messages).is_ok_and(|sent| sent == record.talk.len());
         record.messages = record.messages.saturating_add(1);
         let text = cut(text, MOST_MESSAGE_BYTES);
         let held: usize = record.talk.iter().map(|said| said.text.len()).sum();
-        if record.talk.len() < MOST_SAID && held + text.len() <= MOST_SAID_BYTES {
+        if whole && record.talk.len() < MOST_SAID && held + text.len() <= MOST_SAID_BYTES {
             record.talk.push(Said {
                 at: crate::dispatch::stamp(now),
                 kind,
                 text,
             });
-            kept = Some(record.clone());
+            taken = Taken::Kept(record.clone());
+        } else {
+            taken = Taken::Counted(record.clone());
         }
         true
     })?;
-    Ok(kept)
+    Ok(taken)
+}
+
+/// How long after a dispatch ended its record keeps what the two chats said (D-1495-12).
+pub const TALK_KEPT_FOR: chrono::Duration = chrono::Duration::days(30);
+
+/// Whether `record` ended [`TALK_KEPT_FOR`] or longer before `now`. A record that has not
+/// ended, or whose end does not read as a time, has not.
+fn talk_is_due(record: &Record, now: chrono::DateTime<chrono::Utc>) -> bool {
+    record
+        .ended
+        .as_deref()
+        .and_then(|ended| chrono::DateTime::parse_from_rfc3339(ended).ok())
+        .is_some_and(|ended| now.signed_duration_since(ended) >= TALK_KEPT_FOR)
+}
+
+/// **Takes the text out of every message of a dispatch that ended [`TALK_KEPT_FOR`] ago or
+/// longer** (D-1495-12), at `now`. How many records changed.
+///
+/// The record stays, and so does each message's time and kind: only the words go, and a
+/// message with no words is what says they were kept and are not any more
+/// ([`Said::text`] is never empty as it is taken). **Counted from the dispatch's end, and
+/// whichever chats are still open**: a record is kept for as long as either of its chats
+/// comes back at launch ([`crate::retention`]), and what was said in it is not. The app runs
+/// this when it opens a project and before it reads a timeline.
+pub fn expire_talk(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
+    let due = |record: &Record| {
+        talk_is_due(record, now) && record.talk.iter().any(|said| !said.text.is_empty())
+    };
+    list(root)
+        .into_iter()
+        .filter(|record| due(record))
+        .filter(|record| {
+            change(root, &record.id, |record| {
+                // Looked at again under the lock: only what is still due is changed.
+                if !due(record) {
+                    return false;
+                }
+                for said in &mut record.talk {
+                    said.text.clear();
+                }
+                true
+            })
+            .unwrap_or(false)
+        })
+        .count()
 }
 
 /// Closes dispatch `id` at `now`. `false` for a record that is not there or has already
@@ -752,6 +815,12 @@ pub fn sound(record: &Record) -> bool {
         && name(&record.started)
         && maybe(&record.ended, &name)
         && record.talk.len() <= MOST_SAID
+        && record
+            .talk
+            .iter()
+            .map(|said| said.text.len())
+            .sum::<usize>()
+            <= MOST_SAID_BYTES
         && record
             .talk
             .iter()

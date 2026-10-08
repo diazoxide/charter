@@ -4487,10 +4487,12 @@ mod tests {
         let report = read.lines.last().expect("the report");
         assert_eq!(report.outcome.as_deref(), Some("done"));
         assert_eq!(report.files, ["svc/src/queue.rs"]);
-        assert_eq!((read.unkept, read.undrawn), (0, 0));
-        // The task's own activity is what is under it: nothing.
-        let its_own = crate::activity::read(&held, task).expect("its own");
-        assert!(its_own.lines.is_empty(), "{its_own:?}");
+        assert_eq!(read.undrawn, 0);
+        // The chat asked, and not the person; and the task's report is its own.
+        assert!(read.lines.iter().all(|line| !line.by_person));
+        assert!(read.lines.iter().all(|line| !line.by_purlis));
+        // Its own task: one level under the session.
+        assert!(read.lines.iter().all(|line| line.depth == 1));
 
         // Told once each, in the order they landed, and each for this project.
         let heard = heard.lock().unwrap();

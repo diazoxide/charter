@@ -2894,16 +2894,12 @@ pub fn run() {
                     })
                 })
                 // Each line of a dispatch as the app records it: an open Activity tab adds
-                // it without reading the records again (#1495).
+                // it without reading the records again (#1495). To the window holding the
+                // project only: a line carries what a chat said.
                 .telling_activity({
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |heard: activity::ActivityHeard| {
-                        windows::emit_for_plane(
-                            &window,
-                            &heard.plane.clone(),
-                            activity::EVENT,
-                            &heard,
-                        );
+                        activity::to_its_window(&window, &heard);
                     })
                 })
                 // The plane moved on disk — a todo closed in a terminal, a workspace another

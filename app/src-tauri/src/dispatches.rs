@@ -45,7 +45,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use purlis_core::dispatchrecord::{self, ChatRef, Ending, Event, Opening, Outcome, Record};
+use purlis_core::dispatchrecord::{self, ChatRef, Ending, Event, Opening, Outcome, Record, Taken};
 
 use crate::planes::Held;
 
@@ -184,9 +184,11 @@ pub(crate) fn message(held: &Held, task: u32, said: &purlis_core::dispatchtalk::
     };
     let now = chrono::Utc::now();
     match dispatchrecord::said(held.root(), &record.id, said.kind, &said.text, now) {
-        Ok(Some(kept)) => crate::activity::said(held, &kept),
-        // Counted, and past what a record keeps the text of: no line to tell.
-        Ok(None) => {}
+        Ok(Taken::Kept(kept)) => crate::activity::said(held, &kept),
+        // Counted, and past what a record keeps the text of: the tab is told how many, and
+        // none of the message's words.
+        Ok(Taken::Counted(counted)) => crate::activity::unkept(held, &counted),
+        Ok(Taken::Nothing) => {}
         Err(why) => tracing::warn!("purlis: a dispatch's record was not updated ({why})"),
     }
 }

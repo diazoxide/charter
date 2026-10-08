@@ -5063,7 +5063,7 @@ h2.sidebar-title .node-icon {
 
 .activity-line {
   display: grid;
-  grid-template-columns: 4.5rem 7.5rem minmax(0, 1fr);
+  grid-template-columns: 10.5rem 7.5rem minmax(0, 1fr);
   gap: 0.1rem 0.75rem;
   align-items: baseline;
   padding-block: 0.35rem;
@@ -5098,6 +5098,13 @@ h2.sidebar-title .node-icon {
   overflow-wrap: anywhere;
 }
 
+/* Where words would be and are not: messages a record kept no text of, and ones whose words
+   are no longer kept. purlis's sentence, so it is muted and never mistaken for a chat's. */
+.activity-absent {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .activity-more {
   grid-column: 3;
   justify-self: start;
@@ -5108,7 +5115,7 @@ h2.sidebar-title .node-icon {
   font: inherit;
 }
 
-/* A file two tasks say they changed (V100-68): a warning's mark and the sentence. */
+/* A file another task's report also names (V100-68): a warning's mark and the sentence. */
 .activity-shared {
   display: flex;
   grid-column: 3;

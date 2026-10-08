@@ -868,10 +868,31 @@ export const commands = {
 	dispatchWorktreeDiscard: (plane: PlaneId, id: string, seen: WorktreeLoss) => typedError<null, string>(__TAURI_INVOKE("dispatch_worktree_discard", { plane, id, seen })),
 	/**
 	 *  One chat's Activity (#1495): what it and its tasks said to each other, and the tasks of
-	 *  its tasks, as one timeline, oldest first. Read-only. On a blocking thread, as it reads
-	 *  every dispatch record.
+	 *  its tasks, as one timeline, oldest first. Read-only. `null` for a chat that is not open.
+	 *  On a blocking thread, as it reads every dispatch record.
 	 */
-	activity: (plane: PlaneId, session: number) => typedError<Activity, string>(__TAURI_INVOKE("activity", { plane, session })),
+	activity: (plane: PlaneId, session: number) => typedError<{
+	/**  The chat, by the name the person sees it under. */
+	name: string,
+	/**  Which chat it is ([`ActivityLine::from_key`]): what a line heard later is matched to. */
+	key: string,
+	/**  Oldest first. */
+	lines: ActivityLine[],
+	/**
+	 *  How many of this chat's tasks, and of the tasks under them, are not listed because
+	 *  purlis will not draw their records.
+	 */
+	undrawn: number,
+} | null, string>(__TAURI_INVOKE("activity", { plane, session })),
+	/**
+	 *  **The session the chat a line names has now** (#1495): `key` is the line's `from_key`, a
+	 *  chat's id or `#<number>`. `null` where that chat is not open.
+	 * 
+	 *  Asked when a line's chat is pressed, so the press reaches the chat under the number it has
+	 *  then: a chat that was restarted since the timeline was read has another, and one that was
+	 *  closed has none.
+	 */
+	activityChat: (plane: PlaneId, key: string) => typedError<number | null, string>(__TAURI_INVOKE("activity_chat", { plane, key })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
@@ -1989,9 +2010,10 @@ export type Activity = {
 	key: string,
 	/**  Oldest first. */
 	lines: ActivityLine[],
-	/**  How many messages its tasks' records counted and did not keep the text of. */
-	unkept: number,
-	/**  How many records in the store purlis will not draw. */
+	/**
+	 *  How many of this chat's tasks, and of the tasks under them, are not listed because
+	 *  purlis will not draw their records.
+	 */
 	undrawn: number,
 };
 
@@ -2012,7 +2034,10 @@ export type ActivityLine = {
 	n: number,
 	/**  When, as the record keeps it (UTC, RFC 3339). */
 	at: string,
-	/**  `dispatched`, `follow-up`, `note`, `question`, `answer`, `report` or `stopped`. */
+	/**
+	 *  `dispatched`, `follow-up`, `note`, `question`, `answer`, `report`, `stopped`, or
+	 *  `not listed` for the one line that stands for messages the record kept no text of.
+	 */
 	kind: string,
 	/**  The chat that said it, by the name the person saw. */
 	from: string,
@@ -2023,14 +2048,47 @@ export type ActivityLine = {
 	/**  The chat it was said to, the same two ways. */
 	to: string,
 	to_key: string,
-	/**  What was said, **as text**: a chat's own words, never drawn as markup. */
+	/**
+	 *  What was said, **as text**: a chat's own words, never drawn as markup. Empty where
+	 *  `expired`, and for a `not listed` line.
+	 */
 	text: string,
+	/**
+	 *  The person dispatched the task themselves from the asking chat's tab: on the
+	 *  dispatch's own line, whose words are theirs and not that chat's.
+	 */
+	by_person: boolean,
+	/**
+	 *  purlis wrote the line, and not the task: an ending it recorded in a chat's place, and
+	 *  a `not listed` line.
+	 */
+	by_purlis: boolean,
+	/**  A message whose words were kept for 30 days after its task ended, and are gone. */
+	expired: boolean,
+	/**  On a `not listed` line: how many messages the record counted after the last it kept. */
+	unkept: number | null,
+	/**
+	 *  And why it kept no more: `before` (they were sent before records kept any text),
+	 *  `count` (a record keeps so many messages) or `size` (so much text).
+	 */
+	unkept_why: string | null,
 	/**  How the task ended, in the report's word, on the line that ends it. */
 	outcome: string | null,
 	/**  The files that line's report says the task changed, as far as its words name them. */
 	files: string[],
 	/**  The task's name, else its chat's. */
 	task: string,
+	/**
+	 *  Where the task worked, as one word to compare: two tasks with the same one worked in
+	 *  the same folder.
+	 */
+	place: string,
+	/**
+	 *  How far under the session the task is, 1 for a task it dispatched itself, **in a
+	 *  timeline that was read**. 0 on a line told as it lands: which timeline it is on, and
+	 *  how deep, is the tab's to say there.
+	 */
+	depth: number,
 };
 
 /**  How far a branch is from the branch it was cut from: the branch cockpit's header (FM-5). */

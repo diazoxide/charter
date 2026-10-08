@@ -18,6 +18,11 @@
 //! the caps, and the check on the way back to the screen ([`crate::dispatchrecord::sound`]).
 //! A record that does not pass is counted ([`Timeline::refused`]) and none of it is listed.
 //!
+//! **The words are kept for 30 days after the task ended** (D-1495-12,
+//! [`dispatchrecord::expire_talk`]): after that a message's line stays, with its time and its
+//! kind, and says its words are no longer kept. **A record keeps the first messages**, and the
+//! timeline has one line, in the task's place, for those it did not keep ([`Kind::Unkept`]).
+//!
 //! **Nothing of a chat's conversation is here.** A line is a message one chat sent another
 //! through purlis, which is what the asking chat's turn was handed too.
 //!
@@ -50,6 +55,9 @@ pub enum Kind {
     Report,
     /// The person stopped the task before it reported ([`Outcome::Stopped`]).
     Stopped,
+    /// Messages the record counted and kept no text of ([`Line::unkept`]): one line for all
+    /// of them, where they would have stood. purlis's own line, and nobody's words.
+    Unkept,
 }
 
 impl Kind {
@@ -63,6 +71,7 @@ impl Kind {
             Self::Answer => "answer",
             Self::Report => "report",
             Self::Stopped => "stopped",
+            Self::Unkept => "not listed",
         }
     }
 
@@ -79,8 +88,30 @@ impl Kind {
     fn said_by_the_task(self) -> bool {
         matches!(
             self,
-            Self::Note | Self::Question | Self::Report | Self::Stopped
+            Self::Note | Self::Question | Self::Report | Self::Stopped | Self::Unkept
         )
+    }
+}
+
+/// Why a record kept no text of some of its messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// They were sent before records kept any text: the record has none at all.
+    Before,
+    /// The record holds as many messages as one keeps ([`dispatchrecord::MOST_SAID`]).
+    Count,
+    /// The record holds as much text as one keeps ([`dispatchrecord::MOST_SAID_BYTES`]).
+    Size,
+}
+
+impl Why {
+    /// The word the window is handed.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::Count => "count",
+            Self::Size => "size",
+        }
     }
 }
 
@@ -98,14 +129,30 @@ pub struct Line {
     pub from: ChatRef,
     /// The chat it was said to.
     pub to: ChatRef,
-    /// What was said: the brief, the message, or the report's text.
+    /// What was said: the brief, the message, or the report's text. Empty for a message
+    /// whose words are no longer kept ([`Line::expired`]), and for [`Kind::Unkept`].
     pub text: String,
+    /// **The person dispatched the task themselves**, from the asking chat's tab (V100-70):
+    /// set on the dispatch's own line, whose words are then theirs and not that chat's.
+    pub by_person: bool,
+    /// **purlis wrote this line, and not the task**: the ending it recorded in a chat's place
+    /// (ended without a report, stopped by the person), and [`Kind::Unkept`].
+    pub by_purlis: bool,
+    /// A message whose words were kept and are not any more
+    /// ([`dispatchrecord::expire_talk`]).
+    pub expired: bool,
+    /// For [`Kind::Unkept`]: how many messages the record counted after the last it kept,
+    /// and why it kept no more.
+    pub unkept: Option<(u32, Why)>,
     /// How the task ended, on the line that ends it.
     pub outcome: Option<Outcome>,
     /// The files that line's report says the task changed ([`paths_named`]).
     pub files: Vec<String>,
     /// The task's name, else its chat's.
     pub task: String,
+    /// Where the task worked ([`place_of`]): two tasks with the same one worked in the same
+    /// folder.
+    pub place: String,
     /// How far under the session the task is: 1 for a task it dispatched itself.
     pub depth: u32,
 }
@@ -115,21 +162,41 @@ pub struct Line {
 pub struct Timeline {
     /// Oldest first.
     pub lines: Vec<Line>,
-    /// How many messages its tasks' records counted and did not keep the text of: sent before
-    /// records kept any, or past what one record keeps.
-    pub unkept: u32,
-    /// How many records in the store purlis will not draw ([`dispatchrecord::sound`]). Of any
-    /// session's: a record that is not read is not asked whose it is.
+    /// How many of **this session's** tasks are not listed because purlis will not draw
+    /// their records ([`dispatchrecord::sound`]): a record whose asking chat is the session or
+    /// a chat on its timeline. Another session's is not counted here.
     pub refused: usize,
 }
 
+/// **Where `record`'s task worked**, as one word to compare: its workspace and the folder it
+/// started in. A task given a branch of its own started in that branch's folder, so it shares
+/// a place with no other task; two tasks sent to the same folder share theirs.
+pub fn place_of(record: &Record) -> String {
+    format!(
+        "{}\u{0}{}",
+        record.place.workspace.as_deref().unwrap_or_default(),
+        record.place.folder.as_deref().unwrap_or_default()
+    )
+}
+
+/// Whether `report` is one purlis wrote in a chat's place: the person stopped the chat, or it
+/// ended owing a report.
+fn purlis_wrote(report: &dispatchrecord::Report) -> bool {
+    report.outcome == Outcome::Stopped
+        || report.text == dispatchrecord::ENDED_WITHOUT_A_REPORT
+        || report.text == crate::handback::UNREPORTED
+        || report.text == crate::handback::STOPPED
+}
+
 /// The lines of one task's `record`, oldest first, for a task `depth` under its session: the
-/// dispatch, each message its record kept, and its report once it has one.
+/// dispatch, each message its record kept, one line for the messages it did not, and its
+/// report once it has one.
 pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
     let task = record
         .task
         .clone()
         .unwrap_or_else(|| record.worker.chat.name.clone());
+    let place = place_of(record);
     let line = |n: usize, at: &str, kind: Kind, text: &str| {
         let (from, to) = if kind.said_by_the_task() {
             (&record.worker.chat, &record.asker.chat)
@@ -144,15 +211,48 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             from: from.clone(),
             to: to.clone(),
             text: text.to_owned(),
+            by_person: false,
+            by_purlis: false,
+            expired: false,
+            unkept: None,
             outcome: None,
             files: Vec::new(),
             task: task.clone(),
+            place: place.clone(),
             depth,
         }
     };
-    let mut lines = vec![line(0, &record.started, Kind::Dispatched, &record.brief)];
+    let mut lines = vec![Line {
+        by_person: record.asker.by_person,
+        ..line(0, &record.started, Kind::Dispatched, &record.brief)
+    }];
     for said in &record.talk {
-        lines.push(line(lines.len(), &said.at, Kind::of(said.kind), &said.text));
+        lines.push(Line {
+            // A message is never taken empty: one with no words had them, and they are gone.
+            expired: said.text.is_empty(),
+            ..line(lines.len(), &said.at, Kind::of(said.kind), &said.text)
+        });
+    }
+    // The messages after the last one kept, where they would have stood: before the report.
+    let kept = u32::try_from(record.talk.len()).unwrap_or(u32::MAX);
+    let unkept = record.messages.saturating_sub(kept);
+    if unkept > 0 {
+        let why = if record.talk.is_empty() {
+            Why::Before
+        } else if record.talk.len() >= dispatchrecord::MOST_SAID {
+            Why::Count
+        } else {
+            Why::Size
+        };
+        let at = lines
+            .last()
+            .map_or(&record.started, |last| &last.at)
+            .clone();
+        lines.push(Line {
+            by_purlis: true,
+            unkept: Some((unkept, why)),
+            ..line(lines.len(), &at, Kind::Unkept, "")
+        });
     }
     if let (Some(report), Some(ended)) = (&record.report, &record.ended) {
         let kind = match report.outcome {
@@ -160,6 +260,7 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             _ => Kind::Report,
         };
         lines.push(Line {
+            by_purlis: purlis_wrote(report),
             outcome: Some(report.outcome),
             files: paths_named(&report.changed),
             ..line(lines.len(), ended, kind, &report.text)
@@ -191,37 +292,59 @@ fn under<'a>(records: &'a [Record], session: &ChatRef) -> Vec<(&'a Record, u32)>
 
 /// The timeline of `session` among `records`, which are ones purlis draws.
 pub fn of(records: &[Record], session: &ChatRef) -> Timeline {
-    let tasks = under(records, session);
-    let mut lines: Vec<Line> = tasks
-        .iter()
-        .flat_map(|(record, depth)| lines_of(record, *depth))
-        .collect();
+    let mut lines: Vec<(String, Line)> = Vec::new();
+    for (record, depth) in under(records, session) {
+        // **A task's own lines never change places.** Each is sorted by its time, and never
+        // by one earlier than the line before it: where the clock stepped back between a
+        // question and its answer, the answer still stands after the question.
+        let mut latest = String::new();
+        for line in lines_of(record, depth) {
+            if line.at > latest {
+                latest.clone_from(&line.at);
+            }
+            lines.push((latest.clone(), line));
+        }
+    }
     // A stamp sorts as its time, and a record's id as the time it was minted: two lines of
     // one second stand in the order their dispatches started, and a dispatch's own in the
     // order it kept them.
-    lines.sort_by(|a, b| (&a.at, &a.dispatch, a.n).cmp(&(&b.at, &b.dispatch, b.n)));
-    let unkept = tasks
-        .iter()
-        .map(|(record, _)| {
-            let kept = u32::try_from(record.talk.len()).unwrap_or(u32::MAX);
-            record.messages.saturating_sub(kept)
-        })
-        .fold(0u32, u32::saturating_add);
+    lines.sort_by(|(at, a), (bt, b)| (at, &a.dispatch, a.n).cmp(&(bt, &b.dispatch, b.n)));
     Timeline {
-        lines,
-        unkept,
+        lines: lines.into_iter().map(|(_, line)| line).collect(),
         refused: 0,
     }
 }
 
-/// The timeline of `session` in the project at `root`: its tasks and everything under them,
-/// in time order, from the records purlis draws ([`dispatchrecord::drawn`]).
-pub fn timeline(root: &Path, session: &ChatRef) -> Timeline {
-    let drawn = dispatchrecord::drawn(root);
-    Timeline {
-        refused: drawn.refused,
-        ..of(&drawn.records, session)
-    }
+/// The timeline of `session` in the project at `root`, read at `now`: its tasks and
+/// everything under them, in time order, from the records purlis draws
+/// ([`dispatchrecord::sound`]).
+///
+/// What a record that ended 30 days ago kept of its messages' words is taken out first
+/// ([`dispatchrecord::expire_talk`]), so a timeline never shows words past their time, however
+/// long the project has been open.
+pub fn timeline(root: &Path, session: &ChatRef, now: chrono::DateTime<chrono::Utc>) -> Timeline {
+    dispatchrecord::expire_talk(root, now);
+    let (drawn, refused): (Vec<Record>, Vec<Record>) = dispatchrecord::list(root)
+        .into_iter()
+        .partition(dispatchrecord::sound);
+    let found = of(&drawn, session);
+    // The chats on the timeline: the session, and every task under it.
+    let mut on_it = vec![session.clone()];
+    on_it.extend(
+        under(&drawn, session)
+            .into_iter()
+            .map(|(record, _)| record.worker.chat.clone()),
+    );
+    let refused = refused
+        .iter()
+        .filter(|record| {
+            record.mode == Mode::Task
+                && on_it
+                    .iter()
+                    .any(|chat| dispatchrecord::same_chat(&record.asker.chat, chat))
+        })
+        .count();
+    Timeline { refused, ..found }
 }
 
 /// **The files a report says its task changed**: the ones it lists (`changed.files`), then the

@@ -1464,6 +1464,9 @@ impl Planes {
         }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
+        // And what the chats of a dispatch said to each other is kept for 30 days after it
+        // ended, whichever of them is still brought back (#1495, D-1495-12).
+        purlis_core::dispatchrecord::expire_talk(&root, chrono::Utc::now());
         // Then the worktrees of the dispatches that have ended are looked at, once (#1453):
         // one whose branch is merged, and that no chat coming back stands in, is taken away.
         // **Which chats come back is read here**, beside the settle above and before this
