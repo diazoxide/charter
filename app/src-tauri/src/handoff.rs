@@ -470,12 +470,17 @@ fn report_under(
         // Its session record is named by the report's own part.
         record: None,
         below: held.stopping().ended_below(chat),
+        // purlis's stop at a limit the person set, where it was that (#1512).
+        limit: held.stopping().limit_of(chat),
     });
     let delivered = deliver(held, chat, &from, summary.clone(), task, the_stop_s)?;
     held.chats().owes(chat, Owed::Sent);
     // A report a chat sends in the one turn its stop gave it is still a stop's: the person
     // ended it, whatever it says of itself, and its row does not fold (#1485).
-    let by = last_words.then_some(purlis_core::dispatchrecord::EndedBy::Person);
+    let by = last_words.then_some(match held.stopping().limit_of(chat) {
+        Some(_) => purlis_core::dispatchrecord::EndedBy::Limit,
+        None => purlis_core::dispatchrecord::EndedBy::Person,
+    });
     let way = last_words.then_some(purlis_core::dispatchrecord::EndedWay::Stopped);
     crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by, way);
     if delivered.kept_for.is_none() {
@@ -800,6 +805,7 @@ pub(crate) fn operator_stopped(
                 .last_record(chat)
                 .and_then(|path| handback::record_path(&path)),
             below: if task { below } else { Vec::new() },
+            limit: held.stopping().limit_of(chat).filter(|_| task),
         };
         if let Err(why) = deliver(held, chat, &from, String::new(), None, Some(stopped)) {
             // Still owed where it was: the chat's close tries once more.
@@ -813,14 +819,25 @@ pub(crate) fn operator_stopped(
     if task && from.report == Owed::Due {
         held.chats().owes(chat, Owed::Failed);
         // Its dispatch's record ends here too, in the app's own words and under a word of
-        // its own (#1452, D-T59-j10): the person closed it, and it did not fail by itself.
+        // its own (#1452, D-T59-j10): the person closed it, or purlis did at a limit the
+        // person set (#1512), and it did not fail by itself.
+        let (by, text) = match held.stopping().limit_of(chat) {
+            Some(_) => (
+                purlis_core::dispatchrecord::EndedBy::Limit,
+                handback::CLOSED_AT_A_LIMIT,
+            ),
+            None => (
+                purlis_core::dispatchrecord::EndedBy::Person,
+                handback::CLOSED,
+            ),
+        };
         crate::dispatches::reported(
             held,
             chat,
             purlis_core::dispatchrecord::Outcome::Stopped,
-            handback::CLOSED,
+            text,
             None,
-            Some(purlis_core::dispatchrecord::EndedBy::Person),
+            Some(by),
             Some(purlis_core::dispatchrecord::EndedWay::Closed),
         );
     }
@@ -1942,6 +1959,9 @@ fn dispatch_noting(
                         Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
                     },
                     works_in: moves_into.as_deref().or(ground.workspace()),
+                    session_tokens: &|| {
+                        crate::overlimit::session_tokens(root, held.board(), open, from)
+                    },
                 },
             )
         });
@@ -2865,6 +2885,13 @@ pub(crate) fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
             "As many chats already run as {} as may at once, which is {limit}. Wait for one to \
              finish, or raise the limit {IN_SETTINGS}.",
             short(persona)
+        ),
+        Refused::Limit(Limit::SessionTokens { limit, used, .. }) => format!(
+            "This chat's session has used {} tokens, its own chat and its tasks together as \
+             their harnesses reported them, and a session may use {} here. Raise or take out \
+             the limit {IN_SETTINGS}.",
+            purlis_core::dispatchlimits::spelled(*used),
+            purlis_core::dispatchlimits::spelled(u64::from(*limit)),
         ),
         // Never the person's: a helper is not a tab, a held chat's tab may ask, the person's
         // ask always names a persona, and it sends no message between chats. Said as the chat
@@ -11830,4 +11857,7 @@ mod tests {
     /// Limits are shown where they bind, and a session's tasks can all be stopped at once
     /// (#1498).
     mod limits_where_they_bind;
+
+    /// A session's tokens and a task's time, held to the limits the person set (#1512).
+    mod limits_at_work;
 }

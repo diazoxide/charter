@@ -68,6 +68,7 @@ export function taskBucketOf(kind: ShownKind | undefined): TaskBucket {
     case "reported":
     case "stopped-by-you":
     case "closed-by-you":
+    case "stopped-at-limit":
       return "done";
     default:
       return "waiting";

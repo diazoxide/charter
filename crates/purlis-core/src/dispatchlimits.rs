@@ -1,7 +1,8 @@
 //! **Dispatch limits** (#1439, #1440; spec #1434, "Limits"): how many persona chats a chat may
 //! have running, how many a lineage may hold, how deep a chain may go and how many messages a
 //! minute may pass, and, per persona, how many chats it may dispatch and how many may run as
-//! it at once.
+//! it at once. And two that are off until they are set (#1512, V100-59): the tokens one session
+//! may use, its own chat and its tasks together, and how long one task may work.
 //!
 //! Two pure functions, and the dispatch decision calls both:
 //!
@@ -70,6 +71,24 @@
 //! - A policy file that is refused switches dispatch off, and says the file is refused.
 //! - Every count is of chats that still owe work: not yet reported, and their program not
 //!   ended.
+//!
+//! # The two limits that are off until set (#1512)
+//!
+//! `tokens-per-session` and `minutes-per-task` have no value where no file sets one, at the
+//! same levels and by the same rules as the others ([`Limit::off_until_set`]). Each is a
+//! whole number of 1 or more: a 0 would not switch anything off, so it is refused as written.
+//!
+//! - **Tokens per session**: the tokens one session has used, the chat the person started and
+//!   every task below it, open or ended, as their harnesses reported them
+//!   ([`Lineage::tokens`]). At the limit a new dispatch is refused with the figure
+//!   ([`Refused::SessionTokens`]), and the app asks the session's tasks at work for their
+//!   report. **A figure a harness did not report is not counted**, so the limit cannot bind on
+//!   a chat whose harness reports none; Settings says so beside it. And the figure is the
+//!   harness's as relayed through a file a chat can write: this is a brake on work nobody is
+//!   watching, not a boundary a chat cannot cross.
+//! - **Minutes per task**: how long one task may work, from its dispatch. The app asks a task
+//!   past it for its report and ends it, as Stop and get its report does ([`Reached`]); a
+//!   dispatch is never refused for it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -90,6 +109,9 @@ pub const DEEPEST: u32 = 8;
 /// The most any limit is read as: far past any machine's, and a bound on what a file can ask.
 pub const MOST: u32 = 10_000;
 
+/// The most `tokens-per-session` is read as: a billion, far past any session's.
+pub const MOST_TOKENS: u32 = 1_000_000_000;
+
 /// One limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Limit {
@@ -105,17 +127,23 @@ pub enum Limit {
     MayDispatch,
     /// The chats that may run as this persona at once, in the project.
     MayRunAtOnce,
+    /// The tokens one session may use, its own chat and its tasks together (#1512).
+    TokensPerSession,
+    /// How many minutes one task may work, from its dispatch (#1512).
+    MinutesPerTask,
 }
 
 impl Limit {
     /// Every limit, in the order a table draws them.
-    pub const ALL: [Limit; 6] = [
+    pub const ALL: [Limit; 8] = [
         Limit::RunningPerChat,
         Limit::LivePerLineage,
         Limit::Depth,
         Limit::MessagesPerMinute,
         Limit::MayDispatch,
         Limit::MayRunAtOnce,
+        Limit::TokensPerSession,
+        Limit::MinutesPerTask,
     ];
 
     /// The key a settings file and the policy file write it as.
@@ -127,6 +155,8 @@ impl Limit {
             Self::MessagesPerMinute => "messages-per-minute",
             Self::MayDispatch => "may-dispatch",
             Self::MayRunAtOnce => "may-run-at-once",
+            Self::TokensPerSession => "tokens-per-session",
+            Self::MinutesPerTask => "minutes-per-task",
         }
     }
 
@@ -144,6 +174,8 @@ impl Limit {
             Self::MessagesPerMinute => "Messages per minute",
             Self::MayDispatch => "May dispatch",
             Self::MayRunAtOnce => "May run at once",
+            Self::TokensPerSession => "Tokens per session",
+            Self::MinutesPerTask => "Minutes per task",
         }
     }
 
@@ -161,6 +193,16 @@ impl Limit {
                  project."
             }
             Self::MayRunAtOnce => "The chats that may run as this persona at once, in the project.",
+            Self::TokensPerSession => {
+                "The tokens one session may use, its own chat and all its tasks, as their \
+                 harnesses report them. At the limit no new task starts, and the tasks at work \
+                 are asked for their report. A harness that reports no tokens is not counted, so \
+                 this cannot stop its chats. Off until set."
+            }
+            Self::MinutesPerTask => {
+                "How long one task may work, from its dispatch. A task past it is asked for its \
+                 report and ended. Off until set."
+            }
         }
     }
 
@@ -171,7 +213,37 @@ impl Limit {
             Self::LivePerLineage => Some(16),
             Self::Depth => Some(3),
             Self::MessagesPerMinute => Some(10),
-            Self::MayDispatch | Self::MayRunAtOnce => None,
+            Self::MayDispatch
+            | Self::MayRunAtOnce
+            | Self::TokensPerSession
+            | Self::MinutesPerTask => None,
+        }
+    }
+
+    /// **Whether it is off until a file sets it, and a 0 is no value of it** (#1512): a limit
+    /// of tokens or of time. Its 0 would not switch dispatch off, as the counts' 0 does, so
+    /// it is refused as written, and a refused policy file does not set it.
+    pub fn off_until_set(self) -> bool {
+        matches!(self, Self::TokensPerSession | Self::MinutesPerTask)
+    }
+
+    /// Whether a 0 of it switches dispatch off at the level that set it: every limit but the
+    /// message rate, whose 0 stops messages only, and the two that are off until set.
+    fn switches_off(self) -> bool {
+        self != Self::MessagesPerMinute && !self.off_until_set()
+    }
+
+    /// The least it may be set to.
+    pub fn least(self) -> u32 {
+        u32::from(self.off_until_set())
+    }
+
+    /// The most it may be set to.
+    pub fn most(self) -> u32 {
+        match self {
+            Self::Depth => DEEPEST,
+            Self::TokensPerSession => MOST_TOKENS,
+            _ => MOST,
         }
     }
 
@@ -188,6 +260,8 @@ impl Limit {
             Self::MessagesPerMinute => 3,
             Self::MayDispatch => 4,
             Self::MayRunAtOnce => 5,
+            Self::TokensPerSession => 6,
+            Self::MinutesPerTask => 7,
         }
     }
 }
@@ -196,7 +270,7 @@ impl Limit {
 /// limit it does not set is inherited.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Level {
-    values: [Option<u32>; 6],
+    values: [Option<u32>; Limit::ALL.len()],
     /// A policy file that was refused: no limit of it was read, and dispatch is off.
     refused: bool,
 }
@@ -309,12 +383,16 @@ pub struct Limits {
     pub may_dispatch: Option<u32>,
     /// The chats that may run as the target persona at once; `None` is no cap.
     pub may_run_at_once: Option<u32>,
+    /// The tokens the asking chat's session may use; `None`, as it is until set, is no cap.
+    pub tokens_per_session: Option<u32>,
+    /// How many minutes one task may work; `None`, as it is until set, is no cap.
+    pub minutes_per_task: Option<u32>,
     /// The persona the asking chat runs as, where it runs as one.
     pub asking: Option<String>,
     /// The persona dispatched to, where it is to one.
     pub target: Option<String>,
     /// Which level decided each limit.
-    set_by: [Source; 6],
+    set_by: [Source; Limit::ALL.len()],
     /// Each limit of this machine's own that is above the project's, and was not applied.
     pub ignored: Vec<Ignored>,
 }
@@ -329,6 +407,8 @@ impl Limits {
             Limit::MessagesPerMinute => Some(self.messages_per_minute),
             Limit::MayDispatch => self.may_dispatch,
             Limit::MayRunAtOnce => self.may_run_at_once,
+            Limit::TokensPerSession => self.tokens_per_session,
+            Limit::MinutesPerTask => self.minutes_per_task,
         }
     }
 
@@ -338,11 +418,12 @@ impl Limits {
     }
 
     /// The first limit that is 0 and so switches dispatch off, and the level that set it.
-    /// Messages a minute is not one: its 0 stops messages only ([`may_send`]).
+    /// Messages a minute is not one: its 0 stops messages only ([`may_send`]). Nor are the two
+    /// that are off until set, which are never 0.
     fn off(&self) -> Option<(Limit, &Source)> {
         Limit::ALL
             .into_iter()
-            .filter(|limit| *limit != Limit::MessagesPerMinute)
+            .filter(|limit| limit.switches_off())
             .find(|limit| self.value(*limit) == Some(0))
             .map(|limit| (limit, self.set_by(limit)))
     }
@@ -414,8 +495,10 @@ pub fn in_force(
                 _ => (value, from) = (Some(yours), Source::You),
             }
         }
-        if policy.is_refused() {
-            // Nothing was read from the file, so nothing is allowed: no level lifts this.
+        if policy.is_refused() && !limit.off_until_set() {
+            // Nothing was read from the file, so nothing is allowed: no level lifts this. A
+            // limit of tokens or time is left as the project's files set it: dispatch is off
+            // already, and no task is stopped for a file nobody could read.
             (value, from) = (Some(0), Source::PolicyRefused);
         } else if let Some(ceiling) = policy.get(limit)
             && value.is_none_or(|value| value > ceiling)
@@ -435,6 +518,8 @@ pub fn in_force(
         messages_per_minute: capped(Limit::MessagesPerMinute),
         may_dispatch: value(Limit::MayDispatch),
         may_run_at_once: value(Limit::MayRunAtOnce),
+        tokens_per_session: value(Limit::TokensPerSession),
+        minutes_per_task: value(Limit::MinutesPerTask),
         asking: asking.map(str::to_owned),
         target: target.map(str::to_owned),
         set_by: resolved.map(|(_, from)| from),
@@ -467,6 +552,11 @@ pub struct Lineage {
     /// still running, in every workspace of the project, the asking chat's own among them:
     /// what `may-dispatch` counts.
     pub by_asking: u32,
+    /// **The tokens the asking chat's session has used** (#1512): the chat the person started
+    /// and every task below it, open or ended, as their harnesses reported them, each chat
+    /// once. What `tokens-per-session` is held to. A chat whose harness reported nothing adds
+    /// nothing: never a guess. The app reads it only where that limit is set.
+    pub tokens: u64,
 }
 
 /// **Why a dispatch is refused**: which limit or rule, with its number. [`Refused::say`] is the
@@ -504,6 +594,9 @@ pub enum Refused {
     },
     /// The asking chat has sent as many messages this minute as it may: `sent` of them.
     TooManyMessages { limit: u32, sent: u32 },
+    /// The asking chat's session has used as many tokens as it may (#1512): `used` of them, as
+    /// its chats' harnesses reported them. `by` is the level that set the limit.
+    SessionTokens { limit: u32, used: u64, by: Source },
 }
 
 /// What a chat is told to do about a limit of 0: only the person changes a limit.
@@ -550,6 +643,7 @@ impl Refused {
             Self::PersonaDispatches { .. } => Some(Limit::MayDispatch),
             Self::PersonaFull { .. } => Some(Limit::MayRunAtOnce),
             Self::TooManyMessages { .. } => Some(Limit::MessagesPerMinute),
+            Self::SessionTokens { .. } => Some(Limit::TokensPerSession),
         }
     }
 
@@ -630,8 +724,24 @@ impl Refused {
                  {WAIT_TO_SEND}",
                 counted(*sent, "message", "messages")
             ),
+            Self::SessionTokens { limit, used, by } => format!(
+                "this chat's session has used {} tokens, its own chat and its tasks together as \
+                 their harnesses reported them, and a session may use {} here. {} {DO_IT_HERE}",
+                spelled(*used),
+                spelled(u64::from(*limit)),
+                if matches!(by, Source::Policy | Source::PolicyRefused) {
+                    ASK_AN_ADMINISTRATOR
+                } else {
+                    ASK_THE_PERSON
+                },
+            ),
         }
     }
+}
+
+/// A count of tokens as purlis spells it everywhere (`310k`, `1.2M`).
+pub fn spelled(n: u64) -> String {
+    crate::usage::tokens(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
 impl fmt::Display for Refused {
@@ -724,7 +834,82 @@ pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
             running: lineage.as_target,
         });
     }
+    if let Some(reached) = tokens_reached(limits, lineage.tokens) {
+        return Decision::Refused(reached);
+    }
     Decision::Allowed
+}
+
+/// The refusal `tokens-per-session` gives a session that has used `used` tokens, where it is
+/// set and they reach it.
+fn tokens_reached(limits: &Limits, used: u64) -> Option<Refused> {
+    let limit = limits.tokens_per_session?;
+    (used >= u64::from(limit)).then(|| Refused::SessionTokens {
+        limit,
+        used,
+        by: limits.set_by(Limit::TokensPerSession).clone(),
+    })
+}
+
+/// **A limit a task or a session has reached while at work** (#1512): what the app stops the
+/// tasks at work for, and what the chat that asked is told, in purlis's own words
+/// ([`crate::handback::Stopped::limit`]). Kept in the word the asking chat is left, so it
+/// is written by the app and read back as it wrote it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Reached {
+    /// The task worked `worked` minutes, and a task may work `limit` here.
+    Time { limit: u32, worked: u32 },
+    /// The session the task works for used `used` tokens, as reported, and may use `limit`.
+    Tokens { limit: u32, used: u64 },
+}
+
+impl Reached {
+    /// What was reached, as the chat that asked reads it: one sentence of purlis's, with the
+    /// figure and where the person changes it.
+    pub fn say(self) -> String {
+        let reached = match self {
+            Self::Time { limit, worked } => format!(
+                "It had worked {} and a task may work {} here (minutes per task).",
+                counted(worked, "minute", "minutes"),
+                counted(limit, "minute", "minutes"),
+            ),
+            Self::Tokens { limit, used } => format!(
+                "Its session had used {} tokens, its own chat and its tasks together as their \
+                 harnesses reported them, and a session may use {} here (tokens per session).",
+                spelled(used),
+                spelled(u64::from(limit)),
+            ),
+        };
+        format!("{reached} The person sets that limit in Settings › Project › Dispatch.")
+    }
+
+    /// The limit it is of, as its row and its heading name it.
+    pub fn named(self) -> &'static str {
+        match self {
+            Self::Time { .. } => "its time limit",
+            Self::Tokens { .. } => "its session's token limit",
+        }
+    }
+}
+
+/// **Whether a task that has worked `worked_secs` is past the time a task may work**
+/// (#1512), by `limits` as they stand now: read afresh each time, so a limit raised in
+/// Settings lets a task go on and one lowered stops it.
+pub fn time_reached(limits: &Limits, worked_secs: i64) -> Option<Reached> {
+    let limit = limits.minutes_per_task?;
+    let worked = u32::try_from(worked_secs.max(0) / 60).unwrap_or(u32::MAX);
+    (worked >= limit).then_some(Reached::Time { limit, worked })
+}
+
+/// **Whether a session that has used `used` tokens is at the tokens a session may use**
+/// (#1512): the tasks at work are then asked for their report. The same test a dispatch is
+/// refused by ([`decide`]).
+pub fn tokens_reached_at_work(limits: &Limits, used: u64) -> Option<Reached> {
+    match tokens_reached(limits, used)? {
+        Refused::SessionTokens { limit, used, .. } => Some(Reached::Tokens { limit, used }),
+        _ => None,
+    }
 }
 
 /// **Whether the asking chat may send another message** to a chat of its lineage, having sent
@@ -759,13 +944,24 @@ pub struct Read {
 
 /// One value as a limit, or why it is not one. `here` is its key, dotted.
 fn value_of(limit: Limit, value: &toml::Value, here: &str, file: &str) -> Result<u32, String> {
-    let most = if limit == Limit::Depth { DEEPEST } else { MOST };
+    let most = limit.most();
+    if limit.off_until_set() && value.as_integer() == Some(0) {
+        return Err(format!(
+            "{here} in {file} is 0, and {} is a whole number of 1 or more, so it is not read \
+             and the level beneath it is in force — leave it out for no limit",
+            limit.label().to_lowercase()
+        ));
+    }
     let whole = value.as_integer().filter(|n| *n >= 0).ok_or_else(|| {
         format!(
             "{here} in {file} is not a whole number of 0 or more, so it is not read and \
                  the level beneath it is in force — write {} = {}",
             limit.word(),
-            limit.when_unset().unwrap_or(1)
+            limit.when_unset().unwrap_or(match limit {
+                Limit::TokensPerSession => 2_000_000,
+                Limit::MinutesPerTask => 60,
+                _ => 1,
+            })
         )
     })?;
     u32::try_from(whole)
@@ -779,8 +975,9 @@ fn value_of(limit: Limit, value: &toml::Value, here: &str, file: &str) -> Result
                 )
             } else {
                 format!(
-                    "{here} in {file} is {whole}, and no limit is above {MOST}, so it is not \
-                     read and the level beneath it is in force"
+                    "{here} in {file} is {whole}, and {} is never above {most}, so it is not \
+                     read and the level beneath it is in force",
+                    limit.label().to_lowercase()
                 )
             }
         })
@@ -952,12 +1149,12 @@ pub fn ceiling(dispatch: &serde_json::Map<String, serde_json::Value>) -> Result<
                 crate::shown::one_line(key, 40)
             ));
         };
-        let most = if limit == Limit::Depth { DEEPEST } else { MOST };
+        let (least, most) = (limit.least(), limit.most());
         let whole = value
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
-            .filter(|n| *n <= most)
-            .ok_or_else(|| format!("its \"{key}\" is not a whole number from 0 to {most}"))?;
+            .filter(|n| (least..=most).contains(n))
+            .ok_or_else(|| format!("its \"{key}\" is not a whole number from {least} to {most}"))?;
         level = level.with(limit, whole);
     }
     Ok(level)
@@ -966,12 +1163,14 @@ pub fn ceiling(dispatch: &serde_json::Map<String, serde_json::Value>) -> Result<
 /// **The ceiling of a policy file that was refused**: dispatch is off, and no message passes,
 /// until an administrator fixes the file. purlis cannot tell what the file meant to allow, so
 /// it says the file is refused ([`Source::PolicyRefused`]) and never that a limit "is set to 0",
-/// which no one set.
+/// which no one set. The two that are off until set are not set by it: no task is stopped for
+/// a file nobody could read, and dispatch is off already.
 pub fn ceiling_when_refused() -> Level {
     Level {
         refused: true,
         ..Limit::ALL
             .into_iter()
+            .filter(|limit| !limit.off_until_set())
             .fold(Level::unset(), |level, limit| level.with(limit, 0))
     }
 }
@@ -1057,7 +1256,7 @@ pub fn off_in(root: &Path, workspace: &str, target: Option<&str>) -> Option<Refu
         let level = table.workspaces.get(workspace)?;
         Limit::ALL
             .into_iter()
-            .filter(|limit| *limit != Limit::MessagesPerMinute && !limit.persona_only())
+            .filter(|limit| limit.switches_off() && !limit.persona_only())
             .find(|limit| level.get(*limit) == Some(0))
     };
     off(&files.project)

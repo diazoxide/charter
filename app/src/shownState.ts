@@ -26,6 +26,7 @@ export type ShownKind =
   | "cancelled"
   | "stopped-by-you"
   | "closed-by-you"
+  | "stopped-at-limit"
   | "unreported"
   | "reported"
   | "idle"
@@ -121,6 +122,14 @@ const CLOSED_BY_YOU: Shown = {
   shape: "octagon",
   token: "text.muted",
 };
+/** **purlis stopped it at a limit the person set** (#1512): a stop, so the stop's square, in
+ *  words that say it was the limit and not the person there and then. */
+const STOPPED_AT_LIMIT: Shown = {
+  kind: "stopped-at-limit",
+  word: "stopped at a limit",
+  shape: "square",
+  token: "text.muted",
+};
 const UNREPORTED: Shown = {
   kind: "unreported",
   word: "ended without a report",
@@ -167,6 +176,8 @@ const BY_THE_PERSON: ReadonlyMap<string, Shown> = new Map([
   ["stopped_by_person", STOPPED_BY_YOU],
   ["closed_by_person", CLOSED_BY_YOU],
   ["stopped", CLOSED_BY_YOU],
+  // The app's fact that it stopped the task at a limit the person set (#1512).
+  ["stopped_at_limit", STOPPED_AT_LIMIT],
 ]);
 
 /**

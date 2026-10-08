@@ -81,11 +81,7 @@ pub struct DispatchLimits {
 }
 
 fn most(limit: Limit) -> u32 {
-    if limit == Limit::Depth {
-        limits::DEEPEST
-    } else {
-        limits::MOST
-    }
+    limit.most()
 }
 
 fn values(level: &Level) -> Vec<Option<u32>> {
@@ -305,10 +301,11 @@ mod tests {
         let page = drawn("schema = 1\n", "", &Locks::none());
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].scope, "project");
-        assert_eq!(page.rows[0].values, vec![None; 6]);
+        assert_eq!(page.rows[0].values, vec![None; 8]);
+        // A session's tokens and a task's time are off until set (#1512).
         assert_eq!(
             page.rows[0].beneath,
-            vec![Some(6), Some(16), Some(3), Some(10), None, None]
+            vec![Some(6), Some(16), Some(3), Some(10), None, None, None, None]
         );
         assert_eq!(page.locked_by, None);
         assert_eq!(
@@ -322,10 +319,16 @@ mod tests {
                 "Depth",
                 "Messages per minute",
                 "May dispatch",
-                "May run at once"
+                "May run at once",
+                "Tokens per session",
+                "Minutes per task"
             ]
         );
         assert_eq!(page.limits[at(&page, "depth")].most, 8);
+        assert_eq!(
+            page.limits[at(&page, "tokens-per-session")].most,
+            1_000_000_000
+        );
     }
 
     #[test]

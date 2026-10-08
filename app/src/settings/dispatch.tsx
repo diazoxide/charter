@@ -414,6 +414,17 @@ function useDispatchTable(
             : `Kept in ${page.file}, which your team sees. The most specific row wins: a persona's over a workspace's over the project's. An empty box takes the value shown in it. A 0 switches dispatch off for that row, and a more specific row may set it back; 0 messages per minute stops messages only.`}
         </p>
         {!held && (
+          /* #1512: where the two limits that are off until set are written, say what binds
+             them and what cannot. */
+          <p className="granted-note" data-testid="dispatch-tokens-time-note">
+            Tokens per session and minutes per task are off until set. At a session&apos;s token
+            limit no new task starts and its tasks at work are asked for their report; a task past
+            its minutes is asked for its report and ended. Tokens are counted as each harness
+            reports them: a harness that reports no tokens is not counted, so the token limit cannot
+            stop its chats.
+          </p>
+        )}
+        {!held && (
           <p className="granted-note">
             Me on this machine is kept in {page.local_file}, on this machine only, and can only
             lower a limit.
@@ -552,12 +563,12 @@ export function dispatchGroup(plane: PlaneId, file = "the project's settings fil
   return {
     id: DISPATCH,
     label: "Dispatch",
-    help: "How many tasks a chat may start, how deep a chain may go and how fast chats may message each other.",
+    help: "How many tasks a chat may start, how deep a chain may go, how fast chats may message each other, and how many tokens a session and how long a task may use.",
     settings: [
       {
         id: `${DISPATCH}.limits`,
         label: "Limits",
-        help: "A dispatch past a limit is refused, and the chat is told which limit.",
+        help: "A dispatch past a limit is refused, and the chat is told which limit. A task past its time, or a session past its tokens, is asked for its report.",
         useControl: function useLimits() {
           // The row draws the last change's Undo, as it does for every setting.
           return { grouped: true, ...useDispatchTable(plane) };

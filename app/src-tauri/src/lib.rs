@@ -56,6 +56,7 @@ mod memories;
 mod navguard;
 mod off_the_main_thread;
 mod opener;
+mod overlimit;
 mod panels;
 mod panics;
 mod personas;
@@ -3168,6 +3169,9 @@ pub fn run() {
             reached("the record is back");
             // `charter stop --all` in a terminal is heard here (OV-1).
             killswitch::hear(app.handle());
+            // The clock that holds tasks at work to a session's tokens and a task's time
+            // (#1512).
+            overlimit::keep_looking(app.handle().clone());
 
             // Last, and never fatal. A tray is somewhere to put the window; the sessions
             // are the work. A desktop with no system tray at all — some Linux sessions, and

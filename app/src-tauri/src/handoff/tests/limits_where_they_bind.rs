@@ -6,7 +6,7 @@
 use super::*;
 
 /// The row the sidebar lists for chat `session`.
-fn row_of(held: &Held, session: u32) -> crate::OpenChat {
+pub(super) fn row_of(held: &Held, session: u32) -> crate::OpenChat {
     let sidebar = crate::sidebar_of(held).expect("the sidebar");
     sidebar
         .workspaces
@@ -18,7 +18,7 @@ fn row_of(held: &Held, session: u32) -> crate::OpenChat {
 }
 
 /// A steward chat, on a pretend host, in a project whose `[dispatch]` table is `table`.
-fn a_steward_under(table: &str) -> (Plane, Pretend, Planes, PlaneId, Arc<Held>, u32) {
+pub(super) fn a_steward_under(table: &str) -> (Plane, Pretend, Planes, PlaneId, Arc<Held>, u32) {
     let plane = a_plane_with_personas();
     std::fs::write(
         plane.root.join(purlis_core::plane::MANIFEST),
@@ -32,7 +32,7 @@ fn a_steward_under(table: &str) -> (Plane, Pretend, Planes, PlaneId, Arc<Held>, 
 }
 
 /// Chat `chat`'s harness says a prompt began a turn, and the app hears it, its stop too.
-fn a_turn_begins(held: &Held, chat: u32) {
+pub(super) fn a_turn_begins(held: &Held, chat: u32) {
     use purlis_core::hookwire::Conversation;
     the_board_hears(held, chat, Event::UserPromptSubmit);
     crate::dispatched::heard(
@@ -53,7 +53,7 @@ fn a_turn_begins(held: &Held, chat: u32) {
 }
 
 /// Chat `chat`'s harness says its turn ended, and the app hears it, its stop too.
-fn its_turn_ends(held: &Held, chat: u32) {
+pub(super) fn its_turn_ends(held: &Held, chat: u32) {
     the_board_hears(held, chat, Event::Stop);
     crate::dispatched::moved(held, chat);
     let held = kept(held);

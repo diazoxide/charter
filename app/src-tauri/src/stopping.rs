@@ -78,6 +78,14 @@
 //! nests under the pressed one and no other. A chat's own stop begins only when every chat
 //! below it has ended, so each chat's last turn is handed what the chats under it wrote, and
 //! no chat ends before one it started.
+//!
+//! **purlis stops a task at a limit the person set the same way** (#1512, V100-59): a task
+//! past its time, and every task at work of a session past its tokens, get this one stop with
+//! [`Way::Report`] ([`stop_at_a_limit`]). The person's word is the limit they wrote in
+//! Settings, and the app's own clock is the only caller: no line from a chat reads as one.
+//! What changes is what is said, never how it ends: the task's last-turn line says purlis
+//! stops it at a limit ([`TASK_AT_A_LIMIT_PROMPT`]), and the chat that asked is told which
+//! limit, with the figure, and not that the person stopped it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -102,8 +110,9 @@ pub const PROMPT: &str = "The person stopped this chat. Start nothing new. In th
      report what you did and what is left undone in a few lines, with `purlis handoff report \
      \"<summary>\"`. This chat ends when the turn does.";
 
-/// What a chat being stopped, or a chat below one, is told when it asks to start a chat.
-pub const STARTS_NOTHING: &str = "this chat is being stopped by the person; it cannot start a chat";
+/// What a chat being stopped, or a chat below one, is told when it asks to start a chat: by
+/// the person, or by purlis at a limit the person set (#1512).
+pub const STARTS_NOTHING: &str = "this chat is being stopped; it cannot start a chat";
 
 /// What a restart of a chat being stopped is refused with.
 pub const NOT_STARTED_AGAIN: &str = "This chat is being stopped, so it is not started again.";
@@ -115,11 +124,24 @@ pub const TASK_PROMPT: &str = "The person stopped this task. Start nothing new. 
      --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
      chat ends when the turn does.";
 
+/// [`TASK_PROMPT`], for a task purlis stops at a limit the person set (#1512): the same one
+/// short turn, and the truth of who stops it.
+pub const TASK_AT_A_LIMIT_PROMPT: &str = "purlis is stopping this task: it reached a limit the \
+     person set for a task's time or a session's tokens. Start nothing new. In this one turn, \
+     report what you did and what is left undone in a few lines, with `purlis dispatch report \
+     --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
+     chat ends when the turn does.";
+
 /// The bytes the prompt is sent as, to a task when `task` and to a handoff otherwise: one
 /// bracketed paste, then Enter, in one write.
 pub fn sent_as(task: bool) -> String {
     let prompt = if task { TASK_PROMPT } else { PROMPT };
     format!("{}\r", crate::curation::bracketed(prompt))
+}
+
+/// [`sent_as`] for a task purlis stops at a limit ([`TASK_AT_A_LIMIT_PROMPT`]).
+pub fn sent_at_a_limit() -> String {
+    format!("{}\r", crate::curation::bracketed(TASK_AT_A_LIMIT_PROMPT))
 }
 
 /// One step of one chat's stop, as the window is told it.
@@ -729,6 +751,9 @@ pub struct Stopping {
     /// The sessions to wake once the hold a close is made under is let go: a task of their
     /// Stop all tasks has left its stop, by whatever road ([`closed`], [`carry_pending`]).
     wake: Mutex<Vec<u32>>,
+    /// By the task: the limit purlis stops it at (#1512), where it was purlis and not the
+    /// person that began its stop. Kept until it has ended.
+    limited: Mutex<HashMap<u32, purlis_core::dispatchlimits::Reached>>,
 }
 
 impl Stopping {
@@ -755,6 +780,17 @@ impl Stopping {
     /// Every chat being stopped.
     pub fn now(&self) -> Vec<u32> {
         self.stops().now()
+    }
+
+    fn limited(&self) -> MutexGuard<'_, HashMap<u32, purlis_core::dispatchlimits::Reached>> {
+        self.limited.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// **The limit purlis stops chat `session` at**, where its stop is purlis's at a limit and
+    /// not the person's (#1512): what its last-turn line, its record and the word to the chat
+    /// that asked say instead of "the person".
+    pub fn limit_of(&self, session: u32) -> Option<purlis_core::dispatchlimits::Reached> {
+        self.limited().get(&session).copied()
     }
 
     fn named(&self) -> MutexGuard<'_, HashMap<u32, Vec<String>>> {
@@ -1203,6 +1239,7 @@ pub fn closed(held: &Held, session: u32) {
     held.stopping().left(session);
     held.stopping().session_gone(session);
     held.at_limits().clear(session);
+    held.stopping().limited().remove(&session);
     let acts = held
         .stopping()
         .stops()
@@ -1232,10 +1269,12 @@ fn carry_out(held: &Arc<Held>, acts: Vec<Act>) {
                     .chats()
                     .handed_from(session)
                     .is_some_and(|from| from.mode == purlis_core::dispatchdecision::Mode::Task);
-                let sent = held
-                    .chats()
-                    .sessions()
-                    .input(session, sent_as(task).as_bytes());
+                let line = if task && held.stopping().limit_of(session).is_some() {
+                    sent_at_a_limit()
+                } else {
+                    sent_as(task)
+                };
+                let sent = held.chats().sessions().input(session, line.as_bytes());
                 if sent.is_err() {
                     // Nothing to write to: it is ended as it stands.
                     let more = held
@@ -1308,7 +1347,9 @@ fn end(held: &Held, session: u32, wrote: bool, tell: bool) {
         // Read under the hold: a report taken a moment ago has named them already.
         let below = held.stopping().named().remove(&session).unwrap_or_default();
         crate::handoff::operator_stopped(held, session, wrote, tell, below, &deciding);
-        held.close_chat_held(session, &deciding)
+        let closed = held.close_chat_held(session, &deciding);
+        held.stopping().limited().remove(&session);
+        closed
     };
     if let Err(why) = closed {
         tracing::warn!("purlis: chat {session}, stopped, did not end cleanly ({why})");
@@ -1507,6 +1548,107 @@ pub(crate) fn stop_all_tasks_in_a_test(
     asked: &[u32],
 ) -> Result<u32, String> {
     stop_all_tasks_of(held, session, asked)
+}
+
+/// **purlis stops `tasks` at a limit the person set** (#1512, V100-59): each with everything
+/// below it, deepest first, by the stop Stop and get its report is ([`Way::Report`]). A task
+/// that is not open, not a task, or already being stopped is left as it is: a stop already
+/// under way has its one short turn, and this begins no second one. Answers how many it stops.
+///
+/// `session` is the session whose token limit was reached, where it was: it is then typed one
+/// line once the last of its tasks has ended, as Stop all tasks types it
+/// ([`Stopping::holds_word_for`]). For a task past its time it is `None`, and the chat that
+/// asked is woken by its word as by any report.
+///
+/// **Only the app's own clock calls it** ([`crate::overlimit`]), from the limits the person
+/// wrote: no line a chat sends reads as one.
+pub(crate) fn stop_at_a_limit(
+    held: &Arc<Held>,
+    tasks: &[u32],
+    reached: purlis_core::dispatchlimits::Reached,
+    session: Option<u32>,
+) -> u32 {
+    let (acts, count) = {
+        let _deciding = held.chats().deciding();
+        let lineage = lineage_of(held);
+        let mut order: Vec<u32> = Vec::new();
+        for task in tasks {
+            let is_a_task = held.chats().handed_from(*task).is_some_and(|from| {
+                from.mode == purlis_core::dispatchdecision::Mode::Task && from.chat != *task
+            });
+            if !is_a_task || held.stopping().is_stopping(*task) {
+                continue;
+            }
+            for chat in subtree(&lineage, *task, true) {
+                if !order.contains(&chat) && !held.stopping().is_stopping(chat) {
+                    order.push(chat);
+                }
+            }
+        }
+        if order.is_empty() {
+            return 0;
+        }
+        // Deepest first, as one press orders a subtree: each chat's own stop begins only once
+        // every chat below it has ended.
+        let depth = |chat: u32| {
+            let mut depth = 0_u32;
+            let mut at = started_in(&lineage, chat);
+            while let Some(up) = at {
+                depth += 1;
+                if depth > 64 {
+                    break;
+                }
+                at = started_in(&lineage, up);
+            }
+            depth
+        };
+        order.sort_by_key(|chat| std::cmp::Reverse(depth(*chat)));
+        {
+            let mut named = held.stopping().named();
+            for task in &order {
+                let below: Vec<String> = subtree(&lineage, *task, true)
+                    .into_iter()
+                    .filter(|chat| chat != task && order.contains(chat))
+                    .filter(|chat| held.chats().owed_task_report(*chat).is_some())
+                    .filter_map(|chat| held.chats().shown_name(chat))
+                    .map(|name| purlis_core::handback::in_purlis_s_line(&name))
+                    .take(purlis_core::handback::MOST_NAMED_BELOW)
+                    .collect();
+                if !below.is_empty() {
+                    named.entry(*task).or_default().extend(below);
+                }
+            }
+        }
+        {
+            let mut limited = held.stopping().limited();
+            for chat in &order {
+                limited.insert(*chat, reached);
+            }
+        }
+        let started = started_of(held);
+        let acts = held.stopping().stops().press(
+            &order,
+            Way::Report,
+            |chat| started_in(&started, chat),
+            |chat| facts_of(held, chat),
+        );
+        cancels_stand_down(held, &order);
+        if let Some(session) = session {
+            held.stopping()
+                .all
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(session)
+                .or_default()
+                .extend(order.iter().copied());
+        }
+        (acts, u32::try_from(order.len()).unwrap_or(u32::MAX))
+    };
+    carry_out(held, acts);
+    if let Some(session) = session {
+        crate::dispatched::told_or_settled(held, session);
+    }
+    count
 }
 
 /// What ending a task would do, as the window asks before it does it (#1488, V100-18): what
@@ -1836,7 +1978,7 @@ mod tests {
     fn the_refusals_are_fixed_words_that_name_no_chat() {
         assert_eq!(
             STARTS_NOTHING,
-            "this chat is being stopped by the person; it cannot start a chat"
+            "this chat is being stopped; it cannot start a chat"
         );
         assert_eq!(
             NOT_STARTED_AGAIN,

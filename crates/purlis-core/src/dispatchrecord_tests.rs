@@ -1517,6 +1517,25 @@ fn a_task_the_person_ended_says_which_way_in_words_of_its_own_and_never_folds() 
     );
     assert!(!closed.folds());
 
+    // purlis stopped it at a limit the person set (#1512): its own row, never the person's.
+    let (limited, record) = ended_as(
+        Outcome::Done,
+        "Half of it.",
+        Some(EndedBy::Limit),
+        Some(EndedWay::Stopped),
+    );
+    assert_eq!(limited, Finished::StoppedAtALimit);
+    assert_eq!(record.ended_way, Some(EndedWay::Stopped));
+    assert_eq!(
+        (limited.word(), limited.said_to_a_chat(), limited.key()),
+        (
+            "stopped at a limit",
+            "stopped at a limit",
+            "stopped_at_limit"
+        )
+    );
+    assert!(!limited.folds());
+
     // A cancel its asking chat asked for stays a cancel, and folds.
     let (cancelled, _) = ended_as(Outcome::Cancelled, "Stopped half way.", None, None);
     assert_eq!((cancelled.word(), cancelled.folds()), ("cancelled", true));

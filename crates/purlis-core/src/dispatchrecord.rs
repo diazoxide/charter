@@ -36,7 +36,8 @@
 //! report's text are its words, stored as written and held to a cap ([`cut`]). And what its
 //! harness reported of tokens and cost ([`crate::usage::spent`]) is relayed by the chat's
 //! status line through a file a chat can write: **a chat can alter that figure**, so it is
-//! shown as reported and decides nothing. It is absent where the harness reports none, and
+//! shown as reported, and the one thing it decides is the person's optional token limit
+//! (#1512), a brake and not a boundary. It is absent where the harness reports none, and
 //! never a zero.
 //!
 //! A record is one JSON object, written whole and private ([`crate::rewrite::replace`]) under
@@ -331,6 +332,10 @@ pub enum EndedBy {
     /// The person stopped or closed it. Whatever it reported in its last turn, it did not
     /// end by itself.
     Person,
+    /// purlis stopped it at a limit the person set (#1512): the time one task may work, or
+    /// the tokens its session may use. Whatever it reported in its last turn, it did not end
+    /// by itself, and nor did the person end it there and then.
+    Limit,
 }
 
 /// Which of the two ways the person ended a task (#1488, V100-5).
@@ -522,7 +527,7 @@ pub fn close_as(
             return false;
         }
         record.ended_by = by;
-        record.ended_way = way.filter(|_| by == Some(EndedBy::Person));
+        record.ended_way = way.filter(|_| matches!(by, Some(EndedBy::Person | EndedBy::Limit)));
         record.ended = Some(crate::dispatch::stamp(now));
         record.report = ending.report.as_ref().map(capped_report);
         record.usage = ending.usage.filter(|usage| !usage.is_empty());
@@ -589,6 +594,9 @@ pub enum Finished {
     StoppedByThePerson,
     /// The person closed it: its program was ended with no report from it.
     ClosedByThePerson,
+    /// purlis stopped it at a limit the person set (#1512), with or without the one short
+    /// report it was given a turn for.
+    StoppedAtALimit,
 }
 
 impl Finished {
@@ -610,6 +618,7 @@ impl Finished {
                 });
             }
             Some(EndedBy::Unreported) => return Some(Self::EndedWithoutAReport),
+            Some(EndedBy::Limit) => return Some(Self::StoppedAtALimit),
             None => {}
         }
         Some(match report.outcome {
@@ -642,6 +651,7 @@ impl Finished {
             Self::EndedWithoutAReport => ENDED_WITHOUT_A_REPORT,
             Self::StoppedByThePerson => "stopped by the person",
             Self::ClosedByThePerson => "closed by the person",
+            Self::StoppedAtALimit => "stopped at a limit",
         }
     }
 
@@ -656,6 +666,7 @@ impl Finished {
             Self::EndedWithoutAReport => "unreported",
             Self::StoppedByThePerson => "stopped_by_person",
             Self::ClosedByThePerson => "closed_by_person",
+            Self::StoppedAtALimit => "stopped_at_limit",
         }
     }
 

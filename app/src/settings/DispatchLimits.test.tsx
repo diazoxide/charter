@@ -169,6 +169,18 @@ describe("Settings › Project › Dispatch", () => {
     expect(screen.queryByLabelText("May dispatch for the project")).not.toBeInTheDocument();
   });
 
+  it("says where the token and time limits are set that a harness reporting no tokens is not counted", async () => {
+    // #1512: never a guess, said where the limit is set.
+    core(page({ rows: [row("project", "", [null, null, null, null, null, null])] }));
+    render(<Page />);
+
+    const note = await screen.findByTestId("dispatch-tokens-time-note");
+    expect(note.textContent).toContain("off until set");
+    expect(note.textContent).toContain(
+      "a harness that reports no tokens is not counted, so the token limit cannot stop its chats",
+    );
+  });
+
   it("draws a row per workspace and persona override, a persona's with its two own limits", async () => {
     core(
       page({
