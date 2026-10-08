@@ -52,6 +52,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::dispatchunattended::{AsksNobody, Inherited};
+
 /// The table the lists are kept in: `[dispatch]`.
 pub const TABLE: &str = crate::dispatchlimits::TABLE;
 
@@ -186,21 +188,21 @@ pub fn listed_at(root: &Path, persona: &str) -> Option<Vec<String>> {
 /// **Why a chat a dispatch started may not start on `profile` now**, or `None` where it may:
 /// the two rules a dispatch is held to when it chooses a profile, asked again of a profile
 /// already chosen. `listed` is what the project holds the chat's persona to ([`listed_at`]),
-/// and `command` the profile's own, as this machine declares it now.
+/// and `on` the profile as this machine declares it now.
 ///
 /// - Where the project lists profiles for the persona, `profile` is one of them.
-/// - `command` does not switch the harness's permission prompts off
-///   ([`crate::dispatchunattended::bypass_in`]).
+/// - `on` asks a person before its harness acts
+///   ([`crate::dispatchunattended::Inherited::asks_nobody`]).
 ///
 /// The sentence is for the person, who is the one starting it again: what stands in the way,
 /// and what they can do.
 pub fn started_again_refusal(
     persona: Option<&str>,
     profile: &str,
-    command: Option<&[String]>,
+    on: Option<Inherited<'_>>,
     listed: Option<&[String]>,
 ) -> Option<String> {
-    refusal_on(Again::Started, persona, profile, command, listed)
+    refusal_on(Again::Started, persona, profile, on, listed)
 }
 
 /// [`started_again_refusal`], for a persona chat the person started with Ask from a tab: the
@@ -208,10 +210,10 @@ pub fn started_again_refusal(
 pub fn asked_again_refusal(
     persona: Option<&str>,
     profile: &str,
-    command: Option<&[String]>,
+    on: Option<Inherited<'_>>,
     listed: Option<&[String]>,
 ) -> Option<String> {
-    refusal_on(Again::Asked, persona, profile, command, listed)
+    refusal_on(Again::Asked, persona, profile, on, listed)
 }
 
 /// Which way a chat a dispatch started is being started once more: what its refusal calls it
@@ -234,7 +236,7 @@ fn refusal_on(
     how: Again,
     persona: Option<&str>,
     profile: &str,
-    command: Option<&[String]>,
+    on: Option<Inherited<'_>>,
     listed: Option<&[String]>,
 ) -> Option<String> {
     let shown = crate::shown::short(profile);
@@ -278,7 +280,30 @@ fn refusal_on(
             ),
         });
     }
-    let flag = crate::dispatchunattended::bypass_in(command?)?;
+    let AsksNobody::Flag(flag) = on?.asks_nobody()? else {
+        let mark = crate::dispatchunattended::how_to_mark(&shown);
+        return Some(match how {
+            Again::Started => format!(
+                "This chat was dispatched by another chat, and its profile '{shown}' is not \
+                 marked as asking a person before its harness acts, which a dispatched chat \
+                 never runs without, so it was not started again. {mark} Then start it again, \
+                 or close it and dispatch the work again on a profile that asks."
+            ),
+            Again::Reopened => format!(
+                "This task was dispatched by another chat, and its profile '{shown}' is not \
+                 marked as asking a person before its harness acts, which a dispatched chat \
+                 never runs without, so it was not reopened. {mark} Then reopen it, or \
+                 dispatch the work again on a profile that asks. Its report is still here to \
+                 read."
+            ),
+            Again::Asked => format!(
+                "You started this chat with Ask, and its profile '{shown}' is not marked as \
+                 asking a person before its harness acts, which a persona chat started that way \
+                 never runs without, so it was not started again. {mark} Then start it again, \
+                 or close it and ask again on a profile that asks."
+            ),
+        });
+    };
     let flag = crate::shown::short(&flag);
     Some(match how {
         Again::Started => format!(
@@ -357,7 +382,7 @@ fn task_refusal_on(
         how,
         persona,
         profile,
-        set.get(profile).map(|profile| profile.command.as_slice()),
+        set.get(profile).map(Inherited::of),
         listed.as_deref(),
     )
 }
@@ -550,12 +575,21 @@ mod tests {
         command.iter().map(|word| (*word).to_owned()).collect()
     }
 
+    /// A profile marked as asking, running `command`.
+    fn on(command: &[String]) -> Option<Inherited<'_>> {
+        Some(Inherited {
+            profile: "work",
+            command,
+            asks: true,
+        })
+    }
+
     #[test]
     fn a_dispatched_chat_is_not_started_again_on_a_profile_the_project_stopped_listing() {
         let asks = words(&["claude"]);
         let listed = names(&["work"]).unwrap();
         assert_eq!(
-            started_again_refusal(Some("devops"), "codex", Some(&asks), Some(&listed)).as_deref(),
+            started_again_refusal(Some("devops"), "codex", on(&asks), Some(&listed)).as_deref(),
             Some(
                 "This chat was dispatched as persona 'devops' on profile 'codex', and the \
                  project now lists only 'work' for that persona, so it was not started again. \
@@ -565,16 +599,16 @@ mod tests {
         );
         // Still listed, or no list at all: it starts.
         assert_eq!(
-            started_again_refusal(Some("devops"), "work", Some(&asks), Some(&listed)),
+            started_again_refusal(Some("devops"), "work", on(&asks), Some(&listed)),
             None
         );
         assert_eq!(
-            started_again_refusal(Some("devops"), "codex", Some(&asks), None),
+            started_again_refusal(Some("devops"), "codex", on(&asks), None),
             None
         );
         // A list that holds nothing, or could not be read, starts none.
         let said =
-            started_again_refusal(Some("devops"), "work", Some(&asks), Some(&[])).expect("refused");
+            started_again_refusal(Some("devops"), "work", on(&asks), Some(&[])).expect("refused");
         assert!(
             said.contains("the project now lists no profile for that persona"),
             "{said}"
@@ -585,7 +619,7 @@ mod tests {
     fn a_dispatched_chat_is_not_started_again_on_a_profile_that_now_asks_nobody() {
         let yolo = words(&["claude", "--dangerously-skip-permissions"]);
         assert_eq!(
-            started_again_refusal(Some("devops"), "work", Some(&yolo), None).as_deref(),
+            started_again_refusal(Some("devops"), "work", on(&yolo), None).as_deref(),
             Some(
                 "This chat was dispatched by another chat, and its profile 'work' now starts \
                  its harness with the permission prompts off \
@@ -597,16 +631,41 @@ mod tests {
         );
         // Listed and asking nobody is refused too: a list adds nothing.
         let listed = names(&["work"]).unwrap();
-        assert!(
-            started_again_refusal(Some("devops"), "work", Some(&yolo), Some(&listed)).is_some()
-        );
+        assert!(started_again_refusal(Some("devops"), "work", on(&yolo), Some(&listed)).is_some());
         // A chat on no persona has no list, and is still held to the second rule.
-        assert!(started_again_refusal(None, "work", Some(&yolo), None).is_some());
+        assert!(started_again_refusal(None, "work", on(&yolo), None).is_some());
         // A profile this machine no longer declares is the start's to refuse by name.
         assert_eq!(
             started_again_refusal(Some("devops"), "work", None, None),
             None
         );
+    }
+
+    #[test]
+    fn a_dispatched_chat_is_not_started_again_on_a_profile_nobody_marked_as_asking() {
+        let plain = words(&["claude"]);
+        let unmarked = Some(Inherited {
+            asks: false,
+            ..on(&plain).expect("a profile")
+        });
+        assert_eq!(
+            started_again_refusal(Some("devops"), "work", unmarked, None).as_deref(),
+            Some(
+                "This chat was dispatched by another chat, and its profile 'work' is not \
+                 marked as asking a person before its harness acts, which a dispatched chat \
+                 never runs without, so it was not started again. A person marks a profile \
+                 whose harness asks before it acts with asks = true in its [harness.work] \
+                 table in charter.local.toml. Then start it again, or close it and dispatch the \
+                 work again on a profile that asks."
+            )
+        );
+        // Marked, it starts; a list that names it does not lift the mark's rule.
+        assert_eq!(
+            started_again_refusal(Some("devops"), "work", on(&plain), None),
+            None
+        );
+        let listed = names(&["work"]).unwrap();
+        assert!(started_again_refusal(Some("devops"), "work", unmarked, Some(&listed)).is_some());
     }
 
     #[test]
@@ -625,7 +684,7 @@ mod tests {
         );
         let yolo = words(&["claude", "--dangerously-skip-permissions"]);
         assert_eq!(
-            refusal_on(Again::Reopened, Some("devops"), "work", Some(&yolo), None).as_deref(),
+            refusal_on(Again::Reopened, Some("devops"), "work", on(&yolo), None).as_deref(),
             Some(
                 "This task was dispatched by another chat, and its profile 'work' now starts \
                  its harness with the permission prompts off \
@@ -636,13 +695,20 @@ mod tests {
             )
         );
         // Refused exactly where a start again is, and nowhere else.
+        let plain = words(&["claude"]);
+        let unmarked = Some(Inherited {
+            asks: false,
+            ..on(&plain).expect("a profile")
+        });
         for (command, listed) in [
             (None, Some(&other)),
-            (Some(&yolo), None),
+            (on(&yolo), None),
             (None, None),
-            (Some(&yolo), Some(&other)),
+            (on(&yolo), Some(&other)),
+            (unmarked, None),
+            (on(&plain), None),
         ] {
-            let (command, listed) = (command.map(Vec::as_slice), listed.map(Vec::as_slice));
+            let listed = listed.map(Vec::as_slice);
             assert_eq!(
                 refusal_on(Again::Reopened, Some("devops"), "work", command, listed).is_some(),
                 started_again_refusal(Some("devops"), "work", command, listed).is_some()
@@ -682,8 +748,13 @@ mod tests {
     fn a_chat_the_person_asked_for_is_never_told_another_chat_dispatched_it() {
         let other = names(&["other"]).unwrap();
         let yolo = words(&["claude", "--dangerously-skip-permissions"]);
-        for (command, listed) in [(None, Some(&other)), (Some(&yolo), None)] {
-            let (command, listed) = (command.map(Vec::as_slice), listed.map(Vec::as_slice));
+        let plain = words(&["claude"]);
+        let unmarked = Some(Inherited {
+            asks: false,
+            ..on(&plain).expect("a profile")
+        });
+        for (command, listed) in [(None, Some(&other)), (on(&yolo), None), (unmarked, None)] {
+            let listed = listed.map(Vec::as_slice);
             let said = asked_again_refusal(Some("devops"), "work", command, listed)
                 .expect("refused as a dispatched chat is");
             assert!(said.starts_with("You started this chat with Ask"), "{said}");

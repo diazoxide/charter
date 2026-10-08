@@ -132,12 +132,12 @@ fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored(
     assert_eq!(
         why(&set, "typo-env"),
         "profile 'typo-env' has enviroment, which purlis does not read — a profile is \
-         kind, command and env. Remove it."
+         kind, command, env and asks. Remove it."
     );
     assert_eq!(
         why(&set, "typo-env.enviroment"),
         "[harness.typo-env] holds a table enviroment, which purlis reads neither way — \
-         enviroment is not a key a profile has (kind, command and env), and if a profile \
+         enviroment is not a key a profile has (kind, command, env and asks), and if a profile \
          named 'typo-env.enviroment' was meant, a profile's name is letters, digits, '_' \
          and '-', with no dot — the plane format fixes that alphabet. Rename the key, or \
          give that profile a name of its own."
@@ -640,6 +640,7 @@ fn an_empty_command_list_has_no_usable_command() {
             command: Vec::new(),
             env: vec![("A".into(), "b".into())],
             source: profiles::Source::Local,
+            asks: false,
         }),
         "A=b"
     );
@@ -828,7 +829,7 @@ fn a_bare_value_under_harness_is_refused_as_not_a_table_and_never_becomes_the_de
     assert_eq!(
         why(&set, "work"),
         "[harness] work in charter.local.toml is not a table — a profile is [harness.work] \
-         with kind, command and optionally env."
+         with kind and command, and optionally env and asks."
     );
     assert_eq!(set.default, None);
     assert_eq!(set.default_from, None);
@@ -945,6 +946,7 @@ fn a_long_profile() -> profiles::Profile {
         ],
         env: vec![("A".into(), format!("{filler}-env-tail"))],
         source: Source::Local,
+        asks: false,
     }
 }
 
@@ -1017,6 +1019,7 @@ fn local(env: &[(&str, &str)], command: &[&str]) -> profiles::Profile {
             .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
             .collect(),
         source: Source::Local,
+        asks: false,
     }
 }
 
@@ -1176,5 +1179,38 @@ fn two_profiles_that_differ_only_in_kind_never_share_an_approval_line() {
     assert_eq!(
         purlis_core::profiletrust::approval_needed(dir.path(), &codex),
         None
+    );
+}
+
+#[test]
+fn a_profile_asks_only_where_the_person_marked_it_so_and_a_built_in_by_its_harness() {
+    purlis_core::unsteered!();
+    // #1522: a chat one chat starts for another starts only on a profile known to ask. A
+    // profile of the local file is known to only where it says `asks = true`; a built-in is,
+    // where its harness asks by its own default.
+    let dir = plane(
+        "",
+        "[harness.marked]\nkind = \"claude\"\ncommand = [\"claude\"]\nasks = true\n\
+         [harness.unmarked]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         [harness.says-no]\nkind = \"codex\"\ncommand = [\"codex\"]\nasks = false\n\
+         [harness.opencode]\nkind = \"opencode\"\ncommand = [\"opencode\"]\nasks = true\n\
+         [harness.worded]\nkind = \"claude\"\ncommand = [\"claude\"]\nasks = \"yes\"\n",
+    );
+
+    let set = profiles::derive(dir.path());
+    let asks = |name: &str| set.get(name).map(|p| p.asks);
+
+    assert_eq!(asks("marked"), Some(true));
+    assert_eq!(asks("unmarked"), Some(false));
+    assert_eq!(asks("says-no"), Some(false));
+    // A built-in's place, taken by the person's own table that says its harness asks.
+    assert_eq!(asks("opencode"), Some(true));
+    assert_eq!(asks("claude"), Some(true));
+    assert_eq!(asks("codex"), Some(true));
+    assert_eq!(asks("worded"), None);
+    assert_eq!(
+        why(&set, "worded"),
+        "profile 'worded' has an asks that is not true or false — write asks = true where its \
+         harness asks a person before it acts, or leave it out."
     );
 }

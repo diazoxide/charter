@@ -440,6 +440,7 @@ fn a_declared_word_holding_a_space_never_reads_as_two_words() {
         command: vec!["true".into()],
         env: Vec::new(),
         source: Source::Declared,
+        asks: false,
     };
     let shown = |new: &[&str]| {
         let mut declared = declared.clone();
@@ -475,6 +476,7 @@ fn a_declared_template_of_the_word_nothing_never_reads_as_an_empty_one() {
         command: vec!["true".into()],
         env: Vec::new(),
         source: Source::Declared,
+        asks: false,
     };
     let shown = |new: &[&str], resume: Option<&[&str]>| {
         let mut declared = declared.clone();

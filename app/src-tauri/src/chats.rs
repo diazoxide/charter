@@ -5501,8 +5501,8 @@ pub(crate) mod tests {
     }
 
     /// A plane at `dir/plane` declaring the profile `work` (kind `claude`) in its local file,
-    /// running a stand-in that waits, with `extra` after its program in its command. Nothing is
-    /// approved. Answers the plane's root.
+    /// running a stand-in that waits, with `extra` after its program in its command, and marked
+    /// as asking (#1522). Nothing is approved. Answers the plane's root.
     fn a_plane_with_work(dir: &std::path::Path, extra: &str) -> std::path::PathBuf {
         let root = dir.join("plane");
         std::fs::create_dir_all(&root).expect("the plane");
@@ -5510,7 +5510,9 @@ pub(crate) mod tests {
         let program = a_claude(&root);
         std::fs::write(
             root.join(purlis_core::profiles::LOCAL_FILE),
-            format!("[harness.work]\nkind = \"claude\"\ncommand = [{program:?}{extra}]\n"),
+            format!(
+                "[harness.work]\nkind = \"claude\"\ncommand = [{program:?}{extra}]\nasks = true\n"
+            ),
         )
         .expect("the profile");
         root
@@ -5686,6 +5688,46 @@ pub(crate) mod tests {
 
         // The person's own chat on that profile is not held to this: it waits on the
         // approval any new command does, and nothing else.
+        let (own, _) = recorded();
+        let own = own.in_project(&root);
+        own.put_back(&one_on_work(&root), SIZE);
+        let waiting = own.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert!(!waiting[0].why.contains("dispatched"), "{}", waiting[0].why);
+        assert!(waiting[0].approval.is_some());
+    }
+
+    #[test]
+    fn a_dispatched_chat_is_not_put_back_on_a_profile_nobody_marked_as_asking() {
+        // #1522: what is not marked as asking is taken not to ask. A chat dispatched before the
+        // mark was a rule, or on a profile whose mark was taken out since, does not come back
+        // on it; the person's own chat on it does.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        let local = root.join(purlis_core::profiles::LOCAL_FILE);
+        let text = std::fs::read_to_string(&local).expect("the local file");
+        std::fs::write(&local, text.replace("asks = true\n", "")).expect("unmarked");
+        let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
+
+        let open = chats.put_back(&one_dispatched_on_work(&root), SIZE);
+
+        assert!(
+            open.is_empty(),
+            "a dispatched chat started on an unmarked profile"
+        );
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert!(
+            waiting[0].why.starts_with(
+                "This chat was dispatched by another chat, and its profile 'work' is not \
+                 marked as asking a person before its harness acts"
+            ),
+            "{}",
+            waiting[0].why
+        );
+        assert!(waiting[0].why.contains("asks = true"), "{}", waiting[0].why);
+
         let (own, _) = recorded();
         let own = own.in_project(&root);
         own.put_back(&one_on_work(&root), SIZE);

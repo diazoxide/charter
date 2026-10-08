@@ -302,8 +302,14 @@ BRIEF
   recognises the flags it knows in the command as this machine declares it
   (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`, Codex's
   `--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--full-auto` and `-a never` or
-  `--ask-for-approval never`); a wrapper script that adds one, or a harness setting kept in a
-  file, is not seen.
+  `--ask-for-approval never`, also as `-c approval_policy=never`).
+  **And it starts only on a profile known to ask** (#1522): a built-in whose harness asks by
+  its own default (`claude`, `codex`; not `opencode`, which allows every action unless its own
+  configuration says otherwise), or a profile of the project's local file the person marked
+  `asks = true`. What is not marked is taken not to ask, so a wrapper script that adds a flag,
+  a harness setting kept in a file or an environment variable, which purlis does not see, is
+  refused by the missing mark instead. There is no exception for a session the person started
+  that way: a profile that asks nobody never runs a task.
 - **It starts with its own persona's hosts and vault**, from its first command, with nothing
   to allow on its tab: the grant was your consent to the pair.
 - **Its sandbox is the project's, for its own persona.** What you allowed the asking chat
@@ -327,7 +333,8 @@ that says what to do:
 | with no profile to start it on: the chat is on none, the persona names none and `--profile` names none | there is no harness to start the new chat on |
 | on a profile the project does not offer on this machine, or one whose command has not been approved here | a profile is looked up, never run on a chat's word |
 | on a profile the project does not list for that persona, where it lists any (`[dispatch.profiles]` in the project's file, the persona's own list or the nearest one it `extends:`), whoever chose the profile: `--profile`, the persona's own definition, or the asking chat's own | the project said which profiles that persona's dispatched chats run on; the refusal names them and says what its reader can do |
-| on a profile whose own command carries one of the flags purlis knows for switching the harness's permission prompts off, whoever named it and whether or not anybody is at the asking chat | purlis starts no chat for another chat on such a profile; a setting kept in a file or a wrapper script is not seen |
+| on a profile whose own command carries one of the flags purlis knows for switching the harness's permission prompts off, whoever named it and whether or not anybody is at the asking chat | purlis starts no chat for another chat on such a profile |
+| on a profile not known to ask a person before its harness acts: one of the local file nobody marked `asks = true`, the built-in `opencode`, or a harness the project declares, whoever named it | what is not marked is taken not to ask, because a setting kept in a file, an environment variable or a wrapper script is not seen; the refusal says how a person marks a profile that asks |
 | across a pair, or at all, where an administrator's policy locks dispatch | no grant covers it; the refusal says who locked it |
 | where this machine's policy file is refused | dispatch is off until an administrator fixes the file |
 | from a chat that still holds another persona's grants | it has none of its own to dispatch with until you allow them on its tab |
@@ -1026,8 +1033,8 @@ dispatch from such a chat is never one that asks.
   permission mode. A persona chat is not started on the asking chat's profile where that
   profile's own command switches the prompts off (`--dangerously-skip-permissions`,
   `--permission-mode bypassPermissions`, `--dangerously-bypass-approvals-and-sandbox`,
-  `--yolo`): the dispatch is refused, and says to dispatch from a chat on a profile that asks.
-  A wrapper script that adds such a flag itself is not seen.
+  `--yolo`), or where nobody marked it as asking (`asks = true`): the dispatch is refused, and
+  says to dispatch from a chat on a profile that asks.
 - **When the persona chat needs you, it waits.** Every command of its that asks still asks, in
   its own tab, and the chat is shown as needing you, like any chat that asks. Nothing in a
   brief answers for you.

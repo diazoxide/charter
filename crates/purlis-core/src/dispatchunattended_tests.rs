@@ -357,6 +357,7 @@ fn the_persona_chat_starts_with_no_held_grants_no_opt_out_and_no_bypass() {
         Some(Inherited {
             profile: "work",
             command: &work,
+            asks: true,
         }),
     );
 
@@ -406,6 +407,8 @@ fn a_profile_that_switches_the_prompts_off_is_not_passed_on_to_the_persona_chat(
                 Some(Inherited {
                     profile: "night",
                     command: &command,
+                    // A mark its own command contradicts: the flag still refuses it.
+                    asks: true,
                 }),
             ),
             Err(format!(
@@ -494,14 +497,14 @@ fn no_chat_is_started_for_another_on_a_profile_that_asks_nobody_whoever_named_it
         NamedBy::ThePersona("devops"),
         NamedBy::TheAskingChat,
     ] {
-        assert_eq!(bypass_refusal("work", &asks, by), None, "{by:?}");
-        let said = bypass_refusal("yolo", &yolo, by).expect("refused");
+        assert_eq!(bypass_refusal(marked("work", &asks), by), None, "{by:?}");
+        let said = bypass_refusal(marked("yolo", &yolo), by).expect("refused");
         assert!(said.contains("'yolo'"), "{said}");
         assert!(said.contains("(--dangerously-skip-permissions)"), "{said}");
         assert!(!said.contains('\n'), "{said}");
     }
     assert_eq!(
-        bypass_refusal("yolo", &yolo, NamedBy::TheDispatch).as_deref(),
+        bypass_refusal(marked("yolo", &yolo), NamedBy::TheDispatch).as_deref(),
         Some(
             "the dispatch names profile 'yolo', which starts its harness with the permission \
              prompts off (--dangerously-skip-permissions), and purlis starts no chat for \
@@ -509,7 +512,7 @@ fn no_chat_is_started_for_another_on_a_profile_that_asks_nobody_whoever_named_it
         )
     );
     assert_eq!(
-        bypass_refusal("yolo", &yolo, NamedBy::ThePersona("devops")).as_deref(),
+        bypass_refusal(marked("yolo", &yolo), NamedBy::ThePersona("devops")).as_deref(),
         Some(
             "persona 'devops' names profile 'yolo', which starts its harness with the \
              permission prompts off (--dangerously-skip-permissions), and purlis starts no \
@@ -517,4 +520,79 @@ fn no_chat_is_started_for_another_on_a_profile_that_asks_nobody_whoever_named_it
              from its view, or name one with --profile."
         )
     );
+}
+
+/// A profile marked as asking.
+fn marked<'a>(profile: &'a str, command: &'a [String]) -> Inherited<'a> {
+    Inherited {
+        profile,
+        command,
+        asks: true,
+    }
+}
+
+#[test]
+fn a_profile_nobody_marked_as_asking_starts_no_chat_for_another_whoever_named_it() {
+    // #1522: what is not marked is taken not to ask, whatever its command says, so a way of
+    // asking nobody purlis cannot read (a setting in a file, an environment variable, a
+    // wrapper script) is refused as a flag is.
+    let plain = words(&["ccs", "work"]);
+    let unmarked = Inherited {
+        asks: false,
+        ..marked("work", &plain)
+    };
+    assert_eq!(unmarked.asks_nobody(), Some(AsksNobody::Unmarked));
+    assert_eq!(marked("work", &plain).asks_nobody(), None);
+    let mark = "A person marks a profile whose harness asks before it acts with asks = true in \
+                its [harness.work] table in charter.local.toml.";
+    assert_eq!(
+        bypass_refusal(unmarked, NamedBy::TheDispatch),
+        Some(format!(
+            "the dispatch names profile 'work', which is not marked as asking a person before \
+             its harness acts, and purlis starts no chat for another chat on such a profile. \
+             Name a profile that asks, or none. {mark}"
+        ))
+    );
+    assert_eq!(
+        bypass_refusal(unmarked, NamedBy::ThePersona("devops")),
+        Some(format!(
+            "persona 'devops' names profile 'work', which is not marked as asking a person \
+             before its harness acts, and purlis starts no chat for another chat on such a \
+             profile. Give the persona a profile that asks, from its view, or name one with \
+             --profile. {mark}"
+        ))
+    );
+    assert_eq!(
+        start_of_a_persona_chat(the_asking_chats_own(), "devops", Some(unmarked)),
+        Err(format!(
+            "profile 'work' is not marked as asking a person before its harness acts, and a \
+             persona chat never takes such a profile from the chat that dispatched it. \
+             Dispatch from a chat on a profile that asks. {mark}"
+        ))
+    );
+    // A flag is said before the missing mark: it is the more exact sentence.
+    let yolo = words(&["claude", "--yolo"]);
+    let both = Inherited {
+        asks: false,
+        ..marked("yolo", &yolo)
+    };
+    assert_eq!(
+        both.asks_nobody(),
+        Some(AsksNobody::Flag("--yolo".to_owned()))
+    );
+}
+
+#[test]
+fn the_built_in_profiles_ask_where_their_harness_asks_by_default() {
+    // Claude Code's default permission mode and Codex's default approval policy ask; opencode
+    // allows every action unless its configuration says otherwise.
+    let set = crate::profiles::builtins();
+    let asks = |name: &str| {
+        set.iter()
+            .find(|profile| profile.name == name)
+            .map(|profile| Inherited::of(profile).asks_nobody())
+    };
+    assert_eq!(asks("claude"), Some(None));
+    assert_eq!(asks("codex"), Some(None));
+    assert_eq!(asks("opencode"), Some(Some(AsksNobody::Unmarked)));
 }

@@ -70,7 +70,15 @@ fn the_products_own(name: &str) -> bool {
 const DEFAULT: &str = "default";
 
 /// Everything a profile's table may hold.
-const PROFILE_KEYS: [&str; 3] = ["kind", "command", "env"];
+const PROFILE_KEYS: [&str; 4] = ["kind", "command", "env", ASKS];
+
+/// **The person's mark that a profile's harness asks before it acts** (#1522): `asks = true`.
+/// A chat one chat starts for another starts only on a profile that asks
+/// ([`crate::dispatchunattended::asks_nobody`]), and a profile declared in the local file asks
+/// only where it says so: purlis cannot read every way a harness is told to ask nobody (a
+/// setting in a file, an environment variable, a wrapper script), so what is not marked is
+/// taken not to ask.
+pub const ASKS: &str = "asks";
 
 /// A harness kind: the word typed after `charter`, the name the registry calls it, and the
 /// program a built-in profile of that kind runs.
@@ -90,6 +98,11 @@ pub struct Kind {
     pub binary: &'static str,
     /// Where an operator logs in, named by a refusal that will not hold their credential.
     login: &'static str,
+    /// Whether the harness, started as a built-in profile starts it, asks a person before it
+    /// acts by its own default: Claude Code's `default` permission mode and Codex's
+    /// `on-request` approval policy do; opencode allows every action unless its configuration
+    /// says otherwise, so it does not (#1522).
+    pub asks: bool,
 }
 
 /// Every kind, in REGISTRY order — which is the order the built-ins are listed in, and the
@@ -100,18 +113,21 @@ pub const KINDS: [Kind; 3] = [
         registry: "claude-code",
         binary: "claude",
         login: "set CLAUDE_CONFIG_DIR and run /login inside Claude Code",
+        asks: true,
     },
     Kind {
         word: "opencode",
         registry: "opencode",
         binary: "opencode",
         login: "set XDG_DATA_HOME and run opencode auth login",
+        asks: false,
     },
     Kind {
         word: "codex",
         registry: "codex",
         binary: "codex",
         login: "set CODEX_HOME and run codex login",
+        asks: true,
     },
 ];
 
@@ -230,6 +246,10 @@ pub struct Profile {
     /// The harness process's environment, as declared and sorted by name.
     pub env: Vec<(String, String)>,
     pub source: Source,
+    /// Whether it is known to ask a person before its harness acts ([`ASKS`]): a built-in by
+    /// its kind's own default ([`Kind::asks`]), a profile of the local file only where it is
+    /// marked `asks = true`, and a project's harness declaration never.
+    pub asks: bool,
 }
 
 /// A profile charter will not use, and the one sentence saying why.
@@ -317,6 +337,7 @@ pub fn builtins() -> Vec<Profile> {
             command: vec![k.binary.to_owned()],
             env: Vec::new(),
             source: Source::BuiltIn,
+            asks: k.asks,
         })
         .collect()
 }
@@ -385,6 +406,9 @@ pub fn derive_declared(
             command: vec![d.program.clone()],
             env: Vec::new(),
             source: Source::Declared,
+            // A declaration is the project's, committed: it cannot say for this machine that
+            // the harness asks. A profile of the local file of that kind can.
+            asks: false,
         });
     }
     for refused in &declared.refused {
@@ -571,8 +595,8 @@ pub fn derive_declared(
                 set.refused.push(Refused {
                     reason: format!(
                         "[harness.{parent}] holds a table {child}, which purlis reads \
-                         neither way — {child} is not a key a profile has (kind, command \
-                         and env), and if a profile named '{dotted}' was meant, a profile's \
+                         neither way — {child} is not a key a profile has (kind, command, \
+                         env and asks), and if a profile named '{dotted}' was meant, a profile's \
                          name is letters, digits, '_' and '-', with no dot — the plane \
                          format fixes that alphabet. Rename the key, or give that profile a \
                          name of its own."
@@ -630,6 +654,7 @@ pub fn derive_declared(
                         .collect(),
                     env,
                     source: Source::Local,
+                    asks: inner.get(ASKS).and_then(toml::Value::as_bool) == Some(true),
                 });
             }
         }
@@ -820,7 +845,7 @@ pub(crate) fn refusals_of(
             "",
             format!(
                 "[harness] {shown_name} in charter.local.toml is not a table — a profile is \
-                 [harness.{shown_name}] with kind, command and optionally env."
+                 [harness.{shown_name}] with kind and command, and optionally env and asks."
             ),
         ));
         return out;
@@ -932,6 +957,15 @@ pub(crate) fn refusals_of(
             ),
         ));
     }
+    if inner.get(ASKS).is_some_and(|asks| !asks.is_bool()) {
+        out.push((
+            ASKS,
+            format!(
+                "profile '{shown_name}' has an asks that is not true or false — write asks = \
+                 true where its harness asks a person before it acts, or leave it out."
+            ),
+        ));
+    }
     if let Some(key) = inner
         .keys()
         .find(|key| !PROFILE_KEYS.contains(&key.as_str()))
@@ -940,7 +974,7 @@ pub(crate) fn refusals_of(
             "",
             format!(
                 "profile '{shown_name}' has {}, which purlis does not read — a profile is \
-                 kind, command and env. Remove it.",
+                 kind, command, env and asks. Remove it.",
                 shown::short(key)
             ),
         ));

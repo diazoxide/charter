@@ -43,10 +43,23 @@
 //! profile as the project and this machine declare it. Nothing of how the asking chat runs
 //! goes with it: not a grant it holds, not its opt-out, not its conversation, and not its
 //! permission mode. A [`crate::start::Start`] has no field for a mode, so the one way a bypass
-//! could travel is the asking chat's profile, where that profile's own command is what
-//! switches the prompts off ([`bypass_in`]); a persona chat is not started on such a profile
-//! taken from the asking chat. The persona chat asks what it asks in its own tab, and waits
-//! there, shown as needing the person, like any chat that asks.
+//! could travel is the asking chat's profile; a persona chat is not started on a profile that
+//! asks nobody, taken from the asking chat or named by anyone ([`Inherited::asks_nobody`]). The
+//! persona chat asks what it asks in its own tab, and waits there, shown as needing the person,
+//! like any chat that asks.
+//!
+//! # A profile that asks (#1522)
+//!
+//! **A chat one chat starts for another starts only on a profile known to ask a person before
+//! its harness acts** ([`crate::profiles::ASKS`]): a built-in whose harness asks by its own
+//! default (Claude Code, Codex; not opencode, which allows every action unless configured
+//! otherwise), or a profile of the local file the person marked `asks = true`. Anything
+//! unmarked is taken not to ask, so the rule does not depend on knowing every way each harness
+//! is told to ask nobody: a flag, a configuration override, an environment variable, a settings
+//! file, a wrapper script. The flags purlis does know ([`bypass_in`]) still refuse a profile
+//! marked as asking, whose mark its own command contradicts. There is no exception for a
+//! session the person started that way: the standing rule is that such a profile never runs
+//! a task.
 
 use crate::dispatchgrant::{self, Covers, InForce};
 use crate::sandbox::policy::Locks;
@@ -331,15 +344,38 @@ pub enum NamedBy<'a> {
     TheAskingChat,
 }
 
-/// **Why no chat is started for another chat on `profile`**, where its own `command` switches
-/// the harness's permission prompts off, and `None` where it does not.
+/// **Why no chat is started for another chat on `on`**, where it asks nobody
+/// ([`Inherited::asks_nobody`]), and `None` where it asks.
 ///
 /// **Whoever named it.** A chat one chat starts for another never runs asking nobody: not on
 /// the asking chat's own profile, not on one its dispatch names, and not on one the persona's
 /// definition names, which a chat can write. A handoff is held to it as a task is.
-pub fn bypass_refusal(profile: &str, command: &[String], by: NamedBy<'_>) -> Option<String> {
-    let flag = crate::shown::short(&bypass_in(command)?);
-    let profile = crate::shown::short(profile);
+pub fn bypass_refusal(on: Inherited<'_>, by: NamedBy<'_>) -> Option<String> {
+    let why = on.asks_nobody()?;
+    let profile = crate::shown::short(on.profile);
+    let AsksNobody::Flag(flag) = why else {
+        let mark = how_to_mark(&profile);
+        return Some(match by {
+            NamedBy::TheAskingChat => format!(
+                "profile '{profile}' is not marked as asking a person before its harness acts, \
+                 and a persona chat never takes such a profile from the chat that dispatched \
+                 it. Dispatch from a chat on a profile that asks. {mark}"
+            ),
+            NamedBy::TheDispatch => format!(
+                "the dispatch names profile '{profile}', which is not marked as asking a person \
+                 before its harness acts, and purlis starts no chat for another chat on such a \
+                 profile. Name a profile that asks, or none. {mark}"
+            ),
+            NamedBy::ThePersona(persona) => format!(
+                "persona '{}' names profile '{profile}', which is not marked as asking a person \
+                 before its harness acts, and purlis starts no chat for another chat on such a \
+                 profile. Give the persona a profile that asks, from its view, or name one with \
+                 --profile. {mark}",
+                crate::shown::short(persona)
+            ),
+        });
+    };
+    let flag = crate::shown::short(&flag);
     Some(match by {
         NamedBy::TheAskingChat => format!(
             "profile '{profile}' starts its harness with the permission prompts off ({flag}), \
@@ -361,14 +397,56 @@ pub fn bypass_refusal(profile: &str, command: &[String], by: NamedBy<'_>) -> Opt
     })
 }
 
-/// The profile a persona chat starts on, by its name and its command as this machine declares
-/// it.
+/// The profile a persona chat starts on, by its name, its command as this machine declares it,
+/// and whether it is marked as asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Inherited<'a> {
     /// The profile's name.
     pub profile: &'a str,
     /// Its command, as this machine declares it.
     pub command: &'a [String],
+    /// Whether it is known to ask a person before its harness acts
+    /// ([`crate::profiles::Profile::asks`]).
+    pub asks: bool,
+}
+
+impl<'a> Inherited<'a> {
+    /// A profile as this machine declares it.
+    pub fn of(profile: &'a crate::profiles::Profile) -> Self {
+        Self {
+            profile: &profile.name,
+            command: &profile.command,
+            asks: profile.asks,
+        }
+    }
+
+    /// **Why no chat is started for another chat on this profile**, or `None` where one may
+    /// be: its command carries a flag that switches the prompts off, or nobody marked it as
+    /// asking (the module's "A profile that asks").
+    pub fn asks_nobody(&self) -> Option<AsksNobody> {
+        if let Some(flag) = bypass_in(self.command) {
+            return Some(AsksNobody::Flag(flag));
+        }
+        (!self.asks).then_some(AsksNobody::Unmarked)
+    }
+}
+
+/// What keeps a chat started for another chat off a profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AsksNobody {
+    /// Its command carries this flag, which switches the harness's permission prompts off.
+    Flag(String),
+    /// It is not marked as asking a person before its harness acts.
+    Unmarked,
+}
+
+/// How a person marks a profile `profile` as asking, for the end of a refusal.
+pub fn how_to_mark(profile: &str) -> String {
+    format!(
+        "A person marks a profile whose harness asks before it acts with asks = true in its \
+         [harness.{profile}] table in {}.",
+        crate::profiles::LOCAL_FILE
+    )
 }
 
 /// **The start of the persona chat a dispatch to `target` opens**, from `start`, the one built
@@ -378,7 +456,7 @@ pub struct Inherited<'a> {
 /// chat runs as `target`, holds `target`'s own grants
 /// ([`crate::dispatchgrant::grants_for_a_dispatched_chat`]), and has no grant of one chat, no
 /// opt-out and no conversation or session record to resume. `on` is the profile it starts on:
-/// where that profile's own command switches the prompts off, the chat is not started on it
+/// where that profile asks nobody, the chat is not started on it
 /// ([`bypass_refusal`], in the words for a profile taken from the asking chat; a caller that
 /// knows who named it asks [`bypass_refusal`] first and says so in those words).
 pub fn start_of_a_persona_chat(
@@ -386,8 +464,8 @@ pub fn start_of_a_persona_chat(
     target: &str,
     on: Option<Inherited<'_>>,
 ) -> Result<Start, String> {
-    if let Some(Inherited { profile, command }) = on
-        && let Some(refused) = bypass_refusal(profile, command, NamedBy::TheAskingChat)
+    if let Some(on) = on
+        && let Some(refused) = bypass_refusal(on, NamedBy::TheAskingChat)
     {
         return Err(refused);
     }

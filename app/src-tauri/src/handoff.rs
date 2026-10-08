@@ -1917,10 +1917,7 @@ fn dispatch_it(
                 Some(target) => dispatchunattended::start_of_a_persona_chat(
                     start,
                     target,
-                    its_profile.as_ref().map(|profile| Inherited {
-                        profile: &profile.name,
-                        command: &profile.command,
-                    }),
+                    its_profile.as_ref().map(Inherited::of),
                 ),
                 // A chat on no persona dispatching to none: nothing of a persona to hold.
                 None => Ok(start),
@@ -2188,16 +2185,16 @@ fn tell_the_asker(
     }
 }
 
-/// **Why no chat is started on the profile `chosen`**, where its own command switches the
-/// harness's permission prompts off (`purlis_core::dispatchunattended::bypass_refusal`), in
-/// the words for whoever named it. `persona` is the persona the new chat runs as. A handoff
+/// **Why no chat is started on the profile `chosen`**, where it asks nobody: its own command
+/// switches the harness's permission prompts off, or nobody marked it as asking
+/// (`purlis_core::dispatchunattended::bypass_refusal`), in the words for whoever named it. `persona` is the persona the new chat runs as. A handoff
 /// and a task are held to it alike.
 fn asks_nobody(
     on: &On,
     chosen: &purlis_core::personaprofile::Chosen,
     persona: Option<&str>,
 ) -> Option<String> {
-    use purlis_core::dispatchunattended::{NamedBy, bypass_refusal};
+    use purlis_core::dispatchunattended::{Inherited, NamedBy, bypass_refusal};
     use purlis_core::personaprofile::Who;
     let profile = on.launch.0.get(&chosen.profile)?;
     let by = match chosen.by {
@@ -2205,7 +2202,7 @@ fn asks_nobody(
         Who::Persona | Who::PersonaModel => NamedBy::ThePersona(persona.unwrap_or_default()),
         Who::AskingChat => NamedBy::TheAskingChat,
     };
-    bypass_refusal(&profile.name, &profile.command, by)
+    bypass_refusal(Inherited::of(profile), by)
 }
 
 /// Whether chat `chat`'s program still runs, by the board: one that has ended, with or
@@ -2837,7 +2834,7 @@ mod tests {
             std::fs::write(
                 root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
-                    "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\n",
+                    "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\nasks = true\n",
                     program.display().to_string()
                 ),
             )
@@ -2887,7 +2884,7 @@ mod tests {
             let local = self.root.join(purlis_core::profiles::LOCAL_FILE);
             let mut text = std::fs::read_to_string(&local).expect("the local file");
             text.push_str(&format!(
-                "[harness.cx]\nkind = \"codex\"\ncommand = [{:?}]\n",
+                "[harness.cx]\nkind = \"codex\"\ncommand = [{:?}]\nasks = true\n",
                 program.display().to_string()
             ));
             std::fs::write(&local, text).expect("the profile");
@@ -2913,6 +2910,30 @@ mod tests {
             let mut text = std::fs::read_to_string(&local).expect("the local file");
             text.push_str(&format!(
                 "[harness.{name}]\nkind = \"claude\"\ncommand = [{work:?}, \"--dangerously-skip-permissions\"]\n"
+            ));
+            std::fs::write(&local, text).expect("the profile");
+            let set = purlis_core::profiles::current(&self.root);
+            purlis_core::profiletrust::record_launched(
+                &self.root,
+                name,
+                &purlis_core::profiletrust::fingerprint(set.get(name).expect("it reads")),
+            )
+            .expect("approved");
+            self
+        }
+
+        /// With a profile `name` the project offers and this machine approved, running the
+        /// stand-in as `work` does, and not marked as asking (#1522).
+        fn with_an_unmarked_profile(self, name: &str) -> Self {
+            let local = self.root.join(purlis_core::profiles::LOCAL_FILE);
+            let work = purlis_core::profiles::current(&self.root)
+                .get("work")
+                .expect("work reads")
+                .command[0]
+                .clone();
+            let mut text = std::fs::read_to_string(&local).expect("the local file");
+            text.push_str(&format!(
+                "[harness.{name}]\nkind = \"claude\"\ncommand = [{work:?}]\n"
             ));
             std::fs::write(&local, text).expect("the profile");
             let set = purlis_core::profiles::current(&self.root);
@@ -8050,6 +8071,59 @@ mod tests {
         assert_eq!(held.chats().open_now().len(), before, "nothing started");
         assert!(held.dispatch_grants().waiting(asking).is_empty());
         // The same persona on a profile that asks starts.
+        let (said, _) = dispatch_with(
+            &held,
+            &id,
+            asking,
+            Some("night"),
+            "task",
+            brief,
+            Some("work"),
+        );
+        assert!(matches!(said, Answer::Dispatched { .. }), "{said:?}");
+    }
+
+    /// #1522: a profile nobody marked as asking is taken not to ask, whatever its command
+    /// says, so no chat is started for another chat on it, whoever named it.
+    #[test]
+    fn a_dispatch_never_starts_a_chat_on_a_profile_nobody_marked_as_asking() {
+        let plane = a_plane_with_personas()
+            .with_an_unmarked_profile("plain")
+            .a_persona("night", "description: runs overnight\nprofile: plain\n");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        for to in ["devops", "night"] {
+            purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", to)
+                .expect("the person allowed the pair");
+        }
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+        let refused = |to: Option<&str>, profile: Option<&str>| match dispatch_with(
+            &held, &id, asking, to, "task", brief, profile,
+        )
+        .0
+        {
+            Answer::No { why } => why,
+            other => panic!("refused, not {other:?}"),
+        };
+        for to in [None, Some("devops")] {
+            let why = refused(to, Some("plain"));
+            assert!(
+                why.starts_with(
+                    "the dispatch names profile 'plain', which is not marked as asking a person"
+                ) && why.contains("asks = true"),
+                "{to:?}: {why}"
+            );
+        }
+        let why = refused(Some("night"), None);
+        assert!(
+            why.starts_with("persona 'night' names profile 'plain', which is not marked"),
+            "{why}"
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        // The same persona on a profile marked as asking starts.
         let (said, _) = dispatch_with(
             &held,
             &id,
