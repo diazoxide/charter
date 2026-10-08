@@ -93,7 +93,7 @@ const KEYS_VERSION_BEFORE: u64 = 1;
 /// own timeout runs out, or the harness runs the tool. So the wait is bounded, and a line the
 /// disk does not take in it is said to be lost, never waited on. It is the hook's own write that
 /// is timed, never another hook's: no hook waits for another (#983).
-const A_LINE_IS_SPOOLED_WITHIN: Duration = Duration::from_secs(1);
+pub(crate) const A_LINE_IS_SPOOLED_WITHIN: Duration = Duration::from_secs(1);
 
 /// The most names [`append`] lists in a chat's spool to choose the next number. A spool the host
 /// has not drained grows by one hook line at a time, so this is a long while without a host; one

@@ -2,7 +2,8 @@
  * What each working chat is doing, in one line (#1493, V100-42), kept current by being told.
  *
  * The core sorts what a chat's tool hooks say into a fixed list of kinds, with at most one
- * short name it has passed (a file's base name or a program's name), and sends `chat-doing`
+ * short name it has passed (a file's base name, or a program from its fixed list), and whether
+ * the tool has come back, and sends `chat-doing`
  * each time a chat's line changes, at most a few times a second per chat. This holds the
  * latest per chat, outside React, as the chats' states are held (`chatState.ts`, SC-3): a
  * reader subscribes to its own chat's line and is redrawn only when that line changes.
@@ -13,15 +14,7 @@
  * know says nothing at all. So no line is ever anything but one of these sentences with, at
  * most, the one name in it.
  */
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { listen } from "./here";
 import { markOf, useChatsHere, useChatsSelect } from "./chatState";
@@ -45,7 +38,8 @@ export function sameDoing(one: Doing | undefined, other: Doing | undefined): boo
       other !== undefined &&
       one.kind === other.kind &&
       one.name === other.name &&
-      one.count === other.count)
+      one.count === other.count &&
+      one.over === other.over)
   );
 }
 
@@ -74,40 +68,55 @@ export type Says = {
   readonly name?: string;
 };
 
-/** The sentence for each kind with nothing named. A kind that is not here says nothing. */
-const SENTENCES: ReadonlyMap<string, string> = new Map([
-  ["thinking", "thinking"],
-  ["command", "running a command"],
-  ["editing", "editing a file"],
-  ["reading", "reading a file"],
-  ["searching", "searching"],
-  ["fetching", "fetching a page"],
-  ["helper", "waiting on a helper"],
-  ["dispatching", "dispatching a task"],
-  ["asking", "asking a question"],
-  ["reporting", "writing its report"],
-  ["tool", "using a tool"],
+/**
+ * The sentences, all of them: for each kind, what is said while its tool is in flight and what
+ * is said once a hook has said the tool came back. A kind that is not here says nothing.
+ */
+const SENTENCES: ReadonlyMap<string, { readonly now: string; readonly over?: string }> = new Map([
+  // Said only from a turn's start until the first tool heard in it: it has no past.
+  ["thinking", { now: "thinking" }],
+  ["command", { now: "running a command", over: "ran a command" }],
+  ["editing", { now: "editing a file", over: "edited a file" }],
+  ["reading", { now: "reading a file", over: "read a file" }],
+  ["searching", { now: "searching", over: "searched" }],
+  ["fetching", { now: "fetching a page", over: "fetched a page" }],
+  ["helper", { now: "waiting on a helper", over: "a helper finished" }],
+  ["dispatching", { now: "dispatching a task", over: "dispatched a task" }],
+  ["asking", { now: "asking a question", over: "asked a question" }],
+  ["reporting", { now: "writing its report", over: "wrote its report" }],
+  ["tool", { now: "using a tool", over: "used a tool" }],
 ]);
 
-/** The words in front of a name, for the kinds that have one. */
-const NAMED: ReadonlyMap<string, string> = new Map([
-  ["command", "running"],
-  ["editing", "editing"],
-  ["reading", "reading"],
+/** The words in front of a name, for the kinds that have one: in flight, and once back. */
+const NAMED: ReadonlyMap<string, { readonly now: string; readonly over: string }> = new Map([
+  ["command", { now: "running", over: "ran" }],
+  ["editing", { now: "editing", over: "edited" }],
+  ["reading", { now: "reading", over: "read" }],
 ]);
 
 /**
+ * What a name may be made of, held here as well as in the core, which already passed it
+ * (`purlis_core::doing`): ASCII letters and digits and seven marks, at most 48 characters. So
+ * the window by itself never shows a name with a space, an invisible character, a letter of
+ * another script or markup in it, whatever it is sent.
+ */
+const A_NAME = /^[A-Za-z0-9._+@~#-]{1,48}$/;
+
+/**
  * What `doing` says, or nothing for a kind this window has no sentence for (a newer core's):
- * it never shows a word it was sent.
+ * it never shows a word it was sent. In the present while the tool is in flight, in the past
+ * once it has come back (`over`).
  */
 export function doingSays(doing: Doing): Says | undefined {
   const plain = SENTENCES.get(doing.kind);
   if (plain === undefined) return undefined;
-  if (doing.kind === "reading" && doing.count > 1) return { words: `reading ${doing.count} files` };
+  const over = doing.over === true && plain.over !== undefined;
+  if (doing.kind === "reading" && doing.count > 1)
+    return { words: `${over ? "read" : "reading"} ${doing.count} files` };
   const before = NAMED.get(doing.kind);
-  if (before !== undefined && typeof doing.name === "string" && doing.name !== "")
-    return { words: before, name: doing.name };
-  return { words: plain };
+  if (before !== undefined && typeof doing.name === "string" && A_NAME.test(doing.name))
+    return { words: over ? before.over : before.now, name: doing.name };
+  return { words: over && plain.over !== undefined ? plain.over : plain.now };
 }
 
 /** `says` as one string: the line's tooltip, and what a screen reader is told on demand. */
@@ -195,22 +204,6 @@ export function chatDoingId(session: number): string {
 
 /** What {@link chatDoingId} puts before the chat's number. */
 export const DOING_ID = "chat-doing-";
-
-/**
- * **The rest of a row's second line**, which the activity line replaces while there is one
- * and which comes back when the chat's turn ends (#1493). It reads its own chat, so the swap
- * redraws the second line's contents and not the row; the line itself is always there and a
- * line high, so the row never changes height (#1499).
- */
-export function ChatRowUnlessDoing({
-  session,
-  children,
-}: {
-  session: number;
-  children: ReactNode;
-}): ReactNode {
-  return useDoingSaid(session) === undefined ? children : null;
-}
 
 /**
  * Keeps what the chats of ONE project are doing, starting from what the core holds. It

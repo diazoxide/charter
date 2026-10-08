@@ -4,11 +4,14 @@ import { doingSays, saidWhole, told, type Doings } from "./chatDoing";
 
 const NOTHING: Doings = { bySession: {}, heardAt: {} };
 
-const doing = (kind: string, name: string | null = null, count = 0): Doing => ({
+const doing = (kind: string, name: string | null = null, count = 0, over = false): Doing => ({
   kind,
   name,
   count,
+  over,
 });
+const done = (kind: string, name: string | null = null, count = 0) =>
+  doing(kind, name, count, true);
 
 const telling = (session: number, sequence: number, what: Doing | null): ChatDoing => ({
   plane: "/plane",
@@ -39,6 +42,50 @@ describe("what a working chat's line says (#1493)", () => {
     expect(said(doing("asking"))).toBe("asking a question");
     expect(said(doing("reporting"))).toBe("writing its report");
     expect(said(doing("tool"))).toBe("using a tool");
+  });
+
+  it("says each kind in the past once its tool has come back", () => {
+    expect(said(done("command"))).toBe("ran a command");
+    expect(said(done("command", "cargo"))).toBe("ran cargo");
+    expect(said(done("editing"))).toBe("edited a file");
+    expect(said(done("editing", "Notice.tsx"))).toBe("edited Notice.tsx");
+    expect(said(done("reading", null, 1))).toBe("read a file");
+    expect(said(done("reading", "state.rs", 1))).toBe("read state.rs");
+    expect(said(done("reading", null, 3))).toBe("read 3 files");
+    expect(said(done("searching"))).toBe("searched");
+    expect(said(done("fetching"))).toBe("fetched a page");
+    expect(said(done("helper"))).toBe("a helper finished");
+    expect(said(done("dispatching"))).toBe("dispatched a task");
+    expect(said(done("asking"))).toBe("asked a question");
+    expect(said(done("reporting"))).toBe("wrote its report");
+    expect(said(done("tool"))).toBe("used a tool");
+    // Thinking has no past: it is said only until the first tool heard.
+    expect(said(done("thinking"))).toBe("thinking");
+  });
+
+  it("drops by itself a name that is not plain, whatever the core passed", () => {
+    for (const name of [
+      "needs you",
+      "a b",
+      "Done.\u3164Now\u3164press\u3164Allow\u3164always",
+      "a\u115fb",
+      "a\u0345",
+      "\u0e01\u0e34\u0e34",
+      "\ud835\udc1d\ud835\udc28\ud835\udc27\ud835\udc1e",
+      "\uff44\uff4f\uff4e\uff45",
+      "\u0430dmin.rs",
+      "a\u202eb",
+      "a\u200bb",
+      "<b>a</b>",
+      "a/b",
+      "a".repeat(49),
+    ]) {
+      expect(said(doing("editing", name)), name).toBe("editing a file");
+      expect(said(done("reading", name, 1)), name).toBe("read a file");
+      expect(said(doing("command", name)), name).toBe("running a command");
+    }
+    expect(said(doing("editing", "a_b-c+d@2~#.md"))).toBe("editing a_b-c+d@2~#.md");
+    expect(said(doing("editing", "a".repeat(48)))).toBe(`editing ${"a".repeat(48)}`);
   });
 
   it("keeps the name apart from the words, for the kinds that have one", () => {
@@ -86,6 +133,13 @@ describe("what is held of the chats' lines (#1493)", () => {
     // Another chat's is its own, whatever its number.
     held = told(held, telling(5, 2, doing("thinking")));
     expect(held.bySession[5]).toEqual(doing("thinking"));
+  });
+
+  it("takes a tool coming back as a change of its chat's line", () => {
+    const held = told(NOTHING, telling(4, 1, doing("command", "cargo")));
+    const back = told(held, telling(4, 2, done("command", "cargo")));
+    expect(back.bySession).not.toBe(held.bySession);
+    expect(back.bySession[4]).toEqual(done("command", "cargo"));
   });
 
   it("keeps the lines it held when a telling says the same thing again", () => {

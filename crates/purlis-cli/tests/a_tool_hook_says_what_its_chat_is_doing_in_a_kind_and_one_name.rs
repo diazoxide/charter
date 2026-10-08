@@ -126,7 +126,12 @@ fn a_claude_code_edit_says_the_file_s_base_name_and_then_that_it_came_back() {
         said(&hook("pretooluse-edit", &payload)),
         [began(Kind::Editing, Some("Notice.tsx"))]
     );
-    assert_eq!(said(&hook("posttooluse", &payload)), [Said::Ended]);
+    assert_eq!(
+        said(&hook("posttooluse", &payload)),
+        [Said::Ended {
+            kind: Some(Kind::Editing)
+        }]
+    );
 }
 
 #[test]
@@ -171,6 +176,36 @@ fn a_codex_shell_call_says_its_program() {
         }),
     );
     assert_eq!(said(&heard), [began(Kind::Command, Some("git"))]);
+}
+
+#[test]
+fn a_command_whose_first_word_is_not_a_program_purlis_lists_names_none() {
+    for command in [
+        format!("cd {CANARY} && npm test"),
+        format!("sudo cargo build --{CANARY}"),
+        format!("{CANARY} --version"),
+        format!("/usr/bin/git commit -m {CANARY}"),
+    ] {
+        let heard = hook(
+            "pretooluse",
+            &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": command}}),
+        );
+        assert_eq!(said(&heard), [began(Kind::Command, None)], "{command}");
+    }
+}
+
+#[test]
+fn a_file_whose_name_is_not_plain_ascii_is_a_file_and_names_none() {
+    let heard = hook(
+        "pretooluse-edit",
+        &serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": {"file_path": format!("/w/branch/{CANARY}\u{3164}Allow\u{3164}always.md"),
+                "content": "x"},
+            "cwd": "/w/branch",
+        }),
+    );
+    assert_eq!(said(&heard), [began(Kind::Editing, None)]);
 }
 
 #[test]

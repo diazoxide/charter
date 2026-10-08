@@ -1538,10 +1538,9 @@ fn tell_the_host_about_the_tool_call(
     }
     // What the chat is doing, for the one line under its name (#1493): a kind from a fixed list
     // and at most one short name, on a line of its own, sent once and never spooled, so no
-    // record holds it. Not for a call the guard refused, which did not run.
-    if call.decision != hookwire::Decision::Deny
-        && let Some(doing) = purlis_core::doing::of_hook(word, &data)
-    {
+    // record holds it. Only for a call that will run: not one the guard refused, and not one
+    // the person is being asked about, which they may refuse.
+    if let Some(doing) = purlis_core::doing::of_answered_hook(word, &data, call.decision) {
         let _ = hookwire::tell_doing(
             std::path::Path::new(&socket),
             token.as_ref(),

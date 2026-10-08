@@ -1317,11 +1317,15 @@ impl ChatBoard for Hooks {
     }
 
     fn closed(&self, session: u32) -> Moved {
-        let mut board = self.board();
-        board.closed(session);
-        // And what it was doing goes with it (#1493).
+        let moved = {
+            let mut board = self.board();
+            board.closed(session);
+            seen_by(&board, &self.plane, session)
+        };
+        // And what it was doing goes with it (#1493): the window is told its line is gone,
+        // once the board is let go, as every telling is.
         self.doings.closed(session);
-        seen_by(&board, &self.plane, session)
+        moved
     }
 
     fn ignored(&self, session: u32) -> Moved {
@@ -2334,7 +2338,8 @@ mod tests {
             Some(crate::doing::Doing {
                 kind: "editing".to_owned(),
                 name: Some(format!("{CANARY}.rs")),
-                count: 0
+                count: 0,
+                over: false
             })
         );
 
@@ -2360,7 +2365,8 @@ mod tests {
             Some(crate::doing::Doing {
                 kind: "command".to_owned(),
                 name: None,
-                count: 0
+                count: 0,
+                over: false
             })
         );
         assert_eq!(hooks.doing_now().len(), 1);

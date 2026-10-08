@@ -1897,6 +1897,18 @@ const A_NOTICE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_mi
 #[cfg(unix)]
 const A_NOTICE_IS_SEEN_WITHIN: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// The longest a tool hook can spend telling the app, after it has decided and before it
+/// answers its harness, with an app that has stopped reading: its tool call's line
+/// ([`deliver_tool`], and the spool it falls back to), then the two lines nothing records
+/// ([`touch`], [`tell_doing`]). Whatever decides a tool call adds this to its own budget and
+/// holds the sum inside every harness's timeout for the hook (#1493).
+#[cfg(unix)]
+pub const A_TOOL_HOOK_TELLS_WITHIN: std::time::Duration = std::time::Duration::from_millis(
+    (A_NOTICE_TAKES_AT_MOST.as_millis()
+        + spool::A_LINE_IS_SPOOLED_WITHIN.as_millis()
+        + 2 * A_NOTICE_IS_SEEN_WITHIN.as_millis()) as u64,
+);
+
 /// One conversation with the app: lines written, and each answered on the same connection.
 ///
 /// **The same connection is the point.** A ticket is bound to the connection it was minted
@@ -5302,6 +5314,7 @@ mod tests {
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
         let token = listener.tokens().issue_to_this_process(4).expect("a token");
+        let other = listener.tokens().issue_to_this_process(5).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
@@ -5317,7 +5330,22 @@ mod tests {
             doing: Box::new(move |doing| tx.lock().unwrap().send(doing).unwrap()),
             permission: Box::new(|_| None),
         });
+        // Forged, with every field set: no token, a token nobody was issued, another chat's
+        // token, and this chat's own token on a line that names another chat.
+        let of_another = Doing {
+            chat: 5,
+            agent: Some("agent-1".to_owned()),
+            ..doing.clone()
+        };
         tell_doing(&path, None, &doing).expect("the line is written");
+        tell_doing(&path, Some(&ChatToken::from("not-a-token")), &doing)
+            .expect("the line is written");
+        tell_doing(&path, Some(&other), &doing).expect("the line is written");
+        tell_doing(&path, Some(&token), &of_another).expect("the line is written");
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).is_err(),
+            "a line without its own chat's token was dropped"
+        );
         tell_doing(&path, Some(&token), &doing).expect("the line is written");
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
@@ -5326,7 +5354,7 @@ mod tests {
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err(),
-            "the line without the chat's token was dropped"
+            "and it was heard once"
         );
     }
 

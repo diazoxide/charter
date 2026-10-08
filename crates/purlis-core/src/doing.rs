@@ -9,48 +9,68 @@
 //!
 //! # What is said, and the whole of it
 //!
-//! A kind, and for three kinds one short name:
+//! A kind, whether its tool has come back, and for three kinds one short name:
 //!
-//! | Kind | The window says | Its name |
-//! |---|---|---|
-//! | `thinking` | thinking | none |
-//! | `command` | running a command; running `<program>` | the command's first word |
-//! | `editing` | editing a file; editing `<file>` | the file's base name |
-//! | `reading` | reading a file; reading `<file>`; reading 3 files | the file's base name |
-//! | `searching` | searching | none |
-//! | `fetching` | fetching a page | none |
-//! | `helper` | waiting on a helper | none |
-//! | `dispatching` | dispatching a task | none |
-//! | `asking` | asking a question | none |
-//! | `reporting` | writing its report | none |
-//! | `tool` | using a tool | none |
+//! | Kind | While the tool is in flight | Once it has come back | Its name |
+//! |---|---|---|---|
+//! | `thinking` | thinking | | none |
+//! | `command` | running a command; running `cargo` | ran a command; ran `cargo` | a program on [`PROGRAMS`] |
+//! | `editing` | editing a file; editing `<file>` | edited a file; edited `<file>` | the file's base name |
+//! | `reading` | reading a file; reading `<file>`; reading 3 files | read a file; read `<file>`; read 3 files | the file's base name |
+//! | `searching` | searching | searched | none |
+//! | `fetching` | fetching a page | fetched a page | none |
+//! | `helper` | waiting on a helper | a helper finished | none |
+//! | `dispatching` | dispatching a task | dispatched a task | none |
+//! | `asking` | asking a question | asked a question | none |
+//! | `reporting` | writing its report | wrote its report | none |
+//! | `tool` | using a tool | used a tool | none |
 //!
 //! **Never** a command's arguments, a URL, a search's pattern, a file's folder or contents, a
-//! tool's own name, or anything a tool came back with. `thinking` is a turn that is running
-//! with no tool in flight. `dispatching`, `asking` and `reporting` are also what the app says
-//! by itself when the chat's own purlis command reaches it, so they need no hook.
+//! tool's own name, or anything a tool came back with.
+//!
+//! # Nothing is said that was not heard
+//!
+//! - `thinking` is said only from a turn's start until the first tool heard in it. After that
+//!   the line keeps the last thing heard: in the present while its tool is in flight, in the
+//!   past once a hook says that tool came back, until the next tool heard.
+//! - A tool no hook runs on says nothing, and the line keeps what it last said. So does a hook
+//!   after a tool the line is not about.
+//! - Where a harness has no hook after a tool (Claude Code's `Read` and `Grep`, all of Codex),
+//!   nothing says the tool came back, so the line stays in the present until the next tool
+//!   heard. That is the one inexactness left.
+//! - `dispatching`, `asking` and `reporting` are said by the app alone, when the chat's own
+//!   purlis command reaches it ([`Tracker::asked`]). A line on the wire cannot claim them, nor
+//!   `thinking`: from the wire each reads as `tool` ([`Said::neutral`]).
 //!
 //! # What a chat can make it say
 //!
 //! A hook runs in the chat's own process tree, and anything holding the chat's token can write
 //! the line. So the name is the chat's word, and the app believes none of it until
-//! [`Said::neutral`] has passed it: letters, digits and a handful of marks, no space, no
-//! directory, nothing invisible, and short ([`file_name`], [`program`]). A name that fails is
-//! dropped whole and the kind is said without one. The hook applies the same rule before it
-//! sends, so a path never leaves the hook either. No name has a space in it, so no name can
-//! read as a sentence of the app's.
+//! [`Said::neutral`] has passed it:
+//!
+//! - a **program** is one of [`PROGRAMS`], a fixed list, matched whole against the command's
+//!   first word. Every command line the row can show is therefore one purlis wrote;
+//! - a **file's name** is ASCII letters and digits and seven marks, at most
+//!   [`LONGEST_FILE_NAME`] characters ([`file_name`]). No space, nothing invisible, no letter of
+//!   another script: a name in another script reads "editing a file".
+//!
+//! A name that fails is dropped whole and the kind is said without one. The hook applies the
+//! same rule before it sends, so a path never leaves the hook either. A file's base name can
+//! itself say something (`acquisition-acme.md`), and it is shown.
 //!
 //! # Which tools are heard, per harness
 //!
 //! Only tools some armed hook runs on ([`crate::hookreg`]):
 //!
-//! - **Claude Code:** `Bash`; `Read` and `Grep`; `Write`, `Edit` and `MultiEdit`; `Task` and
-//!   `Agent`; purlis's own dispatch tools. A tool no hook runs on (`WebFetch`, `Glob`, another
-//!   server's tool) says nothing, and the line keeps what it last said.
-//! - **opencode:** every tool, since purlis's plugin routes each to a hook
-//!   ([`crate::opencode::TOOLS`]) under Claude Code's name for it where it has one.
-//! - **Codex:** its shell alone (`plugin::CODEX`), so `command` and `thinking`. With its hooks
-//!   untrusted nothing is heard and nothing is said.
+//! - **Claude Code:** before `Bash`, `Read`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`,
+//!   `Agent` and purlis's own dispatch tools; after `Bash`, `Write`, `Edit`, `MultiEdit`,
+//!   `Task`, `Agent`, `Skill` and `SendMessage`. Nothing for `WebFetch`, `WebSearch`, `Glob`
+//!   or another server's tool.
+//! - **opencode:** every tool before it runs, since purlis's plugin routes each to a hook
+//!   ([`crate::opencode::TOOLS`]) under Claude Code's name for it where it has one; after
+//!   `write`, `edit`, `task` and `skill`.
+//! - **Codex:** its shell alone, before it runs (`plugin::CODEX`). With its hooks untrusted
+//!   nothing is heard and nothing is said.
 //!
 //! A chat whose hooks the app has not heard a turn begin from has no line: the app says what
 //! it was told and guesses nothing (V100-71).
@@ -65,7 +85,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// A turn is running and no tool is in flight.
+    /// A turn has begun and no tool has been heard in it yet.
     Thinking,
     /// A shell command.
     Command,
@@ -107,10 +127,20 @@ impl Kind {
         }
     }
 
-    /// Whether the line keeps saying this once its tool has come back: an edit, a read and a
-    /// search are over in a moment, and "editing Notice.tsx" is worth more than a flicker.
-    fn stays(self) -> bool {
-        matches!(self, Self::Editing | Self::Reading | Self::Searching)
+    /// Whether only the app says this, from an ask of the chat's that really reached it.
+    fn said_by_the_app(self) -> bool {
+        matches!(self, Self::Dispatching | Self::Asking | Self::Reporting)
+    }
+
+    /// This kind as a line on the wire may claim it: a kind no hook can see reads as
+    /// [`Kind::Tool`], so nothing a chat writes by hand says it made a report, asked a
+    /// question or dispatched a task, or that it is only thinking.
+    fn as_the_wire_may_say(self) -> Self {
+        if self.said_by_the_app() || self == Self::Thinking {
+            Self::Tool
+        } else {
+            self
+        }
     }
 }
 
@@ -127,23 +157,34 @@ pub enum Said {
         name: Option<String>,
     },
     /// A tool came back.
-    Ended,
+    Ended {
+        /// Which kind of tool, where the hook could tell. The line goes to the past only if
+        /// this is what it is about.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<Kind>,
+    },
 }
 
 impl Said {
-    /// The same, believing nothing of its name: kept only for a kind that has one, and only
-    /// if it passes that kind's rule unchanged.
+    /// The same, believing nothing of it: a kind only a hook can see
+    /// ([`Kind::as_the_wire_may_say`]), and a name only for a kind that has one, and only if it
+    /// passes that kind's rule unchanged.
     pub fn neutral(self) -> Self {
         match self {
-            Self::Began { kind, name } => Self::Began {
-                kind,
-                name: name.filter(|name| match kind {
-                    Kind::Command => program(name).as_deref() == Some(name),
-                    Kind::Editing | Kind::Reading => file_name(name).as_deref() == Some(name),
-                    _ => false,
-                }),
+            Self::Began { kind, name } => {
+                let kind = kind.as_the_wire_may_say();
+                Self::Began {
+                    kind,
+                    name: name.filter(|name| match kind {
+                        Kind::Command => program(name).as_deref() == Some(name),
+                        Kind::Editing | Kind::Reading => file_name(name).as_deref() == Some(name),
+                        _ => false,
+                    }),
+                }
+            }
+            Self::Ended { kind } => Self::Ended {
+                kind: kind.map(Kind::as_the_wire_may_say),
             },
-            Self::Ended => Self::Ended,
         }
     }
 }
@@ -151,86 +192,154 @@ impl Said {
 /// The longest file name said, in characters. A longer one is not said at all.
 pub const LONGEST_FILE_NAME: usize = 48;
 
-/// The longest program name said, in characters. A longer one is not said at all.
-pub const LONGEST_PROGRAM: usize = 24;
-
-/// The marks a file name may hold beside letters and digits.
+/// The marks a file name may hold beside ASCII letters and digits.
 const FILE_MARKS: &str = "._-+@~#";
 
-/// The marks a program's name may hold beside ASCII letters and digits.
-const PROGRAM_MARKS: &str = "._+-";
-
 /// The base name of the file a tool was given as `path`, or nothing when it is not one purlis
-/// will say: empty, only dots, longer than [`LONGEST_FILE_NAME`], or holding anything but
-/// letters, digits and [`FILE_MARKS`]. So no space, no control or formatting character, no
-/// mark that changes the direction of text, and no markup.
+/// will say: empty, with no letter or digit, longer than [`LONGEST_FILE_NAME`], or holding
+/// anything but ASCII letters, ASCII digits and [`FILE_MARKS`].
+///
+/// **ASCII, and not "letters"**: the letters of every script include ones that draw as a
+/// blank, ones that stack on the letter before, and whole alphabets styled to look like
+/// another face, so a rule over them cannot promise what a name looks like. A name in another
+/// script is not said, and the row reads "editing a file".
 pub fn file_name(path: &str) -> Option<String> {
     let base = path.rsplit(['/', '\\']).next()?;
-    let fits = !base.is_empty()
-        && base.chars().count() <= LONGEST_FILE_NAME
-        && base.chars().any(char::is_alphanumeric)
+    let fits = base.len() <= LONGEST_FILE_NAME
+        && base.chars().any(|one| one.is_ascii_alphanumeric())
         && base
             .chars()
-            .all(|one| one.is_alphanumeric() || FILE_MARKS.contains(one));
+            .all(|one| one.is_ascii_alphanumeric() || FILE_MARKS.contains(one));
     fits.then(|| base.to_owned())
 }
 
-/// The program a shell command starts with, by its base name, or nothing when its first word
-/// is not plainly one: the first word must be ASCII letters, digits, [`PROGRAM_MARKS`] and
-/// `/` alone. So a variable set in front of a command, a quoted word, a substitution and a
-/// redirect say nothing, and no later word is ever looked at.
+/// Every program a row may name: "running cargo".
+///
+/// **A list, and not a rule over the command's first word.** A rule shows whatever a chat
+/// puts first: a secret run by mistake as a command, a word chosen to read as one of the
+/// app's, or a wrapper that says nothing true (`cd x && npm test` is not "running cd"). With
+/// a list every command line the row can show is one purlis wrote, and the whole set can be
+/// read here. So it holds tools a developer knows at a glance, and no shell builtin and no
+/// wrapper (`cd`, `sudo`, `env`, `bash`, `sh`, `time`, `nohup`, `xargs`): those, and every
+/// program not here, read "running a command". Adding a tool is adding a line.
+pub const PROGRAMS: &[&str] = &[
+    "cargo",
+    "rustc",
+    "npm",
+    "npx",
+    "pnpm",
+    "yarn",
+    "node",
+    "deno",
+    "bun",
+    "python",
+    "python3",
+    "pip",
+    "uv",
+    "pytest",
+    "go",
+    "make",
+    "cmake",
+    "git",
+    "gh",
+    "docker",
+    "kubectl",
+    "helm",
+    "terraform",
+    "purlis",
+    "tsc",
+    "eslint",
+    "prettier",
+    "vitest",
+    "jest",
+    "ruff",
+    "mypy",
+    "mvn",
+    "gradle",
+    "dotnet",
+    "swift",
+    "xcodebuild",
+    "rg",
+    "grep",
+    "ls",
+    "cat",
+    "sed",
+    "awk",
+    "curl",
+    "wget",
+    "jq",
+];
+
+/// The program a shell command starts with, where its first word is, whole and as written,
+/// one of [`PROGRAMS`]: no path in front, no extension, no other case. No later word is ever
+/// looked at, so a variable set in front of a command, a wrapper and a path all say nothing.
 pub fn program(command: &str) -> Option<String> {
     let first = command.split_whitespace().next()?;
-    if !first
-        .chars()
-        .all(|one| one.is_ascii_alphanumeric() || PROGRAM_MARKS.contains(one) || one == '/')
-    {
-        return None;
-    }
-    let base = first.rsplit('/').next()?;
-    let fits =
-        base.len() <= LONGEST_PROGRAM && base.starts_with(|one: char| one.is_ascii_alphanumeric());
-    fits.then(|| base.to_owned())
+    PROGRAMS
+        .iter()
+        .find(|listed| **listed == first)
+        .map(|listed| (*listed).to_owned())
 }
 
 /// Where a file tool carries its path: Claude Code's spelling, opencode's, `Grep`'s, a
 /// notebook's.
 const PATH_KEYS: [&str; 4] = ["file_path", "filePath", "path", "notebook_path"];
 
+/// The kind of the tool a hook's payload names.
+fn kind_of(tool: &str) -> Kind {
+    match tool {
+        "Bash" | "bash" | "shell" | "exec_command" | "local_shell" => Kind::Command,
+        "Read" => Kind::Reading,
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => Kind::Editing,
+        "Grep" | "Glob" | "WebSearch" => Kind::Searching,
+        "WebFetch" => Kind::Fetching,
+        "Task" | "Agent" => Kind::Helper,
+        // purlis's own dispatch tools among them: the app says what those are when the ask
+        // itself arrives.
+        _ => Kind::Tool,
+    }
+}
+
 /// What the hook `word` says its chat is doing, from the payload a harness gave it, or nothing
 /// for a hook that is not a tool's.
 ///
-/// A hook before a tool says the tool began; one after says a tool came back. The payload is
-/// read for the tool's name and, for a shell or a file tool, the one name of [`Said::Began`].
+/// A hook before a tool says the tool began; one after says a tool of that kind came back. The
+/// payload is read for the tool's name and, for a shell or a file tool, the one name of
+/// [`Said::Began`].
 pub fn of_hook(word: &str, payload: &Value) -> Option<Said> {
+    let kind = kind_of(payload["tool_name"].as_str().unwrap_or_default());
     if word.starts_with("posttooluse") {
-        return Some(Said::Ended);
+        return Some(Said::Ended { kind: Some(kind) });
     }
     if !word.starts_with("pretooluse") {
         return None;
     }
-    let tool = payload["tool_name"].as_str().unwrap_or_default();
     let input = &payload["tool_input"];
-    let path = || {
-        PATH_KEYS
+    let name = match kind {
+        Kind::Command => input["command"].as_str().and_then(program),
+        Kind::Reading | Kind::Editing => PATH_KEYS
             .iter()
             .find_map(|key| input[*key].as_str())
-            .and_then(file_name)
-    };
-    let (kind, name) = match tool {
-        "Bash" | "bash" | "shell" | "exec_command" | "local_shell" => {
-            (Kind::Command, input["command"].as_str().and_then(program))
-        }
-        "Read" => (Kind::Reading, path()),
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => (Kind::Editing, path()),
-        "Grep" | "Glob" | "WebSearch" => (Kind::Searching, None),
-        "WebFetch" => (Kind::Fetching, None),
-        "Task" | "Agent" => (Kind::Helper, None),
-        "mcp__purlis__dispatch" => (Kind::Dispatching, None),
-        "mcp__purlis__dispatch_report" => (Kind::Reporting, None),
-        _ => (Kind::Tool, None),
+            .and_then(file_name),
+        _ => None,
     };
     Some(Said::Began { kind, name })
+}
+
+/// What a tool hook that answered `decision` sends the app of its chat, or nothing.
+///
+/// **Only for a call that will run**: one the hook allowed or said nothing about. A call it
+/// refused did not run, and one the person is being asked about may yet be refused, so the row
+/// never says "running" of a command that nobody let run.
+pub fn of_answered_hook(
+    word: &str,
+    payload: &Value,
+    decision: crate::hookwire::Decision,
+) -> Option<Said> {
+    use crate::hookwire::Decision;
+    matches!(decision, Decision::Allow | Decision::None)
+        .then(|| of_hook(word, payload))
+        .flatten()
 }
 
 /// What one chat is doing, as the window is told it.
@@ -242,6 +351,8 @@ pub struct Doing {
     pub name: Option<String>,
     /// How many files it has read in a row, for [`Kind::Reading`]; 0 for every other kind.
     pub count: u32,
+    /// Whether a hook said its tool came back: the window then says it in the past.
+    pub over: bool,
 }
 
 impl Doing {
@@ -250,6 +361,7 @@ impl Doing {
             kind,
             name: None,
             count: 0,
+            over: false,
         }
     }
 }
@@ -335,46 +447,75 @@ impl Tracker {
         self.settle(chat, now)
     }
 
-    /// A tool hook of chat `chat` said `said`. Nothing for a chat that is not `running`: its
-    /// hooks have not been heard to begin a turn, or the turn is over.
+    /// A tool hook of chat `chat` said `said`, of which nothing is believed
+    /// ([`Said::neutral`]). Nothing for a chat that is not `running`: its hooks have not been
+    /// heard to begin a turn, or the turn is over.
+    ///
+    /// A tool that began replaces what the line said. A tool that came back puts the line in
+    /// the past only if the line is about that kind of tool; otherwise the line stays as it
+    /// is, since which tool came back was not heard.
     pub fn heard(&mut self, chat: u32, said: Said, running: bool, now: Instant) -> Tell {
         if !running {
             return Tell::Nothing;
         }
-        let held = self.chats.entry(chat).or_default();
-        held.doing = match (said.neutral(), held.doing.take()) {
-            // Reads in a row are counted, and past the first no one file is named.
-            (
-                Said::Began {
-                    kind: Kind::Reading,
-                    ..
-                },
-                Some(Doing {
-                    kind: Kind::Reading,
-                    count,
-                    ..
-                }),
-            ) => Some(Doing {
-                kind: Kind::Reading,
-                name: None,
-                count: count.saturating_add(1),
-            }),
-            (Said::Began { kind, name }, _) => Some(Doing {
-                kind,
-                name,
-                count: u32::from(kind == Kind::Reading),
-            }),
-            (Said::Ended, Some(doing)) if doing.kind.stays() => Some(doing),
-            (Said::Ended, _) => Some(Doing::of(Kind::Thinking)),
-        };
-        self.settle(chat, now)
+        match said.neutral() {
+            Said::Began { kind, name } => self.began(chat, kind, name, now),
+            Said::Ended { kind } => {
+                let ends = |doing: &Doing| {
+                    !doing.over
+                        && (kind == Some(doing.kind)
+                            // What the app said of a purlis command is over when the shell or
+                            // the tool that carried the command comes back.
+                            || (doing.kind.said_by_the_app()
+                                && matches!(kind, Some(Kind::Command | Kind::Tool))))
+                };
+                let Some(doing) = self
+                    .chats
+                    .get_mut(&chat)
+                    .and_then(|held| held.doing.as_mut())
+                    .filter(|doing| ends(doing))
+                else {
+                    return Tell::Nothing;
+                };
+                doing.over = true;
+                self.settle(chat, now)
+            }
+        }
     }
 
     /// Chat `chat`'s own purlis command reached the app: `kind` is one of
     /// [`Kind::Dispatching`], [`Kind::Asking`] and [`Kind::Reporting`], and nothing of the
-    /// command is kept.
+    /// command is kept. Only the app calls this, from an ask it received; no line on the wire
+    /// reaches it.
     pub fn asked(&mut self, chat: u32, kind: Kind, running: bool, now: Instant) -> Tell {
-        self.heard(chat, Said::Began { kind, name: None }, running, now)
+        if !running {
+            return Tell::Nothing;
+        }
+        self.began(chat, kind, None, now)
+    }
+
+    fn began(&mut self, chat: u32, kind: Kind, name: Option<String>, now: Instant) -> Tell {
+        let held = self.chats.entry(chat).or_default();
+        held.doing = Some(match held.doing.take() {
+            // Reads in a row are counted, and past the first no one file is named.
+            Some(Doing {
+                kind: Kind::Reading,
+                count,
+                ..
+            }) if kind == Kind::Reading => Doing {
+                kind,
+                name: None,
+                count: count.saturating_add(1),
+                over: false,
+            },
+            _ => Doing {
+                kind,
+                name,
+                count: u32::from(kind == Kind::Reading),
+                over: false,
+            },
+        });
+        self.settle(chat, now)
     }
 
     /// The telling [`Tell::Later`] put off: what the chat is doing by now, if that is not what
@@ -385,9 +526,13 @@ impl Tracker {
         (held.doing != held.told).then(|| held.tell(now))
     }
 
-    /// Chat `chat` is gone, and what was held of it.
-    pub fn closed(&mut self, chat: u32) {
-        self.chats.remove(&chat);
+    /// Chat `chat` is gone, and what was held of it. Answers the telling that takes its line
+    /// away from a window that may still hold one, for a chat anything was held of.
+    pub fn closed(&mut self, chat: u32) -> Option<Told> {
+        self.chats.remove(&chat).map(|_| Told {
+            sequence: sequence(),
+            doing: None,
+        })
     }
 
     /// What chat `chat` is doing, as held now.
@@ -462,6 +607,10 @@ mod tests {
         })
     }
 
+    fn ended(kind: Kind) -> Said {
+        Said::Ended { kind: Some(kind) }
+    }
+
     fn now_doing(tell: Tell) -> Option<Doing> {
         match tell {
             Tell::Now(told) => told.doing,
@@ -474,6 +623,20 @@ mod tests {
             kind,
             name: Some(name.to_owned()),
         }
+    }
+
+    fn unnamed(kind: Kind) -> Said {
+        Said::Began { kind, name: None }
+    }
+
+    /// A line as the window is told it: in flight, or `over`.
+    fn line(kind: Kind, name: Option<&str>, count: u32, over: bool) -> Option<Doing> {
+        Some(Doing {
+            kind,
+            name: name.map(str::to_owned),
+            count,
+            over,
+        })
     }
 
     // --- what a hook says, per harness ---------------------------------------------------
@@ -524,33 +687,38 @@ mod tests {
                 began(Kind::Helper, None)
             );
         }
-        assert_eq!(
-            said(
-                "pretooluse-dispatch",
-                json!({"tool_name": "mcp__purlis__dispatch", "tool_input": {"brief": "x"}})
-            ),
-            began(Kind::Dispatching, None)
-        );
-        assert_eq!(
-            said(
-                "pretooluse-dispatch",
-                json!({"tool_name": "mcp__purlis__dispatch_report", "tool_input": {}})
-            ),
-            began(Kind::Reporting, None)
-        );
-        for word in [
-            "posttooluse",
-            "posttooluse-skill",
-            "posttooluse-dispatch",
-            "posttooluse-blocked",
-            "posttoolusefailure-blocked",
+        // purlis's own dispatch tools are a tool to a hook: the app says what they are when
+        // the ask itself arrives.
+        for tool in [
+            "mcp__purlis__dispatch",
+            "mcp__purlis__dispatch_report",
+            "mcp__purlis__dispatch_list",
+        ] {
+            assert_eq!(
+                said(
+                    "pretooluse-dispatch",
+                    json!({"tool_name": tool, "tool_input": {"brief": "x"}})
+                ),
+                began(Kind::Tool, None),
+                "{tool}"
+            );
+        }
+        // A hook after a tool says which kind came back, and nothing the tool came back with.
+        for (word, tool, kind) in [
+            ("posttooluse", "Edit", Kind::Editing),
+            ("posttooluse-skill", "Skill", Kind::Tool),
+            ("posttooluse-dispatch", "Task", Kind::Helper),
+            ("posttooluse-message", "SendMessage", Kind::Tool),
+            ("posttooluse-blocked", "Bash", Kind::Command),
+            ("posttoolusefailure-blocked", "Bash", Kind::Command),
         ] {
             assert_eq!(
                 said(
                     word,
-                    json!({"tool_name": "Bash", "tool_response": {"stdout": "CANARY"}})
+                    json!({"tool_name": tool, "tool_input": {"command": "cargo CANARY",
+                        "file_path": "/w/CANARY.rs"}, "tool_response": {"stdout": "CANARY"}})
                 ),
-                Some(Said::Ended),
+                Some(ended(kind)),
                 "{word}"
             );
         }
@@ -604,6 +772,10 @@ mod tests {
             ),
             began(Kind::Tool, None)
         );
+        assert_eq!(
+            said("posttooluse", "Write", json!({"filePath": "/w/b.ts"})),
+            Some(ended(Kind::Editing))
+        );
     }
 
     #[test]
@@ -642,51 +814,118 @@ mod tests {
             ),
             began(Kind::Command, None)
         );
+        // Codex sends a command as a list in some shapes: no first word is read off it.
+        assert_eq!(
+            of_hook(
+                "pretooluse",
+                &json!({"tool_name": "shell", "tool_input": {"command": ["cargo", "test"]}})
+            ),
+            began(Kind::Command, None)
+        );
+    }
+
+    #[test]
+    fn only_a_call_that_will_run_is_said() {
+        use crate::hookwire::Decision;
+        let payload = json!({"tool_name": "Bash", "tool_input": {"command": "cargo test"}});
+        for runs in [Decision::Allow, Decision::None] {
+            assert_eq!(
+                of_answered_hook("pretooluse", &payload, runs),
+                began(Kind::Command, Some("cargo")),
+                "{runs:?}"
+            );
+        }
+        // Refused, or the person is being asked and may refuse: nothing ran yet.
+        for held in [Decision::Deny, Decision::Ask] {
+            assert_eq!(
+                of_answered_hook("pretooluse", &payload, held),
+                None,
+                "{held:?}"
+            );
+        }
     }
 
     // --- the two names -------------------------------------------------------------------
 
     #[test]
-    fn a_command_says_its_first_word_and_never_a_later_one() {
+    fn a_command_names_its_program_only_when_its_first_word_is_on_the_list() {
         assert_eq!(program("cargo test --all").as_deref(), Some("cargo"));
         assert_eq!(program("  npm   ci").as_deref(), Some("npm"));
-        assert_eq!(program("/usr/bin/git log").as_deref(), Some("git"));
-        assert_eq!(program("./gradlew build").as_deref(), Some("gradlew"));
-        assert_eq!(program("python3.12 x.py").as_deref(), Some("python3.12"));
-        assert_eq!(program("g++ a.cc").as_deref(), Some("g++"));
+        assert_eq!(program("python3 x.py").as_deref(), Some("python3"));
+        assert_eq!(program("purlis dispatch x").as_deref(), Some("purlis"));
+        for listed in PROGRAMS {
+            assert_eq!(
+                program(&format!("{listed} --version")).as_deref(),
+                Some(*listed)
+            );
+        }
         for unsaid in [
             "",
             "   ",
-            // A variable set in front of the command is not a program, and may be a secret.
+            // A wrapper or a shell builtin says nothing true of what runs.
+            "cd app && npm test",
+            "sudo cargo build",
+            "env FOO=1 cargo build",
+            "bash -lc 'cargo test'",
+            "sh -c ls",
+            "time make",
+            "nohup node x.js",
+            "xargs rm",
+            "echo hi",
+            "export A=1",
+            "source x",
+            // A variable set in front of the command, a path, an extension, another case.
             "TOKEN=CANARY curl https://example.com",
             "TOKEN=\"a CANARY b\" curl https://example.com",
-            "\"/path with CANARY/bin\" x",
-            "'CANARY' x",
-            "$(CANARY)",
-            "`CANARY`",
-            "$CANARY",
-            "~/CANARY",
-            ">CANARY",
-            "(CANARY)",
-            "CANARY;rm",
-            "CANARY|x",
-            "CANARY&&x",
-            "<b>CANARY</b>",
-            "-CANARY",
-            ".CANARY",
-            "/",
-            "a/",
-            "caf\u{e9}",
-            "\u{202e}CANARY",
-            "abcdefghijklmnopqrstuvwxyz",
+            "/usr/bin/git log",
+            "./gradle build",
+            "cargo.exe build",
+            "python3.12 x.py",
+            "Cargo build",
+            "GIT status",
+            "cargo;rm",
+            "cargo&&ls",
+            "cargo|jq",
+            "\"cargo\" build",
+            "$(cargo)",
+            // A word chosen to read as one of the app's, and a secret run by mistake.
+            "Allow-once",
+            "needs-you",
+            "done",
+            "steward-2",
+            "Stop.this.task",
+            "hunter2",
+            "A1B2C3D4E5F6G7H8I9J0",
+            "CANARY",
+            "\u{202e}cargo",
+            "c\u{430}rgo",
         ] {
             assert_eq!(program(unsaid), None, "{unsaid:?}");
         }
-        assert_eq!(
-            program(&"a".repeat(LONGEST_PROGRAM)).map(|said| said.len()),
-            Some(24)
-        );
-        assert_eq!(program(&"a".repeat(LONGEST_PROGRAM + 1)), None);
+    }
+
+    #[test]
+    fn the_list_of_programs_holds_plain_names_and_no_wrapper_or_builtin() {
+        for listed in PROGRAMS {
+            assert!(
+                !listed.is_empty()
+                    && listed.len() <= 12
+                    && listed
+                        .chars()
+                        .all(|one| one.is_ascii_lowercase() || one.is_ascii_digit()),
+                "{listed}"
+            );
+        }
+        for wrapper in [
+            "cd", "sudo", "env", "bash", "sh", "zsh", "time", "nohup", "xargs", "echo", "export",
+            "source", "exec", "eval",
+        ] {
+            assert!(!PROGRAMS.contains(&wrapper), "{wrapper}");
+        }
+        let mut sorted = PROGRAMS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), PROGRAMS.len(), "each is listed once");
     }
 
     #[test]
@@ -699,12 +938,8 @@ mod tests {
         assert_eq!(file_name("README").as_deref(), Some("README"));
         assert_eq!(file_name(".env.local").as_deref(), Some(".env.local"));
         assert_eq!(
-            file_name("a/b/\u{57c}\u{565}\u{561}\u{564}.md").as_deref(),
-            Some("\u{57c}\u{565}\u{561}\u{564}.md")
-        );
-        assert_eq!(
-            file_name("\u{6587}\u{4ef6}.txt").as_deref(),
-            Some("\u{6587}\u{4ef6}.txt")
+            file_name("a_b-c+d@2~#.md").as_deref(),
+            Some("a_b-c+d@2~#.md")
         );
         assert_eq!(
             file_name(&"a".repeat(LONGEST_FILE_NAME)).map(|said| said.len()),
@@ -728,6 +963,25 @@ mod tests {
             "a\nb",
             "a\u{a0}b",
             "a\u{2028}b",
+            // Letters that draw as a blank: a sentence with no space in it.
+            "a\u{3164}b",
+            "a\u{115f}b",
+            "a\u{1160}b",
+            "a\u{ffa0}b",
+            "Done.\u{3164}Now\u{3164}press\u{3164}Allow\u{3164}always",
+            // Marks that stack on the letter before, counted as letters or not.
+            "a\u{345}",
+            "\u{e01}\u{e34}\u{e34}",
+            "a\u{301}\u{301}\u{301}",
+            // Alphabets styled to look like another face, and look-alike letters.
+            "\u{1d41d}\u{1d428}\u{1d427}\u{1d41e}",
+            "\u{ff44}\u{ff4f}\u{ff4e}\u{ff45}",
+            "\u{430}dmin.rs",
+            // Any other script: not said, since no rule over it can promise how it draws.
+            "\u{57c}\u{565}\u{561}\u{564}.md",
+            "\u{6587}\u{4ef6}.txt",
+            "caf\u{e9}.md",
+            "\u{5e9}\u{5dc}\u{5d5}\u{5dd}.txt",
             // Marks that turn text round, hide in it, or join it.
             "a\u{202e}txt.exe",
             "a\u{2066}b",
@@ -738,8 +992,6 @@ mod tests {
             "a\u{feff}b",
             "a\u{2060}b",
             "a\u{ad}b",
-            // Marks stacked on a letter.
-            "a\u{301}\u{301}\u{301}",
             // Markup, and what a shell or a path would read.
             "<b>a</b>",
             "<img",
@@ -767,7 +1019,6 @@ mod tests {
             assert_eq!(file_name(unsaid), None, "{unsaid:?}");
         }
         assert_eq!(file_name(&"a".repeat(LONGEST_FILE_NAME + 1)), None);
-        assert_eq!(file_name(&format!("/w/{}", "\u{6587}".repeat(49))), None);
     }
 
     #[test]
@@ -777,24 +1028,23 @@ mod tests {
             (Kind::Command, "cargo test --secret CANARY"),
             (Kind::Command, "/usr/bin/git"),
             (Kind::Command, "TOKEN=CANARY"),
-            (Kind::Command, "caf\u{e9}"),
+            (Kind::Command, "sudo"),
+            (Kind::Command, "Allow-once"),
+            (Kind::Command, "hunter2"),
             (Kind::Editing, "/etc/passwd"),
             (Kind::Editing, "needs you: Allow"),
+            (Kind::Editing, "Done.\u{3164}Now\u{3164}press\u{3164}Allow"),
             (Kind::Reading, "a\u{202e}b"),
             (Kind::Reading, &"a".repeat(49)),
             // A kind that has no name is given none.
-            (Kind::Thinking, "CANARY"),
             (Kind::Searching, "CANARY"),
             (Kind::Fetching, "example.com"),
             (Kind::Helper, "steward"),
-            (Kind::Dispatching, "steward"),
-            (Kind::Asking, "steward"),
-            (Kind::Reporting, "CANARY"),
             (Kind::Tool, "mcp__x__CANARY"),
         ] {
             assert_eq!(
                 named(kind, name).neutral(),
-                Said::Began { kind, name: None },
+                unnamed(kind),
                 "{kind:?} {name:?}"
             );
         }
@@ -813,22 +1063,64 @@ mod tests {
     }
 
     #[test]
+    fn a_line_cannot_claim_what_only_the_app_says() {
+        // No hook sees a report made, a question asked, a task dispatched, or a chat only
+        // thinking. Written by hand, each reads as a tool, with no name.
+        for kind in [
+            Kind::Thinking,
+            Kind::Dispatching,
+            Kind::Asking,
+            Kind::Reporting,
+        ] {
+            assert_eq!(
+                named(kind, "steward").neutral(),
+                unnamed(Kind::Tool),
+                "{kind:?}"
+            );
+            assert_eq!(
+                Said::Ended { kind: Some(kind) }.neutral(),
+                ended(Kind::Tool),
+                "{kind:?}"
+            );
+        }
+        for kind in [
+            Kind::Command,
+            Kind::Editing,
+            Kind::Reading,
+            Kind::Searching,
+            Kind::Fetching,
+            Kind::Helper,
+            Kind::Tool,
+        ] {
+            assert_eq!(unnamed(kind).neutral(), unnamed(kind), "{kind:?}");
+        }
+        // And through the tracker: the row never says it.
+        let start = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.reported(4, 1, true, start);
+        assert_eq!(
+            now_doing(tracker.heard(4, unnamed(Kind::Reporting), true, at(start, 1000))),
+            line(Kind::Tool, None, 0, false)
+        );
+    }
+
+    #[test]
     fn the_line_on_the_wire_holds_a_kind_and_a_name_and_an_unknown_kind_is_no_line() {
         assert_eq!(
             serde_json::to_string(&named(Kind::Command, "cargo")).unwrap(),
             r#"{"is":"began","kind":"command","name":"cargo"}"#
         );
         assert_eq!(
-            serde_json::to_string(&Said::Began {
-                kind: Kind::Helper,
-                name: None
-            })
-            .unwrap(),
+            serde_json::to_string(&unnamed(Kind::Helper)).unwrap(),
             r#"{"is":"began","kind":"helper"}"#
         );
         assert_eq!(
-            serde_json::to_string(&Said::Ended).unwrap(),
-            r#"{"is":"ended"}"#
+            serde_json::to_string(&ended(Kind::Command)).unwrap(),
+            r#"{"is":"ended","kind":"command"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Said>(r#"{"is":"ended"}"#).unwrap(),
+            Said::Ended { kind: None }
         );
         assert!(serde_json::from_str::<Said>(r#"{"is":"began","kind":"notice"}"#).is_err());
         assert!(serde_json::from_str::<Said>(r#"{"is":"began"}"#).is_err());
@@ -857,46 +1149,87 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_begins_thinking_and_each_tool_replaces_what_was_said() {
+    fn a_tool_is_said_in_the_present_while_it_runs_and_in_the_past_once_it_is_back() {
         let start = Instant::now();
         let mut tracker = Tracker::default();
         assert_eq!(
             now_doing(tracker.reported(4, 1, true, start)),
-            Some(Doing::of(Kind::Thinking))
+            line(Kind::Thinking, None, 0, false)
         );
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000))),
-            Some(Doing {
-                kind: Kind::Command,
-                name: Some("cargo".to_owned()),
-                count: 0
-            })
+            line(Kind::Command, Some("cargo"), 0, false)
         );
-        // The command came back: no tool is in flight.
+        // The command came back: "ran cargo", and it stays until the next tool heard.
         assert_eq!(
-            now_doing(tracker.heard(4, Said::Ended, true, at(start, 2000))),
-            Some(Doing::of(Kind::Thinking))
+            now_doing(tracker.heard(4, ended(Kind::Command), true, at(start, 2000))),
+            line(Kind::Command, Some("cargo"), 0, true)
+        );
+        assert_eq!(
+            tracker.heard(4, ended(Kind::Command), true, at(start, 2500)),
+            Tell::Nothing,
+            "it came back once"
         );
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Editing, "a.rs"), true, at(start, 3000))),
-            Some(Doing {
-                kind: Kind::Editing,
-                name: Some("a.rs".to_owned()),
-                count: 0
-            })
+            line(Kind::Editing, Some("a.rs"), 0, false)
         );
-        // An edit is over in a moment, and the line goes on saying it.
         assert_eq!(
-            tracker.heard(4, Said::Ended, true, at(start, 4000)),
+            now_doing(tracker.heard(4, ended(Kind::Editing), true, at(start, 4000))),
+            line(Kind::Editing, Some("a.rs"), 0, true)
+        );
+    }
+
+    #[test]
+    fn thinking_is_said_only_until_the_first_tool_heard_in_a_turn() {
+        let start = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.reported(4, 1, true, start);
+        tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000));
+        tracker.heard(4, ended(Kind::Command), true, at(start, 2000));
+        // Minutes pass, in a tool no hook runs on perhaps: nothing is heard, nothing is said.
+        assert_eq!(
+            tracker.doing(4),
+            line(Kind::Command, Some("cargo"), 0, true).as_ref()
+        );
+        // A report within the turn (a helper's end, say) changes nothing either.
+        assert_eq!(tracker.reported(4, 1, true, at(start, 3000)), Tell::Nothing);
+        assert_ne!(
+            tracker.doing(4).map(|doing| doing.kind),
+            Some(Kind::Thinking)
+        );
+    }
+
+    #[test]
+    fn a_tool_coming_back_that_the_line_is_not_about_changes_nothing() {
+        let start = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.reported(4, 1, true, start);
+        // Before any tool was heard: a skill came back, which no hook saw begin.
+        assert_eq!(
+            tracker.heard(4, ended(Kind::Tool), true, at(start, 500)),
             Tell::Nothing
         );
         assert_eq!(
-            tracker.doing(4).map(|doing| doing.kind),
-            Some(Kind::Editing)
+            tracker.doing(4),
+            line(Kind::Thinking, None, 0, false).as_ref()
         );
+        // A command runs; another kind of tool comes back, and one that did not say which.
+        tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000));
+        for other in [
+            ended(Kind::Editing),
+            ended(Kind::Tool),
+            Said::Ended { kind: None },
+        ] {
+            assert_eq!(
+                tracker.heard(4, other.clone(), true, at(start, 2000)),
+                Tell::Nothing,
+                "{other:?}"
+            );
+        }
         assert_eq!(
-            now_doing(tracker.asked(4, Kind::Dispatching, true, at(start, 5000))),
-            Some(Doing::of(Kind::Dispatching))
+            tracker.doing(4),
+            line(Kind::Command, Some("cargo"), 0, false).as_ref()
         );
     }
 
@@ -907,44 +1240,54 @@ mod tests {
         tracker.reported(4, 1, true, start);
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Reading, "a.rs"), true, at(start, 1000))),
-            Some(Doing {
-                kind: Kind::Reading,
-                name: Some("a.rs".to_owned()),
-                count: 1
-            })
+            line(Kind::Reading, Some("a.rs"), 1, false)
         );
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Reading, "b.rs"), true, at(start, 2000))),
-            Some(Doing {
-                kind: Kind::Reading,
-                name: None,
-                count: 2
-            })
+            line(Kind::Reading, None, 2, false)
+        );
+        // A read that came back and one more after it: still reads in a row.
+        tracker.heard(4, ended(Kind::Reading), true, at(start, 2500));
+        assert_eq!(
+            tracker.doing(4),
+            line(Kind::Reading, None, 2, true).as_ref()
         );
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Reading, "c.rs"), true, at(start, 3000))),
-            Some(Doing {
-                kind: Kind::Reading,
-                name: None,
-                count: 3
-            })
+            line(Kind::Reading, None, 3, false)
         );
-        tracker.heard(
-            4,
-            Said::Began {
-                kind: Kind::Searching,
-                name: None,
-            },
-            true,
-            at(start, 4000),
-        );
+        tracker.heard(4, unnamed(Kind::Searching), true, at(start, 4000));
         assert_eq!(
             now_doing(tracker.heard(4, named(Kind::Reading, "d.rs"), true, at(start, 5000))),
-            Some(Doing {
-                kind: Kind::Reading,
-                name: Some("d.rs".to_owned()),
-                count: 1
-            })
+            line(Kind::Reading, Some("d.rs"), 1, false)
+        );
+    }
+
+    #[test]
+    fn what_the_app_says_of_a_purlis_command_is_over_when_what_carried_it_comes_back() {
+        let start = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.reported(4, 1, true, start);
+        // `purlis dispatch …` in a shell: the hook, then the ask itself, then the shell back.
+        tracker.heard(4, named(Kind::Command, "purlis"), true, at(start, 1000));
+        assert_eq!(
+            now_doing(tracker.asked(4, Kind::Dispatching, true, at(start, 2000))),
+            line(Kind::Dispatching, None, 0, false)
+        );
+        assert_eq!(
+            tracker.heard(4, ended(Kind::Helper), true, at(start, 2500)),
+            Tell::Nothing
+        );
+        assert_eq!(
+            now_doing(tracker.heard(4, ended(Kind::Command), true, at(start, 3000))),
+            line(Kind::Dispatching, None, 0, true)
+        );
+        // Through purlis's own tool, which a hook sees as a tool.
+        tracker.heard(4, unnamed(Kind::Tool), true, at(start, 4000));
+        tracker.asked(4, Kind::Reporting, true, at(start, 5000));
+        assert_eq!(
+            now_doing(tracker.heard(4, ended(Kind::Tool), true, at(start, 6000))),
+            line(Kind::Reporting, None, 0, true)
         );
     }
 
@@ -969,7 +1312,7 @@ mod tests {
         assert_eq!(tracker.doing(4), None);
         assert_eq!(
             now_doing(tracker.reported(4, 2, true, at(start, 4000))),
-            Some(Doing::of(Kind::Thinking))
+            line(Kind::Thinking, None, 0, false)
         );
     }
 
@@ -979,20 +1322,6 @@ mod tests {
         let mut tracker = Tracker::default();
         tracker.reported(4, 1, true, start);
         assert_eq!(now_doing(tracker.reported(4, 1, false, at(start, 1))), None);
-    }
-
-    #[test]
-    fn a_report_within_a_turn_does_not_put_the_line_back_to_thinking() {
-        let start = Instant::now();
-        let mut tracker = Tracker::default();
-        tracker.reported(4, 1, true, start);
-        tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000));
-        // A helper's `SubagentStop`, say: the same turn, still running.
-        assert_eq!(tracker.reported(4, 1, true, at(start, 2000)), Tell::Nothing);
-        assert_eq!(
-            tracker.doing(4).map(|doing| doing.kind),
-            Some(Kind::Command)
-        );
     }
 
     #[test]
@@ -1012,6 +1341,7 @@ mod tests {
         assert_eq!(tracker.reported(9, 0, false, start), Tell::Nothing);
         assert_eq!(tracker.doing(9), None);
         assert_eq!(tracker.due(9, at(start, 1000)), None);
+        assert_eq!(tracker.closed(9), None, "nothing was held of it");
     }
 
     #[test]
@@ -1082,19 +1412,30 @@ mod tests {
     }
 
     #[test]
-    fn one_chat_s_tools_say_nothing_of_another_and_a_closed_chat_is_forgotten() {
+    fn one_chat_s_tools_say_nothing_of_another_and_a_closed_chat_s_line_is_taken_away() {
         let start = Instant::now();
         let mut tracker = Tracker::default();
         tracker.reported(4, 1, true, start);
         tracker.reported(5, 1, true, start);
-        tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000));
-        assert_eq!(tracker.doing(5), Some(&Doing::of(Kind::Thinking)));
+        let Tell::Now(last) =
+            tracker.heard(4, named(Kind::Command, "cargo"), true, at(start, 1000))
+        else {
+            panic!("told")
+        };
+        assert_eq!(
+            tracker.doing(5),
+            line(Kind::Thinking, None, 0, false).as_ref()
+        );
         assert_eq!(tracker.all().len(), 2);
-        tracker.closed(4);
+        // Closed: the window is told it has no line, after whatever it was told last.
+        let gone = tracker.closed(4).expect("its line is taken away");
+        assert_eq!(gone.doing, None);
+        assert!(gone.sequence > last.sequence);
         assert_eq!(tracker.doing(4), None);
         assert_eq!(tracker.due(4, at(start, 2000)), None);
+        assert_eq!(tracker.closed(4), None, "and once");
         let left = tracker.all();
         assert_eq!(left.iter().map(|(chat, _)| *chat).collect::<Vec<_>>(), [5]);
-        assert_eq!(left[0].1.doing, Some(Doing::of(Kind::Thinking)));
+        assert_eq!(left[0].1.doing, line(Kind::Thinking, None, 0, false));
     }
 }

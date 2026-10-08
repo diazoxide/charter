@@ -2890,12 +2890,17 @@ export type Doing = {
 	 */
 	kind: string,
 	/**
-	 *  A file's base name or a program's name, where the kind has one: letters, digits and a
-	 *  few marks, no space, and short. Shown as text.
+	 *  A file's base name (ASCII letters, digits and a few marks, short) or a program from the
+	 *  core's fixed list, where the kind has one. Shown as text.
 	 */
 	name: string | null,
 	/**  How many files it has read in a row, for `reading`; 0 otherwise. */
 	count: number,
+	/**
+	 *  Whether a hook said its tool came back: the window then says it in the past ("ran
+	 *  cargo"), until the next tool heard.
+	 */
+	over: boolean,
 };
 
 /**  One field of an entry the core refused, and why: the field is the entry's own key. */

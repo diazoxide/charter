@@ -8,13 +8,14 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
 import { BESIDE_ID, stopId, type Catalogued, type Offer } from "./actions";
 import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
-import { ChatRowUnlessDoing, chatDoingId } from "./chatDoing";
+import { chatDoingId, useDoingSaid } from "./chatDoing";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
@@ -680,8 +681,8 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
  * **Two lines** (#1499, V100-50). The first is the persona's mark, the name and the state; the
  * state's word is never cut short, and the name is, with the whole of it as its tooltip and in
  * what a screen reader is told. The second, dimmer, is what the chat is doing while it works
- * (`ChatRowActivity`, #1493), and otherwise where it works, how long it has been in its
- * state, its own branch and the closed chat it came from. **On one line the second is not drawn at all**, and what of it
+ * and for how long (`SecondLine`, #1493), and otherwise where it works, how long it has been
+ * in its state, its own branch and the closed chat it came from. **On one line the second is not drawn at all**, and what of it
  * does not change is the row's tooltip: a row is never two lines squeezed into one.
  */
 const Row = memo(function Row({
@@ -882,23 +883,25 @@ const Row = memo(function Row({
             </span>
             {lines === 2 && (
               <span className="line two">
-                {/* What it is doing, while it works (#1493): in the place of the rest of
-                    the line, which comes back when its turn ends. Both read their own
-                    chat, so the swap draws this line's contents and not the row. */}
-                <ChatRowActivity session={session} />
-                <ChatRowUnlessDoing session={session}>
-                  {elsewhere && <span className="workspace">{workspace}</span>}
-                  <StateSince clock={clock} session={session} />
-                  {ownBranch !== null && (
-                    <span
-                      className="own-branch"
-                      title="A branch of its own, which nothing merges for it"
-                    >
-                      {ownBranch}
-                    </span>
-                  )}
-                  {cameFrom !== null && <span className="from">{cameFrom}</span>}
-                </ChatRowUnlessDoing>
+                <SecondLine
+                  session={session}
+                  activity={<ChatRowActivity session={session} />}
+                  since={<StateSince clock={clock} session={session} />}
+                  before={elsewhere && <span className="workspace">{workspace}</span>}
+                  after={
+                    <>
+                      {ownBranch !== null && (
+                        <span
+                          className="own-branch"
+                          title="A branch of its own, which nothing merges for it"
+                        >
+                          {ownBranch}
+                        </span>
+                      )}
+                      {cameFrom !== null && <span className="from">{cameFrom}</span>}
+                    </>
+                  }
+                />
               </span>
             )}
           </button>
@@ -924,6 +927,46 @@ const Row = memo(function Row({
     </li>
   );
 });
+
+/**
+ * **What a row's second line holds.** While its chat works and something was heard of what it
+ * is doing (#1493), that and how long it has been in its state, and nothing else: "running
+ * cargo · 2m". The activity is cut short where the row is narrow and the time is not, since
+ * the time is what tells a live "running cargo" from a stuck one. Otherwise where it works,
+ * the time, its own branch and the chat it came from, as before.
+ *
+ * It reads its own chat, so the swap draws the second line's contents and not the row. The
+ * line itself is always there and a fixed line high, so no row changes height (#1499).
+ */
+function SecondLine({
+  session,
+  activity,
+  since,
+  before,
+  after,
+}: {
+  session: number;
+  activity: ReactNode;
+  since: ReactNode;
+  before: ReactNode;
+  after: ReactNode;
+}) {
+  if (useDoingSaid(session) !== undefined)
+    return (
+      <span className="doing-and-since">
+        {activity}
+        {since}
+      </span>
+    );
+  return (
+    <>
+      {activity}
+      {before}
+      {since}
+      {after}
+    </>
+  );
+}
 
 /**
  * How long a chat has been in its state (V100-19), where this window saw it come into it

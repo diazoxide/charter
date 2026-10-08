@@ -24,11 +24,14 @@ pub struct Doing {
     /// The kind's word: `thinking`, `command`, `editing`, `reading`, `searching`, `fetching`,
     /// `helper`, `dispatching`, `asking`, `reporting`, `tool`.
     pub kind: String,
-    /// A file's base name or a program's name, where the kind has one: letters, digits and a
-    /// few marks, no space, and short. Shown as text.
+    /// A file's base name (ASCII letters, digits and a few marks, short) or a program from the
+    /// core's fixed list, where the kind has one. Shown as text.
     pub name: Option<String>,
     /// How many files it has read in a row, for `reading`; 0 otherwise.
     pub count: u32,
+    /// Whether a hook said its tool came back: the window then says it in the past ("ran
+    /// cargo"), until the next tool heard.
+    pub over: bool,
 }
 
 /// What `chat-doing` carries, and what `chat_doings` answers a list of: one chat's line, or
@@ -108,9 +111,13 @@ impl Doings {
         self.act(chat, tell);
     }
 
-    /// Chat `chat` is closed: what was held of it is dropped.
+    /// Chat `chat` is closed: what was held of it is dropped, and the window is told it has
+    /// no line, so a chat that later wears the same number never starts with this one's.
     pub fn closed(&self, chat: u32) {
-        self.tracker().closed(chat);
+        let gone = self.tracker().closed(chat);
+        if let Some(told) = gone {
+            self.tell(chat, told);
+        }
     }
 
     /// The line of every chat `board` has running, for a window that has just opened.
@@ -137,6 +144,7 @@ impl Doings {
                 kind: doing.kind.word().to_owned(),
                 name: doing.name,
                 count: doing.count,
+                over: doing.over,
             }),
         }
     }
@@ -285,16 +293,37 @@ mod tests {
             Some(Doing {
                 kind: "command".to_owned(),
                 name: Some("cargo".to_owned()),
-                count: 0
+                count: 0,
+                over: false
             })
         );
         assert!(second.sequence > first.sequence);
         assert_eq!(doings.now(&board).len(), 1);
 
+        // The command comes back: the same line, in the past, and nothing else is invented.
+        std::thread::sleep(purlis_core::doing::AT_MOST_EVERY);
+        doings.heard(
+            &board,
+            4,
+            Said::Ended {
+                kind: Some(Kind::Command),
+            },
+        );
+        let back = next(&rx);
+        assert_eq!(
+            back.doing,
+            Some(Doing {
+                kind: "command".to_owned(),
+                name: Some("cargo".to_owned()),
+                count: 0,
+                over: true
+            })
+        );
+
         hears(&board, &doings, 4, Event::Stop);
         let last = next(&rx);
         assert_eq!(last.doing, None);
-        assert!(last.sequence > second.sequence);
+        assert!(last.sequence > back.sequence);
         assert!(
             doings.now(&board).is_empty(),
             "nothing is held once the turn has ended"
@@ -332,7 +361,14 @@ mod tests {
         hears(&board, &doings, 4, Event::UserPromptSubmit);
         let began = Instant::now();
         for call in 0..2000 {
-            doings.heard(&board, 4, command(&format!("p{call}")));
+            doings.heard(
+                &board,
+                4,
+                Said::Began {
+                    kind: Kind::Editing,
+                    name: Some(format!("f{call}.rs")),
+                },
+            );
         }
         let took = began.elapsed();
         // Everything put off has been said once this has passed.
@@ -347,18 +383,54 @@ mod tests {
         let last = told.last().expect("told at least once");
         assert_eq!(
             last.doing.as_ref().and_then(|doing| doing.name.as_deref()),
-            Some("p1999"),
+            Some("f1999.rs"),
             "the window ends on the last thing said"
         );
     }
 
     #[test]
-    fn a_closed_chat_is_forgotten() {
+    fn a_closed_chat_is_forgotten_and_the_window_is_told_its_line_is_gone() {
+        let (board, doings, rx) = listening();
+        hears(&board, &doings, 4, Event::UserPromptSubmit);
+        let said = next(&rx);
+        doings.closed(4);
+        let gone = next(&rx);
+        assert_eq!((gone.session, &gone.doing), (4, &None));
+        assert!(gone.sequence > said.sequence);
+        assert!(doings.now(&board).is_empty());
+        // A chat nothing was held of says nothing as it closes.
+        doings.closed(9);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn a_line_written_by_hand_cannot_say_the_chat_made_a_report() {
         let (board, doings, rx) = listening();
         hears(&board, &doings, 4, Event::UserPromptSubmit);
         next(&rx);
-        doings.closed(4);
-        assert!(doings.now(&board).is_empty());
+        std::thread::sleep(purlis_core::doing::AT_MOST_EVERY);
+        doings.heard(
+            &board,
+            4,
+            Said::Began {
+                kind: Kind::Reporting,
+                name: Some("cargo".to_owned()),
+            },
+        );
+        let forged = next(&rx);
+        assert_eq!(
+            forged.doing,
+            Some(Doing {
+                kind: "tool".to_owned(),
+                name: None,
+                count: 0,
+                over: false
+            })
+        );
+        // The app's own word for a report that really reached it is the only way to it.
+        std::thread::sleep(purlis_core::doing::AT_MOST_EVERY);
+        doings.asked(&board, 4, Kind::Reporting);
+        assert_eq!(kind_of(&next(&rx)), Some("reporting"));
     }
 
     #[test]

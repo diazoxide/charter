@@ -167,16 +167,20 @@ function states(): ChatStates {
   );
 }
 
+/** A file's name as long as a row shows one, and wider than a sidebar. */
+const LONG_FILE = "a_file_name_that_is_far_wider_than_a_sidebar.tsx";
+
 /**
- * What two of the working chats are doing (#1493): a session's short line, and a task's with a
- * name longer than a sidebar. Chat 6 has a line held of it and nothing heard of its state: it
- * wears none.
+ * What three of the working chats are doing (#1493): a session's command that has come back, a
+ * task reading, and a task's edit of a file with a name longer than a sidebar. Chat 6 has a
+ * line held of it and nothing heard of its state: it wears none.
  */
 const DOINGS = fixedDoings({
   bySession: {
-    1: { kind: "command", name: "cargo", count: 0 },
-    9: { kind: "editing", name: `${LONG}.tsx`, count: 0 },
-    6: { kind: "thinking", name: null, count: 0 },
+    1: { kind: "command", name: "cargo", count: 0, over: true },
+    3: { kind: "reading", name: null, count: 3, over: false },
+    9: { kind: "editing", name: LONG_FILE, count: 0, over: false },
+    6: { kind: "thinking", name: null, count: 0, over: false },
   },
   heardAt: {},
 });
@@ -218,8 +222,10 @@ describe("the Chats list the e2e measures", () => {
       "below-summary",
       "finished-task",
       'class="line two"',
-      "running <bdi",
-      `${LONG}.tsx`,
+      "ran <bdi",
+      "reading 3 files",
+      LONG_FILE,
+      'class="doing-and-since"',
     ])
       expect(html, drawn).toContain(drawn);
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.two-lines.html");
