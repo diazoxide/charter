@@ -591,7 +591,8 @@ export function stopWaiting(tabs: Tabs, pane: number): Tabs {
 /**
  * The tab's own chat: **the session in its first pane, and nothing when that pane is a view.**
  *
- * What a tab's state mark, its pin and the core's "chat in front" are about. A tab that opened
+ * What a tab's state mark and its pin are about. The core's "chat in front" is
+ * {@link chatInFrontOf}, which also names a chat beside a view. A tab that opened
  * on a view and was split to start a chat beside it is still the view's tab — its first pane
  * says what it is — so it draws no chat state and has no chat to pin.
  */

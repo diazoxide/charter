@@ -1001,15 +1001,19 @@ export const PlaneView = memo(function PlaneView({
             typeof chat.shows === "number" ? [[chat.session, chat.shows] as const] : [],
           ),
         );
+        // **A view tab in front comes first**: the chat the core holds in front can be one
+        // beside that view (`chatInFrontOf`), and that chat's own tab is not the one the person
+        // left in front.
+        const viewInFront =
+          frontView === undefined
+            ? undefined
+            : drawn.order.find((id) => {
+                const lead = contentsOf(drawn, id)[0]?.content;
+                return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
+              });
         const inFront =
-          front !== undefined
-            ? homeOf(shownBack, front.session, askedBy)?.tab
-            : frontView !== undefined
-              ? drawn.order.find((id) => {
-                  const lead = contentsOf(drawn, id)[0]?.content;
-                  return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
-                })
-              : undefined;
+          viewInFront ??
+          (front !== undefined ? homeOf(shownBack, front.session, askedBy)?.tab : undefined);
         if (drawn.order.length > 0)
           change(() => (inFront === undefined ? shownBack : selectTab(shownBack, inFront)));
         // Only now may the window say what view tabs it has: saying it before this point would
