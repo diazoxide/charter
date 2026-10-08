@@ -1,6 +1,6 @@
 import { browser, expect, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { endChat, pressAndStart } from "../opening.js";
+import { endChat, endEveryChat, pressAndStart } from "../opening.js";
 
 /**
  * **A session's tab wears a chip of its tasks, measured and driven in the real WebView**
@@ -325,6 +325,11 @@ describe("the chip a session's tab wears for its tasks", () => {
   }
 
   before(async () => {
+    // **It starts from a strip of its own.** The strip draws what fits and the tab in front,
+    // so what earlier files left open decides which of this file's tabs are drawn, and how
+    // wide each is: measured in CI, eleven tabs left behind, and this file's three not drawn.
+    // Ended the way other files end what they leave (`endEveryChat`).
+    await endEveryChat();
     wereAlreadyOpen = await tabNames();
     was = await browser.getWindowSize();
     await windowIs(1280, 800);

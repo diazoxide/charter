@@ -1,7 +1,16 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import { createContext, Fragment, useContext, useEffect, useId, useRef } from "react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+} from "react";
 import type { Offer, TaskEndWay } from "./actions";
 import type { TaskEnding } from "./bindings";
+import { fitWaysOn } from "./wholeWays";
 
 /**
  * **Ending a task by hand** (#1488, V100-5, V100-18): the second step every ending takes, and
@@ -338,6 +347,16 @@ export function TaskEnds({
 }) {
   const hand = useContext(TaskEndContext);
   const why = useId();
+  // **Each way whole or not at all**, decided by measuring the line (`wholeWays.ts`).
+  const group = useRef<HTMLSpanElement>(null);
+  const asking =
+    hand?.confirming !== undefined &&
+    hand.confirming.where === "crumb" &&
+    hand.confirming.session === session;
+  useLayoutEffect(() => {
+    if (group.current === null) return;
+    return fitWaysOn(group.current);
+  }, [asking, stop, close]);
   if (hand === undefined || (stop === undefined && close === undefined)) return null;
   const asked = hand.confirming;
   if (asked !== undefined && asked.where === "crumb" && asked.session === session)
@@ -361,7 +380,7 @@ export function TaskEnds({
     [close, "now"],
   ];
   return (
-    <span className="pane-task-ends" role="group" aria-label="End this task">
+    <span className="pane-task-ends" role="group" aria-label="End this task" ref={group}>
       {drawn.map(([offer, way]) =>
         offer === undefined ? null : (
           <Fragment key={offer.id}>
