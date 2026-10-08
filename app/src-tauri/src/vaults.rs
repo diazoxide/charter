@@ -1619,14 +1619,15 @@ mod tests {
 
     #[test]
     fn no_answer_or_refusal_of_a_move_carries_the_token() {
-        let (dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+        let (_dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
         let mut answers = vec![wire(&open(&ctx, "team")), wire(&list(&ctx))];
         answers.push(wire(&move_identity(&ctx, "team")));
         answers.push(wire(&move_identity(&ctx, "nope")));
         answers.push(wire(&open(&ctx, "team")));
         answers.push(wire(&list(&ctx)));
         // A keyring that cannot be written: the refusal comes after the token was read.
-        std::fs::write(dir.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+        // In the project's own state folder, which is where the move wrote it.
+        std::fs::write(ctx.state.join(keyring::STUB_FILE), "not json").unwrap();
         answers.push(wire(&move_identity(&ctx, "team")));
         answers.push(wire(&open(&ctx, "team")));
         answers.extend(traced(&ctx).iter().map(ToString::to_string));
