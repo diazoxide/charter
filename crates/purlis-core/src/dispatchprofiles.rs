@@ -404,6 +404,12 @@ fn refusal_on(
                  never runs without, so it was not started again. {mark} Then start it again, \
                  or close it and ask again on a profile that asks."
             ),
+            Again::ReopenedAsked => format!(
+                "You started this task with Ask, and its profile '{shown}' is not marked as \
+                 asking a person before its harness acts, which a persona chat started that way \
+                 never runs without, so it was not reopened. {mark} Then reopen it, or ask \
+                 again on a profile that asks. Its report is still here to read."
+            ),
         });
     };
     let flag = crate::shown::short(&flag);
@@ -839,8 +845,13 @@ mod tests {
     fn a_reopen_of_a_task_the_person_asked_for_is_never_told_another_chat_dispatched_it() {
         let other = names(&["other"]).unwrap();
         let yolo = words(&["claude", "--dangerously-skip-permissions"]);
-        for (command, listed) in [(None, Some(&other)), (Some(&yolo), None)] {
-            let (command, listed) = (command.map(Vec::as_slice), listed.map(Vec::as_slice));
+        let plain = words(&["claude"]);
+        let unmarked = Some(Inherited {
+            asks: false,
+            ..on(&plain).expect("a profile")
+        });
+        for (command, listed) in [(None, Some(&other)), (on(&yolo), None), (unmarked, None)] {
+            let listed = listed.map(Vec::as_slice);
             let said = refusal_on(
                 Again::ReopenedAsked,
                 Some("devops"),
