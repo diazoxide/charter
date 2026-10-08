@@ -432,8 +432,14 @@ export const commands = {
 	 *  **Allow** on a dispatch's Notice, at `level`: the pair is the app's record of the held
 	 *  dispatch `id`, never the window's word. Audited, then kept where that level keeps it, and
 	 *  the dispatch starts.
+	 * 
+	 *  `also` is the wanted personas whose boxes the person ticked (#1502): each the question
+	 *  still offers is kept at the same level and with the same workspace condition as the asked
+	 *  pair (#1505), as its own audited grant. `shown` is the digest the
+	 *  Notice was told; where the question reads differently now, nothing is allowed and the
+	 *  Notice reads it again.
 	 */
-	allowDispatch: (plane: PlaneId, id: number, level: GrantLevel) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch", { plane, id, level })),
+	allowDispatch: (plane: PlaneId, id: number, level: GrantLevel, also: string[], shown: string) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch", { plane, id, level, also, shown })),
 	/**
 	 *  **Keep blocked** on a dispatch's Notice: nothing is granted, and the dispatch does not
 	 *  start. Answers whether it was still waiting.
@@ -500,8 +506,11 @@ export const commands = {
 	 *  (#1505). [`allow_dispatch`] is the narrower one, which holds in the workspace the task
 	 *  works in. The pair and the workspace are the app's record of the held dispatch `id`, never
 	 *  the window's word. Audited, then kept, and the dispatch starts.
+	 * 
+	 *  `also` and `shown` are [`allow_dispatch`]'s (#1502): each ticked persona the question still
+	 *  offers is kept at the same level **and in any workspace too**, as the asked pair is.
 	 */
-	allowDispatchAnywhere: (plane: PlaneId, id: number, level: GrantLevel) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch_anywhere", { plane, id, level })),
+	allowDispatchAnywhere: (plane: PlaneId, id: number, level: GrantLevel, also: string[], shown: string) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch_anywhere", { plane, id, level, also, shown })),
 	/**
 	 *  **Changes which workspace a grant holds in**, on Settings' table (#1505): the grant of
 	 *  `asking` to `target` (`*`: any persona) at `level` (`you` or `project`), which holds in
@@ -2601,6 +2610,13 @@ export type DispatchAllowed = {
 	said: string,
 };
 
+/**  One persona a dispatch's Notice offers beside the one asked about (#1502). */
+export type DispatchAlso = {
+	persona: string,
+	/**  What it works with, as `works_with` says it of the target, without the persona's name. */
+	works_with: string,
+};
+
 /**  One persona whose chats may dispatch to any persona, as Settings lists it. */
 export type DispatchAny = {
 	asking: string,
@@ -2879,6 +2895,24 @@ export type DispatchPending = {
 	 *  person is asked again: the grant they made holds there, and this task works elsewhere.
 	 */
 	allowed_in: string[],
+	/**
+	 *  **What the target persona works with**, in purlis's words (#1502): its vaults' names,
+	 *  the hosts the project declares for it and the personas it may itself dispatch to, each
+	 *  clipped to a few; or that no list holds it, where the project's sandbox is off. Never a
+	 *  secret's name or value, and nothing a chat wrote.
+	 */
+	works_with: string,
+	/**
+	 *  The personas the asking persona's definition wants that nothing answers for yet: one
+	 *  box each under the answers, unticked. Read from the definition by the app as it tells
+	 *  this, never from the request. Empty where policy locks the dispatch.
+	 */
+	also: DispatchAlso[],
+	/**
+	 *  A digest of `works_with` and `also`, the part a long list clips included: an Allow
+	 *  sends it back, and one for a question that reads differently now grants nothing.
+	 */
+	shown: string,
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */

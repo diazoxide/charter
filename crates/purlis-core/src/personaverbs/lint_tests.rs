@@ -524,3 +524,54 @@ fn a_persona_named_charter_is_an_error_because_the_name_is_reserved() {
         )]
     );
 }
+
+#[test]
+fn what_of_wants_is_not_offered_is_said_and_a_clean_line_says_nothing() {
+    // #1502: the line grants nothing, and a name in it that the question will not show is
+    // said, so nobody takes it for one that is offered.
+    let p = plane(&[
+        (
+            "ok",
+            &clean("ok").replace("---\n\n", "wants: [peer]\n---\n\n"),
+        ),
+        ("peer", &clean("peer")),
+        (
+            "wide",
+            &clean("wide").replace("---\n\n", "wants: [peer, ghost, wide, *]\n---\n\n"),
+        ),
+    ]);
+    assert_eq!(messages(&linter(&p).definition("ok")), vec![]);
+    assert_eq!(
+        messages(&linter(&p).definition("wide")),
+        vec![
+            (
+                Level::Warn,
+                "wants names 'ghost', which is not a persona of this project, so it is not \
+                 offered"
+            ),
+            (
+                Level::Warn,
+                "wants names the persona itself, which is ignored: a chat dispatches to its own \
+                 persona with no grant"
+            ),
+            (
+                Level::Warn,
+                "wants names `*`, which is ignored: any persona is granted in Settings only, \
+                 and `wants` grants nothing"
+            ),
+        ]
+    ); // A child that inherits the line is told whose line it is.
+    p.write(
+        "personas/kid/persona.md",
+        "---\nname: kid\nextends: wide\nrole: Kid\nvault: none\ndelegate-when: nights\n---\n\n# Kid\n",
+    );
+    let kid = linter(&p).definition("kid");
+    assert_eq!(
+        messages(&kid)[0],
+        (
+            Level::Warn,
+            "wants names 'ghost', which is not a persona of this project, so it is not offered, \
+             in the line it inherits from 'wide'"
+        )
+    );
+}

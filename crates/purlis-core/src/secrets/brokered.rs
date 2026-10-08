@@ -334,6 +334,26 @@ fn allowed_here(ctx: &Ctx, persona: &str, vault: &str) -> bool {
             .any(|one| one.vault == vault && one.persona == persona)
 }
 
+/// **The vaults a chat started as `persona` is handed**, by name and sorted: the ones the
+/// registry tags for it and the ones you let it use on this machine, which is what
+/// [`authorise`] opens. Never the `vault:` line of the persona's own file. An error where the
+/// registry does not read, so "which is not known" is never said as "none". Names only: no
+/// vault is opened, and nothing inside one is read.
+pub fn vaults_of(ctx: &Ctx, persona: &str) -> Result<Vec<String>, String> {
+    let doc = registry::load_registry(ctx).map_err(|e| e.message)?;
+    let mut out = registry::vaults_for_persona(&doc, persona);
+    if !crate::sandbox::policy::Locks::of(&ctx.root).forbids_vault_grants() {
+        for one in crate::sandbox::local::granted_vaults(&ctx.root) {
+            let held = registry::vaults(&doc).contains_key(&one.vault);
+            if one.persona == persona && held && !out.contains(&one.vault) {
+                out.push(one.vault);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// `vault` as [`NotTagged`] for a chat started as `persona`, or `None` where there is nothing
 /// to allow: the chat runs as no persona, the vault is not registered, or the persona may use
 /// it already.

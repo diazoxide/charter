@@ -5112,6 +5112,10 @@ mod tests {
             r#"{"chat":4,"allow_dispatch":{"id":1,"level":"chat"},"token":"t"}"#,
             r#"{"revoke_dispatch_grant":{"chat":4,"id":"you\u001fsteward\u001fdevops"}}"#,
             r#"{"keep_dispatch_blocked":{"chat":4,"id":1}}"#,
+            // #1502: an Allow that ticks boxes and says what it was shown.
+            r#"{"allow_dispatch":{"chat":4,"id":1,"level":"you","also":["qa","docs"],"shown":"0f"}}"#,
+            r#"{"chat":4,"allow_dispatch":{"id":1,"level":"project","also":["*"],"shown":""},"token":"t"}"#,
+            r#"{"wants":{"persona":"steward","names":["devops","qa"]}}"#,
             // #1503: never, its lifting, and "any persona", by each window command's name.
             r#"{"never_dispatch":{"chat":4,"id":1}}"#,
             r#"{"chat":4,"never_dispatch":{"id":1},"token":"t"}"#,

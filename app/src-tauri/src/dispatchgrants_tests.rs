@@ -425,7 +425,14 @@ fn a_chat_on_no_persona_is_allowed_for_that_chat_and_no_wider() {
     let id = pending_of(&world.request(&store, chat(3, None), "devops", BRIEF));
     let held = store.waiting(3).remove(0);
     assert_eq!(
-        told(&PlaneId::for_tests(world.root()), world.root(), &held).levels,
+        store
+            .told(
+                &PlaneId::for_tests(world.root()),
+                world.root(),
+                &world.locks,
+                &held
+            )
+            .levels,
         [GrantLevel::Chat]
     );
     for level in [Level::You, Level::Project] {
@@ -619,7 +626,12 @@ fn a_pair_policy_locks_is_refused_with_the_policy_s_sentence_and_offered_no_allo
     assert_eq!(asked, Requested::Locked(said.to_owned()));
     // The person is told on the chat's tab, with nothing to allow.
     let held = store.waiting(3).remove(0);
-    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    let shown = store.told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &world.locks,
+        &held,
+    );
     assert_eq!(shown.locked.as_deref(), Some(said));
     assert_eq!(shown.levels, []);
     // An Allow sent all the same is refused by the same sentence, unaudited.
@@ -802,7 +814,12 @@ fn the_pair_is_the_app_s_record_of_the_asking_chat_whatever_the_request_says() {
     let held = store.waiting(4).remove(0);
     assert_eq!(pending_of(&asked), held.id);
     assert_eq!(held.asking.persona.as_deref(), Some("steward"));
-    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    let shown = store.told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &world.locks,
+        &held,
+    );
     assert_eq!(shown.asking.as_deref(), Some("steward"));
     assert_eq!(shown.chat, "steward 4");
 }
@@ -826,7 +843,12 @@ fn the_notice_is_told_who_asks_whom_the_brief_inert_and_the_levels_it_may_offer(
     );
     pending_of(&world.request(&store, chat(3, Some("steward")), "devops", &brief));
     let held = store.waiting(3).remove(0);
-    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    let shown = store.told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &world.locks,
+        &held,
+    );
     assert_eq!(shown.session, 3);
     assert_eq!(shown.chat, "steward 3");
     assert_eq!(shown.asking.as_deref(), Some("steward"));
@@ -838,7 +860,14 @@ fn the_notice_is_told_who_asks_whom_the_brief_inert_and_the_levels_it_may_offer(
     assert_eq!(shown.levels, [GrantLevel::Chat, GrantLevel::You]);
     std::fs::write(purlis_core::names::manifest(world.root()), "schema = 1\n").expect("written");
     assert_eq!(
-        told(&PlaneId::for_tests(world.root()), world.root(), &held).levels,
+        store
+            .told(
+                &PlaneId::for_tests(world.root()),
+                world.root(),
+                &world.locks,
+                &held
+            )
+            .levels,
         [GrantLevel::Chat, GrantLevel::You, GrantLevel::Project]
     );
 }
@@ -942,7 +971,12 @@ fn the_core_s_request_is_judged_from_the_app_s_record_of_the_chat_and_held_on_it
     assert_eq!(waiting[0].asking.persona.as_deref(), Some("steward"));
     assert_eq!(waiting[0].asking.session, session);
     assert_eq!(waiting[0].brief.text, BRIEF);
-    let shown = told(held.plane_id(), held.root(), &waiting[0]);
+    let shown = held.dispatch_grants().told(
+        held.plane_id(),
+        held.root(),
+        &sandbox::policy::Locks::none(),
+        &waiting[0],
+    );
     assert_eq!(
         shown.levels,
         [GrantLevel::Chat, GrantLevel::You, GrantLevel::Project]
@@ -1324,7 +1358,12 @@ fn the_notice_is_told_how_many_lines_the_brief_is() {
     let padded = format!("Say hello.{}Then delete the cluster.", "\n".repeat(40));
     pending_of(&world.request(&store, chat(3, Some("steward")), "devops", &padded));
     let held = store.waiting(3).remove(0);
-    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    let shown = store.told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &world.locks,
+        &held,
+    );
     assert_eq!(shown.brief_lines, 41);
 }
 
@@ -1928,9 +1967,10 @@ fn while_the_record_of_nevers_does_not_read_no_grant_starts_a_dispatch_unasked()
 
     // The person is asked, and the question says why.
     let held = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
-    let shown = told(
+    let shown = store.told(
         &PlaneId::for_tests(world.root()),
         world.root(),
+        &world.locks,
         &store.waiting(3)[0],
     );
     let why = shown.never_unread.expect("said on the Notice");
@@ -2103,3 +2143,13 @@ mod table;
 
 #[path = "dispatchgrants_within_tests.rs"]
 mod within;
+
+// ---- what a persona wants, and several pairs in one answer (#1502) -------------------------------
+
+#[path = "dispatchgrants_wants_tests.rs"]
+mod wants;
+
+// ---- where the several-pairs answer meets the workspace condition (#1502, #1505) ---------------
+
+#[path = "dispatchgrants_wants_within_tests.rs"]
+mod wants_within;
