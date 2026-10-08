@@ -61,9 +61,13 @@ export const MOST_PER_PROJECT = 200;
  * (`purlis_core::windowprefs::ON_THIS_MACHINE`). A project is keyed by its absolute path, so
  * no project is ever this key.
  *
- * Its causes never change and nothing settles them: a Notice seen once stays seen. Only the
- * window writes them, on the person's press (`set_dismissed_on_this_machine`), and no chat
- * reaches a window's commands, so no chat sets or clears what the person has seen.
+ * Its causes never change and nothing settles them: a Notice seen once stays seen. The window
+ * adds one on the person's press (`see_on_this_machine`, under the file's lock), and asks the
+ * file again before it shows one (`seen_on_this_machine`), so a second window open at once does
+ * not show it again. Those commands are served to the window and to a connection holding the
+ * window's own credential, never to a chat, and the core keeps nothing under this key but the
+ * causes it lists itself (`purlis_core::windowprefs::ONCE_ON_THIS_MACHINE`, held to this list
+ * by `windowprefs.test.ts`).
  */
 export const ON_THIS_MACHINE = "on this machine";
 
@@ -133,18 +137,27 @@ function held(layout: Reading = atCreation().layout): Map<string, ReadonlySet<st
 /** Every write, in the order the window made it, so an older list never lands last. */
 let writing: Promise<void> = Promise.resolve();
 
-function change(project: string, next: ReadonlySet<string>) {
+/** What this launch holds for `project` is now `next`, and every reader is told. */
+function hold(project: string, next: ReadonlySet<string>) {
   const all = held();
   if (next.size === 0) all.delete(project);
   else all.set(project, next);
   for (const listener of listeners) listener();
-  const causes = [...next];
+}
+
+/** `next` is held, and kept in the layout file by `keep`: by default, `project`'s whole list. */
+function change(
+  project: string,
+  next: ReadonlySet<string>,
+  keep: () => ReturnType<typeof commands.setDismissed> = () =>
+    commands.setDismissed(project, [...next]),
+) {
+  hold(project, next);
   writing = writing.then(async () => {
-    const kept = await (
-      project === ON_THIS_MACHINE
-        ? commands.setDismissedOnThisMachine(causes)
-        : commands.setDismissed(project, causes)
-    ).catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const kept = await keep().catch((err: unknown) => ({
+      status: "error" as const,
+      error: String(err),
+    }));
     sayAboutThisMachine(
       "dismissed",
       kept.status === "error"
@@ -205,7 +218,19 @@ export function showAgain(project: string, cause: string): void {
 export function seeOnThisMachine(cause: string): void {
   const was = dismissedIn(ON_THIS_MACHINE);
   if (!keptOnce(cause) || was.has(cause)) return;
-  change(ON_THIS_MACHINE, new Set(was).add(cause));
+  // Added by the core under the file's lock, never a whole list written back: another window
+  // may have seen another cause since this one launched.
+  change(ON_THIS_MACHINE, new Set(was).add(cause), () => commands.seeOnThisMachine(cause));
+}
+
+/**
+ * The core says `cause` was already seen on this machine (`seen_on_this_machine`), by another
+ * window since this one launched: held as seen here too, and nothing is written.
+ */
+export function seenElsewhereOnThisMachine(cause: string): void {
+  const was = dismissedIn(ON_THIS_MACHINE);
+  if (!keptOnce(cause) || was.has(cause)) return;
+  hold(ON_THIS_MACHINE, new Set(was).add(cause));
 }
 
 /** Whether `cause` was seen on this machine, for a component that redraws when it is, with

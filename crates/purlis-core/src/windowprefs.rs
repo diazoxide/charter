@@ -307,6 +307,12 @@ pub const DISMISSED: &str = "dismissed";
 /// out by the projects' dismissals ([`DISMISSED_MOST_BYTES`]): dropping it would show it again.
 pub const ON_THIS_MACHINE: &str = "on this machine";
 
+/// **The only causes kept [`ON_THIS_MACHINE`]**: each a Notice shown once per machine. Any
+/// other cause given for that key, or found under it, is dropped, so the list is never more
+/// than these few words and the file's bound holds without trimming it. `app/src/dismissals.ts`
+/// holds the same list (`ONCE_ON_THIS_MACHINE`), and `windowprefs.test.ts` holds it to this one.
+pub const ONCE_ON_THIS_MACHINE: &[&str] = &["chip-explained"];
+
 /// The lock a read-modify-write of the layout file holds, beside it.
 const LAYOUT_LOCK: &str = "layout.json.lock";
 
@@ -327,6 +333,58 @@ pub const DISMISSED_MOST_BYTES: u64 = MAX_BYTES / 2;
 /// No file yet is a layout with nothing in it but this; a file charter could not read, or
 /// cannot use, is refused and left as it is.
 pub fn set_dismissed(config_root: &Path, project: &str, causes: &[String]) -> io::Result<()> {
+    edit_dismissed(config_root, project, |_| causes.to_vec())
+}
+
+/// **Keeps `cause` as seen [`ON_THIS_MACHINE`]** (#1501): added to what the file holds there,
+/// read and written under the file's lock, so two windows seeing two causes keep both and one
+/// seeing what the other already saw changes nothing. A cause not in
+/// [`ONCE_ON_THIS_MACHINE`] is refused.
+pub fn see_on_this_machine(config_root: &Path, cause: &str) -> io::Result<()> {
+    if !ONCE_ON_THIS_MACHINE.contains(&cause) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{cause:?} is not a Notice shown once per machine"),
+        ));
+    }
+    edit_dismissed(config_root, ON_THIS_MACHINE, |held| {
+        let mut causes = held.to_vec();
+        if !causes.iter().any(|one| one == cause) {
+            causes.push(cause.to_owned());
+        }
+        causes
+    })
+}
+
+/// Whether `cause` was seen [`ON_THIS_MACHINE`], as the layout file says now: what a window
+/// asks before it shows a Notice shown once per machine, since another window may have seen it
+/// after this one launched. A file purlis cannot read or use says no.
+pub fn seen_on_this_machine(config_root: &Path, cause: &str) -> bool {
+    read_layout(config_root)
+        .document
+        .and_then(|document| document.get(DISMISSED)?.get(ON_THIS_MACHINE).cloned())
+        .and_then(|held| held.as_array().cloned())
+        .is_some_and(|held| held.iter().any(|one| one.as_str() == Some(cause)))
+}
+
+/// Only the causes [`ONCE_ON_THIS_MACHINE`] lists, each once, in the order given.
+fn only_once<'a>(causes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for cause in causes {
+        if ONCE_ON_THIS_MACHINE.contains(&cause) && !kept.iter().any(|one| one == cause) {
+            kept.push(cause.to_owned());
+        }
+    }
+    kept
+}
+
+/// Replaces `project`'s dismissals with what `next` makes of what the file holds for it, under
+/// the file's lock, and holds the whole to its bound.
+fn edit_dismissed(
+    config_root: &Path,
+    project: &str,
+    next: impl FnOnce(&[String]) -> Vec<String>,
+) -> io::Result<()> {
     let _held = crate::machine::Lock::named(config_root, LAYOUT_LOCK);
     let text = crate::machine::read_beside(config_root, LAYOUT, MAX_BYTES, "the window's layout")
         .map_err(|why| {
@@ -360,9 +418,30 @@ pub fn set_dismissed(config_root: &Path, project: &str, causes: &[String]) -> io
         Some(serde_json::Value::Object(held)) => held,
         _ => serde_json::Map::new(),
     };
-    dismissed.remove(project);
+    let held: Vec<String> = dismissed
+        .remove(project)
+        .and_then(|held| held.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|one| one.as_str().map(str::to_owned))
+        .collect();
+    let mut causes = next(&held);
+    if project == ON_THIS_MACHINE {
+        causes = only_once(causes.iter().map(String::as_str));
+    }
     if !causes.is_empty() {
         dismissed.insert(project.to_owned(), serde_json::json!(causes));
+    }
+    // What was seen once is never trimmed by the bound, so it is held to its few words here,
+    // whoever wrote it there: a hand-edited list under the key is cut to them.
+    if project != ON_THIS_MACHINE
+        && let Some(seen) = dismissed.remove(ON_THIS_MACHINE)
+    {
+        let seen = seen.as_array().cloned().unwrap_or_default();
+        let kept = only_once(seen.iter().filter_map(serde_json::Value::as_str));
+        if !kept.is_empty() {
+            dismissed.insert(ON_THIS_MACHINE.to_owned(), serde_json::json!(kept));
+        }
     }
     within_bound(config_root, project, &mut dismissed);
     if !dismissed.is_empty() {
@@ -800,6 +879,49 @@ mod tests {
         assert!(
             Path::new(ON_THIS_MACHINE).is_relative(),
             "never a project's path"
+        );
+    }
+
+    #[test]
+    fn only_a_notice_shown_once_per_machine_is_kept_on_this_machine_and_never_past_the_bound() {
+        // Whoever writes under the key, and whatever was hand-edited there, the key holds the
+        // few causes purlis shows once per machine, so the file stays one a launch reads.
+        let home = home();
+        let many: Vec<String> = (0..1200).map(|i| format!("chip-{i:0>50}")).collect();
+        let mut given = many.clone();
+        given.push("chip-explained".to_owned());
+        given.push("chip-explained".to_owned());
+        set_dismissed(home.path(), ON_THIS_MACHINE, &given).unwrap();
+        assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() < MAX_BYTES);
+        assert_eq!(
+            dismissed_in(home.path())[ON_THIS_MACHINE],
+            serde_json::json!(["chip-explained"])
+        );
+
+        // A hand-edited list under the key is cut at the next write of any project.
+        let mut document = read_layout(home.path()).document.unwrap();
+        document["dismissed"][ON_THIS_MACHINE] = serde_json::json!(many[..400]);
+        put(home.path(), LAYOUT, &document.to_string());
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).unwrap();
+        assert!(dismissed_in(home.path()).get(ON_THIS_MACHINE).is_none());
+
+        assert!(see_on_this_machine(home.path(), "pin-dormant:a").is_err());
+    }
+
+    #[test]
+    fn what_one_window_saw_on_this_machine_another_reads_at_once_and_keeps() {
+        // Two windows: each adds what it saw under the lock, and each asks the file before
+        // showing a Notice shown once per machine (#1501).
+        let home = home();
+        assert!(!seen_on_this_machine(home.path(), "chip-explained"));
+        see_on_this_machine(home.path(), "chip-explained").unwrap();
+        assert!(seen_on_this_machine(home.path(), "chip-explained"));
+        // A second see, and another project's dismissal, change nothing of it.
+        see_on_this_machine(home.path(), "chip-explained").unwrap();
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).unwrap();
+        assert_eq!(
+            dismissed_in(home.path())[ON_THIS_MACHINE],
+            serde_json::json!(["chip-explained"])
         );
     }
 

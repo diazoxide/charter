@@ -84,7 +84,7 @@ function chat(session: number, workspace: string, more: Partial<OpenChat> = {}):
   };
 }
 
-function taskOf(asker: number): Lineage {
+function taskOf(asker: number, more: Partial<Lineage> = {}): Lineage {
   return {
     chat: asker,
     name: `steward ${asker}`,
@@ -93,6 +93,7 @@ function taskOf(asker: number): Lineage {
     tab: false,
     reported: false,
     unreported: false,
+    ...more,
   };
 }
 
@@ -139,8 +140,15 @@ function core(open: Listed[], attended: (session: number) => boolean = () => tru
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return open.map(asListed);
     if (cmd === "chat_attended") return attended(a.session as number);
-    if (cmd === "set_dismissed_on_this_machine") {
-      disk.seen = [...(a.causes as string[])];
+    if (cmd === "see_on_this_machine") {
+      const cause = a.cause as string;
+      if (!disk.seen.includes(cause)) disk.seen = [...disk.seen, cause];
+      return null;
+    }
+    if (cmd === "seen_on_this_machine") return disk.seen.includes(a.cause as string);
+    if (cmd === "tab_shows") {
+      const one = open.find((chat) => chat.session === a.session);
+      if (one) one.shows = (a.shown as number | null) ?? null;
       return null;
     }
     if (cmd === "dispatch_grants_needed") return [];
@@ -232,6 +240,19 @@ const theNotice = () =>
 const said = (notice: HTMLElement) =>
   notice.querySelector(".notice-says")?.textContent?.replace(/\s+/g, " ").trim();
 
+/** The sessions the panes on screen show, left to right. */
+const onScreen = () =>
+  screen.queryAllByTestId("pane").map((pane) => Number(pane.getAttribute("data-session")));
+
+/** The tab called `name` on the strip. */
+const tabOf = (name: string) => {
+  const found = within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((one) => one.querySelector(".tab-name")?.textContent === name);
+  if (found === undefined) throw new Error(`no tab is called ${name}`);
+  return found;
+};
+
 /** Lets every answer the window asked for land. */
 const settle = () => act(() => new Promise((done) => setTimeout(done, 50)));
 
@@ -286,8 +307,9 @@ describe("the first dispatch on a machine explains the chip (#1501)", () => {
     expect(explained()).toBeNull();
     await settle();
     // Kept on this machine, in the person's own layout file, under no project.
-    expect(held.asked.filter((one) => one.cmd === "set_dismissed_on_this_machine")).toEqual([
-      { cmd: "set_dismissed_on_this_machine", args: { causes: ["chip-explained"] } },
+    // Added by the core under the file's lock: never a whole list written back.
+    expect(held.asked.filter((one) => one.cmd === "see_on_this_machine")).toEqual([
+      { cmd: "see_on_this_machine", args: { cause: "chip-explained" } },
     ]);
     expect(disk.seen).toEqual(["chip-explained"]);
   });
@@ -310,18 +332,86 @@ describe("the first dispatch on a machine explains the chip (#1501)", () => {
     expect(await screen.findByRole("menu", { name: /^Tasks of / })).toBeInTheDocument();
     expect(explained()).toBeNull();
     await settle();
-    expect(held.asked.some((one) => one.cmd === "set_dismissed_on_this_machine")).toBe(true);
+    expect(held.asked.some((one) => one.cmd === "see_on_this_machine")).toBe(true);
     expect(disk.seen).toEqual(["chip-explained"]);
   });
 
   it("is not shown to a chat nobody is at, and waits for one a person is at", async () => {
-    // Chat 1 runs with its harness's prompts off: nobody is at it.
-    const held = await drawn([chat(1, "alpha"), talk()], (session) => session !== 1);
+    // Chat 1 runs with its harness's prompts off: nobody is at it. Chat 2 has a person.
+    const held = await drawn(
+      [chat(1, "alpha"), chat(2, "alpha"), talk(), chat(5, "alpha", { from: taskOf(2) })],
+      (session) => session !== 1,
+    );
     await settle();
     expect(held.asked.some((one) => one.cmd === "chat_attended")).toBe(true);
     expect(explained()).toBeNull();
     // Nothing was kept for it: the next session a person is at still has it explained.
-    expect(held.asked.some((one) => one.cmd === "set_dismissed_on_this_machine")).toBe(false);
+    expect(held.asked.some((one) => one.cmd === "see_on_this_machine")).toBe(false);
+
+    fireEvent.click(tabOf("steward 2"));
+    const notice = await theNotice();
+    expect(said(notice)).toMatch(/^This chat started a task/);
+  });
+
+  it("asks again whether a person is at the chat when its tasks change", async () => {
+    // Nobody is at chat 1 when its first task starts; a person is by its second.
+    let present = false;
+    const held = await drawn([chat(1, "alpha"), talk()], () => present);
+    await settle();
+    expect(explained()).toBeNull();
+    const asks = () => held.asked.filter((one) => one.cmd === "chat_attended").length;
+    const before = asks();
+
+    present = true;
+    await held.dispatched(sweep());
+    await theNotice();
+    expect(asks()).toBeGreaterThan(before);
+  });
+
+  it("is not shown when another window saw it after this one launched", async () => {
+    // This window read nothing at its launch; the file says it was seen since.
+    const held = await drawn([chat(1, "alpha")]);
+    disk.seen = ["chip-explained"];
+    await held.dispatched(talk());
+    await settle();
+    expect(held.asked.some((one) => one.cmd === "seen_on_this_machine")).toBe(true);
+    expect(explained()).toBeNull();
+  });
+
+  it("is not on a pane that shows a task", async () => {
+    // The session's tab shows its task talk: talk's pane says where it came from in its
+    // breadcrumb, and has nothing to explain.
+    await drawn([chat(1, "alpha", { shows: 4 }), talk()]);
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+    await settle();
+    expect(explained()).toBeNull();
+  });
+
+  it("is not on a task's own tab, even one with helpers below it", async () => {
+    await drawn([
+      chat(1, "alpha", { in_front: false }),
+      chat(4, "alpha", {
+        persona: "devops",
+        label: "talk",
+        in_front: true,
+        from: taskOf(1, { tab: true }),
+      }),
+      chat(7, "alpha", { persona: "devops", label: "deep", from: taskOf(4, { name: "talk" }) }),
+    ]);
+    await waitFor(() => expect(tabOf("talk").getAttribute("aria-selected")).toBe("true"));
+    await settle();
+    expect(explained()).toBeNull();
+  });
+
+  it("is not on the session's pane while its task is open beside it", async () => {
+    // Split: each side says which chat it is, so the session's side has a path too.
+    await drawn([
+      chat(1, "alpha"),
+      chat(4, "alpha", { persona: "devops", label: "talk", from: taskOf(1), beside: 1 }),
+    ]);
+    await waitFor(() => expect(onScreen()).toEqual([1, 4]));
+    await settle();
+    expect(explained()).toBeNull();
   });
 
   it("is not shown while the core cannot say a person is at the chat", async () => {

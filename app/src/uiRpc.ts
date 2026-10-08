@@ -1755,12 +1755,22 @@ export const commands = {
 	 */
 	setDismissed: (plane: PlaneId, causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed", { plane, causes })),
 	/**
-	 *  Keeps what the person has seen once on this machine (#1501): `causes` replaces the list kept
-	 *  under no project (`windowprefs::ON_THIS_MACHINE`), and nothing else. Each is a Notice shown
-	 *  once per machine, whatever the project. Only a window asks it, on the person's press, and
-	 *  no chat reaches a window's commands: no chat sets or clears what the person has seen.
+	 *  **Keeps `cause` as seen once on this machine** (#1501): added, under the layout file's lock,
+	 *  to what is kept under no project (`windowprefs::ON_THIS_MACHINE`), so two windows each
+	 *  seeing it keep it once. Only a cause `windowprefs::ONCE_ON_THIS_MACHINE` lists is kept.
+	 * 
+	 *  The window asks it on the person's press. It is not one of the window-only commands
+	 *  (`session_protocol::ui::WINDOW_ONLY`): like `set_dismissed`, it is also served to a
+	 *  connection that holds the window's own credential (a `local-ui` peer of the same build),
+	 *  and to no chat.
 	 */
-	setDismissedOnThisMachine: (causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed_on_this_machine", { causes })),
+	seeOnThisMachine: (cause: string) => typedError<null, string>(__TAURI_INVOKE("see_on_this_machine", { cause })),
+	/**
+	 *  **Whether `cause` was seen once on this machine**, as the layout file says now (#1501): what
+	 *  the window asks before it shows such a Notice, since another window may have seen it after
+	 *  this one launched. No, where purlis keeps no layout or cannot read it.
+	 */
+	seenOnThisMachine: (cause: string) => typedError<boolean, string>(__TAURI_INVOKE("seen_on_this_machine", { cause })),
 	/**
 	 *  **Use built-in** (NO-6): moves the operator's theme file aside to `theme.aside.json`, never
 	 *  over another file, so what is in force without it is drawn from here on. Answers where the

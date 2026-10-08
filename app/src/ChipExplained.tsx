@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { commands, type PlaneId } from "./bindings";
-import { useSeenOnThisMachine } from "./dismissals";
+import { seenElsewhereOnThisMachine, useSeenOnThisMachine } from "./dismissals";
 import { Notice } from "./Notice";
 
 /**
@@ -11,8 +11,9 @@ import { Notice } from "./Notice";
  * goes on Dismiss and on its own action (which opens the chip's menu), and either is kept as
  * seen **on this machine** (`dismissals.ts`, {@link useSeenOnThisMachine}): the person's own
  * layout file, where what they have dismissed is already kept, and never a project, which
- * would carry it to every clone. No chat can set or clear it: only the window writes it, on
- * the person's press.
+ * would carry it to every clone. It is added by the core under the file's lock, on the
+ * person's press, and the file is asked again before the Notice is drawn, so a second window
+ * open at once does not show it a second time. No chat can set or clear it.
  *
  * - **Never to a chat nobody is at** (`chat_attended`): a chat whose harness runs with its
  *   prompts off has nobody to read it, and is told nothing, as it is told of no dispatch. Its
@@ -56,8 +57,8 @@ export function ChipExplained({
 }) {
   const { seen, see } = useSeenOnThisMachine(CHIP_EXPLAINED);
   const ours = chip !== undefined && chip.session === session && chip.tasks > 0 && !seen;
-  const attended = useAttended(plane, ours ? session : undefined, chip?.tasks ?? 0);
-  if (!ours || attended !== true) return null;
+  const owed = useOwed(plane, ours ? session : undefined, chip?.tasks ?? 0);
+  if (!ours || owed !== true) return null;
   const one = chip.tasks === 1;
   return (
     <Notice
@@ -81,28 +82,33 @@ export function ChipExplained({
 }
 
 /**
- * Whether a person is at chat `session`, as the core holds it: `undefined` until it answers,
- * and asked again as its tasks change, since a chat's harness may since have said its prompts
- * are off. Nothing is asked for no chat.
+ * Whether the Notice is owed on chat `session`: a person is at it, as the core holds it, and
+ * the layout file does not say it was seen on this machine since this window launched (by
+ * another window: then it is held as seen here too). `undefined` until both answer; asked
+ * again as its tasks change, since a chat's harness may since have said its prompts are off.
+ * Nothing is asked for no chat, and anything but a plain yes and a plain no is no.
  */
-function useAttended(plane: PlaneId, session: number | undefined, tasks: number) {
-  const [answer, setAnswer] = useState<{ session: number; attended: boolean }>();
+function useOwed(plane: PlaneId, session: number | undefined, tasks: number) {
+  const [answer, setAnswer] = useState<{ session: number; owed: boolean }>();
   useEffect(() => {
     if (session === undefined) return;
     let current = true;
-    void commands
-      .chatAttended(plane, session)
-      .then((said) => {
-        // Only a plain yes is one: an error, or a core that does not know the question, is no.
-        const attended = said.status === "ok" && said.data === true;
-        if (current) setAnswer({ session, attended });
-      })
-      .catch(() => {
-        if (current) setAnswer({ session, attended: false });
-      });
+    const failed = { status: "error" as const, error: "" };
+    void Promise.all([
+      commands.chatAttended(plane, session).catch(() => failed),
+      commands.seenOnThisMachine(CHIP_EXPLAINED).catch(() => failed),
+    ]).then(([attended, seen]) => {
+      if (seen.status === "ok" && seen.data === true) seenElsewhereOnThisMachine(CHIP_EXPLAINED);
+      const owed =
+        attended.status === "ok" &&
+        attended.data === true &&
+        seen.status === "ok" &&
+        seen.data === false;
+      if (current) setAnswer({ session, owed });
+    });
     return () => {
       current = false;
     };
   }, [plane, session, tasks]);
-  return answer !== undefined && answer.session === session ? answer.attended : undefined;
+  return answer !== undefined && answer.session === session ? answer.owed : undefined;
 }

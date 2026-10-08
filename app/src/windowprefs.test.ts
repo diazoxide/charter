@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { ON_THIS_MACHINE, ONCE_ON_THIS_MACHINE } from "./dismissals";
 import { drawWhatIsInForce } from "./Extensions";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
 import {
@@ -119,5 +122,22 @@ describe("the operator's own theme", () => {
     await drawWhatIsInForce();
 
     expect(inForce()).toBe(theirs);
+  });
+});
+
+describe("what is seen once on this machine (#1501)", () => {
+  it("is the same key and the same causes the core keeps", () => {
+    // The core drops any other cause under the key, so a cause the window keeps and the core
+    // does not would show its Notice again at every launch.
+    const core = readFileSync(
+      join(process.cwd(), "..", "crates", "purlis-core", "src", "windowprefs.rs"),
+      "utf8",
+    );
+    const key = /pub const ON_THIS_MACHINE: &str = "([^"]*)";/.exec(core)?.[1];
+    const list = /pub const ONCE_ON_THIS_MACHINE: &\[&str\] = &\[([^\]]*)\];/.exec(core)?.[1];
+    expect(key).toBe(ON_THIS_MACHINE);
+    expect([...(list ?? "").matchAll(/"([^"]*)"/g)].map((one) => one[1])).toEqual([
+      ...ONCE_ON_THIS_MACHINE,
+    ]);
   });
 });

@@ -297,7 +297,8 @@ macro_rules! app_commands {
                 windowprefs::write_layout,
                 windowprefs::adopt_layout,
                 windowprefs::set_dismissed,
-                windowprefs::set_dismissed_on_this_machine,
+                windowprefs::see_on_this_machine,
+                windowprefs::seen_on_this_machine,
                 windowprefs::use_built_in_theme,
             ],
             vault_values: [
