@@ -134,6 +134,25 @@ describe("a task", () => {
     expect(kind(sent("stopped_by_person"))).toBe("stopped-by-you");
   });
 
+  it("says a task purlis stopped at a limit the person set in its own words, never as theirs", () => {
+    // #1512. The app's fact, sent as the record's outcome, with or without its short report.
+    for (const board of ["done", "failed", "waiting", undefined] as const) {
+      expect(said({ board, task: sent("stopped_at_limit") })).toBe(
+        "square stopped at its time limit",
+      );
+      expect(said({ board, task: inItsPlace("stopped_at_limit") })).toBe(
+        "square stopped at its time limit",
+      );
+    }
+    const kind = (task: TaskFacts) =>
+      shownState({ board: "done", needsYou: false, task, harness: null })?.kind;
+    expect(kind(sent("stopped_at_limit"))).toBe("stopped-at-limit");
+    // A task below one stopped at its time limit says it went with the task above it.
+    expect(said({ board: "done", task: sent("stopped_with_above") })).toBe(
+      "square stopped with the task above it",
+    );
+  });
+
   it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {
     const waiting = shownState(of({ board: "waiting", needsYou: true }));
     // Its turn ended after its report: the board says `waiting` of it too, and the core keeps

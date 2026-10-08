@@ -99,6 +99,10 @@ pub(crate) enum How {
     StoppedByPerson,
     /// The person closed it: its program was ended with no report from it.
     ClosedByPerson,
+    /// purlis stopped it at its time limit (#1512).
+    StoppedAtLimit,
+    /// purlis stopped it with the task above it, at that task's time limit (#1512).
+    StoppedWithAbove,
 }
 
 impl From<Finished> for How {
@@ -111,6 +115,8 @@ impl From<Finished> for How {
             Finished::EndedWithoutAReport => Self::Unreported,
             Finished::StoppedByThePerson => Self::StoppedByPerson,
             Finished::ClosedByThePerson => Self::ClosedByPerson,
+            Finished::StoppedAtItsTimeLimit => Self::StoppedAtLimit,
+            Finished::StoppedWithTheTaskAbove => Self::StoppedWithAbove,
         }
     }
 }
@@ -252,7 +258,9 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
                 // A chat reads this, and the person is not it: "by the person".
                 Finished::EndedWithoutAReport
                 | Finished::StoppedByThePerson
-                | Finished::ClosedByThePerson => how.said_to_a_chat().to_owned(),
+                | Finished::ClosedByThePerson
+                | Finished::StoppedAtItsTimeLimit
+                | Finished::StoppedWithTheTaskAbove => how.said_to_a_chat().to_owned(),
             },
             age_secs: chrono::DateTime::parse_from_rfc3339(&record.started)
                 .ok()
@@ -632,6 +640,8 @@ mod tests {
             kept_open: false,
             did_not_start: false,
             attempts: 0,
+            worked: 0,
+            limit: None,
         }
     }
 

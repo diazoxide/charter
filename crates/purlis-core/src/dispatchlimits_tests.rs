@@ -1123,3 +1123,180 @@ fn the_settings_save_refuses_a_depth_of_nine() {
         "{refused:?}"
     );
 }
+
+// ---- a session's tokens and a task's time (#1512) ------------------------------------------------
+
+#[test]
+fn with_neither_limit_set_nothing_changes() {
+    let limits = committed("");
+    assert_eq!(limits.tokens_per_session, None);
+    assert_eq!(limits.minutes_per_task, None);
+    assert_eq!(decide(&limits, &quiet()), Decision::Allowed);
+    assert_eq!(time_reached(&limits, u64::MAX), None);
+    assert_eq!(tokens_past(&limits, u64::MAX), None);
+    let files = Files::of(None, &crate::settings::LayerText::Nothing);
+    assert!(!files.sets(Limit::MinutesPerTask, &no_policy()));
+    assert!(!files.sets(Limit::TokensPerSession, &no_policy()));
+}
+
+#[test]
+fn the_token_limit_is_shown_with_its_figure_and_refuses_nothing_yet() {
+    // #1512, #1457: the figure is one a chat can alter, so nothing is decided by it.
+    let limits = committed("[dispatch]\ntokens-per-session = 500000\n");
+    assert_eq!(limits.tokens_per_session, Some(500_000));
+    assert_eq!(tokens_past(&limits, 499_999), None);
+    assert_eq!(tokens_past(&limits, 512_000), Some(500_000));
+    // However far past it a session is, a dispatch is decided as if it were not set.
+    assert_eq!(decide(&limits, &quiet()), Decision::Allowed);
+    let files = Files::of(
+        Some("[dispatch.workspaces.alpha]\ntokens-per-session = 9\n"),
+        &crate::settings::LayerText::Nothing,
+    );
+    assert!(files.sets(Limit::TokensPerSession, &no_policy()));
+    assert!(!files.sets(Limit::MinutesPerTask, &no_policy()));
+}
+
+#[test]
+fn a_task_past_its_minutes_is_reached_and_one_inside_them_is_not() {
+    let limits = committed("[dispatch.personas.steward]\nminutes-per-task = 30\n");
+    assert_eq!(limits.minutes_per_task, Some(30));
+    assert_eq!(
+        limits.set_by(Limit::MinutesPerTask),
+        &Source::Persona("steward".to_owned())
+    );
+    assert_eq!(time_reached(&limits, 29 * 60 + 59), None);
+    assert_eq!(
+        time_reached(&limits, 31 * 60 + 5),
+        Some(Reached::Time {
+            limit: 30,
+            worked: 31
+        })
+    );
+    // A time limit never refuses a dispatch.
+    assert_eq!(decide(&limits, &quiet()), Decision::Allowed);
+}
+
+#[test]
+fn a_zero_of_tokens_or_minutes_is_refused_as_written_and_switches_nothing_off() {
+    let read = read(
+        Some("[dispatch]\ntokens-per-session = 0\nminutes-per-task = 0\n"),
+        FILE,
+    );
+    assert_eq!(read.table.project.get(Limit::TokensPerSession), None);
+    assert_eq!(read.table.project.get(Limit::MinutesPerTask), None);
+    let said = read.refused.join("\n");
+    assert!(
+        said.contains("dispatch.tokens-per-session in charter.toml is 0"),
+        "{said}"
+    );
+    assert!(said.contains("leave it out for no limit"), "{said}");
+    assert_eq!(read.refused.len(), 2, "{said}");
+    // A billion tokens is the most; above it is refused.
+    let big = super::read(Some("[dispatch]\ntokens-per-session = 2000000000\n"), FILE);
+    assert_eq!(big.table.project.get(Limit::TokensPerSession), None);
+    assert!(
+        big.refused[0].contains("never above 1000000000"),
+        "{:?}",
+        big.refused
+    );
+}
+
+#[test]
+fn your_own_token_limit_lowers_where_the_project_sets_none() {
+    let mine = table("[dispatch]\ntokens-per-session = 100000\n");
+    let limits = in_force(
+        &nothing(),
+        Some("alpha"),
+        Some("steward"),
+        Some("devops"),
+        &mine,
+        &no_policy(),
+    );
+    assert_eq!(limits.tokens_per_session, Some(100_000));
+    assert_eq!(limits.set_by(Limit::TokensPerSession), &Source::You);
+    // And above the project's it is ignored, and said so.
+    let higher = in_force(
+        &table("[dispatch]\ntokens-per-session = 50000\n"),
+        None,
+        None,
+        None,
+        &mine,
+        &no_policy(),
+    );
+    assert_eq!(higher.tokens_per_session, Some(50_000));
+    assert_eq!(higher.ignored.len(), 1);
+}
+
+#[test]
+fn a_policy_caps_the_two_and_a_refused_policy_sets_neither() {
+    let mut map = serde_json::Map::new();
+    map.insert("minutes-per-task".to_owned(), serde_json::json!(15));
+    let ceiling = ceiling(&map).expect("read");
+    let limits = in_force(&nothing(), None, None, None, &nothing(), &ceiling);
+    assert_eq!(limits.minutes_per_task, Some(15));
+    assert_eq!(limits.set_by(Limit::MinutesPerTask), &Source::Policy);
+    let mut zero = serde_json::Map::new();
+    zero.insert("tokens-per-session".to_owned(), serde_json::json!(0));
+    assert!(super::ceiling(&zero).is_err());
+
+    let refused = in_force(
+        &nothing(),
+        None,
+        None,
+        None,
+        &nothing(),
+        &ceiling_when_refused(),
+    );
+    assert_eq!(refused.minutes_per_task, None, "no task is stopped for it");
+    assert_eq!(refused.tokens_per_session, None);
+    assert!(matches!(
+        refused_of(&decide(&refused, &quiet())),
+        Refused::Off { .. }
+    ));
+}
+
+#[test]
+fn what_was_reached_is_said_with_the_figure_and_where_the_person_changes_it() {
+    let time = Reached::Time {
+        limit: 30,
+        worked: 31,
+    }
+    .say();
+    assert!(time.contains("worked 31 minutes"), "{time}");
+    assert!(time.contains("may work 30 minutes"), "{time}");
+    assert!(time.contains("working time only"), "{time}");
+    assert!(time.contains("Settings › Project › Dispatch"), "{time}");
+    let above = Reached::Above { limit: 30 }.say();
+    assert!(above.contains("The task above it"), "{above}");
+    assert!(!above.contains("worked"), "{above}");
+    // Kept in the word left for the asking chat, and read back as written.
+    let kept = serde_json::to_string(&Reached::Time {
+        limit: 30,
+        worked: 31,
+    })
+    .unwrap();
+    assert_eq!(kept, r#"{"kind":"time","limit":30,"worked":31}"#);
+    assert_eq!(stricter(Some(30), Some(10)), Some(10));
+    assert_eq!(stricter(None, Some(10)), Some(10));
+    assert_eq!(stricter(None, None), None);
+}
+
+#[test]
+fn a_task_purlis_stops_at_a_limit_is_never_said_to_be_stopped_by_the_person() {
+    let time = Reached::Time {
+        limit: 30,
+        worked: 31,
+    };
+    assert_eq!(
+        crate::dispatched::being_stopped_as(time),
+        "being stopped at its time limit"
+    );
+    let said = crate::dispatched::being_stopped_at_a_limit("check prod", 4, time);
+    assert!(
+        said.contains("is being stopped at its time limit"),
+        "{said}"
+    );
+    assert!(!said.contains("person"), "{said}");
+    let above = crate::dispatched::being_stopped_as(Reached::Above { limit: 30 });
+    assert!(!above.contains("person"), "{above}");
+}

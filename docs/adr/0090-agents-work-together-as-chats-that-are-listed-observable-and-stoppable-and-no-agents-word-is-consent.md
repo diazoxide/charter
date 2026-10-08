@@ -654,3 +654,22 @@ report.
   rows of tasks the person ended still never fold.
 - **On a harness purlis does not type into, Stop is drawn disabled with its reason**, and
   Close now is the offer.
+
+#### Rulings added in review of #1512 (2026-10-09, delegated to the dispatcher; the operator is told)
+
+- **A task's time limit counts its working time only.** `minutes-per-task` (§4's new limit,
+  V100-59) counts a task's time while its turn runs and it shows no prompt: never while it waits
+  on the person, never while it waits on its own tasks, and never while purlis is not running.
+  The app keeps the total on the task's dispatch record, so **a task put back after a restart
+  keeps the working minutes it had**, and the night the app was closed adds nothing. Past the
+  limit, the task and everything below it are asked for their report, the way Stop and get its
+  report asks, in purlis's words and never as the person's stop.
+- **The clock never stops a task the person is in the middle of.** A task showing a permission
+  prompt or a question, or one the person has typed into since its harness last spoke, or one
+  with such a task below it, is left for the next look.
+- **A session's token limit is read and shown, and not enforced yet.** The figure is relayed
+  through a file a chat can write, for its own conversation or another's, so a limit that
+  refused or stopped by it would let one chat stop another's work. `tokens-per-session` is
+  shown on the session's row against its figure with "not enforced yet", and refuses and stops
+  nothing until the figure is out of a chat's reach (issue 1457). This replaces §7's "Cost is
+  shown, not enforced" for tokens only in that the limit can now be set.
