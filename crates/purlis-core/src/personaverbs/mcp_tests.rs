@@ -242,3 +242,16 @@ fn a_wrapped_servers_args_are_what_pythons_list_makes_of_them() {
     assert_eq!(wrap(json!({"k1": 1, "k2": 2})), with(&["k1", "k2"]));
     assert_eq!(wrap(json!(7)), with(&[]));
 }
+
+/// #1458: where `$PURLIS_HOME` puts the state folder outside the project, the approval is
+/// written there, contained at that folder as every other state reader trusts it, and read back.
+#[test]
+fn an_approval_is_recorded_where_purlis_home_puts_the_state_folder_outside_the_project() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let home = tempfile::tempdir().expect("a state folder elsewhere");
+    let state = home.path().join("state");
+    approve(plane.path(), &state, "ops", &["abc".to_string()]).expect("recorded");
+    assert!(approvals_path(&state).is_file());
+    assert_eq!(approved(&state, "ops"), ["abc".to_string()].into());
+    assert!(!plane.path().join(".charter").exists());
+}

@@ -381,8 +381,11 @@ pub fn approve(
     );
     // `json.dumps(doc, indent=2, ensure_ascii=False) + "\n"`; the writer adds the newline.
     let text = crate::pyjson::dumps_indent2_unicode(&Value::Object(doc));
-    crate::plane::private_dir(plane, state)?;
-    crate::plane::write_private(plane, &approvals_path(state), text.as_bytes())
+    // Contained where the state folder is trusted from: the project, or the folder
+    // `$PURLIS_HOME` names when it is outside it (#1458), as every other state reader is.
+    let trust = crate::hookstate::trust_root(plane, state);
+    crate::plane::private_dir(trust, state)?;
+    crate::plane::write_private(trust, &approvals_path(state), text.as_bytes())
 }
 
 /// `persona.mcp_render_entry`: one declared server as the generated agent carries it.

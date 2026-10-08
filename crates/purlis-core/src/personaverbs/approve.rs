@@ -43,25 +43,54 @@ pub const FROM_A_CHAT: &str = "approving a persona's MCP servers hands a value f
      inside a chat; nothing was recorded. Ask the operator to run `purlis persona approve-mcp` \
      in a terminal";
 
-/// What the command says when the approval could not be written, and nothing was recorded for
-/// `persona` (#1458, D-1458-4). Inside a sandboxed chat that is the sandbox holding the record,
+/// What the command says when the approval for `persona` could not be written to `state`
+/// (#1458, D-1458-4): nothing was approved for it, and the approvals of `recorded`, the personas
+/// this run already wrote, stand. Inside a sandboxed chat that is the sandbox holding the record,
 /// which is the person's to write: the refusal says so, as [`FROM_A_CHAT`] does, rather than
 /// blaming the disk.
-fn not_recorded(persona: &str, err: &std::io::Error, sandboxed: bool) -> String {
-    if sandboxed {
-        format!("this chat's sandbox holds the approvals for {persona}: {FROM_A_CHAT}")
+fn not_recorded(
+    persona: &str,
+    err: &std::io::Error,
+    sandboxed: bool,
+    state: &Path,
+    recorded: &[String],
+) -> String {
+    let mut said = if sandboxed {
+        format!(
+            "this chat's sandbox holds the approvals, so nothing was approved for {persona}: \
+             {FROM_A_CHAT}"
+        )
     } else {
         format!(
             "purlis could not record the approval for {persona} ({err}), so nothing was \
-             approved and its servers stay withheld; nothing else changed. Check that the \
-             project's state folder can be written, then run it again"
+             approved for it and its servers stay withheld. Check that {} can be written, then \
+             run it again",
+            crate::shown::short(&state.display().to_string())
         )
+    };
+    if !recorded.is_empty() {
+        said.push_str(&format!(
+            ". What this run recorded before it stands: {}",
+            recorded.join(", ")
+        ));
     }
+    said
 }
 
 /// `purlis persona approve-mcp`, and its exit code: ask about, and record, each credentialed
 /// server whose consent line the operator has read.
-pub fn approve(root: &Path, options: &Options, mut ask: Option<Ask>, say: Sink) -> u8 {
+pub fn approve(root: &Path, options: &Options, ask: Option<Ask>, say: Sink) -> u8 {
+    approve_in(root, options, ask, say, &crate::envvar::var)
+}
+
+/// [`approve`], reading whether this process's writes are held to a chat's sandbox from `env`.
+fn approve_in(
+    root: &Path,
+    options: &Options,
+    mut ask: Option<Ask>,
+    say: Sink,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> u8 {
     if options.in_chat {
         say(Say::Fail(FROM_A_CHAT.into()));
         return 1;
@@ -92,6 +121,7 @@ pub fn approve(root: &Path, options: &Options, mut ask: Option<Ask>, say: Sink) 
     };
     let state = super::state_dir(root);
     let mut any = false;
+    let mut recorded: Vec<String> = Vec::new();
     for n in &names {
         let declared = mcp::credentialed(root, n);
         if declared.is_empty() {
@@ -142,9 +172,14 @@ pub fn approve(root: &Path, options: &Options, mut ask: Option<Ask>, say: Sink) 
             say(Say::Fail(not_recorded(
                 &mcp::label(&[n]),
                 &err,
-                crate::sandbox::writes_are_sandboxed(),
+                crate::sandbox::writes_are_sandboxed_in(env, crate::sandbox::started()),
+                &state,
+                &recorded,
             )));
             return 1;
+        }
+        if !options.dry_run {
+            recorded.push(mcp::label(&[n]));
         }
     }
     if !any {
@@ -199,8 +234,16 @@ mod tests {
     use crate::personaverbs::tests_plane::{Heard, OPS_APPROVED, Plane};
 
     fn run(plane: &Plane, options: &Options, ask: Option<Ask>) -> (u8, Heard) {
+        run_in(plane, options, ask, false)
+    }
+
+    /// [`run`], in a process whose chat's sandbox is `sandboxed`, whatever the real one says.
+    fn run_in(plane: &Plane, options: &Options, ask: Option<Ask>, sandboxed: bool) -> (u8, Heard) {
+        let env = |name: &str| {
+            (sandboxed && name == crate::hookwire::SANDBOXED_ENV).then(|| "1".to_owned())
+        };
         let mut heard = Heard::default();
-        let rc = approve(plane.root(), options, ask, &mut heard.sink());
+        let rc = approve_in(plane.root(), options, ask, &mut heard.sink(), &env);
         (rc, heard)
     }
 
@@ -275,6 +318,7 @@ mod tests {
     fn an_approval_that_cannot_be_written_is_refused_and_never_said_to_be_recorded() {
         // #1458, D-1458-4: a sandboxed chat is denied the record, so a write that fails is where
         // a chat that got past the refusal above ends up. Here the record's name is a folder.
+        // The sandbox is set both ways here, never read from the process running the test.
         let plane = Plane::daily_with_ops();
         std::fs::create_dir_all(mcp::approvals_path(&plane.state())).expect("in the way");
         let yes = Options {
@@ -282,24 +326,51 @@ mod tests {
             persona: Some("ops"),
             ..Options::default()
         };
-        let (rc, heard) = run(&plane, &yes, None);
+        let (rc, heard) = run_in(&plane, &yes, None, false);
         assert_eq!(rc, 1);
         assert!(
             heard.err.contains("could not record the approval for ops"),
             "{}",
             heard.err
         );
+        assert!(!heard.err.contains("sandbox"), "{}", heard.err);
+        assert!(!heard.err.contains("Recorded"), "{}", heard.err);
+
+        let (rc, heard) = run_in(&plane, &yes, None, true);
+        assert_eq!(rc, 1);
+        assert!(
+            heard
+                .err
+                .contains("this chat's sandbox holds the approvals"),
+            "{}",
+            heard.err
+        );
+        assert!(heard.err.contains("is a person's to give"), "{}", heard.err);
         assert!(!heard.err.contains("Recorded"), "{}", heard.err);
     }
 
     #[test]
-    fn inside_a_sandboxed_chat_the_refusal_names_the_sandbox_and_whose_approval_it_is() {
+    fn a_failed_write_says_which_approvals_of_this_run_already_stand() {
         let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        let said = not_recorded("ops", &err, true);
-        assert!(said.contains("sandbox holds the approvals"), "{said}");
-        assert!(said.contains("is a person's to give"), "{said}");
-        assert!(said.contains("purlis persona approve-mcp"), "{said}");
-        assert!(!not_recorded("ops", &err, false).contains("sandbox"));
+        let state = Path::new("/srv/state");
+        let first = not_recorded("ops", &err, false, state, &[]);
+        assert!(!first.contains("stands"), "{first}");
+        assert!(first.contains("/srv/state"), "{first}");
+        let later = not_recorded("solo", &err, false, state, &["ops".to_owned()]);
+        assert!(
+            later.contains("What this run recorded before it stands: ops"),
+            "{later}"
+        );
+        assert!(!later.contains("nothing else changed"), "{later}");
+        let sandboxed = not_recorded("ops", &err, true, state, &[]);
+        assert!(
+            sandboxed.contains("sandbox holds the approvals"),
+            "{sandboxed}"
+        );
+        assert!(
+            sandboxed.contains("purlis persona approve-mcp"),
+            "{sandboxed}"
+        );
     }
 
     #[test]
