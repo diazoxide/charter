@@ -1983,6 +1983,12 @@ impl Listener {
         // what makes it safe: there is no second live app whose socket this could be. On
         // Linux the app also holds a per-user lock (`instance.rs` in charter-app), because a
         // launch without a session bus has no single-instance name to hold.
+        // Held from the stale file's removal to the new file's identity being read, and by a
+        // stopping listener from its check to its removal: in this process a stop can never
+        // take a file bound between the two (`SOCKET_FILES`).
+        let files = SOCKET_FILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -1998,6 +2004,7 @@ impl Listener {
         // Which file is this listener's, read the moment after it was made: a listener that
         // stops removes the file at its path only while it is still this one.
         let file = BoundFile::of(&std::fs::symlink_metadata(path)?);
+        drop(files);
         // The reading thread waits on the socket and on this pair at once, and is woken
         // through the pair. Waking it by connecting to the path reached whatever listened
         // there by then, which need not be this listener.
@@ -2250,9 +2257,22 @@ fn next_connection(
             Ok(()) => Woke::Connection(connection),
             Err(_) => Woke::Nothing,
         },
-        Err(_) => Woke::Nothing,
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Woke::Nothing,
+        // Out of descriptors, most likely: the socket stays readable and `poll` answers at
+        // once, so wait a little rather than spin, as for a failed `poll`.
+        Err(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            Woke::Nothing
+        }
     }
 }
+
+/// Held across a bind's removal of the file at its path, the bind and the read of what it made,
+/// and across a stopping listener's check of its file and its removal. Without it, a project
+/// opened again on another thread could bind its file between a stop's check and its removal,
+/// and lose it. Another process is kept out by the single-instance lock, not by this.
+#[cfg(unix)]
+static SOCKET_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Which file a listener made: its device and inode, read just after `bind`.
 #[cfg(unix)]
@@ -2289,9 +2309,10 @@ enum AtItsPath {
 
 /// Is the file at `path` still the one `bound` names?
 ///
-/// Read without following a link, so a link put at the path is `Another`. An inode is dealt
-/// again once its file is gone, so a file removed and then made again in the same instant
-/// could read as `Its`; nothing in purlis does that between a listener's bind and its stop.
+/// Read without following a link, so a link put at the path is `Another`. The caller holds
+/// [`SOCKET_FILES`] from this read to its removal, so no listener in this process binds the
+/// path in between. An inode is dealt again once its file is gone, so a file removed and made
+/// again by something else in the same instant could read as `Its`; nothing in purlis does.
 #[cfg(unix)]
 fn what_is_at(path: &std::path::Path, bound: BoundFile) -> AtItsPath {
     match std::fs::symlink_metadata(path) {
@@ -2838,6 +2859,9 @@ impl Drop for Reading {
         }
         // The file goes only while it is the one this listener made. Removing whatever is at
         // the path took a newer listener's file, bound there in the same instant.
+        let _files = SOCKET_FILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match what_is_at(&self.path, self.file) {
             AtItsPath::Its => {
                 let _ = std::fs::remove_file(&self.path);
