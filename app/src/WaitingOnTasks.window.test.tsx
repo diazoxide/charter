@@ -469,7 +469,7 @@ describe("a limit, said where it binds (#1498)", () => {
     const session = chat(1, {
       tasks_limit: 6,
       tasks_running: 6,
-      at_limit: { limit: 6, said: SAID },
+      at_limit: { limit: 6, row: "at its task limit (6)", said: SAID },
     });
     const { reports, running } = core([session, ...six]);
     render(<App />);

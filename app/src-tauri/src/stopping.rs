@@ -726,6 +726,9 @@ pub struct Stopping {
     /// session is typed no line while any of them is still being stopped, and one line, for
     /// all of their words, once the last has ended ([`Stopping::holds_word_for`]).
     all: Mutex<HashMap<u32, Vec<u32>>>,
+    /// The sessions to wake once the hold a close is made under is let go: a task of their
+    /// Stop all tasks has left its stop, by whatever road ([`closed`], [`carry_pending`]).
+    wake: Mutex<Vec<u32>>,
 }
 
 impl Stopping {
@@ -784,6 +787,41 @@ impl Stopping {
         true
     }
 
+    /// **Chat `chat` has left its stop** (#1498, review M1): every session whose Stop all
+    /// tasks listed it is woken once the hold is let go, wherever in the tree the chat was. Its
+    /// own word went to the chat that asked for it, which may be a task between it and the
+    /// session; the session's gate is asked again all the same, so the last of its press to
+    /// end, at any depth and by any road, is what types its one line.
+    fn left(&self, chat: u32) {
+        let listed: Vec<u32> = self
+            .all
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(_, tasks)| tasks.contains(&chat))
+            .map(|(session, _)| *session)
+            .collect();
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        for session in listed {
+            if !wake.contains(&session) {
+                wake.push(session);
+            }
+        }
+    }
+
+    /// Chat `session` itself has closed: a Stop all tasks pressed on it holds nothing more
+    /// (review F3).
+    fn session_gone(&self, session: u32) {
+        self.all
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&session);
+        self.wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|one| *one != session);
+    }
+
     /// Keeps `acts` for [`carry_pending`].
     fn pend(&self, acts: Vec<Act>) {
         self.pending
@@ -804,6 +842,18 @@ pub(crate) fn carry_pending(held: &Arc<Held>) {
             .unwrap_or_else(PoisonError::into_inner),
     );
     carry_out(held, acts);
+    // The sessions a task of whose Stop all tasks has left its stop (#1498): each is typed its
+    // one line once the last has (`Stopping::holds_word_for`).
+    let wake = std::mem::take(
+        &mut *held
+            .stopping()
+            .wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
+    for session in wake {
+        crate::dispatched::told_or_settled(held, session);
+    }
 }
 
 /// A cancel of each of `chats` stands down: the person's stop is the later word (D-T59-j3).
@@ -1148,6 +1198,11 @@ pub fn exited(held: &Arc<Held>, session: u32) {
 /// lock that ending the next chat takes.
 pub fn closed(held: &Held, session: u32) {
     held.stopping().named().remove(&session);
+    // A session waiting for the end of a Stop all tasks this chat was in is woken once the
+    // close's hold is let go, and one that closed holds no word and no mark (#1498).
+    held.stopping().left(session);
+    held.stopping().session_gone(session);
+    held.at_limits().clear(session);
     let acts = held
         .stopping()
         .stops()

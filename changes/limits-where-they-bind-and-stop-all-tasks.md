@@ -6,5 +6,6 @@
   and get its report does, and keeps the session running. The session is woken once, when the
   last of them has ended, not once per task (#1498).
 - **A limit is shown where it binds.** A session's tab menu ends with `4 of 6 running`. A
-  session whose dispatch was refused for its task limit says `at its task limit (6)` under its
-  row, with a link to Settings › Project › Dispatch, until a slot frees (#1498).
+  session whose dispatch was refused for a limit says which one under its row (`at its task
+  limit (6)`, or its chain's, or a persona's across the project), with a link to Settings ›
+  Project › Dispatch, until a slot frees (#1498).

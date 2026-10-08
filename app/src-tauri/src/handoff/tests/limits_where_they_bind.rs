@@ -78,6 +78,8 @@ fn a_session_refused_for_its_task_limit_says_so_on_its_row_until_a_slot_frees() 
     // Refused: its row says so, with the number and where it is changed.
     let said = row_of(&held, asking).at_limit.expect("at its task limit");
     assert_eq!(said.limit, 1);
+    // Its own running limit: the number its tab menu's footer counts against.
+    assert_eq!(said.row, "at its task limit (1)");
     assert!(
         said.said.contains("Settings › Project › Dispatch"),
         "{}",
@@ -197,4 +199,117 @@ fn stop_all_tasks_ends_no_more_than_the_question_named() {
     // And a session with nothing at work below it is told so, and nothing is stopped.
     let none = crate::stopping::stop_all_tasks_in_a_test(&kept(&held), later, &[later]);
     assert_eq!(none, Err(crate::stopping::NO_TASK_AT_WORK.to_owned()));
+}
+
+#[test]
+fn raising_the_limit_in_settings_takes_the_line_away_at_the_next_read_of_the_rows() {
+    let (plane, _host, _planes, id, held, asking) = a_steward_under("running-per-chat = 1");
+    a_task_of(&held, &id, asking, "tidy up");
+    let (second, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "and more");
+    assert!(matches!(second, Answer::No { .. }), "{second:?}");
+    assert!(row_of(&held, asking).at_limit.is_some());
+
+    // Settings › Project › Dispatch writes the project's file.
+    let manifest = plane.root.join(purlis_core::plane::MANIFEST);
+    std::fs::write(
+        &manifest,
+        "[persona]\ndefault = \"steward\"\n[dispatch]\nrunning-per-chat = 2\n",
+    )
+    .expect("the manifest");
+
+    // That write is a change the window reads the rows again on...
+    let change = purlis_core::planechange::classify(&plane.root, &manifest).expect("placed");
+    let answers = purlis_core::planechange::answers(Some(&[change])).expect("known");
+    assert!(
+        answers.contains(&purlis_core::planechange::Answer::Sidebar),
+        "{answers:?}"
+    );
+    // ...and the rows, read again, say no limit binds.
+    assert_eq!(row_of(&held, asking).at_limit, None);
+}
+
+#[test]
+fn a_dispatch_let_through_clears_the_mark_and_a_close_does_too() {
+    let (_plane, _host, _planes, id, held, asking) = a_steward_under("running-per-chat = 1");
+    let task = a_task_of(&held, &id, asking, "tidy up");
+    let (second, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "and more");
+    assert!(matches!(second, Answer::No { .. }), "{second:?}");
+    assert!(held.at_limits().marked(asking));
+
+    // The task reports, and the chat dispatches again before any read of its row.
+    reports(&held, &id, task);
+    let (third, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "once more");
+    assert!(matches!(third, Answer::Dispatched { .. }), "{third:?}");
+    assert!(!held.at_limits().marked(asking), "let through: no mark");
+
+    // Refused again, then closed: nothing of it is kept.
+    let (fourth, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "and again");
+    assert!(matches!(fourth, Answer::No { .. }), "{fourth:?}");
+    assert!(held.at_limits().marked(asking));
+    held.close_chat(asking).expect("closed");
+    assert!(!held.at_limits().marked(asking));
+}
+
+/// Chat `task` is asked for its one short turn by the stop, says what it did, and ends.
+fn writes_its_last_turn(held: &Held, id: &PlaneId, task: u32, said: &str) {
+    a_turn_begins(held, task);
+    let answer = tasks_report(
+        held,
+        id,
+        &Tickets::default(),
+        task,
+        Outcome::Blocked,
+        Some(said),
+    );
+    assert!(matches!(answer, Answer::Reported { .. }), "{answer:?}");
+    its_turn_ends(held, task);
+}
+
+#[test]
+fn stop_all_tasks_wakes_the_session_once_when_the_last_to_end_is_deeper_than_its_own_tasks() {
+    // S asked for A and B. A asked for A1, then reported: A is held open by A1, which still
+    // works, and is not itself at work. So the press is A1 and B, and A1's word goes to A.
+    let plane = a_plane_with_personas();
+    let host = Pretend::default();
+    let (planes, id, steward) = a_steward_chat(&host, &plane);
+    let held = planes.held(&id).expect("held");
+    let a = a_task_of(&held, &id, steward, "check prod");
+    let b = a_task_of(&held, &id, steward, "check staging");
+    let a1 = a_task_of(&held, &id, a, "check prod's queue");
+    let reported = reports(&held, &id, a);
+    assert!(matches!(reported, Answer::Finished { .. }), "{reported:?}");
+    for chat in [steward, a, b, a1] {
+        rests(&held, chat);
+    }
+    // A's report reached S: S is woken for it now, before the stop, as for any report.
+    let before = host.typed(steward).len();
+
+    let ending = crate::stopping::all_tasks_ending_of(&held, steward).expect("asked");
+    let mut named = ending.tasks.clone();
+    named.sort_unstable();
+    assert_eq!(named, {
+        let mut both = vec![a1, b];
+        both.sort_unstable();
+        both
+    });
+    crate::stopping::stop_all_tasks_in_a_test(&kept(&held), steward, &ending.tasks)
+        .expect("stopped");
+
+    // B ends first: its word waits, and S is typed nothing.
+    writes_its_last_turn(&held, &id, b, "staging: 2 stuck");
+    assert_eq!(
+        host.typed(steward).len(),
+        before,
+        "A1 is still being stopped"
+    );
+
+    // A1 ends last. Its word goes to A, and S, whose press it ended, is typed its one line.
+    writes_its_last_turn(&held, &id, a1, "queue: fine");
+    assert!(!held.stopping().is_stopping(a1));
+    assert_eq!(
+        host.typed(steward).len(),
+        before + 1,
+        "{:?}",
+        host.typed(steward)
+    );
 }

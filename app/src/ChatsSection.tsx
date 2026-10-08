@@ -1101,7 +1101,8 @@ const Row = memo(function Row({
         /* **At its task limit** (#1498, V100-54): said where the limit binds, on a refusal,
            until a slot frees; with the number and the way to where it is changed. */
         <span className="at-limit" data-testid={`at-limit-${session}`} title={atLimit.said}>
-          <span>at its task limit ({atLimit.limit})</span>
+          {/* Which limit binds, with its number: only its own is "its task limit". */}
+          <span>{atLimit.row}</span>
           <button type="button" className="at-limit-settings" onClick={onLimits}>
             Dispatch settings
           </button>

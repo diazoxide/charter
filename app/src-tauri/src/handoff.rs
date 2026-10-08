@@ -1966,6 +1966,9 @@ fn dispatch_noting(
             }
             .into());
         }
+        // Let past every limit: a slot is free for it, and a line its last refusal put on its
+        // row goes (#1498).
+        held.at_limits().clear(from);
         // The decision refused where no profile was chosen.
         let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
         // **No chat is started for another chat on a profile whose own command switches the

@@ -2226,8 +2226,13 @@ export type Asking = {
 
 /**  What a chat's row says while it is at its task limit. */
 export type AtLimit = {
-	/**  The limit that binds, as a number: what the row says it is at. */
+	/**  The limit that binds, as a number. */
 	limit: number,
+	/**
+	 *  What the row says, naming which limit binds with its number ([`row_words`]): only the
+	 *  chat's own running limit is "its task limit", the one its tab menu's footer counts.
+	 */
+	row: string,
 	/**  The whole sentence for the person: which limit, how many, and where it is changed. */
 	said: string,
 };
