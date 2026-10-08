@@ -184,7 +184,7 @@ pub fn not_put_back(
 /// it waits on the person: a standing, as a task waiting on the person has one, and no report.
 pub fn waiting_on_the_person(why: &str) -> String {
     format!(
-        "waiting on the operator: it did not start again ({})",
+        "waiting on the person: it did not start again ({})",
         crate::shown::one_line(why.trim(), 600)
     )
 }

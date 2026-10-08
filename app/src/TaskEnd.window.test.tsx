@@ -120,9 +120,12 @@ function core(
   endings: Record<number, Partial<TaskEnding>> = {},
   sweepHasATab = false,
   sweepRunsOn = "claude",
+  /** A second session, steward 2, with a tab of its own. */
+  another = false,
 ) {
   const open: Listed[] = [
     chat(1),
+    ...(another ? [chat(2)] : []),
     chat(4, { persona: "devops", label: "talk", from: taskOf(1) }),
     chat(5, {
       persona: "devops",
@@ -261,11 +264,12 @@ async function drawn(
   endings: Record<number, Partial<TaskEnding>> = {},
   sweepHasATab = false,
   sweepRunsOn = "claude",
+  another = false,
 ) {
-  const held = core(endings, sweepHasATab, sweepRunsOn);
+  const held = core(endings, sweepHasATab, sweepRunsOn, another);
   render(<App />);
   const tree = await section();
-  await waitFor(() => expect(within(tree).getAllByRole("treeitem")).toHaveLength(4));
+  await waitFor(() => expect(within(tree).getAllByRole("treeitem")).toHaveLength(another ? 5 : 4));
   return { ...held, tree };
 }
 
@@ -853,6 +857,28 @@ describe("a tab chip's menu (#1487)", () => {
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "now", below: false }]),
     );
+  });
+
+  it("asks in the one question for a task its tab was left on while another tab is in front", async () => {
+    // steward 1's tab is switched to sweep, and then steward 2's tab is brought forward.
+    // sweep's breadcrumb is not on screen: a second step set there would be asked where
+    // nobody is looking, and the press would seem to do nothing.
+    const { tree, asked } = await drawn({}, false, "claude", true);
+    await userEvent.click(row(tree, "sweep"));
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+    await userEvent.click(row(tree, "steward 2"));
+    await waitFor(() => expect(onScreen()).toEqual([2]));
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Tasks of steward 1/ }));
+    const menu = await screen.findByRole("menu", { name: /^Tasks of steward 1/ });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "End a task" }));
+    const ways = await screen.findByRole("menu", { name: "End a task" });
+    await userEvent.click(within(ways).getByRole("menuitem", { name: STOP_SWEEP }));
+
+    // Idle, and still the modal question: its pane is not the one in front.
+    expect(await screen.findByRole("alertdialog", { name: "Stop task 'sweep'?" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: /^Stop sweep/ })).toBeNull();
+    expect(ends(asked)).toEqual([]);
   });
 
   it("says why a way cannot be taken, and takes no press on it", async () => {

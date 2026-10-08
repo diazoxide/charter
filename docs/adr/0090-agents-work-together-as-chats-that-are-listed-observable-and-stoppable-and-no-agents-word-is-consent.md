@@ -638,8 +638,11 @@ report.
   its close are one step under the lock a report is taken under. A report in flight for a task
   the person closed is the stop's report, never an ordinary one, and no task of a stop starts
   a chat.
-- **Ending a task, the question it asks first, stopping a chat and closing one are the
-  window's alone**, over its own channel to the app. None is served on a link.
+- **Every command that acts on the person's word for a chat is the window's alone**, over
+  its own channel to the app, and none is served on a link: ending a task and the question it
+  asks first, stopping a chat, closing one, a close that also stops what is below it, ending
+  a task that did not start, starting a chat as the person, and starting one again outside
+  the sandbox. The rule is what a command does; the list is `ui::WINDOW_ONLY`.
 - **What "a task cannot forge them" means.** A task cannot produce any of the three ends or
   the fixed sentence through the report channel. The folder reports wait in is writable from
   outside a sandbox, and that exposure stays with issue 1457.

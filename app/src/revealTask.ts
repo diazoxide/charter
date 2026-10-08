@@ -57,8 +57,9 @@ export type Revealing = {
 };
 
 /** How many draws a row is looked for across: one that takes a filter off, one that opens
- *  the rows above it, and one that finds it. After that it is not there. */
-export const DRAWS_LOOKED = 3;
+ *  the rows above it, one that finds it, and one to spare, since a draw the list makes for a
+ *  reason of its own between those is counted too. After that it is not there. */
+export const DRAWS_LOOKED = 4;
 
 /** Whether the Chats list is on screen at all: with the left region shut there is no row to
  *  bring into view, and whoever asks for one is told so before asking (#1491). */

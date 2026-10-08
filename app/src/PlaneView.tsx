@@ -1665,9 +1665,11 @@ export const PlaneView = memo(function PlaneView({
       if (ending === null || typeof ending !== "object") return;
       // Being stopped already: it has its one short turn, and is not asked a second time.
       if (ending.stopping && way === "report") return;
-      const shown = now.current.order.some((id) =>
-        shownIn(now.current, id).some((one) => one.session === session),
-      );
+      // On screen: a pane of the tab in front shows it. A tab behind that was left on the
+      // task draws no breadcrumb, so a question set there would be asked where nobody looks.
+      const front = now.current.inFront;
+      const shown =
+        front !== undefined && shownIn(now.current, front).some((one) => one.session === session);
       const where = from === "elsewhere" ? (shown ? "crumb" : undefined) : from;
       if (asksInAModal(ending) || where === undefined) {
         setTaskEndInline(undefined);

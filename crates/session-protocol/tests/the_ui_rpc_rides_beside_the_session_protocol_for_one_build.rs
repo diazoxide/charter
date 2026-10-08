@@ -126,10 +126,23 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(refused.is_err(), "{refused:?}");
     assert!(commands.asked.lock().unwrap().is_empty());
     assert!(ui::WINDOW_ONLY.contains(&"answer_ask"));
-    // Ending a chat is the person's too (#1488): none of these is served on a link.
-    for command in ["end_task", "task_ending", "stop_chat", "close_session"] {
+    // Every command that acts on the person's word for a chat is the window's too (#1488):
+    // ending one, starting one as the person, and starting one again outside the sandbox.
+    // None of these is served on a link.
+    for command in [
+        "end_task",
+        "task_ending",
+        "stop_chat",
+        "close_session",
+        "close_chat_stopping",
+        "end_task_that_did_not_start",
+        "ask_persona_chat",
+        "restart_chat_without_sandbox",
+    ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
+    // And the list is exactly that rule's: nothing else is kept from a link by it.
+    assert_eq!(ui::WINDOW_ONLY.len(), 9);
 }
 
 #[tokio::test]

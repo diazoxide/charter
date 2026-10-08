@@ -4497,7 +4497,7 @@ export type PersonaChat = {
 	state: PersonaChatState,
 	/**
 	 *  [`PersonaChatState`] in the words a chat's list of its dispatches says: `running`,
-	 *  `waiting on the operator`, `reported`, `ended without a report`.
+	 *  `waiting on the person`, `reported`, `ended without a report`.
 	 */
 	said: string,
 	/**

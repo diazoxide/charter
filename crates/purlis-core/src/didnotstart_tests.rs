@@ -637,6 +637,6 @@ fn a_task_tried_again_and_refused_again_is_one_row_with_a_count_and_the_latest_r
 fn a_task_a_launch_could_not_start_again_is_answered_as_a_standing_and_not_a_report() {
     assert_eq!(
         waiting_on_the_person("the folder\nis gone"),
-        "waiting on the operator: it did not start again (the folder\\x0ais gone)"
+        "waiting on the person: it did not start again (the folder\\x0ais gone)"
     );
 }

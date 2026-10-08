@@ -206,6 +206,24 @@ fn a_dispatch_the_person_allowed_that_does_not_start_is_its_asking_chat_s_failed
         rows[0].report
     );
 
+    // **The person pressed Allow and nothing started, so the chat that asked is flagged for
+    // it** (#1491, V100-15): one failure, named by the record its row carries, so going to
+    // the item finds this row.
+    let failed = held.hooks().board().failed_tasks(steward);
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(
+        (
+            failed[0].id.as_str(),
+            failed[0].task.as_str(),
+            failed[0].how
+        ),
+        (
+            rows[0].id.as_str(),
+            "check the cluster",
+            purlis_core::state::HowFailed::DidNotStart
+        )
+    );
+
     // A command waiting on it returns at once with the report: failed, in purlis's words.
     let number = eventually(|| {
         let number = listed_number(&held, steward, "check the cluster");
@@ -358,7 +376,7 @@ fn a_task_a_launch_could_not_start_again_is_drawn_under_its_asker_and_nothing_is
     };
     assert_eq!(
         state,
-        format!("waiting on the operator: it did not start again ({NOT_THE_HARNESS})")
+        format!("waiting on the person: it did not start again ({NOT_THE_HARNESS})")
     );
     let listed = its_list(held, it.steward);
     assert_eq!(listed.len(), 1, "{listed:?}");
@@ -442,17 +460,9 @@ fn ending_it_is_the_person_s_word_and_only_then_is_the_asking_chat_told_it_faile
     assert_eq!(report.summary, rows[0].report);
     assert_eq!(left_for(held, it.steward), vec![*report]);
     assert_eq!(listed_number(held, it.steward, "check prod"), it.task);
-    // And only now is it a failure the chat that asked is flagged for (#1491): named by the
-    // record its finished row carries, so going to the item finds that row.
-    assert_eq!(
-        held.hooks().board().failed_tasks(it.steward),
-        vec![purlis_core::state::FailedTask::new(
-            &it.record,
-            "check prod",
-            purlis_core::state::HowFailed::DidNotStart,
-            NOT_THE_HARNESS,
-        )]
-    );
+    // And the chat that asked is flagged for nothing (#1491): the person ended it themselves,
+    // and its row is in front of them.
+    assert!(held.hooks().board().failed_tasks(it.steward).is_empty());
 
     // And it ends once.
     assert!(crate::unstarted::end(held, &it.task_id).is_err());

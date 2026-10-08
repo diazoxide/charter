@@ -86,16 +86,29 @@ pub struct Server {
 /// V75). On a link that is the session protocol's `answer`, which [`crate::grants`]' table
 /// checks (FD-27); the UI RPC does not carry a second way to do it.
 ///
-/// **Ending a chat is the person's too** (#1488, a delegated ruling): `end_task` writes a
-/// sentence in the person's name to the chat that asked ("The person ended this task. Do not
-/// dispatch it again unless they ask."), `task_ending` is the question it asks first, and
-/// `stop_chat` and `close_session` end a chat on the same authority. None is served on a link.
+/// **So is every command that acts on the person's word for a chat** (#1488, a delegated
+/// ruling, and its list as the train's review completed it). The rule is what a command does,
+/// and the list is every command that does it:
+///
+/// - **it ends a chat or a task as the person**: `end_task` (which writes a sentence in the
+///   person's name to the chat that asked), `task_ending` (the question it asks first),
+///   `stop_chat`, `close_session`, `close_chat_stopping` (a close that also stops what is
+///   below) and `end_task_that_did_not_start`;
+/// - **it starts a chat as the person**, with no grant asked: `ask_persona_chat`;
+/// - **it starts a chat again outside the sandbox**, which is the person's choice alone:
+///   `restart_chat_without_sandbox`.
+///
+/// None is served on a link. A command added later that does one of these belongs here.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     "end_task",
     "task_ending",
     "stop_chat",
     "close_session",
+    "close_chat_stopping",
+    "end_task_that_did_not_start",
+    "ask_persona_chat",
+    "restart_chat_without_sandbox",
 ];
 
 impl Server {

@@ -313,9 +313,31 @@ describe("the chip a session's tab wears for its tasks", () => {
     was = await browser.getWindowSize();
     await windowIs(1280, 800);
     for (let opened = 0; opened < 3; opened++) {
+      // **Each tab is waited for by itself.** The pane in front already shows the harness's
+      // word from the tab before, so "a pane shows it" is true at once: without this the next
+      // tab was pressed for while this one was still starting, and the names read below were
+      // of a strip that was still filling (one tab on one machine, three with a name that
+      // then changed on another).
+      const had = (await tabNames()).length;
+      const front = await sessionInFront();
       await pressAndStart("New tab");
+      await browser.waitUntil(
+        async () => (await tabNames()).length === had + 1 && (await sessionInFront()) !== front,
+        { timeout: 30_000, interval: 250, timeoutMsg: "the new tab never came in front" },
+      );
       await untilShows(READY);
     }
+    // And the names are read once they have stopped changing.
+    let last = "";
+    await browser.waitUntil(
+      async () => {
+        const now = (await tabNames()).join("|");
+        const settled = now === last;
+        last = now;
+        return settled;
+      },
+      { timeout: 10_000, interval: 400, timeoutMsg: "the strip's names never settled" },
+    );
     mine = (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab));
     await select(mine[0]);
     await browser.waitUntil(async () => (await sessionInFront()) > 0, { timeout: 10_000 });
@@ -330,13 +352,23 @@ describe("the chip a session's tab wears for its tasks", () => {
 
   // One app process serves the whole run: nothing pretended is left, the window goes back to
   // the size it had, and every chat this file opened is ended.
+  // **Every step is tried whatever became of the one before it**: a case that failed half
+  // way must not leave its chats for the specs that share this app.
   after(async () => {
-    await pretend(asker, []);
-    await browser.setWindowSize(was.width, was.height);
+    const tried = async (step: () => Promise<unknown>) => {
+      try {
+        await step();
+      } catch {
+        // The next step still runs; the wait below says what was left.
+      }
+    };
+    await tried(() => pretend(asker, []));
+    await tried(() => browser.keys("Escape"));
+    await tried(() => browser.setWindowSize(was.width, was.height));
     for (let round = 0; round < 5; round++) {
       const left = (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab));
       if (left.length === 0) break;
-      for (const name of left) await endChat(`End chat ${name}`);
+      for (const name of left) await tried(() => endChat(`End chat ${name}`));
       await browser.pause(500);
     }
     await browser.waitUntil(
@@ -470,6 +502,86 @@ describe("the chip a session's tab wears for its tasks", () => {
       interval: 50,
       timeoutMsg: "the menu stayed after the pointer had left the chip",
     });
+  });
+
+  it("keeps a rest-opened menu while the pointer goes onto End a task and into its rows", async () => {
+    // The ways to end a task are in a menu of their own, drawn in a portal beside the first
+    // (#1488 in #1487's menu). A pointer going from the menu into it has not left the menu:
+    // the first must stay, and the second must be drawn.
+    await pretend(asker, ["working", "working"]);
+    await untilChip(mine[0], true);
+    expect(await pointer(mine[0], "on")).toBe(true);
+    await browser.waitUntil(async () => (await menus()) === 1, {
+      timeout: 5_000,
+      interval: 50,
+      timeoutMsg: "resting on the chip opened no menu",
+    });
+
+    // Off the chip and onto the line that opens the ways to end a task, as a hand moves.
+    const onTheLine = await browser.execute(() => {
+      const counts = document.querySelector<HTMLElement>(".tab-tasks-counts");
+      const line = document.querySelector<HTMLElement>(".tasks-menu .tasks-menu-end");
+      if (!counts || !line) return false;
+      const at = line.getBoundingClientRect();
+      const here = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        clientX: at.left + at.width / 2,
+        clientY: at.top + at.height / 2,
+      };
+      counts.dispatchEvent(new PointerEvent("pointerout", { ...here, relatedTarget: line }));
+      line.dispatchEvent(new PointerEvent("pointerover", { ...here, relatedTarget: counts }));
+      line.dispatchEvent(new PointerEvent("pointerenter", { ...here, bubbles: false }));
+      line.dispatchEvent(new PointerEvent("pointermove", here));
+      line.dispatchEvent(new PointerEvent("pointermove", { ...here, clientX: here.clientX + 2 }));
+      return true;
+    });
+    expect(onTheLine).toBe(true);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => document.querySelector('[role="menu"].tasks-menu-ends') !== null),
+      { timeout: 5_000, interval: 50, timeoutMsg: "the ways to end a task never opened" },
+    );
+
+    // Into its rows, and well past the time a menu left by the pointer would have closed.
+    const inside = await browser.execute(() => {
+      const from = document.querySelector<HTMLElement>(".tasks-menu .tasks-menu-end");
+      const row = document.querySelector<HTMLElement>('.tasks-menu-ends [role="menuitem"]');
+      if (!from || !row) return false;
+      const at = row.getBoundingClientRect();
+      const here = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        clientX: at.left + at.width / 2,
+        clientY: at.top + at.height / 2,
+      };
+      from.dispatchEvent(new PointerEvent("pointerout", { ...here, relatedTarget: row }));
+      row.dispatchEvent(new PointerEvent("pointerover", { ...here, relatedTarget: from }));
+      row.dispatchEvent(new PointerEvent("pointermove", here));
+      return true;
+    });
+    expect(inside).toBe(true);
+    await browser.pause(900);
+    const still = await browser.execute(() => ({
+      first: document.querySelector('[role="menu"].tasks-menu:not(.tasks-menu-ends)') !== null,
+      ways: [...document.querySelectorAll('.tasks-menu-ends [role="menuitem"] .name')].map(
+        (row) => row.textContent ?? "",
+      ),
+    }));
+    expect(still.first).toBe(true);
+    // Each open task's two ways, by the catalogue's own titles, and nothing was ended.
+    expect(still.ways).toHaveLength(4);
+    expect(
+      still.ways.every((title) => /^(Stop and get its report|Close now): task /.test(title)),
+    ).toBe(true);
+    await browser.keys("Escape");
+    await browser.keys("Escape");
   });
 
   it("gives up the name before a count on a crowded strip, and overflows nothing", async () => {

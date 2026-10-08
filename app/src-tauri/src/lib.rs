@@ -3686,11 +3686,22 @@ mod tests {
     #[test]
     fn ending_a_chat_is_the_window_s_alone_and_never_in_the_link_s_client() {
         // #1488: ending a task writes a sentence in the person's name to the chat that asked,
-        // so it is the window's over Tauri's IPC, as answering an ask is; and so are the
-        // question it asks first, a chat's stop and a chat's close.
+        // so it is the window's over Tauri's IPC, as answering an ask is; and so is every
+        // other command that acts on the person's word for a chat: the question an end asks
+        // first, a chat's stop and its close, a close that stops what is below, the end of a
+        // task that did not start, a start as the person, and a restart outside the sandbox.
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         let client = ui_rpc_client();
-        for command in ["end_task", "task_ending", "stop_chat", "close_session"] {
+        for command in [
+            "end_task",
+            "task_ending",
+            "stop_chat",
+            "close_session",
+            "close_chat_stopping",
+            "end_task_that_did_not_start",
+            "ask_persona_chat",
+            "restart_chat_without_sandbox",
+        ] {
             let called = format!("(\"{command}\"");
             assert!(bindings.contains(&called), "the window's: {command}");
             assert!(!client.contains(&called), "served on a link: {command}");
