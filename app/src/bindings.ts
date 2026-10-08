@@ -571,6 +571,13 @@ export const commands = {
 	 */
 	chatStates: (plane: PlaneId) => typedError<Moved[], string>(__TAURI_INVOKE("chat_states", { plane })),
 	/**
+	 *  What each working chat is doing, in a kind and at most one short name (#1493).
+	 * 
+	 *  The window asks once, when it opens; after that it is told (`chat-doing`). Only chats the
+	 *  board has running are answered: a chat whose hooks the app has not heard has no line.
+	 */
+	chatDoings: (plane: PlaneId) => typedError<ChatDoing[], string>(__TAURI_INVOKE("chat_doings", { plane })),
+	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
 	 *  The window asks this instead of opening its own: the core puts the record back, once the
@@ -2450,6 +2457,22 @@ export type ChatBlocked = {
 };
 
 /**
+ *  What `chat-doing` carries, and what `chat_doings` answers a list of: one chat's line, or
+ *  that it has none. It travels in memory only.
+ */
+export type ChatDoing = {
+	plane: PlaneId,
+	session: number,
+	/**
+	 *  Which telling this is. Tellings reach the window in any order, and for one chat the
+	 *  higher number is the later word.
+	 */
+	sequence: number,
+	/**  What it is doing, or null: its turn ended, it is asking the person, or it is gone. */
+	doing: Doing | null,
+};
+
+/**
  *  What a restart answered (#1342, #1428): the chat in its new run with what its start found
  *  to say, or, while it waits on a permission prompt, why it is not restarted yet.
  */
@@ -2943,6 +2966,30 @@ export type DoctorRow = {
 
 /**  A row's verdict, as the window draws it. */
 export type DoctorStatus = "ok" | "warn" | "fail";
+
+/**
+ *  What one chat is doing, as the window says it in one line: a kind from the fixed list
+ *  (`purlis_core::doing::Kind`) and at most one short name the core has passed.
+ */
+export type Doing = {
+	/**
+	 *  The kind's word: `thinking`, `command`, `editing`, `reading`, `searching`, `fetching`,
+	 *  `helper`, `dispatching`, `asking`, `reporting`, `tool`.
+	 */
+	kind: string,
+	/**
+	 *  A file's base name (ASCII letters, digits and a few marks, short) or a program from the
+	 *  core's fixed list, where the kind has one. Shown as text.
+	 */
+	name: string | null,
+	/**  How many files it has read in a row, for `reading`; 0 otherwise. */
+	count: number,
+	/**
+	 *  Whether a hook said its tool came back: the window then says it in the past ("ran
+	 *  cargo"), until the next tool heard.
+	 */
+	over: boolean,
+};
 
 /**  One field of an entry the core refused, and why: the field is the entry's own key. */
 export type EntryFieldRefusal = {

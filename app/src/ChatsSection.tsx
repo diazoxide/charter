@@ -8,6 +8,7 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
@@ -24,6 +25,7 @@ import type { FinishedTask } from "./bindings";
 import { ChatRowActivity } from "./ChatRowActivity";
 import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
 import { HelpersSaid } from "./ExplorerChats";
+import { chatDoingId, useDoingSaid } from "./chatDoing";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import {
@@ -823,11 +825,11 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
  *
  * **Two lines** (#1499, V100-50). The first is the persona's mark, the name and the state; the
  * state's word is never cut short, and the name is, with the whole of it as its tooltip and in
- * what a screen reader is told. The second, dimmer, is what the chat is doing (`ChatRowActivity`,
- * which #1493 fills) or, while it is not working, where its work was handed off to
- * (`ChatRowHandedOff`, #1492); then that the person asked for it, where it works, how long it
- * has been in its state, its own branch and the chat it came from. **On one line the second is
- * not drawn at all**, and what of it
+ * what a screen reader is told. The second, dimmer, is what the chat is doing while it works
+ * and for how long (`SecondLine`, `ChatRowActivity`, #1493); otherwise where its work was
+ * handed off to (`ChatRowHandedOff`, #1492), that the person asked for it, where it works, how
+ * long it has been in its state, its own branch and the chat it came from. **On one line the
+ * second is not drawn at all**, and what of it
  * does not change is the row's tooltip: a row is never two lines squeezed into one.
  */
 const Row = memo(function Row({
@@ -998,6 +1000,14 @@ const Row = memo(function Row({
                 ? `${needsName ?? "A chat"} below it needs you`
                 : undefined
             }
+            // What it is doing is its description on demand (#1493), never announced as it
+            // changes: the line is out of the tree where it stands, and named here. A chat
+            // below that needs you is said first, so it is the one description then.
+            aria-describedby={
+              lines === 2 && !(needs !== null && needs !== session)
+                ? chatDoingId(session)
+                : undefined
+            }
             data-tab={tab}
             data-lines={lines}
             // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
@@ -1042,40 +1052,54 @@ const Row = memo(function Row({
             </span>
             {lines === 2 && (
               <span className="line two">
-                <ChatRowActivity session={session} />
-                {handedTo !== null && handedToName !== null && (
-                  <ChatRowHandedOff
-                    session={session}
-                    shell={shell}
-                    report={report}
-                    outcome={outcome}
-                    asking={asking}
-                    harness={harness}
-                    to={handedTo}
-                    name={handedToName}
-                    more={handedMore}
-                  />
-                )}
-                {byYou && (
-                  <span className="by-you" title="You asked for this task from its session's tab">
-                    {ASKED_BY_YOU}
-                  </span>
-                )}
-                {elsewhere && <span className="workspace">{workspace}</span>}
-                <StateSince clock={clock} session={session} />
-                {ownBranch !== null && (
-                  <span
-                    className="own-branch"
-                    title="A branch of its own, which nothing merges for it"
-                  >
-                    {ownBranch}
-                  </span>
-                )}
-                {cameFrom !== null && <span className="from">{cameFrom}</span>}
-                {/* A task's helpers, as a count (#1490, V100-4): it has no row in the
-                    explorer, where a chat's helpers unfold, so its own row says them. Last
-                    on the line, and only where it has some. */}
-                {task && <HelpersSaid session={session} />}
+                <SecondLine
+                  session={session}
+                  activity={<ChatRowActivity session={session} />}
+                  since={<StateSince clock={clock} session={session} />}
+                  before={
+                    <>
+                      {handedTo !== null && handedToName !== null && (
+                        <ChatRowHandedOff
+                          session={session}
+                          shell={shell}
+                          report={report}
+                          outcome={outcome}
+                          asking={asking}
+                          harness={harness}
+                          to={handedTo}
+                          name={handedToName}
+                          more={handedMore}
+                        />
+                      )}
+                      {byYou && (
+                        <span
+                          className="by-you"
+                          title="You asked for this task from its session's tab"
+                        >
+                          {ASKED_BY_YOU}
+                        </span>
+                      )}
+                      {elsewhere && <span className="workspace">{workspace}</span>}
+                    </>
+                  }
+                  after={
+                    <>
+                      {ownBranch !== null && (
+                        <span
+                          className="own-branch"
+                          title="A branch of its own, which nothing merges for it"
+                        >
+                          {ownBranch}
+                        </span>
+                      )}
+                      {cameFrom !== null && <span className="from">{cameFrom}</span>}
+                      {/* A task's helpers, as a count (#1490, V100-4): it has no row in the
+                          explorer, where a chat's helpers unfold, so its own row says them.
+                          Last on the line, and only where it has some. */}
+                      {task && <HelpersSaid session={session} />}
+                    </>
+                  }
+                />
               </span>
             )}
           </button>
@@ -1116,6 +1140,46 @@ const Row = memo(function Row({
     </li>
   );
 });
+
+/**
+ * **What a row's second line holds.** While its chat works and something was heard of what it
+ * is doing (#1493), that and how long it has been in its state, and nothing else: "running
+ * cargo · 2m". The activity is cut short where the row is narrow and the time is not, since
+ * the time is what tells a live "running cargo" from a stuck one. Otherwise where it works,
+ * the time, its own branch and the chat it came from, as before.
+ *
+ * It reads its own chat, so the swap draws the second line's contents and not the row. The
+ * line itself is always there and a fixed line high, so no row changes height (#1499).
+ */
+function SecondLine({
+  session,
+  activity,
+  since,
+  before,
+  after,
+}: {
+  session: number;
+  activity: ReactNode;
+  since: ReactNode;
+  before: ReactNode;
+  after: ReactNode;
+}) {
+  if (useDoingSaid(session) !== undefined)
+    return (
+      <span className="doing-and-since">
+        {activity}
+        {since}
+      </span>
+    );
+  return (
+    <>
+      {activity}
+      {before}
+      {since}
+      {after}
+    </>
+  );
+}
 
 /**
  * How long a chat has been in its state (V100-19), where this window saw it come into it

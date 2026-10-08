@@ -336,6 +336,7 @@ import {
 } from "./chatsTree";
 import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
 import { HarnessChip } from "./HarnessCard";
+import { DoingsHere, useDoings, type DoingsOf } from "./chatDoing";
 import {
   ChatsHere,
   isShell,
@@ -513,6 +514,7 @@ export const PlaneView = memo(function PlaneView({
    *  It keeps listening while the project is behind another one, which is what lets its tab
    *  say that something over there needs you. */
   const chats = useChats(plane);
+  const doings = useDoings(plane);
   // **Only the shares this view draws from, each redrawing it only when it changes** (SC-3).
   // A chat's own state is not one of them: its tab, its explorer row and its pane read that
   // themselves, so a chat that only went from running to waiting redraws those and not this.
@@ -6303,6 +6305,7 @@ export const PlaneView = memo(function PlaneView({
     <Lent
       chats={chats}
       tasksBelow={tasksBelow}
+      doings={doings}
       references={referenceChats}
       personas={personaMarks}
       askPersona={openAskPersona}
@@ -7581,6 +7584,7 @@ export const PlaneView = memo(function PlaneView({
 function Lent({
   chats,
   tasksBelow,
+  doings,
   references,
   personas,
   askPersona,
@@ -7589,6 +7593,8 @@ function Lent({
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
   /** Each session's tasks, by its number (#1491). */
   tasksBelow: ReadonlyMap<number, TasksBelow>;
+  /** What each working chat is doing, for the one line under its name (#1493). */
+  doings: DoingsOf;
   references: ChatsForReferences;
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
@@ -7598,6 +7604,7 @@ function Lent({
   return (
     <ChatsHere.Provider value={chats}>
       <TasksBelowLent below={tasksBelow}>
+  <DoingsHere.Provider value={doings}>
         <ReferenceChats.Provider value={references}>
           <PersonaMarks.Provider value={personas.marks}>
             <ReloadPersonaMarks.Provider value={personas.reload}>
@@ -7605,6 +7612,7 @@ function Lent({
             </ReloadPersonaMarks.Provider>
           </PersonaMarks.Provider>
         </ReferenceChats.Provider>
+  </DoingsHere.Provider>
       </TasksBelowLent>
     </ChatsHere.Provider>
   );

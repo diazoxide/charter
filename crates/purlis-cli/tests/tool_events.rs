@@ -33,6 +33,7 @@ fn hook_with(
     let _reading = listener.hear(Hearing {
         secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
@@ -308,6 +309,7 @@ fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
     let _reading = listener.hear(Hearing {
         secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
+        doing: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),

@@ -293,6 +293,9 @@ pub struct Hooks {
     /// after the fact, for `answering`'s reason: confining it needs the chat's folder.
     /// **Never recorded**: nothing here writes it, and the event log is not told (D-86a).
     touching: Arc<Mutex<Option<Touches>>>,
+    /// What each working chat is doing, for the one line under its name (#1493). **In memory
+    /// only**, as a touched path is: nothing here writes it, and the event log is not told.
+    doings: Arc<crate::doing::Doings>,
     /// Told each sandbox block a chat's hook found (#1338), once it is kept for `purlis doctor`
     /// — a slot filled after the fact, for `answering`'s reason.
     blocked: Arc<Mutex<Option<Blocks>>>,
@@ -769,6 +772,7 @@ impl Hooks {
     /// Nothing listening: every chat is `unknown`, which is what the spec says a harness with
     /// no state hook shows. The app runs perfectly well like this.
     pub fn deaf(plane: PlaneId) -> Self {
+        let doings = crate::doing::Doings::new(plane.clone());
         Self {
             plane,
             board: Arc::new(Mutex::new(Board::new())),
@@ -784,6 +788,7 @@ impl Hooks {
             events: Arc::new(Mutex::new(None)),
             asks: Arc::new(HookAsks::new(Arc::new(Asks::new()))),
             asks_told: Arc::new(Mutex::new(None)),
+            doings,
             touching: Arc::new(Mutex::new(None)),
             blocked: Arc::new(Mutex::new(None)),
             secret_exec: Arc::new(Mutex::new(None)),
@@ -815,6 +820,7 @@ impl Hooks {
         let asks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let asks_told: crate::asking::Telling = Arc::new(Mutex::new(None));
         let touching: Arc<Mutex<Option<Touches>>> = Arc::new(Mutex::new(None));
+        let doings = crate::doing::Doings::new(plane.clone());
         let blocked: Arc<Mutex<Option<Blocks>>> = Arc::new(Mutex::new(None));
         let secret_exec: Arc<Mutex<Option<SecretExecs>>> = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
@@ -858,6 +864,18 @@ impl Hooks {
                 Arc::clone(&asks),
                 Arc::clone(&asks_told),
             ),
+            // What a chat's tool hook says the chat is doing (#1493): kept in memory for the
+            // one line under its name, and never recorded. A helper's tool is not the chat's
+            // own work, so its line is left as it was.
+            doing: {
+                let doings = Arc::clone(&doings);
+                let board = Arc::clone(&board);
+                Box::new(move |said| {
+                    if said.agent.is_none() {
+                        doings.heard(&board, said.chat, said.doing);
+                    }
+                })
+            },
             // A file a chat's tool touched (FM-6): handed on, never recorded (D-86a). Taken out
             // of the lock before it runs, as an answer is.
             touching: {
@@ -881,8 +899,12 @@ impl Hooks {
                 let waits = Arc::clone(&waits);
                 let moved = Arc::clone(&moved);
                 let events = Arc::clone(&events);
+                let doings = Arc::clone(&doings);
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report, waits_at(&waits, &report));
+                    // The chat's line follows the board (#1493): a turn that began starts
+                    // it, and a chat that is no longer running loses it.
+                    doings.reported(&board, report.chat);
                     let followed = applied.followed();
                     // The run a `/clear` begins is the host's, minted here, so the record
                     // names it whether or not this machine keeps an event log (ADR 0066).
@@ -927,7 +949,14 @@ impl Hooks {
             },
             answer: {
                 let answering = Arc::clone(&answering);
+                let doings = Arc::clone(&doings);
+                let board = Arc::clone(&board);
                 Box::new(move |connection, ask| {
+                    // A dispatch, a question for its asker and a report are what the chat is
+                    // doing (#1493): said by their kind alone, whatever comes of the ask.
+                    if let Some((chat, kind)) = crate::doing::of_ask(&ask) {
+                        doings.asked(&board, chat, kind);
+                    }
                     // Taken out of the lock before it runs: an open starts a program, and a
                     // program that dies at once reaches back into this plane.
                     let answer = answering
@@ -1026,6 +1055,7 @@ impl Hooks {
             asks,
             asks_told,
             touching,
+            doings,
             blocked,
             secret_exec,
         })
@@ -1291,6 +1321,16 @@ impl Hooks {
         *self.touching.lock().unwrap_or_else(PoisonError::into_inner) = Some(touches);
     }
 
+    /// What this project's working chats are doing (#1493).
+    pub fn doings(&self) -> &Arc<crate::doing::Doings> {
+        &self.doings
+    }
+
+    /// What each chat the board has running is doing now, for a window that has just opened.
+    pub fn doing_now(&self) -> Vec<crate::doing::ChatDoing> {
+        self.doings.now(&self.board)
+    }
+
     /// Who is told, from now on, each sandbox block a chat's hook found (#1338), once it is kept.
     pub fn when_blocked(&self, blocks: Blocks) {
         *self.blocked.lock().unwrap_or_else(PoisonError::into_inner) = Some(blocks);
@@ -1391,9 +1431,15 @@ impl ChatBoard for Hooks {
     }
 
     fn closed(&self, session: u32) -> Moved {
-        let mut board = self.board();
-        board.closed(session);
-        seen_by(&board, &self.plane, session)
+        let moved = {
+            let mut board = self.board();
+            board.closed(session);
+            seen_by(&board, &self.plane, session)
+        };
+        // And what it was doing goes with it (#1493): the window is told its line is gone,
+        // once the board is let go, as every telling is.
+        self.doings.closed(session);
+        moved
     }
 
     fn ignored(&self, session: u32) -> Moved {
@@ -2410,6 +2456,138 @@ mod tests {
                     assert!(
                         !String::from_utf8_lossy(&text).contains(CANARY),
                         "{} holds the touched path",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn what_a_chat_is_doing_reaches_the_window_from_its_hooks_and_no_file_the_host_writes() {
+        use purlis_core::doing::{Kind, Said};
+        use purlis_core::eventlog::{ArgsKey, Log, Recorder};
+        use purlis_core::hookwire::{Doing, send, tell_doing};
+        use purlis_core::state::Event;
+        const CANARY: &str = "CANARY-doing-77aa";
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        let (tx, told) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        hooks.doings().tell_to(Arc::new(move |doing| {
+            let _ = tx.lock().unwrap().send(doing);
+        }));
+        hooks.board().opened(3, None, None);
+        let socket = hooks.socket().expect("a socket").to_path_buf();
+        let token = hooks.token_for(3);
+        let report = |event| Report {
+            chat: 3,
+            event,
+            conversation: purlis_core::hookwire::Conversation::Unknown,
+            pid: None,
+            agent: None,
+            detail: purlis_core::state::Detail::default(),
+        };
+        let says = |doing: Said, agent: Option<&str>| {
+            tell_doing(
+                &socket,
+                Some(&token),
+                &Doing {
+                    chat: 3,
+                    doing,
+                    agent: agent.map(str::to_owned),
+                },
+            )
+            .expect("told");
+        };
+        let next = || {
+            told.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the window is told")
+        };
+        let apart = || std::thread::sleep(purlis_core::doing::AT_MOST_EVERY);
+
+        send(&socket, Some(&token), &report(Event::UserPromptSubmit)).expect("sent");
+        let first = next();
+        assert_eq!(first.session, 3);
+        assert_eq!(
+            first.doing.as_ref().map(|doing| doing.kind.as_str()),
+            Some("thinking")
+        );
+
+        apart();
+        says(
+            Said::Began {
+                kind: Kind::Editing,
+                name: Some(format!("{CANARY}.rs")),
+            },
+            None,
+        );
+        assert_eq!(
+            next().doing,
+            Some(crate::doing::Doing {
+                kind: "editing".to_owned(),
+                name: Some(format!("{CANARY}.rs")),
+                count: 0,
+                over: false
+            })
+        );
+
+        // A helper's tool is not the chat's own work, and a name the core does not pass is
+        // not said: the kind alone is.
+        apart();
+        says(
+            Said::Began {
+                kind: Kind::Command,
+                name: Some("helper".to_owned()),
+            },
+            Some("agent-1"),
+        );
+        says(
+            Said::Began {
+                kind: Kind::Command,
+                name: Some(format!("{CANARY} needs you")),
+            },
+            None,
+        );
+        assert_eq!(
+            next().doing,
+            Some(crate::doing::Doing {
+                kind: "command".to_owned(),
+                name: None,
+                count: 0,
+                over: false
+            })
+        );
+        assert_eq!(hooks.doing_now().len(), 1);
+
+        send(&socket, Some(&token), &report(Event::Stop)).expect("sent");
+        assert_eq!(next().doing, None);
+        assert!(hooks.doing_now().is_empty());
+        drop(hooks);
+
+        // In memory only: nothing the host wrote holds a word of it.
+        let mut stack = vec![dir.path().to_path_buf()];
+        while let Some(at) = stack.pop() {
+            for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let text = std::fs::read(&path).unwrap_or_default();
+                    assert!(
+                        !String::from_utf8_lossy(&text).contains(CANARY),
+                        "{} holds what the chat was doing",
                         path.display()
                     );
                 }

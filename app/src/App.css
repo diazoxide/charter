@@ -3196,14 +3196,15 @@ h2.sidebar-title .node-icon {
 }
 
 /* The second line, dimmer: where it works, for how long, its own branch. One line, cut short
-   as a whole; a part with more to say has its own tooltip. **Always a line high, with or
-   without words**: what it comes to say later (a time, what the chat is doing) must not make
-   the row taller and move the rows below it. */
+   as a whole; a part with more to say has its own tooltip. **Exactly a line high, with or
+   without words, whatever the words are drawn in**: what it comes to say later (a time, what
+   the chat is doing) must not make the row taller and move the rows below it, and text drawn
+   from a taller font is cut, not made room for. */
 .chats-section .chat .line.two {
   display: block;
   min-width: 0;
-  min-height: 1.4em;
-  min-height: 1lh;
+  height: 1.4em;
+  height: 1lh;
   padding-inline-start: 1.35rem;
   overflow: hidden;
   color: var(--text-muted);
@@ -3222,6 +3223,41 @@ h2.sidebar-title .node-icon {
 .chats-section .chat .line.two .handed-off:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+/* What a working chat is doing, in one line (#1493): dim, never wrapped. In a row it stands
+   in the second line with the time in the chat's state after it ("running cargo · 2m"): the
+   activity is cut short where the row is narrow, and the time never is. Anything else that
+   mounts it gives it a line of its own to be cut in. The one name in it keeps its own
+   direction (`bdi`). */
+.chat-doing {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chat-doing .named {
+  unicode-bidi: isolate;
+}
+
+.chats-section .chat .line.two > .doing-and-since {
+  display: flex;
+  min-width: 0;
+}
+
+.chats-section .doing-and-since > .chat-doing {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-section .doing-and-since > .since {
+  flex: none;
+}
+
+.chats-section .doing-and-since > .chat-doing + .since::before {
+  content: " · ";
+  white-space: pre;
 }
 
 /* The filter over the list: the box, then its two chips. The box gives way first. */

@@ -1266,6 +1266,8 @@ pub struct Planes {
     by_hand: hooks::ByHandTeller,
     /// Told each file a chat's tool touched, confined and rated (FM-6).
     touches: hooks::TouchTeller,
+    /// Told what a working chat is doing, each time its one line changes (#1493).
+    doings: crate::doing::Teller,
     /// Told each sandbox block a chat's hook found, once kept for the doctor (#1338).
     blocks: hooks::BlockTeller,
     /// Told each vault a chat was refused for its persona (#1430).
@@ -1369,6 +1371,7 @@ impl Planes {
             closed: Arc::new(|_| {}),
             by_hand: Arc::new(|_| {}),
             touches: Arc::new(|_| {}),
+            doings: Arc::new(|_| {}),
             blocks: Arc::new(|_| {}),
             vault_refused: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
@@ -1460,6 +1463,13 @@ impl Planes {
     /// confined to the chat's folder, so the window can mark it in the tree (FM-6).
     pub fn telling_touches(mut self, touches: hooks::TouchTeller) -> Self {
         self.touches = touches;
+        self
+    }
+
+    /// Tells `doings` what a working chat of a plane this registry holds is doing, each time
+    /// its one line changes, so the window can say it under the chat's name (#1493).
+    pub fn telling_doings(mut self, doings: crate::doing::Teller) -> Self {
+        self.doings = doings;
         self
     }
 
@@ -1719,6 +1729,9 @@ impl Planes {
                 }
             })
         });
+        // What a working chat is doing (#1493): already a kind and one passed name, held in
+        // memory and written nowhere.
+        held.hooks.doings().tell_to(Arc::clone(&self.doings));
         // A sandbox block a chat's hook found (#1338): the window shows it on the chat's tab.
         // It carries no path, so there is nothing to confine.
         held.hooks.when_blocked({

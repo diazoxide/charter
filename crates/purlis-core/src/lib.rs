@@ -40,6 +40,7 @@ pub mod dispatchtalk;
 pub mod dispatchunattended;
 pub mod docsrc;
 pub mod doctor;
+pub mod doing;
 pub mod engine;
 pub mod envvar;
 pub mod eventlog;

@@ -5136,6 +5136,69 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   the file a chat's file tool touched, for the tree's live marker (FM-6). **It is never stored**:
   never spooled, never in the event log (which keeps only the arguments' digest), never in
   `app/reopen.json` or any other file here (D-86a).
+  Another, `doing`, says what a chat's tool hook saw, for the one line a working chat's row
+  says under its name (#1493): `{"chat": <n>, "doing": {"is": "began", "kind": "<kind>",
+  "name": "<name>"}}` before a tool runs, and `{"is": "ended", "kind": "<kind>"}` after one
+  comes back. It is sent only for a call that will run: not for one purlis's guard refused, nor
+  for one the person is being asked about. **It is never stored either**: sent once, never
+  spooled, never in the event log, a dispatch record or the Activity view. The app keeps the
+  latest per chat in memory, replaces it at the chat's next one, and drops it when the chat's
+  turn ends, when the chat asks the person something, and when the chat closes. The window is
+  told at most four times a second per chat (`chat-doing`).
+
+  | `kind` | While the tool is in flight | Once it has come back | `name` |
+  |---|---|---|---|
+  | `thinking` | thinking | | none |
+  | `command` | running a command; running `cargo` | ran a command; ran `cargo` | a program on the list below |
+  | `editing` | editing a file; editing `<file>` | edited a file; edited `<file>` | the file's base name |
+  | `reading` | reading a file; reading `<file>`; reading 3 files | read a file; read `<file>`; read 3 files | the file's base name |
+  | `searching` | searching | searched | none |
+  | `fetching` | fetching a page | fetched a page | none |
+  | `helper` | waiting on a helper | a helper finished | none |
+  | `dispatching` | dispatching a task | dispatched a task | none |
+  | `asking` | asking a question | asked a question | none |
+  | `reporting` | writing its report | wrote its report | none |
+  | `tool` | using a tool (a tool purlis has no word for) | used a tool | none |
+
+  The list is fixed, the sentences are the window's own, and a line whose `kind` is not in it
+  is dropped whole.
+
+  **Nothing is said that was not heard.** `thinking` is said only from a turn's start until
+  the first tool heard in it. After that the line keeps the last thing heard: in the present
+  while its tool is in flight, in the past once a hook says a tool of that kind came back,
+  until the next tool heard. A tool no hook is armed on says nothing, and the line keeps what
+  it last said. Where a harness has no hook after a tool (Claude Code's `Read` and `Grep`, all
+  of Codex), nothing says the tool came back, so the line stays in the present until the next
+  tool heard: that is the one inexactness left. `dispatching`, `asking` and `reporting` are
+  said by the app alone, when the chat's own dispatch, question or report reaches it; on the
+  wire those kinds, and `thinking`, read as `tool`, so a chat cannot write by hand that it
+  made a report. A chat the app has not heard begin a turn has no line (a harness that sends
+  no events, Codex with its hooks untrusted), and a helper's tools do not change its chat's
+  line.
+
+  **`name` is the only word of the chat's that can reach the row, and the app believes none
+  of it.** The hook applies the rule and the app applies it again:
+  - a program is named only if the command's first word is, whole and as written, one of a
+    fixed list (`purlis_core::doing::PROGRAMS`): `cargo`, `rustc`, `npm`, `npx`, `pnpm`,
+    `yarn`, `node`, `deno`, `bun`, `python`, `python3`, `pip`, `uv`, `pytest`, `go`, `make`,
+    `cmake`, `git`, `gh`, `docker`, `kubectl`, `helm`, `terraform`, `purlis`, `tsc`, `eslint`,
+    `prettier`, `vitest`, `jest`, `ruff`, `mypy`, `mvn`, `gradle`, `dotnet`, `swift`,
+    `xcodebuild`, `rg`, `grep`, `ls`, `cat`, `sed`, `awk`, `curl`, `wget`, `jq`. It is a list
+    and not a rule over the first word, so that every command line a row can show is one
+    purlis wrote: no path, no extension, no other case, and no shell builtin or wrapper (`cd`,
+    `sudo`, `env`, `bash`, `sh`, `time`, `nohup`, `xargs`). Those, a variable set in front of
+    a command, and every program not listed read "running a command";
+  - a file's base name is kept only if it is ASCII letters, ASCII digits and `._-+@~#`, at
+    most 48 characters. Anything else (a space, a control or formatting character, markup, a
+    letter of another script) is dropped and the row reads "editing a file".
+
+  Never a command's arguments, a URL, a search's pattern, a folder, a tool's own name, or
+  anything a tool came back with. A file's base name can itself say something
+  (`acquisition-acme.md`), and it is shown in the window, as its whole path is by the tree's
+  live marker. Which tools are heard is which tools a hook is armed on (`hookreg`): for Claude
+  Code, before `Bash`, `Read`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and
+  purlis's dispatch tools, and after `Bash`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent`,
+  `Skill` and `SendMessage`; every opencode tool before it runs; Codex's shell alone.
 - **Status:** **internal** — bound by the app while a plane is open and gone with it. Nothing
   reads it but the connection it serves. **purlis only.**
 - **Tier:** Clone state, transient — it lives as long as the app has the plane open.
