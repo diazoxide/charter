@@ -1559,11 +1559,11 @@ button.show-more:focus-visible {
    3. only in a cell too narrow for the hand and one count beside the floor (under `7.5rem`,
       the narrowest a tab is drawn), the counts go and the hand stays: a chat waiting for the
       person is said before a number is.
-   Nothing is cut through: a count that does not fit wraps onto a second line of the counts'
-   own box, which is one line tall and shows no second. */
+   Nothing is cut through: a count that does not fit whole is not drawn (`wholeWays.ts`). */
 .tabs .tab > .tab-tasks {
   display: flex;
-  flex: 0 1 auto;
+  /* It does not shrink: the name gives way, and then the counts go whole (`wholeWays.ts`). */
+  flex: none;
   gap: 0.15rem;
   align-items: center;
   align-self: center;
@@ -1597,13 +1597,12 @@ button.show-more:focus-visible {
   cursor: pointer;
 }
 
-/* The counts are one line that wraps: what does not fit is not drawn. */
+/* The counts are one line, and which are drawn is measured (`wholeWays.ts`): one that does
+   not fit is set aside, below the line, where the clip hides it. */
 .tabs .tab-tasks button.tab-tasks-counts {
-  flex: 0 1 auto;
-  flex-wrap: wrap;
+  position: relative;
+  flex: none;
   gap: 0 0.4rem;
-  align-content: flex-start;
-  min-width: min-content;
   overflow: hidden;
   background: var(--surface-sunken);
   font-variant-numeric: tabular-nums;
@@ -1626,6 +1625,13 @@ button.show-more:focus-visible {
   gap: 0.15rem;
   align-items: center;
   height: 1.35rem;
+}
+
+.tab-tasks-counts > .count[data-away] {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  visibility: hidden;
 }
 
 .tab-tasks-counts .count svg {
