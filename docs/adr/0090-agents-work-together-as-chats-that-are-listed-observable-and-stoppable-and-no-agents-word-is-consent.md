@@ -566,10 +566,11 @@ tickets start from:
 | 5 | The caps' initial values | Replaced by the limits of change 4 |
 | 6 | AC-11's lineage exclusion | Accepted as written. AC-11 itself is out of the first version |
 
-## Amended (2026-10-08): a grant is one-way, "any persona", and the two ways to say no
+## Amended (2026-10-08): a grant is one-way, "any persona", the two ways to say no, what a persona wants, and what the question says
 
 The operator ruled on these on 2026-10-08, in the grill that is the spec of #1483 (rulings
-V100-22, V100-23 and V100-25). #1503 builds them and records them here. Where this section and
+V100-20 to V100-23, V100-25 and V100-28). #1503 builds 1 to 5 and #1502 builds 6 to 8, and
+each records its own here. Where this section and
 change 3 above differ, this section holds; everything else of change 3 stands.
 
 **1. A grant is one-way (V100-22).** A grant from one persona to another allows nothing the
@@ -617,6 +618,52 @@ their machine, never committed, and it is the one deny among the records of disp
 
 **5. The audit** gains a never and its lifting beside a grant and its revoke; a grant for any
 persona is a grant whose target is `*`.
+
+**6. A persona may say what it wants, and that is never a grant (V100-20).** A persona's
+definition may carry `wants`, the personas it usually works with.
+
+- Nothing that decides a dispatch reads it: not the grant, the rule for an unattended chat,
+  the limits or the loop rule. The list of who may dispatch to whom stays in the project's
+  file and the machine's record.
+- A chat can write persona definitions, so the line is an offer a chat may have written. Only
+  a finished persona of the project is offered: never the persona itself, a name purlis keeps
+  for itself or "any persona"; at most six; in alphabetical order.
+
+**7. One answer may make several grants (V100-21).** Change 3 says the Notice "offers the
+three levels" for the pair; an answer was one pair. It still offers the pair at the three
+levels, and under the answers it now offers one box for each wanted persona that nothing
+answers for yet.
+
+- **A box is never ticked for the person.** An Allow keeps the asked pair and each ticked one
+  at the level pressed. Each is a grant that names its pair, audited as its own, listed and
+  revoked on its own.
+- Keep blocked and Never for this pair are about the asked pair only.
+- Not offered: a pair a grant covers, one the person said never to, one policy locks, one the
+  person kept blocked in that chat (amendment 3: they are not asked twice, by a box either),
+  one with a question of its own waiting (its brief is shown there), and any while the record
+  of nevers does not read.
+- **The answer is held to the question as it was shown.** The app builds the boxes and what
+  each persona works with from the project's files, never from the request. The window sends
+  back a digest of all of it. The files are read again at the answer: only a name still
+  offered is granted, and where the question reads differently now nothing is granted or
+  audited, the asked pair included, and the person is shown it again with no box ticked.
+- No box makes "any persona" (amendment 2 holds).
+
+**8. The question says what the target works with (V100-28).** For the persona asked about,
+and for each box's persona, in purlis's words and from records no chat writes:
+
+- the names of the vaults its chats are handed: the ones the vault registry tags for it and
+  the ones the person let it use on this machine. Not the `vault:` line of its own file;
+- the hosts the project's file declares for it;
+- **the personas it may itself dispatch to**, from the grants in force for it: named ones, or
+  "any persona", and nothing where there is none. The dispatcher added this in review of
+  #1502, extending V100-28's sentence, and it is flagged for the operator: work handed to a
+  persona can go on from it without a further question;
+- each list is clipped to three with "and n more", and the digest covers the whole;
+- **where the project's sandbox is off it says so of vaults and hosts alike**, since no list
+  of either holds a chat there;
+- never a secret's name or value. Allowing a dispatch does not allow the use of a secret:
+  that consent is unchanged, and the question says so.
 
 Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
 (#1506), and what a persona removed and made again under the same name inherits (V100-61).

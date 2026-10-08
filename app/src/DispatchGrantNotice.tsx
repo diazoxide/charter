@@ -8,6 +8,10 @@ import { Choice } from "./settings/components";
  *  `.block-report-brief`). */
 const SHOWN_LINES = 8;
 
+/** What the Notice says when its question read differently on a re-read while it was up. */
+const BOXES_CHANGED =
+  "What is offered under the answers changed while this was shown, so every box is unticked. Read it again before you answer.";
+
 /** What each level's Allow says, in the order they read. */
 const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
   ["chat", "Allow for this chat"],
@@ -47,7 +51,10 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * window draws the names and sentences it is told and sends back only the names ticked and the
  * digest of what it showed (`shown`): the core reads the files again at the answer, and an
  * answer to a question that reads differently now allows nothing and is shown again, with every
- * box unticked: a tick is for the words it was made under.
+ * box unticked: a tick is for the words it was made under. **The boxes never change in place
+ * with nothing said**: when the core's list is read again while the question is up and it reads
+ * differently, the Notice says so and every box is unticked. The boxes stand in alphabetical
+ * order, which is the core's, so where one stands is not a persona file's to choose.
  *
  * **Allowing a dispatch is not allowing a secret**, and the Notice says so: what a persona's
  * chat does with a vault is asked as it was before.
@@ -75,6 +82,9 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     shown: string;
     names: ReadonlySet<string>;
   }>();
+  /** The question last drawn, and the held dispatch whose question changed while it was up. */
+  const [drawn, setDrawn] = useState<{ on: number; shown: string }>();
+  const [moved, setMoved] = useState<number>();
 
   if (allowed !== undefined)
     return (
@@ -94,6 +104,13 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
 
   const [first, ...rest] = waiting;
   if (first === undefined) return null;
+  // The same held dispatch, reading differently than when it was last drawn: said on the
+  // Notice, so a box is never swapped under the pointer with no word. Adjusted while
+  // rendering, as React has state follow what it is drawn from.
+  if (drawn?.on !== first.id || drawn.shown !== first.shown) {
+    if (drawn?.on === first.id) setMoved(first.id);
+    setDrawn({ on: first.id, shown: first.shown });
+  }
   const cause = `dispatch-grant:${session}:${first.id}`;
   const label = `Dispatch to ${first.target}`;
   const behind =
@@ -132,7 +149,11 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
           <p id={`${id}-also-label`}>Also let {asker} dispatch to:</p>
           <Choice
             kind="checks"
-            ids={{ id: `${id}-also`, labelledBy: `${id}-also-label` }}
+            ids={{
+              id: `${id}-also`,
+              labelledBy: `${id}-also-label`,
+              describedBy: `${id}-also-says`,
+            }}
             options={first.also.map((one) => ({
               value: one.persona,
               label: one.persona,
@@ -141,9 +162,9 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
             checked={new Set(ticked)}
             onCheckedChange={tick}
           />
-          <p>
-            A ticked box is allowed with the answer you press, at the same level. Keep blocked and
-            Never are about {first.target} only.
+          <p id={`${id}-also-says`}>
+            A ticked box is allowed with the Allow you press, for the same people as that answer.
+            Keep blocked and Never are about {first.target} only.
           </p>
         </>
       )}
@@ -187,6 +208,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     if (busy) return;
     setBusy(true);
     setSaid(undefined);
+    setMoved(undefined);
     void commands
       .allowDispatch(plane, first.id, level, ticked, first.shown)
       .then((done) => {
@@ -241,9 +263,12 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       anything {first.target} can do, without asking you again. The grant covers the helper
       sub-agents {first.asking === null ? "this chat runs" : "those chats run"} too: what one of
       them asks is asked as its chat.
+      {first.also.length > 0 &&
+        " Under the answers are boxes for more personas: tick any you want before you press Allow."}
       {first.never_unread !== null &&
         ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}
+      {moved === first.id && ` ${BOXES_CHANGED}`}
       {behind}
     </Notice>
   );

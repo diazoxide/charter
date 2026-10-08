@@ -44,8 +44,11 @@ const WAITING: DispatchPending = {
 const WANTING: DispatchPending = {
   ...WAITING,
   also: [
-    { persona: "qa", works_with: "no vault; no hosts beyond the project's" },
     { persona: "docs", works_with: "vault docs; hosts docs.example and 4 more" },
+    {
+      persona: "qa",
+      works_with: "no vault; no hosts beyond the project's, and may itself dispatch to any persona",
+    },
   ],
   shown: "s1",
 };
@@ -332,7 +335,9 @@ describe("the dispatch grant Notice", () => {
     expect(within(boxes).getAllByRole("checkbox")).toHaveLength(2);
     expect(box("qa")).not.toBeChecked();
     expect(box("docs")).not.toBeChecked();
-    expect(box("qa")).toHaveAccessibleDescription("no vault; no hosts beyond the project's");
+    expect(box("qa")).toHaveAccessibleDescription(
+      "no vault; no hosts beyond the project's, and may itself dispatch to any persona",
+    );
     expect(box("docs")).toHaveAccessibleDescription("vault docs; hosts docs.example and 4 more");
     // Each is a Tab stop (`docs/ui-primitives.md`).
     for (const one of within(boxes).getAllByRole("checkbox"))
@@ -404,7 +409,7 @@ describe("the dispatch grant Notice", () => {
     // The names as the core listed them, and what the question read as: nothing of the pair.
     await waitFor(() =>
       expect(sent(asked, "allow_dispatch")).toEqual([
-        { plane: PLANE, id: 7, level, also: ["qa", "docs"], shown: "s1" },
+        { plane: PLANE, id: 7, level, also: ["docs", "qa"], shown: "s1" },
       ]),
     );
   });
@@ -475,9 +480,87 @@ describe("the dispatch grant Notice", () => {
 
     await waitFor(() => expect(sent(asked, "allow_dispatch")).toHaveLength(2));
     expect(sent(asked, "allow_dispatch")).toEqual([
-      { plane: PLANE, id: 7, level: "you", also: ["qa", "docs"], shown: "s1" },
+      { plane: PLANE, id: 7, level: "you", also: ["docs", "qa"], shown: "s1" },
       { plane: PLANE, id: 7, level: "you", also: [], shown: "s2" },
     ]);
+  });
+
+  it("says so when the boxes change while the question is up, and unticks every box", async () => {
+    // The core's list is read again while the question is up (here after a press it refused
+    // for a reason of its own) and the same dispatch reads differently: never swapped in place
+    // with nothing said.
+    let held: DispatchPending[] = [WANTING];
+    const asked: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "dispatch_grants_needed") return held;
+      if (cmd === "allow_dispatch") throw "the event log is not open";
+      return null;
+    });
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+    const user = userEvent.setup();
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    await user.click(await screen.findByRole("checkbox", { name: "docs" }));
+    expect(notice).not.toHaveTextContent("changed while this was shown");
+    held = [
+      {
+        ...WANTING,
+        also: [
+          { persona: "docs", works_with: "vault docs; hosts docs.example and 4 more" },
+          { persona: "legal", works_with: "vault contracts; no hosts beyond the project's" },
+        ],
+        shown: "s9",
+      },
+    ];
+    await user.click(screen.getByRole("button", { name: "Allow for this chat" }));
+
+    await screen.findByRole("checkbox", { name: "legal" });
+    expect(box("docs")).not.toBeChecked();
+    expect(notice).toHaveTextContent("the event log is not open");
+    expect(notice).toHaveTextContent(
+      "What is offered under the answers changed while this was shown, so every box is unticked. Read it again before you answer.",
+    );
+    expect(sent(asked, "allow_dispatch")).toEqual([
+      { plane: PLANE, id: 7, level: "chat", also: ["docs"], shown: "s1" },
+    ]);
+  });
+
+  it("says nothing of a change for a question drawn once, or for the next question", async () => {
+    core([WANTING, { ...WANTING, id: 8, target: "legal", shown: "s3" }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const first = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(first).not.toHaveTextContent("changed while this was shown");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Keep blocked" }));
+    const next = await screen.findByRole("status", { name: "Dispatch to legal" });
+    expect(next).not.toHaveTextContent("changed while this was shown");
+  });
+
+  it("ties what a tick does to the boxes, and says before the answers that boxes follow", async () => {
+    core([WANTING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    // The answers come first in the Tab order, so the sentence says boxes follow.
+    expect(notice).toHaveTextContent(
+      "Under the answers are boxes for more personas: tick any you want before you press Allow.",
+    );
+    // In the buttons' own words, not "level": with "for everyone in this project" a tick is
+    // plainly another pair for everyone.
+    expect(
+      screen.getByRole("group", { name: "Also let steward dispatch to:" }),
+    ).toHaveAccessibleDescription(
+      "A ticked box is allowed with the Allow you press, for the same people as that answer. Keep blocked and Never are about devops only.",
+    );
+  });
+
+  it("says nothing of boxes where none is offered", async () => {
+    core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).not.toHaveTextContent("Under the answers are boxes");
   });
 
   it("starts the next question with no box ticked", async () => {

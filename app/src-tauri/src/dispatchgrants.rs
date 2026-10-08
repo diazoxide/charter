@@ -79,8 +79,8 @@
 //! ([`Store::allow_with`]), each audited as its own grant. Keep blocked and Never are about
 //! the asked pair only.
 //!
-//! **A chat can edit its own persona's file**, so what the question offers is something a
-//! chat can move. What holds:
+//! **A chat can write persona definitions** (its own persona's, and at the project's root any
+//! persona's), so what the question offers is something a chat can move. What holds:
 //!
 //! - the boxes and the sentences are built by the app, from the project's files as it reads
 //!   them ([`Store::offer`]); a request carries a target and a brief and nothing else;
@@ -472,8 +472,10 @@ impl Store {
     /// request.
     ///
     /// A wanted persona is not offered where a grant covers it, the person said never to it,
-    /// policy locks it, or a dispatch to it from a chat of the same persona is waiting on the
-    /// person: that one has its own question, which shows its own brief.
+    /// policy locks it, the person kept it blocked on this chat's tab (they are not asked
+    /// twice in one chat, by a box either), or a dispatch to it from a chat of the same
+    /// persona is waiting on the person: that one has its own question, which shows its own
+    /// brief.
     pub fn offer(&self, root: &Path, locks: &sandbox::policy::Locks, held: &Pending) -> Offer {
         let asking = held.asking.persona.as_deref();
         let wanted = if held.locked.is_some() {
@@ -487,6 +489,7 @@ impl Store {
             target: Access::at(root, locks, &held.target),
             also: wanted
                 .iter()
+                .filter(|wanted| !self.is_kept_blocked(&held.asking, wanted))
                 .filter(|wanted| {
                     !waiting.iter().any(|one| {
                         one.asking.persona.as_deref() == asking && one.target == **wanted
@@ -1133,9 +1136,10 @@ pub struct DispatchPending {
     /// sentence saying so. No grant counts until it reads, which is why the person is asked;
     /// an Allow starts this one dispatch, and the next asks again.
     pub never_unread: Option<String>,
-    /// **What the target persona works with**, in purlis's words (#1502): its vaults' names
-    /// and the hosts the project declares for it, clipped to a few. Never a secret's name or
-    /// value, and nothing a chat wrote.
+    /// **What the target persona works with**, in purlis's words (#1502): its vaults' names,
+    /// the hosts the project declares for it and the personas it may itself dispatch to, each
+    /// clipped to a few; or that no list holds it, where the project's sandbox is off. Never a
+    /// secret's name or value, and nothing a chat wrote.
     pub works_with: String,
     /// The personas the asking persona's definition wants that nothing answers for yet: one
     /// box each under the answers, unticked. Read from the definition by the app as it tells

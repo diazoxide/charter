@@ -102,10 +102,18 @@ fn a_chat_nobody_is_at_is_refused_whatever_its_persona_wants() {
         ("devops", &persona("devops", "")),
     ]);
     let root = project.path();
-    // A chat nobody is at is covered by a standing grant only, and there is none.
-    assert_eq!(
-        InForce::read(root, Vec::new()).level_of(Some("steward"), "devops"),
-        None
+    // The rule for a chat nobody is at, asked as the app asks it: a standing grant only, and
+    // a line in a persona's file is none.
+    let answer = crate::dispatchunattended::covers(
+        Some("steward"),
+        "devops",
+        &InForce::read(root, Vec::new()),
+        &Locks::none(),
+        true,
+    );
+    assert!(
+        matches!(answer, crate::dispatchunattended::Answer::Refused(_)),
+        "{answer:?}"
     );
 }
 
@@ -113,9 +121,15 @@ fn a_chat_nobody_is_at_is_refused_whatever_its_persona_wants() {
 
 /// `value` read for `me`, where `known` are the project's personas and `drafts` its drafts.
 fn read_as(value: &str, me: &str, known: &[&str], drafts: &[&str]) -> Wants {
-    read(value, me, &|name| known.contains(&name), &|name| {
-        drafts.contains(&name)
-    })
+    read(
+        value,
+        me,
+        &Project {
+            known: &|name| known.contains(&name),
+            loads: &|_| true,
+            draft: &|name| drafts.contains(&name),
+        },
+    )
 }
 
 #[test]
@@ -196,6 +210,7 @@ fn no_more_than_a_few_are_offered_however_long_the_line_is() {
     assert_eq!(wants.personas.len(), MOST);
     assert_eq!(names(&wants)[..2], ["p0", "p1"]);
     assert_eq!(wants.ignored, vec![Ignored::Beyond(500 - MOST)]);
+    assert_eq!(wants.from, None);
     assert_eq!(
         wants.ignored[0].said(),
         format!(
@@ -203,9 +218,17 @@ fn no_more_than_a_few_are_offered_however_long_the_line_is() {
              not offered"
         )
     );
-    // And a line of nothing but junk says a bounded number of things.
+    // And a line of nothing but junk says a bounded number of things, and why it stopped:
+    // not "more than purlis offers", since none was offered.
     let junk = vec!["Not A Name"; 500].join(", ");
-    assert!(read_as(&junk, "steward", &[], &[]).ignored.len() <= MOST_SAID + 1);
+    let ignored = read_as(&junk, "steward", &[], &[]).ignored;
+    assert_eq!(ignored.len(), MOST_SAID + 1);
+    assert_eq!(ignored[MOST_SAID], Ignored::Unread(500 - MOST_SAID));
+    assert_eq!(
+        ignored[MOST_SAID].said(),
+        "wants holds 488 more entries purlis did not read after 12 it ignored: mend the ones \
+         above first"
+    );
 }
 
 #[test]
@@ -253,6 +276,96 @@ fn the_line_is_read_off_the_project_s_own_personas_and_a_child_s_line_wins() {
     );
 }
 
+#[test]
+fn a_reserved_name_one_that_does_not_load_and_one_too_long_to_show_are_not_offered() {
+    let long = "docs.nothing-else-is-allowed-by-this-box-at-all";
+    assert!(long.len() > MOST_NAME);
+    let wants = read(
+        &format!("[charter, purlis, broken, {long}, devops]"),
+        "steward",
+        &Project {
+            known: &|_| true,
+            loads: &|name| name != "broken",
+            draft: &|_| false,
+        },
+    );
+    assert_eq!(names(&wants), ["devops"]);
+    assert_eq!(
+        wants.ignored,
+        vec![
+            Ignored::Reserved("charter".to_owned()),
+            Ignored::Reserved("purlis".to_owned()),
+            Ignored::Unloadable("broken".to_owned()),
+            Ignored::TooLong(long.to_owned()),
+        ]
+    );
+    assert_eq!(
+        wants.ignored[0].said(),
+        "wants names 'charter', a name purlis keeps for itself, so it is not offered"
+    );
+    assert_eq!(
+        wants.ignored[2].said(),
+        "wants names 'broken', whose definition does not load, so it is not offered"
+    );
+    let said = wants.ignored[3].said();
+    assert!(
+        said.ends_with(
+            "which is longer than the 40 characters a question shows a name in, so it is not \
+             offered"
+        ),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_reserved_persona_written_by_hand_and_a_definition_that_is_not_text_are_not_offered() {
+    let project = project(&[
+        (
+            "steward",
+            &persona("steward", "wants: [charter, broken, devops]\n"),
+        ),
+        ("charter", &persona("charter", "")),
+        ("devops", &persona("devops", "")),
+    ]);
+    let dir = project.path().join("personas/broken");
+    std::fs::create_dir_all(&dir).expect("made");
+    std::fs::write(dir.join("persona.md"), [0xff, 0xfe, 0x00, 0xff]).expect("written");
+    let wants = of(project.path(), "steward");
+    assert_eq!(names(&wants), ["devops"]);
+    assert_eq!(
+        wants.ignored,
+        vec![
+            Ignored::Reserved("charter".to_owned()),
+            Ignored::Unloadable("broken".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn an_inherited_line_says_whose_it_is() {
+    let project = project(&[
+        ("base", &persona("base", "wants: [ghost]\n")),
+        (
+            "kid",
+            "---\nname: kid\nextends: base\nrole: kid\nvault: none\n---\n\n# kid\n",
+        ),
+    ]);
+    let root = project.path();
+    assert_eq!(of(root, "base").from, None);
+    assert_eq!(
+        of(root, "base").said(),
+        ["wants names 'ghost', which is not a persona of this project, so it is not offered"]
+    );
+    assert_eq!(of(root, "kid").from.as_deref(), Some("base"));
+    assert_eq!(
+        of(root, "kid").said(),
+        [
+            "wants names 'ghost', which is not a persona of this project, so it is not offered, \
+          in the line it inherits from 'base'"
+        ]
+    );
+}
+
 // ---- which of them a question offers ------------------------------------------------------------
 
 #[test]
@@ -274,7 +387,8 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
     // The asked pair is the question itself, never a box under it.
     assert_eq!(
         offered(&InForce::default(), &Locks::none()),
-        ["qa", "docs", "legal", "ops"]
+        // In alphabetical order, whatever order the line writes them in.
+        ["docs", "legal", "ops", "qa"]
     );
     let grants = InForce {
         chat: vec![ChatPair {
@@ -299,7 +413,7 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
     );
     assert_eq!(
         offered(&InForce::default(), &locks),
-        ["qa", "docs", "legal"]
+        ["docs", "legal", "qa"]
     );
     // A chat on no persona has no definition, so nothing is offered.
     assert_eq!(
@@ -358,7 +472,13 @@ hosts = ["10.100.39.145:6443", "*.internal.example"]
 fn the_question_names_the_target_s_vault_and_hosts_as_the_project_declares_them() {
     let project = with_vaults();
     let ctx = Ctx::new(project.path(), Env::of(&[]));
-    let access = Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), "devops");
+    let access = Access::of(
+        &ctx,
+        &sandbox(SANDBOXED),
+        &Locks::none(),
+        &InForce::default(),
+        "devops",
+    );
     assert_eq!(
         access.said(),
         "devops works with its own access: vault team; hosts 10.100.39.145:6443, \
@@ -366,7 +486,13 @@ fn the_question_names_the_target_s_vault_and_hosts_as_the_project_declares_them(
     );
     // The vault the registry tags, never the one the persona's own file names.
     assert!(!access.said().contains("everything"));
-    let none = Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), "qa");
+    let none = Access::of(
+        &ctx,
+        &sandbox(SANDBOXED),
+        &Locks::none(),
+        &InForce::default(),
+        "qa",
+    );
     assert_eq!(
         none.said(),
         "qa works with its own access: no vault; no hosts beyond the project's."
@@ -377,7 +503,13 @@ fn the_question_names_the_target_s_vault_and_hosts_as_the_project_declares_them(
 fn it_never_shows_a_secret_s_name_or_value() {
     let project = with_vaults();
     let ctx = Ctx::new(project.path(), Env::of(&[]));
-    let access = Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), "devops");
+    let access = Access::of(
+        &ctx,
+        &sandbox(SANDBOXED),
+        &Locks::none(),
+        &InForce::default(),
+        "devops",
+    );
     for said in [access.said(), access.brief(), format!("{access:?}")] {
         assert!(!said.contains(SECRET_NAME), "{said}");
         assert!(!said.contains(SECRET_VALUE), "{said}");
@@ -390,7 +522,13 @@ fn a_vault_you_let_the_persona_use_on_this_machine_is_named_too() {
     let root = project.path();
     crate::sandbox::local::grant_vault(root, "everything", "devops").expect("kept");
     let ctx = Ctx::new(root, Env::of(&[]));
-    let access = Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), "devops");
+    let access = Access::of(
+        &ctx,
+        &sandbox(SANDBOXED),
+        &Locks::none(),
+        &InForce::default(),
+        "devops",
+    );
     assert_eq!(
         access.brief(),
         "vaults everything, team; hosts 10.100.39.145:6443, *.internal.example"
@@ -406,7 +544,13 @@ fn a_long_list_is_clipped_to_a_few_and_says_how_many_more() {
         "[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\nhosts = [{}]\n",
         hosts.join(", ")
     );
-    let access = Access::of(&ctx, &sandbox(&text), &Locks::none(), "devops");
+    let access = Access::of(
+        &ctx,
+        &sandbox(&text),
+        &Locks::none(),
+        &InForce::default(),
+        "devops",
+    );
     assert_eq!(
         access.brief(),
         "vault team; hosts h0.example, h1.example, h2.example and 37 more"
@@ -420,10 +564,16 @@ fn where_the_sandbox_is_off_the_question_says_so_and_names_no_host() {
     let off = "[sandbox.personas.devops]\nhosts = [\"a.example\"]\n";
     for text in [None, Some(off)] {
         let plane = crate::sandbox::Plane::of(text);
-        let access = Access::of(&ctx, &plane, &Locks::none(), "devops");
+        let access = Access::of(&ctx, &plane, &Locks::none(), &InForce::default(), "devops");
+        // Of vaults too: a vault's tag is held by the sandbox, so no list bounds the chat.
         assert_eq!(
             access.brief(),
-            "vault team; any host, since this project's sandbox is off"
+            "any vault and any host on this machine, since this project's sandbox is off"
+        );
+        assert_eq!(
+            access.said(),
+            "devops works with its own access: any vault and any host on this machine, since \
+             this project's sandbox is off."
         );
     }
 }
@@ -433,12 +583,122 @@ fn a_registry_that_does_not_read_is_said_and_never_read_as_no_vault() {
     let project = with_vaults();
     std::fs::write(project.path().join("vaults.json"), "{ not json").expect("written");
     let ctx = Ctx::new(project.path(), Env::of(&[]));
-    let access = Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), "devops");
+    let access = Access::of(
+        &ctx,
+        &sandbox(SANDBOXED),
+        &Locks::none(),
+        &InForce::default(),
+        "devops",
+    );
     assert_eq!(access.vaults, Vaults::Unreadable);
     assert_eq!(
         access.brief(),
         "vaults purlis could not read; hosts 10.100.39.145:6443, *.internal.example"
     );
+}
+
+// ---- what the persona may itself dispatch to (the dispatcher's ruling on V100-28) --------------
+
+fn pair(asking: &str, target: &str) -> crate::dispatchgrant::Pair {
+    crate::dispatchgrant::Pair::new(asking, target).expect("a pair")
+}
+
+#[test]
+fn the_question_says_what_the_target_may_itself_dispatch_to_and_nothing_where_that_is_nobody() {
+    let project = with_vaults();
+    let ctx = Ctx::new(project.path(), Env::of(&[]));
+    let brief = |grants: &InForce, locks: &Locks| {
+        Access::of(&ctx, &sandbox(SANDBOXED), locks, grants, "devops").brief()
+    };
+    let plain = "vault team; hosts 10.100.39.145:6443, *.internal.example";
+    // Nobody: nothing is said.
+    assert_eq!(brief(&InForce::default(), &Locks::none()), plain);
+    // Named grants, yours and the project's, each once, sorted, clipped like the hosts.
+    let named = InForce {
+        you: vec![pair("devops", "researcher"), pair("steward", "legal")],
+        project: vec![pair("devops", "qa"), pair("devops", "researcher")],
+        ..InForce::default()
+    };
+    assert_eq!(
+        brief(&named, &Locks::none()),
+        format!("{plain}, and may itself dispatch to qa, researcher")
+    );
+    let many = InForce {
+        you: ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|to| pair("devops", to))
+            .collect(),
+        ..InForce::default()
+    };
+    assert_eq!(
+        brief(&many, &Locks::none()),
+        format!("{plain}, and may itself dispatch to a, b, c and 2 more")
+    );
+    // The wildcard, at either level.
+    for any in [
+        InForce {
+            you_any: vec!["devops".to_owned()],
+            ..InForce::default()
+        },
+        InForce {
+            project_any: vec!["devops".to_owned()],
+            you: vec![pair("devops", "qa")],
+            ..InForce::default()
+        },
+    ] {
+        assert_eq!(
+            brief(&any, &Locks::none()),
+            format!("{plain}, and may itself dispatch to any persona")
+        );
+    }
+    // Another persona's wildcard is not this one's.
+    let other = InForce {
+        you_any: vec!["steward".to_owned()],
+        ..InForce::default()
+    };
+    assert_eq!(brief(&other, &Locks::none()), plain);
+}
+
+#[test]
+fn onward_reach_is_only_what_a_dispatch_would_be_covered_for() {
+    let grants = InForce {
+        you: vec![pair("devops", "qa"), pair("devops", "researcher")],
+        never: vec![("devops".to_owned(), "qa".to_owned())],
+        ..InForce::default()
+    };
+    // A never takes the pair away.
+    assert_eq!(
+        Onward::of("devops", &grants, &Locks::none()),
+        Onward::Named(vec!["researcher".to_owned()])
+    );
+    // A policy lock takes it away, and a lock on all dispatch takes everything.
+    let locked = Locks::parse(
+        r#"{"dispatch": {"locked": [{"from": "devops", "to": "researcher"}]}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    assert_eq!(
+        Onward::of("devops", &grants, &locked),
+        Onward::Named(vec![])
+    );
+    let none = Locks::parse(
+        r#"{"dispatch": {"allow": false}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    let any = InForce {
+        you_any: vec!["devops".to_owned()],
+        ..InForce::default()
+    };
+    assert_eq!(Onward::of("devops", &any, &none), Onward::Named(vec![]));
+    // While the record of nevers does not read, no grant counts: none is said.
+    let unread = InForce {
+        never_unread: true,
+        ..any.clone()
+    };
+    assert_eq!(
+        Onward::of("devops", &unread, &Locks::none()),
+        Onward::Named(vec![])
+    );
+    assert_eq!(Onward::of("devops", &any, &Locks::none()), Onward::Any);
 }
 
 // ---- what was shown is what is answered ---------------------------------------------------------
@@ -447,11 +707,40 @@ fn a_registry_that_does_not_read_is_said_and_never_read_as_no_vault() {
 fn the_stamp_changes_with_anything_the_question_says_and_with_what_it_clips() {
     let project = with_vaults();
     let ctx = Ctx::new(project.path(), Env::of(&[]));
+    // What the target may itself dispatch to is part of what was said.
+    let reach = |grants: &InForce| {
+        Offer {
+            target: Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), grants, "devops"),
+            also: Vec::new(),
+        }
+        .stamp()
+    };
+    assert_ne!(
+        reach(&InForce::default()),
+        reach(&InForce {
+            you_any: vec!["devops".to_owned()],
+            ..InForce::default()
+        })
+    );
     let offer = |text: &str, also: &[&str]| Offer {
-        target: Access::of(&ctx, &sandbox(text), &Locks::none(), "devops"),
+        target: Access::of(
+            &ctx,
+            &sandbox(text),
+            &Locks::none(),
+            &InForce::default(),
+            "devops",
+        ),
         also: also
             .iter()
-            .map(|one| Access::of(&ctx, &sandbox(text), &Locks::none(), one))
+            .map(|one| {
+                Access::of(
+                    &ctx,
+                    &sandbox(text),
+                    &Locks::none(),
+                    &InForce::default(),
+                    one,
+                )
+            })
             .collect(),
     };
     let shown = offer(SANDBOXED, &["qa"]).stamp();

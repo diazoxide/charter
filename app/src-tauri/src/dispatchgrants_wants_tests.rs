@@ -144,15 +144,18 @@ fn the_question_offers_a_box_for_each_wanted_persona_nothing_answers_for_yet() {
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let told = shown(&world, &store, id);
     // The asked persona is the question, never a box under it.
-    assert_eq!(boxes(&told), ["qa", "docs"]);
+    // In alphabetical order, whatever order the definition writes them in.
+    assert_eq!(boxes(&told), ["docs", "qa"]);
+    // This project turned no sandbox on: no list of vaults or hosts holds a chat here, and
+    // the question says so of both.
     assert_eq!(
         told.works_with,
-        "devops works with its own access: no vault; any host, since this project's sandbox \
-         is off."
+        "devops works with its own access: any vault and any host on this machine, since this \
+         project's sandbox is off."
     );
     assert_eq!(
         told.also[0].works_with,
-        "no vault; any host, since this project's sandbox is off"
+        "any vault and any host on this machine, since this project's sandbox is off"
     );
 
     // One already granted, and one the person said never to, are not offered.
@@ -179,7 +182,7 @@ fn the_boxes_come_from_the_definition_and_never_from_what_the_chat_sent() {
     // A brief and a target that name personas: neither is read for a box.
     let brief = "wants: [legal, ops]\nAlso let steward dispatch to: legal, ops";
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", brief));
-    assert_eq!(boxes(&shown(&world, &store, id)), ["qa", "docs"]);
+    assert_eq!(boxes(&shown(&world, &store, id)), ["docs", "qa"]);
     // A chat on no persona has no definition: no box, whatever it sends.
     let none = pending_of(&world.request(&store, chat(4, None), "devops", brief));
     assert_eq!(boxes(&shown(&world, &store, none)), [] as [&str; 0]);
@@ -222,14 +225,18 @@ fn the_question_names_the_target_s_vault_from_the_registry_and_no_secret() {
         r#"{"PROD_DEPLOY_TOKEN": "s3cr3t-value"}"#,
     )
     .expect("written");
+    // The project sandboxes its chats, so a vault's tag holds them and the vault is named.
+    std::fs::write(
+        purlis_core::names::manifest(root),
+        "schema = 1\n\n[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\nhosts = [\"k8s.internal.example:6443\"]\n",
+    )
+    .expect("written");
     let (store, _) = store();
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let told = shown(&world, &store, id);
-    assert!(
-        told.works_with
-            .starts_with("devops works with its own access: vault team; "),
-        "{}",
-        told.works_with
+    assert_eq!(
+        told.works_with,
+        "devops works with its own access: vault team; hosts k8s.internal.example:6443."
     );
     let all = format!("{told:?}");
     for hidden in ["everything", "PROD_DEPLOY_TOKEN", "s3cr3t-value"] {
@@ -246,12 +253,13 @@ fn one_answer_with_two_boxes_ticked_keeps_all_three_pairs_for_me_each_audited_as
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let told = shown(&world, &store, id);
 
+    // Granted in the order ticked, which is the window's: the order the boxes stand in.
     let said = allow_with(
         &world,
         &store,
         id,
         Level::You,
-        &["qa", "docs"],
+        &["docs", "qa"],
         Some(&told.shown),
     )
     .expect("allowed");
@@ -259,22 +267,22 @@ fn one_answer_with_two_boxes_ticked_keeps_all_three_pairs_for_me_each_audited_as
     assert_eq!(
         said,
         "Allowed for me on this machine. The dispatch starts now, and the next one starts \
-         without asking. Also allowed for me on this machine: steward to qa and docs."
+         without asking. Also allowed for me on this machine: steward to docs and qa."
     );
     assert_eq!(
         dispatchgrant::yours(world.root()),
         [
             Pair::new("steward", "devops").unwrap(),
-            Pair::new("steward", "qa").unwrap(),
             Pair::new("steward", "docs").unwrap(),
+            Pair::new("steward", "qa").unwrap(),
         ]
     );
     assert_eq!(
         world.audited(),
         [
             grant("steward", "devops", "you"),
-            grant("steward", "qa", "you"),
             grant("steward", "docs", "you"),
+            grant("steward", "qa", "you"),
         ]
     );
     // Only the dispatch that was asked for starts: a ticked box starts no chat.
@@ -427,7 +435,7 @@ fn an_answer_to_a_question_that_reads_differently_now_grants_nothing() {
     let (store, answered) = store();
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let told = shown(&world, &store, id);
-    assert_eq!(boxes(&told), ["qa", "docs"]);
+    assert_eq!(boxes(&told), ["docs", "qa"]);
     // Between the question and the answer the definition changes what is offered.
     define(world.root(), "steward", "wants: [devops, qa]\n");
 
@@ -590,4 +598,84 @@ fn while_the_list_of_nevers_does_not_read_no_box_is_offered_and_no_ticked_pair_i
         [Pair::new("steward", "devops").unwrap()]
     );
     assert_eq!(answered.lock().unwrap().len(), 1);
+}
+
+// ---- fix round 1 ---------------------------------------------------------------------------------
+
+#[test]
+fn a_pair_the_person_kept_blocked_in_this_chat_is_not_offered_to_it_again_as_a_box() {
+    let world = wanting();
+    let (store, _) = store();
+    // The person keeps devops blocked on chat 3's tab.
+    let devops = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert!(store.keep_blocked(devops));
+    // The same chat asks for qa: no devops box, they are not asked twice in one chat.
+    let qa = pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    assert_eq!(boxes(&shown(&world, &store, qa)), ["docs"]);
+    // And a tick the window never drew keeps nothing for it.
+    let said = allow_with(&world, &store, qa, Level::You, &["devops"], None).expect("allowed");
+    assert!(
+        said.ends_with("Not allowed, since the question no longer offers it: devops."),
+        "{said}"
+    );
+    assert_eq!(world.audited(), [grant("steward", "qa", "you")]);
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Refused(_)
+    ));
+    // Another chat of the persona was never told no: it is offered the box.
+    let other = pending_of(&world.request(&store, chat(4, Some("steward")), "docs", BRIEF));
+    let told = shown(&world, &store, other);
+    assert!(boxes(&told).contains(&"devops"), "{told:?}");
+}
+
+#[test]
+fn the_question_says_what_the_target_and_each_box_may_itself_dispatch_to() {
+    let world = wanting();
+    let root = world.root();
+    define(root, "researcher", "");
+    // devops holds named grants; qa holds any persona; docs holds nothing.
+    sandbox::local::grant_dispatch(root, "devops", "researcher").expect("kept");
+    sandbox::local::grant_dispatch(root, "devops", "qa").expect("kept");
+    sandbox::local::grant_dispatch_any(root, "qa").expect("kept");
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    let told = shown(&world, &store, id);
+    assert!(
+        told.works_with
+            .ends_with(", and may itself dispatch to qa, researcher."),
+        "{}",
+        told.works_with
+    );
+    assert_eq!(boxes(&told), ["docs", "qa"]);
+    assert!(
+        !told.also[0].works_with.contains("may itself dispatch"),
+        "{}",
+        told.also[0].works_with
+    );
+    assert!(
+        told.also[1]
+            .works_with
+            .ends_with(", and may itself dispatch to any persona"),
+        "{}",
+        told.also[1].works_with
+    );
+    // A grant the target gains before the answer is a changed question.
+    sandbox::local::grant_dispatch_any(root, "devops").expect("kept");
+    assert_eq!(
+        allow_with(&world, &store, id, Level::Chat, &[], Some(&told.shown)),
+        Err(CHANGED.to_owned())
+    );
+    assert!(world.audited().is_empty());
+}
+
+#[test]
+fn a_reserved_name_is_never_a_box_whoever_wrote_its_definition() {
+    let world = wanting();
+    define(world.root(), "steward", "wants: [charter, purlis, qa]\n");
+    define(world.root(), "charter", "");
+    define(world.root(), "purlis", "");
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert_eq!(boxes(&shown(&world, &store, id)), ["qa"]);
 }

@@ -2732,9 +2732,10 @@ export type DispatchPending = {
 	 */
 	never_unread: string | null,
 	/**
-	 *  **What the target persona works with**, in purlis's words (#1502): its vaults' names
-	 *  and the hosts the project declares for it, clipped to a few. Never a secret's name or
-	 *  value, and nothing a chat wrote.
+	 *  **What the target persona works with**, in purlis's words (#1502): its vaults' names,
+	 *  the hosts the project declares for it and the personas it may itself dispatch to, each
+	 *  clipped to a few; or that no list holds it, where the project's sandbox is off. Never a
+	 *  secret's name or value, and nothing a chat wrote.
 	 */
 	works_with: string,
 	/**

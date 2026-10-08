@@ -560,5 +560,18 @@ fn what_of_wants_is_not_offered_is_said_and_a_clean_line_says_nothing() {
                  and `wants` grants nothing"
             ),
         ]
+    ); // A child that inherits the line is told whose line it is.
+    p.write(
+        "personas/kid/persona.md",
+        "---\nname: kid\nextends: wide\nrole: Kid\nvault: none\ndelegate-when: nights\n---\n\n# Kid\n",
+    );
+    let kid = linter(&p).definition("kid");
+    assert_eq!(
+        messages(&kid)[0],
+        (
+            Level::Warn,
+            "wants names 'ghost', which is not a persona of this project, so it is not offered, \
+             in the line it inherits from 'wide'"
+        )
     );
 }
