@@ -1,5 +1,6 @@
 //! Where purlis looks for a provider's program: `op` for a 1Password vault, `op` or `vault`
-//! for a reference. One lookup, [`Ctx::program`], asked by every provider and by `purlis doctor`.
+//! for a reference. One lookup, [`Ctx::program`], asked by every provider, by the pin taken
+//! when a token is stored, and by `purlis doctor`.
 //!
 //! **#1516.** A provider used to be looked for on its process's own `PATH` and nowhere else. An
 //! app started from the Dock is given `/usr/bin:/bin:/usr/sbin:/sbin`, so the app that resolves
@@ -15,10 +16,20 @@
 //! sandboxed chat that is the app, whose environment the chat never sets. What a chat sends
 //! with its ask is the child's environment and is never read here.
 //!
-//! **A directory a chat may write is searched last**, wherever `PATH` names it: the project,
-//! the temp directories and a harness's own homes ([`chat_may_write`]). A provider's program is
-//! handed the vault's identity, so one a chat could have written never runs in place of one the
-//! person installed.
+//! **A program where a chat may write is never run** (D-1516-9). A provider's program is handed
+//! the vault's identity, so a file a chat could have written is refused as a harness in such a
+//! place is ([`crate::sandbox::program::checked`], whose test of "where a chat can write" this
+//! asks). The file is judged as it was found and as the disk names it, so a link in a
+//! directory no chat writes to a file a chat does write is refused too, and what runs is the
+//! file the disk names. A copy further along the search that no chat can write is used; with
+//! none, the refusal names the file that was passed over.
+//!
+//! **Where a chat may write is the sandbox's own record** ([`Ctx::chat_writes`]): the project,
+//! the folders the person let every chat of it write, its cache home, every harness's own
+//! homes and the temp directories; and, for a read the app makes for one chat, that chat's own
+//! folder and what its sandbox was compiled to let it write ([`Ctx::chat`]). A read with no
+//! chat behind it is held to what the project's sandbox would grant any chat, so the answer
+//! does not depend on who asks.
 //!
 //! **A fenced build leaves the machine-wide directories out** unless its `PATH` names them, as
 //! it keeps a stub for the keyring: no test may run the `op` this machine has installed.
@@ -59,21 +70,44 @@ pub struct Place {
 /// A provider's program, and how it was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
+    /// The file to run: the one the disk names, with every link resolved.
     pub path: PathBuf,
+    /// Where the search found it, which may be a link to [`Self::path`]. What a pin records:
+    /// an installer's link keeps its name across an upgrade and the file behind it does not.
+    pub found: PathBuf,
     pub route: Route,
+}
+
+/// Why no provider's program is run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotRun {
+    /// No directory holds one.
+    NotFound(NotFound),
+    /// The only one found is where a chat may write.
+    Writable {
+        /// The file, as it was found or as the disk names it: whichever spelling lies where a
+        /// chat may write.
+        path: PathBuf,
+        /// Every directory searched, in order.
+        looked: Vec<PathBuf>,
+    },
+}
+
+impl NotRun {
+    /// Every directory that was searched, in order.
+    pub fn looked(&self) -> &[PathBuf] {
+        match self {
+            Self::NotFound(not) => &not.looked,
+            Self::Writable { looked, .. } => looked,
+        }
+    }
 }
 
 /// Every directory searched for a provider's program, in order.
 ///
 /// [`programs::search_dirs_from`]'s list for `path` and `home`, less the machine-wide
-/// directories `path` does not name when `machine_wide` is off, with every directory
-/// `chat_may_write` answers for moved after the rest. Each half keeps its own order.
-pub fn places_from(
-    path: Option<&OsStr>,
-    home: Option<&Path>,
-    machine_wide: bool,
-    chat_may_write: &dyn Fn(&Path) -> bool,
-) -> Vec<Place> {
+/// directories `path` does not name when `machine_wide` is off.
+pub fn places_from(path: Option<&OsStr>, home: Option<&Path>, machine_wide: bool) -> Vec<Place> {
     let inherited: Vec<PathBuf> = path
         .map(|path| programs::searchable(path).collect())
         .unwrap_or_default();
@@ -88,7 +122,7 @@ pub fn places_from(
         .into_iter()
         .filter(|dir| machine_wide || !machine_wide_dir(dir))
         .collect();
-    let (first, last): (Vec<Place>, Vec<Place>) = programs::search_dirs_from(path, home)
+    programs::search_dirs_from(path, home)
         .into_iter()
         .filter(|dir| inherited.contains(dir) || always.contains(dir))
         .map(|dir| Place {
@@ -99,56 +133,12 @@ pub fn places_from(
             },
             dir,
         })
-        .partition(|place| !chat_may_write(&place.dir));
-    first.into_iter().chain(last).collect()
+        .collect()
 }
 
-/// `path` as the disk names it, as far as it exists: a directory spelled through a link is
-/// compared by where it is.
+/// `path` as the disk names it, as far as it exists.
 fn real(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// The folders a chat in `ctx`'s project may write: the project, the temp directories, and the
-/// homes a harness keeps its own files under. Each in both spellings, as named and as the disk
-/// names it.
-pub fn chat_may_write(ctx: &Ctx) -> Vec<PathBuf> {
-    let home = home_of(ctx);
-    let tmpdir: Vec<(String, String)> = ctx
-        .env
-        .get("TMPDIR")
-        .map(|dir| ("TMPDIR".to_owned(), dir))
-        .into_iter()
-        .collect();
-    let machine = crate::sandbox::Machine {
-        env: ctx.env.clone(),
-        home,
-        os: crate::sandbox::Os::this(),
-    };
-    let homes = crate::sandbox::Homes::of(&machine);
-    let mut named = crate::sandbox::program::temp_roots(&tmpdir);
-    named.extend(
-        [
-            homes.data,
-            homes.state,
-            homes.config,
-            homes.cache,
-            homes.codex,
-            crate::sandbox::Homes::codex_project(&machine, &ctx.root),
-        ]
-        .into_iter()
-        .flatten(),
-    );
-    named.push(ctx.root.clone());
-    let mut all: Vec<PathBuf> = Vec::new();
-    for dir in named {
-        for spelling in [real(&dir), dir] {
-            if spelling.is_absolute() && !all.contains(&spelling) {
-                all.push(spelling);
-            }
-        }
-    }
-    all
 }
 
 /// `$HOME` in `ctx`'s environment, when it is an absolute path.
@@ -159,62 +149,183 @@ fn home_of(ctx: &Ctx) -> Option<PathBuf> {
         .filter(|home| home.is_absolute())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's seam, as [`crate::sandbox::grant`]'s is: a fixture's stand-in program is made in
+    /// a temp folder, which the rule refuses as it must. A test of the rest turns the temp
+    /// directories off for its own thread ([`stand_ins_live_in_temp_folders`]);
+    /// the rule has tests of its own.
+    pub(crate) static TEMP_COUNTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Turns the temp directories off, for this thread, as a place a chat may write: called by a
+/// fixture that makes a stand-in program in one.
+#[cfg(test)]
+pub(crate) fn stand_ins_live_in_temp_folders() {
+    TEMP_COUNTS.with(|counts| counts.set(false));
+}
+
+/// Whether the temp directories count as a place a chat may write: always, in a build that
+/// ships.
+#[cfg(test)]
+fn temp_counts() -> bool {
+    TEMP_COUNTS.with(std::cell::Cell::get)
+}
+
+/// See the shipped arm. A fenced build that is not this crate's own tests is another crate's
+/// test, or the command a test runs: its fixtures hold their stand-in programs in a temp
+/// folder, in a process no thread-local seam reaches. Compile time only, as the fence is.
+#[cfg(all(not(test), feature = "fenced"))]
+fn temp_counts() -> bool {
+    false
+}
+
+#[cfg(all(not(test), not(feature = "fenced")))]
+fn temp_counts() -> bool {
+    true
+}
+
 impl Ctx {
+    /// This context, reading for the chat whose folder is `folder` and whose sandbox was
+    /// compiled to `confines`: what that chat may write is added to where no provider's program
+    /// is run from. The app's record of the chat, never anything the chat sent.
+    pub fn chat(mut self, confines: &crate::sandbox::Confines, folder: Option<&Path>) -> Self {
+        self.chat_writes.extend(folder.map(Path::to_path_buf));
+        self.chat_writes.extend(confines.writable.iter().cloned());
+        self.chat_writes.extend(
+            confines
+                .widened
+                .caches
+                .iter()
+                .flat_map(|caches| caches.writable()),
+        );
+        self
+    }
+
     /// Every directory this context searches for a provider's program, in order.
     pub fn program_places(&self) -> Vec<Place> {
-        let writable = chat_may_write(self);
         let path = self.env.get("PATH");
         places_from(
             path.as_deref().map(OsStr::new),
             home_of(self).as_deref(),
             !crate::fence::FENCED,
-            &|dir| {
-                let real = real(dir);
-                writable
-                    .iter()
-                    .any(|grant| dir.starts_with(grant) || real.starts_with(grant))
-            },
         )
     }
 
-    /// The provider's program `name` as an absolute path with the route it was found by, or
-    /// every directory that was searched.
-    pub fn program(&self, name: &str) -> Result<Found, NotFound> {
-        let places = self.program_places();
-        let dirs: Vec<PathBuf> = places.iter().map(|place| place.dir.clone()).collect();
-        let Some(path) = programs::find(name, &dirs) else {
-            return Err(NotFound {
-                program: name.to_owned(),
-                looked: dirs,
-            });
+    /// Where a chat may write, each folder as named and as the disk names it: the project, the
+    /// folders the person let every chat of it write, its cache home, every harness's own homes
+    /// and the temp directories, and what [`Self::chat`] added for the chat this reads for.
+    pub fn chat_writes(&self) -> Vec<(PathBuf, PathBuf)> {
+        let machine = crate::sandbox::Machine {
+            env: self.env.clone(),
+            home: home_of(self),
+            os: crate::sandbox::Os::this(),
         };
-        let route = places
-            .iter()
-            .find(|place| path.parent() == Some(place.dir.as_path()))
-            .map_or(Route::Always, |place| place.route);
-        Ok(Found { path, route })
+        let mut homes = crate::sandbox::Homes::of(&machine);
+        homes.codex_project = crate::sandbox::Homes::codex_project(&machine, &self.root);
+        let mut named = vec![self.root.clone()];
+        named.extend(self.chat_writes.iter().cloned());
+        named.extend(crate::sandbox::local::granted_writes(&self.root));
+        named.extend(crate::sandbox::caches::root_of(&machine, &self.root));
+        named.extend(crate::sandbox::grant::harness_homes(&machine, &homes));
+        if temp_counts() {
+            let tmpdir: Vec<(String, String)> = self
+                .env
+                .get("TMPDIR")
+                .map(|dir| ("TMPDIR".to_owned(), dir))
+                .into_iter()
+                .collect();
+            named.extend(crate::sandbox::program::temp_roots(&tmpdir));
+        }
+        named
+            .into_iter()
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| {
+                let real = real(&dir);
+                (dir, real)
+            })
+            .collect()
     }
-}
 
-impl Ctx {
-    /// The end of a not-found refusal: every directory that was searched, whole, and where to
-    /// link a program that is installed somewhere else.
-    pub fn looked_in(&self, not: &NotFound) -> String {
-        if not.looked.is_empty() {
+    /// The provider's program `name`: the first one in the search that is nowhere a chat may
+    /// write, as the file the disk names, with the route it was found by. Or why none is run:
+    /// none was found, or the only one found is where a chat may write.
+    pub fn program(&self, name: &str) -> Result<Found, NotRun> {
+        let places = self.program_places();
+        let writes = self.chat_writes();
+        let mut passed_over: Option<PathBuf> = None;
+        for place in &places {
+            let Some(found) = programs::find(name, std::slice::from_ref(&place.dir)) else {
+                continue;
+            };
+            let real = real(&found);
+            let writable = [&found, &real]
+                .into_iter()
+                .find(|path| crate::sandbox::program::writable(path, &writes))
+                .cloned();
+            match writable {
+                Some(path) => {
+                    passed_over.get_or_insert(path);
+                }
+                None => {
+                    return Ok(Found {
+                        path: real,
+                        found,
+                        route: place.route,
+                    });
+                }
+            }
+        }
+        let looked: Vec<PathBuf> = places.into_iter().map(|place| place.dir).collect();
+        Err(match passed_over {
+            Some(path) => NotRun::Writable { path, looked },
+            None => NotRun::NotFound(NotFound {
+                program: name.to_owned(),
+                looked,
+            }),
+        })
+    }
+
+    /// The refusal for `why`: `what` is the program as a person names it ("the 1Password CLI
+    /// ('op')") and `install` what to do where there is none. Every path is whole.
+    pub fn not_run(&self, what: &str, install: &str, why: &NotRun) -> String {
+        match why {
+            NotRun::NotFound(_) => format!(
+                "purlis could not find {what}. {install} {}",
+                self.looked_in(why.looked())
+            ),
+            NotRun::Writable { path, .. } => format!(
+                "purlis found {what} only where a chat can write: {}, so it was not run. Keep \
+                 the program outside the project and outside what a chat may write. {}",
+                crate::shown::readable(&path.display().to_string(), usize::MAX),
+                self.looked_in(why.looked())
+            ),
+        }
+    }
+
+    /// The end of a refusal: every directory that was searched, whole, and where to link a
+    /// program that is installed somewhere else.
+    pub fn looked_in(&self, looked: &[PathBuf]) -> String {
+        if looked.is_empty() {
             return "It had no directory to look in: this process has no PATH and no home \
                     directory."
                 .to_owned();
         }
-        let looked = format!("It looked in: {}.", not.looked_in());
+        let listed = NotFound {
+            program: String::new(),
+            looked: looked.to_vec(),
+        }
+        .looked_in();
         match home_of(self) {
             Some(home) => format!(
-                "{looked} If it is installed somewhere else, put a link to it in {}.",
+                "It looked in: {listed}. If it is installed somewhere else, put a link to it \
+                 in {}.",
                 crate::shown::readable(
                     &home.join(programs::USER_BIN[0]).display().to_string(),
                     usize::MAX
                 )
             ),
-            None => looked,
+            None => format!("It looked in: {listed}."),
         }
     }
 }

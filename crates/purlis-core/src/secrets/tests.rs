@@ -529,6 +529,7 @@ fn pinned_plane(
     std::path::PathBuf,
     registry::Vault,
 ) {
+    crate::secrets::program::stand_ins_live_in_temp_folders();
     let tmp = tempfile::tempdir().unwrap();
     let bin = tempfile::tempdir().unwrap();
     let op = stand_in::program(
@@ -760,6 +761,29 @@ fn a_pinned_op_that_is_missing_gone_or_signed_by_another_team_is_refused() {
 fn a_token_pasted_where_no_op_is_on_path_is_kept_and_every_read_is_refused_until_it_is_put_again() {
     let (tmp, _bin, _op, v) = pinned_plane("");
     let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let rec = identity_record(&ctx);
+    assert_eq!(
+        (&rec["op_cmd"], &rec["op_team"]),
+        (&serde_json::json!(""), &serde_json::json!(""))
+    );
+    let err = identity::pinned_op(&ctx, &v).unwrap_err();
+    assert!(
+        err.message.contains("no `op` was pinned"),
+        "{}",
+        err.message
+    );
+}
+
+/// D-1516-9: the pin is what every later read runs with the token out of the keyring, so an
+/// `op` a chat could have written is never the one pinned.
+#[test]
+fn an_op_found_only_where_a_chat_can_write_is_not_pinned_when_a_token_is_stored() {
+    let (tmp, _bin, _op, v) = pinned_plane("");
+    let planted = tmp.path().join("tools");
+    std::fs::create_dir_all(&planted).unwrap();
+    stand_in::program(&planted, "op", "#!/bin/sh\nprintf planted\n");
+    let ctx = on_path(tmp.path(), &planted);
     identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
     let rec = identity_record(&ctx);
     assert_eq!(

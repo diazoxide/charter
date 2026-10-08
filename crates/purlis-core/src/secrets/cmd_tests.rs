@@ -140,6 +140,7 @@ impl Plane {
 /// A directory holding an executable `op` that prints `value` for any `op read`.
 pub(crate) fn fake_op(value: &str) -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
+    crate::secrets::program::stand_ins_live_in_temp_folders();
     let bin = tempfile::tempdir().unwrap();
     let op = bin.path().join("op");
     std::fs::write(&op, format!("#!/bin/sh\nprintf '%s\\n' '{value}'\n")).unwrap();

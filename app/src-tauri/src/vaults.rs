@@ -1490,6 +1490,9 @@ mod tests {
     fn team(carrying: &[(&str, &str)]) -> (tempfile::TempDir, Ctx) {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
+        // The project is a folder of its own beside it: no provider's program is run from
+        // inside a project (#1516).
+        std::fs::create_dir_all(dir.path().join("plane")).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
         let op = bin.join("op");
         std::fs::write(
@@ -1502,7 +1505,7 @@ mod tests {
         let path = format!("{}:/usr/bin:/bin", bin.display());
         let mut vars = vec![("PATH", path.as_str())];
         vars.extend_from_slice(carrying);
-        let ctx = Ctx::new(dir.path(), Env::of(&vars));
+        let ctx = Ctx::new(&dir.path().join("plane"), Env::of(&vars));
         let mut config = serde_json::Map::new();
         config.insert("op-vault".into(), serde_json::json!("Fixture"));
         config.insert(
@@ -1546,7 +1549,10 @@ mod tests {
         );
         // A chat's `charter`, which has no `$OP_TEAM_TOKEN`, now finds it.
         let path = format!("{}:/usr/bin:/bin", dir.path().join("bin").display());
-        let bare = Ctx::new(dir.path(), Env::of(&[("PATH", path.as_str())]));
+        let bare = Ctx::new(
+            &dir.path().join("plane"),
+            Env::of(&[("PATH", path.as_str())]),
+        );
         let reopened = open(&bare, "team").unwrap();
         assert_eq!(
             identity_of(&reopened),
@@ -1569,7 +1575,10 @@ mod tests {
         );
         assert!(put.identity_in_app_env.is_empty(), "{put:?}");
         let path = format!("{}:/usr/bin:/bin", dir.path().join("bin").display());
-        let bare = Ctx::new(dir.path(), Env::of(&[("PATH", path.as_str())]));
+        let bare = Ctx::new(
+            &dir.path().join("plane"),
+            Env::of(&[("PATH", path.as_str())]),
+        );
         assert_eq!(
             identity_of(&open(&bare, "team").unwrap()),
             [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]

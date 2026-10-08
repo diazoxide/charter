@@ -9,7 +9,9 @@
 //!    request names: a vault the registry tags with that persona, or one the person allowed for
 //!    it on this machine ([`authorise`], D-1430-1). A chat on no persona gets no vault;
 //! 2. **resolves** each value with the providers' own code, in the app's process and
-//!    environment, never the chat's, so nothing the chat sets moves where a value is read from;
+//!    environment, never the chat's, so nothing the chat sets moves where a value is read from,
+//!    and a provider's program is never one in the chat's folder or anywhere its sandbox lets
+//!    it write ([`Ctx::chat`]);
 //! 3. **runs** the command outside the chat's read rules but inside a sandbox built from what
 //!    the chat's own sandbox was compiled to when it started ([`crate::sandbox::Confines`]): the
 //!    same denials, its harness's own among them, the chat's folder and a temp directory of its
@@ -644,6 +646,9 @@ pub(crate) fn serve_wrapped(
         );
         return not_answered(writer);
     };
+    // What this chat may write is the app's record of it, and no provider's program is run
+    // from there (#1516).
+    let ctx = ctx.chat(confines, asker.folder.as_deref());
     if let Err(why) = authorise(&ctx, asker.persona.as_deref(), &wanted.vault) {
         return refuse(&mut *writer, 1, why);
     }
@@ -781,6 +786,7 @@ pub(crate) fn serve_wrapped(
         root: ctx.root.clone(),
         state: ctx.state.clone(),
         env: Env::of(&[(crate::active::SESSION_ID_ENV, &chat)]),
+        chat_writes: Vec::new(),
     };
     exec::record(
         &ctx_traced,

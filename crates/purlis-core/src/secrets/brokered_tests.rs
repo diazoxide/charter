@@ -487,6 +487,7 @@ fn an_asker_that_goes_away_has_its_command_stopped() {
 
 /// A stand-in `op` that answers every `op read` with `value`, and leaves `ran` beside itself.
 fn an_op(dir: &Path, value: &str) {
+    crate::secrets::program::stand_ins_live_in_temp_folders();
     std::fs::create_dir_all(dir).unwrap();
     stand_in::program(
         dir,
@@ -580,6 +581,84 @@ fn nothing_in_a_chats_environment_chooses_the_providers_program() {
     assert!(!why.contains(&planted.display().to_string()), "{why}");
     assert!(!planted.join("ran").exists());
     assert!(!project.path().join("work/.local/bin/ran").exists());
+}
+
+/// D-1516-9: the app was started with a `PATH` that names a folder in the project (a terminal
+/// with a project's own `bin` on it), and the only `op` anywhere is the one a chat put there.
+#[test]
+fn a_providers_program_a_chat_could_have_written_is_never_run_for_it() {
+    let project = project_on_1password();
+    let home = tempfile::tempdir().unwrap();
+    let planted = project.path().join("work/bin");
+    an_op(&planted, "planted");
+    let asker = Asker {
+        env: Env::of(&[
+            ("PATH", &format!("{}:/usr/bin:/bin", planted.display())),
+            ("HOME", &home.path().to_string_lossy()),
+        ]),
+        ..asker(project.path(), Some("devops"))
+    };
+    let frames = served(&asker, wants_token(project.path(), "prod"));
+    let why = refusal(&frames);
+    assert!(
+        why.starts_with(&format!(
+            "purlis found the 1Password CLI ('op') only where a chat can write: {}, so it was \
+             not run. Keep the program outside the project and outside what a chat may write. \
+             It looked in: ",
+            planted.join("op").display()
+        )),
+        "{why}"
+    );
+    assert!(!planted.join("ran").exists());
+}
+
+/// M1: the chat's own folder is outside the project, and the person let this one chat write a
+/// second folder. Both are the app's record of the chat, and neither is in the project.
+#[test]
+fn what_the_asking_chat_may_write_is_the_apps_record_of_it() {
+    let project = project_on_1password();
+    let home = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let granted = tempfile::tempdir().unwrap();
+    for (dir, asker_of) in [
+        (
+            folder.path().join("bin"),
+            Box::new(|asker: Asker| Asker {
+                folder: Some(folder.path().to_path_buf()),
+                ..asker
+            }) as Box<dyn Fn(Asker) -> Asker>,
+        ),
+        (
+            granted.path().to_path_buf(),
+            Box::new(|asker: Asker| Asker {
+                confines: Some(Confines {
+                    writable: vec![granted.path().to_path_buf()],
+                    ..asker.confines.clone().unwrap()
+                }),
+                ..asker
+            }),
+        ),
+    ] {
+        an_op(&dir, TOKEN);
+        let from_a_terminal = Asker {
+            env: Env::of(&[
+                ("PATH", &format!("{}:/usr/bin:/bin", dir.display())),
+                ("HOME", &home.path().to_string_lossy()),
+            ]),
+            ..asker(project.path(), Some("devops"))
+        };
+        let mut want = wants_token(project.path(), "prod");
+        want.cwd = None;
+        // Nobody recorded that a chat may write it: it is the person's own program.
+        let frames = served(&from_a_terminal, want.clone());
+        assert_eq!(frames.last(), Some(&Frame::Exit(0)), "{frames:?}");
+        std::fs::remove_file(dir.join("ran")).unwrap();
+        // The app recorded that this chat may: it is not run.
+        let frames = served(&asker_of(from_a_terminal), want);
+        let why = refusal(&frames);
+        assert!(why.contains("only where a chat can write"), "{why}");
+        assert!(!dir.join("ran").exists());
+    }
 }
 
 #[test]

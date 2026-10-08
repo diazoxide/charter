@@ -127,11 +127,20 @@ the keys and the command — never a value.
 then in the directories installers use under your home (`~/.local/bin` first), then in
 Homebrew's and the system's. For a sandboxed chat that process is the app, so a program your
 shell finds is found however the app was started, and nothing the chat sets changes where it is
-looked for. A directory a chat may write (the project, a temp directory, a harness's own home)
-is searched after every other. A refusal names every directory searched; a program installed
-somewhere else is found once a link to it is in `~/.local/bin`. `purlis doctor` has a row for
-each such program your vaults use (`op for vaults`), saying where it was found and whether only
-this `PATH` finds it.
+looked for.
+
+**A program where a chat may write is never run as a provider.** That is the project, any
+folder you let chats write, the project's cache home, a harness's own folders, the temp
+directories, and, for a read the app makes for one chat, that chat's own folder and what its
+sandbox lets it write. The file is judged by where it really is, so a link to such a file is
+refused too, and purlis runs the file itself, not the link. A copy further along the search
+that no chat can write is used. With none, purlis refuses, names the file it passed over, and
+stores no pin for it. The rule is the one a harness's program is held to.
+
+A refusal names every directory searched. A program installed somewhere else is found once a
+link to it is in `~/.local/bin`. `purlis doctor` has a row for each such program your vaults
+use (`op for vaults`): green where it is found however purlis is started, a warning where only
+this `PATH` finds it, where it is missing, and where the only one is where a chat may write.
 
 A vault may declare the identity it is read through — `--env OP_SERVICE_ACCOUNT_TOKEN=<VAR>`
 or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, purlis refuses rather than read

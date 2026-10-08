@@ -151,6 +151,7 @@ pub fn vault_ctx(root: &Path, state: &Path) -> crate::secrets::Ctx {
         root: root.to_path_buf(),
         state: state.to_path_buf(),
         env: crate::secrets::Env::from_process(),
+        chat_writes: Vec::new(),
     }
 }
 
