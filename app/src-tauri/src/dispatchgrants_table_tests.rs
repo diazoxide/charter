@@ -6,7 +6,7 @@
 use super::*;
 
 /// Writes the persona `name` into `world`'s project, as a hand or a pull would.
-fn persona(world: &World, name: &str) {
+pub(super) fn persona(world: &World, name: &str) {
     let dir = world.root().join("personas").join(name);
     std::fs::create_dir_all(&dir).expect("its folder");
     std::fs::write(
@@ -17,7 +17,7 @@ fn persona(world: &World, name: &str) {
 }
 
 /// A world whose project has a project file holding `grants` and these personas.
-fn world_with(personas: &[&str], grants: &str) -> World {
+pub(super) fn world_with(personas: &[&str], grants: &str) -> World {
     let world = World::new();
     std::fs::write(
         purlis_core::names::manifest(world.root()),
@@ -34,7 +34,7 @@ fn file(world: &World) -> String {
     std::fs::read_to_string(purlis_core::names::manifest(world.root())).expect("the file")
 }
 
-fn known(world: &World) -> impl Fn(&str) -> bool {
+pub(super) fn known(world: &World) -> impl Fn(&str) -> bool {
     let personas = purlis_core::dispatchdormant::personas_of(world.root()).unwrap_or_default();
     move |name: &str| personas.iter().any(|one| one == name)
 }
@@ -137,6 +137,9 @@ fn the_table_is_told_every_grant_with_its_source_and_what_stands_beside_them() {
             level: GrantLevel::Project,
             waiting: true,
             declined: false,
+            workspace: None,
+            nowhere: None,
+            id: None,
         }]
     );
     assert_eq!(

@@ -495,6 +495,34 @@ export const commands = {
 	 */
 	removeDormantDispatch: (plane: PlaneId, asking: string, target: string, any: boolean) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target, any })),
 	/**
+	 *  **Allow, in any workspace**, on a dispatch's Notice, at `level`: the explicit wider choice
+	 *  (#1505). [`allow_dispatch`] is the narrower one, which holds in the workspace the task
+	 *  works in. The pair and the workspace are the app's record of the held dispatch `id`, never
+	 *  the window's word. Audited, then kept, and the dispatch starts.
+	 */
+	allowDispatchAnywhere: (plane: PlaneId, id: number, level: GrantLevel) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch_anywhere", { plane, id, level })),
+	/**
+	 *  **Changes which workspace a grant holds in**, on Settings' table (#1505): the grant of
+	 *  `asking` to `target` (`*`: any persona) at `level` (`you` or `project`), which holds in
+	 *  `from` now (null: any workspace), is set to hold in `to` (null: any workspace). Narrowing
+	 *  and widening alike are the person's confirmed press; a project grant's change edits the
+	 *  committed file. Setting a grant to the workspace it names already confirms it for the
+	 *  workspace of that name that is there now. Audited first. Answers what stands now.
+	 */
+	setDispatchWorkspace: (plane: PlaneId, asking: string, target: string, level: GrantLevel, from: string | null, to: string | null) => typedError<DispatchStanding, string>(__TAURI_INVOKE("set_dispatch_workspace", { plane, asking, target, level, from, to })),
+	/**
+	 *  **Accept** on Settings' table, for a grant of the project's limited to one workspace
+	 *  (#1505): this machine follows it from now on, for work in `workspace` only. Audited first.
+	 *  Answers what stands now.
+	 */
+	acceptProjectDispatchIn: (plane: PlaneId, asking: string, target: string, workspace: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("accept_project_dispatch_in", { plane, asking, target, workspace })),
+	/**
+	 *  **Not on my machine** on Settings' table, for a grant of the project's limited to one
+	 *  workspace (#1505). The committed file is not changed. Audited first. Answers what stands
+	 *  now.
+	 */
+	declineProjectDispatchIn: (plane: PlaneId, asking: string, target: string, workspace: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("decline_project_dispatch_in", { plane, asking, target, workspace })),
+	/**
 	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
 	 *  for Settings' list and the project's Notice.
 	 */
@@ -2600,6 +2628,18 @@ export type DispatchAny = {
 	 *  covers nothing here, and is not told as new, until it is accepted in Settings.
 	 */
 	declined: boolean,
+	/**  The workspace it is limited to (#1505); null where it holds in any workspace. */
+	workspace: string | null,
+	/**
+	 *  Why it covers nothing because of its workspace, where it does not: the workspace is
+	 *  gone, or one was made again under its name since. Null where its workspace stands.
+	 */
+	nowhere: string | null,
+	/**
+	 *  What Clear is sent by ([`revoke_dispatch_grant`]) for one limited to a workspace; null
+	 *  for one that holds in any, which is cleared by its persona and level.
+	 */
+	id: string | null,
 };
 
 /**
@@ -2648,6 +2688,17 @@ export type DispatchGrant = {
 	 *  is `waiting` too, and is not told as new until it is accepted in Settings.
 	 */
 	declined: boolean,
+	/**
+	 *  The workspace it is limited to (#1505); null where it holds in any workspace. For a
+	 *  grant made for one chat: the workspace the task it was allowed for works in, null for
+	 *  the project's root, and it covers that chat's dispatches there only.
+	 */
+	workspace: string | null,
+	/**
+	 *  Why it covers nothing because of its workspace, where it does not: the workspace is
+	 *  gone, or one was made again under its name since. Null where its workspace stands.
+	 */
+	nowhere: string | null,
 };
 
 /**
@@ -2820,6 +2871,26 @@ export type DispatchPending = {
 	 *  an Allow starts this one dispatch, and the next asks again.
 	 */
 	never_unread: string | null,
+	/**
+	 *  The workspace the task works in (#1505); null at the project's root. Where it is one,
+	 *  an Allow for the person or the project holds in it alone unless the person chooses
+	 *  any workspace, which is a command of its own ([`allow_dispatch_anywhere`]). Where it
+	 *  is null and an Allow for the person or the project is offered, that Allow holds in
+	 *  any workspace, and the Notice says so.
+	 */
+	works_in: string | null,
+	/**
+	 *  Whether `works_in` is not a workspace of the project yet (a handoff that makes it):
+	 *  no grant is kept for a name that is no workspace, so an Allow starts this one dispatch
+	 *  and the next one asks. One Allow is offered, and no choice of where it holds.
+	 */
+	works_in_missing: boolean,
+	/**
+	 *  The other workspaces this dispatch is already allowed in, sorted: by a grant for this
+	 *  chat, the person's, or the project's. Where there are any, the Notice says why the
+	 *  person is asked again: the grant they made holds there, and this task works elsewhere.
+	 */
+	allowed_in: string[],
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */
@@ -2918,6 +2989,11 @@ export type DispatchStanding = {
 	 *  has grants or acceptances set aside for it.
 	 */
 	back: string[],
+	/**
+	 *  The project's workspaces now, sorted: what a grant's workspace can be set to (#1505).
+	 *  Empty where they could not be listed.
+	 */
+	workspaces: string[],
 };
 
 /**  What the Dispatches tab is handed. */

@@ -102,6 +102,63 @@ struct OnDisk {
     /// since ([`crate::dispatchdormant`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_known: Vec<Known>,
+    /// The dispatch grants of yours that hold in one workspace only (#1505), a pair or "any
+    /// persona". **A key of their own, never a field on `dispatch_mine` or a name in
+    /// `dispatch_any`**: a build that does not know the condition reads those two as holding
+    /// everywhere, and does not read this key at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_mine_in: Vec<DispatchIn>,
+    /// The project's grants limited to one workspace that you accepted on this machine
+    /// (#1505). Kept apart from `dispatch_seen` and `dispatch_any_seen`, so accepting a grant
+    /// for one workspace never accepts the same pair for every workspace, or the reverse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_seen_in: Vec<DispatchIn>,
+    /// What this machine knows of each workspace a limited grant names (#1505): how many
+    /// times the name was seen to be no workspace of the project
+    /// ([`crate::dispatchwithin`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_workspaces: Vec<KnownWorkspace>,
+}
+
+/// One dispatch grant that holds in one workspace only (#1505), as this file keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DispatchIn {
+    pub asking: String,
+    /// The target persona's name; `*` where [`DispatchIn::any`].
+    pub target: String,
+    /// Whether it is "any persona". Said by this key and never by `target`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub any: bool,
+    /// The workspace it holds in, by the name its folder has.
+    pub workspace: String,
+    /// How many times this machine had seen that name gone when the grant was made or last
+    /// confirmed ([`KnownWorkspace::gone`]). The grant counts only while the two are equal, so
+    /// a workspace made later under the name of one that was removed inherits nothing.
+    #[serde(default)]
+    pub seen: u32,
+}
+
+impl DispatchIn {
+    /// Whether this is the grant of `asking` to `target` (`any`: any persona) in `workspace`.
+    pub fn is(&self, asking: &str, target: &str, any: bool, workspace: &str) -> bool {
+        self.asking == asking
+            && self.any == any
+            && (any || self.target == target)
+            && self.workspace == workspace
+    }
+}
+
+/// What this machine knows of one workspace a limited dispatch grant names (#1505).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KnownWorkspace {
+    pub name: String,
+    /// How many times the name was seen to be no workspace of the project, having been one or
+    /// not been looked at before.
+    #[serde(default)]
+    pub gone: u32,
+    /// Whether it was gone when last looked at.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub away: bool,
 }
 
 /// One grant of yours set aside because a name in it came to be another persona's (#1504):
@@ -718,6 +775,12 @@ fn granted_names(held: &OnDisk) -> Vec<String> {
             add(target);
         }
     }
+    for one in held.dispatch_mine_in.iter().chain(&held.dispatch_seen_in) {
+        add(&one.asking);
+        if !one.any {
+            add(&one.target);
+        }
+    }
     names
 }
 
@@ -809,12 +872,16 @@ pub struct SetAside {
     pub grants: Vec<Dormant>,
     /// What this machine had accepted of the project's grants.
     pub accepted: Vec<Accepted>,
+    /// Your grants limited to one workspace, and what this machine had accepted of the
+    /// project's such grants (#1505): **ended, not set aside**. They are in no record now and
+    /// are made again by asking.
+    pub ended: Vec<(crate::sandbox::grant::Level, DispatchIn)>,
 }
 
 impl SetAside {
     /// Whether nothing was.
     pub fn is_empty(&self) -> bool {
-        self.grants.is_empty() && self.accepted.is_empty()
+        self.grants.is_empty() && self.accepted.is_empty() && self.ended.is_empty()
     }
 }
 
@@ -885,6 +952,27 @@ pub fn set_aside_dispatch(root: &Path, gone: &dyn Fn(&str) -> bool) -> io::Resul
                 match was {
                     Some(was) => out.accepted.push(Accepted { said, was }),
                     None => seen.push(said),
+                }
+            }
+        }
+        // A grant limited to one workspace that names the name ends: the record of what is
+        // set aside keeps no condition, and one given back without it would hold everywhere.
+        let names = |one: &DispatchIn| gone(&one.asking) || (!one.any && gone(&one.target));
+        for (level, list) in [
+            (
+                crate::sandbox::grant::Level::You,
+                &mut held.dispatch_mine_in,
+            ),
+            (
+                crate::sandbox::grant::Level::Project,
+                &mut held.dispatch_seen_in,
+            ),
+        ] {
+            for one in std::mem::take(list) {
+                if names(&one) {
+                    out.ended.push((level, one));
+                } else {
+                    list.push(one);
                 }
             }
         }
@@ -1017,6 +1105,191 @@ pub fn decline_dispatch(root: &Path, said: &str) -> io::Result<()> {
         held.dispatch_accepted_aside.retain(|one| one.said != said);
         if !held.dispatch_declined.iter().any(|one| one == said) {
             held.dispatch_declined.push(said.to_owned());
+        }
+    })
+}
+
+// ---- a grant limited to one workspace (#1505) ------------------------------------------------
+
+/// Your dispatch grants that hold in one workspace only, in the project at `root`, as the
+/// file spells them. [`crate::dispatchwithin`] says which of them count.
+pub fn dispatch_mine_in(root: &Path) -> Vec<DispatchIn> {
+    read(root).dispatch_mine_in
+}
+
+/// The project's grants limited to one workspace that you accepted on this machine.
+pub fn dispatch_seen_in(root: &Path) -> Vec<DispatchIn> {
+    read(root).dispatch_seen_in
+}
+
+/// What this machine knows of the workspaces limited grants name.
+pub fn dispatch_workspaces(root: &Path) -> Vec<KnownWorkspace> {
+    read(root).dispatch_workspaces
+}
+
+/// Which of the two records of limited grants is meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limited {
+    /// Yours: `dispatch_mine_in`.
+    Mine,
+    /// What you accepted of the project's: `dispatch_seen_in`.
+    Accepted,
+}
+
+fn limited(held: &mut OnDisk, which: Limited) -> &mut Vec<DispatchIn> {
+    match which {
+        Limited::Mine => &mut held.dispatch_mine_in,
+        Limited::Accepted => &mut held.dispatch_seen_in,
+    }
+}
+
+/// **Keeps `grant` in `which` record**, in one write: where the same grant is there already,
+/// what it had seen of its workspace is brought up to `grant.seen`, which is how the person
+/// confirms it again.
+pub fn keep_dispatch_in(root: &Path, which: Limited, grant: &DispatchIn) -> io::Result<()> {
+    change(root, |held| {
+        let list = limited(held, which);
+        list.retain(|one| !one.is(&grant.asking, &grant.target, grant.any, &grant.workspace));
+        list.push(grant.clone());
+    })
+}
+
+/// Takes the grant of `asking` to `target` (`any`: any persona) in `workspace` out of `which`
+/// record. Answers whether it was there.
+pub fn drop_dispatch_in(
+    root: &Path,
+    which: Limited,
+    asking: &str,
+    target: &str,
+    any: bool,
+    workspace: &str,
+) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let list = limited(held, which);
+        let before = list.len();
+        list.retain(|one| !one.is(asking, target, any, workspace));
+        was = list.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// **Changes where your grant of `asking` to `target` (`any`: any persona) holds**, in one
+/// write: `from` is the workspace it holds in now (`None`: any workspace), `to` the one it is
+/// to hold in, with what this machine has seen of that name (`None`: any workspace). Answers
+/// whether the grant was there as `from` says; where it was not, nothing is written.
+///
+/// **Widening to any workspace takes the pair's other limited grants with it**: they are
+/// covered by the one that now holds everywhere.
+pub fn move_dispatch_mine(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    any: bool,
+    from: Option<&str>,
+    to: Option<(&str, u32)>,
+) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        was = match from {
+            Some(workspace) => held
+                .dispatch_mine_in
+                .iter()
+                .any(|one| one.is(asking, target, any, workspace)),
+            None if any => held.dispatch_any.iter().any(|one| one == asking),
+            None => held
+                .dispatch_mine
+                .iter()
+                .any(|pair| pair.asking == asking && pair.target == target),
+        };
+        if !was {
+            return;
+        }
+        match from {
+            Some(workspace) => held
+                .dispatch_mine_in
+                .retain(|one| !one.is(asking, target, any, workspace)),
+            None if any => held.dispatch_any.retain(|one| one != asking),
+            None => held
+                .dispatch_mine
+                .retain(|pair| !(pair.asking == asking && pair.target == target)),
+        }
+        match to {
+            Some((workspace, seen)) => {
+                held.dispatch_mine_in
+                    .retain(|one| !one.is(asking, target, any, workspace));
+                held.dispatch_mine_in.push(DispatchIn {
+                    asking: asking.to_owned(),
+                    target: target.to_owned(),
+                    any,
+                    workspace: workspace.to_owned(),
+                    seen,
+                });
+            }
+            None => {
+                held.dispatch_mine_in.retain(|one| {
+                    !(one.asking == asking && one.any == any && (any || one.target == target))
+                });
+                if any {
+                    if !held.dispatch_any.iter().any(|one| one == asking) {
+                        held.dispatch_any.push(asking.to_owned());
+                    }
+                } else {
+                    let pair = DispatchPair {
+                        asking: asking.to_owned(),
+                        target: target.to_owned(),
+                    };
+                    if !held.dispatch_mine.contains(&pair) {
+                        held.dispatch_mine.push(pair);
+                    }
+                }
+            }
+        }
+    })?;
+    Ok(was)
+}
+
+/// **Records which of `names` is a workspace of the project now** (`there`), in one write:
+/// a name that is gone, and was not when last looked at, has its count of times seen gone
+/// raised by one. **The one thing reading the limited grants writes**, and it only ever takes
+/// grants out of force. Nothing is written where nothing changed.
+pub fn note_dispatch_workspaces(
+    root: &Path,
+    names: &[String],
+    there: &dyn Fn(&str) -> bool,
+) -> io::Result<()> {
+    let known = read(root).dispatch_workspaces;
+    let same = |name: &String| {
+        let now = there(name);
+        match known.iter().find(|one| one.name == *name) {
+            Some(one) => one.away != now,
+            None => now,
+        }
+    };
+    if names.iter().all(same) {
+        return Ok(());
+    }
+    change(root, |held| {
+        for name in names {
+            let now = there(name);
+            match held
+                .dispatch_workspaces
+                .iter_mut()
+                .find(|one| one.name == *name)
+            {
+                Some(one) => {
+                    if !now && !one.away {
+                        one.gone = one.gone.saturating_add(1);
+                    }
+                    one.away = !now;
+                }
+                None if now => {}
+                None => held.dispatch_workspaces.push(KnownWorkspace {
+                    name: name.clone(),
+                    gone: 1,
+                    away: true,
+                }),
+            }
         }
     })
 }

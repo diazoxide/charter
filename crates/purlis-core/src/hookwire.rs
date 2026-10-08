@@ -5135,6 +5135,18 @@ mod tests {
             r#"{"dispatch_accepted_aside":[{"said":"steward -> devops","was":"devops"}]}"#,
             r#"{"dispatch_declined":["steward -> devops"]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
+            // #1505: a grant limited to one workspace. The wider Allow, the change of a
+            // grant's workspace, Accept and Not on my machine for a limited grant, by each
+            // window command's name; and the keys it keeps.
+            r#"{"allow_dispatch_anywhere":{"chat":4,"id":1,"level":"project"}}"#,
+            r#"{"chat":4,"allow_dispatch_anywhere":{"id":1,"level":"you"},"token":"t"}"#,
+            r#"{"set_dispatch_workspace":{"chat":4,"asking":"steward","target":"devops","level":"you","from":"runners","to":null}}"#,
+            r#"{"chat":4,"set_dispatch_workspace":{"asking":"steward","target":"*","level":"project","from":null,"to":"runners"},"token":"t"}"#,
+            r#"{"accept_project_dispatch_in":{"chat":4,"asking":"steward","target":"devops","workspace":"runners"}}"#,
+            r#"{"decline_project_dispatch_in":{"chat":4,"asking":"steward","target":"devops","workspace":"runners"}}"#,
+            r#"{"dispatch_mine_in":[{"asking":"steward","target":"devops","workspace":"runners","seen":0}]}"#,
+            r#"{"dispatch_seen_in":[{"asking":"steward","target":"*","any":true,"workspace":"runners","seen":0}]}"#,
+            r#"{"dispatch_workspaces":[{"name":"runners","gone":0}]}"#,
         ];
         for line in forged {
             assert!(read_line(line).is_none(), "read as a line: {line}");

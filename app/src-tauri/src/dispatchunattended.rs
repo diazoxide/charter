@@ -36,7 +36,9 @@ use crate::dispatchgrants::{
 };
 
 /// **THE DISPATCH CORE'S ENTRY POINT (#1446).** Chat `session` of `held`'s project, which runs
-/// as `attendance` says, asks to dispatch to persona `target` with `brief`.
+/// as `attendance` says, asks to dispatch to persona `target` with `brief`, for a task that
+/// works in `works_in` (#1505: the workspace the new chat is to run in, none for the project's
+/// root).
 ///
 /// An attended chat's ask is [`request_dispatch_grant`]'s, whole. An unattended chat's is
 /// answered here and now: [`Requested::Covered`], [`Requested::Locked`] or
@@ -48,11 +50,14 @@ pub fn request_dispatch(
     attendance: Attendance,
     target: &str,
     brief: &str,
+    works_in: Option<&str>,
 ) -> Requested {
     match attendance {
-        Attendance::Attended => request_dispatch_grant(held, session, target, brief),
+        Attendance::Attended => request_dispatch_grant(held, session, target, brief, works_in),
         // One seam refuses plainly, for whoever calls it: it ends in [`unattended`].
-        Attendance::Unattended => request_dispatch_grant_or_refuse(held, session, target, brief),
+        Attendance::Unattended => {
+            request_dispatch_grant_or_refuse(held, session, target, brief, works_in)
+        }
     }
 }
 
@@ -84,6 +89,7 @@ pub fn unattended(
     asking: &Asking,
     runs: Runs,
     target: &str,
+    works_in: Option<&str>,
 ) -> Requested {
     if !purlis_core::personas::valid_name(target) {
         return Requested::Refused(format!(
@@ -95,7 +101,9 @@ pub fn unattended(
         return Requested::Refused(HOLDS_ANOTHERS.to_owned());
     }
     // No grant of one chat is read, so none can count.
-    let standing = InForce::read(root, Vec::new());
+    // For the workspace the task is to work in (#1505): a standing grant limited to one
+    // workspace counts for a task there, and for no other.
+    let standing = InForce::read(root, Vec::new()).for_task_in(works_in);
     let persona = asking.persona.as_deref();
     // A pair the project's file names counts on this machine only once someone here allowed
     // it (D-1437-R1), so what is in force no longer says whether the file names it. The file

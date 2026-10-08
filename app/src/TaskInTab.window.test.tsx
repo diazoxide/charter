@@ -131,6 +131,9 @@ function held(session: number, id: number): DispatchPending {
     levels: ["chat", "you", "project"],
     locked: null,
     never_unread: null,
+    works_in: null,
+    works_in_missing: false,
+    allowed_in: [],
   };
 }
 
