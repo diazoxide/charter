@@ -523,7 +523,7 @@ they allow nothing until the person gives them back or removes them.
 machine, which no grant covers until they lift it. A grant whose persona was removed is **set
 aside**: it allows nothing until the person gives it back or removes it. A project grant a
 teammate committed **arrives**: it allows nothing on a machine until the person there accepts
-it, and their yes holds only while the project keeps the grant.
+it, and their yes holds only until a commit takes the grant out.
 >>>>>>> 6a984f64 (dispatch: a teammate's project grant is shown when it arrives, and a yes is bound to what it accepted)
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 

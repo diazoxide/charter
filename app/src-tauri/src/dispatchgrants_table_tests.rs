@@ -501,8 +501,8 @@ fn reading_the_table_while_a_persona_is_away_moves_nothing_and_drops_nothing() {
     assert_eq!(world.listed(&store), listed);
     assert_eq!(dispatchgrant::any_yours(world.root()), ["devops"]);
     assert_eq!(
-        changed_of(world.root()),
-        None,
+        arrival_of(world.root()).waiting,
+        [],
         "nothing accepted here was forgotten"
     );
     assert_eq!(
@@ -595,7 +595,7 @@ fn another_persona_under_a_name_seen_gone_is_set_aside_as_a_dispatch_is_judged_a
         Some("steward 4"),
         "with the chat it came from"
     );
-    assert_eq!(changed_of(world.root()), None);
+    assert_eq!(arrival_of(world.root()).waiting, []);
 }
 
 #[test]

@@ -661,22 +661,42 @@ whose folder is moved is, to these rules, one that went away and another that ap
 - When the project's file comes to hold a grant the person has neither accepted nor declined,
   the window says so once, at its own level and not on a chat's tab: after a pull, a branch
   switched or a hand's edit, and when the project opens. Everything that arrived together is
-  one Notice, with **Accept** and **Not on my machine** for all it lists and a way to decide
-  each in Settings. Until it is answered nothing listed is in force for that person.
-- **It names "any persona" in its own words and can accept it.** This narrows item 2's "no
-  answer to a Notice makes one": no answer to a *chat's question* makes or accepts one. The
-  Notice of an arrival is raised by the project's file, never by a chat, and accepts only what
-  the file already holds.
-- Putting the Notice away answers nothing. The question on the tab of a chat that needs the
+  one Notice. Until it is answered nothing listed is in force for that person.
+- **Named pairs** take **Accept** and **Not on my machine**, with a way to decide each in
+  Settings.
+- **"Any persona" is told, and never accepted, on a Notice.** Item 2 and V100-23 stand as
+  written: it is made and accepted in Settings only. The Notice says it in its own sentence,
+  with where it is accepted, and offers for it only Not on my machine and the way to
+  Settings. The command behind the Notice refuses to accept one whatever it is sent.
+- **Accepting is a machine's own act.** It records the acceptance and never goes through the
+  writer of the committed file.
+- **Anyone who can push can raise this Notice.** So a re-ask never carries a new grant (each
+  has its own Accept), Accept leads only where the line names every pair it accepts, and
+  putting the Notice away answers nothing. The question on the tab of a chat that needs the
   pair stays as the fallback, says the same thing, and takes the same two answers.
 - **An answer is for what was shown.** Only a grant still exactly as it was listed is
   answered; where the list moved, the person is told and shown it as it is.
 - A grant naming a persona the checkout does not define is said to cover nothing and is not
-  accepted.
-- **A yes is bound to what it accepted.** A grant the project's file drops is no longer
-  accepted on that machine as soon as that is seen, and the person is told once that it was
-  taken away. A grant taken out and put back waits for a new yes. Because a file that was
-  changed and changed back reads the same, the acceptances are kept with the commit they were
-  last checked through, and the versions of the file committed since are read; where that
-  history cannot be read, nothing is assumed to have stayed. A decline goes with the grant it
-  declined, so a grant put back is told again.
+  accepted. An accepted grant counts only while both its personas exist (item 7), and one
+  naming a name that changed hands waits again on this Notice, saying so.
+- **A yes is bound to what it accepted, by the project's history.** A file that was changed
+  and changed back reads the same, so the acceptances are kept with the commit they were last
+  checked through. An acceptance is dropped where a commit since then **took the grant out**:
+  it lacks the grant and a parent holds it, read on every merged line and under every name
+  the project's file may have. The person is told once that it was taken away, and a grant
+  put back waits for a new yes and says why. A decline goes the same way.
+- **Absent from the working file is not a removal.** Such a grant is not in force, and that
+  is worked out at each read; nothing is dropped or told, so a branch switched away and back
+  moves nothing, and no read of Settings writes a drop.
+- **Fail closed.** Where the history cannot be read (the kept commit gone or unrelated, too
+  many commits, an object missing or too large, grafts, a shallow boundary inside the range,
+  git out of time) every acceptance is dropped and asked again, saying that is why. Where
+  nothing answers at all (git cannot be run, the commit checked out cannot be read, the
+  record cannot be written) nothing stored changes and no accepted project grant is in force
+  until something does.
+- **The limits.** A history rewritten so that no commit this machine has took the grant out
+  (a force-push to a line that never lost it) keeps the acceptance: the check is over the
+  history as pulled. A hand's uncommitted remove-and-restore is not seen. A project in no
+  repository has no history to read. An acceptance kept by a build from before this is bound
+  at its first check and not asked again; an older build that rewrites the record strips the
+  binding, and the next check binds afresh.

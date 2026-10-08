@@ -5069,7 +5069,8 @@ mod tests {
             r#"{"dispatch_gone_told":{"chat":4,"shown":["steward -> devops"]}}"#,
             r#"{"dispatch_seen":["steward -> devops"]}"#,
             r#"{"dispatch_seen_at":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
-            r#"{"dispatch_gone":["steward -> devops"]}"#,
+            r#"{"dispatch_gone":[{"said":"steward -> devops","why":"removed"}]}"#,
+            r#"{"answer_dispatch_arrival":{"chat":4,"accepted":true,"shown":["steward -> devops"],"listed":["steward -> devops"]}}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {

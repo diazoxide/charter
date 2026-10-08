@@ -43,8 +43,10 @@
 //! Notice that says it arrived or on a chat's tab. One made in this window is acknowledged as
 //! it is written. So a chat nobody is at never dispatches under a pair nobody here has seen.
 //! **And the yes is bound to what it accepted** (#1506, [`crate::dispatcharrival`]): a grant
-//! the project's file drops is no longer accepted here, so one that is taken out and put back
-//! waits for a new yes, whether or not anything was read in between.
+//! a commit takes out of the project's file is no longer accepted here, so one that is taken
+//! out and put back waits for a new yes, whether or not anything was read in between. A grant
+//! the file on disk does not hold is not in force, and nothing is dropped for that alone.
+//! Where the project's history cannot be asked, no acceptance of its grants counts.
 //!
 //! # Any persona, and never (#1503)
 //!
@@ -192,13 +194,18 @@ impl InForce {
     /// **A committed pair is in force only once this machine acknowledged it** (D-1437-R1): one
     /// a pull brought in covers nothing here until a person allows it on the one-time Notice,
     /// or on a chat's tab. A grant made in this window is acknowledged as it is written.
+    ///
+    /// **And only while the last settling of this machine's acceptances answered**
+    /// ([`crate::dispatcharrival::for_read`]): where the project's history could not be
+    /// asked, or the record could not be written, none of the project's grants is in force.
+    /// **This runs no git and writes nothing**: it goes by the verdict of the last settling,
+    /// which the app runs before a dispatch is decided, and it is safe under the lock a
+    /// decision is made under. Only the first read of a project in a process settles.
     pub fn read(root: &Path, chat: Vec<ChatPair>) -> Self {
-        // An acceptance does not outlive what it accepted: one the project's file dropped, now
-        // or in a commit since it was last checked, is dropped here, where every dispatch is
-        // judged, so a grant taken out of the file and put back waits for a yes again. **The
-        // one thing reading the grants in force writes**, and it only narrows.
-        crate::dispatcharrival::settle(root);
-        let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
+        let settled = crate::dispatcharrival::for_read(root).read;
+        let seen = crate::sandbox::local::dispatch_seen(root)
+            .filter(|_| settled)
+            .unwrap_or_default();
         let (never, never_unread) = match crate::dispatchnever::read(root) {
             crate::dispatchnever::Nevers::Read(pairs) => (pairs, false),
             crate::dispatchnever::Nevers::Unread => (Vec::new(), true),
@@ -211,7 +218,11 @@ impl InForce {
                 .filter(|pair| seen.contains(&pair.to_string()))
                 .collect(),
             you_any: any_yours(root),
-            project_any: any_of_the_project(root),
+            project_any: if settled {
+                any_of_the_project(root)
+            } else {
+                Vec::new()
+            },
             never,
             never_unread,
         }
@@ -621,7 +632,7 @@ pub fn accept_any_of_the_project(root: &Path, asking: &str) -> Result<(), String
     if !crate::personas::valid_name(asking) || !project_grants(root, asking, ANY) {
         return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
     }
-    crate::sandbox::local::acknowledge_dispatch_any(root, asking)
+    acknowledge_any(root, asking)
         .map_err(|why| format!("purlis could not record it as allowed on this machine: {why}"))
 }
 
@@ -683,32 +694,49 @@ pub fn unacknowledged(root: &Path) -> Vec<Pair> {
         .collect()
 }
 
-/// Records that the person allowed the project's `pair` on this machine, beside what was
-/// acknowledged before.
+/// What an acceptance is refused with while the project's history cannot be asked.
+pub const HISTORY_UNREAD: &str = "purlis could not read this project's git history just now, so \
+     it cannot tell what its grants were when you last accepted them. Nothing was accepted. Try \
+     again in a moment.";
+
+/// What an acceptance is refused with where the project's file does not hold the grant.
+pub const NO_SUCH_GRANT: &str = "the project no longer has that grant";
+
+/// Records that the person accepted the project's grant `said` on this machine.
 ///
 /// **Bound to the project's history as it is written** ([`crate::dispatcharrival::settle`]):
-/// what was accepted before is checked first, so the commit kept beside the acceptances is
-/// one all of them were checked through.
-pub fn acknowledge_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
-    crate::dispatcharrival::settle(root);
-    let mut seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
-    let said = pair.to_string();
-    if seen.contains(&said) {
-        return Ok(());
+/// what was accepted before is settled first, so the commit kept beside the acceptances is
+/// one all of them were checked through; refused where that history cannot be asked. **One
+/// write, which checks the project's file holds the grant** and adds to the record without
+/// writing it back whole, so nothing dropped meanwhile comes back.
+fn acknowledge_said(root: &Path, said: &str, holds: &dyn Fn() -> bool) -> std::io::Result<()> {
+    if !crate::dispatcharrival::settle_afresh(root).read {
+        return Err(std::io::Error::other(HISTORY_UNREAD));
     }
-    seen.push(said);
-    crate::sandbox::local::acknowledge_dispatch(root, &seen)?;
-    crate::dispatcharrival::settle(root);
+    if !crate::sandbox::local::accept_dispatch(root, said, holds)? {
+        return Err(std::io::Error::other(NO_SUCH_GRANT));
+    }
+    // Binds a first acceptance to the commit checked out now.
+    crate::dispatcharrival::settle_afresh(root);
     Ok(())
 }
 
+/// Records that the person allowed the project's `pair` on this machine, beside what was
+/// acknowledged before ([`acknowledge_said`]).
+pub fn acknowledge_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
+    acknowledge_said(root, &pair.to_string(), &|| {
+        committed_at(root).contains(pair)
+    })
+}
+
 /// Records that the person accepted the project's "any persona" grant for `asking` on this
-/// machine, bound as [`acknowledge_pair`] binds a pair.
+/// machine, as [`acknowledge_pair`] records a pair. **Acknowledge only**: it never writes the
+/// project's file.
 pub fn acknowledge_any(root: &Path, asking: &str) -> std::io::Result<()> {
-    crate::dispatcharrival::settle(root);
-    crate::sandbox::local::acknowledge_dispatch_any(root, asking)?;
-    crate::dispatcharrival::settle(root);
-    Ok(())
+    acknowledge_said(root, &format!("{asking} -> {ANY}"), &|| {
+        crate::personas::valid_name(asking)
+            && any_committed_at(root).iter().any(|one| one == asking)
+    })
 }
 
 /// Takes `pair` off what this machine acknowledged: a revoke made here is no news here.

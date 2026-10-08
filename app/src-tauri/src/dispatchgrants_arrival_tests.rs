@@ -1,7 +1,8 @@
 //! A teammate's project grant, when it arrives (#1506): what waits when the project opens and
-//! when the watcher says its file moved, what Accept and Not on my machine do and audit, an
-//! answer that comes after the list moved, and a grant taken away and put back. Driven at the
-//! functions the window's commands and the watcher call.
+//! when its file moves, what Accept and Not on my machine do and audit, that no Notice's
+//! answer accepts "any persona", an answer that comes after the list moved, and a grant a
+//! commit took out and put back. Driven at the functions the window's commands and the
+//! watcher call.
 
 use super::table::{audit, file, kinds, known, persona, world_with};
 use super::*;
@@ -17,17 +18,6 @@ fn write(world: &World, grants: &str) {
     .expect("the project file");
 }
 
-/// The watcher saying the project's own file moved.
-fn the_file_moved(world: &World) {
-    let moved = purlis_core::planechange::classify(
-        world.root(),
-        &purlis_core::names::manifest(world.root()),
-    )
-    .expect("a path of the project's");
-    assert_eq!(moved.kind, purlis_core::planechange::Kind::Project);
-    project_moved(world.root(), Some(&[moved]));
-}
-
 /// What waits, each as `asking -> target`.
 fn waiting(world: &World) -> Vec<String> {
     arrival_of(world.root())
@@ -37,10 +27,12 @@ fn waiting(world: &World) -> Vec<String> {
         .collect()
 }
 
-fn ids(world: &World) -> Vec<String> {
+/// The ids the Notice would send for what waits: every grant, or the named pairs only.
+fn ids(world: &World, pairs_only: bool) -> Vec<String> {
     arrival_of(world.root())
         .waiting
         .into_iter()
+        .filter(|one| !(pairs_only && one.any))
         .map(|one| one.id)
         .collect()
 }
@@ -51,12 +43,30 @@ fn answer(
     accepted: bool,
     shown: &[String],
 ) -> Result<Option<String>, String> {
-    let known = known(world);
-    world.on(|ground| answer_arrival(store, ground, &known, accepted, shown))
+    answer_of(world, store, accepted, shown, &ids(world, false))
 }
 
+/// An answer for `shown` from a Notice that listed `listed`.
+fn answer_of(
+    world: &World,
+    store: &Store,
+    accepted: bool,
+    shown: &[String],
+    listed: &[String],
+) -> Result<Option<String>, String> {
+    let known = known(world);
+    world.on(|ground| answer_arrival(store, ground, &known, accepted, shown, listed))
+}
+
+/// The grants in force, by the last settling of this machine's acceptances.
 fn in_force(world: &World) -> InForce {
     InForce::read(world.root(), Vec::new())
+}
+
+/// The grants in force after a settling, as the dispatch path settles before it decides.
+fn settled_in_force(world: &World) -> InForce {
+    purlis_core::dispatcharrival::settle(world.root());
+    in_force(world)
 }
 
 // ---- arrival -----------------------------------------------------------------------------------
@@ -85,9 +95,10 @@ fn what_the_project_grants_is_waiting_when_the_project_opens_and_in_force_for_no
         arrival
             .waiting
             .iter()
-            .all(|one| one.undefined.is_none() && !one.again)
+            .all(|one| one.undefined.is_none() && one.again.is_none())
     );
     assert_eq!(arrival.gone, []);
+    assert!(!arrival.unread);
     // Nothing listed is in force: a chat that needs one meanwhile is held, and a chat nobody
     // is at is refused.
     assert_eq!(in_force(&world), InForce::default());
@@ -103,15 +114,24 @@ fn what_the_project_grants_is_waiting_when_the_project_opens_and_in_force_for_no
 }
 
 #[test]
-fn a_pair_a_pull_brings_in_is_waiting_once_the_watcher_says_the_file_moved() {
+fn a_pair_the_file_gains_is_waiting_at_the_next_read_and_the_watcher_knows_which_changes_matter() {
     let world = world_with(&["steward", "devops"], "");
     assert_eq!(arrival_of(world.root()), DispatchArrival::default());
 
     write(&world, ONE);
-    the_file_moved(&world);
 
     assert_eq!(waiting(&world), ["steward -> devops"]);
     assert_eq!(in_force(&world), InForce::default());
+    // The project's own file, and a burst the watcher could not place, are settled for; a
+    // todo is not.
+    let classify = |path: std::path::PathBuf| {
+        purlis_core::planechange::classify(world.root(), &path).expect("a path of the project's")
+    };
+    let its_file = classify(purlis_core::names::manifest(world.root()));
+    let a_todo = classify(world.root().join("workspaces/alpha/todos/one.md"));
+    assert!(concerns_grants(Some(&[a_todo.clone(), its_file])));
+    assert!(!concerns_grants(Some(&[a_todo])));
+    assert!(concerns_grants(None));
 }
 
 #[test]
@@ -121,7 +141,7 @@ fn a_grant_naming_a_persona_the_project_does_not_define_is_said_to_and_never_acc
         "\n[dispatch.grants]\nsteward = [\"ghost\"]\n",
     );
     let (store, _) = store();
-    let shown = ids(&world);
+    let shown = ids(&world, false);
     assert_eq!(
         arrival_of(world.root()).waiting[0].undefined.as_deref(),
         Some("ghost")
@@ -145,18 +165,17 @@ fn a_grant_naming_a_persona_the_project_does_not_define_is_said_to_and_never_acc
 // ---- accept, and not on my machine -------------------------------------------------------------
 
 #[test]
-fn accept_puts_everything_listed_in_force_audits_each_and_starts_what_waited() {
+fn accept_puts_the_named_pairs_in_force_audits_each_writes_no_file_and_starts_what_waited() {
     let world = world_with(&["steward", "devops", "qa", "prod"], TEAMS);
     let (store, answered) = store();
     let held = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let before = file(&world);
 
-    assert_eq!(answer(&world, &store, true, &ids(&world)), Ok(None));
+    assert_eq!(answer(&world, &store, true, &ids(&world, true)), Ok(None));
 
     assert_eq!(
         kinds(&world),
         [
-            audit("trust.dispatch.grant", "steward", "*", "project"),
             audit("trust.dispatch.grant", "steward", "devops", "project"),
             audit("trust.dispatch.grant", "qa", "devops", "project"),
         ]
@@ -164,14 +183,15 @@ fn accept_puts_everything_listed_in_force_audits_each_and_starts_what_waited() {
     // The person's, from the window: no chat is named as having made it.
     assert!(world.audited().iter().all(|one| one.0.is_none()));
     let now = in_force(&world);
-    assert_eq!(now.project_any, ["steward"]);
     assert_eq!(now.project.len(), 2);
+    assert_eq!(now.project_any, Vec::<String>::new());
     assert_eq!(
         file(&world),
         before,
         "accepting writes nothing to the team's file"
     );
-    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
+    // The project's "any persona" still waits: told, and accepted in Settings only.
+    assert_eq!(waiting(&world), ["steward -> *"]);
     // Answering here cleared the question on the chat's tab: its dispatch started.
     assert_eq!(
         answered
@@ -192,12 +212,42 @@ fn accept_puts_everything_listed_in_force_audits_each_and_starts_what_waited() {
 }
 
 #[test]
+fn no_answer_to_the_arrival_notice_accepts_any_persona() {
+    let world = world_with(&["steward", "devops", "qa"], TEAMS);
+    let (store, _) = store();
+    let before = file(&world);
+    let star: Vec<String> = arrival_of(world.root())
+        .waiting
+        .into_iter()
+        .filter(|one| one.any)
+        .map(|one| one.id)
+        .collect();
+    assert_eq!(star.len(), 1);
+
+    // Alone, and among the pairs: refused whole, in the command, before anything is audited.
+    for shown in [star.clone(), ids(&world, false)] {
+        assert_eq!(
+            answer(&world, &store, true, &shown),
+            Err(ANY_IS_SETTINGS.to_owned())
+        );
+    }
+
+    assert!(world.audited().is_empty());
+    assert_eq!(in_force(&world), InForce::default());
+    assert_eq!(file(&world), before);
+    assert_eq!(waiting(&world).len(), 3);
+    // Not on my machine may answer it: declining narrows.
+    assert_eq!(answer(&world, &store, false, &star), Ok(None));
+    assert_eq!(waiting(&world), ["steward -> devops", "qa -> devops"]);
+}
+
+#[test]
 fn not_on_my_machine_is_remembered_audited_shown_in_settings_and_never_asked_again() {
     let world = world_with(&["steward", "devops", "qa"], TEAMS);
     let (store, answered) = store();
     let before = file(&world);
 
-    assert_eq!(answer(&world, &store, false, &ids(&world)), Ok(None));
+    assert_eq!(answer(&world, &store, false, &ids(&world, false)), Ok(None));
 
     assert_eq!(
         kinds(&world),
@@ -210,9 +260,7 @@ fn not_on_my_machine_is_remembered_audited_shown_in_settings_and_never_asked_aga
     assert_eq!(file(&world), before, "the team's file is not touched");
     assert_eq!(in_force(&world), InForce::default());
     assert!(answered.lock().unwrap().is_empty());
-    // Not told again, at the next open or the next time the file moves.
-    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
-    the_file_moved(&world);
+    // Not told again, at the next open or the next read.
     assert_eq!(arrival_of(world.root()), DispatchArrival::default());
     // Settings' table is where each is changed.
     let rows = world.listed(&store);
@@ -224,8 +272,15 @@ fn not_on_my_machine_is_remembered_audited_shown_in_settings_and_never_asked_aga
     let any = standing_of(world.root()).any;
     assert_eq!(any.len(), 1);
     assert!(any[0].declined);
-    // A chat that needs the pair is still asked on its own tab.
-    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    // A chat that needs the pair is still asked on its own tab, and is not offered the
+    // project's level there: that would undo the decline by another name.
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    let asked = store.waiting(3);
+    assert_eq!(asked[0].id, id);
+    assert_eq!(
+        told(&PlaneId::for_tests(world.root()), world.root(), &asked[0]).levels,
+        [GrantLevel::Chat, GrantLevel::You]
+    );
 }
 
 #[test]
@@ -236,7 +291,7 @@ fn an_answer_nobody_recorded_puts_nothing_in_force() {
     };
     let (store, _) = store();
 
-    assert!(answer(&world, &store, true, &ids(&world)).is_err());
+    assert!(answer(&world, &store, true, &ids(&world, true)).is_err());
 
     assert_eq!(in_force(&world), InForce::default());
     assert_eq!(waiting(&world), ["steward -> devops"]);
@@ -248,15 +303,16 @@ fn an_answer_nobody_recorded_puts_nothing_in_force() {
 fn a_late_accept_answers_only_what_is_still_as_shown_and_says_the_list_moved() {
     let world = world_with(&["steward", "devops", "qa", "prod"], TEAMS);
     let (store, _) = store();
-    let shown = ids(&world);
+    let shown = ids(&world, true);
+    let listed = ids(&world, false);
 
-    // While the Notice stands, a pull takes one grant out, leaves one, and adds two.
+    // While the Notice stands, a pull takes one pair out, leaves one, and adds two grants.
     write(
         &world,
         "\n[dispatch.grants]\nsteward = [\"devops\", \"prod\"]\nqa = [\"*\"]\n",
     );
 
-    let said = answer(&world, &store, true, &shown).expect("answered");
+    let said = answer_of(&world, &store, true, &shown, &listed).expect("answered");
 
     assert_eq!(
         said.as_deref(),
@@ -274,13 +330,7 @@ fn a_late_accept_answers_only_what_is_still_as_shown_and_says_the_list_moved() {
             "project"
         )]
     );
-    let now = in_force(&world);
-    assert_eq!(now.project.len(), 1);
-    assert_eq!(
-        now.project_any,
-        Vec::<String>::new(),
-        "no star the person did not see"
-    );
+    assert_eq!(in_force(&world).project.len(), 1);
     assert_eq!(waiting(&world), ["qa -> *", "steward -> prod"]);
 }
 
@@ -288,7 +338,7 @@ fn a_late_accept_answers_only_what_is_still_as_shown_and_says_the_list_moved() {
 fn a_late_answer_to_a_list_that_is_wholly_gone_answers_nothing_and_says_so() {
     let world = world_with(&["steward", "devops", "qa"], ONE);
     let (store, _) = store();
-    let shown = ids(&world);
+    let shown = ids(&world, true);
     write(&world, "\n[dispatch.grants]\nsteward = [\"qa\"]\n");
 
     for (accepted, word) in [(true, "accepted"), (false, "declined")] {
@@ -323,31 +373,93 @@ fn an_answer_names_what_was_shown_and_no_other_spelling_of_a_grant_is_one() {
     assert_eq!(in_force(&world), InForce::default());
 }
 
-// ---- taken away, and put back ------------------------------------------------------------------
+// ---- away on disk, and taken out by a commit ---------------------------------------------------
 
 #[test]
-fn a_pair_taken_out_and_put_back_with_nothing_read_in_between_waits_for_a_new_yes() {
+fn a_grant_the_file_on_disk_loses_and_gets_back_drops_nothing_and_tells_nothing() {
     let world = world_with(&["steward", "devops"], ONE);
     let (store, _) = store();
-    answer(&world, &store, true, &ids(&world)).expect("accepted");
+    answer(&world, &store, true, &ids(&world, true)).expect("accepted");
     assert_eq!(in_force(&world).project.len(), 1);
+    let kept = sandbox::local::dispatch_bound(world.root());
 
-    // The file loses the pair and gets it back. Nothing reads the grants in between: only
-    // the watcher sees each change.
+    // A branch without it is checked out, purlis open.
     write(&world, "");
-    the_file_moved(&world);
-    write(&world, ONE);
-    the_file_moved(&world);
+    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
+    assert_eq!(settled_in_force(&world), InForce::default());
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert_eq!(sandbox::local::dispatch_bound(world.root()), kept);
 
-    assert_eq!(in_force(&world), InForce::default());
+    // And back: in force as it was, and nobody is asked about the project's grant again.
+    write(&world, ONE);
+    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
+    assert_eq!(settled_in_force(&world).project.len(), 1);
+    assert_eq!(world.audited().len(), 1, "one acceptance, and no more");
+}
+
+/// git in `world`'s project, for a fixture.
+fn git(world: &World, args: &[&str]) -> String {
+    let mut all = vec![
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    all.extend(args);
+    let run = purlis_core::worktree::git::run_untimed(world.root(), &all).expect("git runs");
+    assert_eq!(run.code, Some(0), "git {args:?}: {}", run.err);
+    run.out.trim().to_owned()
+}
+
+/// Makes `world`'s project a repository kept beside it, with one commit of what is there.
+fn committed(world: &World) -> tempfile::TempDir {
+    let kept = tempfile::tempdir().expect("a place for the repository");
+    let nothing = kept.path().join("template");
+    std::fs::create_dir_all(&nothing).expect("an empty template");
+    git(
+        world,
+        &[
+            "init",
+            "-q",
+            &format!("--template={}", nothing.display()),
+            &format!("--separate-git-dir={}", kept.path().join("git").display()),
+        ],
+    );
+    commit(world);
+    kept
+}
+
+fn commit(world: &World) {
+    git(world, &["add", "-A", "."]);
+    git(world, &["commit", "-q", "--allow-empty", "-m", "settings"]);
+}
+
+#[test]
+fn a_pair_two_commits_took_out_and_put_back_waits_for_a_new_yes_and_says_why() {
+    let world = world_with(&["steward", "devops"], ONE);
+    let _kept = committed(&world);
+    let (store, _) = store();
+    answer(&world, &store, true, &ids(&world, true)).expect("accepted");
+    assert_eq!(settled_in_force(&world).project.len(), 1);
+
+    // Two commits arrive together. Nothing reads the grants in between, and the file reads
+    // as it did when the pair was accepted.
+    write(&world, "");
+    commit(&world);
+    write(&world, ONE);
+    commit(&world);
+
+    assert_eq!(settled_in_force(&world), InForce::default());
     pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     let arrival = arrival_of(world.root());
     assert_eq!(arrival.gone, []);
     assert_eq!(arrival.waiting.len(), 1);
-    assert!(arrival.waiting[0].again, "said to be asked a second time");
+    assert_eq!(arrival.waiting[0].again, Some(DispatchAgain::TakenOut));
 
     // The new yes is a new audit.
-    answer(&world, &store, true, &ids(&world)).expect("accepted again");
+    answer(&world, &store, true, &ids(&world, true)).expect("accepted again");
     assert_eq!(
         kinds(&world),
         [
@@ -359,37 +471,21 @@ fn a_pair_taken_out_and_put_back_with_nothing_read_in_between_waits_for_a_new_ye
 }
 
 #[test]
-fn a_change_that_is_not_the_project_s_file_settles_nothing() {
-    let world = world_with(&["steward", "devops"], ONE);
-    let (store, _) = store();
-    answer(&world, &store, true, &ids(&world)).expect("accepted");
-    write(&world, "");
-
-    let todo = world.root().join("workspaces/alpha/todos/one.md");
-    let moved = purlis_core::planechange::classify(world.root(), &todo).expect("a todo");
-    project_moved(world.root(), Some(&[moved]));
-
-    assert_eq!(
-        sandbox::local::dispatch_bound(world.root()).seen,
-        ["steward -> devops"],
-        "not read, so not settled yet"
-    );
-    // A burst the watcher could not place may be the file: settled.
-    project_moved(world.root(), None);
-    assert_eq!(
-        sandbox::local::dispatch_bound(world.root()).seen,
-        Vec::<String>::new()
-    );
-}
-
-#[test]
-fn what_the_project_took_away_is_told_once_and_asks_nothing() {
+fn what_a_commit_took_away_is_settled_off_the_watcher_s_thread_told_once_and_asks_nothing() {
     let world = world_with(&["steward", "devops", "qa"], TEAMS);
+    let _kept = committed(&world);
     let (store, _) = store();
-    answer(&world, &store, true, &ids(&world)).expect("accepted");
+    answer(&world, &store, true, &ids(&world, true)).expect("accepted");
 
     write(&world, "\n[dispatch.grants]\nqa = [\"devops\"]\n");
-    the_file_moved(&world);
+    commit(&world);
+    // The watcher's event: it comes back at once, and the settling lands on its own thread.
+    project_moved(&PlaneId::for_tests(world.root()), world.root(), None);
+    let landed = (0..600).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        sandbox::local::dispatch_bound(world.root()).seen == ["qa -> devops"]
+    });
+    assert!(landed, "the settling after the watcher's event landed");
 
     let arrival = arrival_of(world.root());
     assert_eq!(arrival.waiting, []);
@@ -399,7 +495,7 @@ fn what_the_project_took_away_is_told_once_and_asks_nothing() {
             .iter()
             .map(|one| (one.asking.as_str(), one.target.as_str(), one.any))
             .collect::<Vec<_>>(),
-        [("steward", "*", true), ("steward", "devops", false)]
+        [("steward", "devops", false)]
     );
     assert_eq!(
         arrival_of(world.root()),
@@ -418,4 +514,45 @@ fn what_the_project_took_away_is_told_once_and_asks_nothing() {
         1,
         "what stayed is still accepted"
     );
+}
+
+// ---- a persona that went and came back ---------------------------------------------------------
+
+#[test]
+fn a_grant_naming_a_name_that_changed_hands_waits_here_again_and_one_answer_settles_it() {
+    let world = world_with(&["steward", "devops"], ONE);
+    let (store, _) = store();
+    answer(&world, &store, true, &ids(&world, true)).expect("accepted");
+    purlis_core::dispatchdormant::judged(world.root(), &[]).expect("judged with both there");
+
+    // devops is removed, seen gone, and another persona is made under the name by a pull.
+    std::fs::remove_dir_all(world.root().join("personas/devops")).expect("removed");
+    purlis_core::dispatchdormant::noticed(world.root(), &[]).expect("seen gone");
+    let made = world.root().join("personas/devops");
+    std::fs::create_dir_all(&made).expect("its folder");
+    std::fs::write(
+        made.join("persona.md"),
+        "---\nname: devops\ndelegate-when: other work\n---\n\n# another devops\n",
+    )
+    .expect("another definition");
+
+    let arrival = arrival_of(world.root());
+    assert_eq!(arrival.waiting.len(), 1);
+    assert_eq!(
+        arrival.waiting[0].again,
+        Some(DispatchAgain::Persona {
+            name: "devops".to_owned()
+        })
+    );
+
+    // Accepted on the Notice: in force for the persona of that name now, and not waiting to
+    // be given back in Settings as well.
+    let shown: Vec<String> = arrival.waiting.into_iter().map(|one| one.id).collect();
+    assert_eq!(answer(&world, &store, true, &shown), Ok(None));
+    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
+    assert_eq!(
+        sandbox::local::dispatch_bound(world.root()).seen,
+        ["steward -> devops"]
+    );
+    assert_eq!(sandbox::local::accepted_aside_dispatch(world.root()), []);
 }

@@ -271,10 +271,11 @@ fn applying(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .apply(&root, what.as_deref());
-        // Before the window is told: a grant the project's file dropped is no longer accepted
-        // on this machine by the time anything reads what waits (#1506).
-        crate::dispatchgrants::project_moved(&root, what.as_deref());
-        tell(plane, what);
+        // The window is told first, and nothing is settled on this thread: where the change
+        // may be the project's file, this machine's acceptances of its dispatch grants are
+        // settled on a thread of their own, and the window is told again then (#1506).
+        tell(plane.clone(), what.clone());
+        crate::dispatchgrants::project_moved(&plane, &root, what.as_deref());
     })
 }
 

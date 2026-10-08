@@ -152,10 +152,16 @@ fn a_teammate_s_change_is_told_once_and_your_own_after_it_does_not_hide_it() {
         crate::dispatcharrival::Arrival::default(),
         "your own"
     );
-    fs::write(crate::names::manifest(dir.path()), PROJECT).expect("a teammate's push");
+    // The file on disk without it: in force for nobody. What tells it as taken away is a
+    // commit that took it out (`dispatcharrival`), and this project has no history.
+    fs::write(crate::names::manifest(dir.path()), PROJECT).expect("another file");
     assert_eq!(
-        crate::dispatcharrival::arrival(dir.path()).gone,
-        ["steward -> devops"]
+        crate::dispatchgrant::InForce::read(dir.path(), Vec::new()).project,
+        []
+    );
+    assert_eq!(
+        crate::dispatcharrival::arrival(dir.path()),
+        crate::dispatcharrival::Arrival::default()
     );
 }
 

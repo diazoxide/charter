@@ -33,8 +33,10 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * says the same thing in the same words (`arrivedSaid`), and for the pair it offers the same
  * two answers: **Accept**, in place of allowing it for everyone, since the project's settings
  * hold it already, and **Not on my machine**. Answering here clears that Notice, and answering
- * that one clears this. A project's "any persona" is said here and answered there or in
- * Settings: nothing on a chat's tab accepts it.
+ * that one clears this. A project's "any persona" is said here with where it is accepted,
+ * Settings: no Notice accepts it (V100-23). After Not on my machine the dispatch is still
+ * held and this says so; the project's level is then not offered for the pair, which would
+ * undo the answer by another name.
  *
  * **Where the list of nevers does not read, the Notice says so** (`never_unread`): no grant
  * counts until it does, which is why a pair already granted is asked about again.
@@ -177,7 +179,13 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     setSaid(undefined);
     void arrival
       .answer(accepted, pair)
-      .then(read)
+      .then(() => {
+        if (!accepted)
+          setSaid(
+            `Not followed on this machine. This dispatch to ${first.target} still waits for your answer here.`,
+          );
+        read();
+      })
       .finally(() => setBusy(false));
   };
   const keep: NoticeAction = { label: "Keep blocked", onPress: putAway };
@@ -201,11 +209,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   return (
     <Notice cause={cause} at="pane" tone="trouble" label={label} fixes={fixes} under={brief}>
       {here.length > 0 &&
-        `${arrivedSaid(here).join(" ")} You have not answered that on this machine${
-          here.some((one) => one.any)
-            ? ": any persona is answered on the project's Notice or in Settings"
-            : ""
-        }. `}
+        `${arrivedSaid(here).join(" ")}${pair.length > 0 ? " You have not answered that on this machine." : ""} `}
       {who} wants to dispatch to {first.target}. Nothing starts until you answer. Allowing it lets{" "}
       {first.asking === null ? "this chat" : `${first.asking} chats`} ask {first.target} for
       anything {first.target} can do, without asking you again. The grant covers the helper

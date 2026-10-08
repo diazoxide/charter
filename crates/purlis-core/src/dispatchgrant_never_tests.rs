@@ -630,25 +630,24 @@ fn any_persona_for_everyone_needs_a_project_file_to_be_written_into() {
 }
 
 #[test]
-fn a_star_taken_out_of_the_project_s_file_and_put_back_waits_for_a_yes_again() {
+fn a_star_the_file_on_disk_does_not_hold_covers_nothing_and_its_acceptance_is_not_dropped() {
     let with_it = "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n";
     let project = project(with_it);
     let root = project.path();
     allow_any(root, "steward", Level::Project).expect("accepted");
     assert_eq!(InForce::read(root, Vec::new()).project_any, ["steward"]);
 
-    // A teammate takes it out: it covers nothing, and the acceptance goes with it.
-    std::fs::write(crate::names::manifest(root), "schema = 1\n").expect("a pull");
+    // The file on disk is without it (a branch switched, a hand's edit): it covers nothing.
+    // Nothing is dropped for that alone: only a commit that took it out drops an acceptance
+    // (#1506, `dispatcharrival`), and this project has no history to read.
+    std::fs::write(crate::names::manifest(root), "schema = 1\n").expect("another file");
     assert_eq!(InForce::read(root, Vec::new()), InForce::default());
-    assert_eq!(
-        crate::sandbox::local::dispatch_any_seen(root),
-        Vec::<String>::new()
-    );
+    assert_eq!(crate::sandbox::local::dispatch_any_seen(root), ["steward"]);
 
-    // Put back by a later pull, it is a grant nobody here has accepted.
-    std::fs::write(crate::names::manifest(root), with_it).expect("another pull");
-    assert_eq!(InForce::read(root, Vec::new()), InForce::default());
-    assert_eq!(any_unaccepted(root), ["steward"]);
+    // And back: in force again, with nothing asked.
+    std::fs::write(crate::names::manifest(root), with_it).expect("the file as it was");
+    assert_eq!(InForce::read(root, Vec::new()).project_any, ["steward"]);
+    assert_eq!(any_unaccepted(root), Vec::<String>::new());
 }
 
 #[test]

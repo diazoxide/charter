@@ -309,7 +309,7 @@ describe("a dispatch the project already grants, not yet answered on this machin
     target,
     any: target === "*",
     undefined: null,
-    again: false,
+    again: null,
     ...more,
   });
 
@@ -321,13 +321,19 @@ describe("a dispatch the project already grants, not yet answered on this machin
     mockIPC((cmd, args) => {
       asked.push({ cmd, args });
       if (cmd === "dispatch_grants_needed") return held;
-      if (cmd === "dispatch_arrival") return { waiting: now, gone: [] };
+      if (cmd === "dispatch_arrival") return { waiting: now, gone: [], unread: false };
       if (cmd === "answer_dispatch_arrival") {
         const { accepted, shown } = args as { accepted: boolean; shown: string[] };
         now = now.filter((one) => !shown.includes(one.id));
-        // An accepted grant starts what waited on it.
-        if (accepted) held = [];
-        return { said: null, arrival: { waiting: now, gone: [] } };
+        // An accepted grant starts what waited on it. A declined one leaves the dispatch
+        // held, and the core no longer offers the project's level for that pair.
+        held = accepted
+          ? []
+          : held.map((one) => ({
+              ...one,
+              levels: one.levels.filter((level) => level !== "project"),
+            }));
+        return { said: null, arrival: { waiting: now, gone: [], unread: false } };
       }
       return null;
     });
@@ -374,7 +380,7 @@ describe("a dispatch the project already grants, not yet answered on this machin
     expect(sent(asked, "allow_dispatch")).toEqual([]);
   });
 
-  it("declines it on Not on my machine, and the chat's own question still stands", async () => {
+  it("declines it on Not on my machine, says the dispatch still waits, and no longer offers the project's level", async () => {
     const asked = project([WAITING], [arrived("devops")]);
     render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
 
@@ -385,27 +391,31 @@ describe("a dispatch the project already grants, not yet answered on this machin
     expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
       { accepted: false, shown: ["steward -> devops"] },
     ]);
-    expect(
-      within(notice)
-        .getAllByRole("button")
-        .map((one) => one.textContent),
-    ).toEqual([
-      "Allow for this chat",
-      "Allow for me on this machine",
-      "Allow for everyone in this project",
-      "Keep blocked",
-      "Never for this pair",
-    ]);
+    expect(notice).toHaveTextContent(
+      "Not followed on this machine. This dispatch to devops still waits for your answer here.",
+    );
+    await waitFor(() =>
+      expect(
+        within(notice)
+          .getAllByRole("button")
+          .map((one) => one.textContent),
+      ).toEqual([
+        "Allow for this chat",
+        "Allow for me on this machine",
+        "Keep blocked",
+        "Never for this pair",
+      ]),
+    );
   });
 
-  it("says the project's any persona, and accepts it nowhere on a chat's tab", async () => {
+  it("says the project's any persona with where it is accepted, and accepts it nowhere here", async () => {
     project([WAITING], [arrived("*")]);
     render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
 
     const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
     await waitFor(() =>
       expect(notice).toHaveTextContent(
-        "The project now lets steward dispatch to any persona: every persona of this project, including ones added later. You have not answered that on this machine: any persona is answered on the project's Notice or in Settings.",
+        "The project now lets steward dispatch to any persona: every persona of this project, including ones added later. It is not in force on this machine, and is accepted only in Settings › Project › Dispatch. This chat runs as steward and wants to dispatch to devops.",
       ),
     );
     expect(within(notice).queryByRole("button", { name: "Accept" })).toBeNull();

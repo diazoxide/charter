@@ -75,9 +75,9 @@ pub const HOLDS_ANOTHERS: &str = "this chat still runs on the grants of the chat
 /// the project at `root` under `locks`. `runs` is how this app started and records the chat.
 ///
 /// Of standing grants alone: the person's on this machine and the project's. It makes and
-/// widens nothing; reading the grants in force may drop this machine's acceptance of an "any
-/// persona" grant the project's file no longer holds
-/// ([`purlis_core::dispatcharrival::settle`]), which only ever narrows.
+/// widens nothing, and reading the grants in force writes nothing: the project's count only
+/// while the last settling of this machine's acceptances answered
+/// ([`purlis_core::dispatcharrival::for_read`]).
 pub fn unattended(
     root: &Path,
     locks: &Locks,

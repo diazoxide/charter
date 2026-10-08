@@ -850,21 +850,11 @@ fn a_teammate_is_told_once_when_the_committed_grants_change() {
     dispatchgrant::acknowledge(root, &["steward -> devops".to_owned()]).expect("accepted");
 
     assert_eq!(arrival_of(root), DispatchArrival::default(), "once");
-    // What the project then takes away is told, once, and asks nothing.
-    std::fs::write(&manifest, "schema = 1\n").expect("another push");
-    let gone = arrival_of(root);
-    assert_eq!(gone.waiting, []);
-    assert_eq!(
-        gone.gone,
-        [DispatchGone {
-            id: "steward -> devops".to_owned(),
-            asking: "steward".to_owned(),
-            target: "devops".to_owned(),
-            any: false,
-        }]
-    );
-    purlis_core::dispatcharrival::told_gone(root, &["steward -> devops".to_owned()]).expect("read");
+    // The file on disk without it (a branch switched): in force for nobody, and nothing is
+    // told. What a commit takes away is told once: `dispatchgrants_arrival_tests.rs`.
+    std::fs::write(&manifest, "schema = 1\n").expect("another file");
     assert_eq!(arrival_of(root), DispatchArrival::default());
+    assert_eq!(InForce::read(root, Vec::new()).project, []);
 }
 
 // ---- the entry point the dispatch core calls, on a project the app holds ------------------------

@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 
 use super::*;
 use crate::dispatchgrant::{InForce, Pair, acknowledge_any, acknowledge_pair, decline};
@@ -14,19 +15,24 @@ const STAR: &str = "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n";
 
 const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const PAIR: &str = "steward -> devops";
 
 fn pair(asking: &str, target: &str) -> Pair {
     Pair::new(asking, target).expect("a pair")
 }
 
-fn persona(root: &Path, name: &str) {
+fn persona_saying(root: &Path, name: &str, body: &str) {
     let dir = root.join("personas").join(name);
     std::fs::create_dir_all(&dir).expect("its folder");
     std::fs::write(
         dir.join("persona.md"),
-        format!("---\nname: {name}\ndelegate-when: {name} work\n---\n\n# {name}\n"),
+        format!("---\nname: {name}\ndelegate-when: {name} work\n---\n\n# {name}\n{body}"),
     )
     .expect("its definition");
+}
+
+fn persona(root: &Path, name: &str) {
+    persona_saying(root, name, "");
 }
 
 fn write(root: &Path, text: &str) {
@@ -48,24 +54,35 @@ fn arrived(asking: &str, target: &str) -> Arrived {
         asking: asking.to_owned(),
         target: target.to_owned(),
         undefined: None,
-        again: false,
+        again: None,
     }
 }
 
-/// A history that answers what a test hands it, and counts what it was asked.
+fn again(asking: &str, target: &str, why: Again) -> Arrived {
+    Arrived {
+        again: Some(why),
+        ..arrived(asking, target)
+    }
+}
+
+/// A history that answers what a test hands it, and keeps what it was asked.
 struct Told {
-    head: Option<&'static str>,
+    head: Head,
     between: Between,
     asked: RefCell<Vec<(String, String)>>,
 }
 
 impl Told {
-    /// No repository: there is no commit to read.
+    /// No repository: there is no history.
     fn none() -> Self {
-        Self::at(None, Between::Unanswered)
+        Self::of(Head::None, Between::Unanswered)
     }
 
-    fn at(head: Option<&'static str>, between: Between) -> Self {
+    fn at(head: &str, between: Between) -> Self {
+        Self::of(Head::At(head.to_owned()), between)
+    }
+
+    fn of(head: Head, between: Between) -> Self {
         Self {
             head,
             between,
@@ -75,11 +92,11 @@ impl Told {
 }
 
 impl History for Told {
-    fn head(&self) -> Option<String> {
-        self.head.map(str::to_owned)
+    fn head(&self, _until: Instant) -> Head {
+        self.head.clone()
     }
 
-    fn between(&self, from: &str, to: &str) -> Between {
+    fn between(&self, from: &str, to: &str, _until: Instant) -> Between {
         self.asked
             .borrow_mut()
             .push((from.to_owned(), to.to_owned()));
@@ -87,15 +104,71 @@ impl History for Told {
     }
 }
 
-fn versions(from: &str, since: &[Option<&str>]) -> Between {
-    Between::Versions {
-        from: Some(from.to_owned()),
-        since: since.iter().map(|one| one.map(str::to_owned)).collect(),
+fn took_out(said: &[&str]) -> Between {
+    Between::TakenOut(said.iter().map(|one| (*one).to_owned()).collect())
+}
+
+/// The project's pairs in force, by the last settling.
+fn in_force(root: &Path) -> Vec<Pair> {
+    InForce::read(root, Vec::new()).project
+}
+
+fn bound(root: &Path) -> local::DispatchBound {
+    local::dispatch_bound(root)
+}
+
+/// Accepts steward to devops in a project at commit [`A`].
+fn accepted_at_a(root: &Path) {
+    local::accept_dispatch(root, PAIR, &|| true).expect("accepted");
+    assert_eq!(
+        settle_with(root, &Told::at(A, Between::Unanswered)),
+        Verdict { read: true }
+    );
+    assert_eq!(bound(root).at.as_deref(), Some(A));
+    assert_eq!(in_force(root), [pair("steward", "devops")]);
+}
+
+// ---- which commits took a grant out ----------------------------------------------------------
+
+fn step(holds: &[&str], parents: &[&[&str]]) -> Step {
+    let own = |all: &[&str]| all.iter().map(|one| (*one).to_owned()).collect::<Vec<_>>();
+    Step {
+        holds: own(holds),
+        parents: parents.iter().map(|one| own(one)).collect(),
     }
 }
 
-fn in_force(root: &Path) -> Vec<Pair> {
-    InForce::read(root, Vec::new()).project
+#[test]
+fn a_commit_takes_out_what_it_lacks_and_a_parent_of_it_holds() {
+    // Taken out, then put back.
+    assert_eq!(
+        taken_out(&[step(&[PAIR], &[&[]]), step(&[], &[&[PAIR]])]),
+        [PAIR]
+    );
+    // Added, and never taken out.
+    assert_eq!(
+        taken_out(&[
+            step(&[PAIR, "qa -> devops"], &[&[PAIR]]),
+            step(&[PAIR], &[&[]])
+        ]),
+        Vec::<String>::new()
+    );
+    // A branch that predates the grant, merged later: no commit of it took anything out.
+    assert_eq!(
+        taken_out(&[step(&[PAIR], &[&[PAIR], &[]]), step(&[], &[&[]])]),
+        Vec::<String>::new()
+    );
+    // A merge that keeps the grant does not undo a removal on the line it merged.
+    assert_eq!(
+        taken_out(&[
+            step(&[PAIR], &[&[PAIR], &[PAIR]]),
+            step(&[PAIR], &[&[]]),
+            step(&[], &[&[PAIR]]),
+        ]),
+        [PAIR]
+    );
+    // A merge that itself loses what one side held took it out.
+    assert_eq!(taken_out(&[step(&[], &[&[], &[PAIR]])]), [PAIR]);
 }
 
 // ---- arrival ---------------------------------------------------------------------------------
@@ -176,55 +249,114 @@ fn a_grant_naming_a_persona_this_checkout_does_not_define_is_said_to_and_not_as_
     );
 }
 
-// ---- removal and return ----------------------------------------------------------------------
+// ---- absent from the working file is not a removal -------------------------------------------
 
 #[test]
-fn a_pair_removed_and_put_back_waits_for_a_new_yes_and_its_going_is_told_once() {
+fn a_grant_absent_from_the_file_on_disk_is_not_in_force_and_nothing_is_dropped_or_told() {
     let dir = project(ONE);
     let root = dir.path();
-    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+    accepted_at_a(root);
+    let before = bound(root);
 
-    // Taken out: seen at the next read of the grants in force.
+    // A branch without the grant is checked out, purlis open: same commit history as far as
+    // any removal goes, another file on disk.
     write(root, NONE);
+    let away = Told::at(B, took_out(&[]));
+    assert_eq!(
+        arrival_with(root, &away),
+        Arrival::default(),
+        "nothing waits and nothing was taken away"
+    );
     assert_eq!(in_force(root), []);
     assert_eq!(
-        arrival_with(root, &Told::none()),
-        Arrival {
-            waiting: Vec::new(),
-            gone: vec!["steward -> devops".to_owned()],
-        }
+        bound(root),
+        local::DispatchBound {
+            at: Some(B.to_owned()),
+            ..before
+        },
+        "the acceptance is kept"
     );
 
-    told_gone(root, &["steward -> devops".to_owned()]).expect("told");
-    assert_eq!(arrival_with(root, &Told::none()), Arrival::default());
-
-    // Put back: it is the project's again, and nobody here has said yes to it.
+    // And back: in force again, with nothing asked.
     write(root, ONE);
-    assert_eq!(in_force(root), []);
     assert_eq!(
-        arrival_with(root, &Told::none()).waiting,
-        [arrived("steward", "devops")]
+        arrival_with(root, &Told::at(A, took_out(&[]))),
+        Arrival::default()
     );
+    assert_eq!(in_force(root), [pair("steward", "devops")]);
 }
 
 #[test]
-fn a_pair_put_back_before_its_going_was_told_is_asked_again_and_said_to_be() {
+fn a_project_file_that_does_not_read_for_a_moment_drops_nothing() {
     let dir = project(ONE);
     let root = dir.path();
-    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
-    write(root, NONE);
-    settle_with(root, &Told::none());
+    accepted_at_a(root);
 
+    write(root, "<<<<<<< ours\nschema = 1\n=======\n");
+    assert_eq!(
+        arrival_with(root, &Told::at(A, took_out(&[]))),
+        Arrival::default()
+    );
+    assert_eq!(in_force(root), []);
+    std::fs::remove_file(crate::names::manifest(root)).expect("removed");
+    assert_eq!(
+        arrival_with(root, &Told::at(A, took_out(&[]))),
+        Arrival::default()
+    );
     write(root, ONE);
 
+    assert_eq!(in_force(root), [pair("steward", "devops")]);
+}
+
+// ---- a commit took it out --------------------------------------------------------------------
+
+#[test]
+fn a_pair_a_commit_took_out_is_dropped_and_its_going_is_told_once() {
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+
+    // A pull brings the commit that takes it out.
+    write(root, NONE);
+    let pulled = Told::at(B, took_out(&[PAIR]));
     assert_eq!(
-        arrival_with(root, &Told::none()),
+        arrival_with(root, &pulled),
         Arrival {
-            waiting: vec![Arrived {
-                again: true,
-                ..arrived("steward", "devops")
-            }],
-            gone: Vec::new(),
+            gone: vec![PAIR.to_owned()],
+            ..Arrival::default()
+        }
+    );
+    assert_eq!(*pulled.asked.borrow(), [(A.to_owned(), B.to_owned())]);
+    assert_eq!(bound(root).seen, Vec::<String>::new());
+    // It stands until it is read, then is not said again.
+    assert_eq!(arrival_with(root, &pulled).gone, [PAIR]);
+    told_gone(root, &[PAIR.to_owned()]).expect("told");
+    assert_eq!(arrival_with(root, &pulled), Arrival::default());
+
+    // Put back later: it is the project's again, and nobody here has said yes to it.
+    write(root, ONE);
+    assert_eq!(
+        arrival_with(root, &pulled).waiting,
+        [arrived("steward", "devops")]
+    );
+    assert_eq!(in_force(root), []);
+}
+
+#[test]
+fn a_pair_taken_out_and_put_back_between_two_reads_waits_for_a_new_yes_and_says_why() {
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+
+    // Two commits arrive in one pull: the first takes the pair out, the second puts it back.
+    // The file reads exactly as it did when the pair was accepted.
+    let pulled = Told::at(B, took_out(&[PAIR]));
+
+    assert_eq!(
+        arrival_with(root, &pulled),
+        Arrival {
+            waiting: vec![again("steward", "devops", Again::TakenOut)],
+            ..Arrival::default()
         }
     );
     assert_eq!(in_force(root), []);
@@ -235,245 +367,326 @@ fn a_pair_put_back_before_its_going_was_told_is_asked_again_and_said_to_be() {
 }
 
 #[test]
-fn any_persona_removed_and_put_back_waits_for_a_new_yes() {
+fn any_persona_a_commit_took_out_and_put_back_waits_for_a_new_yes() {
     let dir = project(STAR);
     let root = dir.path();
-    acknowledge_any(root, "steward").expect("accepted");
+    local::accept_dispatch(root, "steward -> *", &|| true).expect("accepted");
+    settle_with(root, &Told::at(A, Between::Unanswered));
     assert_eq!(InForce::read(root, Vec::new()).project_any, ["steward"]);
 
-    write(root, NONE);
-    assert_eq!(
-        arrival_with(root, &Told::none()).gone,
-        ["steward -> *".to_owned()]
-    );
-    write(root, STAR);
+    let pulled = Told::at(B, took_out(&["steward -> *"]));
 
+    assert_eq!(
+        arrival_with(root, &pulled).waiting,
+        [again("steward", "*", Again::TakenOut)]
+    );
     assert_eq!(
         InForce::read(root, Vec::new()).project_any,
         Vec::<String>::new()
     );
-    assert_eq!(
-        arrival_with(root, &Told::none()).waiting,
-        [Arrived {
-            again: true,
-            ..arrived("steward", "*")
-        }]
-    );
 }
 
 #[test]
-fn a_decline_goes_with_the_grant_it_declined_so_one_put_back_is_told_again() {
-    let dir = project(ONE);
-    let root = dir.path();
-    decline(root, "steward", "devops").expect("declined");
-
-    write(root, NONE);
-    assert_eq!(arrival_with(root, &Told::none()), Arrival::default());
-    write(root, ONE);
-
-    assert_eq!(
-        arrival_with(root, &Told::none()).waiting,
-        [arrived("steward", "devops")]
-    );
-    assert_eq!(in_force(root), []);
-}
-
-#[test]
-fn a_project_file_that_does_not_read_for_a_moment_drops_nothing() {
-    let dir = project(ONE);
-    let root = dir.path();
-    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
-
-    write(root, "<<<<<<< ours\nschema = 1\n=======\n");
-    settle_with(root, &Told::none());
-    std::fs::remove_file(crate::names::manifest(root)).expect("removed");
-    settle_with(root, &Told::none());
-    write(root, ONE);
-
-    assert_eq!(in_force(root), [pair("steward", "devops")]);
-}
-
-// ---- both between two reads ------------------------------------------------------------------
-
-/// Accepts steward to devops in a project at commit [`A`].
-fn accepted_at_a(root: &Path) {
-    let history = Told::at(Some(A), Between::Unanswered);
-    settle_with(root, &history);
-    crate::sandbox::local::acknowledge_dispatch(root, &["steward -> devops".to_owned()])
-        .expect("accepted");
-    settle_with(root, &history);
-    assert_eq!(
-        crate::sandbox::local::dispatch_bound(root).at.as_deref(),
-        Some(A)
-    );
-}
-
-#[test]
-fn a_pair_removed_and_put_back_between_two_reads_waits_for_a_new_yes() {
-    let dir = project(ONE);
-    let root = dir.path();
-    accepted_at_a(root);
-
-    // Two commits arrive in one pull: the first takes the pair out, the second puts it back.
-    // The file reads exactly as it did when the pair was accepted.
-    let pulled = Told::at(Some(B), versions(ONE, &[Some(NONE), Some(ONE)]));
-
-    assert_eq!(
-        arrival_with(root, &pulled),
-        Arrival {
-            waiting: vec![Arrived {
-                again: true,
-                ..arrived("steward", "devops")
-            }],
-            gone: Vec::new(),
-        }
-    );
-    assert_eq!(*pulled.asked.borrow(), [(A.to_owned(), B.to_owned())]);
-    assert_eq!(in_force(root), []);
-    assert_eq!(crate::sandbox::local::dispatch_bound(root).at, None);
-}
-
-#[test]
-fn a_pair_every_version_in_between_holds_stays_accepted_and_is_bound_to_the_new_commit() {
+fn a_pair_no_commit_took_out_stays_accepted_and_is_bound_to_the_new_commit() {
     let dir = project(TWO);
     let root = dir.path();
     accepted_at_a(root);
 
-    // The persona's line changed around it; the accepted pair was there the whole time.
-    let pulled = Told::at(Some(B), versions(ONE, &[Some(TWO)]));
-    settle_with(root, &pulled);
+    // The persona's line changed around it; another grant was taken out.
+    let pulled = Told::at(B, took_out(&["qa -> devops"]));
+    assert_eq!(settle_with(root, &pulled), Verdict { read: true });
 
     assert_eq!(
-        crate::sandbox::local::dispatch_bound(root),
-        crate::sandbox::local::DispatchBound {
-            seen: vec!["steward -> devops".to_owned()],
+        bound(root),
+        local::DispatchBound {
+            seen: vec![PAIR.to_owned()],
             at: Some(B.to_owned()),
             ..Default::default()
         }
     );
     // What is new waits.
     assert_eq!(
-        arrival_with(root, &Told::at(Some(B), Between::Unreadable)).waiting,
+        arrival_with(root, &pulled).waiting,
         [arrived("steward", "qa")]
     );
 }
 
 #[test]
-fn the_history_is_read_once_per_commit_and_not_at_all_where_nothing_is_accepted() {
+fn a_decline_goes_when_a_commit_takes_its_grant_out_and_not_when_a_checkout_does() {
     let dir = project(ONE);
     let root = dir.path();
-    let idle = Told::at(Some(A), Between::Unreadable);
-    settle_with(root, &idle);
-    assert_eq!(crate::sandbox::local::dispatch_bound(root).at, None);
+    decline(root, "steward", "devops").expect("declined");
+    settle_with(root, &Told::at(A, Between::Unanswered));
+    assert_eq!(bound(root).at.as_deref(), Some(A));
+
+    // Away on a branch without it, and back: still declined, still not told.
+    write(root, NONE);
+    settle_with(root, &Told::at(B, took_out(&[])));
+    write(root, ONE);
+    assert_eq!(
+        arrival_with(root, &Told::at(A, took_out(&[]))),
+        Arrival::default()
+    );
+
+    // A commit takes it out and another puts it back: a new grant, told again.
+    assert_eq!(
+        arrival_with(root, &Told::at(B, took_out(&[PAIR]))).waiting,
+        [arrived("steward", "devops")]
+    );
+    assert_eq!(in_force(root), []);
+}
+
+// ---- a history that does not answer ----------------------------------------------------------
+
+#[test]
+fn a_history_that_cannot_be_read_keeps_no_acceptance_and_says_that_is_why() {
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+
+    assert_eq!(
+        arrival_with(root, &Told::at(B, Between::Unreadable)),
+        Arrival {
+            waiting: vec![again("steward", "devops", Again::Unread)],
+            ..Arrival::default()
+        }
+    );
+    assert_eq!(in_force(root), []);
+    assert_eq!(bound(root).seen, Vec::<String>::new());
+}
+
+#[test]
+fn a_repository_that_is_no_longer_one_keeps_no_acceptance_bound_to_a_commit() {
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+
+    assert_eq!(
+        arrival_with(root, &Told::none()).waiting,
+        [again("steward", "devops", Again::Unread)]
+    );
+    assert_eq!(bound(root).at, None);
+}
+
+#[test]
+fn where_git_cannot_be_run_nothing_stored_changes_and_nothing_is_in_force_for_that_read() {
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+    let before = bound(root);
+
+    for unanswered in [
+        Told::at(B, Between::Unanswered),
+        Told::of(Head::Unanswered, Between::Unanswered),
+    ] {
+        let told = arrival_with(root, &unanswered);
+        assert_eq!(
+            told,
+            Arrival {
+                unread: true,
+                ..Arrival::default()
+            }
+        );
+        assert_eq!(in_force(root), [], "not in force for this read");
+        assert_eq!(bound(root), before, "and nothing stored changed");
+    }
+
+    // It answers again: the history is read from the commit that was kept.
+    let later = Told::at(B, took_out(&[]));
+    assert_eq!(settle_with(root, &later), Verdict { read: true });
+    assert_eq!(*later.asked.borrow(), [(A.to_owned(), B.to_owned())]);
+    assert_eq!(in_force(root), [pair("steward", "devops")]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_drop_that_could_not_be_written_leaves_nothing_in_force() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = project(ONE);
+    let root = dir.path();
+    accepted_at_a(root);
+    let state = local::path(root)
+        .parent()
+        .expect("its folder")
+        .to_path_buf();
+    let writable = std::fs::metadata(&state).expect("there").permissions();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+
+    let verdict = settle_with(root, &Told::at(B, took_out(&[PAIR])));
+    let stored = bound(root);
+    let now = in_force(root);
+    std::fs::set_permissions(&state, writable).expect("writable again");
+
+    // A user no permission stops wrote it all the same: then there is nothing to show.
+    if stored.seen.is_empty() {
+        return;
+    }
+    assert_eq!(verdict, Verdict { read: false });
+    assert_eq!(stored.seen, [PAIR], "still on disk");
+    assert_eq!(now, [], "and in force for nobody");
+}
+
+#[test]
+fn the_history_is_read_once_per_commit_and_not_at_all_where_nothing_is_kept() {
+    let dir = project(ONE);
+    let root = dir.path();
+    let idle = Told::of(Head::Unanswered, Between::Unreadable);
+    assert_eq!(settle_with(root, &idle), Verdict { read: true });
+    assert_eq!(bound(root).at, None);
 
     accepted_at_a(root);
-    let same = Told::at(Some(A), Between::Unreadable);
+    let same = Told::at(A, Between::Unreadable);
     settle_with(root, &same);
     settle_with(root, &same);
 
     assert_eq!(*same.asked.borrow(), []);
-    assert_eq!(
-        crate::sandbox::local::dispatch_bound(root).seen,
-        ["steward -> devops"]
-    );
-}
-
-#[test]
-fn a_version_with_no_project_file_or_one_that_does_not_parse_held_no_grant() {
-    for between in [None, Some("not = [toml")] {
-        let dir = project(ONE);
-        let root = dir.path();
-        accepted_at_a(root);
-
-        settle_with(
-            root,
-            &Told::at(Some(B), versions(ONE, &[between, Some(ONE)])),
-        );
-
-        assert_eq!(
-            crate::sandbox::local::dispatch_bound(root).seen,
-            Vec::<String>::new(),
-            "{between:?}"
-        );
-    }
-}
-
-#[test]
-fn a_history_that_cannot_be_read_keeps_no_acceptance() {
-    let dir = project(ONE);
-    let root = dir.path();
-    accepted_at_a(root);
-
-    settle_with(root, &Told::at(Some(B), Between::Unreadable));
-
-    assert_eq!(
-        arrival_with(root, &Told::at(Some(B), Between::Unreadable)).waiting,
-        [Arrived {
-            again: true,
-            ..arrived("steward", "devops")
-        }]
-    );
-}
-
-#[test]
-fn a_history_that_does_not_answer_changes_nothing_and_is_asked_again() {
-    let dir = project(ONE);
-    let root = dir.path();
-    accepted_at_a(root);
-
-    settle_with(root, &Told::at(Some(B), Between::Unanswered));
-    settle_with(root, &Told::at(None, Between::Unanswered));
-
-    assert_eq!(
-        crate::sandbox::local::dispatch_bound(root),
-        crate::sandbox::local::DispatchBound {
-            seen: vec!["steward -> devops".to_owned()],
-            at: Some(A.to_owned()),
-            ..Default::default()
-        }
-    );
-    let later = Told::at(Some(B), versions(ONE, &[Some(NONE), Some(ONE)]));
-    settle_with(root, &later);
-    assert_eq!(*later.asked.borrow(), [(A.to_owned(), B.to_owned())]);
-    assert_eq!(in_force(root), []);
-}
-
-#[test]
-fn a_grant_made_here_and_not_committed_yet_is_not_dropped_by_commits_that_never_held_it() {
-    let dir = project(ONE);
-    let root = dir.path();
-    accepted_at_a(root);
-
-    // The commit it was accepted at had no such pair: it was this machine's own edit.
-    let pulled = Told::at(Some(B), versions(NONE, &[Some(NONE)]));
-    settle_with(root, &pulled);
-
-    assert_eq!(
-        crate::sandbox::local::dispatch_bound(root),
-        crate::sandbox::local::DispatchBound {
-            seen: vec!["steward -> devops".to_owned()],
-            at: Some(B.to_owned()),
-            ..Default::default()
-        }
-    );
+    assert_eq!(bound(root).seen, [PAIR]);
 }
 
 #[test]
 fn an_acceptance_from_before_commits_were_kept_is_bound_from_the_first_read_on() {
     let dir = project(ONE);
     let root = dir.path();
-    crate::sandbox::local::acknowledge_dispatch(root, &["steward -> devops".to_owned()])
-        .expect("an earlier build's record");
+    local::acknowledge_dispatch(root, &[PAIR.to_owned()]).expect("an earlier build's record");
 
-    let first = Told::at(Some(A), Between::Unreadable);
-    settle_with(root, &first);
+    let first = Told::at(A, Between::Unreadable);
+    assert_eq!(settle_with(root, &first), Verdict { read: true });
 
     assert_eq!(*first.asked.borrow(), []);
-    assert_eq!(
-        crate::sandbox::local::dispatch_bound(root).at.as_deref(),
-        Some(A)
-    );
+    assert_eq!(bound(root).at.as_deref(), Some(A));
     assert_eq!(in_force(root), [pair("steward", "devops")]);
+}
+
+// ---- one settling at a time ------------------------------------------------------------------
+
+/// A history whose first answer waits until it is let go, and that counts its answers.
+struct Slow {
+    asked: AtomicUsize,
+    entered: mpsc::Sender<()>,
+    go: Mutex<mpsc::Receiver<()>>,
+}
+
+impl History for Slow {
+    fn head(&self, _until: Instant) -> Head {
+        if self.asked.fetch_add(1, Ordering::SeqCst) == 0 {
+            let _ = self.entered.send(());
+            let _ = self.go.lock().expect("held").recv();
+        }
+        Head::At(A.to_owned())
+    }
+
+    fn between(&self, _from: &str, _to: &str, _until: Instant) -> Between {
+        Between::Unreadable
+    }
+}
+
+#[test]
+fn a_settling_asked_for_while_one_runs_waits_for_it_and_takes_its_answer() {
+    let dir = project(ONE);
+    let root = dir.path().to_path_buf();
+    accepted_at_a(&root);
+    let (entered, has_entered) = mpsc::channel();
+    let (go, wait) = mpsc::channel();
+    let slow = Arc::new(Slow {
+        asked: AtomicUsize::new(0),
+        entered,
+        go: Mutex::new(wait),
+    });
+
+    let first = {
+        let (root, slow) = (root.clone(), Arc::clone(&slow));
+        std::thread::spawn(move || settle_with(&root, &*slow))
+    };
+    has_entered
+        .recv()
+        .expect("the first is reading the history");
+    let second = {
+        let (root, slow) = (root.clone(), Arc::clone(&slow));
+        std::thread::spawn(move || settle_with(&root, &*slow))
+    };
+    // The second has asked, and is waiting on the first.
+    std::thread::sleep(Duration::from_millis(200));
+    go.send(()).expect("let go");
+
+    assert_eq!(first.join().expect("first"), Verdict { read: true });
+    assert_eq!(second.join().expect("second"), Verdict { read: true });
+    assert_eq!(
+        slow.asked.load(Ordering::SeqCst),
+        1,
+        "one read of the history"
+    );
+}
+
+// ---- the record --------------------------------------------------------------------------------
+
+#[test]
+fn an_acceptance_is_added_in_one_write_and_brings_nothing_dropped_back() {
+    let dir = project(TWO);
+    let root = dir.path();
+    accepted_at_a(root);
+    // Dropped by a settling, as another thread's would between a read and a write.
+    settle_with(root, &Told::at(B, took_out(&[PAIR])));
+
+    acknowledge_pair(root, &pair("steward", "qa")).expect("accepted");
+
+    assert_eq!(bound(root).seen, ["steward -> qa"]);
+    assert_eq!(
+        bound(root).gone,
+        [Gone {
+            said: PAIR.to_owned(),
+            why: Gone::REMOVED.to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn nothing_is_accepted_that_the_project_s_file_does_not_hold() {
+    let dir = project(NONE);
+    let root = dir.path();
+
+    let pair_refused = acknowledge_pair(root, &pair("steward", "devops")).expect_err("refused");
+    let any_refused = acknowledge_any(root, "steward").expect_err("refused");
+
+    assert_eq!(
+        pair_refused.to_string(),
+        crate::dispatchgrant::NO_SUCH_GRANT
+    );
+    assert_eq!(any_refused.to_string(), crate::dispatchgrant::NO_SUCH_GRANT);
+    assert_eq!(bound(root), local::DispatchBound::default());
+    assert_eq!(arrival_with(root, &Told::none()), Arrival::default());
+}
+
+// ---- a persona that went and came back (#1504's rule, told here) -----------------------------
+
+#[test]
+fn a_grant_naming_a_name_that_changed_hands_waits_again_and_says_the_persona_was_away() {
+    let dir = project(ONE);
+    let root = dir.path();
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+    crate::dispatchdormant::judged(root, &[]).expect("a dispatch judged while both are there");
+
+    // devops is removed, seen gone, and another persona is made under the name.
+    std::fs::remove_dir_all(root.join("personas/devops")).expect("removed");
+    crate::dispatchdormant::noticed(root, &[]).expect("seen gone");
+    persona_saying(root, "devops", "Another persona altogether.\n");
+
+    // Before any dispatch is judged the acceptance is still in the record, and waits.
+    let waits = [again(
+        "steward",
+        "devops",
+        Again::Persona("devops".to_owned()),
+    )];
+    assert_eq!(arrival_with(root, &Told::none()).waiting, waits);
+
+    // A dispatch is judged: #1504 sets the acceptance aside. It waits the same way.
+    crate::dispatchdormant::judged(root, &[]).expect("judged");
+    assert_eq!(bound(root).seen, Vec::<String>::new());
+    assert_eq!(arrival_with(root, &Told::none()).waiting, waits);
+
+    // One answer: accepted here, it is not waiting to be given back in Settings as well.
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+    assert_eq!(arrival_with(root, &Told::none()), Arrival::default());
+    assert_eq!(local::accepted_aside_dispatch(root), []);
 }
 
 // ---- git's own history ------------------------------------------------------------------------
@@ -494,125 +707,388 @@ fn git(root: &Path, args: &[&str]) -> String {
     run.out.trim().to_owned()
 }
 
-/// Commits the project file as `text`, and answers the commit.
-fn commit(root: &Path, text: &str) -> String {
-    write(root, text);
-    let file = crate::names::manifest(root);
-    let file = file
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("a name");
-    git(root, &["add", "--", file]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", "settings"]);
+fn head_of(root: &Path) -> String {
     git(root, &["rev-parse", "HEAD"])
 }
 
-/// A project in a repository of its own, its file committed as `text`. The repository is kept
-/// beside the project, so nothing of git's is written inside it.
+/// Commits everything in the project's folder, and answers the commit.
+fn commit_all(root: &Path) -> String {
+    git(root, &["add", "-A", "."]);
+    git(root, &["commit", "-q", "--allow-empty", "-m", "settings"]);
+    head_of(root)
+}
+
+/// Commits the project file as `text`, and answers the commit.
+fn commit(root: &Path, text: &str) -> String {
+    write(root, text);
+    commit_all(root)
+}
+
+/// A project in a repository of its own, with one commit whose project file is `text`. The
+/// repository is kept beside the project, so nothing of git's is written inside it.
 fn repository(text: &str) -> (tempfile::TempDir, tempfile::TempDir) {
-    let dir = project(NONE);
+    let dir = project(text);
     let kept = tempfile::tempdir().expect("a place for the repository");
     let at = format!("--separate-git-dir={}", kept.path().join("git").display());
     git(dir.path(), &["init", "-q", &at]);
-    commit(dir.path(), text);
+    commit_all(dir.path());
     (dir, kept)
 }
 
-#[test]
-fn git_says_every_version_between_two_commits_and_the_one_before_them() {
-    let (dir, _kept) = repository(ONE);
-    let root = dir.path();
-    let history = Git(root);
-    let first = history.head().expect("a commit");
+/// A repository where steward to devops is committed and accepted.
+fn accepted_in_a_repository() -> (tempfile::TempDir, tempfile::TempDir) {
+    let made = repository(ONE);
+    acknowledge_pair(made.0.path(), &pair("steward", "devops")).expect("accepted");
+    assert_eq!(settled_in_force(made.0.path()), [pair("steward", "devops")]);
+    made
+}
 
-    let out = commit(root, NONE);
-    let back = commit(root, ONE);
+/// The project's pairs in force after a settling against git, as the app settles before a
+/// dispatch is decided.
+fn settled_in_force(root: &Path) -> Vec<Pair> {
+    settle(root);
+    in_force(root)
+}
 
-    assert_eq!(history.head().as_deref(), Some(back.as_str()));
-    assert_eq!(
-        history.between(&first, &back),
-        versions(ONE, &[Some(ONE), Some(NONE)])
-    );
-    assert_eq!(history.between(&out, &back), versions(NONE, &[Some(ONE)]));
-    assert_eq!(history.between(&back, &back), versions(ONE, &[]));
+/// The project's file under its other name.
+fn other_name(root: &Path) -> std::path::PathBuf {
+    let now = crate::names::manifest_name(root);
+    let other = crate::names::PLANE_MANIFEST
+        .spellings()
+        .find(|name| *name != now)
+        .expect("a second spelling");
+    root.join(other)
 }
 
 #[test]
-fn a_pair_two_pulled_commits_took_out_and_put_back_waits_for_a_new_yes_in_a_real_repository() {
-    let (dir, _kept) = repository(ONE);
+fn two_pulled_commits_that_took_a_pair_out_and_put_it_back_make_it_wait_for_a_new_yes() {
+    let (dir, _kept) = accepted_in_a_repository();
     let root = dir.path();
-    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
-    assert_eq!(in_force(root), [pair("steward", "devops")]);
 
     // Nothing reads the grants between the two commits.
     commit(root, NONE);
     commit(root, ONE);
 
-    assert_eq!(in_force(root), []);
+    assert_eq!(settled_in_force(root), []);
     assert_eq!(
         arrival(root).waiting,
-        [Arrived {
-            again: true,
-            ..arrived("steward", "devops")
-        }]
+        [again("steward", "devops", Again::TakenOut)]
     );
 }
 
 #[test]
-fn a_commit_that_leaves_the_grants_alone_keeps_the_acceptance_in_a_real_repository() {
-    let (dir, _kept) = repository(ONE);
+fn a_commit_that_leaves_the_grant_alone_keeps_the_acceptance_bound_to_it() {
+    let (dir, _kept) = accepted_in_a_repository();
     let root = dir.path();
-    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
 
     let head = commit(root, TWO);
 
-    assert_eq!(in_force(root), [pair("steward", "devops")]);
-    assert_eq!(crate::sandbox::local::dispatch_bound(root).at, Some(head));
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+    assert_eq!(bound(root).at, Some(head));
 }
 
 #[test]
-fn a_version_on_a_branch_that_was_merged_in_counts_though_the_merge_changed_nothing() {
-    let (dir, _kept) = repository(ONE);
+fn a_grant_made_here_then_committed_then_taken_out_and_put_back_by_a_pull_waits_again() {
+    let (dir, _kept) = repository(NONE);
     let root = dir.path();
+    // Made here: in the file, accepted, and in no commit yet.
+    write(root, ONE);
     acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
-    let ours = Git(root).head().expect("a commit");
+    // Committed while nothing reads the grants, then a teammate's two commits.
+    commit_all(root);
+    commit(root, NONE);
+    commit(root, ONE);
 
-    // A teammate's line of history takes the pair out and puts it back; this machine has a
-    // commit of its own, so the pull is a merge whose result is the file as it was.
+    assert_eq!(settled_in_force(root), []);
+    assert_eq!(
+        arrival(root).waiting,
+        [again("steward", "devops", Again::TakenOut)]
+    );
+}
+
+#[test]
+fn a_removal_is_not_hidden_by_giving_the_project_s_file_its_other_name() {
+    for back_under_the_first_name in [false, true] {
+        let (dir, _kept) = accepted_in_a_repository();
+        let root = dir.path();
+        let first = crate::names::manifest(root);
+        let second = other_name(root);
+
+        // Taken out, and put back in a file under the other name.
+        std::fs::remove_file(&first).expect("removed");
+        std::fs::write(&second, NONE).expect("under the other name");
+        commit_all(root);
+        std::fs::write(&second, ONE).expect("put back");
+        commit_all(root);
+        if back_under_the_first_name {
+            std::fs::remove_file(&second).expect("removed");
+            std::fs::write(&first, ONE).expect("back");
+            commit_all(root);
+        }
+
+        assert_eq!(settled_in_force(root), [], "{back_under_the_first_name}");
+        assert_eq!(
+            arrival(root).waiting,
+            [again("steward", "devops", Again::TakenOut)]
+        );
+    }
+}
+
+#[test]
+fn a_project_file_renamed_with_its_grants_kept_takes_nothing_out() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    let first = crate::names::manifest(root);
+    let second = other_name(root);
+
+    std::fs::remove_file(&first).expect("removed");
+    std::fs::write(&second, ONE).expect("the same grants, under the other name");
+    commit_all(root);
+
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+    assert_eq!(arrival(root), Arrival::default());
+}
+
+#[test]
+fn a_removal_on_a_line_that_was_merged_in_counts_though_the_merge_changed_nothing() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+
+    // A teammate's line takes the pair out and puts it back; this machine has a commit of
+    // its own, so the pull is a merge whose result is the file as it was.
     git(root, &["checkout", "-q", "-b", "theirs"]);
     commit(root, NONE);
     commit(root, ONE);
     git(root, &["checkout", "-q", "-"]);
     std::fs::write(root.join("notes.md"), "mine\n").expect("a file of this machine's");
-    git(root, &["add", "--", "notes.md"]);
-    git(root, &["commit", "-q", "-m", "mine"]);
+    commit_all(root);
     git(root, &["merge", "-q", "--no-ff", "-m", "pull", "theirs"]);
-    assert_ne!(Git(root).head().expect("the merge"), ours);
 
-    assert_eq!(in_force(root), []);
+    assert_eq!(settled_in_force(root), []);
+}
+
+#[test]
+fn a_branch_that_predates_the_grant_and_changed_the_file_takes_nothing_out_when_merged() {
+    let (dir, _kept) = repository(NONE);
+    let root = dir.path();
+    // An old branch, cut before the grant existed, that edits the project's file.
+    git(root, &["checkout", "-q", "-b", "old"]);
+    commit(root, "schema = 1\n# a note\n");
+    git(root, &["checkout", "-q", "-"]);
+    commit(root, ONE);
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+
+    // Merged, keeping this line's file where the two differ.
+    git(
+        root,
+        &[
+            "merge", "-q", "--no-ff", "-X", "ours", "-m", "old work", "old",
+        ],
+    );
+
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+    assert_eq!(arrival(root), Arrival::default());
+}
+
+#[test]
+fn switching_to_a_branch_without_the_grant_and_back_drops_nothing_and_tells_nothing() {
+    let (dir, _kept) = repository(NONE);
+    let root = dir.path();
+    git(root, &["branch", "before"]);
+    commit(root, ONE);
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+
+    git(root, &["checkout", "-q", "before"]);
+    assert_eq!(settled_in_force(root), []);
+    assert_eq!(arrival(root), Arrival::default());
+    assert_eq!(bound(root).seen, [PAIR]);
+
+    git(root, &["checkout", "-q", "-"]);
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+    assert_eq!(arrival(root), Arrival::default());
+}
+
+#[test]
+fn a_line_rewritten_so_that_no_commit_took_the_grant_out_keeps_the_acceptance() {
+    // The limit, pinned: the check is over the history as this machine has it.
+    let (dir, _kept) = repository(NONE);
+    let root = dir.path();
+    git(root, &["branch", "rewritten"]);
+    commit(root, ONE);
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+
+    // The line is pushed again from before the grant, with a commit of its own that adds it.
+    git(root, &["checkout", "-q", "rewritten"]);
+    commit(root, ONE);
+
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+}
+
+#[test]
+fn a_history_that_shares_nothing_with_the_one_accepted_under_keeps_no_acceptance() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+
+    git(root, &["checkout", "-q", "--orphan", "elsewhere"]);
+    commit_all(root);
+
+    assert_eq!(settled_in_force(root), []);
+    assert_eq!(
+        arrival(root).waiting,
+        [again("steward", "devops", Again::Unread)]
+    );
+}
+
+#[test]
+fn an_object_that_stands_in_for_the_removing_commit_hides_nothing() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    let accepted = head_of(root);
+    let removed = commit(root, NONE);
+    commit(root, ONE);
+    // Whoever can write the repository says: read the accepted commit where the removing
+    // one is asked for.
+    git(root, &["replace", &removed, &accepted]);
+
+    assert_eq!(settled_in_force(root), []);
+}
+
+#[test]
+fn a_repository_with_grafts_or_a_boundary_inside_the_range_is_a_history_that_cannot_be_read() {
+    for cut in ["grafts", "shallow"] {
+        let (dir, kept) = accepted_in_a_repository();
+        let root = dir.path();
+        let accepted = head_of(root);
+        std::fs::write(root.join("notes.md"), "more\n").expect("a file");
+        let head = commit_all(root);
+        let git_dir = kept.path().join("git");
+        match cut {
+            "grafts" => {
+                std::fs::create_dir_all(git_dir.join("info")).expect("info");
+                std::fs::write(git_dir.join("info/grafts"), format!("{head} {accepted}\n"))
+                    .expect("grafts");
+            }
+            // The newest commit is the boundary: what is under it is not there to read.
+            _ => std::fs::write(git_dir.join("shallow"), format!("{head}\n")).expect("shallow"),
+        }
+
+        assert_eq!(settled_in_force(root), [], "{cut}");
+        assert_eq!(
+            arrival(root).waiting,
+            [again("steward", "devops", Again::Unread)],
+            "{cut}"
+        );
+    }
+}
+
+#[test]
+fn a_version_of_the_project_s_file_past_the_size_cap_is_a_history_that_cannot_be_read() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    let pad = "# pad\n".repeat(usize::try_from(MOST_FILE_BYTES / 6).expect("fits") + 1);
+
+    commit(root, &format!("{ONE}{pad}"));
+    commit(root, ONE);
+
+    assert_eq!(settled_in_force(root), []);
+    assert_eq!(
+        arrival(root).waiting,
+        [again("steward", "devops", Again::Unread)]
+    );
 }
 
 #[test]
 fn a_stored_commit_that_is_no_commit_id_is_never_handed_to_git() {
     let (dir, _kept) = repository(ONE);
     let root = dir.path();
-    let head = Git(root).head().expect("a commit");
+    let history = Git::new(root);
+    let until = Instant::now() + DEADLINE;
+    let Head::At(head) = history.head(until) else {
+        panic!("a commit");
+    };
 
     for forged in ["--output=x", "HEAD", "", "main..other", &"g".repeat(40)] {
-        assert_eq!(Git(root).between(forged, &head), Between::Unreadable);
+        assert_eq!(history.between(forged, &head, until), Between::Unreadable);
     }
     // One git does not know: nothing is assumed to have stayed.
-    assert_eq!(Git(root).between(A, &head), Between::Unreadable);
+    assert_eq!(history.between(A, &head, until), Between::Unreadable);
 }
 
 #[test]
-fn a_project_in_no_repository_has_no_commit_to_read() {
-    let dir = project(ONE);
-    // A fixture's folder may sit inside some checkout of the machine's; only where it does
-    // not is there nothing to read.
-    if Git(dir.path()).head().is_none() {
-        acknowledge_pair(dir.path(), &pair("steward", "devops")).expect("accepted");
-        assert_eq!(crate::sandbox::local::dispatch_bound(dir.path()).at, None);
-        assert_eq!(in_force(dir.path()), [pair("steward", "devops")]);
+fn reading_the_grants_in_force_runs_no_git() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    settle(root);
+    let before = crate::worktree::git::tally(root).spawned;
+
+    for _ in 0..3 {
+        assert_eq!(in_force(root), [pair("steward", "devops")]);
     }
+
+    assert_eq!(crate::worktree::git::tally(root).spawned, before);
+}
+
+#[test]
+fn a_settling_at_the_commit_it_was_last_checked_through_asks_git_one_thing() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    settle(root);
+    let before = crate::worktree::git::tally(root).spawned;
+
+    settle(root);
+
+    assert_eq!(crate::worktree::git::tally(root).spawned, before + 1);
+}
+
+#[test]
+fn a_settling_past_its_deadline_reads_no_history_and_keeps_no_acceptance() {
+    let (dir, _kept) = accepted_in_a_repository();
+    let root = dir.path();
+    let accepted = head_of(root);
+    let head = commit(root, TWO);
+    let history = Git::new(root);
+    assert_eq!(
+        history.head(Instant::now() + DEADLINE),
+        Head::At(head.clone())
+    );
+
+    assert_eq!(
+        history.between(&accepted, &head, Instant::now()),
+        Between::Unreadable
+    );
+}
+
+#[test]
+fn a_project_in_an_ordinary_clone_is_read_as_one_with_a_repository_kept_apart() {
+    // The other tests keep the repository beside the project; this one is `git init` as a
+    // person runs it.
+    let dir = project(ONE);
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    commit_all(root);
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+
+    commit(root, NONE);
+    commit(root, ONE);
+
+    assert_eq!(settled_in_force(root), []);
+    assert_eq!(
+        arrival(root).waiting,
+        [again("steward", "devops", Again::TakenOut)]
+    );
+}
+
+#[test]
+fn a_project_in_no_repository_has_no_history_and_its_acceptance_stands() {
+    let dir = project(ONE);
+    let root = dir.path();
+    // A fixture's folder may sit inside some checkout of the machine's; only where it does
+    // not is there no history.
+    if Git::new(root).head(Instant::now() + DEADLINE) != Head::None {
+        return;
+    }
+    acknowledge_pair(root, &pair("steward", "devops")).expect("accepted");
+
+    assert_eq!(bound(root).at, None);
+    assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
 }

@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import {
   commands,
+  type DispatchAgain,
   type DispatchArrival,
   type DispatchArrived,
   type DispatchGone,
@@ -42,10 +43,13 @@ type Held = {
 export type Arrival = {
   waiting: readonly DispatchArrived[];
   gone: readonly DispatchGone[];
+  /** Whether the project's git history could not be asked just now: no accepted project
+   *  grant counts until it can, and nothing can be accepted. */
+  unread: boolean;
   said: string | undefined;
 };
 
-const NOTHING: DispatchArrival = { waiting: [], gone: [] };
+const NOTHING: DispatchArrival = { waiting: [], gone: [], unread: false };
 const held = new Map<string, Held>();
 const snapshots = new WeakMap<Held, Arrival>();
 
@@ -61,6 +65,7 @@ function took(plane: PlaneId, arrival: DispatchArrival | null | undefined, said?
   mine.arrival = {
     waiting: Array.isArray(arrival?.waiting) ? arrival.waiting : NOTHING.waiting,
     gone: Array.isArray(arrival?.gone) ? arrival.gone : NOTHING.gone,
+    unread: arrival?.unread === true,
   };
   mine.said = said;
   changed(mine);
@@ -81,13 +86,23 @@ function snapshot(plane: PlaneId): Arrival {
   if (mine === undefined) return EMPTY;
   let made = snapshots.get(mine);
   if (made === undefined) {
-    made = { waiting: mine.arrival.waiting, gone: mine.arrival.gone, said: mine.said };
+    made = {
+      waiting: mine.arrival.waiting,
+      gone: mine.arrival.gone,
+      unread: mine.arrival.unread,
+      said: mine.said,
+    };
     snapshots.set(mine, made);
   }
   return made;
 }
 
-const EMPTY: Arrival = { waiting: NOTHING.waiting, gone: NOTHING.gone, said: undefined };
+const EMPTY: Arrival = {
+  waiting: NOTHING.waiting,
+  gone: NOTHING.gone,
+  unread: false,
+  said: undefined,
+};
 
 export function useDispatchArrival(plane: PlaneId): Arrival & {
   /** Accept (`true`) or Not on my machine, for the grants `shown` listed. */
@@ -154,6 +169,8 @@ export function useDispatchArrival(plane: PlaneId): Arrival & {
           plane,
           accepted,
           shown.map((one) => one.id),
+          // Everything listed, answered or not: what waits and was not listed arrived since.
+          (held.get(plane)?.arrival.waiting ?? []).map((one) => one.id),
         )
         .then((done) => {
           if (done.status === "ok") took(plane, done.data?.arrival, done.data?.said ?? undefined);
@@ -204,14 +221,58 @@ function byAsking(items: readonly { asking: string; target: string }[]): [string
 /** How many named pairs one Notice says each of, before it sums them ({@link arrivedSaid}). */
 export const MOST_SAID = 6;
 
+/** One grant as a sentence names it: "steward to devops", "steward to any persona". */
+export function pairSaid(one: { asking: string; target: string; any: boolean }): string {
+  return `${one.asking} to ${one.any ? "any persona" : one.target}`;
+}
+
+/** One grant as "The project lets …" goes on: "steward dispatch to devops". */
+export function letsSaid(one: { asking: string; target: string; any: boolean }): string {
+  return `${one.asking} dispatch to ${one.any ? "any persona" : one.target}`;
+}
+
+/** The key two causes share where they are one sentence. */
+const causeOf = (again: DispatchAgain): string =>
+  again.why === "persona" ? `persona ${again.name}` : again.why;
+
+/**
+ * **Why grants accepted before wait again, one true sentence per cause** (#1506):
+ *
+ * - a commit of the project's history took the grant out, and it is there again;
+ * - purlis could not read the project's history since it was accepted, so it does not know;
+ * - a persona it names was not in the project for a time, and one of that name is there now.
+ *
+ * Never one sentence for all three: only the first says anyone took anything out.
+ */
+export function againSaid(items: readonly DispatchArrived[]): string[] {
+  const causes = new Map<string, DispatchArrived[]>();
+  for (const one of items) {
+    if (one.again === null) continue;
+    const key = causeOf(one.again);
+    causes.set(key, [...(causes.get(key) ?? []), one]);
+  }
+  return [...causes.values()].map((these) => {
+    const again = these[0]?.again;
+    const many = these.length > 1;
+    const [it, waits] = many ? ["them", "they wait"] : ["it", "it waits"];
+    const before = `You accepted ${listed(these.map(pairSaid))} before.`;
+    if (again?.why === "takenOut")
+      return `${before} The project took ${it} out of its settings and put ${it} back, so ${waits} for a new yes.`;
+    if (again?.why === "persona")
+      return `${before} The persona ${again.name} was not in this project for a time and one of that name is there now, so ${waits} for a new yes.`;
+    return `${before} purlis could not read the project's history since then and cannot tell whether ${many ? "they were" : "it was"} there the whole time, so ${waits} for a new yes.`;
+  });
+}
+
 /**
  * **What arrived, in the words both Notices use** (#1506). Each is one sentence, in this order:
  *
- * - every "any persona" grant, in its own plain words and never summed with anything;
+ * - every "any persona" grant, in its own plain words and never summed with anything, with
+ *   where it is accepted: Settings, and no Notice (V100-23);
  * - the named pairs that can be used, by asking persona; more than {@link MOST_SAID} are
  *   summed, and the Notice shows each under its line;
  * - each grant that names a persona this project does not define, said as covering nothing;
- * - which of them the person accepted before, and why they are asked again.
+ * - which of them the person accepted before, and why each waits again ({@link againSaid}).
  *
  * Names are the core's, drawn as text.
  */
@@ -220,7 +281,7 @@ export function arrivedSaid(items: readonly DispatchArrived[]): string[] {
   const out: string[] = [];
   for (const one of usable.filter((one) => one.any))
     out.push(
-      `The project now lets ${one.asking} dispatch to any persona: every persona of this project, including ones added later.`,
+      `The project now lets ${one.asking} dispatch to any persona: every persona of this project, including ones added later. It is not in force on this machine, and is accepted only in Settings \u203a Project \u203a Dispatch.`,
     );
   const pairs = usable.filter((one) => !one.any);
   if (pairs.length > MOST_SAID) {
@@ -237,17 +298,8 @@ export function arrivedSaid(items: readonly DispatchArrived[]): string[] {
   }
   for (const one of items.filter((one) => one.undefined !== null))
     out.push(
-      `The project's settings also let ${one.asking} dispatch to ${one.any ? "any persona" : one.target}, but this project does not define a persona named ${one.undefined ?? ""}, so that covers nothing and is not accepted.`,
+      `The project's settings also let ${letsSaid(one)}, but this project does not define a persona named ${one.undefined ?? ""}, so that covers nothing and is not accepted.`,
     );
-  const again = usable.filter((one) => one.again);
-  if (again.length > 0)
-    out.push(
-      `You accepted ${listed(again.map(pairSaid))} before. The project's settings were without ${again.length === 1 ? "it" : "them"} for a time since, so ${again.length === 1 ? "it waits" : "they wait"} for your yes again.`,
-    );
+  out.push(...againSaid(usable));
   return out;
-}
-
-/** One grant as a sentence names it: "steward to devops", "steward to any persona". */
-export function pairSaid(one: { asking: string; target: string; any: boolean }): string {
-  return `${one.asking} to ${one.any ? "any persona" : one.target}`;
 }

@@ -1631,6 +1631,12 @@ fn dispatch_it(
         return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned());
     }
     let asking_as = crate::dispatchgrants::asking_from(&asking, from, asker.clone(), root);
+    // **Before the lock the dispatch is decided under** (#1506): this machine's acceptances
+    // of the project's grants are settled against git's history here, where a slow history
+    // holds nothing else. Under the lock the grants in force are read by this settling's
+    // verdict, and no git runs. One settling per project at a time: asks that arrive
+    // together share one.
+    purlis_core::dispatcharrival::settle(root);
     // **A chat nobody is at crosses into another workspace only under a grant that already
     // stands** (D-1453-16): the person's on this machine or the project's acknowledged one,
     // read here with no grant of one chat. Its own persona's rule does not carry it across:

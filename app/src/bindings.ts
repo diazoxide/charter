@@ -494,10 +494,7 @@ export const commands = {
 	 *  no chat, so nothing changes for any. Answers what stands now.
 	 */
 	removeDormantDispatch: (plane: PlaneId, asking: string, target: string, any: boolean) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target, any })),
-	/**
-	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
-	 *  for Settings' list and the project's Notice.
-	 */
+	/**  Every dispatch grant in force here, and what policy locks: for Settings' list. */
 	dispatchGrants: (plane: PlaneId) => typedError<DispatchGrants, string>(__TAURI_INVOKE("dispatch_grants", { plane })),
 	/**
 	 *  **Revoke** on Settings' list of dispatch grants: the grant called `id` is audited and taken
@@ -505,18 +502,28 @@ export const commands = {
 	 */
 	revokeDispatchGrant: (plane: PlaneId, id: string) => typedError<DispatchGrants, string>(__TAURI_INVOKE("revoke_dispatch_grant", { plane, id })),
 	/**
-	 *  **Allow** on the Notice of the project's dispatch grants (D-1437-R1): `shown` is the pairs
-	 *  the person allowed, as the Notice showed them, all of them or one. Each the committed file
-	 *  holds is audited and is in force on this machine from now on; what the file no longer
-	 *  holds is read. Answers what is still to tell, if anything.
+	 *  What the project's dispatch grants ask of the person now (#1506): the grants its file
+	 *  holds that nobody on this machine has accepted or declined, and the ones accepted here
+	 *  that a commit took away. For the Notice the window shows when a teammate's grant arrives.
 	 */
-	acknowledgeDispatchGrants: (plane: PlaneId, shown: string[]) => typedError<{
-	/**  Each as `asking -> target`. */
-	added: string[],
-	removed: string[],
-	/**  The whole list now: what the Notice sends back once it is read. */
-	now: string[],
-} | null, string>(__TAURI_INVOKE("acknowledge_dispatch_grants", { plane, shown })),
+	dispatchArrival: (plane: PlaneId) => typedError<DispatchArrival, string>(__TAURI_INVOKE("dispatch_arrival", { plane })),
+	/**
+	 *  **Accept** (`accepted`) or **Not on my machine** on the Notice that says a teammate's
+	 *  grant arrived (#1506): `shown` is the ids of the grants to answer, and `listed` the ids
+	 *  of everything the Notice listed. Only a grant still exactly as shown is answered; each is
+	 *  audited first. An accepted pair is in force on this
+	 *  machine from now on and every dispatch waiting on it starts; a declined grant covers
+	 *  nothing here, is not told again, and is changed in Settings. **"Any persona" is never
+	 *  accepted here**: a list naming one is refused. Answers what waits now, and the sentence to
+	 *  say where the list had moved.
+	 */
+	answerDispatchArrival: (plane: PlaneId, accepted: boolean, shown: string[], listed: string[]) => typedError<DispatchArrivalAnswered, string>(__TAURI_INVOKE("answer_dispatch_arrival", { plane, accepted, shown, listed })),
+	/**
+	 *  The person read that the project took away `shown`, grants they had accepted (#1506), by
+	 *  the ids [`DispatchArrival::gone`] gave: each is told once. Nothing is granted or declined.
+	 *  Answers what waits now.
+	 */
+	dispatchGoneTold: (plane: PlaneId, shown: string[]) => typedError<DispatchArrival, string>(__TAURI_INVOKE("dispatch_gone_told", { plane, shown })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -2556,6 +2563,15 @@ export type Curations = {
 	cannot: string | null,
 };
 
+/**  Why a grant the person accepted before waits for a yes again. */
+export type DispatchAgain = 
+/**  A commit of the project's history took it out, and the file holds it again. */
+{ why: "takenOut" } | 
+/**  purlis could not read the project's history since it was accepted. */
+{ why: "unread" } | 
+/**  The persona `name` was not in the project for a time, and one of that name is. */
+{ why: "persona"; name: string };
+
 /**  What allowing a dispatch answered: the sentence the Notice says. */
 export type DispatchAllowed = {
 	said: string,
@@ -2578,6 +2594,59 @@ export type DispatchAny = {
 	declined: boolean,
 };
 
+/**  What the project's dispatch grants ask of the person now. */
+export type DispatchArrival = {
+	/**  The grants waiting for an answer, "any persona" first. None is in force here. */
+	waiting: DispatchArrived[],
+	/**
+	 *  The grants accepted here that a commit took out of the project's file: said once,
+	 *  asking nothing.
+	 */
+	gone: DispatchGone[],
+	/**
+	 *  Whether the project's git history could not be asked just now. While it cannot, no
+	 *  grant of the project's that was accepted here counts, and nothing can be accepted.
+	 */
+	unread: boolean,
+};
+
+/**  What an answer to the arrival Notice did. */
+export type DispatchArrivalAnswered = {
+	/**
+	 *  Where the list was no longer as it was shown: the sentence saying so, and what was
+	 *  answered all the same. Null where everything shown was answered as shown.
+	 */
+	said: string | null,
+	/**  What waits now. */
+	arrival: DispatchArrival,
+};
+
+/**  One grant of the project's waiting for the person's answer, as the Notice lists it. */
+export type DispatchArrived = {
+	/**
+	 *  What an answer is sent by: the grant exactly as it is shown here. One that is shown
+	 *  another way by the time the answer comes is not answered. **Everything the Notice
+	 *  shows of a grant belongs in it.**
+	 */
+	id: string,
+	/**  The persona whose chats it lets dispatch. */
+	asking: string,
+	/**  The persona they may dispatch to; `*` where `any`. */
+	target: string,
+	/**
+	 *  Whether it is "any persona": every persona of the project, ones added later included.
+	 *  **The Notice tells of it and may decline it. It is accepted in Settings only.**
+	 */
+	any: boolean,
+	/**
+	 *  A name in it that is no persona of the project as it is checked out here. It can be
+	 *  used by nothing, and Accept leaves it out.
+	 */
+	undefined: string | null,
+	/**  Why it is asked again, where the person accepted it before. */
+	again: DispatchAgain | null,
+};
+
 /**
  *  A grant of yours set aside because a persona it named was no longer the project's
  *  (#1504): in force for no chat until the person gives it back or removes it.
@@ -2593,6 +2662,16 @@ export type DispatchDormant = {
 	 *  everything set aside for that name.
 	 */
 	was: string,
+};
+
+/**  One grant the person had accepted that the project took away, as the Notice says it. */
+export type DispatchGone = {
+	/**  What "told" is sent by. */
+	id: string,
+	asking: string,
+	/**  The persona's name; `*` where `any`. */
+	target: string,
+	any: boolean,
 };
 
 /**  One dispatch grant, as Settings lists it. */
@@ -2626,10 +2705,7 @@ export type DispatchGrant = {
 	declined: boolean,
 };
 
-/**
- *  Everything Settings shows of dispatch grants: the grants, what policy locks, and the
- *  teammate's one-time change.
- */
+/**  Everything Settings shows of dispatch grants: the grants, and what policy locks. */
 export type DispatchGrants = {
 	grants: DispatchGrant[],
 	/**  Where policy forbids every dispatch: its sentence, naming who set it. */
@@ -2638,20 +2714,6 @@ export type DispatchGrants = {
 	locked_pairs: DispatchLock[],
 	/**  "Locked by policy, set by <who> in <file>.", where a policy locks anything of dispatch. */
 	locked_by: string | null,
-	/**
-	 *  How the project's grants changed since this machine last told the person; null when
-	 *  nothing did.
-	 */
-	changed: DispatchGrantsChanged | null,
-};
-
-/**  The project's dispatch grants as they changed since this machine last told the person. */
-export type DispatchGrantsChanged = {
-	/**  Each as `asking -> target`. */
-	added: string[],
-	removed: string[],
-	/**  The whole list now: what the Notice sends back once it is read. */
-	now: string[],
 };
 
 /**
