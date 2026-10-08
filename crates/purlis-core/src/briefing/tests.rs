@@ -1546,7 +1546,8 @@ fn a_chat_the_app_started_is_told_the_one_route_for_work_that_reports_back() {
     assert_eq!(
         one_route_note(&env(Some("/tmp/p/hooks.sock"))),
         Some(format!(
-            "⬢ **Work for another chat.** {}",
+            "⬢ **If work has to go to another chat.** {} This says where such work goes, not \
+             that work should go: what this chat can do itself, it does.",
             crate::handoff::ONE_ROUTE
         ))
     );
@@ -1569,6 +1570,69 @@ fn a_chat_the_app_started_is_told_the_one_route_for_work_that_reports_back() {
         "From now on, run `purlis dispatch` yourself",
     ] {
         assert!(told.contains(said), "{said}");
+    }
+}
+
+/// The line is in the briefing itself, once, for a chat the app started, and in no other
+/// session's: asked of [`parts`], which is what a session is told, and not of the function
+/// that writes the line. No plane is laid down: the line does not depend on one.
+#[test]
+fn the_one_route_is_in_the_briefing_of_a_chat_the_app_started_and_of_no_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("plane");
+    std::fs::create_dir_all(&root).unwrap();
+    let line = one_route_note(&|_| Some("/tmp/p/hooks.sock".to_owned())).expect("the line");
+
+    let started_by_the_app = told(
+        &root,
+        &[(crate::hookwire::SOCKET_ENV, "/tmp/p/hooks.sock")],
+        serde_json::json!({}),
+    );
+    assert_eq!(
+        started_by_the_app
+            .iter()
+            .filter(|part| **part == line)
+            .count(),
+        1,
+        "{started_by_the_app:?}"
+    );
+
+    for env in [vec![], vec![(crate::hookwire::SOCKET_ENV, "")]] {
+        let in_a_terminal = told(&root, &env, serde_json::json!({}));
+        assert!(
+            !in_a_terminal
+                .iter()
+                .any(|part| part.contains(crate::handoff::ONE_ROUTE)),
+            "{in_a_terminal:?}"
+        );
+    }
+}
+
+/// #1515: the name a handoff goes by where it gave none, and never one longer than a chat's
+/// name may be, however long the workspace's is.
+#[test]
+fn a_handoff_with_no_name_goes_by_where_the_work_went_within_a_names_length() {
+    use crate::handoff::task_name_of_a_handoff;
+    assert_eq!(task_name_of_a_handoff("alpha"), "handoff to alpha");
+    // 53 characters is the longest workspace name that fits whole.
+    let fits = "w".repeat(53);
+    assert_eq!(task_name_of_a_handoff(&fits), format!("handoff to {fits}"));
+    assert_eq!(
+        task_name_of_a_handoff(&fits).chars().count(),
+        crate::reopen::MOST_LABEL
+    );
+    let long = "w".repeat(54);
+    let named = task_name_of_a_handoff(&long);
+    assert_eq!(named, format!("handoff to {}…", "w".repeat(52)));
+    assert_eq!(named.chars().count(), crate::reopen::MOST_LABEL);
+    // Counted in characters, not bytes, and held to the rule a task's name is.
+    let wide = task_name_of_a_handoff(&"é".repeat(80));
+    assert_eq!(wide.chars().count(), crate::reopen::MOST_LABEL);
+    for name in [named, wide, task_name_of_a_handoff("alpha")] {
+        assert_eq!(
+            crate::dispatchdecision::task_name(&name).as_deref(),
+            Ok(name.as_str())
+        );
     }
 }
 

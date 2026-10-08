@@ -76,6 +76,48 @@ fn the_handoff_skill_offers_no_flag_that_asks_for_an_answer() {
     }
 }
 
+/// A chat an older build opened owing a report reads this skill too, and its own first message
+/// says the chat that asked wants an answer. So the skill does not tell every handed-off chat
+/// that nobody is waiting: it sends the chat to the lines under its stamp, and says nobody is
+/// waiting only where none of them asks.
+#[test]
+fn the_handoff_skill_tells_a_handed_off_chat_to_do_what_its_own_first_message_says() {
+    purlis_core::unsteered!();
+    let said = words(&skill("handoff"));
+    let asked = "If one says the chat that handed this off wants an answer, do what that line says";
+    let (before, after) = said
+        .split_once(asked)
+        .expect("the sentence for a chat that owes a report");
+    assert!(before.ends_with("**Read the lines under the stamp.** "));
+    assert!(after.contains("Otherwise nobody is waiting on a report"));
+    // Nowhere does it say so with no condition in front.
+    assert_eq!(said.matches("obody is waiting on a report").count(), 1);
+}
+
+/// The description is what selects the skill, and it agrees with the body: a handoff may name
+/// another persona whose work it is, so what the description rules out is work this chat needs
+/// an answer from, whoever's it is.
+#[test]
+fn the_handoff_skills_description_rules_out_answers_and_not_another_persona() {
+    purlis_core::unsteered!();
+    let handoff = skill("handoff");
+    let description = handoff
+        .lines()
+        .find(|line| line.starts_with("description: "))
+        .expect("a description");
+    assert!(
+        description.contains(
+            "Not for work this chat needs an answer from, its own persona's or another's"
+        ),
+        "{description}"
+    );
+    assert!(
+        !description.contains("not for giving work to another persona"),
+        "{description}"
+    );
+    assert!(handoff.contains("A handoff may name another persona (`--persona`)"));
+}
+
 /// The persona skill is where "dispatch to devops" is answered, so it names the command for
 /// it and says which command it is not.
 #[test]

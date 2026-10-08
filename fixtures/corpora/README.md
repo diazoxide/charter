@@ -77,6 +77,19 @@ were recorded on a filesystem that folds case; on one that does not, the replay 
   `=`, in clusters and after long-name prefixes; `--` ending the options; and the other flags
   that take a value.
 
+**And one answer that moved with no row to edit (#1515): asking for the handoff command's
+help.** The Python's A7 refused every handoff that no quoted heredoc feeds, `charter handoff
+--help` among them. The app's guard lets that one through, because the program prints its help
+and reads no brief: only where `--help` or `-h` is the bare word right after `handoff`,
+nothing is fed to the command, and the call holds no other handoff. Neither corpus holds a
+handoff with a help flag, so no recorded answer changed, and a new row cannot be written by
+hand: a row carries every reader's answer under the recorder's own probes. The divergence is
+held instead by a table in `the_handoff_guard_answers_what_the_python_answers.rs`
+(`asking_for_help_is_the_one_answer_that_moved_from_the_pythons_and_only_where_it_is_help`):
+each help spelling with the Python's answer and the app's, and each shape that only looks
+like a help ask, which is still answered as the Python answers it. That test fails if the
+recording ever gains such a row, so the row is then answered where the others are.
+
 **And where the shell reader learned more of bash's quoting.** The frozen Python read words with
 `shlex`, which knows neither ANSI-C quoting (`$'…'`) nor bash's `$"…"`, and which keeps a
 backslash-newline as part of the next word. The reader now reads all three as bash does, so

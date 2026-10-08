@@ -335,7 +335,8 @@ fn report_under(
         (Owed::Sent, Mode::Handoff) => {
             return Err(format!(
                 "this chat has already reported back to '{}', and a handoff gets one report — \
-                 already reported. Hand off again with --report for another",
+                 already reported. Another answer needs a task: that chat dispatches one with \
+                 `purlis dispatch`",
                 from.name
             ));
         }
@@ -1299,9 +1300,9 @@ impl Wanted {
     /// purlis would not draw.
     fn shown(&self) -> Option<String> {
         match &self.moved {
-            Some(moved) if self.name.trim().is_empty() => {
-                Some(format!("handoff to {}", moved.workspace))
-            }
+            Some(moved) if self.name.trim().is_empty() => Some(
+                purlis_core::handoff::task_name_of_a_handoff(&moved.workspace),
+            ),
             _ => dispatchdecision::task_name(&self.name).ok(),
         }
     }

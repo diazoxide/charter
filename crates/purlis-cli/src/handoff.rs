@@ -87,6 +87,19 @@ pub struct Args {
     pub now: Option<String>,
 }
 
+impl Args {
+    /// Whether what this asks for, once it succeeds, is a handoff an extension is told of
+    /// (`handoff-created`).
+    ///
+    /// **Not with `--report`** (#1515): that is carried out as a task, a dispatch tells
+    /// extensions nothing, and a task that told them a handoff was created would be the one
+    /// respect in which it is not a task. There is no event for a dispatch to tell in its
+    /// place, so nothing is told.
+    pub fn creates_a_handoff(&self) -> bool {
+        !self.report
+    }
+}
+
 /// The word that makes `charter handoff` a report back rather than a handoff.
 ///
 /// **Only with a summary after it.** `charter handoff report <<'BRIEF'` is still a handoff
@@ -144,9 +157,8 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     if args.report && args.create {
         voice::err(&format!(
             "{HANDOFF_SAYS} --report makes this a task, and a task works in a workspace that \
-             exists, so --create cannot go with it — nothing was opened. Create '{ws}' first \
-             (purlis workspace create {ws}), then dispatch into it: purlis dispatch --name \
-             \"<task>\" --in workspace:{ws}. {}",
+             exists, so --create cannot go with it — nothing was opened. {} {}",
+            create_then_dispatch(ws),
             handoff::ONE_ROUTE
         ));
         return ExitCode::FAILURE;
@@ -165,6 +177,15 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         voice::err(&format!(
             "{HANDOFF_SAYS} workspace '{ws}' already exists, and --create only makes a new \
              one — nothing was opened. Drop --create to hand off into it."
+        ));
+        return ExitCode::FAILURE;
+    }
+    // With `--report` the way forward is not `--create`, which a task refuses above.
+    if !args.create && !exists && args.report {
+        voice::err(&format!(
+            "{HANDOFF_SAYS} no workspace '{ws}' on this plane — nothing was opened. --report \
+             makes this a task, and a task works in a workspace that exists. {}",
+            create_then_dispatch(ws)
         ));
         return ExitCode::FAILURE;
     }
@@ -338,6 +359,16 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     }
     voice::err(&said);
     ExitCode::FAILURE
+}
+
+/// The two commands that do what `--report` cannot do in one, said by both refusals about a
+/// workspace that is not there: create it **with its vision** (a workspace with none is never
+/// proposed, which is why `--create` needs `--vision`), then dispatch into it.
+fn create_then_dispatch(ws: &str) -> String {
+    format!(
+        "Create '{ws}' first (purlis workspace create {ws} --vision \"<what it is for>\"), \
+         then dispatch into it: purlis dispatch --name \"<task>\" --in workspace:{ws}."
+    )
 }
 
 /// **A handoff that asks for a report is a task, and is dispatched as one** (#1515).
@@ -804,4 +835,41 @@ fn some(names: &[String]) -> String {
         shown.push(format!("…{} more", names.len() - shown.len()));
     }
     shown.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asked(report: bool) -> Args {
+        Args {
+            workspace: "alpha".to_owned(),
+            create: false,
+            vision: None,
+            persona: None,
+            name: None,
+            report,
+            summary: None,
+            now: None,
+        }
+    }
+
+    /// #1515: a handoff that asks for a report is a task, and a task tells extensions nothing.
+    #[test]
+    fn extensions_are_told_of_a_handoff_and_not_of_one_carried_out_as_a_task() {
+        assert!(asked(false).creates_a_handoff());
+        assert!(!asked(true).creates_a_handoff());
+    }
+
+    /// The two commands a refusal about a missing workspace names keep the vision, without
+    /// which a workspace is never proposed.
+    #[test]
+    fn the_way_to_a_workspace_that_is_not_there_keeps_its_vision() {
+        assert_eq!(
+            create_then_dispatch("gamma"),
+            "Create 'gamma' first (purlis workspace create gamma --vision \"<what it is \
+             for>\"), then dispatch into it: purlis dispatch --name \"<task>\" --in \
+             workspace:gamma."
+        );
+    }
 }
