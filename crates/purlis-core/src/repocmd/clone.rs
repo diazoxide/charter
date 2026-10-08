@@ -190,6 +190,18 @@ pub fn clone(request: &Request, say: Sink) -> u8 {
         // Reported BEFORE the docs hint: an empty submodule directory is what breaks the next
         // command, and the clone itself still succeeded.
         submodules::report(root, &dest, &name, None, None, say);
+        // Made by the app for a chat, git ran no filter of your config's (#1413): a checkout
+        // whose .gitattributes asks for one, Git LFS above all, holds what is stored.
+        if git::isolation().is_some() {
+            let at = dest
+                .strip_prefix(root)
+                .unwrap_or(&dest)
+                .display()
+                .to_string();
+            for note in super::unread::filter_notes(&dest, &name, &at) {
+                say(Say::Warn(note));
+            }
+        }
         hint_docs(&dest, &name, say);
         if let Some(dir) = dest.file_name() {
             members.push(dir.to_string_lossy().into_owned());
@@ -406,10 +418,15 @@ fn clone_one(
         }
     };
     if !run.ok() {
-        return Outcome::Failed {
-            said: failure(&run, &dest),
-            forge,
-        };
+        let mut said = failure(&run, &dest);
+        // A clone the app made for a chat read none of your git config (#1413): where yours
+        // would have changed its route, say which key.
+        if git::isolation().is_some()
+            && let Some(note) = super::unread::network_note(&super::unread::global_entries(), &url)
+        {
+            said = format!("{said}\n{note}");
+        }
+        return Outcome::Failed { said, forge };
     }
     crate::gitpolicy::apply(&dest, root);
     let branch = git::run(
