@@ -222,8 +222,11 @@ pub(crate) fn reported(
     outcome: Outcome,
     text: &str,
     changed: Option<&str>,
+    // Who ended it, where that was not the chat's own report alone (#1485): the person's
+    // stop, or purlis saying it went without one.
+    by: Option<dispatchrecord::EndedBy>,
 ) {
-    close_with_report(held, session, outcome, text, changed);
+    close_with_report(held, session, outcome, text, changed, by);
     held.rows_changed();
 }
 
@@ -233,6 +236,7 @@ fn close_with_report(
     outcome: Outcome,
     text: &str,
     changed: Option<&str>,
+    by: Option<dispatchrecord::EndedBy>,
 ) {
     let Some(record) = running_for(held, session) else {
         return;
@@ -256,7 +260,7 @@ fn close_with_report(
         }),
         usage: spent(held, session),
     };
-    close(held, &record, ending);
+    close(held, &record, ending, by);
     ended_in(held, session, &record);
 }
 
@@ -304,7 +308,11 @@ pub(crate) fn ended(held: &Held, session: u32) {
         return;
     };
     let ending = dispatchrecord::ended_unreported(&record, spent(held, session));
-    close(held, &record, ending);
+    // purlis's own word for a chat that went owing a report, said as the app's fact.
+    let by = record
+        .report_owed
+        .then_some(dispatchrecord::EndedBy::Unreported);
+    close(held, &record, ending, by);
     ended_in(held, session, &record);
 }
 
@@ -393,8 +401,10 @@ fn running_for(held: &Held, session: u32) -> Option<Record> {
     dispatchrecord::running_for(held.root(), &chat_ref(held, session)?)
 }
 
-fn close(held: &Held, record: &Record, ending: Ending) {
-    if let Err(why) = dispatchrecord::close(held.root(), &record.id, ending, chrono::Utc::now()) {
+fn close(held: &Held, record: &Record, ending: Ending, by: Option<dispatchrecord::EndedBy>) {
+    if let Err(why) =
+        dispatchrecord::close_by(held.root(), &record.id, ending, by, chrono::Utc::now())
+    {
         tracing::warn!("purlis: a dispatch's record was not closed ({why})");
     }
 }
@@ -979,6 +989,8 @@ mod tests {
             usage: None,
             conversation: None,
             cleared: false,
+            ended_by: None,
+            kept_open: false,
         }
     }
 

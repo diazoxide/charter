@@ -68,6 +68,15 @@
 //! purlis hears nothing from. Never while a task of its own is at work, never while the person
 //! is stopping it (the stop ends it), and never as the app quits.
 //!
+//! **And never a chat that is working again, mid-turn.** A key of the person's in its pane
+//! after the report ([`person_typed`]), or a Smart close of it beginning ([`stand_down`]),
+//! stands the end down for good, and its record says so for the next launch. A line purlis
+//! types into it starts a turn that is waited for. While it is the chat in front, the end is
+//! held until the person moves away ([`front_moved`]). A blocked task and one the person
+//! started from a tab are never ones to end. A task that had reported when the app quit is
+//! left out of the next launch's put-back and is a finished row
+//! ([`crate::finished::put_back_without_the_finished`]).
+//!
 //! What is left is its dispatch record, which its finished row is read from
 //! ([`crate::finished`]), and the ledger's memory of how it ended, which answers a wait.
 //!
@@ -102,10 +111,31 @@ pub struct Tasks {
     moved: Condvar,
     /// By chat: how many waits of its are parked on a thread now.
     parked: Mutex<HashMap<u32, usize>>,
+    /// The finished tasks being reopened, by their dispatch record's id ([`Tasks::reopen`]).
+    reopening: Mutex<HashMap<String, Reopening>>,
+    /// Why the last Reopen of a finished task did not hold, by its record's id, for its row.
+    not_reopened: Mutex<HashMap<String, String>>,
     /// Whether a reported task's end runs on the clock in a test ([`Tasks::on_the_clock`]).
     #[cfg(test)]
     clocked: std::sync::atomic::AtomicBool,
 }
+
+/// One finished task being reopened: the chat that was started for it, once one was, and when.
+#[derive(Debug, Clone, Copy)]
+struct Reopening {
+    /// The new chat's number; none while it is being started.
+    session: Option<u32>,
+    started: Instant,
+}
+
+/// How long a reopened chat that purlis never heard from must have lived for its resume to
+/// count as having worked. One that ends sooner is a harness that could not bring the
+/// conversation back, and the task's row is put back.
+pub const A_RESUME_HOLDS_AFTER: Duration = Duration::from_secs(15);
+
+/// What a row says when the chat a Reopen started ended at once.
+pub const NOT_RESUMED: &str = "It could not be reopened: its harness ended at once, without \
+    bringing the conversation back (it may have been removed). Its report is still here.";
 
 /// The most waits one chat may have parked at once, as it may hold that many live tickets
 /// (`hookwire::MOST_LIVE_TICKETS_A_CHAT`): room for a wait on every task it can have running.
@@ -118,6 +148,88 @@ impl Tasks {
 
     fn changed(&self) {
         self.moved.notify_all();
+    }
+
+    fn reopens(&self) -> MutexGuard<'_, HashMap<String, Reopening>> {
+        self.reopening
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// **Takes the one Reopen of finished task `id`** (#1485): `false` where one is already
+    /// under way, so two presses start one chat. Tested and taken under one lock. Let go by
+    /// [`Self::reopen_failed`], or settled when the chat it started is heard from or ends.
+    pub(crate) fn reopen_begins(&self, id: &str) -> bool {
+        let mut reopening = self.reopens();
+        if reopening.contains_key(id) {
+            return false;
+        }
+        reopening.insert(
+            id.to_owned(),
+            Reopening {
+                session: None,
+                started: Instant::now(),
+            },
+        );
+        self.not_reopened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        true
+    }
+
+    /// Whether any Reopen is under way: asked first, so a chat's move costs nothing more.
+    fn any_reopening(&self) -> bool {
+        !self.reopens().is_empty()
+    }
+
+    /// The Reopen of `id` started chat `session`.
+    pub(crate) fn reopen_started(&self, id: &str, session: u32) {
+        if let Some(entry) = self.reopens().get_mut(id) {
+            entry.session = Some(session);
+            entry.started = Instant::now();
+        }
+    }
+
+    /// The Reopen of `id` started nothing: the row is as it was.
+    pub(crate) fn reopen_failed(&self, id: &str) {
+        self.reopens().remove(id);
+    }
+
+    /// Whether a Reopen of `id` is under way: its row is not drawn while one is.
+    pub(crate) fn reopening(&self, id: &str) -> bool {
+        self.reopens().contains_key(id)
+    }
+
+    /// Why the last Reopen of `id` did not hold, where it did not.
+    pub(crate) fn not_reopened(&self, id: &str) -> Option<String> {
+        self.not_reopened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    /// Chat `session` was heard from (`ended` false) or has gone (`ended` true): where a
+    /// Reopen started it, how that Reopen came out. `Some((id, true))` where the resume
+    /// worked, and the task's row is to be cleared; `Some((id, false))` where the chat ended
+    /// at once unheard, and the row stays with the reason.
+    fn reopen_settles(&self, session: u32, ended: bool) -> Option<(String, bool)> {
+        let mut reopening = self.reopens();
+        let (id, entry) = reopening
+            .iter()
+            .find(|(_, entry)| entry.session == Some(session))
+            .map(|(id, entry)| (id.clone(), *entry))?;
+        reopening.remove(&id);
+        drop(reopening);
+        let worked = !ended || entry.started.elapsed() >= A_RESUME_HOLDS_AFTER;
+        if !worked {
+            self.not_reopened
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(id.clone(), NOT_RESUMED.to_owned());
+        }
+        Some((id, worked))
     }
 
     /// In a test, a reported task's end waits on no clock unless the test says so here: the
@@ -520,11 +632,15 @@ pub fn person_typed(held: &Held, chat: u32, bytes: &[u8], line: Option<usize>) {
     if !crate::smartclose::typed_by_the_operator(bytes) {
         return;
     }
-    let stepped_in = {
+    let (took_over, stepped_in) = {
         let mut ledger = held.tasks().ledger();
-        ledger.person_keyed(chat);
-        ledger.stepped_in(chat)
+        (ledger.person_keyed(chat), ledger.stepped_in(chat))
     };
+    // **A key of theirs in a task that had reported is the person taking it over** (#1485):
+    // its end stood down, for good, and its record says so for the next launch.
+    if took_over {
+        crate::finished::taken_over(held, chat);
+    }
     if stepped_in {
         return;
     }
@@ -748,6 +864,24 @@ pub fn delivered(held: &Held, task: u32) {
     end_look(held, task, Looked::Moved);
 }
 
+/// **The end of task `task` stands down, for good**: a Smart close of it is beginning, which is
+/// a turn of its own that the pending end must not cut. As for a key of the person's
+/// ([`person_typed`]). Nothing where it was not one to end.
+pub fn stand_down(held: &Held, task: u32) {
+    if held.tasks().ledger().end_stood_down(task) {
+        crate::finished::taken_over(held, task);
+    }
+}
+
+/// The chat in front changed: every task whose end was held is looked at again, since one of
+/// them may have been held because the person had it in front of them.
+pub fn front_moved(held: &Held) {
+    let held_back = held.tasks().ledger().held_back();
+    for task in held_back {
+        end_look(held, task, Looked::Moved);
+    }
+}
+
 /// Looks at task `task`, which has reported, and does the next thing toward ending its
 /// program (`Ledger::end_step`). `looked` says why it is looked at.
 ///
@@ -764,12 +898,16 @@ pub(crate) fn end_look(held: &Held, task: u32, looked: Looked) {
         return;
     }
     let seen = seen(held, task);
-    // Read before the ledger is taken: it asks the chats and the board.
-    let below_at_work = !crate::handoff::running_below(held, task).is_empty();
+    // Read before the ledger is taken: it asks the chats and the board. **Held back** while a
+    // chat it started is at work, and while it is the chat in front: a chat the person is
+    // looking at is not ended under them, and is ended when they move away from it
+    // ([`front_moved`]).
+    let held_back =
+        held.chats().front() == Some(task) || !crate::handoff::running_below(held, task).is_empty();
     let step = held
         .tasks()
         .ledger()
-        .end_step(task, seen, below_at_work, looked);
+        .end_step(task, seen, held_back, looked);
     match step {
         Ends::Nothing | Ends::Hold => {}
         Ends::Settle => end_look_after(
@@ -841,6 +979,8 @@ fn tell_the_chat(held: &Held, chat: u32) -> bool {
         );
         return false;
     }
+    // The line starts a turn: a task that had reported is working again from now (#1485).
+    held.tasks().ledger().line_typed(chat);
     true
 }
 
@@ -943,6 +1083,8 @@ fn look_again_after(held: &Held, task: u32, after: Duration, what: After) {
 /// A report reached the project from chat `report.chat`'s harness: whatever was waiting for
 /// that chat to move is looked at again.
 pub fn heard(held: &Held, report: &Report) {
+    // A chat a Reopen started was heard from: its harness brought the conversation back.
+    reopen_settled(held, report.chat, false);
     match report.event {
         Event::UserPromptSubmit => held.tasks().ledger().turn_began(report.chat),
         Event::Stop => held.tasks().ledger().turn_ended(report.chat),
@@ -963,7 +1105,27 @@ pub fn moved(held: &Held, chat: u32) {
         // A task that has reported: its turn's end is when its program is ended (#1485).
         end_look(held, chat, Looked::Moved);
     }
+    // And the chat that started this one may be a reported task held back while this one was
+    // at work: a turn ending here, as a close does, is when that hold may have gone.
+    if let Some(from) = held.chats().handed_from(chat) {
+        end_look(held, from.chat, Looked::Moved);
+    }
+    // A chat a Reopen started that has ended: how that Reopen came out.
+    if held.tasks().any_reopening() && seen(held, chat).ended {
+        reopen_settled(held, chat, true);
+    }
     held.tasks().changed();
+}
+
+/// Chat `session`, which a Reopen of a finished task may have started, was heard from or has
+/// gone: the task's row is cleared where the resume worked, and stays, saying why, where the
+/// chat ended at once ([`Tasks::reopen_settles`]).
+fn reopen_settled(held: &Held, session: u32, ended: bool) {
+    if let Some((id, true)) = held.tasks().reopen_settles(session, ended)
+        && let Err(why) = purlis_core::dispatchrecord::clear(held.root(), &id)
+    {
+        tracing::warn!("purlis: a reopened task's row was not cleared ({why})");
+    }
 }
 
 /// Chat `chat` was closed. `task_of` is its asking chat and its name, where it was a task,
@@ -978,6 +1140,7 @@ pub fn closed(held: &Held, chat: u32, task_of: Option<(u32, String)>) {
     );
     // A message is for one chat's turn, and this chat will have no more.
     dispatchtalk::forget(held.root(), chat);
+    reopen_settled(held, chat, true);
     // The chat that asked for it may have been waiting for it to go before its own program
     // is ended (#1485). A look only: called under a close's lock, it ends nothing here.
     if let Some((asker, _)) = task_of {

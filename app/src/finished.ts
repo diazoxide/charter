@@ -43,20 +43,16 @@ export function firstLine(report: string): string {
 }
 
 /**
- * What the record of a task that ended as `outcome` says of it, as a chat's row is told it
- * (`TaskFacts`). The core's words for an end (`FinishedTask.outcome`) are the dispatch record's
- * own, but for the two where purlis wrote the report in the task's place, which it says in a
- * phrase: one whose program ended owing it, and one the person stopped (the record's
- * `stopped`). Neither sent a report itself.
+ * What the record of a task that ended `how` says of it, as a chat's row is told it
+ * (`TaskFacts`). The two ends where purlis wrote the report in the task's place sent none
+ * themselves: one whose program ended owing it, and one the person stopped (the record's
+ * `stopped`). A value a later core sends that this window does not know is handed on as it is,
+ * and is not guessed at.
  */
-function recordOf(outcome: string): TaskFacts {
-  if (outcome === "ended without a report") {
-    return { report: "failed", outcome: null, asking: null };
-  }
-  if (outcome === "closed by the person") {
-    return { report: "failed", outcome: "stopped", asking: null };
-  }
-  return { report: "sent", outcome, asking: null };
+function recordOf(how: FinishedTask["how"]): TaskFacts {
+  if (how === "unreported") return { report: "failed", outcome: null, asking: null };
+  if (how === "stopped_by_person") return { report: "failed", outcome: "stopped", asking: null };
+  return { report: "sent", outcome: how, asking: null };
 }
 
 /**
@@ -65,21 +61,22 @@ function recordOf(outcome: string): TaskFacts {
  * it did on its chat's row in the moment before its program was ended. Nothing is asked of a
  * board: its program has ended.
  */
-export function shownOf(task: Pick<FinishedTask, "outcome">): Shown | undefined {
+export function shownOf(task: Pick<FinishedTask, "how">): Shown | undefined {
   return shownState({
     board: undefined,
     needsYou: false,
-    task: recordOf(task.outcome),
+    task: recordOf(task.how),
     harness: null,
   });
 }
 
 /**
- * The core's own word for how a task ended, where it says more than its state's word does
- * (`blocked`, `closed by the person`): what a row draws beside the state. Nothing where the
+ * The core's own words for how a task ended (`FinishedTask.outcome`), where they say more
+ * than its state's word does (a blocked task, one the person closed): what a row draws beside
+ * the state. Nothing where the
  * state's word is the core's.
  */
-export function qualifierOf(task: Pick<FinishedTask, "outcome">): string | undefined {
+export function qualifierOf(task: Pick<FinishedTask, "how" | "outcome">): string | undefined {
   return task.outcome === shownOf(task)?.word ? undefined : task.outcome;
 }
 

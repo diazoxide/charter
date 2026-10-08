@@ -642,6 +642,7 @@ fn in_the_app(
         Ok(
             Answer::Ticket { .. }
             | Answer::Reported { .. }
+            | Answer::Finished { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
             | Answer::Said { .. }
@@ -684,6 +685,7 @@ pub(crate) fn ticketed() -> Ticketed {
         Ok(
             Answer::Opened { .. }
             | Answer::Reported { .. }
+            | Answer::Finished { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
             | Answer::Said { .. }
@@ -732,7 +734,9 @@ fn report_back(summary: &str) -> ExitCode {
         task: None,
     };
     match asking.ask(&Ask::Report(Box::new(back)), A_TICKET_TAKES_AT_MOST) {
-        Ok(Answer::Reported { to, kept_for: None }) => {
+        // A chat being stopped that was dispatched as a task is answered as finished: the
+        // same line, since its stop has already told it the chat ends with the turn.
+        Ok(Answer::Reported { to, kept_for: None } | Answer::Finished { to }) => {
             println!(
                 "charter handoff report: sent to '{}'. It reaches that chat as context on its \
                  next turn, and is that chat's to read.",

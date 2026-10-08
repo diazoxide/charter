@@ -281,6 +281,28 @@ pub struct Record {
     /// and is collected as any record is.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cleared: bool,
+    /// Who ended the dispatch, where it was not its persona chat's own report alone (#1485):
+    /// **the app's fact, never read from the report's words**. Absent for a dispatch that
+    /// ended with a report its chat sent of its own accord, and for every record written
+    /// before this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_by: Option<EndedBy>,
+    /// The person took the task's chat over after it reported (#1485): they typed in it, or
+    /// began a Smart close of it. purlis does not end such a chat, at its report or at the
+    /// next launch. It is a finished row once it is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kept_open: bool,
+}
+
+/// Who ended a dispatch, where the app knows it was not the persona chat's own report alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndedBy {
+    /// Its chat went without reporting, and purlis said so in its place.
+    Unreported,
+    /// The person stopped or closed it. Whatever it reported in its last turn, it did not
+    /// end by itself.
+    Person,
 }
 
 impl Record {
@@ -369,6 +391,8 @@ pub fn open_as(
         usage: None,
         conversation: None,
         cleared: false,
+        ended_by: None,
+        kept_open: false,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -426,10 +450,23 @@ pub fn close(
     ending: Ending,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<bool> {
+    close_by(root, id, ending, None, now)
+}
+
+/// [`close`], saying who ended it where that was not its chat's own report alone
+/// ([`EndedBy`]): written in the same write as the ending, by the app, from what the app did.
+pub fn close_by(
+    root: &Path,
+    id: &str,
+    ending: Ending,
+    by: Option<EndedBy>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<bool> {
     change(root, id, |record| {
         if !record.running() {
             return false;
         }
+        record.ended_by = by;
         record.ended = Some(crate::dispatch::stamp(now));
         record.report = ending.report.as_ref().map(capped_report);
         record.usage = ending.usage.filter(|usage| !usage.is_empty());
@@ -472,19 +509,19 @@ impl Finished {
             return None;
         }
         let report = record.report.as_ref()?;
+        // **Who ended it is the app's fact** ([`EndedBy`]), never the report's words: a
+        // task cannot make its row read as purlis's word by reporting purlis's sentence, and
+        // a task the person stopped is said so whatever its last report says of itself.
+        match record.ended_by {
+            Some(EndedBy::Person) => return Some(Self::ClosedByThePerson),
+            Some(EndedBy::Unreported) => return Some(Self::EndedWithoutAReport),
+            None => {}
+        }
         Some(match report.outcome {
             Outcome::Done => Self::Done,
             Outcome::Cancelled => Self::Cancelled,
             Outcome::Blocked => Self::Blocked,
             Outcome::Stopped => Self::ClosedByThePerson,
-            // purlis's own sentence for a chat that went without reporting, by either hand
-            // that writes it: the record's settle, and the report written in the chat's place.
-            Outcome::Failed
-                if report.text == ENDED_WITHOUT_A_REPORT
-                    || report.text == crate::handback::UNREPORTED =>
-            {
-                Self::EndedWithoutAReport
-            }
             Outcome::Failed => Self::Failed,
         })
     }
@@ -521,8 +558,15 @@ impl Finished {
 pub fn finished_for(root: &Path, asker: &ChatRef, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
     finished(root, open)
         .into_iter()
-        .filter(|record| same_chat(&record.asker.chat, asker))
+        .filter(|record| asked_by(record, asker))
         .collect()
+}
+
+/// Whether the finished task `record` is listed under `asker`: **by the asking chat's id and
+/// never by its number**. A number is dealt again in another launch, so a record that names
+/// its asking chat by number alone is listed under nobody: its row would be another chat's.
+pub fn asked_by(record: &Record, asker: &ChatRef) -> bool {
+    record.asker.chat.id.is_some() && record.asker.chat.id == asker.id
 }
 
 /// [`finished_for`], for every asking chat at once: one read of the store.
@@ -538,6 +582,19 @@ pub fn finished(root: &Path, open: impl Fn(&ChatRef) -> bool) -> Vec<Record> {
         .collect();
     finished.reverse();
     finished
+}
+
+/// The person took the task's chat over after it reported: dispatch `id` is marked, so purlis
+/// does not end that chat at the next launch either. `false` for a record that is not there
+/// or is marked already.
+pub fn kept_open(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.kept_open {
+            return false;
+        }
+        record.kept_open = true;
+        true
+    })
 }
 
 /// Takes the finished task `id`'s row off its asking chat's list. **The row and nothing
@@ -559,9 +616,7 @@ pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
     list(root)
         .into_iter()
         .filter(|record| {
-            !record.cleared
-                && Finished::of(record).is_some()
-                && same_chat(&record.asker.chat, asker)
+            !record.cleared && Finished::of(record).is_some() && asked_by(record, asker)
         })
         .filter(|record| clear(root, &record.id).unwrap_or(false))
         .count()
@@ -758,6 +813,8 @@ fn capped(record: &Record) -> Record {
         usage: record.usage,
         conversation: record.conversation.as_deref().map(name),
         cleared: record.cleared,
+        ended_by: record.ended_by,
+        kept_open: record.kept_open,
     }
 }
 
@@ -928,7 +985,8 @@ pub fn settle(
         .into_iter()
         .filter(|record| record.running() && !still_open(&record.worker.chat))
         .filter(|record| {
-            close(root, &record.id, ended_unreported(record, None), now).unwrap_or(false)
+            let by = record.report_owed.then_some(EndedBy::Unreported);
+            close_by(root, &record.id, ended_unreported(record, None), by, now).unwrap_or(false)
         })
         .count()
 }

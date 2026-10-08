@@ -425,7 +425,10 @@ fn report_under(
     let changed = task.as_ref().and_then(|task| task.changed.clone());
     let delivered = deliver(held, chat, &from, summary.clone(), task, None)?;
     held.chats().owes(chat, Owed::Sent);
-    crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref());
+    // A report a chat sends in the one turn its stop gave it is still a stop's: the person
+    // ended it, whatever it says of itself, and its row does not fold (#1485).
+    let by = last_words.then_some(purlis_core::dispatchrecord::EndedBy::Person);
+    crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by);
     if delivered.kept_for.is_none() {
         held.board().reported_to_its_asker(chat);
     } else if !last_words {
@@ -439,13 +442,18 @@ fn report_under(
         );
     }
     let tell = (delivered.reached_the_chat && from.mode == Mode::Task).then_some(from.chat);
-    Ok((
+    // **The chat is told its program will be ended only where it will be** (#1485): the
+    // ledger's own word, set as the report was delivered. Never a handoff's chat, a blocked
+    // task, one the person started, or one whose report reached no chat.
+    let answer = if delivered.kept_for.is_none() && held.tasks().ledger().ending(chat) {
+        Answer::Finished { to: delivered.to }
+    } else {
         Answer::Reported {
             to: delivered.to,
             kept_for: delivered.kept_for,
-        },
-        tell,
-    ))
+        }
+    };
+    Ok((answer, tell))
 }
 
 /// Where [`deliver`] left what a chat said.
@@ -616,6 +624,7 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
                 purlis_core::dispatchrecord::Outcome::Failed,
                 text,
                 None,
+                Some(purlis_core::dispatchrecord::EndedBy::Unreported),
             );
             tracing::info!(
                 "purlis: chat {chat} {text}, so '{}' is told{}",
@@ -689,6 +698,7 @@ pub(crate) fn operator_stopped(
             purlis_core::dispatchrecord::Outcome::Stopped,
             handback::STOPPED,
             None,
+            Some(purlis_core::dispatchrecord::EndedBy::Person),
         );
     }
 }
@@ -3138,7 +3148,7 @@ mod tests {
         assert!(
             matches!(
                 report(&held, &id, &tickets, chat, "done"),
-                Answer::Reported { .. }
+                Answer::Reported { .. } | Answer::Finished { .. }
             ),
             "the Codex chat's report reaches the chat that asked"
         );
@@ -4161,7 +4171,10 @@ mod tests {
         assert_eq!(running.report, None);
 
         let said = report(&held, &id, &tickets, child, "Healthy: 3 of 3 ready.");
-        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        assert!(
+            matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
 
         let records = dispatch_records(&held);
         assert_eq!(records.len(), 1, "{records:?}");
@@ -4213,7 +4226,10 @@ mod tests {
         ));
 
         let said = report(&held, &id, &tickets, child, "done");
-        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        assert!(
+            matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
 
         let usage = dispatch_records(&held)[0].usage.expect("its cost");
         assert_eq!(usage.cost_usd, Some(0.42));
@@ -4407,7 +4423,10 @@ mod tests {
             purlis_core::handback::Outcome::Blocked,
             Some("svc: 2 files"),
         );
-        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        assert!(
+            matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
 
         let done = record_of(&held, task);
         assert!(!done.running());
@@ -4859,7 +4878,7 @@ mod tests {
         assert!(
             matches!(
                 report(&held, &id, &tickets, child, "done"),
-                Answer::Reported { .. }
+                Answer::Reported { .. } | Answer::Finished { .. }
             ),
             "a refused report used up nothing"
         );
@@ -6096,7 +6115,7 @@ mod tests {
                 purlis_core::handback::Outcome::Done,
                 None
             ),
-            Answer::Reported { .. }
+            Answer::Reported { .. } | Answer::Finished { .. }
         ));
         let _ = purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
 
@@ -6113,7 +6132,10 @@ mod tests {
             purlis_core::handback::Outcome::Failed,
             Some("svc: 2 files"),
         );
-        assert!(matches!(&said, Answer::Reported { .. }), "{said:?}");
+        assert!(
+            matches!(&said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
         let waiting =
             purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
         assert_eq!(waiting.len(), 1);
@@ -6408,11 +6430,11 @@ mod tests {
             purlis_core::handback::Outcome::Done,
             None,
         );
+        // Delivered, so the task is finished, and is told so (#1485).
         assert_eq!(
             said,
-            Answer::Reported {
+            Answer::Finished {
                 to: "steward 1".to_owned(),
-                kept_for: None,
             }
         );
         let waiting =
@@ -6759,7 +6781,10 @@ mod tests {
             purlis_core::handback::Outcome::Done,
             Some("committed on branch main, merge it"),
         );
-        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        assert!(
+            matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
 
         // The report names the branch the app cut, from its record; the chat's own words about
         // a branch stay its words.
@@ -8858,7 +8883,7 @@ mod tests {
         let reported = a_task_of(&held, &id, steward, "check staging");
         assert!(matches!(
             reports(&held, &id, reported),
-            Answer::Reported { .. }
+            Answer::Reported { .. } | Answer::Finished { .. }
         ));
 
         // The person closes both tabs.
@@ -8970,12 +8995,17 @@ mod tests {
             "still owed"
         );
         // Its real report is taken when it comes.
-        assert!(matches!(reports(&held, &id, task), Answer::Reported { .. }));
+        assert!(matches!(
+            reports(&held, &id, task),
+            Answer::Reported { .. } | Answer::Finished { .. }
+        ));
     }
 
     #[test]
-    fn a_reported_persona_chat_is_open_while_its_turn_goes_on_and_is_ended_when_it_is_over() {
+    fn a_reported_persona_chat_s_program_is_ended_once_its_reporting_turn_is_over() {
         // #1485: a task ends at its report. It used to stay open until somebody closed it.
+        // What keeps one open (the person typing in it, a block, a task of its own) is in
+        // `ends_at_report::working_again`, on the real clock.
         let plane = a_plane_with_personas();
         let host = Pretend::default();
         let (planes, id, steward) = a_steward_chat(&host, &plane);
@@ -8989,14 +9019,13 @@ mod tests {
 
         let said = reports(&held, &id, task);
 
-        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        assert!(matches!(said, Answer::Finished { .. }), "{said:?}");
         // Marked reported, and still a chat while the turn that reported goes on.
         assert_eq!(
             stands(&held, steward, task),
             Some((PersonaChatState::Reported, "reported".to_owned()))
         );
         assert!(open_chats(&held).contains(&task));
-        assert_eq!(held.operator_input(task, b"one more thing\r"), Ok(()));
         // Its turn ends, and it has its moment: purlis ends its program, which reports
         // nothing more.
         the_board_hears(&held, task, Event::Stop);
@@ -9062,7 +9091,7 @@ mod tests {
         let under_reported = a_task_of(held, id, reported, "read the logs");
         assert!(matches!(
             reports(held, id, reported),
-            Answer::Reported { .. }
+            Answer::Reported { .. } | Answer::Finished { .. }
         ));
         rests(held, reported);
         let running = a_task_of(held, id, steward, "check prod");
@@ -9313,7 +9342,10 @@ mod tests {
         let record_gone = task("record gone");
         for chat in [at_rest, working_again, asking_you, record_gone] {
             writes_its_record(&held, chat);
-            assert!(matches!(reports(&held, &id, chat), Answer::Reported { .. }));
+            assert!(matches!(
+                reports(&held, &id, chat),
+                Answer::Reported { .. } | Answer::Finished { .. }
+            ));
             rests(&held, chat);
         }
         // The person gave one more to do, one is at a permission prompt, and one's record was
@@ -9328,7 +9360,7 @@ mod tests {
         let unrecorded = task("reported with no record");
         assert!(matches!(
             reports(&held, &id, unrecorded),
-            Answer::Reported { .. }
+            Answer::Reported { .. } | Answer::Finished { .. }
         ));
 
         // What the dialog is told closes with it: the one at rest on its record, and the one
@@ -9893,12 +9925,18 @@ mod tests {
         // `purlis dispatch report`, from the task: once.
         let blocked = purlis_core::handback::Outcome::Blocked;
         let first = tasks_report(&held, &id, &Tickets::default(), task, blocked, None);
-        assert!(matches!(first, Answer::Reported { .. }), "{first:?}");
+        assert!(
+            matches!(first, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{first:?}"
+        );
         let again = tasks_report(&held, &id, &Tickets::default(), task, blocked, None);
         assert!(matches!(again, Answer::No { .. }), "{again:?}");
         // `purlis handoff report`, from the chat a handoff opened: once.
         let first = report(&held, &id, &Tickets::default(), handed, "Half done.");
-        assert!(matches!(first, Answer::Reported { .. }), "{first:?}");
+        assert!(
+            matches!(first, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{first:?}"
+        );
         let again = report(
             &held,
             &id,
@@ -10765,6 +10803,10 @@ mod tests {
             let host = Pretend::default();
             let (planes, id, steward) = a_steward_chat(&host, &plane);
             let held = planes.held(&id).expect("held");
+            // On the clock, as the app runs (#1485): the row is read while the turn that
+            // reported is still running, which is before a reported task can be ended, so
+            // this holds whether or not the end's clock is on.
+            held.tasks().on_the_clock();
             let task = a_task_of(&held, &id, steward, "check the queue");
             let working = listed_from(&held, task);
             assert_eq!(
@@ -10835,6 +10877,9 @@ mod tests {
         });
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
+        // On the clock, as the app runs (#1485): the row is read while the turn that reported
+        // is still running, before a reported task can be ended.
+        held.tasks().on_the_clock();
         let alpha = held.root().join("workspaces").join("alpha");
         let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
         let task = a_task_of(&held, &id, asking, "check the queue");

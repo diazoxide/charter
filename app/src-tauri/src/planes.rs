@@ -662,6 +662,9 @@ impl Held {
                 reopen::Record::default()
             }
         };
+        // A task that had reported when the app quit is not started again: it is a finished
+        // row from its dispatch record (#1485). Before anything is put back.
+        let record = crate::finished::put_back_without_the_finished(&self.root, &record);
         let wanted = record.chats.len();
         let back = self.chats.put_back(&record, size).len();
         if wanted > 0 {
