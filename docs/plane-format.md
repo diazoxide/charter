@@ -3345,7 +3345,7 @@ before it is stored.
 | `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone — or `plane root` for a chat that handed off from the plane root (SI-1b). Two words with a space, which no workspace name can be, so a reader that holds the field to the name rule drops the report rather than joining the words onto `workspaces/` |
 | `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one. Empty in a file that carries `stopped`, and only there |
 | `stopped` | object, absent | **purlis's own word that the operator stopped the chat `from` names** (#1443, #1448): `{"wrote": <bool>, "task": true, "by_person": true, "record": "<str>"}`. `wrote` says whether that chat sent a last report before it ended. `task` is `true` where the stopped chat was dispatched as a task, and absent for one a handoff opened: the sentence says "the task you dispatched to it" or "the work you handed to it" by it. `by_person` is `true` where the person started the stopped chat as a task from the asking chat's tab (#1438), and absent otherwise: wording only. `record` is the project-relative path of the session record the app wrote for the stopped chat, from the app's own note and never a path a chat named; absent when it wrote none. Written only by the app, and the one way it says a chat was stopped: when the person stops a chat or the chats below one, answers *Stop them* as they close the chat that asked, or closes the tab of a task that had not reported. No report a chat sends has a way to carry it. Absent in every report, and in every file written before it. A file that carries it holds an empty `summary` and no `task`, and is drawn as one fixed sentence of purlis's, outside any quote. Held on the way in: a `stopped` beside a `summary` that is not empty, or beside a `task`, or with a `record` that is absolute, climbs with `..`, holds a backtick or an undrawable character, drops the file. So does a `from` that holds one of `⟨ ⟩ ·` or a backtick: the name is drawn inside purlis's own sentence, and the app writes it with those marks replaced (`(`, `)`, `-`, `'`) |
-| `task` | object, absent | what a task's report says besides (#1436): `{"outcome": "done" \| "blocked" \| "failed" \| "cancelled", "changed": "<str>", "record": "<str>", "by_person": true, "unreported": true, "stepped_in": true}`. `cancelled` (#1441) is written by the app for a task its asking chat cancelled, whatever that task's chat said, and for no other. `stepped_in` (#1442) is `true` when the person typed in the task's chat while it worked, from the app's own note of their keys and never anything the chat said; absent otherwise, and nothing they typed is written anywhere. Absent for a handoff's report, and in every file written before tasks. `outcome` is how the persona chat says the task ended, or `cancelled`. `changed` is what it says changed, in its own words, held to `summary`'s rule; absent when it said nothing. `record` is the project-relative path of the session record the app wrote for that chat, from the app's own note of what it wrote and never a path the chat named; absent when it wrote none. Held on the way in: an `outcome` that is none of the four, a `changed` that breaks the rule, or a `record` that is absolute, climbs with `..`, holds a backtick or an undrawable character, drops the whole report. `by_person` is `true` in the report of a task the person started from the asking chat's tab (#1438), copied from the app's record of the persona chat (`chats[].from.by`), and absent otherwise: the report then reads "a task the person started from this chat's tab". Wording only, as `by` is. `unreported` is `true` in a report the app wrote in the persona chat's place (#1443), and absent otherwise: no chat said any of it. `outcome` is then `"failed"`, `changed` is absent, and `summary` is exactly `ended without a report`: that chat's program ended on its own before it reported. A chat the person stopped or closed is not written this way: that is `stopped`, above, and a `task` has no key for it. **Held on the way in**: a file with `unreported` in any other shape drops the whole report, so nothing that can write this directory has a sentence of its own read as purlis's |
+| `task` | object, absent | what a task's report says besides (#1436): `{"outcome": "done" \| "blocked" \| "failed" \| "cancelled", "changed": "<str>", "record": "<str>", "by_person": true, "unreported": true, "stepped_in": true}`. `cancelled` (#1441) is written by the app for a task its asking chat cancelled, whatever that task's chat said, and for no other. `stepped_in` (#1442) is `true` when the person typed in the task's chat while it worked, from the app's own note of their keys and never anything the chat said; absent otherwise, and nothing they typed is written anywhere. Absent for a handoff's report, and in every file written before tasks. `outcome` is how the persona chat says the task ended, or `cancelled`. `changed` is what it says changed, in its own words, held to `summary`'s rule; absent when it said nothing. `record` is the project-relative path of the session record the app wrote for that chat, from the app's own note of what it wrote and never a path the chat named; absent when it wrote none. Held on the way in: an `outcome` that is none of the four, a `changed` that breaks the rule, or a `record` that is absolute, climbs with `..`, holds a backtick or an undrawable character, drops the whole report. `by_person` is `true` in the report of a task the person started from the asking chat's tab (#1438), copied from the app's record of the persona chat (`chats[].from.by`), and absent otherwise: the report then reads "a task the person started from this chat's tab". Wording only, as `by` is. `unreported` is `true` in a report the app wrote in the persona chat's place (#1443), and absent otherwise: no chat said any of it. `outcome` is then `"failed"`, `changed` is absent, and `summary` is one of the app's two sentences: exactly `ended without a report`, where that chat's program ended on its own before it reported; or `it did not start: <reason>` (#1497), where the task was let through and no program was ever started for it, with the reason the start gave on one line (the asking chat is then told it failed and why, with the reason quoted as data, and nothing of a session record, since no chat ran to write one). A chat the person stopped or closed is not written this way: that is `stopped`, above, and a `task` has no key for it. **Held on the way in**: a file with `unreported` in any other shape drops the whole report, so nothing that can write this directory has a sentence of its own read as purlis's |
 
 **Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
 the chat-name rule, whose workspaces are neither a workspace's name nor `plane root`, or which
@@ -4998,6 +4998,44 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   cleared. **A reported task's own finished rows go when purlis ends it**: it is their asking
   chat, and it has closed. `purlis dispatch list` lists the same records after the asking
   chat's open tasks, until the row is cleared or that chat closes.
+- **A task that did not start** (#1497): a task that was let through and started no chat
+  still has a record, written by the app at that moment and ended in the same breath. Two
+  more keys say so:
+  - `did_not_start` — `true` for a task that did not start: the profile's program was missing
+    or did not answer as its harness, the sandbox would not wrap it, there was no
+    pseudo-terminal, its folder or workspace was gone, its worktree could not be cut, or a
+    limit had filled between the person's Allow and the start; and for a task a launch could
+    not start again **that the person then ended** (End task on its row). Absent for every
+    other dispatch. Its `report` is then `{"outcome": "failed", "text": "it did not start:
+    <reason>"}`, where the text is purlis's own sentence around the reason the start gave, on
+    one line, cut at a character with `…` past 3600 bytes.
+  - `attempts` — how many starts of the task were refused, where the asking chat tried again
+    and it was more than one: an integer of 2 or more. Absent for one. Each try writes a
+    record; the newest counts the earlier ones of the same asking chat and task name that did
+    not start and were not yet cleared, and marks them `cleared`, so they are one row with
+    the latest reason.
+
+  **For a task no chat ever was**, `worker` is the chat it would have been: the number it was
+  dealt and no `id`. That number is nobody's: such a record is never matched to a chat by it,
+  and its row is listed whatever chat later has the number. `ended` equals `started`. A
+  worktree cut for it and taken back whole is not named; one that could not be taken back,
+  or whose branch git kept, is named in `place.worktree` (repo, folder and branch), because
+  it is still on the disk. **For a task that had run and that the person ended**, the record
+  is the one it was running under: `worker` keeps the chat's `id`, and `conversation` is the
+  one it was in, which Reopen resumes. Its row is drawn only while that chat is not open, as
+  every finished row is.
+
+  **It is a finished task's row like the others**: `failed`, a row of its own that never
+  folds, cleared by Clear finished and gone when the asking chat closes, and there again
+  after the app is quit and reopened. `purlis dispatch list` says `did not start` for it. A
+  record of this kind is written for a chat's own task and for one the person allowed from a
+  Notice, never for a refusal made before a start was tried on the asking chat's own command,
+  which that command answers, and never for a start the person's stop refused.
+
+  **A launch writes nothing here.** A task a launch could not start again stays in
+  `app/reopen.json` with its dispatch record still running, and is tried again at the next
+  launch. The window draws it under the chat that asked, from those two files and no third,
+  until it starts or the person ends it.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.

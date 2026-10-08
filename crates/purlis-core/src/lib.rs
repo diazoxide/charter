@@ -26,6 +26,7 @@ pub mod credguard;
 pub mod curate;
 pub mod curation;
 pub mod datahome;
+pub mod didnotstart;
 pub mod diffscan;
 pub mod dispatch;
 pub mod dispatchdecision;

@@ -295,6 +295,7 @@ import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
 import { finishedOf, qualifierOf, shownOf, useFinishedTasks, useRowsUntilRead } from "./finished";
+import { WaitingTaskWaysContext, type WaitingTaskWays } from "./waitingTasks";
 import {
   below as chatsBelow,
   chatsTree,
@@ -4182,8 +4183,33 @@ export const PlaneView = memo(function PlaneView({
       setWouldNotStart((was) =>
         was.map((one) => (one.id === asked.id ? { ...one, approval: null } : one)),
       );
+      // A task drawn under the chat that asked (#1497): the core reads what its profile needs
+      // again when it is next tried, so its row is read again and offers the try.
+      rereadFinished();
     },
-    [plane],
+    [plane, rereadFinished],
+  );
+  /**
+   * **What a task a launch could not start again offers on its row** (#1497): the same try and
+   * the same approval the window's own "did not start" line has, and End task, which is the
+   * one thing that ends it. The rows are the core's, so each is read again afterwards.
+   */
+  const waitingTaskWays = useMemo<WaitingTaskWays>(
+    () => ({
+      retry: async (task) => {
+        await retryChat(task.id);
+        rereadFinished();
+      },
+      approve: (task, approval) => askApprove(task.id, task.name, approval),
+      end: async (task) => {
+        const said = await commands
+          .endTaskThatDidNotStart(plane, task.id)
+          .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+        rereadFinished();
+        return said.status === "error" ? said.error : undefined;
+      },
+    }),
+    [askApprove, plane, rereadFinished, retryChat],
   );
 
   const askStartFresh = useCallback(
@@ -6388,20 +6414,22 @@ export const PlaneView = memo(function PlaneView({
             /* The left region is navigation (ADR 0038): the project's chats above, and the
                focused workspace's repos and branches under them. */
             <div className="left-region">
-              <ChatsSection
-                rows={listRows}
-                // The chat that has the keyboard: a task, while its pane shows it (#1486).
-                front={focusedChat(tabs)}
-                onOpen={showChat}
-                offers={found}
-                onPress={press}
-                stopping={stopping}
-                finished={finishedTasks}
-                onClearFinished={clearFinished}
-                onReopen={reopenFinished}
-                clock={chatClock}
-                onDrawn={rowsDrawn}
-              />
+              <WaitingTaskWaysContext.Provider value={waitingTaskWays}>
+                <ChatsSection
+                  rows={listRows}
+                  // The chat that has the keyboard: a task, while its pane shows it (#1486).
+                  front={focusedChat(tabs)}
+                  onOpen={showChat}
+                  offers={found}
+                  onPress={press}
+                  stopping={stopping}
+                  finished={finishedTasks}
+                  onClearFinished={clearFinished}
+                  onReopen={reopenFinished}
+                  clock={chatClock}
+                  onDrawn={rowsDrawn}
+                />
+              </WaitingTaskWaysContext.Provider>
               <Explorer
                 plane={plane}
                 workspace={ofWorkspace}

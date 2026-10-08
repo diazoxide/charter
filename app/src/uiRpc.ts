@@ -580,6 +580,13 @@ export const commands = {
 	 */
 	forgetChatThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, id })),
 	/**
+	 *  **End task** (#1497): the person ends a task a launch could not start again, by its chat's
+	 *  id. Its dispatch ends failed with the reason, the chat that asked is told once as it is
+	 *  told a task's report, and it is no longer tried at a launch. Its row stays, as a finished
+	 *  one, with Reopen where its conversation is known.
+	 */
+	endTaskThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("end_task_that_did_not_start", { plane, id })),
+	/**
 	 *  Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
 	 *  now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
 	 *  new one as the window draws it. The old one is ended here once the new one has started; a
@@ -3207,6 +3214,23 @@ export type FinishedTask = {
 	reopens: boolean,
 	/**  Why the last Reopen of it did not hold, where one did not: said on its row. */
 	not_reopened: string | null,
+	/**
+	 *  Whether it did not start (#1497): its report is then purlis's own sentence saying why,
+	 *  which its row shows without a press.
+	 */
+	did_not_start: boolean,
+	/**
+	 *  How many starts of it were refused, where the chat that asked tried more than once:
+	 *  they are this one row, with the latest reason. 0 for one.
+	 */
+	attempts: number,
+	/**
+	 *  Set where this is not an ended task at all, but **one a launch could not start again**
+	 *  (`crate::unstarted`): still a task, still recorded, tried again at the next launch.
+	 *  `id` is then its chat's id, which Try to start again, Review and approve and End task
+	 *  name it by; it has no Reopen and no Clear. Null for every ended task.
+	 */
+	waits: WaitsToStart | null,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -6134,6 +6158,15 @@ export type WaitingProject = {
 	plane: string,
 	chats: number,
 	views: number,
+};
+
+/**  What a task waiting to start again offers beside trying again and ending it. */
+export type WaitsToStart = {
+	/**
+	 *  The approval its profile needs before it can start, where it needs one (#1246): the
+	 *  row offers Review and approve from this, never from the words of its reason.
+	 */
+	approval: NeedsApproval | null,
 };
 
 /**

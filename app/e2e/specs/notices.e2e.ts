@@ -160,6 +160,37 @@ describe("a pin to a workspace that is gone", function () {
     );
     expect(said).toContain(`${gone} is gone, kept dormant`);
     await expect($(`[data-cause="${cause}"]`).$("button=Forget")).toBeExisting();
+
+    // **A line under the strip wraps, whatever it says** (#1497): a reason with a path in it,
+    // which has nowhere to break, is drawn inside the window and on more lines, never past
+    // the window's edge. Measured on this Notice's own box with a long word put in its
+    // sentence for the measurement, and taken out again: one a real refusal would carry.
+    const wrapped = await browser.execute((wanted: string) => {
+      const line = [...document.querySelectorAll<HTMLElement>("[data-cause]")].find(
+        (one) => one.dataset.cause === wanted,
+      );
+      const says = line?.querySelector<HTMLElement>(".notice-says");
+      if (line === undefined || says === null || says === undefined) return undefined;
+      const short = line.getBoundingClientRect().height;
+      const word = document.createElement("span");
+      word.textContent = ` /${"long-folder-name-with-no-break/".repeat(40)}profile.toml`;
+      says.append(word);
+      const box = line.getBoundingClientRect();
+      const measured = {
+        right: box.right,
+        window: window.innerWidth,
+        overflows: line.scrollWidth > line.clientWidth,
+        taller: box.height > short,
+        page: document.documentElement.scrollWidth > window.innerWidth,
+      };
+      word.remove();
+      return measured;
+    }, cause);
+    expect(wrapped).toBeDefined();
+    expect(wrapped?.right).toBeLessThanOrEqual(wrapped?.window ?? 0);
+    expect(wrapped?.overflows).toBe(false);
+    expect(wrapped?.page).toBe(false);
+    expect(wrapped?.taller).toBe(true);
     // Never written away: the store holds it, in its place, and names it gone.
     const held = await pins();
     expect(held.order).toEqual(before);
