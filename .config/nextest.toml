@@ -1,0 +1,21 @@
+# cargo-nextest's settings, for the `rust` job in `.github/workflows/ci.yml`. A machine without
+# nextest runs the same tests with `cargo test --workspace`; nothing here changes what a test does.
+
+[profile.default]
+# The whole suite's result, never its first red: what `cargo test --no-fail-fast` gave.
+fail-fast = false
+
+# nextest runs each test in a process of its own, so a lock a test binary holds in a static no
+# longer orders tests against each other. The floods of `unread_answers` are run one at a time
+# by such a lock so that they do not compete for the machine; this group keeps that.
+[test-groups]
+floods = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "package(fake-harness) & binary(unread_answers)"
+test-group = "floods"
+
+[profile.ci]
+# A test that failed prints its output again at the end of the run, where the job log ends.
+final-status-level = "fail"
+failure-output = "immediate-final"
