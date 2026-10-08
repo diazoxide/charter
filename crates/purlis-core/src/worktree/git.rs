@@ -242,6 +242,14 @@ const NO_PROGRAMS: [&str; 6] = [
     "fetch.recurseSubmodules=false",
 ];
 
+/// **A bare repository is used only where it is named** (D-1335-8, #1415): on every git call
+/// purlis makes, brokered or not, `purlis worktree add` from your own terminal included. A bare
+/// repository a chat made in a folder it writes, which no `.git` path covers, is never found by
+/// discovery and read in place of the clone meant. Nothing purlis runs finds a bare repository
+/// implicitly: one it means is named with `--git-dir`, or is a remote URL. A test's own fixture
+/// git, which runs in the bare remotes it made, is told otherwise ([`crate::testgit`]).
+pub(crate) const BARE_ONLY_WHEN_NAMED: &str = "safe.bareRepository=explicit";
+
 /// The diff verbs that ignore `diff.ignoreSubmodules`, and are told on their own command line.
 const PLUMBING_DIFFS: [&str; 3] = ["diff-files", "diff-index", "diff-tree"];
 
@@ -426,9 +434,16 @@ struct Extra {
 /// to find it.
 fn linked(dir: &Path, args: &[&str]) -> Result<Option<(PathBuf, PathBuf)>, &'static str> {
     use super::link::{Check, Link};
-    // A call the thread's own isolation pins is held to a git directory its maker checked.
-    if isolation().is_some_and(|held| held.pin_in(dir).is_some()) {
-        return Ok(None);
+    // A call the thread's own isolation pins is held to a git directory its maker checked,
+    // and to that directory itself, not whatever has its name now (#1415).
+    if let Some(held) = isolation()
+        && let Some(pin) = held.pin_at(&real(dir))
+    {
+        return if pin.holds() {
+            Ok(None)
+        } else {
+            Err(NOT_THE_CHECKED_REPOSITORY)
+        };
     }
     // `worktree repair` is run in a folder that was moved, to write its new name back.
     let repair = {
@@ -557,8 +572,40 @@ pub struct Isolated {
     /// Each work tree with the git directory a check resolved for it: a call run in that tree
     /// is given both, so git uses the repository that was checked and no other (D-1335-9). A
     /// clone, and beside it the folder of a branch cut from it (D-1453-27).
-    pins: Vec<(PathBuf, PathBuf)>,
+    pins: Vec<Pin>,
 }
+
+/// One pinned work tree: its git directory, and **which directory that was** when it was
+/// checked (#1415), so a rename between the check and a call can't swap another clone in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pin {
+    tree: PathBuf,
+    git_dir: PathBuf,
+    id: Option<DirId>,
+}
+
+/// A directory's identity, its device and inode: the same path names another directory once
+/// one is renamed away and another put in its place, and this tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirId {
+    dev: u64,
+    ino: u64,
+}
+
+impl DirId {
+    /// The identity of the directory at `path`, links followed; `None` where nothing is there.
+    pub fn of(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(path).ok().map(|found| Self {
+            dev: found.dev(),
+            ino: found.ino(),
+        })
+    }
+}
+
+/// What a call in a pinned tree whose git directory is no longer the one checked answers.
+const NOT_THE_CHECKED_REPOSITORY: &str = "the repository purlis checked for this call was \
+    replaced since it was checked, so git was not run there. Run the command again";
 
 impl Isolated {
     /// `user.name` and `user.email` as given, and nothing else.
@@ -591,15 +638,35 @@ impl Isolated {
     /// `--work-tree=<work_tree>`, so it uses the repository a check resolved and discovers none.
     /// A tree pinned before keeps its pin, and one pinned again takes the later git directory.
     #[must_use]
+    ///
+    /// The git directory is held to the directory it is now ([`DirId`]): [`Self::pinned_as`]
+    /// with what is there as it is pinned.
     pub fn pinned(&self, work_tree: &Path, git_dir: &Path) -> Self {
+        self.pinned_as(work_tree, git_dir, DirId::of(git_dir))
+    }
+
+    /// [`Self::pinned`], held to `id`, the identity the git directory had when it was checked
+    /// (#1415): a call in the tree whose git directory is not that directory any more is
+    /// refused before git runs, and [`Self::holds`] answers false.
+    #[must_use]
+    pub fn pinned_as(&self, work_tree: &Path, git_dir: &Path, id: Option<DirId>) -> Self {
         let tree = real(work_tree);
         let mut pins = self.pins.clone();
-        pins.retain(|(held, _)| *held != tree);
-        pins.push((tree, git_dir.to_path_buf()));
+        pins.retain(|held| held.tree != tree);
+        pins.push(Pin {
+            tree,
+            git_dir: git_dir.to_path_buf(),
+            id,
+        });
         Self {
             pins,
             ..self.clone()
         }
+    }
+
+    /// Whether every pinned git directory is still the directory it was when it was checked.
+    pub fn holds(&self) -> bool {
+        self.pins.iter().all(Pin::holds)
     }
 
     /// The git directory a call run in `dir` is pinned to, if it is.
@@ -613,11 +680,16 @@ impl Isolated {
     /// inner one is `dir`'s.
     pub fn pin_in(&self, dir: &Path) -> Option<(&Path, &Path)> {
         let dir = real(dir);
+        self.pin_at(&dir)
+            .map(|pin| (pin.tree.as_path(), pin.git_dir.as_path()))
+    }
+
+    /// The pin of the tree `dir` (links resolved) is in: the innermost.
+    fn pin_at(&self, dir: &Path) -> Option<&Pin> {
         self.pins
             .iter()
-            .filter(|(tree, _)| dir.starts_with(tree))
-            .max_by_key(|(tree, _)| tree.components().count())
-            .map(|(tree, git_dir)| (tree.as_path(), git_dir.as_path()))
+            .filter(|pin| dir.starts_with(&pin.tree))
+            .max_by_key(|pin| pin.tree.components().count())
     }
 
     /// One more key. **For a test's stand-in forge only** (a `url.<base>.insteadOf` that points
@@ -626,6 +698,13 @@ impl Isolated {
     pub fn also(mut self, key: &str, value: &str) -> Self {
         self.config.push(format!("{key}={value}"));
         self
+    }
+}
+
+impl Pin {
+    /// Whether the git directory is still the one checked.
+    fn holds(&self) -> bool {
+        DirId::of(&self.git_dir) == self.id
     }
 }
 
@@ -671,15 +750,13 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     for setting in NO_PROGRAMS {
         cmd.arg("-c").arg(setting);
     }
+    cmd.arg("-c").arg(BARE_ONLY_WHEN_NAMED);
     for setting in &extra.config {
         cmd.arg("-c").arg(setting);
     }
     let isolated = isolation();
     let mut pinned = false;
     if let Some(held) = &isolated {
-        // A bare repository is used only when named (D-1335-8): one a chat made, which no
-        // `.git` path covers, is never found by discovery.
-        cmd.arg("-c").arg("safe.bareRepository=explicit");
         for setting in &held.config {
             cmd.arg("-c").arg(setting);
         }
@@ -1148,6 +1225,71 @@ mod tests {
             !listed(dir.path()).contains("user.name=Op Erator"),
             "an ordinary call read the brokered identity"
         );
+    }
+
+    /// #1415: every call, brokered or not, uses a bare repository only where it is named.
+    #[test]
+    fn no_call_finds_a_bare_repository_it_was_not_given() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let bare = dir.path().join("planted");
+        std::fs::create_dir(&bare).expect("a folder");
+        assert!(
+            crate::testgit::run(&bare, &["init", "-q", "--bare", "."]).ok(),
+            "a bare repository"
+        );
+        let asked = |held: Option<&Isolated>| {
+            within(held, || {
+                run(&bare, &["rev-parse", "--absolute-git-dir"], READ).expect("git runs")
+            })
+        };
+        let plain = asked(None);
+        assert!(
+            !plain.ok(),
+            "an ordinary call found the bare repository: {plain:?}"
+        );
+        let brokered = asked(Some(&Isolated::default()));
+        assert!(!brokered.ok(), "a brokered call found it: {brokered:?}");
+        // A test's own fixture git may, as it reads its bare remotes.
+        assert!(crate::testgit::run(&bare, &["rev-parse", "--absolute-git-dir"]).ok());
+    }
+
+    /// #1415: a pin is held to the directory that was checked, not to whatever has its name.
+    #[test]
+    fn a_pin_holds_only_while_its_git_directory_is_the_one_checked() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let tree = dir.path().join("clone");
+        let git_dir = tree.join(".git");
+        std::fs::create_dir_all(&git_dir).expect("a git directory");
+        let pinned = Isolated::default().pinned(&tree, &git_dir);
+        assert!(pinned.holds());
+
+        // Renamed away, and another put in its place under the same name.
+        std::fs::rename(&git_dir, tree.join("checked.git")).expect("renamed");
+        std::fs::create_dir(&git_dir).expect("another");
+        assert!(
+            !pinned.holds(),
+            "another directory passed as the one checked"
+        );
+
+        // Every call in the tree is refused before git runs, and names why.
+        let refused = isolated(&pinned, || run(&tree, &["status"], READ).expect("answered"));
+        assert_eq!(refused.code, Some(128), "{refused:?}");
+        assert!(refused.err.contains("was replaced"), "{refused:?}");
+        // Pinned to what is there now, it holds again.
+        assert!(Isolated::default().pinned(&tree, &git_dir).holds());
+    }
+
+    #[test]
+    fn a_pin_to_an_identity_taken_before_is_refused_once_the_directory_changed() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let git_dir = dir.path().join("clone/.git");
+        std::fs::create_dir_all(&git_dir).expect("a git directory");
+        let checked = DirId::of(&git_dir);
+        // Kept elsewhere, so its inode is not the new one's.
+        std::fs::rename(&git_dir, dir.path().join("kept.git")).expect("moved");
+        std::fs::create_dir(&git_dir).expect("back, as another");
+        let pinned = Isolated::default().pinned_as(&dir.path().join("clone"), &git_dir, checked);
+        assert!(!pinned.holds());
     }
 
     #[test]

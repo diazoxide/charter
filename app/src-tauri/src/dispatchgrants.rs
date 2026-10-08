@@ -887,19 +887,29 @@ fn committed_by(root: &Path, pair: &Pair) -> Option<(String, u64)> {
     // A persona's name is letters, digits, dots, underscores and hyphens: only the dot means
     // anything to the pattern.
     let plain = |name: &str| name.replace('.', "\\.");
-    let mut git = std::process::Command::new("git");
-    git.arg("-C")
-        .arg(root)
-        .args(["log", "-1", "--format=%an%x09%at", "-G"])
-        .arg(format!(
-            "^[[:space:]]*\"?{}\"?[[:space:]]*=.*\"{}\"",
-            plain(&pair.asking),
-            plain(&pair.target)
-        ))
-        .args(["--", &file]);
-    let out = purlis_core::forklock::output(&mut git).ok()?;
-    let line = String::from_utf8(out.stdout).ok()?;
-    let (name, at) = line.trim().split_once('\t')?;
+    let pattern = format!(
+        "^[[:space:]]*\"?{}\"?[[:space:]]*=.*\"{}\"",
+        plain(&pair.asking),
+        plain(&pair.target)
+    );
+    // Through the hardened runner (#1415): a constructed environment, no program a config
+    // names, a bare repository only where it is named.
+    use purlis_core::worktree::git;
+    let out = git::run(
+        root,
+        &[
+            "log",
+            "-1",
+            "--format=%an%x09%at",
+            "-G",
+            &pattern,
+            "--",
+            &file,
+        ],
+        git::READ,
+    )
+    .ok()?;
+    let (name, at) = out.out.trim().split_once('\t')?;
     Some((name.to_owned(), at.parse().ok()?))
 }
 
