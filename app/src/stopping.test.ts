@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { stepped, stopAnswer, stopSays, stopTitle, type StopAsked } from "./stopping";
+import {
+  stepped,
+  stopAllAnswer,
+  stopAllSays,
+  stopAllTitle,
+  stopAnswer,
+  stopSays,
+  stopTitle,
+  type StopAsked,
+} from "./stopping";
 
 const PLANE = "/home/dev/plane";
 
@@ -98,5 +107,25 @@ describe("everything below, asked of a chat that is already stopping (#1448)", (
     expect(stopAnswer(asked(2))).toBe("Stop 2 chats");
     expect(stopSays(asked(1))).toContain("The 1 chat below it is stopped too");
     expect(stopAnswer(asked(1))).toBe("Stop 1 chat");
+  });
+});
+
+describe("the question Stop all tasks asks (#1498)", () => {
+  it("names how many tasks end, and says the session keeps running", () => {
+    const two = { name: "steward 1", tasks: [3, 2] };
+
+    expect(stopAllTitle(two)).toBe("Stop all 2 tasks of steward 1?");
+    expect(stopAllSays(two)).toBe(
+      "The 2 tasks at work below steward 1 end, deepest first. Each gets one short turn to say what it did, where it can be given one, and the chat that asked is told you stopped it. steward 1 keeps running. There is no undo.",
+    );
+    expect(stopAllAnswer(two)).toBe("Stop 2 tasks");
+  });
+
+  it("says one task as one", () => {
+    const one = { name: "steward 1", tasks: [2] };
+
+    expect(stopAllTitle(one)).toBe("Stop the 1 task of steward 1?");
+    expect(stopAllSays(one)).toContain("The 1 task at work below steward 1 ends.");
+    expect(stopAllAnswer(one)).toBe("Stop 1 task");
   });
 });

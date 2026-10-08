@@ -255,6 +255,10 @@ export type Does =
    *  itself**: the window asks first, and the core's `stop_chat` is what ends anything. Only a
    *  person's press reaches it: no chat has a way to this verb. */
   | { verb: "stopChat"; session: number; below: boolean }
+  /** Asks to stop every task at work below a session, and keep the session (#1498, V100-53).
+   *  **It stops nothing by itself**: the window asks once, naming how many, and the core's
+   *  `stop_all_tasks` is what ends anything, each task the way Stop and get its report does. */
+  | { verb: "stopAllTasks"; session: number }
   /** Ends a task one of the two ways a person ends one (#1488, V100-5): `report` is Stop and
    *  get its report, `now` is Close now. **It ends nothing by itself**: the window asks the
    *  core what ending it would do, asks the person where the task is mid-turn or has tasks at
@@ -733,6 +737,9 @@ export type Doing = {
   /** Opens the question a stop asks first, or ends at once a chat that is already stopping.
    *  Nothing is stopped until it is answered, so it answers no `Ran`. */
   stopChat: (session: number, below: boolean) => void;
+  /** Opens the one question Stop all tasks asks first (#1498). Nothing is stopped until it is
+   *  answered, so it answers no `Ran`. */
+  stopAllTasks: (session: number) => void;
   /** Ends a task the way pressed, asking first where V100-18 says to. It answers no `Ran`:
    *  what it does is said by the question, or by the task's row going. */
   endTask: (session: number, way: TaskEndWay) => void;
@@ -2392,6 +2399,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "stopChat":
       doing.stopChat(does.session, does.below);
       return DID;
+    case "stopAllTasks":
+      doing.stopAllTasks(does.session);
+      return DID;
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
@@ -2629,6 +2639,14 @@ export function stoppedRows(
 export function stopRows(listed: readonly ListedChat[], stopping: readonly number[]): Offer[] {
   // What is below a chat is the tasks it asked for: a handoff is a session of its own (#1492).
   const started = tasksOf(listed);
+  // A session's tasks, and not the chats it handed work off to: what Stop all tasks stops.
+  const tasksOfIt = new Set(
+    listed.flatMap((chat) =>
+      chat.mode === "task" && chat.parent !== null && chat.parent !== chat.session
+        ? [chat.parent]
+        : [],
+    ),
+  );
   // **A task is not stopped by these** (#1488): it is ended one of its own two ways
   // (`taskEndRows`), which say what the chat that asked is told.
   return listed
@@ -2636,6 +2654,7 @@ export function stopRows(listed: readonly ListedChat[], stopping: readonly numbe
     .flatMap((chat) => {
       const { session, name } = chat;
       const below = `Stop chat ${name} and everything below it`;
+      const all = `Stop all tasks of ${name}`;
       if (stopping.includes(session))
         return [
           {
@@ -2662,6 +2681,15 @@ export function stopRows(listed: readonly ListedChat[], stopping: readonly numbe
                 },
               ]
             : []),
+          // Stop all tasks stays beside it (#1498): stopped alone, its tasks still run.
+          ...(tasksOfIt.has(session)
+            ? [
+                {
+                  ...can(stopAllId(session), all, { verb: "stopAllTasks", session }, name),
+                  note: STOPS_ALL,
+                },
+              ]
+            : []),
         ];
       return [
         {
@@ -2684,6 +2712,13 @@ export function stopRows(listed: readonly ListedChat[], stopping: readonly numbe
               `${name} started no chat that is still running.`,
               name,
             ),
+        // **Stop all tasks** (#1498, V100-53): beside it, and the session keeps running.
+        tasksOfIt.has(session)
+          ? {
+              ...can(stopAllId(session), all, { verb: "stopAllTasks", session }, name),
+              note: STOPS_ALL,
+            }
+          : cannot(stopAllId(session), all, `${name} has no task open.`, name),
       ];
     });
 }
@@ -3035,6 +3070,15 @@ export function stopId(session: number): string {
 export function stopBelowId(session: number): string {
   return `chat.stop.below:${session}`;
 }
+
+/** The catalogue's id for a session's Stop all tasks row (#1498). */
+export function stopAllId(session: number): string {
+  return `chat.stop.tasks:${session}`;
+}
+
+/** What Stop all tasks does that its title cannot fit. */
+export const STOPS_ALL =
+  "Every task it asked for that is still at work, and every task those asked for, deepest first. Each gets one short turn to say what it did, and is told of as stopped by you. The chat itself keeps running.";
 
 /** The catalogue's id for a stopped smart close's Dismiss row (SI-8f). */
 export function dismissId(session: number): string {
@@ -3516,7 +3560,12 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           // an id the catalogue does not have is not in the menu.
           ...(what.session === undefined
             ? []
-            : [stopId(what.session), stopBelowId(what.session), ...taskEndIds(what.session)]),
+            : [
+                stopId(what.session),
+                stopBelowId(what.session),
+                stopAllId(what.session),
+                ...taskEndIds(what.session),
+              ]),
         ],
       };
     case "listed":
@@ -3530,7 +3579,12 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           besideId(what.session),
           backId(what.session),
         ],
-        below: [stopId(what.session), stopBelowId(what.session), ...taskEndIds(what.session)],
+        below: [
+          stopId(what.session),
+          stopBelowId(what.session),
+          stopAllId(what.session),
+          ...taskEndIds(what.session),
+        ],
       };
     case "workspace":
       return {

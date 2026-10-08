@@ -161,6 +161,9 @@ function core(
       if (refuses.why !== undefined) throw new Error(refuses.why);
       return null;
     }
+    // Stop all tasks (#1498): every open task below the session, deepest first.
+    if (cmd === "all_tasks_ending") return { name: "steward 1", tasks: [7, 4, 5] };
+    if (cmd === "stop_all_tasks") return (a.tasks as number[]).length;
     if (cmd === "close_chat_tab") {
       // The core's half of sending a task's tab back: it has no tab from here on.
       const one = open.find((chat) => chat.session === a.session);
@@ -843,6 +846,8 @@ describe("a tab chip's menu (#1487)", () => {
       "Close now: task deep",
       STOP_SWEEP,
       CLOSE_SWEEP,
+      // Its own row, last, under a line (#1498).
+      "Stop all tasks",
     ]);
 
     await userEvent.click(within(ways).getByRole("menuitem", { name: CLOSE_SWEEP }));
@@ -857,6 +862,34 @@ describe("a tab chip's menu (#1487)", () => {
     await waitFor(() =>
       expect(ends(asked)).toEqual([{ plane: PLANE, session: 5, way: "now", below: false }]),
     );
+  });
+
+  it("ends with Stop all tasks, which asks once naming how many and keeps the session (#1498)", async () => {
+    const { asked } = await drawn();
+    fireEvent.click(await screen.findByRole("button", { name: /^Tasks of steward 1/ }));
+    const menu = await screen.findByRole("menu", { name: /^Tasks of steward 1/ });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "End a task" }));
+    const ways = await screen.findByRole("menu", { name: "End a task" });
+
+    await userEvent.click(within(ways).getByRole("menuitem", { name: "Stop all tasks" }));
+
+    const question = await screen.findByRole("alertdialog", {
+      name: "Stop all 3 tasks of steward 1?",
+    });
+    expect(question.textContent).toContain("steward 1 keeps running.");
+    const stopsAll = () =>
+      asked.filter((one) => one.cmd === "stop_all_tasks").map((one) => one.args);
+    expect(stopsAll()).toEqual([]);
+    expect(ends(asked)).toEqual([]);
+
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 3 tasks" }));
+
+    await waitFor(() =>
+      expect(stopsAll()).toEqual([{ plane: PLANE, session: 1, tasks: [7, 4, 5] }]),
+    );
+    // Through the one stop, never a task's own end or a chat's stop.
+    expect(ends(asked)).toEqual([]);
+    expect(asked.some((one) => one.cmd === "stop_chat")).toBe(false);
   });
 
   it("asks in the one question for a task its tab was left on while another tab is in front", async () => {

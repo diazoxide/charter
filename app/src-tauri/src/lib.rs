@@ -20,6 +20,7 @@ mod about;
 mod activity;
 mod alerts;
 mod asking;
+mod atlimit;
 mod autosave;
 mod branchwatch;
 mod brokered;
@@ -596,6 +597,11 @@ struct OpenChat {
     /// the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
     #[specta(optional)]
     tasks_running: Option<u32>,
+    /// Where its last dispatch was refused for a limit that a slot frees, and no slot has
+    /// freed since (#1498, V100-54): the number that binds and the sentence that says which
+    /// limit and where it is changed. Its row says "at its task limit" while it is set.
+    #[specta(optional)]
+    at_limit: Option<atlimit::AtLimit>,
     /// The chat whose tab it has a pane in, by session, where it is not its tab's own chat
     /// (#1489). The window puts a task back beside the session that asked for it, where that
     /// session has a tab; any other chat comes back as a tab of its own.
@@ -809,6 +815,7 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
         let mut chat = with_task_standing(held, &mut outcomes, OpenChat::from(open));
         chat.tasks_limit = limit;
         chat.tasks_running = running;
+        chat.at_limit = atlimit::still(held, chat.session);
         match chat
             .cwd
             .as_deref()
@@ -2221,6 +2228,7 @@ impl From<chats::Open> for OpenChat {
             shows: open.shows,
             tasks_limit: None,
             tasks_running: None,
+            at_limit: None,
             beside: open.beside,
             pinned: open.pinned,
             label: open.label,
@@ -3740,11 +3748,14 @@ mod tests {
         // #1488: ending a task writes a sentence in the person's name to the chat that asked,
         // so it is the window's over Tauri's IPC, as answering an ask is; and so is every
         // other command that ends, starts or restarts a chat on the person's word.
+        // Stop all tasks and its question too (#1498).
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         let client = ui_rpc_client();
         for command in [
             "end_task",
             "task_ending",
+            "stop_all_tasks",
+            "all_tasks_ending",
             "stop_chat",
             "close_session",
             "close_chat_stopping",

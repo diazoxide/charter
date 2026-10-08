@@ -94,7 +94,8 @@ pub struct Server {
 /// - **it ends a chat, a task, or every chat of a project or of the app**: `end_task` (which
 ///   writes a sentence in the person's name to the chat that asked), `task_ending` (the
 ///   question it asks first), `stop_chat`, `close_session`, `close_chat_stopping`,
-///   `end_task_that_did_not_start`, `smart_close`, `stop_every_agent`,
+///   `end_task_that_did_not_start`, `stop_all_tasks` with `all_tasks_ending` (its question,
+///   #1498), `smart_close`, `stop_every_agent`,
 ///   `forget_chat_that_did_not_start`, `close_plane`, `forget_project`, and the two that quit
 ///   the app to start it again (`restart_on_the_session_bus`, `restart_to_update`);
 /// - **it starts a chat or a shell as the person**: `ask_persona_chat`, `start_chat`,
@@ -125,6 +126,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     // Ends.
     "end_task",
     "task_ending",
+    "stop_all_tasks",
+    "all_tasks_ending",
     "stop_chat",
     "close_session",
     "close_chat_stopping",

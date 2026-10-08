@@ -13,7 +13,7 @@
  * the Chats section and the explorer draw the same parent for the same chat.
  */
 import type { Placed } from "./tabs";
-import type { OpenChat } from "./bindings";
+import type { AtLimit, OpenChat } from "./bindings";
 import { isShell } from "./chatState";
 import { rowFactsOf, type RowFacts } from "./shownState";
 
@@ -49,6 +49,10 @@ export type ListedChat = {
   /** How many tasks it has running against that limit, as the core counts them for a
    *  dispatch from it (#1491). */
   tasksRunning?: number | null;
+  /** Where its last dispatch was refused for a limit a slot frees, and none has freed since
+   *  (#1498, V100-54): the number that binds, and the core's sentence saying which limit and
+   *  where it is changed. Its row says `at its task limit` while it is set. */
+  atLimit?: AtLimit | null;
   /** A task the person asked for themselves, from its session's tab (#1492, V100-70): its row
    *  and its breadcrumb say `asked by you`. */
   byYou?: boolean;
@@ -120,6 +124,7 @@ export function listedChat(
     branch: ownBranch(chat),
     tasksLimit: chat.tasks_limit ?? null,
     tasksRunning: chat.tasks_running ?? null,
+    atLimit: chat.at_limit ?? null,
     byYou: chat.from?.task === true && chat.from.by_person === true,
     typed: typedInto(chat.harness),
     ...rowFactsOf(chat, nameOf),

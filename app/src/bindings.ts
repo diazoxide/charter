@@ -1733,6 +1733,18 @@ export const commands = {
 	 */
 	endTask: (plane: PlaneId, session: number, way: Way, below: boolean) => typedError<null, string>(__TAURI_INVOKE("end_task", { plane, session, way, below })),
 	/**
+	 *  What Stop all tasks on a chat would end: its name, and the tasks at work below it, by
+	 *  number, deepest first. The question names how many.
+	 */
+	allTasksEnding: (plane: PlaneId, session: number) => typedError<AllTasksEnding, string>(__TAURI_INVOKE("all_tasks_ending", { plane, session })),
+	/**
+	 *  Stops every task at work below a chat, of those the question named, and keeps the chat
+	 *  running. Each gets one short turn to say what it did where it can be given one, deepest
+	 *  first, and the chat that asked for it is told it was stopped by the person. Answers how
+	 *  many were stopped.
+	 */
+	stopAllTasks: (plane: PlaneId, session: number, tasks: number[]) => typedError<number, string>(__TAURI_INVOKE("stop_all_tasks", { plane, session, tasks })),
+	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
 	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
@@ -2331,6 +2343,21 @@ export type AlertWay =
 { kind: "saving" };
 
 /**
+ *  **What Stop all tasks on a session would end** (#1498, V100-53), as the window asks before
+ *  it does it: the one confirmation names the count.
+ */
+export type AllTasksEnding = {
+	/**  The session, as its row names it. */
+	name: string,
+	/**
+	 *  The tasks at work below it that the answer ends, by number, deepest first: those that
+	 *  have not reported, or are mid-turn or asking the person something, and are not being
+	 *  stopped already. The same chats the close of a session asks about ("Stop them").
+	 */
+	tasks: number[],
+};
+
+/**
  *  What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
  *  a restart on its conversation, which the window asks for once its turn has ended.
  */
@@ -2426,6 +2453,19 @@ export type AskOffer = {
 export type Asking = {
 	plane: PlaneId,
 	asks: Shown[],
+};
+
+/**  What a chat's row says while it is at its task limit. */
+export type AtLimit = {
+	/**  The limit that binds, as a number. */
+	limit: number,
+	/**
+	 *  What the row says, naming which limit binds with its number ([`row_words`]): only the
+	 *  chat's own running limit is "its task limit", the one its tab menu's footer counts.
+	 */
+	row: string,
+	/**  The whole sentence for the person: which limit, how many, and where it is changed. */
+	said: string,
 };
 
 /**
@@ -4506,6 +4546,12 @@ export type OpenChat = {
 	 *  the limit, so the window says `6 of 6 tasks` exactly when a seventh would be refused.
 	 */
 	tasks_running?: number | null,
+	/**
+	 *  Where its last dispatch was refused for a limit that a slot frees, and no slot has
+	 *  freed since (#1498, V100-54): the number that binds and the sentence that says which
+	 *  limit and where it is changed. Its row says "at its task limit" while it is set.
+	 */
+	at_limit?: AtLimit | null,
 	/**
 	 *  The chat whose tab it has a pane in, by session, where it is not its tab's own chat
 	 *  (#1489). The window puts a task back beside the session that asked for it, where that

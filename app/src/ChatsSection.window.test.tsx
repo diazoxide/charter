@@ -167,6 +167,9 @@ function core(open: (OpenChat & { workspace: string })[], finished: FinishedTask
       return null;
     }
     if (cmd === "stopping_chats") return [];
+    // Stop all tasks (#1498): the tasks at work below the session, deepest first.
+    if (cmd === "all_tasks_ending") return { name: `steward ${String(a.session)}`, tasks: [3, 2] };
+    if (cmd === "stop_all_tasks") return (a.tasks as number[]).length;
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
@@ -1002,6 +1005,65 @@ describe("what the chat that asked is shown of a stop (#1448)", () => {
 });
 
 /** The explorer's tree, and a row of it by its accessible name. */
+describe("stopping all of a session's tasks (#1498)", () => {
+  const stopsAll = (asked: Asked[]) =>
+    asked.filter((one) => one.cmd === "stop_all_tasks").map((one) => one.args);
+
+  it("sits beside Stop with everything below it, asks once naming the count, and keeps the session", async () => {
+    const { asked } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(row(tree, "steward 1"));
+    await screen.findByRole("menuitem", { name: "Stop chat steward 1" });
+    const names = screen
+      .getAllByRole("menuitem")
+      .map((one) => one.getAttribute("aria-label") ?? one.textContent);
+    const below = names.findIndex((name) =>
+      name?.startsWith("Stop chat steward 1 and everything below it"),
+    );
+    expect(names[below + 1]).toMatch(/^Stop all tasks of steward 1/);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Stop all tasks of steward 1" }));
+
+    const question = await screen.findByRole("alertdialog", {
+      name: "Stop all 2 tasks of steward 1?",
+    });
+    expect(question.textContent).toContain(
+      "The 2 tasks at work below steward 1 end, deepest first.",
+    );
+    expect(question.textContent).toContain("steward 1 keeps running.");
+    expect(stopsAll(asked)).toEqual([]);
+
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 2 tasks" }));
+
+    // The tasks the question named, and no more; the session is not stopped.
+    await waitFor(() =>
+      expect(stopsAll(asked)).toEqual([{ plane: PLANE, session: 1, tasks: [3, 2] }]),
+    );
+    expect(asked.some((one) => one.cmd === "stop_chat")).toBe(false);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("stops nothing when the question is cancelled", async () => {
+    const { asked } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(row(tree, "steward 1"));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Stop all tasks of steward 1" }),
+    );
+    const question = await screen.findByRole("alertdialog", {
+      name: "Stop all 2 tasks of steward 1?",
+    });
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+
+    expect(stopsAll(asked)).toEqual([]);
+  });
+});
+
 const explorerTree = () => screen.findByRole("tree", { name: "Repos and branches" });
 const inExplorer = async (name: RegExp | string) =>
   within(await explorerTree()).findByRole("treeitem", { name });

@@ -121,7 +121,13 @@ function eitherFile(path: readonly SettingsStep[]): boolean {
 
 /** The names of the project's two files, as the core read them: `charter.toml` or `purlis.toml`. */
 function namesOf(read: ProjectRead): Record<SettingsWhich, string> {
-  return { shared: read.shared.file, local: read.local.file };
+  // A read that came back without its files (a core that answered nothing usable) still draws
+  // the tab, under the usual names, and never takes it down.
+  const got = read as Partial<ProjectRead> | undefined;
+  return {
+    shared: got?.shared?.file ?? "charter.toml",
+    local: got?.local?.file ?? "charter.local.toml",
+  };
 }
 
 /**

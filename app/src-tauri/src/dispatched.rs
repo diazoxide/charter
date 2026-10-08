@@ -1407,6 +1407,11 @@ fn tell_the_chat(held: &Held, chat: u32) -> bool {
     if held.stopping().is_stopping(chat) {
         return false;
     }
+    // A session whose tasks the person is stopping all at once is typed one line for all of
+    // their words, once the last has ended (#1498).
+    if held.stopping().holds_word_for(chat) {
+        return false;
+    }
     let seen = seen(held, chat);
     let landed = held.tasks().ledger().nudge_step(chat, seen);
     if landed.is_empty() {
