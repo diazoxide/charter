@@ -76,6 +76,7 @@ mod slowstart;
 mod smartclose;
 mod stopping;
 mod taskbrief;
+mod tasksused;
 mod thismachine;
 mod todos;
 mod unstarted;

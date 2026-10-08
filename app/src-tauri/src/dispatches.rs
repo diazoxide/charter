@@ -347,7 +347,7 @@ fn ended_in(held: &Held, session: u32, record: &Record) {
 
 /// The conversation chat `session` is in: the one the board follows it in, else the one the
 /// app started it on.
-fn conversation_of(held: &Held, session: u32) -> Option<String> {
+pub(crate) fn conversation_of(held: &Held, session: u32) -> Option<String> {
     held.board().conversation(session).or_else(|| {
         held.chats()
             .recorded_chat(session)
@@ -718,7 +718,7 @@ fn dollars(cost: f64) -> String {
 }
 
 /// A harness's token counts as the window says them, or `None` where it counted neither.
-fn counted(input: Option<u64>, output: Option<u64>) -> Option<String> {
+pub(crate) fn counted(input: Option<u64>, output: Option<u64>) -> Option<String> {
     let spelled = |n: u64, way: &str| {
         format!(
             "{} {way}",

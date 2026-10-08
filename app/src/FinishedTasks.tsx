@@ -5,6 +5,7 @@ import { briefTitle, useOpenBrief } from "./Brief";
 import { firstLine, foldedOf, qualifierOf, shownOf } from "./finished";
 import { PersonaMark } from "./PersonaMark";
 import { StateShown } from "./StateShown";
+import { useTokensOnHover } from "./tasksUsed";
 import { WaitingTaskWaysContext } from "./waitingTasks";
 
 /**
@@ -134,6 +135,12 @@ function FinishedRow({
    *  which stays in the Tab order, and in the opened row. A disabled button takes no focus,
    *  so its reason would reach nobody on a keyboard. */
   const cannot = task.reopens ? undefined : NO_CONVERSATION;
+  // What it used, kept when it ended (#1500): on its name's hover, read as the pointer comes
+  // on. A task still waiting to start has no record to read.
+  const used = useTokensOnHover({ finished: task.id });
+  const hover = [firstLine(task.report), waits === null ? (used.said ?? "") : ""]
+    .filter((one) => one !== "")
+    .join("\n");
   const doing = (what: Promise<string | undefined>) => {
     setBusy(true);
     setRefused(undefined);
@@ -158,7 +165,9 @@ function FinishedRow({
           className="finished-name"
           tabIndex={0}
           aria-expanded={shown}
-          title={firstLine(task.report) || undefined}
+          title={hover || undefined}
+          onPointerEnter={waits === null ? used.onPointerEnter : undefined}
+          onPointerLeave={waits === null ? used.onPointerLeave : undefined}
           onClick={() => {
             // Opened to be read: looked at.
             if (!shown) onLook?.(task);
@@ -172,7 +181,12 @@ function FinishedRow({
           )}
           {/* Cut short in a narrow sidebar (#1499), and whole here for a pointer that rests on
               it; a screen reader is told the text. */}
-          <span className="session" title={task.name}>
+          <span
+            className="session"
+            title={
+              waits === null && used.said !== undefined ? `${task.name}\n${used.said}` : task.name
+            }
+          >
             {task.name}
           </span>
           {/* How it ended, as every row says a state: the mark and the word a chat's row

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render as renderBare,
   screen,
   waitFor,
@@ -145,6 +146,17 @@ function core(rows: FinishedTask[], open: OpenChat[] = [STEWARD], refuses?: stri
         listed = listed.filter((row) => !ids.includes(row.id));
         return before - listed.length;
       }
+      if (cmd === "tasks_used")
+        // What each ended task's record kept (#1500): the failure kept a figure, the rest none.
+        return {
+          chats: [],
+          finished: ((a.finished as string[]) ?? []).map((id) =>
+            id === FAILED.id
+              ? { id, tokens: "12k in, 3k out", unsaid: null }
+              : { id, tokens: null, unsaid: "nothing" },
+          ),
+          total: null,
+        };
       if (cmd === "reopen_finished_task") {
         if (refuses !== undefined) throw new Error(refuses);
         const row = listed.find((one) => one.id === a.id);
@@ -443,6 +455,39 @@ describe("a chat's finished tasks", () => {
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Finished tasks of steward 4" })).toBeNull(),
     );
+  });
+
+  it("says what a finished task used on its name's hover, read once the pointer rests (#1500)", async () => {
+    const { asked } = core([
+      FAILED,
+      finished("01K6WAITS", "start again", {
+        how: "failed",
+        outcome: "failed",
+        folds: false,
+        report: "It could not start.",
+        waits: { approval: null },
+      }),
+    ]);
+    render(<App />);
+    const group = await theirs();
+    const name = theRow(group, "check staging");
+
+    fireEvent.pointerEnter(name);
+    await waitFor(() =>
+      expect(name.getAttribute("title")).toBe(
+        "The cluster refused the login.\nTokens: 12k in, 3k out",
+      ),
+    );
+    expect(asked("tasks_used")).toEqual([
+      { plane: PLANE, scope: "hover", own: null, chats: [], finished: [FAILED.id] },
+    ]);
+
+    // A task still waiting to start has no record to read, and nothing is asked for it.
+    const waiting = theRow(group, "start again");
+    fireEvent.pointerEnter(waiting);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(asked("tasks_used")).toHaveLength(1);
+    expect(waiting.getAttribute("title")).toBe("It could not start.");
   });
 
   it("shows a finished row's report on a press, as text and never as markup", async () => {

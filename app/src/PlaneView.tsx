@@ -254,6 +254,7 @@ import {
 import { chatsListPrefs } from "./chatsListPrefs";
 import { placeRowId, TabTasks, type Place as TaskPlace } from "./TabChip";
 import { hasTasks, type Ended, type Needing } from "./tabTasks";
+import { readUsed, type UsedAsk } from "./tasksUsed";
 import { finishedBucketOf, taskBucketOf } from "./taskBuckets";
 import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
@@ -5936,6 +5937,8 @@ export const PlaneView = memo(function PlaneView({
     (session: number, where: TaskPlace) => placeNow.current(session, where),
     [],
   );
+  /** What a tab's chats used, for its menu (#1500): read only as the window asks. */
+  const usedFromChip = useCallback((ask: UsedAsk) => readUsed(plane, "menu", ask), [plane]);
 
   /**
    * **A tab on the strip was pressed.** One that is behind comes forward, on whatever it was
@@ -6730,6 +6733,7 @@ export const PlaneView = memo(function PlaneView({
                               ends={taskEndsOf}
                               onPress={pressTaskEnd}
                               onPlace={placeFromChip}
+                              used={usedFromChip}
                             />
                             <FreshMark
                               id={freshMarkOf(id)}
