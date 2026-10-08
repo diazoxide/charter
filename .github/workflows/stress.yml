@@ -173,7 +173,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
+      # Only `main` saves a Rust cache; a pull request restores `main`'s and saves none.
+      # The repository holds 10 GB of caches, and each pull request's own 0.8-1.2 GB ones
+      # pushed `main`'s out: on 2026-10-08 the caches held 12 GB and a run on `main` started
+      # with none (the rust-cache README's own advice for a busy repository).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
@@ -226,6 +232,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Pollers at once on a 300,000-file plane, with and without the shared standing
         run: cargo test -p purlis-core --lib -- planegit::tests::pollers_at_once --test-threads 1 --nocapture
         env:
@@ -259,6 +267,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # `shell: bash` for `pipefail`, so the test's own failure is the step's.
       - name: ⌘P, ⌘⇧F and status on a generated repo
         shell: bash
