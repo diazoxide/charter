@@ -380,7 +380,7 @@ fn allow_for_everyone_is_kept_in_the_committed_project_file() {
     assert_eq!(listed[0].by, None);
     assert_eq!(world.audited()[0].4, "project");
     // Whoever allowed it is not told of their own change.
-    assert_eq!(changed_of(world.root()), None);
+    assert_eq!(arrival_of(world.root()), DispatchArrival::default());
 }
 
 #[test]
@@ -673,7 +673,6 @@ fn settings_is_told_what_policy_locks_of_dispatch() {
             all_locked: None,
             locked_pairs: vec![],
             locked_by: None,
-            changed: None,
         }
     );
     set_for_this_test(Locks::parse(
@@ -696,7 +695,6 @@ fn settings_is_told_what_policy_locks_of_dispatch() {
                 target: "devops".to_owned(),
             }],
             locked_by: Some("Locked by policy, set by IT in /etc/purlis/policy.json.".to_owned()),
-            changed: None,
         }
     );
 }
@@ -831,38 +829,42 @@ fn a_teammate_is_told_once_when_the_committed_grants_change() {
     let root = project.path();
     let manifest = purlis_core::names::manifest(root);
     std::fs::write(&manifest, "schema = 1\n").expect("the project file");
-    assert_eq!(changed_of(root), None);
+    assert_eq!(arrival_of(root), DispatchArrival::default());
 
     std::fs::write(
         &manifest,
         "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n",
     )
     .expect("a teammate's push");
-    let told = changed_of(root).expect("told");
+    let told = arrival_of(root);
     assert_eq!(
-        told,
-        DispatchGrantsChanged {
-            added: vec!["steward -> devops".to_owned()],
-            removed: vec![],
-            now: vec!["steward -> devops".to_owned()],
-        }
+        told.waiting
+            .iter()
+            .map(|one| (one.asking.as_str(), one.target.as_str(), one.any))
+            .collect::<Vec<_>>(),
+        [("steward", "devops", false)]
     );
-    // It stands until it is read, and is told as often as it is asked for until then.
-    assert_eq!(changed_of(root), Some(told.clone()));
+    // It stands until it is answered, and is told as often as it is asked for until then.
+    assert_eq!(arrival_of(root), told);
 
-    dispatchgrant::acknowledge(root, &told.now).expect("read");
+    dispatchgrant::acknowledge(root, &["steward -> devops".to_owned()]).expect("accepted");
 
-    assert_eq!(changed_of(root), None, "once");
-    // A later change is told again.
+    assert_eq!(arrival_of(root), DispatchArrival::default(), "once");
+    // What the project then takes away is told, once, and asks nothing.
     std::fs::write(&manifest, "schema = 1\n").expect("another push");
+    let gone = arrival_of(root);
+    assert_eq!(gone.waiting, []);
     assert_eq!(
-        changed_of(root),
-        Some(DispatchGrantsChanged {
-            added: vec![],
-            removed: vec!["steward -> devops".to_owned()],
-            now: vec![],
-        })
+        gone.gone,
+        [DispatchGone {
+            id: "steward -> devops".to_owned(),
+            asking: "steward".to_owned(),
+            target: "devops".to_owned(),
+            any: false,
+        }]
     );
+    purlis_core::dispatcharrival::told_gone(root, &["steward -> devops".to_owned()]).expect("read");
+    assert_eq!(arrival_of(root), DispatchArrival::default());
 }
 
 // ---- the entry point the dispatch core calls, on a project the app holds ------------------------
@@ -1267,8 +1269,13 @@ fn a_teammate_s_pair_covers_nothing_here_until_it_is_allowed_on_the_notice_which
         [("devops", false), ("qa", true)]
     );
     assert_eq!(
-        changed_of(world.root()).expect("still told").added,
-        ["steward -> qa"]
+        arrival_of(world.root())
+            .waiting
+            .iter()
+            .map(|one| format!("{} -> {}", one.asking, one.target))
+            .collect::<Vec<_>>(),
+        ["steward -> qa"],
+        "still told"
     );
     // Allowed twice, it is audited once.
     world
@@ -2074,3 +2081,6 @@ fn a_chat_still_running_as_a_persona_that_is_gone_is_covered_by_no_grant_and_ask
 
 #[path = "dispatchgrants_table_tests.rs"]
 mod table;
+
+#[path = "dispatchgrants_arrival_tests.rs"]
+mod arrival;

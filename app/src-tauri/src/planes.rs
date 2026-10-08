@@ -271,6 +271,9 @@ fn applying(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .apply(&root, what.as_deref());
+        // Before the window is told: a grant the project's file dropped is no longer accepted
+        // on this machine by the time anything reads what waits (#1506).
+        crate::dispatchgrants::project_moved(&root, what.as_deref());
         tell(plane, what);
     })
 }

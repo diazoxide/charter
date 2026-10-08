@@ -6,7 +6,7 @@
 use super::*;
 
 /// Writes the persona `name` into `world`'s project, as a hand or a pull would.
-fn persona(world: &World, name: &str) {
+pub(super) fn persona(world: &World, name: &str) {
     let dir = world.root().join("personas").join(name);
     std::fs::create_dir_all(&dir).expect("its folder");
     std::fs::write(
@@ -17,7 +17,7 @@ fn persona(world: &World, name: &str) {
 }
 
 /// A world whose project has a project file holding `grants` and these personas.
-fn world_with(personas: &[&str], grants: &str) -> World {
+pub(super) fn world_with(personas: &[&str], grants: &str) -> World {
     let world = World::new();
     std::fs::write(
         purlis_core::names::manifest(world.root()),
@@ -30,17 +30,17 @@ fn world_with(personas: &[&str], grants: &str) -> World {
     world
 }
 
-fn file(world: &World) -> String {
+pub(super) fn file(world: &World) -> String {
     std::fs::read_to_string(purlis_core::names::manifest(world.root())).expect("the file")
 }
 
-fn known(world: &World) -> impl Fn(&str) -> bool {
+pub(super) fn known(world: &World) -> impl Fn(&str) -> bool {
     let personas = purlis_core::dispatchdormant::personas_of(world.root()).unwrap_or_default();
     move |name: &str| personas.iter().any(|one| one == name)
 }
 
 /// The kinds audited, with who and what, in order.
-fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
+pub(super) fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
     world
         .audited()
         .into_iter()
@@ -48,7 +48,7 @@ fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
         .collect()
 }
 
-fn audit(
+pub(super) fn audit(
     kind: &'static str,
     asking: &str,
     target: &str,
@@ -285,9 +285,14 @@ fn not_on_my_machine_is_audited_leaves_the_committed_file_and_is_undone_by_accep
         .find(|one| one.asking.as_deref() == Some("steward"))
         .expect("still listed");
     assert!(row.waiting && row.declined);
+    // Declined here is not told as arrived again; what nobody answered still is.
     assert_eq!(
-        changed_of(world.root()).map(|one| one.added),
-        Some(vec!["qa -> devops".to_owned()])
+        arrival_of(world.root())
+            .waiting
+            .iter()
+            .map(|one| format!("{} -> {}", one.asking, one.target))
+            .collect::<Vec<_>>(),
+        ["steward -> *", "qa -> devops"]
     );
     pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     assert_eq!(

@@ -105,7 +105,10 @@ fn allow_for_everyone_is_kept_in_the_committed_file_and_is_no_news_to_whoever_ma
     grant(dir.path(), &pair("steward", "devops")).expect("granted");
     assert_eq!(committed_at(dir.path()), [pair("steward", "devops")]);
     // Written by you here, so the Notice is a teammate's and not yours.
-    assert_eq!(crate::dispatchgrant::changed(dir.path()), None);
+    assert_eq!(
+        crate::dispatcharrival::arrival(dir.path()),
+        crate::dispatcharrival::Arrival::default()
+    );
 }
 
 #[test]
@@ -116,29 +119,42 @@ fn a_teammate_s_change_is_told_once_and_your_own_after_it_does_not_hide_it() {
         format!("{PROJECT}\n[dispatch.grants]\nqa = [\"devops\"]\n"),
     )
     .expect("a teammate's push");
-    let told = crate::dispatchgrant::changed(dir.path()).expect("a change");
-    assert_eq!(told.added, ["qa -> devops"]);
-    assert_eq!(told.removed, Vec::<String>::new());
+    let waiting = |root: &std::path::Path| -> Vec<String> {
+        crate::dispatcharrival::arrival(root)
+            .waiting
+            .iter()
+            .map(crate::dispatcharrival::Arrived::said)
+            .collect()
+    };
+    assert_eq!(waiting(dir.path()), ["qa -> devops"]);
+    assert_eq!(
+        crate::dispatcharrival::arrival(dir.path()).gone,
+        Vec::<String>::new()
+    );
     // A grant of your own while that one waits is yours, seen as it is written; the
     // teammate's still waits, in force for no chat here until you allow it.
     grant(dir.path(), &pair("steward", "devops")).expect("granted");
-    let both = crate::dispatchgrant::changed(dir.path()).expect("still a change");
-    assert_eq!(both.added, ["qa -> devops"]);
+    assert_eq!(waiting(dir.path()), ["qa -> devops"], "still waiting");
     assert_eq!(
         crate::dispatchgrant::InForce::read(dir.path(), Vec::new()).project,
         [pair("steward", "devops")]
     );
-    // Read once, it is not told again.
-    crate::dispatchgrant::acknowledge(dir.path(), &both.now).expect("kept");
-    assert_eq!(crate::dispatchgrant::changed(dir.path()), None);
+    // Accepted once, it is not told again.
+    crate::dispatchgrant::acknowledge(dir.path(), &["qa -> devops".to_owned()]).expect("kept");
+    assert_eq!(
+        crate::dispatcharrival::arrival(dir.path()),
+        crate::dispatcharrival::Arrival::default()
+    );
     // Until it changes again.
     revoke(dir.path(), &pair("qa", "devops")).expect("revoked");
-    assert_eq!(crate::dispatchgrant::changed(dir.path()), None, "your own");
+    assert_eq!(
+        crate::dispatcharrival::arrival(dir.path()),
+        crate::dispatcharrival::Arrival::default(),
+        "your own"
+    );
     fs::write(crate::names::manifest(dir.path()), PROJECT).expect("a teammate's push");
     assert_eq!(
-        crate::dispatchgrant::changed(dir.path())
-            .expect("a change")
-            .removed,
+        crate::dispatcharrival::arrival(dir.path()).gone,
         ["steward -> devops"]
     );
 }

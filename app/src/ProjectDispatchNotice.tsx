@@ -1,93 +1,134 @@
-import { useEffect, useState } from "react";
-import { commands, type DispatchGrantsChanged, type PlaneId } from "./bindings";
+import { useState } from "react";
+import type { DispatchArrived, PlaneId } from "./bindings";
+import { arrivedSaid, MOST_SAID, pairSaid, useDispatchArrival } from "./dispatchArrival";
 import { Notice, type NoticeAction } from "./Notice";
 
-/** A pair as the core spells it (`steward -> devops`), as a sentence says it. */
-const said = (pair: string) => pair.replace(" -> ", " to ");
+/**
+ * **What a target persona works with**, in the words the grant question uses (#1502's
+ * `wants`).
+ *
+ * THE ONE PLACE FOR #1502: that code is not on this branch's base, so this says nothing today.
+ * When it lands, return its sentence for `target` here and the Notice says it after each
+ * grant, with no other change.
+ */
+function worksWith(target: string): string | undefined {
+  void target;
+  return undefined;
+}
 
 /**
- * **The project's dispatch grants changed** (#1437): the one-time Notice each teammate sees when
- * the committed settings change who may dispatch to whom, so a pulled change never silently
- * widens what chats do. **A pair a pull added covers no chat on this machine until someone here
- * allows it**: this Notice is where, all of them or one at a time (`acknowledge_dispatch_grants`,
- * which the core audits). A pair left unanswered still asks on the tab of the chat that needs it.
+ * **A teammate's dispatch grant arrived** (#1506, V100-62): the Notice the window shows, at
+ * its own level and not on a chat's tab, when the project's settings come to let one persona's
+ * chats dispatch to another and this person has not answered that yet. After a pull, a branch
+ * switched, a hand's edit, and once when the project opens.
  *
- * It names what was added and what was taken away, and stands until it is answered. Grants taken
- * away need no yes: "Got it" records that they were read. "Review the grants" opens Settings,
- * where each is listed with Revoke. A grant allowed or revoked in this window is recorded there,
- * so it is never told back to the person who made it.
+ * One Notice for everything that arrived together: the pairs listed, "any persona" in its own
+ * words, a grant naming a persona this project does not define said as covering nothing. Two
+ * answers for all that is listed, **Accept** and **Not on my machine**, and **Decide each in
+ * Settings**, which opens the Dispatch section. Until it is answered nothing listed is in force
+ * for this person, and a chat that needs one of the grants meanwhile is held and asks on its
+ * own tab in the same words (`DispatchGrantNotice`); answering either clears both.
+ *
+ * **Putting it away answers nothing.** Dismiss hides this list until it changes or the project
+ * is opened again; nothing is accepted by it, and the chat's own question still stands.
+ *
+ * **An answer is for what was shown.** It sends each listed grant's id; the core answers only
+ * what is still exactly as it was shown, and where the list moved meanwhile this says so and
+ * shows the list as it is now.
+ *
+ * **Many pairs are summed** (more than `MOST_SAID`), with each one listed under the line, so a
+ * flood cannot hide one grant among others. "Any persona" is never summed.
+ *
+ * **What the project took away** is a Notice of its own that asks nothing: said once, and put
+ * away with Dismiss.
  */
 export function ProjectDispatchNotice({
   plane,
   onReview,
 }: {
   plane: PlaneId;
-  /** Opens Settings where the dispatch grants are listed. */
+  /** Opens Settings at the project's Dispatch section. */
   onReview: () => void;
 }) {
-  const [changed, setChanged] = useState<DispatchGrantsChanged>();
+  const { waiting, gone, said, answer, told } = useDispatchArrival(plane);
+  /** The list the person put away, by what it showed: another list is shown. */
+  const [putAway, setPutAway] = useState<string>();
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    void commands
-      .dispatchGrants(plane)
-      .then((held) => {
-        if (live && held.status === "ok") setChanged(held.data?.changed ?? undefined);
-      })
-      // A project whose grants cannot be read says nothing here: they still apply.
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [plane]);
+  const shown = waiting.map((one) => one.id).join("\n");
+  const usable = waiting.filter((one) => one.undefined === null);
+  const pairs = usable.filter((one) => !one.any);
 
-  if (changed === undefined) return null;
+  const press = (accepted: boolean, these: readonly DispatchArrived[]) => () => {
+    if (busy) return;
+    setBusy(true);
+    void answer(accepted, these).finally(() => setBusy(false));
+  };
+  const decline: NoticeAction = {
+    label: "Not on my machine",
+    onPress: press(false, waiting),
+  };
+  const accept: NoticeAction[] =
+    usable.length === 0
+      ? []
+      : [
+          {
+            label: usable.length === 1 ? "Accept" : `Accept all ${usable.length}`,
+            onPress: press(true, usable),
+          },
+        ];
+  const [first, ...rest] = [...accept, decline];
 
-  /** Allows `shown`, each as the core spelled it: every pair added, or one. */
-  const allow = (shown: readonly string[]) =>
-    void commands
-      .acknowledgeDispatchGrants(plane, [...shown])
-      .then((left) => {
-        if (left.status === "ok") setChanged(left.data ?? undefined);
-      })
-      // Not recorded: it is told again next time, which is the safe way to be wrong.
-      .catch(() => {});
-
-  const review: NoticeAction = { label: "Review the grants", onPress: onReview };
-  const all: NoticeAction =
-    changed.added.length === 0
-      ? { label: "Got it", onPress: () => allow(changed.now) }
-      : {
-          label: changed.added.length === 1 ? "Allow it" : `Allow all ${changed.added.length}`,
-          onPress: () => allow(changed.added),
-        };
-  // One at a time, where there is more than one to choose between.
-  const each: NoticeAction[] =
-    changed.added.length > 1
-      ? changed.added.map((pair) => ({
-          label: `Allow ${said(pair)}`,
-          onPress: () => allow([pair]),
-        }))
-      : [];
+  const each =
+    pairs.length > MOST_SAID ? (
+      <details className="block-report">
+        <summary>Show all {pairs.length} pairs</summary>
+        <ul>
+          {pairs.map((one) => (
+            <li key={one.id}>{pairSaid(one)}</li>
+          ))}
+        </ul>
+      </details>
+    ) : undefined;
 
   return (
-    <Notice
-      cause="dispatch-grants"
-      label="The project's dispatch grants changed"
-      fixes={[all, ...each, review]}
-    >
-      <p>
-        Which personas&apos; chats may dispatch to which has changed in the project&apos;s settings,
-        which everyone who opens it follows.
-        {changed.added.length > 0 && (
-          <>
-            {" "}
-            Added: {changed.added.map(said).join(", ")}. What was added covers no chat on this
-            machine until you allow it here.
-          </>
-        )}
-        {changed.removed.length > 0 && <> Taken away: {changed.removed.map(said).join(", ")}.</>}
-      </p>
-    </Notice>
+    <>
+      {waiting.length > 0 && shown !== putAway && (
+        <Notice
+          cause="dispatch-grants"
+          label="The project's dispatch grants changed"
+          fixes={[first ?? decline, ...rest]}
+          link={{ label: "Decide each in Settings", onPress: onReview }}
+          onDismiss={() => setPutAway(shown)}
+          under={each}
+        >
+          <p>
+            {arrivedSaid(waiting).join(" ")}
+            {usable
+              .map((one) => worksWith(one.target))
+              .filter((one) => one !== undefined)
+              .map((one) => ` ${one}`)}
+            {usable.length > 0 &&
+              " None of it is in force on this machine until you accept it. Accepting lets those chats ask the other persona for anything it can do, without asking you again."}
+            {" Not on my machine leaves the project's settings as they are for your teammates."}
+            {said !== undefined && ` ${said}`}
+          </p>
+        </Notice>
+      )}
+      {gone.length > 0 && (
+        <Notice
+          cause="dispatch-grants-gone"
+          label="The project took dispatch grants away"
+          onDismiss={() => told(gone)}
+        >
+          <p>
+            The project no longer lets {gone.map(pairSaid).join(", ")}. You had accepted{" "}
+            {gone.length === 1 ? "it" : "them"} on this machine; from now on{" "}
+            {gone.length === 1 ? "it covers" : "they cover"} nothing here. There is nothing to
+            answer.
+          </p>
+        </Notice>
+      )}
+    </>
   );
 }

@@ -534,9 +534,12 @@ fn any_persona_for_everyone_is_written_as_a_star_and_is_in_force_for_whoever_set
         grants.level_of(Some("steward"), "someone-new"),
         Some(Level::Project)
     );
-    // No pair was made of it, so the Notice of what a teammate changed says nothing of it.
+    // No pair was made of it, and whoever set it is told of nothing arriving.
     assert_eq!(committed_at(root), []);
-    assert_eq!(changed(root), None);
+    assert_eq!(
+        crate::dispatcharrival::arrival(root),
+        crate::dispatcharrival::Arrival::default()
+    );
 
     assert_eq!(revoke_any(root, "steward", Level::Project), Ok(true));
     assert_eq!(revoke_any(root, "steward", Level::Project), Ok(false));

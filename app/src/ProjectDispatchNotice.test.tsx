@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
-import type { DispatchGrants } from "./bindings";
+import type { DispatchArrival, DispatchArrived, DispatchGone } from "./bindings";
 
 /**
- * The one-time Notice of a project's dispatch grants changing (#1437): each teammate is told
- * who may now dispatch to whom, and who no longer may, once.
+ * The Notice that says a teammate's dispatch grant arrived (#1506): what the project's
+ * settings now let which persona's chats do, with Accept and Not on my machine for all that is
+ * listed, and what the project took away, said once.
  */
 
 afterEach(() => {
@@ -17,112 +18,298 @@ afterEach(() => {
 
 const PLANE = "/home/dev/plane";
 const LABEL = "The project's dispatch grants changed";
+const GONE = "The project took dispatch grants away";
 
-const QUIET: DispatchGrants = {
-  grants: [],
-  all_locked: null,
-  locked_pairs: [],
-  locked_by: null,
-  changed: null,
-};
+const arrived = (asking: string, target: string, more: Partial<DispatchArrived> = {}) => ({
+  id: `${asking} -> ${target}`,
+  asking,
+  target,
+  any: target === "*",
+  undefined: null,
+  again: false,
+  ...more,
+});
 
-const CHANGED: DispatchGrants = {
-  ...QUIET,
-  changed: {
-    added: ["steward -> devops", "qa -> devops"],
-    removed: ["steward -> billing"],
-    now: ["steward -> devops", "qa -> devops"],
-  },
-};
+const gone = (asking: string, target: string): DispatchGone => ({
+  id: `${asking} -> ${target}`,
+  asking,
+  target,
+  any: target === "*",
+});
 
-function core(state: DispatchGrants) {
+const QUIET: DispatchArrival = { waiting: [], gone: [] };
+
+/** A core where `first` waits; an answer is recorded and answered with `after`. */
+function core(first: DispatchArrival, after: { said: string | null; arrival: DispatchArrival }) {
   const asked: { cmd: string; args: unknown }[] = [];
+  let now = first;
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
-    if (cmd === "dispatch_grants") return state;
-    if (cmd === "acknowledge_dispatch_grants") return null;
+    if (cmd === "dispatch_arrival") return now;
+    if (cmd === "answer_dispatch_arrival") {
+      now = after.arrival;
+      return after;
+    }
+    if (cmd === "dispatch_gone_told") {
+      now = { ...now, gone: [] };
+      return now;
+    }
     return null;
   });
   return asked;
 }
 
-describe("the project's dispatch grants Notice", () => {
-  it("names who may now dispatch to whom, and who no longer may", async () => {
-    core(CHANGED);
-    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
+const sent = (asked: { cmd: string; args: unknown }[], cmd: string) =>
+  asked.filter((one) => one.cmd === cmd).map((one) => one.args);
+
+const show = (onReview: () => void = () => {}) =>
+  render(<ProjectDispatchNotice plane={PLANE} onReview={onReview} />);
+
+describe("the Notice that a teammate's dispatch grant arrived", () => {
+  it("says one pair in a sentence, and that nothing is in force until it is accepted", async () => {
+    core({ waiting: [arrived("steward", "devops")], gone: [] }, { said: null, arrival: QUIET });
+    show();
 
     const notice = await screen.findByRole("status", { name: LABEL });
-    expect(notice).toHaveTextContent("Added: steward to devops, qa to devops.");
-    expect(notice).toHaveTextContent("Taken away: steward to billing.");
-    // What a pull added covers nothing here until someone at this machine allows it.
+    expect(notice).toHaveTextContent("The project now lets steward dispatch to devops.");
+    expect(notice).toHaveTextContent("None of it is in force on this machine until you accept it.");
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Accept", "Not on my machine", "Decide each in Settings", "Dismiss"]);
+  });
+
+  it("lists several pairs in one Notice, by the persona that may dispatch", async () => {
+    core(
+      {
+        waiting: [arrived("steward", "devops"), arrived("steward", "qa"), arrived("qa", "devops")],
+        gone: [],
+      },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(screen.getAllByRole("status", { name: LABEL })).toHaveLength(1);
     expect(notice).toHaveTextContent(
-      "What was added covers no chat on this machine until you allow it here.",
+      "The project now lets steward dispatch to devops and qa; qa dispatch to devops.",
     );
+    expect(within(notice).getByRole("button", { name: "Accept all 3" })).toBeInTheDocument();
   });
 
-  it("allows one pair alone, and the others still wait", async () => {
-    const asked = core(CHANGED);
-    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
-
-    await userEvent
-      .setup()
-      .click(await screen.findByRole("button", { name: "Allow steward to devops" }));
-
-    const acknowledged = asked.filter((one) => one.cmd === "acknowledge_dispatch_grants");
-    expect(acknowledged.map((one) => one.args)).toMatchObject([
-      { plane: PLANE, shown: ["steward -> devops"] },
-    ]);
-  });
-
-  it("only says so when grants were taken away, with nothing to allow", async () => {
-    const asked = core({
-      ...QUIET,
-      changed: { added: [], removed: ["steward -> billing"], now: [] },
-    });
-    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
+  it("says any persona in its own words, before the pairs", async () => {
+    core(
+      { waiting: [arrived("steward", "*"), arrived("qa", "devops")], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
 
     const notice = await screen.findByRole("status", { name: LABEL });
-    expect(notice).not.toHaveTextContent("until you allow it here");
-    expect(screen.queryByRole("button", { name: /^Allow/ })).toBeNull();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Got it" }));
-    await waitFor(() =>
-      expect(asked.map((one) => one.cmd)).toContain("acknowledge_dispatch_grants"),
+    expect(notice).toHaveTextContent(
+      "The project now lets steward dispatch to any persona: every persona of this project, including ones added later. The project now lets qa dispatch to devops.",
     );
   });
 
-  it("says nothing when they did not change", async () => {
-    const asked = core(QUIET);
-    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
+  it("accepts everything it listed, by what was shown, and is gone", async () => {
+    const waiting = [arrived("steward", "*"), arrived("steward", "devops")];
+    const asked = core({ waiting, gone: [] }, { said: null, arrival: QUIET });
+    show();
 
-    await waitFor(() => expect(asked.map((one) => one.cmd)).toContain("dispatch_grants"));
-    expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument();
-  });
-
-  it("allows every pair it showed on Allow all, and is gone", async () => {
-    const asked = core(CHANGED);
-    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
-
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Allow all 2" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Accept all 2" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument(),
     );
-    const acknowledged = asked.filter((one) => one.cmd === "acknowledge_dispatch_grants");
-    expect(acknowledged).toHaveLength(1);
-    expect(acknowledged[0]?.args).toMatchObject({
-      plane: PLANE,
-      shown: ["steward -> devops", "qa -> devops"],
-    });
+    expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
+      { plane: PLANE, accepted: true, shown: ["steward -> *", "steward -> devops"] },
+    ]);
   });
 
-  it("opens Settings to review them, and records nothing", async () => {
-    const asked = core(CHANGED);
-    const onReview = vi.fn();
-    render(<ProjectDispatchNotice plane={PLANE} onReview={onReview} />);
+  it("declines everything it listed on Not on my machine", async () => {
+    const asked = core(
+      { waiting: [arrived("steward", "devops"), arrived("qa", "devops")], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
 
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Review the grants" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Not on my machine" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument(),
+    );
+    expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
+      { plane: PLANE, accepted: false, shown: ["steward -> devops", "qa -> devops"] },
+    ]);
+  });
+
+  it("is put away by Dismiss without answering anything", async () => {
+    const asked = core(
+      { waiting: [arrived("steward", "devops")], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Dismiss" }));
+
+    expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument();
+    expect(sent(asked, "answer_dispatch_arrival")).toEqual([]);
+    // Nothing but the read was ever sent to the core.
+    expect(asked.map((one) => one.cmd).filter((cmd) => !cmd.startsWith("plugin:"))).toEqual([
+      "dispatch_arrival",
+    ]);
+  });
+
+  it("opens Settings to decide each, and answers nothing", async () => {
+    const asked = core(
+      { waiting: [arrived("steward", "devops")], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    const onReview = vi.fn();
+    show(onReview);
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Decide each in Settings" }));
 
     expect(onReview).toHaveBeenCalledOnce();
-    expect(asked.map((one) => one.cmd)).not.toContain("acknowledge_dispatch_grants");
+    expect(sent(asked, "answer_dispatch_arrival")).toEqual([]);
+  });
+
+  it("says where the list changed before the answer came, and shows the list as it is", async () => {
+    const said =
+      "Nothing was accepted: the project's dispatch grants changed after this was shown. This is what waits now.";
+    core(
+      { waiting: [arrived("steward", "devops")], gone: [] },
+      { said, arrival: { waiting: [arrived("steward", "prod")], gone: [] } },
+    );
+    show();
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Accept" }));
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    await waitFor(() => expect(notice).toHaveTextContent(said));
+    expect(notice).toHaveTextContent("The project now lets steward dispatch to prod.");
+    expect(notice).not.toHaveTextContent("steward dispatch to devops");
+  });
+
+  it("says a grant names a persona this project does not define, and does not accept it", async () => {
+    const asked = core(
+      {
+        waiting: [
+          arrived("steward", "devops"),
+          arrived("steward", "ghost", { undefined: "ghost" }),
+        ],
+        gone: [],
+      },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(notice).toHaveTextContent(
+      "The project's settings also let steward dispatch to ghost, but this project does not define a persona named ghost, so that covers nothing and is not accepted.",
+    );
+    await userEvent.setup().click(within(notice).getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(sent(asked, "answer_dispatch_arrival")).toHaveLength(1));
+    expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
+      { accepted: true, shown: ["steward -> devops"] },
+    ]);
+  });
+
+  it("offers no Accept where nothing listed can be used", async () => {
+    core(
+      { waiting: [arrived("steward", "ghost", { undefined: "ghost" })], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(within(notice).queryByRole("button", { name: /^Accept/ })).toBeNull();
+    expect(notice).not.toHaveTextContent("until you accept it");
+    expect(within(notice).getByRole("button", { name: "Not on my machine" })).toBeInTheDocument();
+  });
+
+  it("says a grant is asked again when the project took it away and put it back", async () => {
+    core(
+      { waiting: [arrived("steward", "devops", { again: true })], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    expect(await screen.findByRole("status", { name: LABEL })).toHaveTextContent(
+      "You accepted steward to devops before. The project's settings were without it for a time since, so it waits for your yes again.",
+    );
+  });
+
+  it("sums a flood of pairs, keeps any persona apart, and lists each pair under the line", async () => {
+    const targets = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    core(
+      {
+        waiting: [arrived("qa", "*"), ...targets.map((target) => arrived("steward", target))],
+        gone: [],
+      },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(notice).toHaveTextContent("The project now lets qa dispatch to any persona");
+    expect(notice).toHaveTextContent(
+      "The project now lets steward dispatch to others: 8 pairs in all, each listed below.",
+    );
+    expect(screen.getByText("Show all 8 pairs")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem").map((one) => one.textContent)).toEqual(
+      targets.map((target) => `steward to ${target}`),
+    );
+  });
+
+  it("draws a name as text, never as markup", async () => {
+    core(
+      { waiting: [arrived("steward", "<img src=x>", { undefined: "<img src=x>" })], gone: [] },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(notice).toHaveTextContent("steward dispatch to <img src=x>");
+    expect(notice.querySelector("img")).toBeNull();
+  });
+
+  it("says once what the project took away, and asks nothing", async () => {
+    const asked = core(
+      { waiting: [], gone: [gone("steward", "billing"), gone("qa", "*")] },
+      { said: null, arrival: QUIET },
+    );
+    show();
+
+    const notice = await screen.findByRole("status", { name: GONE });
+    expect(notice).toHaveTextContent(
+      "The project no longer lets steward to billing, qa to any persona.",
+    );
+    expect(notice).toHaveTextContent("There is nothing to answer.");
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Dismiss"]);
+    expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument();
+
+    await userEvent.setup().click(within(notice).getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: GONE })).not.toBeInTheDocument(),
+    );
+    expect(sent(asked, "dispatch_gone_told")).toMatchObject([
+      { plane: PLANE, shown: ["steward -> billing", "qa -> *"] },
+    ]);
+  });
+
+  it("says nothing when nothing waits", async () => {
+    const asked = core(QUIET, { said: null, arrival: QUIET });
+    show();
+
+    await waitFor(() => expect(asked.map((one) => one.cmd)).toContain("dispatch_arrival"));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

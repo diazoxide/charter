@@ -515,9 +515,16 @@ The person's rule that one persona may dispatch to another: for this chat, for m
 machine, or for everyone in this project. Dispatching to the same persona needs none, and
 nothing a chat sends can make one. It is one-way. **Any persona** is a grant with no named
 target, made only in Settings; **never for this pair** is the person's refusal on their
+<<<<<<< HEAD
 machine, which no grant covers until they lift it. It counts only while both personas exist. Where a
 persona was seen gone and another has its name, the grants for the name are **set aside**:
 they allow nothing until the person gives them back or removes them.
+=======
+machine, which no grant covers until they lift it. A grant whose persona was removed is **set
+aside**: it allows nothing until the person gives it back or removes it. A project grant a
+teammate committed **arrives**: it allows nothing on a machine until the person there accepts
+it, and their yes holds only while the project keeps the grant.
+>>>>>>> 6a984f64 (dispatch: a teammate's project grant is shown when it arrives, and a yes is bound to what it accepted)
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
 **Headless chat**:

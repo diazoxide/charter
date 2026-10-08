@@ -656,5 +656,27 @@ decided here. Nor is any of this a boundary against a chat: a chat that may writ
 project's `personas/` can edit a persona in place. **purlis has no persona rename**: a persona
 whose folder is moved is, to these rules, one that went away and another that appeared.
 
-Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
-(#1506).
+**8. A teammate's grant is shown when it arrives (V100-62).** #1506 builds it.
+
+- When the project's file comes to hold a grant the person has neither accepted nor declined,
+  the window says so once, at its own level and not on a chat's tab: after a pull, a branch
+  switched or a hand's edit, and when the project opens. Everything that arrived together is
+  one Notice, with **Accept** and **Not on my machine** for all it lists and a way to decide
+  each in Settings. Until it is answered nothing listed is in force for that person.
+- **It names "any persona" in its own words and can accept it.** This narrows item 2's "no
+  answer to a Notice makes one": no answer to a *chat's question* makes or accepts one. The
+  Notice of an arrival is raised by the project's file, never by a chat, and accepts only what
+  the file already holds.
+- Putting the Notice away answers nothing. The question on the tab of a chat that needs the
+  pair stays as the fallback, says the same thing, and takes the same two answers.
+- **An answer is for what was shown.** Only a grant still exactly as it was listed is
+  answered; where the list moved, the person is told and shown it as it is.
+- A grant naming a persona the checkout does not define is said to cover nothing and is not
+  accepted.
+- **A yes is bound to what it accepted.** A grant the project's file drops is no longer
+  accepted on that machine as soon as that is seen, and the person is told once that it was
+  taken away. A grant taken out and put back waits for a new yes. Because a file that was
+  changed and changed back reads the same, the acceptances are kept with the commit they were
+  last checked through, and the versions of the file committed since are read; where that
+  history cannot be read, nothing is assumed to have stayed. A decline goes with the grant it
+  declined, so a grant put back is told again.

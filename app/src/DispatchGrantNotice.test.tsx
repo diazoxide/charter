@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
-import type { DispatchPending, GrantLevel } from "./bindings";
+import type { DispatchArrived, DispatchPending, GrantLevel } from "./bindings";
 
 /**
  * The Notice for a dispatch to another persona that no grant covers (#1437): who wants to
@@ -294,5 +294,130 @@ describe("the dispatch grant Notice", () => {
 
     await waitFor(() => expect(sent(asked, "dispatch_grants_needed")).toHaveLength(1));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The fallback at first use (#1506): the project already grants the pair and the person has not
+ * answered that, because they put the Notice that said it arrived away or missed it. The
+ * chat's own question says the same thing and takes the same two answers.
+ */
+describe("a dispatch the project already grants, not yet answered on this machine", () => {
+  const arrived = (target: string, more: Partial<DispatchArrived> = {}): DispatchArrived => ({
+    id: `steward -> ${target}`,
+    asking: "steward",
+    target,
+    any: target === "*",
+    undefined: null,
+    again: false,
+    ...more,
+  });
+
+  /** A core holding `waiting` for the chat while `first` waits of the project's grants. */
+  function project(waiting: DispatchPending[], first: DispatchArrived[]) {
+    const asked: { cmd: string; args: unknown }[] = [];
+    let held = waiting;
+    let now = first;
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "dispatch_grants_needed") return held;
+      if (cmd === "dispatch_arrival") return { waiting: now, gone: [] };
+      if (cmd === "answer_dispatch_arrival") {
+        const { accepted, shown } = args as { accepted: boolean; shown: string[] };
+        now = now.filter((one) => !shown.includes(one.id));
+        // An accepted grant starts what waited on it.
+        if (accepted) held = [];
+        return { said: null, arrival: { waiting: now, gone: [] } };
+      }
+      return null;
+    });
+    return asked;
+  }
+
+  it("says what the arrival Notice says, and offers Accept and Not on my machine", async () => {
+    project([WAITING], [arrived("devops")]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    await waitFor(() =>
+      expect(notice).toHaveTextContent(
+        "The project now lets steward dispatch to devops. You have not answered that on this machine. This chat runs as steward and wants to dispatch to devops.",
+      ),
+    );
+    // Accept stands where allowing it for everyone would: the project's settings hold it.
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual([
+      "Allow for this chat",
+      "Allow for me on this machine",
+      "Accept",
+      "Not on my machine",
+      "Keep blocked",
+      "Never for this pair",
+    ]);
+  });
+
+  it("accepts the project's grant by what was shown, and the question is gone", async () => {
+    const asked = project([WAITING], [arrived("devops")]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Accept" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Dispatch to devops" })).not.toBeInTheDocument(),
+    );
+    expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
+      { plane: PLANE, accepted: true, shown: ["steward -> devops"] },
+    ]);
+    expect(sent(asked, "allow_dispatch")).toEqual([]);
+  });
+
+  it("declines it on Not on my machine, and the chat's own question still stands", async () => {
+    const asked = project([WAITING], [arrived("devops")]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Not on my machine" }));
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    await waitFor(() => expect(notice).not.toHaveTextContent("The project now lets"));
+    expect(sent(asked, "answer_dispatch_arrival")).toMatchObject([
+      { accepted: false, shown: ["steward -> devops"] },
+    ]);
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual([
+      "Allow for this chat",
+      "Allow for me on this machine",
+      "Allow for everyone in this project",
+      "Keep blocked",
+      "Never for this pair",
+    ]);
+  });
+
+  it("says the project's any persona, and accepts it nowhere on a chat's tab", async () => {
+    project([WAITING], [arrived("*")]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    await waitFor(() =>
+      expect(notice).toHaveTextContent(
+        "The project now lets steward dispatch to any persona: every persona of this project, including ones added later. You have not answered that on this machine: any persona is answered on the project's Notice or in Settings.",
+      ),
+    );
+    expect(within(notice).queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(within(notice).queryByRole("button", { name: "Not on my machine" })).toBeNull();
+  });
+
+  it("says nothing of a grant for another pair", async () => {
+    project([WAITING], [arrived("qa")]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).not.toHaveTextContent("The project now lets");
+    expect(within(notice).queryByRole("button", { name: "Accept" })).toBeNull();
   });
 });

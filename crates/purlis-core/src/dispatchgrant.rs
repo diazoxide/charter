@@ -21,7 +21,7 @@
 //!   committed.
 //! - **Everyone in this project**: the committed project file, `[dispatch.grants]`
 //!   ([`committed`], written by [`crate::settings::dispatch`]), which every teammate follows
-//!   and is told of once when it changes ([`changed`]):
+//!   and is told of when it changes ([`crate::dispatcharrival::arrival`]):
 //!
 //!   ```toml
 //!   [dispatch.grants]
@@ -40,8 +40,11 @@
 //!
 //! **A pulled grant waits for this machine's yes** (D-1437-R1): a committed pair is in force
 //! here only once someone here allowed it ([`InForce::read`], [`acknowledge_pair`]), on the
-//! project's one-time Notice or on a chat's tab. One made in this window is acknowledged as it
-//! is written. So a chat nobody is at never dispatches under a pair nobody here has seen.
+//! Notice that says it arrived or on a chat's tab. One made in this window is acknowledged as
+//! it is written. So a chat nobody is at never dispatches under a pair nobody here has seen.
+//! **And the yes is bound to what it accepted** (#1506, [`crate::dispatcharrival`]): a grant
+//! the project's file drops is no longer accepted here, so one that is taken out and put back
+//! waits for a new yes, whether or not anything was read in between.
 //!
 //! # Any persona, and never (#1503)
 //!
@@ -190,10 +193,11 @@ impl InForce {
     /// a pull brought in covers nothing here until a person allows it on the one-time Notice,
     /// or on a chat's tab. A grant made in this window is acknowledged as it is written.
     pub fn read(root: &Path, chat: Vec<ChatPair>) -> Self {
-        // An acceptance does not outlive what it accepted: one left behind is dropped here,
-        // where every dispatch is judged, so a star taken out of the file and put back later
-        // waits for a yes again.
-        forget_any_the_file_dropped(root);
+        // An acceptance does not outlive what it accepted: one the project's file dropped, now
+        // or in a commit since it was last checked, is dropped here, where every dispatch is
+        // judged, so a grant taken out of the file and put back waits for a yes again. **The
+        // one thing reading the grants in force writes**, and it only narrows.
+        crate::dispatcharrival::settle(root);
         let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
         let (never, never_unread) = match crate::dispatchnever::read(root) {
             crate::dispatchnever::Nevers::Read(pairs) => (pairs, false),
@@ -534,40 +538,13 @@ pub fn any_committed_at(root: &Path) -> Vec<String> {
 
 /// The personas the project's file lets dispatch to any persona **and** you accepted on this
 /// machine: the only ones of the file's in force here, as a pulled pair waits for a yes
-/// (D-1437-R1). The acceptance is its own record, which no Notice's answer writes.
+/// (D-1437-R1). The acceptance is its own record, which nothing that accepts a pair writes.
 pub fn any_of_the_project(root: &Path) -> Vec<String> {
     let accepted = crate::sandbox::local::dispatch_any_seen(root);
     any_committed_at(root)
         .into_iter()
         .filter(|asking| accepted.contains(asking))
         .collect()
-}
-
-/// **Drops this machine's acceptance of each "any persona" grant the project's file no longer
-/// holds**, so the grant is not in force unasked if the file comes to hold it again. **The one
-/// thing reading the grants in force writes**, and only against a project file that was read
-/// and parsed. Best effort: an acceptance that could not be dropped still covers nothing while the file lacks
-/// the grant.
-pub fn forget_any_the_file_dropped(root: &Path) {
-    let accepted = crate::sandbox::local::dispatch_any_seen(root);
-    if accepted.is_empty() {
-        return;
-    }
-    // Only a file that was read and parsed says it holds no star. One that is not there, or
-    // does not read for a moment (a merge left half done), changes nothing that is stored.
-    let Some(text) = crate::sandbox::read_plane_file(&crate::names::manifest(root))
-        .ok()
-        .flatten()
-    else {
-        return;
-    };
-    if text.parse::<toml::Table>().is_err() {
-        return;
-    }
-    let held = committed(Some(&text)).any;
-    for asking in accepted.iter().filter(|one| !held.contains(one)) {
-        let _ = crate::sandbox::local::forget_dispatch_any(root, asking);
-    }
 }
 
 /// The project's "any persona" grants nobody on this machine has accepted: in the file, in
@@ -629,54 +606,6 @@ pub fn revoke_any(root: &Path, asking: &str, level: Level) -> Result<bool, Strin
     }
 }
 
-/// The project's dispatch grants as they changed since this machine last told the person: what
-/// was added, what was taken away, and the whole list now, each as [`Pair`] is displayed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Change {
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    pub now: Vec<String>,
-}
-
-/// How `now`, the project's grants, differs from `seen`, what the person was last told of.
-/// `None` when nothing differs; order is no change.
-pub fn change_between(seen: &[String], now: &[Pair]) -> Option<Change> {
-    let now: Vec<String> = now.iter().map(ToString::to_string).collect();
-    let added: Vec<String> = now
-        .iter()
-        .filter(|one| !seen.contains(one))
-        .cloned()
-        .collect();
-    let removed: Vec<String> = seen
-        .iter()
-        .filter(|one| !now.contains(one))
-        .cloned()
-        .collect();
-    (!added.is_empty() || !removed.is_empty()).then_some(Change {
-        added,
-        removed,
-        now,
-    })
-}
-
-/// **How the project's dispatch grants changed since this machine last told the person**: the
-/// one-time Notice each teammate sees, so a pulled change never silently widens what chats do.
-/// `None` when nothing did. A project first seen here with grants is a change. Whether the
-/// project's chats are sandboxed makes no difference: a grant is about whose vaults and hosts a
-/// chat can ask for, sandbox or none.
-///
-/// **A pair the person said "Not on my machine" to is no news** ([`decline`]): it is not told
-/// as added and is not in what the Notice sends back, so allowing what the Notice shows never
-/// accepts it. Settings is where it is accepted.
-pub fn changed(root: &Path) -> Option<Change> {
-    let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
-    let declined = crate::sandbox::local::dispatch_declined(root);
-    let mut change = change_between(&seen, &committed_at(root))?;
-    change.added.retain(|one| !declined.contains(one));
-    change.now.retain(|one| !declined.contains(one));
-    (!change.added.is_empty() || !change.removed.is_empty()).then_some(change)
-}
-
 // ---- not on my machine (#1504) ----------------------------------------------------------------
 
 /// The project's grants you said "Not on my machine" to in the project at `root`, each as
@@ -732,11 +661,16 @@ pub fn decline(root: &Path, asking: &str, target: &str) -> Result<(), String> {
         .map_err(|why| format!("purlis could not record it: {why}"))
 }
 
-/// Records that the person allowed `shown`, the project's grants as the Notice showed them:
-/// each of them the file holds is in force here from now on ([`InForce::read`]), and a change
-/// after it was shown is told again ([`changed`]).
+/// Records that the person allowed `shown`, pairs of the project's as [`Pair`] is displayed:
+/// each of them the file holds is in force here from now on ([`InForce::read`]), beside what
+/// was accepted before. One the file does not hold is nothing.
 pub fn acknowledge(root: &Path, shown: &[String]) -> std::io::Result<()> {
-    crate::sandbox::local::acknowledge_dispatch(root, shown)
+    for pair in unacknowledged(root) {
+        if shown.contains(&pair.to_string()) {
+            acknowledge_pair(root, &pair)?;
+        }
+    }
+    Ok(())
 }
 
 /// The project's pairs this machine has not acknowledged: in the file, in force for no chat
@@ -751,14 +685,30 @@ pub fn unacknowledged(root: &Path) -> Vec<Pair> {
 
 /// Records that the person allowed the project's `pair` on this machine, beside what was
 /// acknowledged before.
+///
+/// **Bound to the project's history as it is written** ([`crate::dispatcharrival::settle`]):
+/// what was accepted before is checked first, so the commit kept beside the acceptances is
+/// one all of them were checked through.
 pub fn acknowledge_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
+    crate::dispatcharrival::settle(root);
     let mut seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
     let said = pair.to_string();
     if seen.contains(&said) {
         return Ok(());
     }
     seen.push(said);
-    crate::sandbox::local::acknowledge_dispatch(root, &seen)
+    crate::sandbox::local::acknowledge_dispatch(root, &seen)?;
+    crate::dispatcharrival::settle(root);
+    Ok(())
+}
+
+/// Records that the person accepted the project's "any persona" grant for `asking` on this
+/// machine, bound as [`acknowledge_pair`] binds a pair.
+pub fn acknowledge_any(root: &Path, asking: &str) -> std::io::Result<()> {
+    crate::dispatcharrival::settle(root);
+    crate::sandbox::local::acknowledge_dispatch_any(root, asking)?;
+    crate::dispatcharrival::settle(root);
+    Ok(())
 }
 
 /// Takes `pair` off what this machine acknowledged: a revoke made here is no news here.

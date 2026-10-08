@@ -30,13 +30,14 @@
 //!   Notice. The caller keeps the brief it will send.
 //! - **A held dispatch whose chat closes is dropped**, and the [`Store::answers_with`] listener
 //!   is not told: there is no chat left to tell.
-//! - On Allow, and when the person allows a teammate's committed pair on the project's Notice,
-//!   every held dispatch the grant covers is handed to the listener, which starts it.
+//! - On Allow, and when the person accepts a teammate's committed grant on the Notice that
+//!   says it arrived, every held dispatch the grant covers is handed to the listener, which
+//!   starts it.
 //!
 //! # What a chat cannot do
 //!
 //! **Nothing a chat sends creates, widens or revokes a grant.** A grant is made by
-//! [`allow_dispatch`] or [`acknowledge_dispatch_grants`], window commands a person's press
+//! [`allow_dispatch`] or [`answer_dispatch_arrival`], window commands a person's press
 //! sends, and by nothing on the hook socket: a request carries a target and a brief, and
 //! neither is read for anything but the Notice. **The brief is a chat's text**: it is shown
 //! inert and capped ([`purlis_core::dispatchgrant::shown_brief`]), apart from purlis's own
@@ -64,8 +65,26 @@
 //! person is asked, told why, and their Allow starts the one dispatch they read.
 //!
 //! **Any persona** ([`allow_dispatch_to_any`]) is granted from Settings and from nowhere else.
-//! No answer to a Notice makes one: [`Store::allow`] keeps the one pair the held dispatch
-//! names, whose target is a persona's name, and the project's Notice accepts pairs only.
+//! No answer to a chat's question makes one: [`Store::allow`] keeps the one pair the held
+//! dispatch names, whose target is a persona's name. A teammate's, already in the project's
+//! file, is accepted in Settings or on the Notice that says it arrived, where it is named in
+//! its own words; never on a chat's tab.
+//!
+//! # A teammate's grant, when it arrives (#1506)
+//!
+//! A commit by anyone who can push to the project can add a grant to its file. It is in force
+//! on this machine for nobody until the person here accepts it. [`dispatch_arrival`] is what
+//! waits: the window says it once, at its own level and not on a chat's tab, when the project
+//! opens and each time the watcher says the project's file moved ([`project_moved`]). **Accept**
+//! and **Not on my machine** answer what was listed ([`answer_dispatch_arrival`]): **only what
+//! is still exactly as it was shown** is answered, and where the list moved meanwhile the
+//! person is told and shown the list as it is. Putting the Notice away answers nothing. A
+//! grant that names a persona this checkout does not define is said to, and is never accepted.
+//!
+//! **This machine's yes is bound to what it accepted** ([`purlis_core::dispatcharrival`]): a
+//! grant the project's file drops is dropped here as soon as that is seen, and one taken out
+//! and put back, even with nothing read in between, waits for a new yes. What the project
+//! took away is told once and asks nothing ([`dispatch_gone_told`]).
 //!
 //! # The table in Settings (#1504)
 //!
@@ -774,11 +793,10 @@ impl Store {
             })
     }
 
-    /// **The person allowed `shown` on the project's Notice** (D-1437-R1): each pair of it the
-    /// committed file holds and this machine had not acknowledged is audited as a grant for
-    /// everyone, then in force here, and every held dispatch it covers is handed on. A pair
-    /// the file does not hold is nothing. What the file no longer holds is taken off what was
-    /// acknowledged, so its going is told once.
+    /// **The person accepted `shown`, pairs of the project's** (D-1437-R1): each pair of it
+    /// the committed file holds and this machine had not acknowledged is audited as a grant
+    /// for everyone, then in force here, and every held dispatch it covers is handed on. A
+    /// pair the file does not hold is nothing.
     pub fn acknowledge(&self, ground: &Ground<'_>, shown: &[String]) -> Result<(), String> {
         for pair in dispatchgrant::unacknowledged(ground.root) {
             if !shown.contains(&pair.to_string()) {
@@ -795,21 +813,6 @@ impl Store {
             )?;
             dispatchgrant::acknowledge_pair(ground.root, &pair)
                 .map_err(|why| format!("purlis could not record it as allowed: {why}"))?;
-        }
-        let committed: Vec<String> = dispatchgrant::committed_at(ground.root)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        if let Some(seen) = sandbox::local::dispatch_seen(ground.root) {
-            let kept: Vec<String> = seen
-                .iter()
-                .filter(|one| committed.contains(one))
-                .cloned()
-                .collect();
-            if kept != seen {
-                dispatchgrant::acknowledge(ground.root, &kept)
-                    .map_err(|why| format!("purlis could not record what was read: {why}"))?;
-            }
         }
         self.start_what_is_covered(ground);
         Ok(())
@@ -1229,7 +1232,8 @@ pub fn allow_dispatch(
     let held = planes.held(&plane)?;
     let root = held.root();
     let locks = sandbox::policy::Locks::of(root);
-    held.dispatch_grants()
+    let allowed = held
+        .dispatch_grants()
         .allow(
             &Ground {
                 root,
@@ -1242,7 +1246,10 @@ pub fn allow_dispatch(
             id,
             level.into(),
         )
-        .map(|said| DispatchAllowed { said })
+        .map(|said| DispatchAllowed { said });
+    // An Allow for everyone answers a grant of the project's that was waiting, where it was.
+    arrival_moved(&plane);
+    allowed
 }
 
 /// **Keep blocked** on a dispatch's Notice: nothing is granted, and the dispatch does not
@@ -1717,6 +1724,7 @@ pub fn allow_dispatch_to_any(
         held.dispatch_grants().start_what_is_covered(ground);
         Ok::<(), String>(())
     })?;
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -1735,6 +1743,7 @@ pub fn revoke_dispatch_to_any(
     revoke_any(root, &asking, level.into(), &|number, audited| {
         held.hooks().record_dispatch_grant(root, number, audited)
     })?;
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -1754,6 +1763,7 @@ pub fn decline_project_dispatch(
     decline(root, &asking, &target, &|number, audited| {
         held.hooks().record_dispatch_grant(root, number, audited)
     })?;
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -1781,6 +1791,7 @@ pub fn accept_project_dispatch(
             &target,
         )
     })?;
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -1858,18 +1869,7 @@ pub struct DispatchLock {
     pub target: String,
 }
 
-/// The project's dispatch grants as they changed since this machine last told the person.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct DispatchGrantsChanged {
-    /// Each as `asking -> target`.
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    /// The whole list now: what the Notice sends back once it is read.
-    pub now: Vec<String>,
-}
-
-/// Everything Settings shows of dispatch grants: the grants, what policy locks, and the
-/// teammate's one-time change.
+/// Everything Settings shows of dispatch grants: the grants, and what policy locks.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct DispatchGrants {
     pub grants: Vec<DispatchGrant>,
@@ -1879,9 +1879,6 @@ pub struct DispatchGrants {
     pub locked_pairs: Vec<DispatchLock>,
     /// "Locked by policy, set by <who> in <file>.", where a policy locks anything of dispatch.
     pub locked_by: Option<String>,
-    /// How the project's grants changed since this machine last told the person; null when
-    /// nothing did.
-    pub changed: Option<DispatchGrantsChanged>,
 }
 
 /// Who last committed the line granting `pair` in the project's committed file, and when: the
@@ -2053,6 +2050,7 @@ fn revoke(root: &Path, store: &Store, id: &str, audit: Audit<'_>) -> Result<(), 
 
 /// Everything Settings shows of dispatch grants in the project at `root`.
 fn state_of(root: &Path, store: &Store, open: &dyn Fn(&str) -> bool) -> DispatchGrants {
+    purlis_core::dispatcharrival::settle(root);
     let locks = sandbox::policy::Locks::of(root);
     let locks_dispatch = locks.forbids_dispatch() || !locks.locked_pairs().is_empty();
     DispatchGrants {
@@ -2069,16 +2067,7 @@ fn state_of(root: &Path, store: &Store, open: &dyn Fn(&str) -> bool) -> Dispatch
             })
             .collect(),
         locked_by: locks_dispatch.then(|| locks.locked_by()),
-        changed: changed_of(root),
     }
-}
-
-fn changed_of(root: &Path) -> Option<DispatchGrantsChanged> {
-    dispatchgrant::changed(root).map(|change| DispatchGrantsChanged {
-        added: change.added,
-        removed: change.removed,
-        now: change.now,
-    })
 }
 
 /// The ids of the chats `held` has open.
@@ -2090,8 +2079,7 @@ fn open_ids(held: &crate::planes::Held) -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
-/// for Settings' list and the project's Notice.
+/// Every dispatch grant in force here, and what policy locks: for Settings' list.
 #[tauri::command]
 #[specta::specta]
 pub fn dispatch_grants(
@@ -2119,38 +2107,262 @@ pub fn revoke_dispatch_grant(
     revoke(root, held.dispatch_grants(), &id, &|number, audited| {
         held.hooks().record_dispatch_grant(root, number, audited)
     })?;
+    arrival_moved(&plane);
     let open = open_ids(&held);
     Ok(state_of(root, held.dispatch_grants(), &|id| {
         open.contains(id)
     }))
 }
 
-/// **Allow** on the Notice of the project's dispatch grants (D-1437-R1): `shown` is the pairs
-/// the person allowed, as the Notice showed them, all of them or one. Each the committed file
-/// holds is audited and is in force on this machine from now on; what the file no longer
-/// holds is read. Answers what is still to tell, if anything.
+// ---- a teammate's grant, when it arrives (#1506) ---------------------------------------------
+
+/// The event the window is sent when what waits of the project's grants may have moved: an
+/// answer was given, here or in Settings. Its payload is a [`DispatchArrivalMoved`]. What the
+/// watcher sees on disk is told by `plane-changed`.
+pub const ARRIVAL: &str = "dispatch-arrival";
+
+/// What [`ARRIVAL`] carries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrivalMoved {
+    pub plane: PlaneId,
+}
+
+/// Told each time what waits of a project's grants may have moved, for the window.
+pub type ArrivalTeller = Arc<dyn Fn(DispatchArrivalMoved) + Send + Sync + 'static>;
+
+static ARRIVAL_TELL: OnceLock<ArrivalTeller> = OnceLock::new();
+
+/// Sends every such move to `tell` from now on: the window, once, as the app starts.
+pub fn telling_arrival(tell: ArrivalTeller) {
+    let _ = ARRIVAL_TELL.set(tell);
+}
+
+/// Says that what waits of `plane`'s grants may have moved.
+fn arrival_moved(plane: &PlaneId) {
+    if let Some(tell) = ARRIVAL_TELL.get() {
+        tell(DispatchArrivalMoved {
+            plane: plane.clone(),
+        });
+    }
+}
+
+/// **The watcher said the project at `root` moved on disk** (a pull, a branch switched, a
+/// hand's edit): where that may be its file, this machine's acceptances are settled against
+/// it at once ([`purlis_core::dispatcharrival::settle`]), so a grant the file dropped is no
+/// longer accepted here even if nothing reads the grants before it is put back. The window
+/// hears the same change and reads [`dispatch_arrival`] again.
+pub fn project_moved(root: &Path, what: Option<&[purlis_core::planechange::Change]>) {
+    let its_file = what.is_none_or(|changes| {
+        changes
+            .iter()
+            .any(|one| one.kind == purlis_core::planechange::Kind::Project)
+    });
+    if its_file {
+        purlis_core::dispatcharrival::settle(root);
+    }
+}
+
+/// One grant of the project's waiting for the person's answer, as the Notice lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrived {
+    /// What an answer is sent by: the grant exactly as it is shown here. One that is shown
+    /// another way by the time the answer comes is not answered.
+    pub id: String,
+    /// The persona whose chats it lets dispatch.
+    pub asking: String,
+    /// The persona they may dispatch to; `*` where `any`.
+    pub target: String,
+    /// Whether it is "any persona": every persona of the project, ones added later included.
+    pub any: bool,
+    /// A name in it that is no persona of the project as it is checked out here. It can be
+    /// used by nothing, and Accept leaves it out.
+    pub undefined: Option<String>,
+    /// Whether the person accepted it before and it is asked again: the project took it away
+    /// and put it back.
+    pub again: bool,
+}
+
+/// One grant the person had accepted that the project took away, as the Notice says it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchGone {
+    /// What "told" is sent by.
+    pub id: String,
+    pub asking: String,
+    /// The persona's name; `*` where `any`.
+    pub target: String,
+    pub any: bool,
+}
+
+/// What the project's dispatch grants ask of the person now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrival {
+    /// The grants waiting for an answer, "any persona" first. None is in force here.
+    pub waiting: Vec<DispatchArrived>,
+    /// The grants accepted here that the project took away: said once, asking nothing.
+    pub gone: Vec<DispatchGone>,
+}
+
+/// What an answer to the arrival Notice did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrivalAnswered {
+    /// Where the list was no longer as it was shown: the sentence saying so, and what was
+    /// answered all the same. Null where everything shown was answered as shown.
+    pub said: Option<String>,
+    /// What waits now.
+    pub arrival: DispatchArrival,
+}
+
+/// `one` exactly as it is shown: the grant, whether it can be used, and whether it is asked
+/// again.
+fn arrived_id(one: &purlis_core::dispatcharrival::Arrived) -> String {
+    format!(
+        "{}{SEP}{}{SEP}{}",
+        one.said(),
+        one.undefined.as_deref().unwrap_or_default(),
+        if one.again { "again" } else { "" }
+    )
+}
+
+/// What waits in the project at `root`, as the window is told it.
+fn arrival_of(root: &Path) -> DispatchArrival {
+    let arrival = purlis_core::dispatcharrival::arrival(root);
+    DispatchArrival {
+        waiting: arrival
+            .waiting
+            .into_iter()
+            .map(|one| DispatchArrived {
+                id: arrived_id(&one),
+                any: one.target == dispatchgrant::ANY,
+                asking: one.asking,
+                target: one.target,
+                undefined: one.undefined,
+                again: one.again,
+            })
+            .collect(),
+        gone: arrival
+            .gone
+            .into_iter()
+            .filter_map(|said| {
+                let (asking, target) = said.split_once(" -> ")?;
+                Some(DispatchGone {
+                    asking: asking.to_owned(),
+                    target: target.to_owned(),
+                    any: target == dispatchgrant::ANY,
+                    id: said.clone(),
+                })
+            })
+            .collect(),
+    }
+}
+
+/// **Accept, or Not on my machine, for `shown`**: the grants the arrival Notice listed, each
+/// by the id it was shown under. The list is read again first, and **only a grant that is
+/// still exactly as it was shown is answered**: one that left the project's file, or now reads
+/// another way, is nothing, and one that arrived since is not answered by a press that never
+/// showed it. Accept leaves out a grant naming a persona the project does not define. Each
+/// answer is audited before it takes effect, as Settings' own are ([`accept`], [`decline`]).
+/// Answers the sentence to say where the list had moved.
+fn answer_arrival(
+    store: &Store,
+    ground: &Ground<'_>,
+    known: &dyn Fn(&str) -> bool,
+    accepted: bool,
+    shown: &[String],
+) -> Result<Option<String>, String> {
+    let now = purlis_core::dispatcharrival::arrival(ground.root).waiting;
+    let (listed, unseen): (Vec<_>, Vec<_>) =
+        now.iter().partition(|one| shown.contains(&arrived_id(one)));
+    let mut answered = 0;
+    for one in &listed {
+        if accepted {
+            if one.undefined.is_some() {
+                continue;
+            }
+            accept(store, ground, known, &one.asking, &one.target)?;
+        } else {
+            decline(ground.root, &one.asking, &one.target, ground.audit)?;
+        }
+        answered += 1;
+    }
+    let moved = listed.len() != shown.len() || !unseen.is_empty();
+    let did = if accepted { "accepted" } else { "declined" };
+    Ok(moved.then(|| {
+        if answered == 0 {
+            format!(
+                "Nothing was {did}: the project's dispatch grants changed after this was \
+                 shown. This is what waits now."
+            )
+        } else {
+            format!(
+                "The project's dispatch grants changed after this was shown, so only what was \
+                 still as shown was {did}. This is what waits now."
+            )
+        }
+    }))
+}
+
+/// What the project's dispatch grants ask of the person now (#1506): the grants its file
+/// holds that nobody on this machine has accepted or declined, and the ones accepted here
+/// that it took away. For the Notice the window shows when a teammate's grant arrives.
 #[tauri::command]
 #[specta::specta]
-pub fn acknowledge_dispatch_grants(
+pub fn dispatch_arrival(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<DispatchArrival, String> {
+    Ok(arrival_of(planes.held(&plane)?.root()))
+}
+
+/// **Accept** (`accepted`) or **Not on my machine** on the Notice that says a teammate's
+/// grant arrived (#1506): `shown` is the ids of the grants it listed. Only a grant still
+/// exactly as shown is answered; each is audited first. An accepted grant is in force on this
+/// machine from now on and every dispatch waiting on it starts; a declined one covers nothing
+/// here, is not told again, and is changed in Settings. Answers what waits now, and the
+/// sentence to say where the list had moved.
+#[tauri::command]
+#[specta::specta]
+pub fn answer_dispatch_arrival(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    accepted: bool,
+    shown: Vec<String>,
+) -> Result<DispatchArrivalAnswered, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
+    let said = with_ground(&held, |ground| {
+        answer_arrival(
+            held.dispatch_grants(),
+            ground,
+            &|name| personas.iter().any(|one| one == name),
+            accepted,
+            &shown,
+        )
+    });
+    // Told whatever came of it: an answer refused half way may have answered some.
+    arrival_moved(&plane);
+    Ok(DispatchArrivalAnswered {
+        said: said?,
+        arrival: arrival_of(root),
+    })
+}
+
+/// The person read that the project took away `shown`, grants they had accepted (#1506), by
+/// the ids [`DispatchArrival::gone`] gave: each is told once. Nothing is granted or declined.
+/// Answers what waits now.
+#[tauri::command]
+#[specta::specta]
+pub fn dispatch_gone_told(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     shown: Vec<String>,
-) -> Result<Option<DispatchGrantsChanged>, String> {
+) -> Result<DispatchArrival, String> {
     let held = planes.held(&plane)?;
     let root = held.root();
-    let locks = sandbox::policy::Locks::of(root);
-    held.dispatch_grants().acknowledge(
-        &Ground {
-            root,
-            locks: &locks,
-            is_open: &|session| held.chats().recorded_chat(session).is_some(),
-            sandboxed: &|session| held.chats().confines_of(session).is_some(),
-            audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
-            at: now_secs(),
-        },
-        &shown,
-    )?;
-    Ok(changed_of(root))
+    purlis_core::dispatcharrival::told_gone(root, &shown)
+        .map_err(|why| format!("purlis could not record that it was read: {why}"))?;
+    arrival_moved(&plane);
+    Ok(arrival_of(root))
 }
 
 #[cfg(test)]

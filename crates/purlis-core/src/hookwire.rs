@@ -5060,6 +5060,16 @@ mod tests {
             r#"{"dispatch_known":[{"name":"devops","hash":"","away":false}]}"#,
             r#"{"dispatch_accepted_aside":[{"said":"steward -> devops","was":"devops"}]}"#,
             r#"{"dispatch_declined":["steward -> devops"]}"#,
+            // #1506: the Notice of a teammate's grant arriving. Its read, its two answers and
+            // "told", by each window command's name; and the two keys an acceptance is bound by.
+            r#"{"dispatch_arrival":{"chat":4}}"#,
+            r#"{"answer_dispatch_arrival":{"chat":4,"accepted":true,"shown":["steward -> devops"]}}"#,
+            r#"{"chat":4,"answer_dispatch_arrival":{"accepted":true,"shown":["steward -> *"]},"token":"t"}"#,
+            r#"{"answer_dispatch_arrival":{"chat":4,"accepted":false,"shown":["steward -> devops"]}}"#,
+            r#"{"dispatch_gone_told":{"chat":4,"shown":["steward -> devops"]}}"#,
+            r#"{"dispatch_seen":["steward -> devops"]}"#,
+            r#"{"dispatch_seen_at":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+            r#"{"dispatch_gone":["steward -> devops"]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {
