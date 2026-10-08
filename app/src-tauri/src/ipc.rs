@@ -84,10 +84,36 @@ mod tests {
     }
 
     #[test]
-    fn a_vaults_reveal_and_copy_are_the_value_bearing_commands() {
-        // A command joining this class is a design decision (ADR 0052), not a list edit.
+    fn a_vaults_reveal_and_copy_and_its_sign_in_set_up_are_the_value_bearing_commands() {
+        // A command joining this class is a design decision (ADR 0052), not a list edit. The
+        // set-up joined it on 2026-10-09 (#1527): it takes a credential from the window.
         let (_, values) = listed();
-        assert_eq!(values, ["vault_secret_reveal", "vault_secret_copy"]);
+        assert_eq!(
+            values,
+            [
+                "vault_secret_reveal",
+                "vault_secret_copy",
+                "vault_setup_accounts",
+                "vault_setup_begin",
+                "vault_setup_test",
+                "vault_setup_create",
+                "vault_setup_change",
+                "vault_setup_cancel",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vaults_sign_in_set_up_is_never_served_on_a_link() {
+        // #1527 (ADR 0052, amended 2026-10-09): a credential the person gives a vault reaches
+        // purlis through the window's own IPC, never the UI RPC a link serves.
+        let (_, values) = listed();
+        for command in values.iter().filter(|c| c.starts_with("vault_setup_")) {
+            assert!(
+                purlis_session_protocol::ui::window_only(command),
+                "{command} would be served on a link"
+            );
+        }
     }
 
     /// The app as `tauri.conf.json` and `capabilities/` build it, on Tauri's mock runtime, with

@@ -1227,39 +1227,6 @@ export const commands = {
 	 */
 	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
 	/**
-	 *  The accounts the 1Password app on this machine lists, for a vault that signs in through it
-	 *  ([`setup_accounts`]). No credential is involved and no value crosses.
-	 */
-	vaultSetupAccounts: (plane: PlaneId) => typedError<SetupAccounts, string>(__TAURI_INVOKE("vault_setup_accounts", { plane })),
-	/**
-	 *  Begin setting up how a 1Password vault signs in ([`setup_begin`]): with a service-account
-	 *  token, which comes in here once and is held by the app until the set-up ends, or through
-	 *  the 1Password app (`token` null) with the account chosen. `vault` names the vault whose
-	 *  sign-in is being changed, and is null for a new one. Nothing is written, and the answer
-	 *  holds names only.
-	 */
-	vaultSetupBegin: (plane: PlaneId, token: string | null, account: string | null, vault: string | null) => typedError<SetupBegun, string>(__TAURI_INVOKE("vault_setup_begin", { plane, token, account, vault })),
-	/**
-	 *  Test a set-up before anything is registered ([`setup_test`]): purlis signs in with what was
-	 *  given and reads the chosen 1Password vault's item names. `op_vault` is null for a vault that
-	 *  exists, which is tested where its items already live. Never a value.
-	 */
-	vaultSetupTest: (plane: PlaneId, setup: number, vault: string, opVault: string | null, opItem: string | null) => typedError<SetupTested, string>(__TAURI_INVOKE("vault_setup_test", { plane, setup, vault, opVault, opItem })),
-	/**
-	 *  Make the vault `place` names, with its token in the keyring and its record, in one step
-	 *  ([`setup_create`]). `also` is the other vaults the person ticked, each with the digest they
-	 *  were shown; only those still matching are given the token. No value crosses.
-	 */
-	vaultSetupCreate: (plane: PlaneId, setup: number, place: SetupNew, also: SetupTick[]) => typedError<SetupDone, string>(__TAURI_INVOKE("vault_setup_create", { plane, setup, place, also })),
-	/**
-	 *  Change how a registered vault signs in, to what a set-up was given ([`setup_change`]): a
-	 *  vault bound to an environment variable comes to keep its token in the keyring, with no
-	 *  restart. No value crosses.
-	 */
-	vaultSetupChange: (plane: PlaneId, setup: number, vault: string, also: SetupTick[]) => typedError<SetupDone, string>(__TAURI_INVOKE("vault_setup_change", { plane, setup, vault, also })),
-	/**  Let go of a set-up, and of the token it was given: the dialog was cancelled or closed. */
-	vaultSetupCancel: (setup: number) => typedError<null, string>(__TAURI_INVOKE("vault_setup_cancel", { setup })),
-	/**
 	 *  Make a persona: `charter persona create <name> [--role …] [--delegate-when …] [--extends …]`,
 	 *  where `parent` is `--extends` (a word TypeScript keeps for itself).
 	 * 

@@ -395,6 +395,25 @@ pub fn test(ctx: &Ctx, name: &str, sign_in: &SignIn, place: &Place) -> Result<Te
     })
 }
 
+/// A listing's failure in a listing's words: a failure of a kind purlis knows is said as that
+/// kind (a refused sign-in, no network), and one it does not know says the listing failed,
+/// never that a test did. A sign-in that may not list its vaults lands here, and the name is
+/// then typed.
+fn listing_failed(failed: Failed, code: i32) -> Failed {
+    if failed.kind != Kind::Other || failed.why == NO_SUCH_VAULT {
+        return failed;
+    }
+    Failed::new(
+        Kind::Other,
+        format!(
+            "purlis could not list the 1Password vaults this sign-in can see (op exit {code}), \
+             and did not recognise why. Some sign-ins may read a vault and not list them: type \
+             the vault's name, and the test will say whether it can be read. purlis withholds \
+             what `op` printed, because it can hold what it was given."
+        ),
+    )
+}
+
 /// The 1Password vaults `sign_in` can see, by name, sorted: what the set-up offers to choose
 /// from. A sign-in that may not list its vaults fails here and the name is typed instead.
 pub fn op_vaults(
@@ -411,7 +430,10 @@ pub fn op_vaults(
         &["vault", "list", "--format", "json"],
     )?;
     if ran.code != 0 {
-        return Err(reason(&sign_in, ran.code, &ran.stderr));
+        return Err(listing_failed(
+            reason(&sign_in, ran.code, &ran.stderr),
+            ran.code,
+        ));
     }
     let mut names: Vec<String> = listed(&ran.stdout)?
         .iter()
@@ -541,13 +563,12 @@ fn sources_of(vault: &Vault) -> BTreeSet<String> {
 }
 
 /// `vault` as the person is shown it, with the digest of what a record would pin.
-fn shown(ctx: &Ctx, vault: &Vault) -> Alike {
+fn shown(ctx: &Ctx, vault: &Vault, half: String) -> Alike {
     let op_vault = onepassword::op_vault(vault).unwrap_or_default();
     let op_item = onepassword::op_item(vault).unwrap_or_default();
     let account = super::config_str(&vault.config, "account")
         .map(|a| a.trim().to_owned())
         .filter(|a| !a.is_empty());
-    let half = registry::scope_of(ctx, &vault.name);
     let bindings: BTreeMap<String, String> = identity::bindings(vault).into_iter().collect();
     let held = identity::held(ctx, vault)
         .into_iter()
@@ -563,6 +584,9 @@ fn shown(ctx: &Ctx, vault: &Vault) -> Alike {
         "account": account,
         "persona": vault.persona,
         "half": half,
+        // Shown as where its token is now ("has no token yet"): a token stored in the vault's
+        // own tab after it was shown is not replaced on a tick given before.
+        "held": format!("{held:?}"),
     });
     let digest = sha2::Sha256::digest(pinned.to_string().as_bytes())
         .iter()
@@ -587,21 +611,43 @@ fn shown(ctx: &Ctx, vault: &Vault) -> Alike {
 /// only: nothing is written and no keyring is read.** A registry that cannot be read lists
 /// none.
 pub fn alike(ctx: &Ctx, sources: &BTreeSet<String>, except: &str) -> Vec<Alike> {
-    if sources.len() != 1 {
-        return Vec::new();
-    }
-    let Ok(doc) = registry::load_registry(ctx) else {
-        return Vec::new();
+    alike_read(ctx, sources, except)
+        .map(|(_, listed)| listed)
+        .unwrap_or_default()
+}
+
+/// [`alike`], and the merged registry it was made from: ONE read of both halves, so a store
+/// pins each record to the very settings its digest was taken over. `None` where either half
+/// cannot be read.
+///
+/// **Alike is the whole binding, not only its source** (#1527 review): the other vault must be
+/// read through exactly one binding, the token's variable from that one source, so a vault
+/// that binds the same variable to another target is never offered.
+fn alike_read(
+    ctx: &Ctx,
+    sources: &BTreeSet<String>,
+    except: &str,
+) -> Option<(Map<String, Value>, Vec<Alike>)> {
+    let [source] = sources.iter().collect::<Vec<_>>()[..] else {
+        return None;
     };
+    let shared = registry::load_shared(ctx).ok()?;
+    let local = registry::load_local(ctx).ok()?;
+    let doc = registry::merged(&shared, &local);
+    let want = [(identity::TOKEN_TARGET.to_owned(), source.clone())];
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
-    names
+    let listed = names
         .into_iter()
         .filter(|name| name != except)
         .filter_map(|name| registry::vault_in(&doc, &name).ok())
-        .filter(|other| other.provider == "1password" && &sources_of(other) == sources)
-        .map(|other| shown(ctx, &other))
-        .collect()
+        .filter(|other| other.provider == "1password" && identity::bindings(other) == want)
+        .map(|other| {
+            let half = registry::scope_in(&shared, &local, &other.name);
+            shown(ctx, &other, half)
+        })
+        .collect();
+    Some((doc, listed))
 }
 
 /// [`alike`] for a vault that is registered: the others read through what `name` is read
@@ -632,8 +678,7 @@ fn mark(
     if ticks.is_empty() {
         return out;
     }
-    let now = alike(ctx, sources, except);
-    let Ok(doc) = registry::load_registry(ctx) else {
+    let Some((doc, now)) = alike_read(ctx, sources, except) else {
         out.skipped = ticks
             .iter()
             .map(|t| (t.name.clone(), NotMarked::Gone))
@@ -1029,33 +1074,127 @@ pub fn change(
     Ok(mark(ctx, token, &basis, name, also))
 }
 
+/// Whether this process runs inside a chat (or a shell) the app started, as far as purlis can
+/// tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Where {
+    /// A terminal of the person's own.
+    Outside,
+    /// Inside a chat, or a shell the app started.
+    Inside,
+    /// purlis could not tell, and says why. Taken as inside: a doubt never lets a token in.
+    Unsure(String),
+}
+
 /// Whether this process runs inside a chat (or a shell) the app started.
 ///
 /// Two ways of knowing, either of which is enough:
 ///
 /// - **what the app sets in the environment of everything it starts**: the chat's number, its
 ///   session's number, and the mark of its sandbox;
-/// - **whose child this process is**: the project's record of its open chats names each one's
-///   program, and a process below one of those is inside that chat whatever its environment
-///   says ([`crate::process::descends_from`]). So clearing the variables in front of the
-///   command does not make it a terminal of the person's.
+/// - **where this process runs**: the project's record of its open chats names each one's
+///   program, and a process that IS one, is in one's session (every chat's program leads its
+///   own, so a process it started stays in it after its parent has gone), or runs below one is
+///   inside that chat whatever its environment says (`purlis_same_user::inside_a_chat`).
+///
+/// **Every doubt is [`Where::Unsure`]**: a record that cannot be read or is not one this purlis
+/// knows, a parent or a session that cannot be read, an ancestry that loops.
 ///
 /// **A chat never supplies a vault's token**, so `vault add --token-stdin` asks this before it
 /// reads standard input. It is a refusal that tells an agent where the token is given instead,
-/// and not the boundary: what holds a sandboxed chat off a vault's token is that this
-/// machine's registry half and the keyring are not its to write.
-pub fn in_a_chat(ctx: &Ctx) -> bool {
+/// and not the boundary: what holds a sandboxed chat off a vault's token is that the registry
+/// and the keyring are not its to write.
+pub fn in_a_chat(ctx: &Ctx) -> Where {
+    #[cfg(unix)]
+    {
+        in_a_chat_with(
+            ctx,
+            std::process::id(),
+            purlis_same_user::Parents::of,
+            purlis_same_user::session_of,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        in_a_chat_with(
+            ctx,
+            std::process::id(),
+            |_| None,
+            |_| Err(std::io::Error::other("no sessions here")),
+        )
+    }
+}
+
+/// [`in_a_chat`] for process `me`, with the kernel's answers handed in.
+pub(crate) fn in_a_chat_with(
+    ctx: &Ctx,
+    me: u32,
+    parent: impl Fn(u32) -> Option<u32>,
+    session: impl Fn(u32) -> std::io::Result<u32>,
+) -> Where {
     let env = |name: &str| ctx.env.get(name);
     let set = |name: &str| env(name).is_some_and(|v| !v.trim().is_empty());
-    set(crate::hookwire::CHAT_ENV)
+    if set(crate::hookwire::CHAT_ENV)
         || set(crate::active::SESSION_ID_ENV)
         || crate::sandbox::chat_is_sandboxed_in(&env)
-        || crate::reopen::read_or_refusal(&ctx.root).is_ok_and(|record| {
-            record
-                .chats
-                .iter()
-                .any(|chat| chat.pid.is_some_and(crate::process::descends_from))
-        })
+    {
+        return Where::Inside;
+    }
+    let record = match crate::reopen::read_strictly(&ctx.root) {
+        Ok(record) => record.unwrap_or_default(),
+        Err(e) => {
+            return Where::Unsure(format!(
+                "purlis could not read the project's record of its open chats ({})",
+                e.kind()
+            ));
+        }
+    };
+    // 0 and 1 are the kernel's and `init`'s, above every process: a record naming either
+    // vouches for nothing.
+    let programs: Vec<u32> = record
+        .chats
+        .iter()
+        .filter_map(|chat| chat.pid)
+        .filter(|pid| *pid > 1)
+        .collect();
+    if programs.is_empty() {
+        return Where::Outside;
+    }
+    #[cfg(unix)]
+    let answer = purlis_same_user::inside_a_chat(me, &programs, parent, session);
+    #[cfg(not(unix))]
+    let answer: std::io::Result<Option<u32>> = {
+        let _ = (me, parent, session);
+        Err(std::io::Error::other("no process ancestry here"))
+    };
+    match answer {
+        Ok(None) => Where::Outside,
+        Ok(Some(_)) => Where::Inside,
+        Err(_) => Where::Unsure(
+            "purlis could not read where this process runs: a parent or its session could \
+             not be read"
+                .to_owned(),
+        ),
+    }
+}
+
+/// The command that gives a registered 1Password vault its token from a terminal, as a
+/// sentence prints it: it works as printed, keeps every other setting of the vault, and is
+/// the same wherever the vault is registered (`vault add --token-stdin` on a registered vault
+/// is [`change`]).
+pub fn token_again(vault: &str) -> String {
+    format!("purlis vault add {vault} --provider 1password --token-stdin")
+}
+
+/// What is said when purlis could not tell whether it runs inside a chat: the reason, then
+/// [`NOT_FROM_A_CHAT`]'s way out.
+pub fn could_not_tell(why: &str) -> String {
+    format!(
+        "{why}, so purlis cannot tell whether this runs inside a chat, and a vault's token is \
+         never given from one. purlis read nothing from standard input and stored nothing. Give \
+         it in New vault in the app (or the vault's own tab), or run this command in a terminal \
+         of your own, outside the app."
+    )
 }
 
 /// What is said when a vault's token is offered from inside a chat.

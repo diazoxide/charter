@@ -722,18 +722,42 @@ pub(crate) fn move_identity(ctx: &Ctx, vault: &str) -> Result<VaultContents, Str
 /// How long a token given to a set-up is held for it before it must be given again.
 const A_SETUP_IS_HELD_FOR: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
+/// Where a set-up is held for: the window that began it, by its label, and the project.
+/// Only that window may use it or let go of it, and it is dropped when that window goes or
+/// reloads ([`Setups::forget`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct At {
+    window: String,
+    plane: PlaneId,
+}
+
+impl At {
+    pub(crate) fn new(window: &str, plane: PlaneId) -> Self {
+        Self {
+            window: window.to_owned(),
+            plane,
+        }
+    }
+}
+
 /// One set-up in progress: what the person gave at its first step, held here so that the page
 /// hands a token over **once** and never holds it between the test and the create.
 struct Pending {
     number: u32,
-    plane: PlaneId,
+    at: At,
     sign_in: setup::SignIn,
     account: Option<String>,
     since: std::time::Instant,
 }
 
-/// The set-up the window has open, if it has one. One at a time: a new one replaces the last,
-/// whose token is dropped with it, and so does a cancel, a finished create and the time limit.
+/// The set-up a window has open, if one has. One at a time: a new one replaces the last,
+/// whose token is dropped with it.
+///
+/// **The token is held for [`A_SETUP_IS_HELD_FOR`] at most**, from the moment it was given:
+/// a timer started then lets go of it ([`Setups::expire_after`]), whatever the window does.
+/// Before that it goes with a finished create or change, a cancel, a new set-up, and the window
+/// that began it closing or reloading ([`Setups::forget`]): a page that is gone sends no
+/// cancel, so the app does not wait for one.
 #[derive(Default)]
 pub(crate) struct Setups {
     held: std::sync::Mutex<Option<Pending>>,
@@ -757,12 +781,12 @@ impl Setups {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Hold a new set-up in place of whatever was held, and answer its number.
-    fn begin(&self, plane: &PlaneId, sign_in: setup::SignIn, account: Option<String>) -> u32 {
+    /// Hold a new set-up for `at` in place of whatever was held, and answer its number.
+    fn begin(&self, at: &At, sign_in: setup::SignIn, account: Option<String>) -> u32 {
         let number = self.made.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         *self.held() = Some(Pending {
             number,
-            plane: plane.clone(),
+            at: at.clone(),
             sign_in,
             account,
             since: std::time::Instant::now(),
@@ -770,12 +794,8 @@ impl Setups {
         number
     }
 
-    /// What set-up `number` of `plane` was given, while it is still held.
-    fn given(
-        &self,
-        plane: &PlaneId,
-        number: u32,
-    ) -> Result<(setup::SignIn, Option<String>), String> {
+    /// What set-up `number` was given, asked by `at`, while it is still held for it.
+    fn given(&self, at: &At, number: u32) -> Result<(setup::SignIn, Option<String>), String> {
         let mut held = self.held();
         if held
             .as_ref()
@@ -784,17 +804,48 @@ impl Setups {
             *held = None;
         }
         held.as_ref()
-            .filter(|p| p.number == number && p.plane == *plane)
+            .filter(|p| p.number == number && p.at == *at)
             .map(|p| (p.sign_in.clone(), p.account.clone()))
             .ok_or_else(|| SETUP_GONE.to_owned())
     }
 
-    /// Let go of set-up `number`, and of its token with it.
-    fn end(&self, number: u32) {
+    /// Let go of set-up `number`, and of its token with it, when `window` is the one it is
+    /// held for.
+    fn end(&self, window: &str, number: u32) {
         let mut held = self.held();
-        if held.as_ref().is_some_and(|p| p.number == number) {
+        if held
+            .as_ref()
+            .is_some_and(|p| p.number == number && p.at.window == window)
+        {
             *held = None;
         }
+    }
+
+    /// Let go of whatever is held for `window`: it closed, or its page reloaded.
+    pub(crate) fn forget(&self, window: &str) {
+        let mut held = self.held();
+        if held.as_ref().is_some_and(|p| p.at.window == window) {
+            *held = None;
+        }
+    }
+
+    /// Let go of set-up `number` once `after` has passed, if it is still the one held.
+    fn expire_after(self: &std::sync::Arc<Self>, number: u32, after: std::time::Duration) {
+        let setups = std::sync::Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(after).await;
+            let mut held = setups.held();
+            if held.as_ref().is_some_and(|p| p.number == number) {
+                *held = None;
+            }
+        });
+    }
+}
+
+/// The window `label` is gone or its page reloaded: the set-up held for it goes too.
+pub(crate) fn window_gone<R: tauri::Runtime>(app: &impl tauri::Manager<R>, label: &str) {
+    if let Some(setups) = app.try_state::<std::sync::Arc<Setups>>() {
+        setups.forget(label);
     }
 }
 
@@ -990,7 +1041,7 @@ pub(crate) fn setup_accounts(ctx: &Ctx) -> SetupAccounts {
 pub(crate) fn setup_begin(
     ctx: &Ctx,
     setups: &Setups,
-    plane: &PlaneId,
+    at: &At,
     token: Option<&SecretValue>,
     account: Option<&str>,
     vault: Option<&str>,
@@ -1010,7 +1061,7 @@ pub(crate) fn setup_begin(
         (_, None) => setup::alike(ctx, &setup::kept_sources(), ""),
     };
     Ok(SetupBegun {
-        setup: setups.begin(plane, sign_in, account),
+        setup: setups.begin(at, sign_in, account),
         op_vaults,
         listing,
         alike: alike_shown(alike),
@@ -1023,13 +1074,13 @@ pub(crate) fn setup_begin(
 pub(crate) fn setup_test(
     ctx: &Ctx,
     setups: &Setups,
-    plane: &PlaneId,
+    at: &At,
     number: u32,
     name: &str,
     op_vault: Option<&str>,
     op_item: Option<&str>,
 ) -> Result<SetupTested, String> {
-    let (sign_in, account) = setups.given(plane, number)?;
+    let (sign_in, account) = setups.given(at, number)?;
     let place = match op_vault {
         Some(op_vault) => setup::Place {
             op_vault: op_vault.to_owned(),
@@ -1068,12 +1119,12 @@ pub(crate) fn setup_test(
 pub(crate) fn setup_create(
     ctx: &Ctx,
     setups: &Setups,
-    plane: &PlaneId,
+    at: &At,
     number: u32,
     new: &SetupNew,
     also: Vec<SetupTick>,
 ) -> Result<SetupDone, String> {
-    let (sign_in, account) = setups.given(plane, number)?;
+    let (sign_in, account) = setups.given(at, number)?;
     let marked = setup::create(
         ctx,
         &setup::Request {
@@ -1091,7 +1142,7 @@ pub(crate) fn setup_create(
         },
     )
     .map_err(message_of)?;
-    setups.end(number);
+    setups.end(&at.window, number);
     done(ctx, &new.vault, marked)
 }
 
@@ -1099,15 +1150,15 @@ pub(crate) fn setup_create(
 pub(crate) fn setup_change(
     ctx: &Ctx,
     setups: &Setups,
-    plane: &PlaneId,
+    at: &At,
     number: u32,
     vault: &str,
     also: Vec<SetupTick>,
 ) -> Result<SetupDone, String> {
-    let (sign_in, account) = setups.given(plane, number)?;
+    let (sign_in, account) = setups.given(at, number)?;
     let marked = setup::change(ctx, vault, &sign_in, account.as_deref(), &ticks_of(also))
         .map_err(message_of)?;
-    setups.end(number);
+    setups.end(&at.window, number);
     done(ctx, vault, marked)
 }
 
@@ -1408,14 +1459,16 @@ pub(crate) async fn vault_setup_accounts(
 pub(crate) async fn vault_setup_begin(
     planes: tauri::State<'_, Planes>,
     setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    window: tauri::Window,
     plane: PlaneId,
     token: Option<SecretValue>,
     account: Option<String>,
     vault: Option<String>,
 ) -> Result<SetupBegun, String> {
     let setups = std::sync::Arc::clone(&setups);
-    let of = plane.clone();
-    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+    let of = At::new(window.label(), plane.clone());
+    let timed = std::sync::Arc::clone(&setups);
+    let begun = blocking(ctx_of(&planes, &plane)?, move |ctx| {
         setup_begin(
             ctx,
             &setups,
@@ -1425,7 +1478,10 @@ pub(crate) async fn vault_setup_begin(
             vault.as_deref(),
         )
     })
-    .await
+    .await?;
+    // The token is let go of when the limit is reached, whatever the window does.
+    timed.expire_after(begun.setup, A_SETUP_IS_HELD_FOR);
+    Ok(begun)
 }
 
 /// Test a set-up before anything is registered ([`setup_test`]): purlis signs in with what was
@@ -1433,9 +1489,13 @@ pub(crate) async fn vault_setup_begin(
 /// exists, which is tested where its items already live. Never a value.
 #[tauri::command]
 #[specta::specta]
+// The Tauri state, the asking window and the project come with every command; what is tested
+// is the rest.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn vault_setup_test(
     planes: tauri::State<'_, Planes>,
     setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    window: tauri::Window,
     plane: PlaneId,
     setup: u32,
     vault: String,
@@ -1443,7 +1503,7 @@ pub(crate) async fn vault_setup_test(
     op_item: Option<String>,
 ) -> Result<SetupTested, String> {
     let setups = std::sync::Arc::clone(&setups);
-    let of = plane.clone();
+    let of = At::new(window.label(), plane.clone());
     blocking(ctx_of(&planes, &plane)?, move |ctx| {
         setup_test(
             ctx,
@@ -1466,13 +1526,14 @@ pub(crate) async fn vault_setup_test(
 pub(crate) async fn vault_setup_create(
     planes: tauri::State<'_, Planes>,
     setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    window: tauri::Window,
     plane: PlaneId,
     setup: u32,
     place: SetupNew,
     also: Vec<SetupTick>,
 ) -> Result<SetupDone, String> {
     let setups = std::sync::Arc::clone(&setups);
-    let of = plane.clone();
+    let of = At::new(window.label(), plane.clone());
     blocking(ctx_of(&planes, &plane)?, move |ctx| {
         setup_create(ctx, &setups, &of, setup, &place, also)
     })
@@ -1487,27 +1548,30 @@ pub(crate) async fn vault_setup_create(
 pub(crate) async fn vault_setup_change(
     planes: tauri::State<'_, Planes>,
     setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    window: tauri::Window,
     plane: PlaneId,
     setup: u32,
     vault: String,
     also: Vec<SetupTick>,
 ) -> Result<SetupDone, String> {
     let setups = std::sync::Arc::clone(&setups);
-    let of = plane.clone();
+    let of = At::new(window.label(), plane.clone());
     blocking(ctx_of(&planes, &plane)?, move |ctx| {
         setup_change(ctx, &setups, &of, setup, &vault, also)
     })
     .await
 }
 
-/// Let go of a set-up, and of the token it was given: the dialog was cancelled or closed.
+/// Let go of a set-up this window began, and of the token it was given: the dialog was
+/// cancelled or closed.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn vault_setup_cancel(
     setups: tauri::State<'_, std::sync::Arc<Setups>>,
+    window: tauri::Window,
     setup: u32,
 ) -> Result<(), String> {
-    setups.end(setup);
+    setups.end(window.label(), setup);
     Ok(())
 }
 
@@ -2508,8 +2572,9 @@ mod tests {
         'item get') printf '%s' '{\"fields\":[{\"label\":\"DEPLOY\",\"value\":\"x\"}]}';;\n\
         esac";
 
-    fn id_of(ctx: &Ctx) -> PlaneId {
-        PlaneId::for_tests(&ctx.root)
+    /// The main window, on the project `ctx` is for.
+    fn id_of(ctx: &Ctx) -> At {
+        At::new("main", PlaneId::for_tests(&ctx.root))
     }
 
     /// A new vault `fresh`, its items in the 1Password vault `Engineering`.
@@ -2636,7 +2701,7 @@ mod tests {
         )
         .unwrap()
         .setup;
-        let elsewhere = PlaneId::for_tests(dir.path());
+        let elsewhere = At::new("main", PlaneId::for_tests(dir.path()));
 
         assert!(setups.given(&elsewhere, first).is_err());
         assert!(setups.given(&plane, first).is_ok());
@@ -2644,12 +2709,130 @@ mod tests {
             .unwrap()
             .setup;
         assert_eq!(setups.given(&plane, first).unwrap_err(), SETUP_GONE);
-        setups.end(second);
+        setups.end("main", second);
         assert!(setups.given(&plane, second).is_err());
         // A create with nothing held makes nothing.
         let refused = setup_create(&ctx, &setups, &plane, second, &fresh(), vec![]);
         assert_eq!(refused.unwrap_err(), SETUP_GONE);
         assert!(open(&ctx, "fresh").is_err());
+    }
+
+    #[test]
+    fn a_set_up_is_held_for_the_window_that_began_it_alone() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let (setups, main) = (Setups::default(), id_of(&ctx));
+        let split = At::new("window-2", main.plane.clone());
+        let number = setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+
+        // Another window of the same project cannot use it, nor let go of it.
+        assert_eq!(setups.given(&split, number).unwrap_err(), SETUP_GONE);
+        assert!(setup_change(&ctx, &setups, &split, number, "team", vec![]).is_err());
+        setups.end("window-2", number);
+        assert!(setups.given(&main, number).is_ok());
+        // The window that began it going, or its page reloading, lets go of the token.
+        setups.forget("window-2");
+        assert!(setups.given(&main, number).is_ok());
+        setups.forget("main");
+        assert_eq!(setups.given(&main, number).unwrap_err(), SETUP_GONE);
+        assert!(
+            open(&ctx, "team").unwrap().refused.is_some(),
+            "nothing was stored"
+        );
+    }
+
+    #[test]
+    fn a_held_token_is_let_go_of_when_its_time_is_up_with_no_call_from_the_window() {
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let setups = std::sync::Arc::new(Setups::default());
+        let main = id_of(&ctx);
+        let number = setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+
+        setups.expire_after(number, std::time::Duration::from_millis(50));
+        assert!(setups.given(&main, number).is_ok());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Asked of the holder itself, never through `given`, whose own check would hide a
+        // timer that never ran.
+        while setups.held().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the timer never let go"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // A later set-up is not let go of by an earlier one's timer.
+        let later = setup_begin(
+            &ctx,
+            &setups,
+            &main,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+        setups.expire_after(number, std::time::Duration::from_millis(1));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(setups.given(&main, later).is_ok());
+    }
+
+    #[test]
+    fn a_window_that_is_gone_or_reloaded_lets_go_of_the_set_up_it_began() {
+        // What the app's `Destroyed` and page-load hooks call (`lib.rs`), on an app that holds
+        // the set-ups as the real one does. Tauri's mock runtime sends no window events, so
+        // the hooks themselves are wired in `lib.rs` and not driven here.
+        use tauri::Manager as _;
+        let (dir, ctx) = team(&[]);
+        op_now(&dir, SIGNS_IN);
+        let setups = std::sync::Arc::new(Setups::default());
+        let held = At::new("held", id_of(&ctx).plane);
+        let number = setup_begin(
+            &ctx,
+            &setups,
+            &held,
+            Some(&SecretValue::from(GIVEN)),
+            None,
+            None,
+        )
+        .unwrap()
+        .setup;
+        let app = tauri::test::mock_builder()
+            .manage(std::sync::Arc::clone(&setups))
+            .build(tauri_context!(test = true))
+            .expect("a mock app");
+
+        window_gone(&app, "window-2");
+        assert!(
+            app.state::<std::sync::Arc<Setups>>()
+                .given(&held, number)
+                .is_ok()
+        );
+        window_gone(&app, "held");
+        assert!(setups.held().is_none(), "the window's token was kept");
+        // An app that holds no set-ups at all is not troubled by a window going.
+        let bare = tauri::test::mock_builder()
+            .build(tauri_context!(test = true))
+            .expect("a mock app");
+        window_gone(&bare, "main");
     }
 
     #[test]

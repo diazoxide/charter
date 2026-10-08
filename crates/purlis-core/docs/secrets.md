@@ -183,9 +183,23 @@ purlis vault add team --provider 1password --op-vault Engineering --token-stdin
 `--token-stdin` asks for the token at a prompt that does not show it, or reads it from standard
 input when that is a pipe. The token is never an argument and never a variable named on the
 command line. The command runs the same test, and a test that does not pass registers nothing;
-then the same one-step create. With `--force` it replaces a vault's token on a machine with no
-window. **It is refused inside a chat, or a shell the app started, before anything is read**:
-a chat is never the one supplying a vault's token. Type it in a terminal of your own.
+then the same one-step create.
+
+On a 1Password vault that is registered already, `--token-stdin` changes its token and nothing
+else: `purlis vault add team --provider 1password --token-stdin` keeps the vault's 1Password
+vault, item, account and persona, wherever the vault is registered, and converts a vault bound
+to a variable. This is the command a missing token's refusal and `purlis doctor` print. A
+setting given beside it that differs from the vault's is refused, not taken; changing those is a
+registration again, with `--force`.
+
+**It is refused inside a chat, or a shell the app started, before anything is read**: a chat is
+never the one supplying a vault's token. It is refused too where purlis cannot tell (the
+project's record of open chats cannot be read, or this process's parent or session cannot).
+Type it in a terminal of your own.
+
+In the app, a token given to the set-up is held only for the window that began it, and goes
+when the set-up ends, when that window closes or reloads, and at the latest fifteen minutes
+after it was given.
 
 **One token for several vaults.** After a token is given, the set-up lists the *other* vaults
 bound to the same identity, each with a tick box and the settings that would be pinned for it

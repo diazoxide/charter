@@ -146,9 +146,28 @@ pub const WINDOW_ONLY: &[&str] = &[
     "ask_chat_restart",
 ];
 
+/// The commands that take a vault's sign-in from the person and use it (#1527, ADR 0052 as
+/// amended 2026-10-09): a credential the person gives purlis reaches it through the window's
+/// own IPC, from the window that began the set-up, and is never carried by a link. The window's
+/// alone, as [`WINDOW_ONLY`]'s are.
+pub const WINDOW_ONLY_CREDENTIALS: &[&str] = &[
+    "vault_setup_accounts",
+    "vault_setup_begin",
+    "vault_setup_test",
+    "vault_setup_create",
+    "vault_setup_change",
+    "vault_setup_cancel",
+];
+
+/// Whether `method` is the window's alone: in [`WINDOW_ONLY`] or [`WINDOW_ONLY_CREDENTIALS`].
+pub fn window_only(method: &str) -> bool {
+    WINDOW_ONLY.contains(&method) || WINDOW_ONLY_CREDENTIALS.contains(&method)
+}
+
 impl Server {
     /// `methods` is the app's command list (`ipc_commands.rs`), or the part of it this host
-    /// answers; a method not in it, or in [`WINDOW_ONLY`], is refused before `handler` is asked.
+    /// answers; a method not in it, or the window's alone ([`window_only`]), is refused before
+    /// `handler` is asked.
     pub fn new(
         build: impl Into<String>,
         methods: impl IntoIterator<Item = impl Into<String>>,
@@ -159,7 +178,7 @@ impl Server {
             methods: methods
                 .into_iter()
                 .map(Into::into)
-                .filter(|method: &String| !WINDOW_ONLY.contains(&method.as_str()))
+                .filter(|method: &String| !window_only(method))
                 .collect(),
             handler: Arc::new(handler),
         }
@@ -333,5 +352,44 @@ impl Client {
         answer
             .await
             .map_err(|_| CallError::Closed("the link is closed".into()))?
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    struct Nothing;
+
+    impl Handler for Nothing {
+        fn call(&self, _: String, _: Value) -> BoxFuture<'_, Result<Value, Value>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+    }
+
+    #[test]
+    fn a_vaults_sign_in_set_up_is_never_among_the_methods_a_link_serves() {
+        // #1527: a host built with the app's whole command list still leaves them out.
+        let server = Server::new(
+            "0.0.0+test",
+            WINDOW_ONLY_CREDENTIALS
+                .iter()
+                .chain(["rename_chat", "answer_ask"].iter())
+                .copied(),
+            Nothing,
+        );
+        assert_eq!(
+            server
+                .methods
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["rename_chat"]
+        );
+        for method in WINDOW_ONLY_CREDENTIALS {
+            assert!(window_only(method), "{method}");
+        }
+        assert!(window_only("answer_ask"));
+        assert!(!window_only("rename_chat"));
     }
 }

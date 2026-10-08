@@ -249,7 +249,8 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
     let mut said: Vec<String> = Vec::new();
-    let (mut nowhere, mut here_only, mut kept_nowhere) = (false, false, false);
+    let (mut nowhere, mut here_only) = (false, false);
+    let mut kept_nowhere: Vec<String> = Vec::new();
     for name in names {
         let Ok(vault) = registry::vault_in(&doc, &name) else {
             continue;
@@ -275,7 +276,9 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
                 }
                 Held::Unset => {
                     nowhere = true;
-                    kept_nowhere |= kept;
+                    if kept {
+                        kept_nowhere.push(crate::personas::one_line(&vault.name));
+                    }
                     "is nowhere".to_owned()
                 }
             };
@@ -306,12 +309,18 @@ pub(super) fn token_row(ctx: &Ctx) -> Option<Row> {
              by the app opened from the Dock.",
         );
     }
-    if kept_nowhere {
-        hint.push_str(
+    if let Some(name) = kept_nowhere.first() {
+        hint.push_str(&format!(
             " A vault that keeps its token in the keyring alone has no variable to export: in \
-             a terminal, register it again with `purlis vault add <name> --provider 1password \
-             --op-vault <NAME> --token-stdin --force`, which asks for the token.",
-        );
+             a terminal of your own, `{}` asks for its token and keeps every other setting of \
+             the vault{}.",
+            crate::secrets::setup::token_again(name),
+            if kept_nowhere.len() > 1 {
+                " (the same for each such vault, by its name)"
+            } else {
+                ""
+            }
+        ));
     }
     Some(Row::warn(TOKENS, detail, hint))
 }
@@ -674,8 +683,8 @@ mod tests {
         assert!(
             row.hint.ends_with(
                 "A vault that keeps its token in the keyring alone has no variable to export: \
-                 in a terminal, register it again with `purlis vault add <name> --provider \
-                 1password --op-vault <NAME> --token-stdin --force`, which asks for the token."
+                 in a terminal of your own, `purlis vault add pulled --provider 1password \
+                 --token-stdin` asks for its token and keeps every other setting of the vault."
             ),
             "{}",
             row.hint

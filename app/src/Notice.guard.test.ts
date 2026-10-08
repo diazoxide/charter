@@ -274,12 +274,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       "it moved to: what the last press answered, not a standing line",
   },
   "VaultSignIn.tsx": {
-    count: 4,
+    count: 5,
     why:
       ACTION +
       ". The set-up of a 1Password vault's sign-in (#1527): why the app's accounts could not " +
-      "be listed, what the test just pressed answered (passed, or the core's reason), and the " +
-      "refusal of the step just pressed",
+      "be listed, a sign-in refused as its vaults were listed, what the test just pressed " +
+      "answered (passed, or the core's reason), and the refusal of the step just pressed",
   },
   "VaultTab.tsx": {
     count: 7,

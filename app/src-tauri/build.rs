@@ -27,8 +27,9 @@ fn main() {
             ),
             set(
                 "vault-values",
-                "A vault's reveal and copy: the commands that put a secret's value where the \
-                 window can reach it. Granted to the main window only.",
+                "A vault's reveal and copy, which put a secret's value where the window can reach \
+                 it, and a vault's sign-in set-up, which takes a credential from the window and \
+                 uses it (ADR 0052, amended 2026-10-09). Granted to charter's own windows only.",
                 vault_values,
             ),
         ]

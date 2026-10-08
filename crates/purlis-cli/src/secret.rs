@@ -428,29 +428,30 @@ pub fn vault(here: &crate::Here, command: VaultCommand) -> u8 {
     let ctx = ctx(here);
     let io = &mut Console;
     let code = match command {
-        VaultCommand::Add(a) => vaultcmd::add(
-            &ctx,
-            &AddRequest {
-                name: a.name,
-                provider: a.provider,
-                file: a.file,
-                op_vault: a.op_vault,
-                op_item: a.op_item,
-                account: a.account,
-                persona: a.persona,
-                env: a.env,
-                token_env: a.token_env,
-                token_stdin: a.token_stdin,
-                share: a.share,
-                force: a.force,
-            },
-            io,
-        ),
+        VaultCommand::Add(a) => vaultcmd::add(&ctx, &add_request(a), io),
         VaultCommand::List => vaultcmd::list(&ctx, io),
         VaultCommand::Verify { name } => vaultcmd::verify(&ctx, name.as_deref(), io),
         VaultCommand::Remove { name } => vaultcmd::remove(&ctx, &name, io),
     };
     status(code)
+}
+
+/// What `vault add` was asked, for the core.
+fn add_request(a: VaultAdd) -> AddRequest {
+    AddRequest {
+        name: a.name,
+        provider: a.provider,
+        file: a.file,
+        op_vault: a.op_vault,
+        op_item: a.op_item,
+        account: a.account,
+        persona: a.persona,
+        env: a.env,
+        token_env: a.token_env,
+        token_stdin: a.token_stdin,
+        share: a.share,
+        force: a.force,
+    }
 }
 
 /// `purlis persona create --with-vault`: register `vault` for `persona` exactly as
@@ -520,6 +521,41 @@ mod tests {
             argv(&["charter", "persona", "secret", "exec", "--persona", "p"])
         );
         assert_eq!(tail, Some(strings(&["true"])));
+    }
+
+    #[test]
+    fn the_command_a_missing_token_names_is_accepted_as_printed() {
+        // #1527: the sentence and the doctor print it; it must parse, and ask for exactly the
+        // token of the vault as it is (the core's own test runs that request).
+        use clap::Parser as _;
+        let printed = purlis_core::secrets::setup::token_again("team");
+        let words: Vec<&str> = std::iter::once("purlis")
+            .chain(printed.split_whitespace().skip(1))
+            .collect();
+        let cli = crate::Cli::try_parse_from(&words).expect("the printed command parses");
+        let crate::Command::Vault(VaultCommand::Add(asked)) = cli.command else {
+            panic!("not `vault add`");
+        };
+        let request = add_request(asked);
+        assert_eq!(
+            (
+                request.name.as_str(),
+                request.provider.as_str(),
+                request.token_stdin
+            ),
+            ("team", "1password", true)
+        );
+        assert!(
+            request.op_vault.is_none()
+                && request.op_item.is_none()
+                && request.account.is_none()
+                && request.persona.is_none()
+                && request.env.is_empty()
+                && request.token_env.is_none()
+                && !request.share
+                && !request.force,
+            "{request:?}"
+        );
     }
 
     #[test]

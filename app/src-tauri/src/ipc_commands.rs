@@ -15,7 +15,10 @@
 //   reveal and its copy. A capability of their own grants them, to the main window only, so a
 //   window added to the default capability later does not inherit them. A new command goes
 //   here if it hands the window a value that the vault design (ADR 0047) keeps out of it. The
-//   default is the other list, and adding one here means amending ADR 0052.
+//   default is the other list, and adding one here means amending ADR 0052. Since 2026-10-09
+//   it also holds the commands that take a vault's sign-in from the window and use it (the
+//   `vault_setup_*` set-up, #1527): a credential going the other way is held to the same
+//   windows (ADR 0052's amendment of that date).
 //
 // Plain macros and no items, so the file means the same thing inside a build script as inside
 // the crate. Paths are written `module::command`; the IPC knows a command by the last segment.
@@ -217,12 +220,6 @@ macro_rules! app_commands {
                 vaults::vault_secret_delete,
                 vaults::vault_identity_move,
                 vaults::vault_identity_put,
-                vaults::vault_setup_accounts,
-                vaults::vault_setup_begin,
-                vaults::vault_setup_test,
-                vaults::vault_setup_create,
-                vaults::vault_setup_change,
-                vaults::vault_setup_cancel,
                 personas::persona_create,
                 personas::persona_remove,
                 personas::persona_edit,
@@ -307,6 +304,14 @@ macro_rules! app_commands {
             vault_values: [
                 vaults::vault_secret_reveal,
                 vaults::vault_secret_copy,
+                // A vault's sign-in, given and used (#1527, ADR 0052 amended 2026-10-09): they
+                // take a credential from the window, or use one it gave.
+                vaults::vault_setup_accounts,
+                vaults::vault_setup_begin,
+                vaults::vault_setup_test,
+                vaults::vault_setup_create,
+                vaults::vault_setup_change,
+                vaults::vault_setup_cancel,
             ],
         }
     };
