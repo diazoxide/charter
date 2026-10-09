@@ -149,13 +149,18 @@ pub const AT_ONCE: Duration = Duration::from_secs(1);
 /// **No shell.** The program is looked up as charter looks up a harness
 /// ([`crate::programs::resolve`]: the app's `PATH`, then the fixed directories a
 /// double-clicked app lacks) and started through the fork lock ([`crate::forklock::spawn`]),
-/// with nothing on its standard input, output or error. A thread waits for it, so it leaves no
-/// zombie behind.
+/// with nothing on its standard input or output. A thread waits for it, so it leaves no zombie
+/// behind.
 ///
 /// **An editor that fails at once is said, not dropped** (#1044). A terminal editor (vi, nano,
 /// `emacs -nw`) has no terminal here, reads the end of its input and exits. So this waits up
 /// to [`AT_ONCE`]: an exit that is not a success within it is refused with a sentence; one
-/// still running then, or one that exited `0`, is an editor that opened.
+/// still running then, or one that exited `0`, is an editor that opened. **The sentence says
+/// what the editor printed** when it printed something ([`SAID_MOST`] bytes of its standard
+/// error, its first line), so a windowed editor that failed for its own reason (`emacsclient`
+/// with no server) is not told it needs a terminal. Its standard error is read on a thread of
+/// its own for as long as the editor keeps it open, and past what is kept it is read and
+/// dropped, so an editor that writes a lot there is never held up by a full pipe.
 pub fn start(program: &str, args: &[OsString]) -> Result<(), String> {
     let found = crate::programs::resolve(program).map_err(|missing| missing.said())?;
     let mut command = std::process::Command::new(&found);
@@ -163,9 +168,10 @@ pub fn start(program: &str, args: &[OsString]) -> Result<(), String> {
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::piped());
     let mut child = crate::forklock::spawn(&mut command)
         .map_err(|e| format!("purlis could not start {program}: {e}"))?;
+    let said = child.stderr.take().map(listen);
     let (exited, heard) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("your-editor".into())
@@ -173,23 +179,112 @@ pub fn start(program: &str, args: &[OsString]) -> Result<(), String> {
             let _ = exited.send(child.wait());
         })
         .map_err(|e| format!("purlis could not wait for {program}: {e}"))?;
+    let began = std::time::Instant::now();
     match heard.recv_timeout(AT_ONCE) {
-        Ok(Ok(status)) if !status.success() => Err(exited_at_once(program, status)),
+        Ok(Ok(status)) if !status.success() => {
+            // What it printed before it exited; a child it left holding its standard error
+            // open is waited for no longer than what is left of the moment.
+            let printed = said
+                .map(|said| said.by(AT_ONCE.saturating_sub(began.elapsed()).max(SAID_GRACE)))
+                .unwrap_or_default();
+            Err(exited_at_once(program, status, &printed))
+        }
         _ => Ok(()),
     }
 }
 
-/// What the window says of an editor that exited at once, and not with success.
-fn exited_at_once(program: &str, status: std::process::ExitStatus) -> String {
+/// The most of an editor's standard error kept to say why it failed: 2 KiB. The rest is read
+/// and dropped.
+pub const SAID_MOST: usize = 2048;
+
+/// The most chars of what an editor printed that the sentence carries.
+const SAID_CHARS: usize = 300;
+
+/// How long, at least, an editor that exited is given for what it printed to arrive.
+const SAID_GRACE: Duration = Duration::from_millis(100);
+
+/// What an editor prints on its standard error, kept up to [`SAID_MOST`] bytes by a thread that
+/// reads it until the editor closes it.
+struct Said {
+    kept: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    closed: std::sync::mpsc::Receiver<()>,
+}
+
+impl Said {
+    /// What was kept, once the editor closed its standard error or `within` passed.
+    fn by(self, within: Duration) -> Vec<u8> {
+        let _ = self.closed.recv_timeout(within);
+        self.kept
+            .lock()
+            .map(|kept| kept.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+}
+
+/// Reads `stderr` on a thread of its own until it closes, keeping its first [`SAID_MOST`] bytes.
+fn listen(mut stderr: impl std::io::Read + Send + 'static) -> Said {
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (closed, heard) = std::sync::mpsc::channel();
+    let keeping = kept.clone();
+    // A thread that could not start drops the pipe and the sender with it: nothing is said.
+    let _ = std::thread::Builder::new()
+        .name("your-editor-said".into())
+        .spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut kept) = keeping.lock() {
+                            let room = SAID_MOST.saturating_sub(kept.len());
+                            kept.extend_from_slice(&buf[..n.min(room)]);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = closed.send(());
+        });
+    Said {
+        kept,
+        closed: heard,
+    }
+}
+
+/// The first line of what an editor printed, as the window shows it: read as UTF-8 where it is
+/// not, with no control characters, trimmed, and at most [`SAID_CHARS`] chars. Nothing when it
+/// printed nothing but space.
+fn first_line(printed: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(printed);
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let clean: String = line.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let mut said: String = clean.chars().take(SAID_CHARS).collect();
+    if clean.chars().count() > SAID_CHARS {
+        said.push('…');
+    }
+    Some(said)
+}
+
+/// What the window says of an editor that exited at once, and not with success: what it printed,
+/// when it printed something, else the likeliest cause, a terminal editor with no terminal.
+fn exited_at_once(program: &str, status: std::process::ExitStatus, printed: &[u8]) -> String {
     let how = match status.code() {
         Some(code) => format!("with code {code}"),
         None => "on a signal".to_string(),
     };
-    format!(
-        "{program} exited at once, {how}: a terminal editor needs a terminal, and purlis \
-         starts your editor without one. Set $VISUAL to an editor that opens its own window, \
-         or choose VS Code, Zed or a JetBrains IDE in Settings"
-    )
+    match first_line(printed) {
+        Some(said) => format!("{program} exited at once, {how}, and said: {said}"),
+        None => format!(
+            "{program} exited at once, {how}: a terminal editor needs a terminal, and purlis \
+             starts your editor without one. Set $VISUAL to an editor that opens its own \
+             window, or choose VS Code, Zed or a JetBrains IDE in Settings"
+        ),
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -225,6 +320,60 @@ mod tests {
         assert_eq!(
             launched,
             Launch::Url("vscode://file/work/piece/caf%E9.md:3:1".to_string())
+        );
+    }
+
+    fn sh(script: &str) -> Result<(), String> {
+        start("/bin/sh", &[OsString::from("-c"), OsString::from(script)])
+    }
+
+    /// #1044: a windowed editor that fails for its own reason is said by what it printed, not
+    /// told it needs a terminal.
+    #[test]
+    fn an_editor_that_failed_at_once_is_said_by_what_it_printed() {
+        let said =
+            sh("printf '\\nemacsclient: can'\\''t find socket\\nmore\\n' >&2; exit 1").unwrap_err();
+
+        assert_eq!(
+            said,
+            "/bin/sh exited at once, with code 1, and said: emacsclient: can't find socket"
+        );
+    }
+
+    /// One that printed nothing keeps the likeliest cause.
+    #[test]
+    fn an_editor_that_failed_at_once_saying_nothing_is_told_it_needs_a_terminal() {
+        let said = sh("exit 1").unwrap_err();
+
+        assert!(
+            said.contains("a terminal editor needs a terminal"),
+            "{said}"
+        );
+    }
+
+    /// An editor that writes more than is kept is never held up by a full pipe: its exit is
+    /// still heard at once.
+    #[test]
+    fn an_editor_that_prints_a_lot_is_not_held_up() {
+        let said = sh("head -c 300000 /dev/zero | tr '\\0' x >&2; exit 3").unwrap_err();
+
+        assert!(said.contains("with code 3, and said: xxx"), "{said}");
+        assert!(said.ends_with("x…"), "{said}");
+    }
+
+    #[test]
+    fn what_an_editor_printed_is_one_clean_line() {
+        assert_eq!(first_line(b""), None);
+        assert_eq!(first_line(b"  \n\t\n"), None);
+        assert_eq!(
+            first_line(b"\x1b[31mno server\x07\r\nnext"),
+            Some("[31mno server".to_string())
+        );
+        assert_eq!(first_line(b"caf\xe9"), Some("caf\u{FFFD}".to_string()));
+        let long = "y".repeat(SAID_CHARS + 5);
+        assert_eq!(
+            first_line(long.as_bytes()),
+            Some(format!("{}…", "y".repeat(SAID_CHARS)))
         );
     }
 }
