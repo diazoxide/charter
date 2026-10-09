@@ -39,9 +39,12 @@ pub enum PieceFile {
 
 /// One file of a branch, by its path relative to the branch's folder. Refused for a path that
 /// leaves it.
+// It reads up to the 5 MiB a file may be, so on a blocking thread and never the one that draws
+// (#1007), as every command here that reads a branch is. Not a doc comment, because the
+// generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn piece_file(
+pub async fn piece_file(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
@@ -49,11 +52,12 @@ pub fn piece_file(
     piece: Option<String>,
     path: String,
 ) -> Result<PieceFile, String> {
-    file_of(
-        planes.held(&plane)?.root(),
-        branch(&workspace, &repo, &piece),
-        &path,
-    )
+    // Resolved here, so a project that is not open refuses here rather than in the thread.
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window("reading the file", move || {
+        file_of(&root, branch(&workspace, &repo, &piece), &path)
+    })
+    .await
 }
 
 /// What one entry of a branch's folder is.
@@ -515,19 +519,22 @@ pub async fn open_their_agents_md(
 /// `AGENTS.md` at the top of a branch renamed to `AGENTS.aside.md` (or the next free
 /// `AGENTS.aside-N.md`), never over a file, so `git status` shows it again. Answers its new
 /// name. Refused, touching nothing, for an `AGENTS.md` that is not theirs.
+// Off the window's thread (#1007): it asks git whether the file is the operator's before it
+// renames anything. Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn move_their_agents_md_aside(
+pub async fn move_their_agents_md_aside(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     repo: String,
     piece: Option<String>,
 ) -> Result<String, String> {
-    purlis_core::guest::move_agents_md_aside(
-        planes.held(&plane)?.root(),
-        branch(&workspace, &repo, &piece),
-    )
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window("moving AGENTS.md aside", move || {
+        purlis_core::guest::move_agents_md_aside(&root, branch(&workspace, &repo, &piece))
+    })
+    .await
 }
 
 fn launch_of(
@@ -546,12 +553,13 @@ fn launch_of(
 /// folder, or absolute (FM-10). Refused, in the core's sentence, for a path that leaves the
 /// branch, a link or git's own folder.
 // The path is placed by `purlis_core::files::place` and the absolute one is the core's, never
-// one the window joined; it goes to the clipboard here and never back to the window. Not a doc
-// comment, because the generated bindings carry those.
+// one the window joined; it goes to the clipboard here and never back to the window. Placed on
+// a blocking thread, never the one that draws (#1007). Not a doc comment, because the generated
+// bindings carry those.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
-pub fn copy_branch_path(
+pub async fn copy_branch_path(
     planes: tauri::State<'_, Planes>,
     clipboard: tauri::State<'_, crate::vaults::SystemClipboard>,
     plane: PlaneId,
@@ -561,23 +569,22 @@ pub fn copy_branch_path(
     path: String,
     absolute: bool,
 ) -> Result<(), String> {
-    let text = path_text(
-        planes.held(&plane)?.root(),
-        branch(&workspace, &repo, &piece),
-        &path,
-        absolute,
-    )?;
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let text = crate::off_the_window("placing the path", move || {
+        path_text(&root, branch(&workspace, &repo, &piece), &path, absolute)
+    })
+    .await?;
     clipboard.put_text(&text)
 }
 
 /// One file or folder of a branch, shown in the operating system's file manager: Finder,
 /// Files or File Explorer (FM-10). Refused as Copy path is refused.
 // The opener plugin's reveal, called here with the path the core placed: the window names a
-// branch and a path inside it, never a directory. Not a doc comment, because the generated
-// bindings carry those.
+// branch and a path inside it, never a directory. Placed on a blocking thread, never the one
+// that draws (#1007). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn reveal_branch_path(
+pub async fn reveal_branch_path(
     app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
@@ -587,11 +594,12 @@ pub fn reveal_branch_path(
     path: String,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
-    let placed = placed_of(
-        planes.held(&plane)?.root(),
-        branch(&workspace, &repo, &piece),
-        &path,
-    )?;
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let asked = path.clone();
+    let placed = crate::off_the_window("placing the path", move || {
+        placed_of(&root, branch(&workspace, &repo, &piece), &asked)
+    })
+    .await?;
     app.opener()
         .reveal_item_in_dir(&placed.absolute)
         .map_err(|e| format!("the system did not show '{path}': {e}"))
