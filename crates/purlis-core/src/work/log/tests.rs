@@ -5,11 +5,22 @@ const OTHER_DEVICE: &str = "01K6H0Z8Y3V1N3G4QK0A9T5B7D";
 const CHAT: &str = "01K6H10000AAAAAAAAAAAAAAAA";
 const OTHER_CHAT: &str = "01K6H10000BBBBBBBBBBBBBBBB";
 
+/// A project with workspaces `alpha` and `beta`, and the todo [`todo`] names open in `alpha`.
 fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     for ws in ["alpha", "beta"] {
         std::fs::create_dir_all(dir.path().join("workspaces").join(ws)).unwrap();
     }
+    let written = crate::workspaces::Plane::open(dir.path())
+        .workspace("alpha")
+        .unwrap()
+        .add_todo("Port the picker", at(0).naive_utc())
+        .unwrap();
+    assert_eq!(
+        Some(todo().todo_parts().unwrap().1),
+        written.file_stem().and_then(|s| s.to_str()),
+        "the todo `todo()` names is the one written"
+    );
     dir
 }
 
@@ -705,4 +716,109 @@ fn a_log_directory_the_filesystem_refuses_to_make_is_named() {
     let refused = append(root, "alpha", DEVICE, at(1), &Op::link(todo())).unwrap_err();
 
     crate::rewrite::frozen::names(&refused, &dir_for(root, "alpha"));
+}
+
+// ---- a todo key names a todo (#918) ----
+
+#[test]
+fn a_link_to_a_todo_that_does_not_exist_is_refused_and_nothing_is_written() {
+    let p = project();
+    let root = p.path();
+    let typo = key("todo:alpha/20261002-080000-port-the-pickr");
+    let refused = link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(1),
+        typo.clone(),
+        CHAT,
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        refused.to_string().contains("names no todo")
+            && refused
+                .to_string()
+                .contains("20261002-080000-port-the-pickr"),
+        "{refused}"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), None);
+    assert!(!dir_for(root, "alpha").exists(), "nothing was written");
+
+    // The same stem in a workspace that does not hold it, or one that does not exist.
+    for elsewhere in [
+        "todo:beta/20261002-080000-port-the-picker",
+        "todo:gamma/20261002-080000-port-the-picker",
+    ] {
+        let refused = link_chat(
+            root,
+            Place::Workspace("alpha"),
+            DEVICE,
+            at(1),
+            key(elsewhere),
+            CHAT,
+        )
+        .unwrap_err();
+        assert!(refused.to_string().contains("names no todo"), "{refused}");
+    }
+    assert_eq!(fold(root).chat_link(CHAT), None);
+
+    // The todo that is there is linked.
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(2), todo(), CHAT).unwrap();
+    assert_eq!(fold(root).chat_link(CHAT), Some(todo()));
+}
+
+#[test]
+fn a_promoted_todo_whose_file_is_gone_still_links_as_the_item_it_became() {
+    let p = project();
+    let root = p.path();
+    let gone = key("todo:alpha/20261001-090000-old-promoted");
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(1),
+        gone.clone(),
+        issue(),
+        Cause::Promoted,
+    )
+    .unwrap();
+
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(2), gone, CHAT).unwrap();
+    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
+}
+
+#[test]
+fn an_alias_to_a_todo_that_does_not_exist_is_refused_naming_both() {
+    let p = project();
+    let root = p.path();
+    // A workspace rename's alias, to a todo the new workspace never got.
+    let from = key("todo:old/20261001-090000-never-written");
+    let to = key("todo:alpha/20261001-090000-never-written");
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(1),
+        from.clone(),
+        to.clone(),
+        Cause::Renamed,
+    )
+    .unwrap();
+
+    let refused = link_chat(
+        root,
+        Place::Workspace("alpha"),
+        DEVICE,
+        at(2),
+        from.clone(),
+        CHAT,
+    )
+    .unwrap_err();
+    let said = refused.to_string();
+    assert!(
+        said.contains(to.as_str()) && said.contains(from.as_str()),
+        "{said}"
+    );
+    assert_eq!(fold(root).chat_link(CHAT), None);
 }
