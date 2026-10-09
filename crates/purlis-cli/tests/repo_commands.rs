@@ -393,20 +393,52 @@ fn a_url_on_a_host_the_plane_does_not_manage_is_refused() {
 }
 
 #[test]
-fn a_workspace_that_does_not_exist_is_not_invented() {
+fn a_clone_into_a_workspace_that_does_not_exist_makes_it_first() {
+    // #1382: the workspace is created and scaffolded through `workspace ensure`, as the
+    // Python charter's clone did, and the clone says so in one line.
     let w = World::new();
     w.remote("widget", "main");
     w.inventory(json!([World::record("widget", "main")]));
 
-    let out = w.charter(&["clone", "widget", "-w", "nope"]);
+    let out = w.charter(&["clone", "widget", "-w", "beta"]);
 
-    assert_eq!(out.status.code(), Some(1));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ws = w.root.join("workspaces/beta");
+    assert!(ws.join("widget/.git").exists(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("no workspace 'nope'"),
+        ws.join("memory/MEMORY.md").is_file(),
+        "made but not scaffolded: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stderr(&out).matches("Made workspace 'beta'").count(),
+        1,
         "{}",
         stderr(&out)
     );
-    assert!(!w.root.join("workspaces/nope").exists());
+    assert!(!stderr(&out).contains("yet"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_bad_workspace_name_or_a_linked_workspace_is_still_refused_and_nothing_is_made() {
+    let w = World::new();
+    w.remote("widget", "main");
+    w.inventory(json!([World::record("widget", "main")]));
+
+    let out = w.charter(&["clone", "widget", "-w", ".hidden"]);
+    assert_ne!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(!w.root.join("workspaces/.hidden").exists());
+
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), w.root.join("workspaces/evil")).unwrap();
+    let out = w.charter(&["clone", "widget", "-w", "evil"]);
+    assert_ne!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_dir(outside.path()).unwrap().count(),
+        0,
+        "something was written through the link: {}",
+        stderr(&out)
+    );
 }
 
 // ---------------------------------------------------------------------------------------
