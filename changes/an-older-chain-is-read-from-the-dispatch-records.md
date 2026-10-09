@@ -7,3 +7,8 @@
   open show longer than the chat's recorded depth is kept whole, and the depth raised to it
   (#1548).
 
+### Changed
+
+- **The dispatch question offers no box the decision would refuse.** A persona the person
+  said never to for a chat above the asking one is not offered under the question's answers
+  (#1548).

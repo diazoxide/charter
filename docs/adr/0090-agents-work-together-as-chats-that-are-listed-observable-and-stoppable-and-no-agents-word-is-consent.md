@@ -1017,6 +1017,9 @@ task reopened as an ordinary chat names no asking chat and starts a new chain.
 - **An older ancestry from before the depth key keeps its whole chain (#1548).** Where the
   chats still open show a chain longer than the asking chat's recorded depth, the depth is
   raised to it (deeper is the safe side), and a chat it starts keeps the whole chain.
+- **The dispatch question offers no box the decision would refuse (#1548).** A wanted persona
+  the person said never to for a chat above the asking one is not offered; for a chat whose
+  own record keeps no chain, a persona any never names is not offered.
 - **The asking chat is read under the lock the decision is made under.** One that has closed
   or ended by then is refused, so a chain read short is never written into a new chat.
 - A kept chain whose length is not the record's depth, or that names what cannot be a
@@ -1030,8 +1033,7 @@ Still open, and not decided here:
   limits items 12 and 13 state;
 - a history rewritten so that no commit this machine has took a grant out (item 14);
 - a task's request named with its whole path, and one question for several tasks at the same
-  block (V100-56, V100-57; #1508), and boxes filtered by a never above the asking chat
-  (#1548): neither is in train 64.
+  block (V100-56, V100-57; #1508): not in train 64.
 
 #### Rulings added in review of #1512 (2026-10-09, delegated to the dispatcher; the operator is told)
 

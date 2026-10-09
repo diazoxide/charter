@@ -178,6 +178,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use purlis_core::dispatchchain;
 use purlis_core::dispatchgrant::{self, ChatPair, Covers, Dispatched, InForce, Pair};
 use purlis_core::dispatchwants::{self, Access, Offer};
 use purlis_core::dispatchwithin;
@@ -211,6 +212,9 @@ pub struct Asking {
     /// Whether it runs on another chat's grants until the person allows its own on its tab
     /// (D-1362-5, D-1362-6). Such a chat dispatches to no one.
     pub held: bool,
+    /// Who is above it in its chain, as its own record keeps it (#1548): what the question
+    /// reads to offer no box for a persona the person said never to for a chat above it.
+    pub above: dispatchchain::Above,
 }
 
 /// The chat `chat` records, as an asking chat: session `session`, shown as `name`, in the
@@ -227,6 +231,7 @@ pub fn asking_from(
         name,
         persona: purlis_core::start::runs_with(chat, root),
         held: chat.held.is_some(),
+        above: dispatchchain::Above::of(chat),
     }
 }
 
@@ -646,10 +651,10 @@ impl Store {
     /// A wanted persona is not offered where a grant covers it **for a task in the workspace
     /// this one works in** (#1505: a ticked pair is kept with the answer's own workspace
     /// condition, so a box is offered where that grant would be new), the person said never to
-    /// it, policy locks it, the person kept it blocked on this chat's tab (they are not asked
-    /// twice in one chat, by a box either), or a dispatch to it from a chat of the same
-    /// persona is waiting on the person: that one has its own question, which shows its own
-    /// brief.
+    /// it, or to it for a chat above this one in its chain (#1548), policy locks it, the person
+    /// kept it blocked on this chat's tab (they are not asked twice in one chat, by a box
+    /// either), or a dispatch to it from a chat of the same persona is waiting on the person:
+    /// that one has its own question, which shows its own brief.
     ///
     /// **No box at all where the task's workspace is not there yet**: an Allow then starts the
     /// one dispatch and keeps no grant, so there is nothing a tick could be kept as.
@@ -663,7 +668,14 @@ impl Store {
             Vec::new()
         } else {
             let grants = self.in_force_for(root, &held.asking, held.works_in.as_deref());
-            dispatchwants::also(root, asking, &held.target, &grants, locks)
+            dispatchwants::also(
+                root,
+                asking,
+                &held.target,
+                &grants,
+                locks,
+                &held.asking.above,
+            )
         };
         let waiting = lock(&self.pending).clone();
         // A pair whose project grant the person said "Not on my machine" to is no box: a
