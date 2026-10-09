@@ -72,17 +72,21 @@ export function check({ html, chunks }) {
     for (const imported of staticImportsOf(code))
       queue.push(posix.normalize(posix.join(posix.dirname(path), imported)));
   }
+  let carried = false;
   for (const path of main) {
     const found = MARKERS.filter((marker) => chunks.get(path).includes(marker));
-    if (found.length > 0)
+    if (found.length > 0) {
+      carried = true;
       failures.push(
         `${path} is in the window's main bundle and carries CodeMirror (${found.join(", ")}): load the editor through import(...), as Views.tsx does`,
       );
+    }
   }
   const lazy = [...chunks].some(
     ([path, code]) => !main.has(path) && code.includes("cm-editor"),
   );
-  if (!lazy)
+  // Where the main bundle already carries it, the editor moved there and the markers are fine.
+  if (!lazy && !carried)
     failures.push(
       "no lazy chunk carries cm-editor, so this check can no longer see CodeMirror: update its markers",
     );
