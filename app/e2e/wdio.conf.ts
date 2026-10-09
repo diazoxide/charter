@@ -11,6 +11,7 @@ import {
   writeForgeCache,
   writeShell,
 } from "./harness.js";
+import { theWindowIsDrawn } from "./drawn.js";
 import { PANIC_LOG, collectEvidence } from "./processes.js";
 
 /**
@@ -90,6 +91,14 @@ export const config: WebdriverIO.Config = {
   // path would quietly clean nothing.
   beforeSession() {
     anEmptyRecord(plane);
+  },
+
+  // Every spec starts once the app has drawn its window (#1469): the service's own `before` waits
+  // for a window handle, not for the page in it, and the first spec of a cold start used to send
+  // its first key to a window with nothing in it yet. Every config spreads this one, so each of
+  // them waits too.
+  async before() {
+    await theWindowIsDrawn();
   },
 
   // The service reads `tauri:options`, which WebdriverIO's own capability type does not know.

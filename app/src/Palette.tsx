@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   aim,
@@ -258,7 +258,12 @@ export function Palette({
   // wherever the focus has got to — a row reached by clicking, a browser that moved focus on
   // its own, or a surface that took it. A palette that cannot be left is the worst thing a
   // modal surface can be, and it is not a state to be one stray focus away from.
-  useEffect(() => {
+  //
+  // **A layout effect, so it is listening from the first frame** (#1469). A plain effect runs
+  // after the browser paints, and an `F2` pressed as the window appeared was lost in between —
+  // the first scenario spec's, on a slow Linux runner. Added in the commit that draws the
+  // window, the listener is there before anything can be seen to press it at.
+  useLayoutEffect(() => {
     const key = (e: KeyboardEvent) => {
       // The switcher's key (FR-27). A terminal sends nothing for it (`switcherKey.ts`), so it
       // is claimed wherever the keyboard is, and there is nothing to hand back.
