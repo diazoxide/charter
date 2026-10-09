@@ -8,6 +8,7 @@ use purlis_core::dispatchdecision::{MEMORY_WAIT, gave_up_on_memory};
 use purlis_core::handback::Answered;
 use purlis_core::memorypressure::Memory;
 
+use super::limits_where_they_bind::row_of;
 use super::*;
 
 /// The project's memory reads `memory` from now on.
@@ -197,6 +198,16 @@ fn a_dispatch_the_person_allowed_waits_on_memory_and_then_starts_on_the_grant_th
     })
     .expect("it waits on memory");
     assert_eq!(held.chats().open_now().len(), before, "nothing started yet");
+    // Told now that it waits, and that it hears more (#1617), not only once it starts.
+    let told = told_on_its_next_turn(&held, asking);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0].answered, Some(Answered::WaitingOnMemory));
+    assert_eq!(told[0].from, "check the cluster");
+    assert_eq!(
+        told[0].summary,
+        "if this machine is still short on memory after 10 minutes, nothing starts and this \
+         chat is told"
+    );
 
     memory_is(&held, Memory::Enough);
     memory_freed(&held, &id, Instant::now(), &nobody);
@@ -290,4 +301,66 @@ fn a_chat_that_asks_in_a_loop_while_memory_is_short_is_refused_past_the_bound_it
         held.held_dispatches().on_memory_listed().len(),
         MOST_ON_MEMORY_PER_CHAT
     );
+}
+
+#[test]
+fn the_asking_chat_s_row_counts_what_waits_on_memory_and_the_window_is_told_as_it_moves() {
+    use purlis_core::planechange::Kind as Changed;
+    // #1617: the row says how many of the chat's dispatches wait, so the window is told the
+    // rows moved each time one starts waiting and once memory frees.
+    let told: Arc<Mutex<Vec<purlis_core::planechange::Change>>> = Arc::default();
+    let rows_changed = {
+        let told = Arc::clone(&told);
+        move || {
+            told.lock()
+                .expect("the changes told")
+                .iter()
+                .filter(|change| change.kind == Changed::Chats)
+                .count()
+        }
+    };
+    let plane = a_plane_with_personas();
+    let host = Pretend::default();
+    let planes = planes_on(&host).telling_changes({
+        let told = Arc::clone(&told);
+        Arc::new(move |_, what: crate::planewatch::What| {
+            told.lock()
+                .expect("the changes told")
+                .extend(what.unwrap_or_default());
+        })
+    });
+    let id = planes.open(&plane.root);
+    let held = planes.held(&id).expect("held");
+    let alpha = held.root().join("workspaces").join("alpha");
+    let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+    memory_is(&held, Memory::Short);
+    assert!(held.held_dispatches().on_memory_by_chat().is_empty());
+
+    let before = rows_changed();
+    for task in ["tidy up", "check the queue"] {
+        let (said, _) = dispatch(&held, &id, &Tickets::default(), asking, None, task);
+        assert!(matches!(said, Answer::WaitingOnMemory { .. }), "{said:?}");
+    }
+    let waited = rows_changed();
+    assert!(waited >= before + 2, "each wait is told");
+    assert_eq!(
+        held.held_dispatches().on_memory_by_chat(),
+        std::collections::HashMap::from([(asking, 2)]),
+        "counted by the chat that asked"
+    );
+    assert_eq!(
+        row_of(&held, asking).waiting_on_memory,
+        Some(2),
+        "on its row"
+    );
+
+    // Still short: nothing moves, and nothing is told.
+    memory_freed(&held, &id, Instant::now(), &nothing_opens);
+    assert_eq!(rows_changed(), waited);
+
+    memory_is(&held, Memory::Enough);
+    memory_freed(&held, &id, Instant::now(), &nobody);
+    assert!(held.held_dispatches().on_memory_by_chat().is_empty());
+    assert_eq!(row_of(&held, asking).waiting_on_memory, None, "and off it");
+    assert!(rows_changed() > waited, "the row's count going is told");
 }

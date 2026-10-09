@@ -56,6 +56,9 @@ export type ListedChat = {
    *  (#1498, V100-54): the number that binds, and the core's sentence saying which limit and
    *  where it is changed. Its row says `at its task limit` while it is set. */
   atLimit?: AtLimit | null;
+  /** How many of its dispatches wait until this machine has memory to spare (#1617), where
+   *  any does: its row says so, as the Dispatches tab's *Not started* list names them. */
+  waitingOnMemory?: number | null;
   /** A task the person asked for themselves, from its session's tab (#1492, V100-70): its row
    *  and its breadcrumb say `asked by you`. */
   byYou?: boolean;
@@ -139,6 +142,7 @@ export function listedChat(
     tasksLimit: chat.tasks_limit ?? null,
     tasksRunning: chat.tasks_running ?? null,
     atLimit: chat.at_limit ?? null,
+    waitingOnMemory: chat.waiting_on_memory ?? null,
     byYou: chat.from?.task === true && chat.from.by_person === true,
     typed: typedInto(chat.harness),
     ...rowFactsOf(chat, nameOf),

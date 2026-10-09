@@ -120,6 +120,15 @@ const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
 /** What a key on a row asks for beside opening it. */
 type Asked = "beside" | "stop";
 
+/** **What a chat's row says of its dispatches waiting on memory** (#1617): how many. */
+function onMemoryWords(waiting: number): string {
+  return waiting === 1 ? "1 dispatch waits on memory" : `${waiting} dispatches wait on memory`;
+}
+
+/** The whole sentence, on the line's hover: what they wait for, and where they are named. */
+const ON_MEMORY_SAID =
+  "This machine is short on memory: they start by themselves once it frees, and the chat that asked is told if they give up. The Dispatches tab lists them under Not started.";
+
 /**
  * Whether the element that took the focus took it from the keyboard. A pointer's press focuses
  * a row too, on the WebViews that focus a button on a click, and a list held for that would
@@ -783,6 +792,7 @@ export function ChatsSection({
                       trouble={second?.session === row.session ? (second.trouble ?? null) : null}
                       onConfirm={confirm}
                       atLimit={row.atLimit ?? null}
+                      waitingOnMemory={row.waitingOnMemory ?? null}
                       onLimits={limits}
                       offers={offers}
                       clock={clock}
@@ -897,6 +907,7 @@ const Row = memo(function Row({
   trouble,
   onConfirm,
   atLimit,
+  waitingOnMemory,
   onLimits,
   offers,
   clock,
@@ -962,6 +973,9 @@ const Row = memo(function Row({
   /** Its last dispatch was refused for a limit and no slot has freed since (#1498): the
    *  number, and the core's sentence of which limit and where it is changed. */
   atLimit: AtLimit | null;
+  /** How many of its dispatches wait until this machine has memory to spare (#1617); nothing
+   *  where none does. */
+  waitingOnMemory: number | null;
   /** Opens Settings where the limits are changed. */
   onLimits: () => void;
   offers: Catalogued;
@@ -1165,6 +1179,13 @@ const Row = memo(function Row({
           <button type="button" className="at-limit-settings" onClick={onLimits}>
             Dispatch settings
           </button>
+        </span>
+      )}
+      {waitingOnMemory !== null && waitingOnMemory > 0 && (
+        /* **Its dispatches waiting on memory** (#1617): said on the asking chat's row, in the
+           at-limit line's place and style, as the Dispatches tab's Not started list names them. */
+        <span className="at-limit" data-testid={`on-memory-${session}`} title={ON_MEMORY_SAID}>
+          {onMemoryWords(waitingOnMemory)}
         </span>
       )}
       {restartSaid !== null && (
