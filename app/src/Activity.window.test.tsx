@@ -594,7 +594,7 @@ describe("a session's Activity tab", () => {
 
     expect(question).toHaveAttribute("data-kind", "question");
     expect(within(question).getByTestId("activity-expired")).toHaveTextContent(
-      "Its words are no longer kept: purlis keeps what a task said for 30 days after the task ended.",
+      "Its words are no longer kept: purlis forgets what a task said 30 days after the task ended, and when its row is cleared or the chat that asked closes.",
     );
   });
 

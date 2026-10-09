@@ -1848,3 +1848,89 @@ fn what_a_record_kept_is_taken_out_where_its_end_stands_in_the_future() {
     assert_eq!(read(&root, &far).unwrap().talk[0].text, "");
     assert_eq!(read(&root, &near).unwrap().talk[0].text, "Still up.");
 }
+
+// ----- clearing a row forgets what was said (#1520) ----------------------------------------
+
+/// A finished task of `steward 3`'s that kept one message.
+fn a_task_that_talked(root: &Path, name: &str, worker: u32, minute: u32) -> String {
+    let opening = Opening {
+        mode: Mode::Task,
+        task: Some(name.to_owned()),
+        worker: Worker {
+            chat: ChatRef {
+                chat: worker,
+                id: Some(mint()),
+                name: name.to_owned(),
+                persona: Some("devops".to_owned()),
+            },
+            ..a_handoff().worker
+        },
+        ..a_handoff()
+    };
+    let opened = open(root, opening, at(&format!("2026-10-07T12:{minute:02}:00Z"))).unwrap();
+    said(
+        root,
+        &opened.id,
+        crate::dispatchtalk::Kind::Note,
+        "Still up.",
+        at(&format!("2026-10-07T12:{minute:02}:10Z")),
+    )
+    .unwrap();
+    close(
+        root,
+        &opened.id,
+        Ending {
+            report: Some(done("Healthy.")),
+            usage: None,
+        },
+        at(&format!("2026-10-07T12:{minute:02}:30Z")),
+    )
+    .unwrap();
+    opened.id
+}
+
+#[test]
+fn clear_finished_forgets_what_was_said_and_keeps_the_record() {
+    let (_d, root) = project();
+    let id = a_task_that_talked(&root, "check prod", 7, 1);
+    let before = read(&root, &id).unwrap();
+
+    assert!(clear_forgetting(&root, &id).unwrap());
+    assert!(!clear_forgetting(&root, &id).unwrap(), "cleared once");
+
+    let after = read(&root, &id).expect("the record stays");
+    assert!(after.cleared);
+    assert_eq!(after.messages, 1);
+    assert_eq!(after.talk[0].text, "", "its words are forgotten");
+    assert_eq!(after.talk[0].at, before.talk[0].at, "its line stays");
+    assert_eq!(after.brief, before.brief);
+    assert_eq!(after.report, before.report);
+    assert!(sound(&after));
+}
+
+#[test]
+fn a_row_taken_for_a_reopen_keeps_what_was_said() {
+    // `clear` is the row and nothing else: a Reopen takes the row, and forgets nothing.
+    let (_d, root) = project();
+    let id = a_task_that_talked(&root, "check prod", 7, 1);
+
+    assert!(clear(&root, &id).unwrap());
+
+    assert_eq!(read(&root, &id).unwrap().talk[0].text, "Still up.");
+}
+
+#[test]
+fn a_chat_that_closes_forgets_what_its_finished_tasks_said() {
+    let (_d, root) = project();
+    let one = a_task_that_talked(&root, "check prod", 7, 1);
+    let two = a_task_that_talked(&root, "check staging", 8, 2);
+
+    assert_eq!(clear_for(&root, &steward()), 2);
+
+    for id in [&one, &two] {
+        let kept = read(&root, id).expect("the record stays");
+        assert!(kept.cleared);
+        assert_eq!(kept.talk[0].text, "");
+        assert!(kept.report.is_some());
+    }
+}

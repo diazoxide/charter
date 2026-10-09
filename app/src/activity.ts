@@ -280,9 +280,10 @@ export function leftOutAsked(line: ActivityLine): string {
   return `${line.to} has this question: purlis did not keep its text, so it is answered there and not here.`;
 }
 
-/** What a message whose words are no longer kept says in their place. */
+/** What a message whose words are no longer kept says in their place: they expired, or were
+ *  forgotten with the task's row (#1520). */
 export const EXPIRED_SAID =
-  "Its words are no longer kept: purlis keeps what a task said for 30 days after the task ended.";
+  "Its words are no longer kept: purlis forgets what a task said 30 days after the task ended, and when its row is cleared or the chat that asked closes.";
 
 /** The most of a line's text drawn before it is asked for in full: characters, and lines. */
 export const CLIP_CHARS = 400;
