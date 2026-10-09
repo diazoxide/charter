@@ -1166,6 +1166,11 @@ struct StartOptions {
     /// project offers (#1445): the harness row the picker moves to when that persona is
     /// picked. The person can still pick another.
     persona_profiles: std::collections::BTreeMap<String, String>,
+    /// Each persona's one-line description (`agent-description`, else `description`), by the
+    /// persona's name, where it declares one (#1460): shown under its row. Always sent; optional
+    /// in the window's type so a picker drawn from an older answer reads it as none.
+    #[specta(optional)]
+    persona_descriptions: Option<std::collections::BTreeMap<String, String>>,
     /// Set when git would carry `charter.local.toml`: every declared profile is refused
     /// until it is fixed, and this is the one fix for that state.
     ignore_fix: Option<String>,
@@ -1222,6 +1227,13 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
             ))
         })
         .collect();
+    let persona_descriptions = personas
+        .iter()
+        .filter_map(|who| {
+            purlis_core::personaverbs::retired::description_of(root, who)
+                .map(|said| (who.clone(), said))
+        })
+        .collect();
     Ok(StartOptions {
         profiles: set
             .profiles()
@@ -1260,6 +1272,7 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
             .collect(),
         personas,
         persona_profiles,
+        persona_descriptions: Some(persona_descriptions),
         // Only a persona this plane HAS. `[persona] default` is a committed line that
         // nothing checks, so it can name a deleted persona or `_shared` — and preselecting
         // one the picker does not draw means the operator presses Start and is refused over
@@ -3393,6 +3406,39 @@ mod tests {
             options.persona_profiles,
             std::collections::BTreeMap::from([("ops".to_owned(), "codex".to_owned())]),
             "only a profile the project offers is a row to move to"
+        );
+    }
+
+    #[test]
+    fn the_picker_is_told_each_personas_one_line_description_where_it_has_one() {
+        // #1460: the description a chat as the persona is briefed with, under its row.
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(plane.path().join(purlis_core::plane::MANIFEST), "").expect("written");
+        for (name, line) in [
+            ("ops", "description: Keeps the lights on\n"),
+            (
+                "qa",
+                "description: x\nagent-description: Breaks things on purpose\n",
+            ),
+            ("bare", ""),
+        ] {
+            let dir = plane.path().join("personas").join(name);
+            std::fs::create_dir_all(&dir).expect("a persona");
+            std::fs::write(
+                dir.join("persona.md"),
+                format!("---\nname: {name}\n{line}---\n"),
+            )
+            .expect("a definition");
+        }
+
+        let options = start_options_in(plane.path()).expect("read");
+
+        assert_eq!(
+            options.persona_descriptions,
+            Some(std::collections::BTreeMap::from([
+                ("ops".to_owned(), "Keeps the lights on".to_owned()),
+                ("qa".to_owned(), "Breaks things on purpose".to_owned()),
+            ]))
         );
     }
 

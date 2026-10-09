@@ -320,6 +320,8 @@ export function StartChat({
                   ...options.personas.map((who) => {
                     const own = ownProfile(who);
                     const says = [
+                      // What the persona says of itself in a line (#1460).
+                      options.persona_descriptions?.[who],
                       who === options.persona ? "plane default" : undefined,
                       own === undefined ? undefined : `its profile is ${own}`,
                     ].filter((word) => word !== undefined);
