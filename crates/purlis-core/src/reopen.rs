@@ -140,6 +140,17 @@ pub struct Chat {
     /// Riding the record is what lets the pairing outlive a relaunch. `None` is every chat the
     /// operator opened, and every record written before this field.
     pub from: Option<HandedFrom>,
+    /// Whether this chat is a finished task the person reopened (ADR 0090 item 16, #1543), and
+    /// who asked for that task. **Recorded by the app when it reopens the task**, from the
+    /// task's own record.
+    ///
+    /// A reopened task names no [`Self::from`]: it is an ordinary chat, owes nobody a report,
+    /// and nothing above it reads it. But it still runs on the profile a dispatch chose, so each
+    /// later start of it (a relaunch, a restart) is held to what that dispatch was held to, as
+    /// the Reopen was ([`crate::dispatchprofiles::may_start_again`]). `None` is every other
+    /// chat, and every record written before this field — not a format change, for
+    /// [`Self::pinned`]'s reason.
+    pub reopened: Option<ReopenedTask>,
     /// Whose persona grants it holds instead of its own, where it holds another's (#1362):
     /// see [`HeldGrants`]. Its own home, apart from [`Self::from`], so a handoff note that does
     /// not read never drops it, and a Resume, which has no note, can hold too.
@@ -256,6 +267,39 @@ pub struct Identity {
     /// The chat a **Resume** from a session record started this one from (ADR 0064), by its
     /// id. `None` is `unknown` or none: a record that names no chat id leaves it so.
     pub resumed_from: Option<String>,
+}
+
+/// A finished task the person reopened as an ordinary chat ([`Chat::reopened`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReopenedTask {
+    /// Whether the person asked for the task with Ask from a tab: its refusals then say so,
+    /// never that another chat dispatched it. Wording only, as [`HandedFrom::by_person`] is.
+    pub by_person: bool,
+}
+
+/// What a record's `reopened` holds for a task a chat dispatched.
+const REOPENED_TASK: &str = "task";
+/// What a record's `reopened` holds for a task the person asked for with Ask.
+const REOPENED_ASKED: &str = "person";
+
+impl ReopenedTask {
+    /// The word a record keeps it under.
+    fn word(self) -> &'static str {
+        if self.by_person {
+            REOPENED_ASKED
+        } else {
+            REOPENED_TASK
+        }
+    }
+
+    /// A record's word read back. **Any word that is not empty is a reopened task**, held to
+    /// what its dispatch was held to: a value somebody else wrote never lets a chat out of
+    /// that check. Only [`REOPENED_ASKED`] changes the words.
+    fn read(word: &str) -> Option<Self> {
+        (!word.is_empty()).then(|| Self {
+            by_person: word == REOPENED_ASKED,
+        })
+    }
 }
 
 /// The chat a handoff came from, as the chat it opened keeps it.
@@ -1321,6 +1365,11 @@ struct ChatOnDisk {
     /// always wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from: Option<FromOnDisk>,
+    /// `"task"` for a finished task the person reopened, `"person"` for one they had asked for
+    /// with Ask, and absent for every other chat — see [`Chat::reopened`]. Any other word
+    /// reads as `"task"`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    reopened: String,
     /// [`Chat::held`]: the persona whose grants the chat holds, `""` for none; absent where it
     /// holds its own. **Read failing closed**: any value present that is not a persona's name
     /// holds no persona's grants, never its own.
@@ -1557,6 +1606,10 @@ impl From<&Record> for OnDisk {
                     number: chat.number.unwrap_or_default(),
                     label: chat.label.clone().unwrap_or_default(),
                     from: chat.from.as_ref().map(FromOnDisk::from),
+                    reopened: chat
+                        .reopened
+                        .map(|reopened| reopened.word().to_owned())
+                        .unwrap_or_default(),
                     held: chat.held.as_ref().map(|held| {
                         serde_json::Value::String(held.persona.clone().unwrap_or_default())
                     }),
@@ -1636,6 +1689,7 @@ impl From<ChatOnDisk> for Chat {
             label: label(&chat.label).ok().flatten(),
             tab_opened,
             from,
+            reopened: ReopenedTask::read(&chat.reopened),
             held: chat.held.map(|value| HeldGrants {
                 persona: value
                     .as_str()
@@ -1942,6 +1996,53 @@ pub(crate) mod tests {
         assert!(
             !read(plane.path()).chats[0].unsandboxed,
             "only the one word"
+        );
+    }
+
+    /// #1543: a reopened task names no asking chat, so the record says it was a task, for each
+    /// later start of it to be held to what its dispatch was held to.
+    #[test]
+    fn a_reopened_task_is_recorded_so_and_a_word_it_does_not_know_still_reads_as_one() {
+        let plane = tempfile::tempdir().unwrap();
+        let task = Chat {
+            reopened: Some(ReopenedTask { by_person: false }),
+            ..claude("ide.7", Some(ID))
+        };
+        let asked = Chat {
+            reopened: Some(ReopenedTask { by_person: true }),
+            ..claude("ide.8", Some(ID))
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![task.clone(), asked.clone(), claude("ide.9", Some(ID))],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"reopened\"").count(), 2, "{text}");
+        assert_eq!(text.matches("\"reopened\": \"task\"").count(), 1, "{text}");
+        assert_eq!(
+            text.matches("\"reopened\": \"person\"").count(),
+            1,
+            "{text}"
+        );
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0], task);
+        assert_eq!(back.chats[1], asked);
+        assert_eq!(back.chats[2].reopened, None);
+
+        // A word somebody else wrote never lets a chat out of the check: it is a task.
+        fs::write(
+            path(plane.path()),
+            text.replace("\"reopened\": \"task\"", "\"reopened\": \"no\""),
+        )
+        .unwrap();
+        assert_eq!(
+            read(plane.path()).chats[0].reopened,
+            Some(ReopenedTask { by_person: false })
         );
     }
 

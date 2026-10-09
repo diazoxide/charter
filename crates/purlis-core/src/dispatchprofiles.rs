@@ -47,7 +47,9 @@
 //! A dispatch is held to the list when it starts its chat. That chat may be started again
 //! later: when purlis is opened again, by Restart chat, by the restart a grant owes, by Start
 //! fresh. The list and the profile's own command may have changed since, so the same two
-//! questions are asked again there ([`may_start_again`], [`task_profile_refusal`]).
+//! questions are asked again there ([`may_start_again`], [`task_profile_refusal`]). So are
+//! they of a finished task the person reopened, at the Reopen and at every start after it
+//! (#1543): it names no asking chat, and its record says it was a task.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -364,13 +366,21 @@ fn task_refusal_on(
 
 /// **Whether `chat`, as the app recorded it, may be started again as it stands**: any chat a
 /// dispatch started (its record has `from`), a task or a handoff, on a profile, is asked
-/// [`task_profile_refusal`]. A chat the person started is theirs to run as they declared it.
+/// [`task_profile_refusal`], **and so is a finished task the person reopened** (its record has
+/// `reopened`, #1543): it names no asking chat, and still runs on the profile a dispatch
+/// chose, so every later start of it is held as the Reopen was (ADR 0090 item 16). A chat the
+/// person started is theirs to run as they declared it.
 pub fn may_start_again(root: &Path, chat: &crate::reopen::Chat) -> Result<(), String> {
-    let (Some(from), Some(profile)) = (&chat.from, chat.profile.as_deref()) else {
+    let Some(profile) = chat.profile.as_deref() else {
         return Ok(());
     };
     // A chat the person asked for from a tab is told so, never that another chat sent it.
-    let how = if from.by_person {
+    let by_person = match (&chat.from, chat.reopened) {
+        (Some(from), _) => from.by_person,
+        (None, Some(reopened)) => reopened.by_person,
+        (None, None) => return Ok(()),
+    };
+    let how = if by_person {
         Again::Asked
     } else {
         Again::Started
@@ -736,6 +746,32 @@ mod tests {
             ..dispatched.clone()
         };
         assert_eq!(may_start_again(root.path(), &started), Ok(()));
+        // A finished task reopened names no asking chat, and is still asked each time it is
+        // started again (#1543, ADR 0090 item 16), in the words its asking said.
+        let reopened = Chat {
+            reopened: Some(crate::reopen::ReopenedTask { by_person: false }),
+            ..started.clone()
+        };
+        assert_eq!(
+            may_start_again(root.path(), &reopened),
+            Err(task_profile_refusal(root.path(), Some("devops"), "codex").expect("refused"))
+        );
+        let asked = Chat {
+            reopened: Some(crate::reopen::ReopenedTask { by_person: true }),
+            ..started.clone()
+        };
+        let said = may_start_again(root.path(), &asked).expect_err("refused");
+        assert!(said.starts_with("You started this chat with Ask"), "{said}");
+        assert_eq!(
+            may_start_again(
+                root.path(),
+                &Chat {
+                    profile: Some("work".to_owned()),
+                    ..reopened
+                }
+            ),
+            Ok(())
+        );
         // And one on no profile has none to ask about.
         let plain = Chat {
             profile: None,
