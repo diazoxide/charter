@@ -393,6 +393,21 @@ Two decisions those four share, taken once so they do not have to be taken again
   one thing a modal must not be. In both, Escape is exactly Cancel — nothing is ended, nothing
   is approved, and the core is told so the next ask is a first ask again.
 
+And the **persona mark picker** (`app/src/PersonaMarkPicker.tsx`, #1449), in a persona's view:
+two Radix radio groups, `Icon` and `Colour`, each a row of `RadioGroup.Item`s that wraps. Three
+things about it are decisions:
+
+- **The first item of each takes the key out.** `Initials` and `From its name` write no `icon:`
+  or `color:`, so the persona goes back to what it inherits along `extends:` or to its default.
+  A pick is written to the definition at once; there is no Save to forget.
+- **A colour outside the palette is an item too.** A `#rrggbb` written by hand in the definition
+  is drawn as one more item, checked, so the group never shows nothing picked for a colour the
+  persona has. Any other hue is typed into one native text box under the group, as
+  `#rrggbb`, and written at Enter; something else is marked `aria-invalid` and nothing is sent.
+- **What the persona asked for and cannot have is a `Notice`** above the groups, one per
+  reason, each dismissable: an icon purlis does not have, a colour it does not read, an image
+  over its limits or one this window could not decode.
+
 ## Two things learned converting them, which will catch the next person
 
 **A radio group's pick does not follow the arrow keys on its own.** Radix selects an item on
