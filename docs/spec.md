@@ -391,8 +391,8 @@ how it is cited and nothing here is renumbered.
     `Bash(purlis session record *)` as an `allow`, so a Smart close never stops to ask for
     the command that ends it, and, since V79, an `allow` for each of purlis's five read-only
     MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
-    `change_status`) and for `persona_where` (#1450), while its writes and `ask_operator`
-    still ask. Since V98b it also carries an `allow` for `purlis dispatch` by each spelling
+    `change_status`), for `persona_where` (#1450) and for `dispatch_list` (#1463), while its
+    writes and `ask_operator` still ask. Since V98b it also carries an `allow` for `purlis dispatch` by each spelling
     it has (`--name`, `--to`, `--profile` first, and `report`), never a bare wildcard, and for
     the `dispatch` and `dispatch_report` tools: consent to a dispatch is purlis's own dispatch
     grant, which the app asks the person for, so the harness does not ask beside it. Since

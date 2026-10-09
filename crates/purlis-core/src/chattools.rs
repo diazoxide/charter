@@ -72,18 +72,22 @@ pub const DISPATCH_REPORT: &str = "dispatch_report";
 pub const DISPATCH_LIST: &str = "dispatch_list";
 
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
-/// the five that only read, and [`PERSONA_WHERE`] (V98a, #1450), which reads the app's own
-/// record and answers names and states a chat is told at its start anyway. Named one by one,
-/// never derived from [`Tool::read_only`]: `ask_operator` is marked read-only too and still
-/// asks, and a tool added later is asked about until someone rules it in here. Writes are
-/// never in this list.
-pub const PRE_ALLOWED: [&str; 6] = [
+/// the five that only read, [`PERSONA_WHERE`] (V98a, #1450), which reads the app's own
+/// record and answers names and states a chat is told at its start anyway, and
+/// [`DISPATCH_LIST`] (#1463), which lists the tasks the asking chat dispatched itself, or the
+/// person started from its tab, and no other chat's: the same answer `purlis dispatch list`
+/// gives, whose command line is already allowed ([`crate::harness::claude::DISPATCH_TASK_ALLOW`]).
+/// Named one by one, never derived from [`Tool::read_only`]: `ask_operator` is marked
+/// read-only too and still asks, and a tool added later is asked about until someone rules it
+/// in here. Writes are never in this list.
+pub const PRE_ALLOWED: [&str; 7] = [
     "todo_list",
     "memory_search",
     "session_record_list",
     "session_record_read",
     "change_status",
     PERSONA_WHERE,
+    DISPATCH_LIST,
 ];
 
 /// The variables the server reads to find the chat's place, as a `charter` command in the chat

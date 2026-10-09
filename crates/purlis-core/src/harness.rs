@@ -967,7 +967,7 @@ mod tests {
         // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
         // the one command that ends it. Amended by V79 (#1050): the five read-only tools of
         // charter's own MCP server are pre-allowed beside it, and `persona_where` with them
-        // (V98a, #1450). Only grants, for exactly these —
+        // (V98a, #1450), and `dispatch_list` (#1463). Only grants, for exactly these —
         // no `ask`, no `deny`, no mode — so every rule of the operator's and the project's
         // still stands beside them (measured on 2.1.283: `--settings` permissions merge with
         // them, and a compound command holding the record command is still asked about).
@@ -1009,6 +1009,7 @@ mod tests {
                 "mcp__purlis__session_record_read",
                 "mcp__purlis__change_status",
                 "mcp__purlis__persona_where",
+                "mcp__purlis__dispatch_list",
             ]})
         );
     }
@@ -1153,8 +1154,8 @@ mod tests {
     #[test]
     fn a_claude_code_chat_is_still_asked_before_every_other_charter_tool() {
         // V79: the writes and `ask_operator` keep Claude Code's prompt. Every tool the server
-        // offers that is not one of the five reads or `persona_where` (V98a) has no allow,
-        // whatever it is marked.
+        // offers that is not one of the five reads, `persona_where` (V98a) or `dispatch_list`
+        // (#1463) has no allow, whatever it is marked.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
@@ -1170,6 +1171,9 @@ mod tests {
             "session_record_read",
             "change_status",
             "persona_where",
+            // And the list of the chat's own tasks (#1463), which `purlis dispatch list`
+            // already runs without asking.
+            "dispatch_list",
             "session_record",
             // And a dispatch (V98b): the app asks the person, so the harness does not.
             "dispatch",
@@ -1417,6 +1421,7 @@ mod tests {
                 "mcp__purlis__session_record_read",
                 "mcp__purlis__change_status",
                 "mcp__purlis__persona_where",
+                "mcp__purlis__dispatch_list",
             ])
         );
         assert_eq!(

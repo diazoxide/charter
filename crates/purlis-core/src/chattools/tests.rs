@@ -474,7 +474,7 @@ fn a_dispatch_waits_only_when_told_to_and_for_the_default_unless_told_how_long()
 }
 
 #[test]
-fn the_list_of_dispatched_tasks_is_the_apps_to_answer_and_is_not_run_unasked() {
+fn the_list_of_dispatched_tasks_is_the_apps_to_answer() {
     let p = tempfile::tempdir().unwrap();
     let refused = call(
         p.path(),
@@ -485,7 +485,6 @@ fn the_list_of_dispatched_tasks_is_the_apps_to_answer_and_is_not_run_unasked() {
     )
     .unwrap_err();
     assert!(refused.contains(DISPATCH_LIST), "{refused}");
-    assert!(!PRE_ALLOWED.contains(&DISPATCH_LIST));
 }
 
 #[test]
@@ -858,8 +857,8 @@ fn a_fifo_in_a_store_is_refused_at_once_and_the_store_is_let_go() {
 #[test]
 fn every_tool_pre_allowed_in_claude_code_is_one_that_only_reads() {
     // V79: the pre-allowed tools are the five reads, and `persona_where` beside them
-    // (V98a, #1450): each a tool the server offers and marks read-only, and never
-    // `ask_operator`, which is marked read-only and still asks.
+    // (V98a, #1450) and `dispatch_list` (#1463): each a tool the server offers and marks
+    // read-only, and never `ask_operator`, which is marked read-only and still asks.
     assert_eq!(
         PRE_ALLOWED,
         [
@@ -869,6 +868,7 @@ fn every_tool_pre_allowed_in_claude_code_is_one_that_only_reads() {
             "session_record_read",
             "change_status",
             "persona_where",
+            "dispatch_list",
         ]
     );
     for name in PRE_ALLOWED {
