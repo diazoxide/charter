@@ -540,11 +540,12 @@ above. Each holds until the ticket named, and the text above is left as accepted
 
 1. **GitLab REST does not use the `gitlab` crate (ruling 4, amended by the operator's V72).**
    The crate's endpoint builders are behind its `client_api` feature, which brings in
-   `reqwest`, the client "Rejected" names for the core. And FG-3's GitLab bodies are already `Call`s, built once, whose recordings and
-   `glab api` argv are pinned (ADR 0046). So GitLab's REST bodies are purlis's own, as
-   GitHub's are, sent over the same `Transport`, and pagination is the short-page loop both
-   backends use. If the crate ever offers its endpoints without `reqwest`, the move is a
-   rewrite of how a `Call` is built, and the recordings say whether it changed what is asked.
+   `reqwest`, the client "Rejected" names for the core. And FG-3's GitLab bodies are already
+   `Call`s, built once, whose recordings and `glab api` argv are pinned (ADR 0046). So GitLab's
+   REST bodies are purlis's own, as GitHub's are, sent over the same `Transport`, and
+   pagination is the short-page loop both backends use. If the crate ever offers its endpoints
+   without `reqwest`, the move is a rewrite of how a `Call` is built, and the recordings say
+   whether it changed what is asked.
 2. **GitLab's GraphQL documents are not checked at compile time yet** ([#1031](https://github.com/diazoxide/charter/issues/1031)).
    GitLab publishes no schema file to vendor, as GitHub does; the schema is read by
    introspection, and part of it describes GitLab's Enterprise Edition, whose licence is not

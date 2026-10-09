@@ -272,6 +272,33 @@ fn a_mutation_gitlab_refuses_in_its_payload_is_an_error_in_its_words() {
 }
 
 #[test]
+fn a_payload_refusal_reaches_the_window_as_one_line_and_capped() {
+    let long = "x".repeat(5_000);
+    let (gitlab, recorded) = over(json!([gql(
+        SET_PARENT,
+        json!([{"text": ["id", "gid://gitlab/WorkItem/84002"]},
+               {"text": ["parent", "gid://gitlab/WorkItem/84001"]}]),
+        json!({"data": {"workItemUpdate": {"errors": ["first\nline\u{202e}reversed", long]}}})
+    )]));
+    let said = gitlab
+        .set_parent(
+            &me(),
+            "gid://gitlab/WorkItem/84002",
+            Some("gid://gitlab/WorkItem/84001"),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("first\\x0aline\\u202ereversed"), "{said}");
+    assert!(!said.contains('\n') && !said.contains('\u{202e}'), "{said}");
+    assert!(
+        said.chars().count() < 1_000,
+        "{} characters",
+        said.chars().count()
+    );
+    spent(&recorded);
+}
+
+#[test]
 fn milestones_are_read_whatever_their_state_and_one_is_made() {
     let (gitlab, recorded) = over(json!([
         rest(

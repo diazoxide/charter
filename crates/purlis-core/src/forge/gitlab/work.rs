@@ -308,7 +308,8 @@ impl GitLab {
             .map(|all| all.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         if !errors.is_empty() {
-            return Err(ForgeError::new(format!("{doing}: {}", errors.join(", "))));
+            let said = super::super::http::refusal_text(&errors.join(", "));
+            return Err(ForgeError::new(format!("{doing}: {said}")));
         }
         Ok(payload)
     }

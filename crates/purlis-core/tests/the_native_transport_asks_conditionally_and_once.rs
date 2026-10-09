@@ -267,8 +267,13 @@ mod gitlab {
     }
 
     fn backend(server: &MockServer, cli: Arc<Counting>) -> Box<dyn ForgeBackend> {
+        backend_at(&server.uri(), cli)
+    }
+
+    /// A GitLab backend whose API root is `root`.
+    fn backend_at(root: &str, cli: Arc<Counting>) -> Box<dyn ForgeBackend> {
         let resolver = Resolver::new(Kind::GitLab, "gitlab.com")
-            .at_root(ApiRoot::at(&server.uri()))
+            .at_root(ApiRoot::at(root))
             .cli_over(cli)
             .signed_in(
                 &HostScope::for_a_test(),
@@ -336,6 +341,37 @@ mod gitlab {
             "{error}"
         );
         assert!(!error.to_string().contains(TOKEN));
+        assert_eq!(cli.0.load(Ordering::SeqCst), 0, "retried through the CLI");
+        rt.block_on(server.verify());
+    }
+
+    /// The GitLab root, `<host>/api/v4`, follows no redirect with the token either: a `302`
+    /// from it is a refusal, and the place it names is never asked (FW-2b's review, #1038).
+    #[test]
+    fn a_redirect_from_the_gitlab_root_is_not_followed_with_the_token() {
+        purlis_core::unsteered!();
+        let rt = runtime();
+        let server = rt.block_on(MockServer::start());
+        let elsewhere = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v4{MR}")))
+                .respond_with(
+                    ResponseTemplate::new(302)
+                        .insert_header("location", format!("{}/stolen", elsewhere.uri()).as_str()),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let cli = Arc::new(Counting::default());
+        let root = format!("{}/api/v4", server.uri());
+        let got = backend_at(&root, cli.clone()).state(&human(), "acme/api", &pr());
+        let error = got.unwrap_err();
+        assert!(!error.to_string().contains(TOKEN));
+        let reached = rt
+            .block_on(elsewhere.received_requests())
+            .unwrap_or_default();
+        assert!(reached.is_empty(), "the redirect was followed");
         assert_eq!(cli.0.load(Ordering::SeqCst), 0, "retried through the CLI");
         rt.block_on(server.verify());
     }

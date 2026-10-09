@@ -21,9 +21,9 @@
 //! no way to wipe it), and `ureq`'s write buffer. Both live for one request.
 //!
 //! A token is sent only over HTTPS, or, in a test build alone, plain HTTP to this machine's
-//! loopback (a recorded forge). A URL with user information is refused, so `http://127.0.0.1:1@evil.example/`
-//! is not loopback, and so is a request whose authority differs from the API root's. No
-//! redirect is followed.
+//! loopback (a recorded forge). A URL with user information is refused, so
+//! `http://127.0.0.1:1@evil.example/` is not loopback, and so is a request whose authority
+//! differs from the API root's. No redirect is followed.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -46,8 +46,8 @@ pub trait TokenSource: Send + Sync {
 /// Where a forge's API lives: its REST root and its GraphQL endpoint.
 ///
 /// Its fields are private, and the constructors a shipped build has, [`ApiRoot::github`],
-/// [`ApiRoot::gitlab`] and [`ApiRoot::of`], always name an HTTPS root. [`ApiRoot::at`], which can name a loopback `http://` root for a
-/// recorded forge, exists only in a test build.
+/// [`ApiRoot::gitlab`] and [`ApiRoot::of`], always name an HTTPS root. [`ApiRoot::at`], which
+/// can name a loopback `http://` root for a recorded forge, exists only in a test build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRoot {
     /// `https://api.github.com`, `https://<host>/api/v3` on a GHES, or `https://<host>/api/v4`
@@ -475,7 +475,18 @@ fn refusal_words(answer: &Value) -> Option<String> {
         .find_map(|key| answer[*key].as_str().map(str::to_string))
 }
 
-/// The [`Reply`] a forge's HTTP answer is, spelled as the CLI would have.
+/// How many characters of a forge's own words a refusal repeats.
+pub(super) const REFUSAL_LIMIT: usize = 500;
+
+/// A forge's own words as they may reach the window: one line, every control and bidi
+/// character shown as its escape, clipped at [`REFUSAL_LIMIT`]. The forge's text is not
+/// charter's, and a refusal is shown as charter's own sentence around it.
+pub(super) fn refusal_text(said: &str) -> String {
+    crate::shown::one_line(said.trim(), REFUSAL_LIMIT)
+}
+
+/// The [`Reply`] a forge's HTTP answer is, spelled as the CLI would have. Its `err` holds the
+/// forge's words through [`refusal_text`]; `out` keeps the answer whole for the backend.
 fn reply_of(call: &Call, status: u16, out: String, headers: Vec<(String, String)>) -> Reply {
     let refusal = |err: String| Reply {
         code: 1,
@@ -489,7 +500,7 @@ fn reply_of(call: &Call, status: u16, out: String, headers: Vec<(String, String)
             .ok()
             .and_then(|v| refusal_words(&v))
             .unwrap_or_else(|| out.trim().to_string());
-        return refusal(format!("{message} (HTTP {status})"));
+        return refusal(format!("{} (HTTP {status})", refusal_text(&message)));
     }
     if call.endpoint == Endpoint::Graphql
         && let Ok(answer) = serde_json::from_str::<Value>(&out)
@@ -499,7 +510,7 @@ fn reply_of(call: &Call, status: u16, out: String, headers: Vec<(String, String)
             .iter()
             .filter_map(|e| e["message"].as_str())
             .collect();
-        return refusal(format!("GraphQL: {}", said.join(", ")));
+        return refusal(format!("GraphQL: {}", refusal_text(&said.join(", "))));
     }
     Reply {
         code: 0,
@@ -746,6 +757,70 @@ mod tests {
             serde_json::json!({"query": "mutation($v:ProjectV2FieldValue!){x}",
                                "variables": {"value": {"singleSelectOptionId": "opt"},
                                              "number": 12}})
+        );
+    }
+
+    /// A forge's refusal reaches the window as one line with no control or bidi character,
+    /// clipped, whichever of its spellings carried it, with the status still said.
+    #[test]
+    fn a_refusal_is_one_line_with_no_control_or_bidi_character_and_is_capped() {
+        use serde_json::json;
+        let get = Call::get("x", super::super::LIST_TIMEOUT);
+        let gql = Call::graphql("q", vec![], super::super::LIST_TIMEOUT);
+        let forged = "denied\nok: merged\u{202e}txt.exe\u{1b}[2J";
+        let long = "y".repeat(20_000);
+        let answers = [
+            (&get, 403, json!({"message": forged}).to_string()),
+            (&get, 401, json!({"error_description": forged}).to_string()),
+            (&get, 400, json!({"error": forged}).to_string()),
+            (
+                &get,
+                422,
+                json!({"message": {"title": [forged]}}).to_string(),
+            ),
+            (&get, 502, forged.to_string()),
+            (&get, 500, long.clone()),
+            (&get, 500, json!({"message": long}).to_string()),
+            (
+                &gql,
+                200,
+                json!({"errors": [{"message": forged}]}).to_string(),
+            ),
+            (
+                &gql,
+                200,
+                json!({"errors": [{"message": long}]}).to_string(),
+            ),
+        ];
+        for (call, status, out) in answers {
+            let r = reply_of(call, status, out.clone(), vec![]);
+            assert_eq!(r.code, 1, "{out}");
+            assert!(
+                !r.err
+                    .chars()
+                    .any(|c| c.is_control() || ('\u{202a}'..='\u{202e}').contains(&c)),
+                "{status}: {:?}",
+                r.err
+            );
+            assert!(
+                r.err.chars().count() <= REFUSAL_LIMIT + 20,
+                "{status}: {} characters",
+                r.err.chars().count()
+            );
+            assert_eq!(
+                r.out, out,
+                "the answer itself is kept whole for the backend to read"
+            );
+        }
+        let r = reply_of(&get, 403, json!({"message": forged}).to_string(), vec![]);
+        assert_eq!(
+            r.err, "denied\\x0aok: merged\\u202etxt.exe\\x1b[2J (HTTP 403)",
+            "escaped, not dropped, so the reader still sees what was sent"
+        );
+        let r = reply_of(&get, 500, long, vec![]);
+        assert!(
+            r.err.ends_with(" (HTTP 500)"),
+            "the status survives the clip"
         );
     }
 
