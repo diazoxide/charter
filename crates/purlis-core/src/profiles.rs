@@ -70,14 +70,21 @@ fn the_products_own(name: &str) -> bool {
 const DEFAULT: &str = "default";
 
 /// Everything a profile's table may hold.
-const PROFILE_KEYS: [&str; 4] = ["kind", "command", "env", ASKS];
+const PROFILE_KEYS: [&str; 3] = ["kind", "command", "env"];
 
-/// **The person's mark that a profile's harness asks before it acts** (#1522): `asks = true`.
-/// A chat one chat starts for another starts only on a profile that asks
-/// ([`crate::dispatchunattended::asks_nobody`]), and a profile declared in the local file asks
-/// only where it says so: purlis cannot read every way a harness is told to ask nobody (a
-/// setting in a file, an environment variable, a wrapper script), so what is not marked is
-/// taken not to ask.
+/// **The person's mark that profiles' harnesses ask before they act** (#1522): `asks`, a list
+/// of profile names under `[harness]` in the local file, beside `default`
+/// (`[harness]\nasks = ["work", "opencode"]`). A chat one chat starts for another starts only
+/// on a profile that asks ([`crate::dispatchunattended::Inherited::asks_nobody`]): purlis
+/// cannot read every way a harness is told to ask nobody (a setting in a file, an environment
+/// variable, a wrapper script), so what is not marked is taken not to ask.
+///
+/// **A list of names, not a key of each profile's table**, so marking defines nothing: it
+/// marks the profile of that name wherever it comes from (a built-in, a project's declared
+/// harness, a table of this file), and a mark can never be a table that is refused and takes
+/// the built-in of its name down with it (ruling 37). A build that does not know the key reads
+/// it as a profile named `asks` that is not a table, refuses that, and takes down nothing.
+/// A name no profile has marks nothing.
 pub const ASKS: &str = "asks";
 
 /// A harness kind: the word typed after `charter`, the name the registry calls it, and the
@@ -246,10 +253,17 @@ pub struct Profile {
     /// The harness process's environment, as declared and sorted by name.
     pub env: Vec<(String, String)>,
     pub source: Source,
-    /// Whether it is known to ask a person before its harness acts ([`ASKS`]): a built-in by
-    /// its kind's own default ([`Kind::asks`]), a profile of the local file only where it is
-    /// marked `asks = true`, and a project's harness declaration never.
+    /// Whether it is known to ask a person before its harness acts: a built-in by its kind's
+    /// own default ([`Kind::asks`]), and any profile, a built-in included, that the local
+    /// file's `[harness] asks` names ([`ASKS`]). A table of the local file and a project's
+    /// harness declaration ask only where named there.
     pub asks: bool,
+}
+
+/// What a profile asks by its own source, with nothing marked: a built-in by its kind's
+/// default, anything else not.
+fn asks_by_default(profile: &Profile) -> bool {
+    profile.source == Source::BuiltIn && kind_of(&profile.kind).is_some_and(|kind| kind.asks)
 }
 
 /// A profile charter will not use, and the one sentence saying why.
@@ -276,6 +290,10 @@ pub struct ProfileSet {
     pub default_from: Option<String>,
     /// A `default` that named no profile this machine has, kept so a surface can say so.
     pub default_refused: Option<String>,
+    /// The local file's name in this project, as it was read: `purlis.local.toml` where that
+    /// is there, else `charter.local.toml` ([`crate::names::local_settings`]). Empty where the
+    /// set was made from text alone ([`ProfileSet::local_file`] then says [`LOCAL_FILE`]).
+    local_file: String,
 }
 
 impl ProfileSet {
@@ -285,6 +303,16 @@ impl ProfileSet {
 
     pub fn get(&self, name: &str) -> Option<&Profile> {
         self.profiles.iter().find(|p| p.name == name)
+    }
+
+    /// The name of the local file this project reads, for a sentence that tells a person what
+    /// to write in it.
+    pub fn local_file(&self) -> &str {
+        if self.local_file.is_empty() {
+            LOCAL_FILE
+        } else {
+            &self.local_file
+        }
     }
 
     /// Put `profile` in, keeping the place a profile of that name already had.
@@ -354,7 +382,12 @@ pub fn derive(root: &Path) -> ProfileSet {
 /// them once judges and runs the same bytes ([`crate::start::ready_in`]).
 pub fn derive_in(root: &Path, declared: &crate::harness_declaration::Declarations) -> ProfileSet {
     let committed = std::fs::read_to_string(crate::names::manifest(root)).ok();
-    derive_declared(committed.as_deref(), read_local(root), declared)
+    let mut set = derive_declared(committed.as_deref(), read_local(root), declared);
+    set.local_file = crate::names::local_settings(root)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    set
 }
 
 /// The local file as [`derive_from`] takes it: its text, `None` when there is none, or the
@@ -407,7 +440,7 @@ pub fn derive_declared(
             env: Vec::new(),
             source: Source::Declared,
             // A declaration is the project's, committed: it cannot say for this machine that
-            // the harness asks. A profile of the local file of that kind can.
+            // the harness asks. The local file's `[harness] asks` can.
             asks: false,
         });
     }
@@ -569,7 +602,38 @@ pub fn derive_declared(
         None => toml::Table::new(),
     };
 
+    let mut marked: Vec<String> = Vec::new();
     for (name, table) in &harness {
+        // The mark (#1522): a list, never a profile. A table under the name stays a profile,
+        // as it always was.
+        if name == ASKS && !table.is_table() {
+            match table.as_array() {
+                Some(names) => {
+                    for one in names {
+                        match one.as_str() {
+                            Some(profile) => marked.push(profile.to_owned()),
+                            None => set.refused.push(Refused {
+                                name: ASKS.to_owned(),
+                                source: LOCAL_FILE.to_owned(),
+                                reason: "[harness] asks in charter.local.toml holds something \
+                                         that is not a profile's name, which marks nothing. \
+                                         Write the names as text: asks = [\"work\"]."
+                                    .to_owned(),
+                            }),
+                        }
+                    }
+                }
+                None => set.refused.push(Refused {
+                    name: ASKS.to_owned(),
+                    source: LOCAL_FILE.to_owned(),
+                    reason: "[harness] asks in charter.local.toml is not a list of profile \
+                             names, so no profile is marked as asking. Write it as asks = \
+                             [\"work\"]."
+                        .to_owned(),
+                }),
+            }
+            continue;
+        }
         if name == DEFAULT && !table.is_table() {
             set.default = table.as_str().map(str::to_owned);
             set.default_from = Some(LOCAL_FILE.to_owned());
@@ -595,8 +659,8 @@ pub fn derive_declared(
                 set.refused.push(Refused {
                     reason: format!(
                         "[harness.{parent}] holds a table {child}, which purlis reads \
-                         neither way — {child} is not a key a profile has (kind, command, \
-                         env and asks), and if a profile named '{dotted}' was meant, a profile's \
+                         neither way — {child} is not a key a profile has (kind, command \
+                         and env), and if a profile named '{dotted}' was meant, a profile's \
                          name is letters, digits, '_' and '-', with no dot — the plane \
                          format fixes that alphabet. Rename the key, or give that profile a \
                          name of its own."
@@ -654,9 +718,14 @@ pub fn derive_declared(
                         .collect(),
                     env,
                     source: Source::Local,
-                    asks: inner.get(ASKS).and_then(toml::Value::as_bool) == Some(true),
+                    asks: false,
                 });
             }
+        }
+    }
+    for profile in &mut set.profiles {
+        if marked.contains(&profile.name) {
+            profile.asks = true;
         }
     }
     settle(set)
@@ -761,6 +830,10 @@ pub fn with_ignore_check(mut set: ProfileSet, check: &IgnoreCheck) -> ProfileSet
         })
         .collect();
     set.profiles.retain(|p| p.source != Source::Local);
+    // The marks are that file's too (#1522): none of them counts while git would carry it.
+    for profile in &mut set.profiles {
+        profile.asks = asks_by_default(profile);
+    }
     set.refused.extend(moved);
     settle(set)
 }
@@ -845,7 +918,7 @@ pub(crate) fn refusals_of(
             "",
             format!(
                 "[harness] {shown_name} in charter.local.toml is not a table — a profile is \
-                 [harness.{shown_name}] with kind and command, and optionally env and asks."
+                 [harness.{shown_name}] with kind, command and optionally env."
             ),
         ));
         return out;
@@ -957,15 +1030,6 @@ pub(crate) fn refusals_of(
             ),
         ));
     }
-    if inner.get(ASKS).is_some_and(|asks| !asks.is_bool()) {
-        out.push((
-            ASKS,
-            format!(
-                "profile '{shown_name}' has an asks that is not true or false — write asks = \
-                 true where its harness asks a person before it acts, or leave it out."
-            ),
-        ));
-    }
     if let Some(key) = inner
         .keys()
         .find(|key| !PROFILE_KEYS.contains(&key.as_str()))
@@ -974,7 +1038,7 @@ pub(crate) fn refusals_of(
             "",
             format!(
                 "profile '{shown_name}' has {}, which purlis does not read — a profile is \
-                 kind, command, env and asks. Remove it.",
+                 kind, command and env. Remove it.",
                 shown::short(key)
             ),
         ));

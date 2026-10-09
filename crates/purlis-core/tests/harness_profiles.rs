@@ -132,12 +132,12 @@ fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored(
     assert_eq!(
         why(&set, "typo-env"),
         "profile 'typo-env' has enviroment, which purlis does not read — a profile is \
-         kind, command, env and asks. Remove it."
+         kind, command and env. Remove it."
     );
     assert_eq!(
         why(&set, "typo-env.enviroment"),
         "[harness.typo-env] holds a table enviroment, which purlis reads neither way — \
-         enviroment is not a key a profile has (kind, command, env and asks), and if a profile \
+         enviroment is not a key a profile has (kind, command and env), and if a profile \
          named 'typo-env.enviroment' was meant, a profile's name is letters, digits, '_' \
          and '-', with no dot — the plane format fixes that alphabet. Rename the key, or \
          give that profile a name of its own."
@@ -829,7 +829,7 @@ fn a_bare_value_under_harness_is_refused_as_not_a_table_and_never_becomes_the_de
     assert_eq!(
         why(&set, "work"),
         "[harness] work in charter.local.toml is not a table — a profile is [harness.work] \
-         with kind and command, and optionally env and asks."
+         with kind, command and optionally env."
     );
     assert_eq!(set.default, None);
     assert_eq!(set.default_from, None);
@@ -1186,15 +1186,15 @@ fn two_profiles_that_differ_only_in_kind_never_share_an_approval_line() {
 fn a_profile_asks_only_where_the_person_marked_it_so_and_a_built_in_by_its_harness() {
     purlis_core::unsteered!();
     // #1522: a chat one chat starts for another starts only on a profile known to ask. A
-    // profile of the local file is known to only where it says `asks = true`; a built-in is,
-    // where its harness asks by its own default.
+    // built-in is, where its harness asks by its own default; any profile is, where the local
+    // file's `[harness] asks` names it. The mark is a name in a list, so it defines nothing and
+    // takes nothing down.
     let dir = plane(
         "",
-        "[harness.marked]\nkind = \"claude\"\ncommand = [\"claude\"]\nasks = true\n\
+        "[harness]\nasks = [\"marked\", \"opencode\", \"nobody-has-this\"]\n\
+         [harness.marked]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
          [harness.unmarked]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
-         [harness.says-no]\nkind = \"codex\"\ncommand = [\"codex\"]\nasks = false\n\
-         [harness.opencode]\nkind = \"opencode\"\ncommand = [\"opencode\"]\nasks = true\n\
-         [harness.worded]\nkind = \"claude\"\ncommand = [\"claude\"]\nasks = \"yes\"\n",
+         [harness.codex]\nkind = \"codex\"\ncommand = [\"codex\"]\n",
     );
 
     let set = profiles::derive(dir.path());
@@ -1202,15 +1202,51 @@ fn a_profile_asks_only_where_the_person_marked_it_so_and_a_built_in_by_its_harne
 
     assert_eq!(asks("marked"), Some(true));
     assert_eq!(asks("unmarked"), Some(false));
-    assert_eq!(asks("says-no"), Some(false));
-    // A built-in's place, taken by the person's own table that says its harness asks.
+    // The built-in opencode, marked by name and still the built-in.
     assert_eq!(asks("opencode"), Some(true));
+    assert_eq!(set.get("opencode").map(|p| p.source), Some(Source::BuiltIn));
     assert_eq!(asks("claude"), Some(true));
-    assert_eq!(asks("codex"), Some(true));
-    assert_eq!(asks("worded"), None);
-    assert_eq!(
-        why(&set, "worded"),
-        "profile 'worded' has an asks that is not true or false — write asks = true where its \
-         harness asks a person before it acts, or leave it out."
+    // A table of this file with a built-in's name is not the built-in: unmarked, it asks not.
+    assert_eq!(asks("codex"), Some(false));
+    assert_eq!(set.refused, Vec::new());
+}
+
+#[test]
+fn a_mark_that_is_not_a_list_of_names_marks_nothing_and_says_so() {
+    purlis_core::unsteered!();
+    let dir = plane("", "[harness]\nasks = \"opencode\"\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.get("opencode").map(|p| p.asks), Some(false));
+    assert_eq!(set.refused.len(), 1);
+    assert!(
+        set.refused[0]
+            .reason
+            .starts_with("[harness] asks in charter.local.toml is not a list"),
+        "{:?}",
+        set.refused
     );
+}
+
+#[test]
+fn a_mark_in_a_local_file_git_would_carry_counts_for_nothing() {
+    purlis_core::unsteered!();
+    // The marks are that file's, as its profiles are: while git would carry it, a built-in is
+    // back to its own default.
+    let dir = plane("", "[harness]\nasks = [\"opencode\"]\n");
+    let set = profiles::derive(dir.path());
+    assert_eq!(set.get("opencode").map(|p| p.asks), Some(true));
+
+    let carried = profiles::with_ignore_check(
+        set,
+        &profiles::IgnoreCheck {
+            reason: "git would carry it".to_owned(),
+            fix: String::new(),
+            ignorable: false,
+        },
+    );
+
+    assert_eq!(carried.get("opencode").map(|p| p.asks), Some(false));
+    assert_eq!(carried.get("claude").map(|p| p.asks), Some(true));
 }

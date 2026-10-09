@@ -1473,7 +1473,7 @@ mod tests {
         a_persona(dir.path(), "qa", "");
         std::fs::write(
             crate::names::manifest(dir.path()),
-            "[dispatch.profiles]\nops = [\"work\"]\n\"*\" = [\"codex\"]\n",
+            "[dispatch.profiles]\nops = [\"work\"]\n\"*\" = [\"codex\", \"work\"]\n",
         )
         .unwrap();
 
@@ -1481,7 +1481,7 @@ mod tests {
         assert_eq!(ops.listed, Some(vec!["work".to_owned()]));
         assert!(ops.denies_tools.is_some());
         let qa = named_by(dir.path(), "qa");
-        assert_eq!(qa.listed, Some(vec!["codex".to_owned()]));
+        assert_eq!(qa.listed, Some(vec!["codex".to_owned(), "work".to_owned()]));
         assert_eq!(qa.denies_tools, None);
     }
 

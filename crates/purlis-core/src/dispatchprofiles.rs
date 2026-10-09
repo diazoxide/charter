@@ -15,7 +15,7 @@
 //! approval on this machine, and is still refused where it asks nobody: its command switches
 //! the harness's permission prompts off, or nobody marked it as asking
 //! ([`crate::dispatchunattended::bypass_refusal`]). There is no exception for a session the
-//! person started that way (ADR 0090 item 16, as amended by #1522). So a list a pull
+//! person started that way (ADR 0090 item 16; the amendment is pending a ruling). So a list a pull
 //! brought in can never let a chat start on something it could not start on without it, and
 //! needs nobody's acknowledgement.
 //!
@@ -45,11 +45,13 @@
 //!
 //! # A list for every persona
 //!
-//! **`"*" = ["work"]` is the list of every persona whose chain lists none** (#1522), one added
-//! later included: a persona a chat copies or makes, with no list of its own, is held to it
-//! rather than to none. A persona's own list, or the nearest one it extends, answers before it,
-//! as the most specific level of a dispatch limit does. Without one, a persona nobody listed,
-//! whose chain lists none, has none, as before.
+//! **`"*" = ["work"]` is a ceiling over every persona** (#1522), one added later included: no
+//! persona's dispatched chat starts on a profile outside it. A persona's own list, or the
+//! nearest one it extends, may narrow under it and never lifts a persona out from under it: a
+//! persona is held to the profiles both lists name. So neither a list a pull brings in nor a
+//! persona a chat writes with an `extends:` line reaches a profile `"*"` leaves out, and a list
+//! still only ever narrows. A persona whose chain lists none is held to `"*"` alone. Without
+//! one, a persona nobody listed, whose chain lists none, has none, as before.
 //!
 //! # A chat started again
 //!
@@ -98,9 +100,9 @@ impl Listed {
     }
 
     /// The profiles a persona is held to, by `chain`, its `extends:` chain with itself first
-    /// ([`crate::personas::lineage`]): its own list, else the nearest one above it, else the
-    /// list for every persona (`"*"`). `None` where there is none of these, so every profile
-    /// the project offers may be chosen.
+    /// ([`crate::personas::lineage`]): its own list, else the nearest one above it, kept to
+    /// what the list for every persona (`"*"`) names where there is one; else `"*"` alone.
+    /// `None` where there is none of these, so every profile the project offers may be chosen.
     pub fn for_chain(&self, chain: &[String]) -> Option<Vec<String>> {
         self.held_by(chain).map(|(_, list)| list)
     }
@@ -110,17 +112,28 @@ impl Listed {
         if self.unreadable {
             return Some((Whose::Unreadable, Vec::new()));
         }
-        chain
-            .iter()
-            .enumerate()
-            .find_map(|(at, who)| {
-                let list = self.personas.get(who)?.clone();
-                Some(match at {
-                    0 => (Whose::Own, list),
-                    _ => (Whose::Extended(who.clone()), list),
-                })
+        let chained = chain.iter().enumerate().find_map(|(at, who)| {
+            let list = self.personas.get(who)?.clone();
+            Some(match at {
+                0 => (Whose::Own, list),
+                _ => (Whose::Extended(who.clone()), list),
             })
-            .or_else(|| self.every.clone().map(|list| (Whose::Every, list)))
+        });
+        match (chained, &self.every) {
+            // `"*"` is a ceiling: a persona's list narrows under it and never lifts it.
+            (Some((whose, list)), Some(every)) => Some((
+                whose,
+                list.into_iter().filter(|one| every.contains(one)).collect(),
+            )),
+            (Some(held), None) => Some(held),
+            (None, Some(every)) => Some((Whose::Every, every.clone())),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether the list for every persona (`"*"`) is there.
+    fn has_every(&self) -> bool {
+        self.every.is_some()
     }
 
     /// What a project file that is there and could not be read at all lists: nothing, for
@@ -164,15 +177,21 @@ pub fn line(root: &Path, persona: &str) -> String {
 
 /// [`line`], of what the project file lists and the persona's `extends:` chain.
 fn line_of(listed: &Listed, chain: &[String]) -> String {
+    const ASKS: &str = "where it asks: the built-in claude or codex, or one marked as asking";
     let Some((whose, list)) = listed.held_by(chain) else {
-        return "any profile the project offers that is marked as asking: the project lists \
-                none for it under [dispatch.profiles]"
+        return "any profile the project offers that asks (the built-in claude or codex, or one \
+                marked as asking): the project lists none for it under [dispatch.profiles]"
             .to_owned();
     };
+    let within = if listed.has_every() {
+        ", within the list for every persona"
+    } else {
+        ""
+    };
     let from = match whose {
-        Whose::Own => "listed for it under [dispatch.profiles]".to_owned(),
+        Whose::Own => format!("listed for it under [dispatch.profiles]{within}"),
         Whose::Extended(parent) => format!(
-            "listed under [dispatch.profiles] for {}, which it extends",
+            "listed under [dispatch.profiles] for {}, which it extends{within}",
             crate::shown::short(&parent)
         ),
         Whose::Every => "listed for every persona under [dispatch.profiles]".to_owned(),
@@ -188,11 +207,8 @@ fn line_of(listed: &Listed, chain: &[String]) -> String {
         .collect();
     match names.split_last() {
         None => format!("none, {from}, so no chat is dispatched to it"),
-        Some((only, [])) => format!("only {only}, {from}, where it is marked as asking"),
-        Some((last, rest)) => format!(
-            "{} or {last}, {from}, where it is marked as asking",
-            rest.join(", ")
-        ),
+        Some((only, [])) => format!("only {only}, {from}, {ASKS}"),
+        Some((last, rest)) => format!("{} or {last}, {from}, {ASKS}", rest.join(", ")),
     }
 }
 
@@ -382,8 +398,9 @@ fn refusal_on(
             ),
         });
     }
-    let AsksNobody::Flag(flag) = on?.asks_nobody()? else {
-        let mark = crate::dispatchunattended::how_to_mark(&shown);
+    let on = on?;
+    let AsksNobody::Flag(flag) = on.asks_nobody()? else {
+        let mark = crate::dispatchunattended::how_to_mark(&on);
         return Some(match how {
             Again::Started => format!(
                 "This chat was dispatched by another chat, and its profile '{shown}' is not \
@@ -490,7 +507,7 @@ fn task_refusal_on(
         how,
         persona,
         profile,
-        set.get(profile).map(Inherited::of),
+        set.get(profile).map(|one| Inherited::of(one, &set)),
         listed.as_deref(),
     )
 }
@@ -689,6 +706,8 @@ mod tests {
             profile: "work",
             command,
             asks: true,
+            kind: "claude",
+            local: "purlis.local.toml",
         })
     }
 
@@ -774,10 +793,10 @@ mod tests {
             Some(
                 "This chat was dispatched by another chat, and its profile 'work' is not \
                  marked as asking a person before its harness acts, which a dispatched chat \
-                 never runs without, so it was not started again. A person marks a profile \
-                 whose harness asks before it acts with asks = true in its [harness.work] \
-                 table in charter.local.toml. Then start it again, or close it and dispatch the \
-                 work again on a profile that asks."
+                 never runs without, so it was not started again. Once its harness asks before \
+                 it acts, a person marks it in Settings › Project › Harness & profiles, or adds \
+                 it to asks under [harness] in purlis.local.toml: asks = [\"work\"]. Then start \
+                 it again, or close it and dispatch the work again on a profile that asks."
             )
         );
         // Marked, it starts; a list that names it does not lift the mark's rule.
@@ -941,17 +960,22 @@ mod tests {
     }
 
     #[test]
-    fn a_list_for_every_persona_holds_each_that_lists_none_of_its_own() {
+    fn a_list_for_every_persona_is_a_ceiling_a_persona_s_own_list_narrows_under() {
         let read = listed(Some(
-            "[dispatch.profiles]\n\"*\" = [\"work\", \"work\"]\nbase = [\"codex\"]\nown = []\n",
+            "[dispatch.profiles]\n\"*\" = [\"work\", \"work\", \"codex\"]\n\
+             base = [\"codex\", \"x\"]\nown = []\n",
         ));
         let chain = |names: &[&str]| -> Vec<String> {
             names.iter().map(|name| (*name).to_owned()).collect()
         };
         assert_eq!(read.refused, Vec::<String>::new());
         // A persona nobody listed, one added later included.
-        assert_eq!(read.for_chain(&chain(&["devops2"])), names(&["work"]));
-        // Its own list and the nearest it extends answer first, an empty one included.
+        assert_eq!(
+            read.for_chain(&chain(&["devops2"])),
+            names(&["work", "codex"])
+        );
+        // Its own list and the nearest it extends narrow under it, an empty one included, and
+        // what they name outside it ('x') is not reached.
         assert_eq!(read.for_chain(&chain(&["base"])), names(&["codex"]));
         assert_eq!(
             read.for_chain(&chain(&["child", "base"])),
@@ -976,9 +1000,59 @@ mod tests {
             ]
         );
         // Only the exact string: a pattern is no persona's name and lists nothing.
+        // (The review's two roads out from under it are their own test, below.)
         let pattern = listed(Some("[dispatch.profiles]\n\"dev*\" = [\"work\"]\n"));
         assert_eq!(pattern.for_chain(&chain(&["devops"])), None);
         assert_eq!(pattern.refused.len(), 1);
+    }
+
+    /// #1522 (review): neither a list a pull brings in nor a persona a chat writes with an
+    /// `extends:` line lifts a persona out from under `"*"`.
+    #[test]
+    fn no_list_lifts_a_persona_out_from_under_the_list_for_every_persona() {
+        let chain = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        // A pull adds devops's own list, naming a profile "*" leaves out.
+        let pulled = listed(Some(
+            "[dispatch.profiles]\n\"*\" = [\"work\"]\ndevops = [\"x\", \"work\"]\n",
+        ));
+        assert_eq!(pulled.for_chain(&chain(&["devops"])), names(&["work"]));
+        let only_outside = listed(Some(
+            "[dispatch.profiles]\n\"*\" = [\"work\"]\ndevops = [\"x\"]\n",
+        ));
+        assert_eq!(only_outside.for_chain(&chain(&["devops"])), names(&[]));
+        // A chat writes a persona that extends devops: it is held where devops is, no wider.
+        assert_eq!(
+            only_outside.for_chain(&chain(&["new", "devops"])),
+            names(&[])
+        );
+        assert_eq!(
+            pulled.for_chain(&chain(&["new", "devops"])),
+            names(&["work"])
+        );
+    }
+
+    /// The same through the project's files: a chat-written `extends:` line and a list.
+    #[test]
+    fn a_chat_written_persona_that_extends_a_listed_one_stays_under_the_list_for_every_persona() {
+        let root = tempfile::tempdir().expect("a project");
+        for (name, more) in [("devops", ""), ("new", "extends: devops\n")] {
+            let dir = root.path().join("personas").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("persona.md"),
+                format!("---\nname: {name}\ndescription: d\n{more}---\n# {name}\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            crate::names::manifest(root.path()),
+            "[dispatch.profiles]\n\"*\" = [\"work\"]\ndevops = [\"x\", \"work\"]\n",
+        )
+        .unwrap();
+        assert_eq!(listed_at(root.path(), "new"), names(&["work"]));
+        assert_eq!(listed_at(root.path(), "devops"), names(&["work"]));
     }
 
     #[test]
@@ -992,13 +1066,13 @@ mod tests {
         ));
         assert_eq!(
             line_of(&read, &chain(&["devops"])),
-            "'work', 'codex' or 'cx', listed for it under [dispatch.profiles], where it is \
-             marked as asking"
+            "'work', 'codex' or 'cx', listed for it under [dispatch.profiles], where it asks: the \
+             built-in claude or codex, or one marked as asking"
         );
         assert_eq!(
             line_of(&read, &chain(&["qa2", "qa"])),
             "only 'work', listed under [dispatch.profiles] for qa, which it extends, where it \
-             is marked as asking"
+             asks: the built-in claude or codex, or one marked as asking"
         );
         assert_eq!(
             line_of(&read, &chain(&["own"])),
@@ -1006,14 +1080,21 @@ mod tests {
         );
         assert_eq!(
             line_of(&read, &chain(&["steward"])),
-            "any profile the project offers that is marked as asking: the project lists none \
-             for it under [dispatch.profiles]"
+            "any profile the project offers that asks (the built-in claude or codex, or one \
+             marked as asking): the project lists none for it under [dispatch.profiles]"
         );
-        let every = listed(Some("[dispatch.profiles]\n\"*\" = [\"work\"]\n"));
+        let every = listed(Some(
+            "[dispatch.profiles]\n\"*\" = [\"work\"]\nqa = [\"work\", \"x\"]\n",
+        ));
         assert_eq!(
             line_of(&every, &chain(&["steward"])),
-            "only 'work', listed for every persona under [dispatch.profiles], where it is \
-             marked as asking"
+            "only 'work', listed for every persona under [dispatch.profiles], where it asks: \
+             the built-in claude or codex, or one marked as asking"
+        );
+        assert_eq!(
+            line_of(&every, &chain(&["qa"])),
+            "only 'work', listed for it under [dispatch.profiles], within the list for every \
+             persona, where it asks: the built-in claude or codex, or one marked as asking"
         );
         let broken = listed(Some("<<<<<<< ours\n"));
         assert_eq!(

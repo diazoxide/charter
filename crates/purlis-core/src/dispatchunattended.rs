@@ -53,13 +53,13 @@
 //! **A chat one chat starts for another starts only on a profile known to ask a person before
 //! its harness acts** ([`crate::profiles::ASKS`]): a built-in whose harness asks by its own
 //! default (Claude Code, Codex; not opencode, which allows every action unless configured
-//! otherwise), or a profile of the local file the person marked `asks = true`. Anything
+//! otherwise), or a profile the person named in the local file's `[harness] asks`. Anything
 //! unmarked is taken not to ask, so the rule does not depend on knowing every way each harness
 //! is told to ask nobody: a flag, a configuration override, an environment variable, a settings
 //! file, a wrapper script. The flags purlis does know ([`bypass_in`]) still refuse a profile
 //! marked as asking, whose mark its own command contradicts. There is no exception for a
-//! session the person started that way: the standing rule is that such a profile never runs
-//! a task.
+//! session the person started that way; V100-60 still words one, and striking it is proposed
+//! in ADR 0090 item 16, pending the operator's ruling.
 
 use crate::dispatchgrant::{self, Covers, InForce};
 use crate::sandbox::policy::Locks;
@@ -342,6 +342,9 @@ pub enum NamedBy<'a> {
     ThePersona(&'a str),
     /// Nobody: it is the profile the asking chat itself runs on.
     TheAskingChat,
+    /// Nobody, on the person's own Ask from a chat's tab: the profile that tab's chat runs on.
+    /// The person dispatched nothing, so the sentence says it is their tab's.
+    TheTabsChat,
 }
 
 /// **Why no chat is started for another chat on `on`**, where it asks nobody
@@ -354,8 +357,14 @@ pub fn bypass_refusal(on: Inherited<'_>, by: NamedBy<'_>) -> Option<String> {
     let why = on.asks_nobody()?;
     let profile = crate::shown::short(on.profile);
     let AsksNobody::Flag(flag) = why else {
-        let mark = how_to_mark(&profile);
+        let mark = how_to_mark(&on);
         return Some(match by {
+            NamedBy::TheTabsChat => format!(
+                "this tab's chat runs on profile '{profile}', which is not marked as asking a \
+                 person before its harness acts, and purlis starts no persona chat for you on \
+                 such a profile. Give the persona a profile that asks, from its view, or ask \
+                 from a chat on one. {mark}"
+            ),
             NamedBy::TheAskingChat => format!(
                 "profile '{profile}' is not marked as asking a person before its harness acts, \
                  and a persona chat never takes such a profile from the chat that dispatched \
@@ -377,6 +386,12 @@ pub fn bypass_refusal(on: Inherited<'_>, by: NamedBy<'_>) -> Option<String> {
     };
     let flag = crate::shown::short(&flag);
     Some(match by {
+        NamedBy::TheTabsChat => format!(
+            "this tab's chat runs on profile '{profile}', which starts its harness with the \
+             permission prompts off ({flag}), and purlis starts no persona chat for you on such \
+             a profile. Give the persona a profile that asks, from its view, or ask from a chat \
+             on one."
+        ),
         NamedBy::TheAskingChat => format!(
             "profile '{profile}' starts its harness with the permission prompts off ({flag}), \
              and a persona chat never takes that from the chat that dispatched it. Dispatch \
@@ -408,15 +423,22 @@ pub struct Inherited<'a> {
     /// Whether it is known to ask a person before its harness acts
     /// ([`crate::profiles::Profile::asks`]).
     pub asks: bool,
+    /// Its kind: `claude`, `codex`, `opencode` or a declared harness's name.
+    pub kind: &'a str,
+    /// The local file this project reads, where a person marks it
+    /// ([`crate::profiles::ProfileSet::local_file`]).
+    pub local: &'a str,
 }
 
 impl<'a> Inherited<'a> {
-    /// A profile as this machine declares it.
-    pub fn of(profile: &'a crate::profiles::Profile) -> Self {
+    /// A profile of `set`, as this machine declares it.
+    pub fn of(profile: &'a crate::profiles::Profile, set: &'a crate::profiles::ProfileSet) -> Self {
         Self {
             profile: &profile.name,
             command: &profile.command,
             asks: profile.asks,
+            kind: &profile.kind,
+            local: set.local_file(),
         }
     }
 
@@ -440,12 +462,21 @@ pub enum AsksNobody {
     Unmarked,
 }
 
-/// How a person marks a profile `profile` as asking, for the end of a refusal.
-pub fn how_to_mark(profile: &str) -> String {
+/// **How a person marks `on` as asking**, for the end of a refusal: in Settings, or by the
+/// line to write, in the file this project reads ([`crate::profiles::ASKS`]). Written so that
+/// doing exactly what it says marks the profile and takes nothing down: the mark is a name in a
+/// list, never a table of its own.
+pub fn how_to_mark(on: &Inherited<'_>) -> String {
+    let when = if on.kind == "opencode" {
+        "Once opencode is configured to ask before it acts (by default it allows every action), \
+         a person"
+    } else {
+        "Once its harness asks before it acts, a person"
+    };
     format!(
-        "A person marks a profile whose harness asks before it acts with asks = true in its \
-         [harness.{profile}] table in {}.",
-        crate::profiles::LOCAL_FILE
+        "{when} marks it in Settings › Project › Harness & profiles, or adds it to asks under \
+         [harness] in {}: asks = [\"{}\"].",
+        on.local, on.profile
     )
 }
 

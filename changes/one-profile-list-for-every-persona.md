@@ -1,6 +1,5 @@
 ### Added
 
-- **A project can list the profiles every persona's tasks run on at once.** `"*" = ["work"]`
-  under `[dispatch.profiles]` holds every persona that has no list of its own, and none up the
-  chain it extends, a persona added later included. A persona's own list still answers first
-  (#1522).
+- **A project can cap the profiles every persona's tasks run on at once.** `"*" = ["work"]`
+  under `[dispatch.profiles]` is a ceiling over every persona, one added later included: a
+  persona's own list narrows under it and never lifts it (#1522).

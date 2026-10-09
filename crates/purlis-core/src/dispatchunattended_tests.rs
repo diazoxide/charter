@@ -354,11 +354,7 @@ fn the_persona_chat_starts_with_no_held_grants_no_opt_out_and_no_bypass() {
     let start = start_of_a_persona_chat(
         the_asking_chats_own(),
         "devops",
-        Some(Inherited {
-            profile: "work",
-            command: &work,
-            asks: true,
-        }),
+        Some(marked("work", &work)),
     );
 
     assert_eq!(
@@ -404,12 +400,8 @@ fn a_profile_that_switches_the_prompts_off_is_not_passed_on_to_the_persona_chat(
             start_of_a_persona_chat(
                 the_asking_chats_own(),
                 "devops",
-                Some(Inherited {
-                    profile: "night",
-                    command: &command,
-                    // A mark its own command contradicts: the flag still refuses it.
-                    asks: true,
-                }),
+                // A mark its own command contradicts: the flag still refuses it.
+                Some(marked("night", &command)),
             ),
             Err(format!(
                 "profile 'night' starts its harness with the permission prompts off ({flag}), \
@@ -528,6 +520,8 @@ fn marked<'a>(profile: &'a str, command: &'a [String]) -> Inherited<'a> {
         profile,
         command,
         asks: true,
+        kind: "claude",
+        local: "purlis.local.toml",
     }
 }
 
@@ -543,8 +537,9 @@ fn a_profile_nobody_marked_as_asking_starts_no_chat_for_another_whoever_named_it
     };
     assert_eq!(unmarked.asks_nobody(), Some(AsksNobody::Unmarked));
     assert_eq!(marked("work", &plain).asks_nobody(), None);
-    let mark = "A person marks a profile whose harness asks before it acts with asks = true in \
-                its [harness.work] table in charter.local.toml.";
+    let mark = "Once its harness asks before it acts, a person marks it in Settings › Project › \
+                Harness & profiles, or adds it to asks under [harness] in purlis.local.toml: \
+                asks = [\"work\"].";
     assert_eq!(
         bypass_refusal(unmarked, NamedBy::TheDispatch),
         Some(format!(
@@ -586,13 +581,89 @@ fn a_profile_nobody_marked_as_asking_starts_no_chat_for_another_whoever_named_it
 fn the_built_in_profiles_ask_where_their_harness_asks_by_default() {
     // Claude Code's default permission mode and Codex's default approval policy ask; opencode
     // allows every action unless its configuration says otherwise.
-    let set = crate::profiles::builtins();
+    let set = crate::profiles::derive_from(None, Ok(None));
     let asks = |name: &str| {
-        set.iter()
-            .find(|profile| profile.name == name)
-            .map(|profile| Inherited::of(profile).asks_nobody())
+        set.get(name)
+            .map(|profile| Inherited::of(profile, &set).asks_nobody())
     };
     assert_eq!(asks("claude"), Some(None));
     assert_eq!(asks("codex"), Some(None));
     assert_eq!(asks("opencode"), Some(Some(AsksNobody::Unmarked)));
+}
+
+#[test]
+fn the_tab_s_chat_is_named_as_the_person_s_own_and_never_as_one_that_dispatched() {
+    let plain = words(&["claude"]);
+    let unmarked = Inherited {
+        asks: false,
+        ..marked("work", &plain)
+    };
+    let said = bypass_refusal(unmarked, NamedBy::TheTabsChat).expect("refused");
+    assert!(
+        said.starts_with("this tab's chat runs on profile 'work', which is not marked as asking"),
+        "{said}"
+    );
+    assert!(!said.contains("dispatched"), "{said}");
+    let yolo = words(&["claude", "--yolo"]);
+    let said = bypass_refusal(marked("work", &yolo), NamedBy::TheTabsChat).expect("refused");
+    assert!(
+        said.starts_with("this tab's chat runs on profile 'work'"),
+        "{said}"
+    );
+    assert!(!said.contains("dispatched"), "{said}");
+}
+
+#[test]
+fn opencode_is_marked_only_once_it_is_configured_to_ask() {
+    let plain = words(&["opencode"]);
+    let opencode = Inherited {
+        asks: false,
+        kind: "opencode",
+        ..marked("opencode", &plain)
+    };
+    assert_eq!(
+        how_to_mark(&opencode),
+        "Once opencode is configured to ask before it acts (by default it allows every action), \
+         a person marks it in Settings › Project › Harness & profiles, or adds it to asks under \
+         [harness] in purlis.local.toml: asks = [\"opencode\"]."
+    );
+}
+
+/// #1522 (review): the refusal's own words, done exactly as they say, mark the profile in the
+/// file this project reads, and take nothing down: the built-in opencode, and a table of the
+/// local file that replaces the built-in codex.
+#[test]
+fn doing_what_the_refusal_says_word_for_word_marks_the_profile_and_takes_nothing_down() {
+    for (local, name) in [
+        ("", "opencode"),
+        (
+            "[harness.codex]\nkind = \"codex\"\ncommand = [\"codex\"]\n",
+            "codex",
+        ),
+    ] {
+        let root = tempfile::tempdir().expect("a project");
+        let file = root.path().join("purlis.local.toml");
+        std::fs::write(&file, local).expect("the local file");
+        let set = crate::profiles::derive(root.path());
+        let profile = set.get(name).expect("offered");
+        let said = bypass_refusal(Inherited::of(profile, &set), NamedBy::TheDispatch)
+            .expect("refused while unmarked");
+
+        // The file it names, and the line it says to write there.
+        let (_, after) = said
+            .split_once("under [harness] in ")
+            .expect("it names a file");
+        let (named, line) = after.split_once(": ").expect("and a line");
+        let line = line.strip_suffix('.').expect("a sentence");
+        assert_eq!(named, "purlis.local.toml", "{said}");
+        let mut text = std::fs::read_to_string(root.path().join(named)).expect("the file");
+        text.push_str(&format!("[harness]\n{line}\n"));
+        std::fs::write(root.path().join(named), text).expect("written as said");
+
+        let set = crate::profiles::derive(root.path());
+        assert_eq!(set.refused, Vec::new(), "{name}");
+        let profile = set.get(name).expect("still offered");
+        assert_eq!(profile.command, words(&[name]), "{name}");
+        assert_eq!(Inherited::of(profile, &set).asks_nobody(), None, "{name}");
+    }
 }

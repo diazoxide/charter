@@ -382,8 +382,9 @@ pub(crate) fn reopening(
     // **A finished task is started again on the profile a dispatch chose for it**, so it is
     // held to what that dispatch was held to (#1509), as every other way a dispatched chat
     // starts again is (`Chats::start_recorded_told`): a profile the project lists for its
-    // persona, where it lists any, and one whose command does not switch the harness's
-    // prompts off. Either may have changed since, and nobody chose the change for this
+    // persona, where it lists any, and one that asks (#1522): marked as asking, or a built-in
+    // that asks by default, and whose command does not switch the harness's prompts off.
+    // Each may have changed since, and nobody chose the change for this
     // conversation. Asked here because the chat a Reopen starts names no asking chat, so the
     // check on a recorded chat does not see that a dispatch started it. Said for a Reopen:
     // the task was not reopened, and its report is still there.

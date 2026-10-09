@@ -1771,11 +1771,14 @@ fn dispatch_it(
         }
         // The decision refused where no profile was chosen.
         let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
-        // **No chat is started for another chat on a profile whose own command switches the
-        // harness's prompts off**, whoever named it: the dispatch, the persona's definition
-        // (which a chat can write), or nobody, where it is the asking chat's own. Said now,
-        // before the person is asked for anything.
-        if let Some(refused) = asks_nobody(&on, chosen, asked.to.as_deref()) {
+        // **No chat is started for another chat on a profile that asks nobody** (#1522): one
+        // whose own command switches the harness's prompts off, or one nobody marked as asking,
+        // whoever named it: the dispatch, the persona's definition (which a chat can write), or
+        // nobody, where it is the asking chat's own. Said now, before the person is asked for
+        // anything.
+        if let Some(refused) =
+            asks_nobody(&on, chosen, asked.to.as_deref(), wanted.by == By::Person)
+        {
             return Err(refused);
         }
         // **The grant**, where a chat asks for a persona. The person needs none, and a chat
@@ -1917,7 +1920,9 @@ fn dispatch_it(
                 Some(target) => dispatchunattended::start_of_a_persona_chat(
                     start,
                     target,
-                    its_profile.as_ref().map(Inherited::of),
+                    its_profile
+                        .as_ref()
+                        .map(|profile| Inherited::of(profile, &on.launch.0)),
                 ),
                 // A chat on no persona dispatching to none: nothing of a persona to hold.
                 None => Ok(start),
@@ -2193,6 +2198,7 @@ fn asks_nobody(
     on: &On,
     chosen: &purlis_core::personaprofile::Chosen,
     persona: Option<&str>,
+    by_person: bool,
 ) -> Option<String> {
     use purlis_core::dispatchunattended::{Inherited, NamedBy, bypass_refusal};
     use purlis_core::personaprofile::Who;
@@ -2200,9 +2206,11 @@ fn asks_nobody(
     let by = match chosen.by {
         Who::Asker => NamedBy::TheDispatch,
         Who::Persona | Who::PersonaModel => NamedBy::ThePersona(persona.unwrap_or_default()),
+        // The person's Ask from a tab dispatched nothing: the profile is their tab's chat's.
+        Who::AskingChat if by_person => NamedBy::TheTabsChat,
         Who::AskingChat => NamedBy::TheAskingChat,
     };
-    bypass_refusal(Inherited::of(profile), by)
+    bypass_refusal(Inherited::of(profile, &on.launch.0), by)
 }
 
 /// Whether chat `chat`'s program still runs, by the board: one that has ended, with or
@@ -2834,7 +2842,8 @@ mod tests {
             std::fs::write(
                 root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
-                    "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\nasks = true\n",
+                    "[harness]\nasks = [\"work\", \"cx\"]\n\n\
+                     [harness.work]\nkind = \"claude\"\ncommand = [{:?}]\n",
                     program.display().to_string()
                 ),
             )
@@ -2884,7 +2893,7 @@ mod tests {
             let local = self.root.join(purlis_core::profiles::LOCAL_FILE);
             let mut text = std::fs::read_to_string(&local).expect("the local file");
             text.push_str(&format!(
-                "[harness.cx]\nkind = \"codex\"\ncommand = [{:?}]\nasks = true\n",
+                "[harness.cx]\nkind = \"codex\"\ncommand = [{:?}]\n",
                 program.display().to_string()
             ));
             std::fs::write(&local, text).expect("the profile");
@@ -8113,7 +8122,7 @@ mod tests {
             assert!(
                 why.starts_with(
                     "the dispatch names profile 'plain', which is not marked as asking a person"
-                ) && why.contains("asks = true"),
+                ) && why.contains("asks = [\"plain\"]"),
                 "{to:?}: {why}"
             );
         }

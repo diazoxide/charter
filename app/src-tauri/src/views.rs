@@ -1041,7 +1041,8 @@ mod tests {
 
         assert_eq!(
             tasks("ops"),
-            "only 'work', listed for it under [dispatch.profiles], where it is marked as asking"
+            "only 'work', listed for it under [dispatch.profiles], where it asks: the built-in \
+             claude or codex, or one marked as asking"
         );
         assert!(
             tasks("qa").starts_with("any profile the project offers"),

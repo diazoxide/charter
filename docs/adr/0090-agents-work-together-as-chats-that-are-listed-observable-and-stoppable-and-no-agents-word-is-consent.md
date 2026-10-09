@@ -934,21 +934,29 @@ needs-you list says "`<persona>` wanted `<persona>` while you were away", with *
 held to it, and to the rule that a dispatched chat never runs with its harness's prompts off,
 each time it is started again: at a relaunch, a restart, and a Reopen of its finished task.
 
-**Amended (#1522), to the stricter rule:** V100-60 said a profile that skips permission checks
-is never used for a task *unless the person started the session that way*. There is no such
-exception. A profile that asks nobody never runs a task, a handoff or a persona chat the person
-asks for from a tab, whoever named it, the person's own session included; the code never built
-the exception, and the operator's standing rule is that it never will. And "asks nobody" is no
-longer read from a list of flags: a chat one chat starts for another starts only on a profile
-known to ask, a built-in whose harness asks by its own default (Claude Code, Codex) or a
-profile of the local file the person marked `asks = true`. Anything unmarked is taken not to
-ask, so a way of switching the prompts off that purlis cannot read (a settings file, an
-environment variable, a wrapper script) refuses by the missing mark. The flags purlis knows
-still refuse a profile marked so.
-The loop rule holds under every grant, "any persona" included. A project may set one list for
-every persona that has none of its own, nor one up its `extends:` chain: `"*"` under
-`[dispatch.profiles]` (#1522), so a persona a chat copies or makes is held to a list rather
-than to none.
+**Proposed amendment (#1522), pending the operator's ruling on V100-60:** V100-60 says a
+profile that skips permission checks is never used for a task *unless the person started the
+session that way*. #1522 proposes to strike the exception: a profile that asks nobody would
+never run a task, a handoff or a persona chat the person asks for from a tab, whoever named it,
+the person's own session included. The code has never built the exception (#1509 shipped the
+stricter rule), and this branch does not build it; whether the ruling's sentence is amended to
+match, or the exception is built, is the operator's word, and V100-60 stands as written until
+then.
+
+**How "asks nobody" is read (#1522).** No longer from a list of flags alone: a chat one chat
+starts for another starts only on a profile known to ask, a built-in whose harness asks by its
+own default (Claude Code, Codex) or a profile the person names in the local file's
+`[harness] asks` (Settings › Project › Harness & profiles ticks it). The mark is a name in a
+list, so it marks a built-in, a declared harness or a table alike and never takes one down.
+Anything unmarked is taken not to ask, so a way of switching the prompts off that purlis cannot
+read (a settings file, an environment variable, a wrapper script) refuses by the missing mark.
+The flags purlis knows still refuse a profile marked so.
+
+The loop rule holds under every grant, "any persona" included. A project may set a ceiling for
+every persona: `"*"` under `[dispatch.profiles]` (#1522). A persona's own list, or the one it
+extends, narrows under it and never lifts a persona out from under it, so neither a list a pull
+brings in nor a persona a chat writes with an `extends:` line reaches a profile `"*"` leaves
+out.
 
 **17. The commands of who may dispatch to whom are the window's alone** (the dispatcher's
 ruling as train 64 was joined, for the operator to confirm). Allow, Keep blocked and Never on

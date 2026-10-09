@@ -393,12 +393,12 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
     [
       "[harness]",
       'default = "scenario"',
+      // A chat a dispatch starts runs only on a profile marked as asking (#1522).
+      'asks = ["scenario"]',
       "",
       "[harness.scenario]",
       `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
-      // A chat a dispatch starts runs only on a profile marked as asking (#1522).
-      "asks = true",
       "",
       "[harness.needs-approval]",
       `kind = ${JSON.stringify(kind)}`,

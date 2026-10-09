@@ -1028,8 +1028,9 @@ impl Chats {
         };
         // **A chat a dispatch started is held, each time it is started again, to what the
         // dispatch was held to** (#1509): a profile the project lists for its persona, where
-        // it lists any, and one whose command does not switch the harness's prompts off. Both
-        // may have changed since it was dispatched, and nobody chose the change for this chat.
+        // it lists any, and one that asks (#1522): marked as asking, or a built-in that asks by
+        // default, and whose command does not switch the harness's prompts off. Each may have
+        // changed since it was dispatched, and nobody chose the change for this chat.
         purlis_core::dispatchprofiles::may_start_again(&self.project, chat)?;
         let ready = purlis_core::start::ready(
             &purlis_core::start::Start {
@@ -5511,7 +5512,8 @@ pub(crate) mod tests {
         std::fs::write(
             root.join(purlis_core::profiles::LOCAL_FILE),
             format!(
-                "[harness.work]\nkind = \"claude\"\ncommand = [{program:?}{extra}]\nasks = true\n"
+                "[harness]\nasks = [\"work\"]\n\n\
+                 [harness.work]\nkind = \"claude\"\ncommand = [{program:?}{extra}]\n"
             ),
         )
         .expect("the profile");
@@ -5706,7 +5708,7 @@ pub(crate) mod tests {
         let root = a_plane_with_work(dir.path(), "");
         let local = root.join(purlis_core::profiles::LOCAL_FILE);
         let text = std::fs::read_to_string(&local).expect("the local file");
-        std::fs::write(&local, text.replace("asks = true\n", "")).expect("unmarked");
+        std::fs::write(&local, text.replace("asks = [\"work\"]\n", "")).expect("unmarked");
         let (chats, _) = recorded();
         let chats = chats.in_project(&root);
 
@@ -5726,7 +5728,11 @@ pub(crate) mod tests {
             "{}",
             waiting[0].why
         );
-        assert!(waiting[0].why.contains("asks = true"), "{}", waiting[0].why);
+        assert!(
+            waiting[0].why.contains("asks = [\"work\"]"),
+            "{}",
+            waiting[0].why
+        );
 
         let (own, _) = recorded();
         let own = own.in_project(&root);
