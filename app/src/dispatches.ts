@@ -173,9 +173,20 @@ export function saidAt(stamp: string): string {
   return read ? `${read[1]} ${read[2]} UTC` : stamp;
 }
 
+/** How long a dispatch waits on this machine's memory before it starts nothing (#1467): the
+ *  core's `MEMORY_WAIT_MINUTES`. */
+export const MEMORY_WAIT_MINUTES = 10;
+
+/** Whether a dispatch that never started is still waiting on this machine's memory (#1467):
+ *  it starts by itself, so the tab reads the list again while one is. */
+export function waitsOnMemory(row: NotStartedRow): boolean {
+  return row.state === "waiting-on-memory";
+}
+
 /**
  * What the Dispatches tab says of a dispatch that never started (#1456): what it was, for
- * whom, who asked, and whether it waits on the person's answer or they kept it blocked.
+ * whom, who asked, and how it stands: waiting on the person's answer, kept blocked by them,
+ * waiting on this machine's memory, or given up after waiting on it (#1467).
  */
 export function notStartedSaid(row: NotStartedRow): string {
   const kind = row.mode === "handoff" ? "handoff" : "task";
@@ -184,7 +195,15 @@ export function notStartedSaid(row: NotStartedRow): string {
   const chat = row.asker ?? "a chat that has closed";
   const by = row.by_person ? `you, from ${chat}` : chat;
   const when = row.at === null ? "" : ` (${saidAt(row.at)})`;
-  return row.state === "held"
-    ? `${what} for ${to}, asked by ${by}: waiting for your answer on its Notice${when}.`
-    : `${what} for ${to}, asked by ${by}: kept blocked by you${when}. Nothing was started.`;
+  const asked = `${what} for ${to}, asked by ${by}`;
+  switch (row.state) {
+    case "held":
+      return `${asked}: waiting for your answer on its Notice${when}.`;
+    case "waiting-on-memory":
+      return `${asked}: waiting for this machine to free memory${when}. It starts by itself once memory frees, or after ${MEMORY_WAIT_MINUTES} minutes starts nothing.`;
+    case "gave-up-on-memory":
+      return `${asked}: this machine was still short on memory after ${MEMORY_WAIT_MINUTES} minutes${when}. Nothing was started.`;
+    default:
+      return `${asked}: kept blocked by you${when}. Nothing was started.`;
+  }
 }

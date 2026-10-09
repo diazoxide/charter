@@ -27,6 +27,7 @@ import {
   personasOf,
   saidAt,
   shownDispatches,
+  waitsOnMemory,
   worktreeSaid,
   type DispatchFilter,
 } from "./dispatches";
@@ -141,8 +142,11 @@ export function DispatchesTab({
     };
   }, [plane, changed, again]);
   // A running dispatch's time, its needs-you count and its end are the app's own writes, which
-  // no change in the project's files announces: read again while one is running.
-  const running = said?.read?.rows.some((row) => row.outcome === "running") ?? false;
+  // no change in the project's files announces: read again while one is running. So is a
+  // dispatch waiting on memory starting by itself (#1467).
+  const running =
+    (said?.read?.rows.some((row) => row.outcome === "running") ?? false) ||
+    (said?.read?.not_started ?? []).some(waitsOnMemory);
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => setAgain((was) => was + 1), WHILE_RUNNING_MS);
@@ -407,7 +411,8 @@ export function DispatchesTab({
 }
 
 /** The dispatches that never started, and so have no record (#1456): held on the person's
- *  answer, or kept blocked by them. The app lists them from memory, and says so. */
+ *  answer, or kept blocked by them; waiting on this machine's memory, or given up on it
+ *  (#1467). The app lists them from memory, and says so. */
 function NotStarted({ rows }: { rows: NotStartedRow[] }) {
   return (
     <section className="dispatches-not-started" aria-label="Dispatches that did not start">

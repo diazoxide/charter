@@ -4606,11 +4606,16 @@ export type NotStarted = {
 
 /**
  *  **A dispatch that never started, and so has no record** (#1456): one held on the person's
- *  answer to its grant Notice, or one they kept blocked. Listed from what the app holds in
- *  memory, and gone with the app.
+ *  answer to its grant Notice, or one they kept blocked; one waiting on this machine's memory,
+ *  or one that waited past the bound (#1467). Listed from what the app holds in memory, and
+ *  gone with the app.
  */
 export type NotStartedRow = {
-	/**  `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked. */
+	/**
+	 *  `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked;
+	 *  `waiting-on-memory` while every check let it through and this machine is short on
+	 *  memory; `gave-up-on-memory` once it waited past the bound and started nothing.
+	 */
 	state: string,
 	/**  `task` or `handoff`. */
 	mode: string,

@@ -148,6 +148,11 @@ fn task_dispatched(
         Ok(Dispatched::Held {
             from, to, waiting, ..
         }) => Answer::NeedsGrant { from, to, waiting },
+        Ok(Dispatched::WaitsOnMemory { to }) => match held.held_dispatches().wait_on_memory(wanted)
+        {
+            Ok(()) => Answer::WaitingOnMemory { to },
+            Err(why) => no(why),
+        },
         Err(why) => no(why),
     }
 }
@@ -196,7 +201,8 @@ pub fn answer(
                 return no(an_open_asking_a_report(&open));
             }
             // Decided as every dispatch is (#1444): started, held for the person, or refused.
-            match dispatch_it(held, plane, &Wanted::moved(&open), STARTING) {
+            let wanted = Wanted::moved(&open);
+            match dispatch_it(held, plane, &wanted, STARTING) {
                 Ok(Dispatched::Started { it, note, row, .. }) => {
                     let chat = it.session;
                     arrived(*it);
@@ -205,6 +211,13 @@ pub fn answer(
                 Ok(Dispatched::Held {
                     from, to, waiting, ..
                 }) => Answer::NeedsGrant { from, to, waiting },
+                // Waits on memory, as a task does (#1467): opened once memory frees.
+                Ok(Dispatched::WaitsOnMemory { to }) => {
+                    match held.held_dispatches().wait_on_memory(&wanted) {
+                        Ok(()) => Answer::WaitingOnMemory { to },
+                        Err(why) => no(why),
+                    }
+                }
                 Err(why) => no(why),
             }
         }
@@ -1526,6 +1539,14 @@ enum Dispatched {
         /// The grants store's number for the held dispatch.
         pending: u32,
     },
+    /// Nothing has started yet: every check let it through and its grant stands, and this
+    /// machine is short on memory (#1467, [`dispatchdecision::waits`]). The caller holds it
+    /// ([`HeldDispatches::wait_on_memory`]) and the asking chat is told it waits
+    /// ([`Answer::WaitingOnMemory`]).
+    WaitsOnMemory {
+        /// The persona it is for, none for the asking chat's own.
+        to: Option<String>,
+    },
 }
 
 /// What a handoff's request says beyond a task's ([`OpenChat`]): where the work moves to, and
@@ -1639,13 +1660,78 @@ impl Wanted {
 /// **And what the Dispatches tab lists of them** (#1456): each one held, from when it was
 /// held, and the last [`KEPT_BLOCKED_LISTED`] the person kept blocked. Neither ever had a
 /// dispatch record, and nothing of them is written: they end with the app too.
-#[derive(Default)]
 pub struct HeldDispatches {
     held: std::sync::Mutex<std::collections::HashMap<u32, Wanted>>,
     /// When each held dispatch was held, by the store's number.
     since: std::sync::Mutex<std::collections::HashMap<u32, String>>,
     /// The dispatches the person kept blocked, oldest first, with when.
     kept_blocked: std::sync::Mutex<std::collections::VecDeque<(Wanted, String)>>,
+    /// **The dispatches waiting on this machine's memory** (#1467), oldest first. Every check
+    /// let each through and its grant stands; [`memory_freed`] decides each again once memory
+    /// frees. In memory only, as the rest: a launch starts with none.
+    on_memory: std::sync::Mutex<Vec<OnMemory>>,
+    /// The numbers [`Self::on_memory`] gives, so a dispatch put back keeps its own.
+    on_memory_dealt: std::sync::atomic::AtomicU64,
+    /// The dispatches that waited [`dispatchdecision::MEMORY_WAIT`] on memory and started
+    /// nothing, oldest first, with when: listed beside the ones the person kept blocked.
+    gave_up: std::sync::Mutex<std::collections::VecDeque<(Wanted, String)>>,
+    /// This project's reader of the machine's memory, with the seam a test sets
+    /// ([`purlis_core::memorypressure::Gauge::stand_in`]).
+    memory: purlis_core::memorypressure::Gauge,
+}
+
+impl Default for HeldDispatches {
+    fn default() -> Self {
+        let held = Self {
+            held: std::sync::Mutex::default(),
+            since: std::sync::Mutex::default(),
+            kept_blocked: std::sync::Mutex::default(),
+            on_memory: std::sync::Mutex::default(),
+            on_memory_dealt: std::sync::atomic::AtomicU64::default(),
+            gave_up: std::sync::Mutex::default(),
+            memory: purlis_core::memorypressure::Gauge::default(),
+        };
+        // **A test's project reads no machine** (#1467): memory is enough until the test says
+        // otherwise, so no test's dispatch waits on whatever the machine running it is short
+        // of, and the project's own timer leaves the looking to the test.
+        #[cfg(test)]
+        held.memory
+            .stand_in(Some(purlis_core::memorypressure::Memory::Enough));
+        held
+    }
+}
+
+/// A dispatch waiting on this machine's memory (#1467).
+#[derive(Clone)]
+struct OnMemory {
+    /// Its number among the ones waiting.
+    id: u64,
+    wanted: Wanted,
+    /// When it began to wait, which the bound is counted from: kept when it is put back.
+    since: Instant,
+    /// The same, as the Dispatches tab says it.
+    at: String,
+}
+
+/// How often the dispatches waiting on memory are looked at again ([`memory_freed`]): soon
+/// enough that one starts within seconds of memory freeing, and only a read of the machine's
+/// memory while any waits.
+pub const MEMORY_LOOKED_AT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// **The most dispatches one chat may have waiting on memory at once** (#1467): none of them
+/// holds a slot of its limits while it waits, so a chat that asks in a loop while memory is
+/// short is refused, and told so, before it fills the list. One chat's running limit by
+/// default.
+pub const MOST_ON_MEMORY_PER_CHAT: usize = 6;
+
+/// What a chat is told where it already has [`MOST_ON_MEMORY_PER_CHAT`] dispatches waiting on
+/// memory.
+fn too_many_on_memory() -> String {
+    format!(
+        "this machine is short on memory, and this chat already has {MOST_ON_MEMORY_PER_CHAT} \
+         dispatches waiting for it to free, so nothing was started. Wait until they start, then \
+         dispatch again"
+    )
 }
 
 /// How many dispatches the person kept blocked the Dispatches tab lists, newest kept.
@@ -1732,6 +1818,9 @@ impl HeldDispatches {
         let mut held = self.lock();
         held.retain(|_, wanted| wanted.chat != session);
         self.since().retain(|id, _| held.contains_key(id));
+        drop(held);
+        // And what it waits on memory for: nothing would tell it.
+        self.on_memory().retain(|one| one.wanted.chat != session);
     }
 
     /// Takes out everything chat `session` asked for that still waits on the person.
@@ -1750,6 +1839,105 @@ impl HeldDispatches {
         // In the order they were asked.
         taken.sort_by_key(|(id, _)| *id);
         taken.into_iter().map(|(_, wanted)| wanted).collect()
+    }
+
+    fn on_memory(&self) -> std::sync::MutexGuard<'_, Vec<OnMemory>> {
+        self.on_memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// This project's reader of the machine's memory: what a dispatch's last step asks, and
+    /// where a test puts its stand-in.
+    pub fn memory(&self) -> &purlis_core::memorypressure::Gauge {
+        &self.memory
+    }
+
+    /// Holds `wanted` until memory frees (#1467), counted from now, or answers why not: its
+    /// chat already has [`MOST_ON_MEMORY_PER_CHAT`] waiting.
+    fn wait_on_memory(&self, wanted: &Wanted) -> Result<(), String> {
+        let mut waiting = self.on_memory();
+        let theirs = waiting
+            .iter()
+            .filter(|one| one.wanted.chat == wanted.chat)
+            .count();
+        if theirs >= MOST_ON_MEMORY_PER_CHAT {
+            return Err(too_many_on_memory());
+        }
+        let id = self
+            .on_memory_dealt
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        waiting.push(OnMemory {
+            id,
+            wanted: wanted.clone(),
+            since: Instant::now(),
+            at: now_stamp(),
+        });
+        Ok(())
+    }
+
+    /// Puts `one` back, still waiting, where it was among the others.
+    fn put_back(&self, one: OnMemory) {
+        let mut waiting = self.on_memory();
+        let at = waiting.partition_point(|other| other.id < one.id);
+        waiting.insert(at, one);
+    }
+
+    /// Every dispatch waiting on memory now, by its number and since when, oldest first.
+    fn waiting_on_memory(&self) -> Vec<(u64, Instant)> {
+        self.on_memory()
+            .iter()
+            .map(|one| (one.id, one.since))
+            .collect()
+    }
+
+    /// Takes out the dispatch waiting on memory as number `id`, where it still waits: whoever
+    /// takes it is the one that starts it or gives it up.
+    fn take_on_memory(&self, id: u64) -> Option<OnMemory> {
+        let mut waiting = self.on_memory();
+        let at = waiting.iter().position(|one| one.id == id)?;
+        Some(waiting.remove(at))
+    }
+
+    /// Takes out everything chat `session` asked for that still waits on memory, oldest first.
+    fn on_memory_taken_from(&self, session: u32) -> Vec<Wanted> {
+        let mut waiting = self.on_memory();
+        let (theirs, others): (Vec<OnMemory>, Vec<OnMemory>) = waiting
+            .drain(..)
+            .partition(|one| one.wanted.chat == session);
+        *waiting = others;
+        theirs.into_iter().map(|one| one.wanted).collect()
+    }
+
+    /// Every dispatch waiting on memory now, oldest first, with when it began to wait.
+    pub(crate) fn on_memory_listed(&self) -> Vec<(Wanted, String)> {
+        self.on_memory()
+            .iter()
+            .map(|one| (one.wanted.clone(), one.at.clone()))
+            .collect()
+    }
+
+    /// `wanted` waited on memory past the bound and started nothing: listed, newest last, as
+    /// the ones the person kept blocked are.
+    fn gave_up(&self, wanted: Wanted) {
+        let mut gave_up = self
+            .gave_up
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if gave_up.len() == KEPT_BLOCKED_LISTED {
+            gave_up.pop_front();
+        }
+        gave_up.push_back((wanted, now_stamp()));
+    }
+
+    /// The dispatches that waited on memory past the bound, oldest first, with when.
+    pub(crate) fn gave_up_listed(&self) -> Vec<(Wanted, String)> {
+        self.gave_up
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
     }
 }
 
@@ -2303,6 +2491,14 @@ fn dispatch_noting(
             (By::Person, Some(to)) => Some(dispatchgrant::grants_for_a_dispatched_chat(to)),
             (_, None) => None,
         };
+        // **The last step: memory** (#1467, [`dispatchdecision::waits`]). Every check let it
+        // through and its grant stands; while this machine is short on memory it waits, and is
+        // decided again once memory frees. Nothing is reserved or created for it meanwhile.
+        if let Some(dispatchdecision::Waits::Memory) =
+            dispatchdecision::waits(wanted.by, held.held_dispatches().memory().read())
+        {
+            return Ok(Dispatched::WaitsOnMemory { to: asked.to });
+        }
         let its_lineage = HandedFrom {
             chat: from,
             name: asker,
@@ -2704,32 +2900,7 @@ pub fn answered(
                 works,
                 row: logged,
             }) => {
-                let running = match &it.persona {
-                    Some(persona) => format!("running as {persona}"),
-                    None => "running".to_owned(),
-                };
-                // **A held handoff leaves what one that opened at once leaves** (#1471): its
-                // todo in the workspace it moved to, which the command writes only after an
-                // open it saw, and its row in the dispatch log. The command returned long
-                // ago, so what could not be written is said here, to the asking chat.
-                let todo = wanted
-                    .moved
-                    .as_ref()
-                    .and_then(|moved| held_handoff_todo(held, moved));
-                let unlogged = unlogged(logged);
-                // Where it works, where that is not the asking chat's folder (#1453): the
-                // branch purlis cut is in it.
-                let detail = [
-                    Some(running),
-                    works.map(|works| format!("it works {works}")),
-                    note,
-                    todo,
-                    unlogged,
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join("; ");
+                let detail = started_after_holding(held, &wanted, &it, (note, works, logged));
                 crate::dispatched::started(held, it.session);
                 arrived(*it);
                 (Answered::Started, detail)
@@ -2750,6 +2921,20 @@ pub fn answered(
                     ),
                 )
             }
+            // **Allowed, and the machine is short on memory** (#1467): it waits, as one let
+            // through at once does, and is decided again once memory frees, its grant asked
+            // again with the rest (D-1467-6): a grant the person kept still covers it, and
+            // one they took back meanwhile is not gone round. The chat is told when it starts
+            // or gives up, as it would have been.
+            Ok(Dispatched::WaitsOnMemory { .. }) => {
+                match held.held_dispatches().wait_on_memory(&wanted) {
+                    Ok(()) => {
+                        held.dispatch_grants().end_once(answer.pending.id);
+                        return;
+                    }
+                    Err(why) => (Answered::NotStarted, why),
+                }
+            }
             Err(not) => {
                 row = not.row;
                 (Answered::NotStarted, not.why)
@@ -2760,11 +2945,74 @@ pub fn answered(
     // held again, or refused before it reached the grant store. It was for this dispatch as
     // they read it, so nothing of it is left for a later ask with another brief.
     held.dispatch_grants().end_once(answer.pending.id);
-    // **A task the person allowed that did not start is a failed row under the chat that
-    // asked, and that chat's report** (#1497): told once, as a task's report is, and not also
-    // as the app's word on a held dispatch. A handoff is not a task, and keeps that word.
-    if how == Answered::NotStarted
-        && wanted.moved.is_none()
+    if how == Answered::NotStarted {
+        not_started_after_holding(
+            held,
+            &wanted,
+            Some(answer.pending.target.clone()),
+            row,
+            &detail,
+        );
+        return;
+    }
+    // A handoff is told in the app's word on a held dispatch, and that is all: it is no task,
+    // so nothing here says a task failed (a task took the road above, `unstarted::allowed`,
+    // which flags the chat that asked by the task's own record).
+    tell_the_asker(held, &wanted, how, &detail);
+}
+
+/// **What the asking chat is told of a dispatch that was held and has now started**: on the
+/// person's Allow ([`answered`]) or once memory freed ([`memory_freed`]). Its command returned
+/// long ago, so this is said on its next turn.
+///
+/// **A held handoff leaves what one that opened at once leaves** (#1471): its todo in the
+/// workspace it moved to, which the command writes only after an open it saw, and its row in
+/// the dispatch log. What could not be written is said here, to the asking chat.
+fn started_after_holding(
+    held: &Held,
+    wanted: &Wanted,
+    it: &Arrived,
+    (note, works, logged): (Option<String>, Option<String>, Option<Row>),
+) -> String {
+    let running = match &it.persona {
+        Some(persona) => format!("running as {persona}"),
+        None => "running".to_owned(),
+    };
+    let todo = wanted
+        .moved
+        .as_ref()
+        .and_then(|moved| held_handoff_todo(held, moved));
+    // Where it works, where that is not the asking chat's folder (#1453): the branch purlis
+    // cut is in it.
+    [
+        Some(running),
+        works.map(|works| format!("it works {works}")),
+        note,
+        todo,
+        unlogged(logged),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+/// **A dispatch that was held, and then did not start**, for `why`: the person allowed it and
+/// its start was refused ([`answered`]), or it was decided again once memory freed and refused,
+/// or it waited on memory past the bound ([`memory_freed`]). `row` is the number its failed row
+/// was written under, where its start itself was refused.
+///
+/// **A task is a failed row under the chat that asked, and that chat's report** (#1497): told
+/// once, as a task's report is, and not also as the app's word on a held dispatch. A handoff
+/// is not a task, and keeps that word.
+fn not_started_after_holding(
+    held: &Held,
+    wanted: &Wanted,
+    persona: Option<String>,
+    row: Option<u32>,
+    why: &str,
+) {
+    if wanted.moved.is_none()
         && let Ok(name) = dispatchdecision::task_name(&wanted.name)
     {
         let task = crate::unstarted::Unstarted {
@@ -2773,7 +3021,7 @@ pub fn answered(
             // start was tried, so the chat that asked has a number to wait on and list it by.
             number: row.unwrap_or_else(|| held.chats().sessions().deal()),
             name,
-            persona: Some(answer.pending.target.clone()),
+            persona,
             profile: wanted.profile.clone(),
             by_person: false,
             brief: wanted.brief.clone(),
@@ -2783,13 +3031,90 @@ pub fn answered(
             worktree: None,
             was: None,
         };
-        crate::unstarted::allowed(held, &task, row.is_some(), &detail);
+        crate::unstarted::allowed(held, &task, row.is_some(), why);
         return;
     }
-    // A handoff is told in the app's word on a held dispatch, and that is all: it is no task,
-    // so nothing here says a task failed (a task took the road above, `unstarted::allowed`,
-    // which flags the chat that asked by the task's own record).
-    tell_the_asker(held, &wanted, how, &detail);
+    tell_the_asker(
+        held,
+        wanted,
+        purlis_core::handback::Answered::NotStarted,
+        why,
+    );
+}
+
+/// **The dispatches waiting on this machine's memory are looked at again** (#1467), every
+/// [`MEMORY_LOOKED_AT_EVERY`] from the project's own thread (`planes.rs`). Nothing is read
+/// while none waits.
+///
+/// - **Still short**: each keeps waiting; one that has waited [`dispatchdecision::MEMORY_WAIT`]
+///   starts nothing, is listed as given up, and the asking chat is told on its next turn
+///   ([`dispatchdecision::gave_up_on_memory`]).
+/// - **Memory has freed**: each is decided again, oldest first, **as it was first asked and
+///   against the limits, grants and chats as they stand now** ([`dispatch_noting`]). It starts,
+///   or is refused and the asking chat is told why, or waits on the person for a grant that no
+///   longer stands, or, where memory is short again by the time it is decided, waits on.
+///
+/// `now` is the moment the bound is counted to.
+pub fn memory_freed(
+    held: &Held,
+    plane: &PlaneId,
+    now: Instant,
+    arrived: &(dyn Fn(Arrived) + Send + Sync),
+) {
+    let waiting = held.held_dispatches().waiting_on_memory();
+    if waiting.is_empty() {
+        return;
+    }
+    let short = held.held_dispatches().memory().read().is_short();
+    for (id, since) in waiting {
+        if short && now.saturating_duration_since(since) < dispatchdecision::MEMORY_WAIT {
+            continue;
+        }
+        // Taken out by whoever starts it or gives it up, so it is never both.
+        let Some(one) = held.held_dispatches().take_on_memory(id) else {
+            continue;
+        };
+        let persona = one
+            .wanted
+            .to
+            .clone()
+            .or_else(|| runs_as(held, one.wanted.chat));
+        if short {
+            held.held_dispatches().gave_up(one.wanted.clone());
+            not_started_after_holding(
+                held,
+                &one.wanted,
+                persona,
+                None,
+                &dispatchdecision::gave_up_on_memory(),
+            );
+            continue;
+        }
+        match dispatch_noting(held, plane, &one.wanted, STARTING) {
+            Ok(Dispatched::Started {
+                it,
+                note,
+                works,
+                row,
+            }) => {
+                let detail = started_after_holding(held, &one.wanted, &it, (note, works, row));
+                crate::dispatched::started(held, it.session);
+                arrived(*it);
+                tell_the_asker(
+                    held,
+                    &one.wanted,
+                    purlis_core::handback::Answered::Started,
+                    &detail,
+                );
+            }
+            // Short again by the moment it was decided: it waits on, from when it first did.
+            Ok(Dispatched::WaitsOnMemory { .. }) => held.held_dispatches().put_back(one),
+            // The grant it was let through on no longer stands: the person is asked now, on
+            // the asking chat's tab, and their answer starts it or tells the chat ([`answered`]).
+            Ok(Dispatched::Held { .. }) => {}
+            Err(not) => not_started_after_holding(held, &one.wanted, persona, not.row, &not.why),
+        }
+    }
 }
 
 /// The workspace chat `chat` works in, by this app's record of it; none at the project's root.
@@ -2815,6 +3140,19 @@ pub fn started_again(held: &Held, session: u32, started: u32) {
             purlis_core::handback::Answered::NotStarted,
             "this chat was started again before the person answered, and the question went \
              with the old run. Dispatch it again, and the person is asked",
+        );
+    }
+    // And what waited on memory (#1467): it was the old run's to start.
+    for wanted in held.held_dispatches().on_memory_taken_from(session) {
+        tell_the_asker(
+            held,
+            &Wanted {
+                chat: started,
+                ..wanted
+            },
+            purlis_core::handback::Answered::NotStarted,
+            "this chat was started again while it waited on memory, and what it asked for went \
+             with the old run. Dispatch it again",
         );
     }
 }
@@ -3181,6 +3519,11 @@ pub fn ask_persona(
         Dispatched::Held { .. } => {
             Err("purlis did not start the chat: it asked for a grant you do not need.".to_owned())
         }
+        // Nor waits theirs on memory (D-1467-4).
+        Dispatched::WaitsOnMemory { .. } => Err(
+            "purlis did not start the chat: it waited on memory, which your own ask does not."
+                .to_owned(),
+        ),
     }
 }
 
@@ -14051,6 +14394,9 @@ mod tests {
 
     /// A chat an older build opened owing a report is its asker's task after an update (#1519).
     mod older_reporting_handoff;
+
+    /// A dispatch waits while the machine is short on memory (#1467).
+    mod waits_on_memory;
 
     /// Tasks across a restart, and a task whose asking chat has gone (#1513).
     mod across_restart;

@@ -772,11 +772,14 @@ pub(crate) fn counted(input: Option<u64>, output: Option<u64>) -> Option<String>
 }
 
 /// **A dispatch that never started, and so has no record** (#1456): one held on the person's
-/// answer to its grant Notice, or one they kept blocked. Listed from what the app holds in
-/// memory, and gone with the app.
+/// answer to its grant Notice, or one they kept blocked; one waiting on this machine's memory,
+/// or one that waited past the bound (#1467). Listed from what the app holds in memory, and
+/// gone with the app.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct NotStartedRow {
-    /// `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked.
+    /// `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked;
+    /// `waiting-on-memory` while every check let it through and this machine is short on
+    /// memory; `gave-up-on-memory` once it waited past the bound and started nothing.
     pub state: String,
     /// `task` or `handoff`.
     pub mode: String,
@@ -817,7 +820,8 @@ fn not_started(
 }
 
 /// The dispatches of `held`'s project that never started: those held on the person now, then
-/// those they kept blocked, newest first each.
+/// those waiting on memory (#1467), then those the person kept blocked, then those that gave
+/// up on memory, newest first each.
 pub(crate) fn not_started_rows(held: &Held) -> Vec<NotStartedRow> {
     let dispatches = held.held_dispatches();
     let waiting = dispatches
@@ -825,12 +829,26 @@ pub(crate) fn not_started_rows(held: &Held) -> Vec<NotStartedRow> {
         .into_iter()
         .rev()
         .map(|(wanted, at)| not_started(held, &wanted, "held", at));
+    let on_memory = dispatches
+        .on_memory_listed()
+        .into_iter()
+        .rev()
+        .map(|(wanted, at)| not_started(held, &wanted, "waiting-on-memory", Some(at)));
     let blocked = dispatches
         .kept_blocked_listed()
         .into_iter()
         .rev()
         .map(|(wanted, at)| not_started(held, &wanted, "kept-blocked", Some(at)));
-    waiting.chain(blocked).collect()
+    let gave_up = dispatches
+        .gave_up_listed()
+        .into_iter()
+        .rev()
+        .map(|(wanted, at)| not_started(held, &wanted, "gave-up-on-memory", Some(at)));
+    waiting
+        .chain(on_memory)
+        .chain(blocked)
+        .chain(gave_up)
+        .collect()
 }
 
 /// What the Dispatches tab is handed.
