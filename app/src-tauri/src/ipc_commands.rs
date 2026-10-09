@@ -314,6 +314,7 @@ macro_rules! app_commands {
                 settings::add_project_profile,
                 settings::remove_project_profile,
                 settings::rename_project_profile,
+                settings::check_sandbox_host,
                 settings::add_sandbox_host,
                 settings::remove_sandbox_host,
                 settings::confirm_sandbox_host,

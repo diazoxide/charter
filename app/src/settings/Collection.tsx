@@ -259,6 +259,16 @@ function initial(fields: readonly EntryField[]): Record<string, string> {
   return Object.fromEntries(fields.map((one) => [one.field, one.initial ?? ""]));
 }
 
+/** What is said under a field: the core's refusal of the Add pressed, else its check of the
+ *  text as typed (#1405). */
+function fieldSaid(
+  refused: readonly string[] | undefined,
+  checked: string | undefined,
+): readonly string[] | undefined {
+  if (refused !== undefined && refused.length > 0) return refused;
+  return checked === undefined ? undefined : [checked];
+}
+
 /**
  * **Add**: a button, which opens the form in place — one setting row per field — with Add and
  * Cancel under it. The form is closed only once the core wrote the entry; a refusal keeps it
@@ -290,6 +300,10 @@ function AddForm({
     setValues(initial(fields));
   }
   const [refusal, setRefusal] = useState<EntryRefusal>();
+  // What a field's own check said of what is in it now (#1405), and the text each was asked
+  // for, so an answer to text typed over since is dropped.
+  const [checked, setChecked] = useState<Readonly<Record<string, string>>>({});
+  const asking = useRef<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const form = useId();
   const open = values !== undefined;
@@ -305,6 +319,8 @@ function AddForm({
   const close = () => {
     setValues(undefined);
     setRefusal(undefined);
+    setChecked({});
+    asking.current = {};
   };
   if (values === undefined)
     return (
@@ -320,8 +336,31 @@ function AddForm({
         </button>
       </div>
     );
-  const set = (field: string) => (to: string) =>
-    setValues((was) => (was === undefined ? was : { ...was, [field]: to }));
+  const set = (one: EntryField) => (to: string) => {
+    setValues((was) => (was === undefined ? was : { ...was, [one.field]: to }));
+    const check = one.check;
+    if (check === undefined) return;
+    // The field is checked anew, so what was said of the text it held goes.
+    asking.current[one.field] = to;
+    setRefusal((was) =>
+      was === undefined ? was : { ...was, fields: { ...was.fields, [one.field]: [] } },
+    );
+    const said = (why: string | null) =>
+      setChecked((was) => {
+        const rest = Object.fromEntries(
+          Object.entries(was).filter(([field]) => field !== one.field),
+        );
+        return why == null ? rest : { ...rest, [one.field]: why };
+      });
+    // An empty field is not refused while it is typed in: Add says what it needs.
+    if (to.trim() === "") return said(null);
+    check(to).then(
+      (why) => {
+        if (asking.current[one.field] === to) said(why);
+      },
+      () => undefined,
+    );
+  };
   const send = async () => {
     setSending(true);
     const said = await driver.entry(id, {
@@ -358,7 +397,7 @@ function AddForm({
           key={one.field}
           label={one.label}
           help={one.help}
-          error={refusal?.fields[one.field]}
+          error={fieldSaid(refusal?.fields[one.field], checked[one.field])}
           control={(ids) =>
             one.kind === "choice" ? (
               <Choice
@@ -366,14 +405,14 @@ function AddForm({
                 ids={ids}
                 options={(one.choices ?? []).map((choice) => ({ value: choice, label: choice }))}
                 value={values[one.field] ?? ""}
-                onValueChange={set(one.field)}
+                onValueChange={set(one)}
               />
             ) : (
               <Field
                 kind={one.kind === "lines" ? "list" : "text"}
                 ids={ids}
                 value={values[one.field] ?? ""}
-                onChange={set(one.field)}
+                onChange={set(one)}
               />
             )
           }
