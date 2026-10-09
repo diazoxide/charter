@@ -332,6 +332,15 @@ One command a chat can run did move a folder there: `purlis workspace rename` mo
 says so, and the app moves it when the project is next opened, from the rename's own journal.
 Where the project's sandbox is off, nothing here holds, as for every class.
 
+*Amended 2026-10-09 (#1457, D-1452-12; class 2 as written):* **what a chat's harness says its
+session has cost is kept in the app's folder.** `<state>/app/spend/<chat>.json`, one file per
+chat by the chat's own id, is the figure a session's token limit is held to. It sits under
+`<state>/app/`, which class 2 already denies a sandboxed chat writing in what every harness is
+compiled, so no new denial is added. Its one writer is the harness's status line, which Claude
+Code runs outside the sandbox its tools run in; a harness held whole inside the wrap cannot
+write it, and none reports a figure today. The file it replaces, `sessions/<sid>.spend`, was in
+a folder a chat writes, and is no longer read.
+
 *Amended 2026-10-09 (#1458; amends classes 2 and 5):* **the person's harness approvals, and
 the harness declarations they approve, are held by the sandbox.** Class 2 also holds the two
 approval records under the state folder, `harness-profiles-launched.json` (a local profile's

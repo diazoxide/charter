@@ -5078,21 +5078,18 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
-        // What the chat's status line writes down from its harness's payload.
-        let conversation = held
-            .board()
-            .conversation(child)
-            .or_else(|| {
-                held.chats()
-                    .recorded_chat(child)
-                    .and_then(|chat| chat.resume)
-                    .map(|id| id.as_str().to_owned())
-            })
-            .expect("the chat's conversation");
+        // What the chat's status line writes down from its harness's payload, under the id
+        // the app started it as.
+        let chat_id = held
+            .chats()
+            .recorded_chat(child)
+            .and_then(|chat| chat.identity.id)
+            .expect("the chat's id");
         assert!(purlis_core::usage::record_spend(
             held.root(),
+            &chat_id,
             &serde_json::json!({
-                "session_id": conversation,
+                "session_id": "11111111-2222-4333-8444-555555555555",
                 "cost": {"total_cost_usd": 0.42},
                 "context_window": {"total_input_tokens": 15234, "total_output_tokens": 4521},
             })

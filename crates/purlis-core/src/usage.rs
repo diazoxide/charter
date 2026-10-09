@@ -361,11 +361,14 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// What a harness said a whole session has cost so far (#1452): its tokens in and out, and its
 /// own cost figure. **Every part is absent where the harness did not say it, never a zero.**
 ///
-/// **A reported figure, which a chat can alter.** It is kept in the project's per-session
-/// state, where a chat writes its own pointers, so a chat can write this file too, for its own
-/// conversation or another's. Show it as reported; decide nothing by it until its source is
-/// out of a chat's reach (#1457). The optional `tokens-per-session` limit (#1512) is shown
-/// against it and, for that reason, refuses and stops nothing yet.
+/// **Kept where no sandboxed chat can write it** (#1457, D-1452-12): one file per chat, by the
+/// chat's own id, in the app's folder of the project's state ([`spend_dir`]), which every
+/// harness's compiled sandbox denies a chat for writing (ADR 0067's integrity class). The one
+/// writer is `purlis statusline`, which the harness runs for itself and outside the sandbox its
+/// tools run in, from the payload the harness hands it, for the chat the app named in its
+/// environment ([`crate::hookwire::CHAT_ID_ENV`]). Neither the file's name nor its figure comes
+/// from anything a sandboxed chat can say. A chat with no sandbox runs as the person, and
+/// can write it as it can write every record of the app's.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Spent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,11 +387,25 @@ impl Spent {
     }
 }
 
-/// The spend file for `sid`, beside its usage file and held to the same rule ([`file_for`]).
-pub fn spend_file_for(plane: &Path, sid: &str) -> Option<PathBuf> {
-    contain::mintable(sid)
+/// The name of the folder of the chats' spend files, in the app's folder of the state.
+pub const SPEND_DIR_NAME: &str = "spend";
+
+/// Where every chat's spend file is: `<state>/app/spend/`. Under the app's own folder, so a
+/// sandboxed chat cannot write it in any harness ([`crate::sandbox::Denied::of`]).
+pub fn spend_dir(plane: &Path) -> PathBuf {
+    crate::names::state(plane).join("app").join(SPEND_DIR_NAME)
+}
+
+/// The spend file of the chat whose id is `chat` (its ULID, ADR 0066), or `None` when `chat`
+/// could not name one file there (held to [`file_for`]'s rule).
+///
+/// **By the chat, never by its conversation.** Which conversation a chat is in is something
+/// its own hooks tell the app, so a figure looked up by it would be one a chat could point
+/// elsewhere. The chat's id is the app's, given to the harness at its start.
+pub fn spend_file(plane: &Path, chat: &str) -> Option<PathBuf> {
+    contain::mintable(chat)
         .is_ok()
-        .then(|| sessions_dir(plane).join(format!("{sid}.spend")))
+        .then(|| spend_dir(plane).join(format!("{chat}.json")))
 }
 
 /// The session a status-line payload names and what it says the session has cost in all, or
@@ -417,14 +434,17 @@ pub fn spend(payload: &Value) -> Option<(String, Spent)> {
     (!session.is_empty() && !spent.is_empty()).then(|| (session.to_owned(), spent))
 }
 
-/// Write down what `payload` says its session has cost so far, over what was written before:
-/// the figure is a running total, so the last one said is the one kept. Whether it was
+/// Write down what `payload` says chat `chat`'s session has cost so far, over what was written
+/// before: the figure is a running total, so the last one said is the one kept. Whether it was
 /// written. Best effort, as [`record`] is.
-pub fn record_spend(plane: &Path, payload: &Value) -> bool {
-    let Some((session, spent)) = spend(payload) else {
+///
+/// `chat` is the chat the app started the harness as ([`crate::hookwire::CHAT_ID_ENV`]); a
+/// harness the app did not start has none, and writes nothing.
+pub fn record_spend(plane: &Path, chat: &str, payload: &Value) -> bool {
+    let Some((_, spent)) = spend(payload) else {
         return false;
     };
-    let Some(path) = spend_file_for(plane, &session) else {
+    let Some(path) = spend_file(plane, chat) else {
         return false;
     };
     let Ok(text) = serde_json::to_string(&spent) else {
@@ -433,11 +453,11 @@ pub fn record_spend(plane: &Path, payload: &Value) -> bool {
     write_row(plane, &path, format!("{text}\n").as_bytes()).is_ok()
 }
 
-/// What session `sid`'s harness last said it has cost in all, or `None` where it said nothing:
-/// no file, a file that does not read, or one that holds no figure. Read through the same gate
-/// as the usage rows ([`rows_at`]).
-pub fn spent(plane: &Path, sid: &str) -> Option<Spent> {
-    let path = spend_file_for(plane, sid)?;
+/// What chat `chat`'s harness last said its session has cost in all, or `None` where it said
+/// nothing: no file, a file that does not read, or one that holds no figure. Read through the
+/// same gate as the usage rows ([`rows_at`]).
+pub fn spent(plane: &Path, chat: &str) -> Option<Spent> {
+    let path = spend_file(plane, chat)?;
     let rows = rows_at(plane, &path);
     let spent: Spent = serde_json::from_str(rows.first()?).ok()?;
     let sane = spent
@@ -1274,7 +1294,10 @@ mod tests {
         assert!(history(&plane, "s1").is_empty());
     }
 
-    // ----- what a session has cost in all (#1452) -----
+    // ----- what a session has cost in all (#1452, #1457) -----
+
+    /// A chat's id as the app mints one (ADR 0066).
+    const CHAT: &str = "01J9ZQ3V7K8M2N4P6R8T0V2X4Z";
 
     #[test]
     fn a_harness_that_reports_its_cost_has_it_recorded_and_the_last_figure_is_the_one_kept() {
@@ -1291,11 +1314,11 @@ mod tests {
             })
         };
 
-        assert!(record_spend(&plane, &said(0.10, 1_000, 200)));
-        assert!(record_spend(&plane, &said(0.42, 15_234, 4_521)));
+        assert!(record_spend(&plane, CHAT, &said(0.10, 1_000, 200)));
+        assert!(record_spend(&plane, CHAT, &said(0.42, 15_234, 4_521)));
 
         assert_eq!(
-            spent(&plane, "s1"),
+            spent(&plane, CHAT),
             Some(Spent {
                 input_tokens: Some(15_234),
                 output_tokens: Some(4_521),
@@ -1305,30 +1328,64 @@ mod tests {
     }
 
     #[test]
+    fn a_chats_figure_is_kept_by_the_chat_in_the_apps_own_folder_never_by_its_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let said = json!({"session_id": "s1", "context_window": {"total_input_tokens": 9}});
+
+        assert!(record_spend(&plane, CHAT, &said));
+
+        // In the app's folder, which no sandboxed chat may write, by the chat's id.
+        let file = spend_file(&plane, CHAT).unwrap();
+        assert_eq!(
+            file,
+            crate::names::state(&plane)
+                .join("app")
+                .join("spend")
+                .join(format!("{CHAT}.json"))
+        );
+        assert!(file.is_file());
+        // Nothing is written where a chat writes its own pointers, and a figure a chat put
+        // there under its conversation's name is not read as any chat's.
+        assert!(!sessions_dir(&plane).join("s1.spend").exists());
+        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
+        std::fs::write(
+            sessions_dir(&plane).join("s1.spend"),
+            "{\"input_tokens\": 999999999}\n",
+        )
+        .unwrap();
+        assert_eq!(spent(&plane, CHAT).and_then(|s| s.input_tokens), Some(9));
+        assert_eq!(spent(&plane, "s1"), None);
+    }
+
+    #[test]
     fn a_harness_that_reports_no_cost_has_none_and_never_a_zero() {
         let dir = tempfile::tempdir().unwrap();
         let plane = std::fs::canonicalize(dir.path()).unwrap();
 
         // A turn's usage, and nothing of the session's cost or totals.
-        assert!(!record_spend(&plane, &payload(90, 10)));
+        assert!(!record_spend(&plane, CHAT, &payload(90, 10)));
         assert!(!record_spend(
             &plane,
+            CHAT,
             &json!({"session_id": "s1", "cost": {}})
         ));
         assert!(!record_spend(
             &plane,
+            CHAT,
             &json!({"cost": {"total_cost_usd": 1.5}})
         ));
 
-        assert_eq!(spent(&plane, "s1"), None);
-        assert!(!spend_file_for(&plane, "s1").unwrap().exists());
+        assert_eq!(spent(&plane, CHAT), None);
+        assert!(!spend_file(&plane, CHAT).unwrap().exists());
         // Tokens without a cost are tokens without a cost.
         assert!(record_spend(
             &plane,
+            CHAT,
             &json!({"session_id": "s2", "context_window": {"total_input_tokens": 7}})
         ));
         assert_eq!(
-            spent(&plane, "s2"),
+            spent(&plane, CHAT),
             Some(Spent {
                 input_tokens: Some(7),
                 output_tokens: None,
@@ -1338,24 +1395,21 @@ mod tests {
     }
 
     #[test]
-    fn a_spend_file_named_outside_the_sessions_directory_is_neither_written_nor_read() {
+    fn a_spend_file_named_outside_its_folder_is_neither_written_nor_read() {
         let dir = tempfile::tempdir().unwrap();
         let plane = std::fs::canonicalize(dir.path()).unwrap();
 
         assert!(!record_spend(
             &plane,
-            &json!({"session_id": "../../escape", "cost": {"total_cost_usd": 1.0}})
+            "../../escape",
+            &json!({"session_id": "s1", "cost": {"total_cost_usd": 1.0}})
         ));
 
-        assert!(!plane.join("escape.spend").exists());
+        assert!(!plane.join("escape.json").exists());
         assert_eq!(spent(&plane, "../../escape"), None);
         // A figure that is not a cost reads as none.
-        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
-        std::fs::write(
-            spend_file_for(&plane, "s3").unwrap(),
-            "{\"cost_usd\": -4.0}\n",
-        )
-        .unwrap();
-        assert_eq!(spent(&plane, "s3"), None);
+        std::fs::create_dir_all(spend_dir(&plane)).unwrap();
+        std::fs::write(spend_file(&plane, CHAT).unwrap(), "{\"cost_usd\": -4.0}\n").unwrap();
+        assert_eq!(spent(&plane, CHAT), None);
     }
 }

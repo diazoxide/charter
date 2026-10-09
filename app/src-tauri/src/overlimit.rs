@@ -157,12 +157,12 @@ fn open_in_session(open: &[(u32, &Chat)], top: u32) -> Vec<u32> {
 }
 
 /// **The tokens the session of chat `chat` has used**, among the chats `open`, as their
-/// harnesses reported them: its open chats from their conversations' figures, and its ended
+/// harnesses reported them: its open chats from their own figures, kept by each chat's id where
+/// no sandboxed chat can write (#1457), and its ended
 /// tasks, at any depth, from what their records kept (`ended`, the store's ended tasks, read
 /// once by the caller). Each chat once, by its id. **Shown, and decides nothing.**
 pub(crate) fn session_tokens(
     root: &Path,
-    board: &dyn ChatBoard,
     open: &[(u32, &Chat)],
     ended: &[Ended],
     chat: u32,
@@ -179,11 +179,11 @@ pub(crate) fn session_tokens(
             .id
             .clone()
             .unwrap_or_else(|| format!("#{number}"));
-        let conversation = board
-            .conversation(number)
-            .or_else(|| one.resume.as_ref().map(|id| id.as_str().to_owned()));
-        let used = conversation
-            .and_then(|conversation| purlis_core::usage::spent(root, &conversation))
+        let used = one
+            .identity
+            .id
+            .as_deref()
+            .and_then(|id| purlis_core::usage::spent(root, id))
             .map_or(0, |spent| counted(&spent));
         by_chat.insert(key.clone(), used);
         known.push(key);
@@ -394,7 +394,7 @@ pub(crate) fn look_at(held: &Arc<Held>, now: chrono::DateTime<chrono::Utc>) {
                 if limits.tokens_per_session.is_none() {
                     continue;
                 }
-                let used = session_tokens(root, held.board(), open, &records.ended, *top);
+                let used = session_tokens(root, open, &records.ended, *top);
                 if let Some(limit) = dispatchlimits::tokens_past(&limits, used) {
                     found.spent.push((*top, used, limit));
                 }

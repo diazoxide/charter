@@ -87,7 +87,7 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use purlis_core::hookwire::{CHAT_ENV, SOCKET_ENV};
+use purlis_core::hookwire::{CHAT_ENV, CHAT_ID_ENV, SOCKET_ENV};
 use purlis_core::start::{FOOTER_ENV, FOOTER_SHOW};
 use purlis_core::{footer, tui, usage};
 
@@ -99,6 +99,9 @@ pub struct Ambient {
     pub stdout_is_a_tty: bool,
     pub socket: Option<PathBuf>,
     pub chat: Option<String>,
+    /// The chat's own id the app started the harness as ([`CHAT_ID_ENV`]): what the session's
+    /// cost is kept under. `None` for a harness the app did not start.
+    pub chat_id: Option<String>,
     pub harness: Option<String>,
     /// `$CHARTER_FOOTER`: what THIS chat was started asking for (ADR 0029).
     pub footer: Option<String>,
@@ -111,6 +114,7 @@ impl Ambient {
             stdout_is_a_tty: std::io::stdout().is_terminal(),
             socket: purlis_core::envvar::var_os(SOCKET_ENV).map(PathBuf::from),
             chat: purlis_core::envvar::var(CHAT_ENV),
+            chat_id: purlis_core::envvar::var(CHAT_ID_ENV).filter(|id| !id.is_empty()),
             harness: purlis_core::envvar::var("PURLIS_HARNESS"),
             footer: purlis_core::envvar::var(FOOTER_ENV),
         }
@@ -238,8 +242,13 @@ pub fn run(
     if let Some(plane) = plane {
         usage::record(plane, &payload);
         // And what the harness says the whole session has cost, which a dispatch's record
-        // reads when it ends (#1452). Absent for a payload that says nothing of it.
-        usage::record_spend(plane, &payload);
+        // reads when it ends (#1452) and a session's token limit is held to (#1512): kept
+        // under the chat the app started this harness as, where no sandboxed chat can write
+        // (#1457). Absent for a payload that says nothing of it, and for a harness the app did
+        // not start.
+        if let Some(chat) = ambient.chat_id.as_deref() {
+            usage::record_spend(plane, chat, &payload);
+        }
     }
     if the_app_owns_this_surface(ambient) {
         // **Draw nothing; record anyway — and do not "clean this up".** It looks like a
@@ -288,6 +297,7 @@ mod tests {
             stdout_is_a_tty: false,
             socket: Some(socket.to_path_buf()),
             chat: Some("7".into()),
+            chat_id: None,
             harness: Some(CLAUDE_CODE.into()),
             // The default: a chat that asked for nothing. Charter sets this variable only
             // for a chat that did, so absence is what the app's chats ordinarily carry.

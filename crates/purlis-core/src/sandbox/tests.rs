@@ -496,6 +496,75 @@ fn every_harness_denies_a_chat_reading_or_writing_the_dispatch_records() {
     }
 }
 
+/// #1457, D-1452-12: what a chat's harness said its session cost is the figure purlis decides
+/// a session's token limit by, so no sandboxed chat may write it, its own or another's. It is
+/// kept in the app's own folder of the state ([`crate::usage::spend_dir`]), which every harness
+/// is compiled to deny a chat writing, under both names of the state folder, on both systems.
+#[test]
+fn every_harness_denies_a_chat_writing_what_its_harness_said_it_cost() {
+    for os in [Os::MacOs, Os::Linux] {
+        let (plane, denied) = denied_with(None, os);
+        let stores: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+            .iter()
+            .map(|state| {
+                plane
+                    .path()
+                    .join(state)
+                    .join("app")
+                    .join(crate::usage::SPEND_DIR_NAME)
+            })
+            .collect();
+        // The folder the figures are written to is one of them.
+        assert!(stores.contains(&crate::usage::spend_dir(plane.path())));
+        let writes = |it: &Denial| matches!(it.access, Access::Write | Access::ReadWrite);
+        let under = |held: &[std::path::PathBuf], file: &std::path::Path| {
+            held.iter().any(|folder| file.starts_with(folder))
+        };
+
+        // What every compiler starts from.
+        let held: Vec<std::path::PathBuf> = denied
+            .paths
+            .iter()
+            .filter(|it| it.class == Class::Integrity && writes(it))
+            .map(|it| it.path.clone())
+            .collect();
+        for store in &stores {
+            assert!(under(&held, store), "{os:?}: {}", store.display());
+        }
+
+        // Claude Code: its own sandbox's write denials. Its status line, the one writer, runs
+        // outside that sandbox.
+        let settings = claude::settings(&compiled(denied.clone(), os)).expect("compiles");
+        let denied_writes: Vec<std::path::PathBuf> = settings.sandbox["filesystem"]["denyWrite"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(|path| path.as_str().map(std::path::PathBuf::from))
+            .collect();
+        for store in &stores {
+            let named =
+                super::real(store.parent().expect("a folder")).join(crate::usage::SPEND_DIR_NAME);
+            assert!(under(&denied_writes, &named), "{os:?}: {named:?}");
+        }
+
+        // Codex and opencode: purlis's own wrap, which holds their whole harness, so none of
+        // theirs writes a figure (and neither reports one today). None compiles on Linux.
+        let Ok(codex) = codex::wrap(&compiled(denied.clone(), os)) else {
+            assert_eq!(os, Os::Linux, "codex compiles on macOS");
+            continue;
+        };
+        let held: Vec<std::path::PathBuf> = codex
+            .denied
+            .iter()
+            .filter(|it| writes(it))
+            .map(|it| it.path.clone())
+            .collect();
+        for store in &stores {
+            assert!(under(&held, store), "codex: {}", store.display());
+        }
+    }
+}
+
 /// #1507: the record of what was refused while nobody was there is in the dispatch store, and
 /// is what a standing grant is offered from. **Its own path** is denied for reading and
 /// writing in what each harness is compiled, on both systems, under both names of the state

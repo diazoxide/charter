@@ -11,12 +11,12 @@
 //! the task ended**, which is the persona chat's to say, and that outcome is written to the
 //! record of the dispatch that chat was started by, and to no other.
 //!
-//! **The cost is the one figure that is not the app's own, and a chat can alter it.** It is
-//! what the persona chat's harness reported through its status line
-//! (`purlis_core::usage::spent`), read as the dispatch ends from a file in the project's
-//! per-session state, which a chat can write. So the window says *Cost (reported)*, nothing
-//! decides anything by it, and it is absent for a harness that reports none. It must be moved
-//! out of a chat's reach before any budget reads it (D-1452-12).
+//! **The cost is the one figure that is not the app's own.** It is what the persona chat's
+//! harness reported through its status line (`purlis_core::usage::spent`), read as the dispatch
+//! ends from the chat's own file in the app's folder, by the chat's id: a folder no sandboxed
+//! chat can write (#1457, D-1452-12), filled by the status line its harness runs outside the
+//! sandbox. So the window says *Cost (reported)*: as the harness said it, absent for a
+//! harness that reports none.
 //!
 //! What the window draws is only what passes `dispatchrecord::sound`: a record in the store
 //! holding text purlis refuses to draw is counted and not shown.
@@ -523,9 +523,11 @@ fn forget_where_its_asker_is_gone(held: &Held, record: &Record) {
     }
 }
 
-/// What chat `session`'s harness says its conversation has cost, where it says.
+/// What chat `session`'s harness says its session has cost, where it says: kept by the chat's
+/// own id, never by the conversation its hooks name (#1457).
 fn spent(held: &Held, session: u32) -> Option<dispatchrecord::Usage> {
-    purlis_core::usage::spent(held.root(), &conversation_of(held, session)?)
+    let chat = held.chats().recorded_chat(session)?;
+    purlis_core::usage::spent(held.root(), chat.identity.id.as_deref()?)
 }
 
 // ---------------------------------------------------------------------------------------

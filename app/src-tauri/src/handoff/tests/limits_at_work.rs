@@ -21,19 +21,15 @@ fn the_clock_looks_at(held: &Held, at: chrono::DateTime<chrono::Utc>) {
     });
 }
 
-/// Chat `chat`'s harness says its conversation has used `input` and `output` tokens in all.
+/// Chat `chat`'s harness says its session has used `input` and `output` tokens in all: what
+/// its status line keeps under the chat's id.
 fn has_used(held: &Held, chat: u32, input: u64, output: u64) {
-    let conversation = held
-        .board()
-        .conversation(chat)
-        .or_else(|| {
-            held.chats()
-                .recorded_chat(chat)
-                .and_then(|one| one.resume)
-                .map(|id| id.as_str().to_owned())
-        })
-        .expect("the chat's conversation");
-    let path = purlis_core::usage::spend_file_for(held.root(), &conversation).expect("a path");
+    let id = held
+        .chats()
+        .recorded_chat(chat)
+        .and_then(|one| one.identity.id)
+        .expect("the chat's id");
+    let path = purlis_core::usage::spend_file(held.root(), &id).expect("a path");
     std::fs::create_dir_all(path.parent().expect("its folder")).expect("the folder");
     std::fs::write(
         &path,

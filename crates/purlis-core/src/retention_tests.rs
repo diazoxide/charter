@@ -236,6 +236,7 @@ fn a_reopen_record_that_cannot_be_read_leaves_every_session_file_alone() {
             traces: 0,
             reports: 1,
             dispatches: 0,
+            spend: 0,
         }
     );
     assert!(sessions.join("3.workspace").exists());
@@ -741,4 +742,25 @@ fn a_record_that_still_owes_its_report_is_kept_thirty_days_from_when_it_became_o
     let file = std::fs::File::options().write(true).open(&path).unwrap();
     file.set_modified(now - OLD).unwrap();
     assert_eq!(sweep_keeping(&root, now, &[], &[]).dispatches, 1);
+}
+
+#[test]
+fn a_chats_figure_untouched_for_thirty_days_is_collected_unless_the_chat_comes_back() {
+    let (_d, root) = plane();
+    let spend = crate::usage::spend_dir(&root);
+    aged(&spend.join(format!("{SEPTEMBERS_ASKER}.json")), OLD);
+    aged(&spend.join(format!("{SEPTEMBERS_WORKER}.json")), OLD);
+    aged(&spend.join(format!("{OCTOBERS_CHAT}.json")), YOUNG);
+
+    let swept = sweep_keeping(
+        &root,
+        SystemTime::now(),
+        &[],
+        &[live(3, Some(SEPTEMBERS_ASKER))],
+    );
+
+    assert_eq!(swept.spend, 1);
+    assert!(spend.join(format!("{SEPTEMBERS_ASKER}.json")).exists());
+    assert!(!spend.join(format!("{SEPTEMBERS_WORKER}.json")).exists());
+    assert!(spend.join(format!("{OCTOBERS_CHAT}.json")).exists());
 }
