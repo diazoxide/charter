@@ -992,8 +992,8 @@ pub(super) fn holds(clone: &Path, commit: &str, at: &str) -> bool {
     .is_ok_and(|run| run.ok())
 }
 
-/// What may be handed to git as a commit.
-pub(super) fn sha_ok(sha: &str) -> bool {
+/// What may be handed to git as a commit. Doctor holds a landing log's line to it too.
+pub(crate) fn sha_ok(sha: &str) -> bool {
     (7..=64).contains(&sha.len())
         && sha
             .bytes()
