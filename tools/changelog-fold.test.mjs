@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { fold, foldInto, mode, pending } from "./changelog-fold.mjs";
+import { STANDING, fold, foldInto, mode, pending, standing } from "./changelog-fold.mjs";
 
 const LOG = `# Changelog
 
@@ -137,8 +137,9 @@ test("the repository's own CHANGELOG.md and changes/ fold cleanly", () => {
     text: readFileSync(join(root, "changes", name), "utf8"),
   }));
   const log = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-  const folded = fold(log, fragments);
-  for (const { text } of fragments) {
+  const notice = standing(root);
+  const folded = fold(log, fragments, notice);
+  for (const { text } of notice ? [...fragments, notice] : fragments) {
     for (const line of text.split("\n").filter((l) => l.startsWith("- "))) {
       assert.ok(folded.includes(line), `folded changelog lacks: ${line}`);
     }
@@ -169,4 +170,40 @@ test("run through a symlinked path, the script still acts and does not silently 
   symlinkSync(fileURLToPath(new URL(".", import.meta.url)), link);
   const ran = spawnSync(process.execPath, [join(link, "changelog-fold.mjs"), "--bogus"]);
   assert.equal(ran.status, 2, String(ran.stderr));
+});
+
+const NOTICE = "### Deprecated\n\n- **The old names go at 1.0.** Every version says so.\n";
+
+test("a standing notice goes under Unreleased on every fold, and only once", () => {
+  const notice = { name: STANDING, text: NOTICE };
+  const once = fold(LOG, [{ name: "a.md", text: "### Added\n\n- **New.**\n" }], notice);
+  assert.ok(
+    once.includes("### Deprecated\n\n- **The old names go at 1.0.** Every version says so.\n\n### Fixed"),
+    once,
+  );
+  assert.equal(fold(once, [], notice), once);
+  // A release renames Unreleased; the next fold puts the notice in the new Unreleased too.
+  const released = once.replace("## [Unreleased]", "## [Unreleased]\n\n## [0.2.0] - 2026-10-01");
+  const next = fold(released, [], notice);
+  assert.equal(next.split("- **The old names go at 1.0.**").length - 1, 2);
+  assert.ok(next.indexOf("- **The old names go at 1.0.**") < next.indexOf("## [0.2.0]"));
+});
+
+test("folding keeps the standing notice in changes/ and --check does not wait on it", () => {
+  const root = mkdtempSync(join(tmpdir(), "changelog-fold-"));
+  mkdirSync(join(root, "changes"));
+  writeFileSync(join(root, "CHANGELOG.md"), LOG);
+  writeFileSync(join(root, "changes", "README.md"), "how\n");
+  writeFileSync(join(root, "changes", STANDING), NOTICE);
+  writeFileSync(join(root, "changes", "new-thing.md"), "### Added\n\n- **A new thing.**\n");
+
+  assert.deepEqual(pending(root), ["new-thing.md"]);
+  assert.deepEqual(foldInto(root), ["new-thing.md"]);
+  assert.ok(readFileSync(join(root, "CHANGELOG.md"), "utf8").includes("- **The old names go at 1.0.**"));
+  assert.deepEqual(readdirSync(join(root, "changes")).sort(), [STANDING, "README.md"].sort());
+  assert.deepEqual(pending(root), []);
+});
+
+test("a standing notice a reader could not place is refused, naming the file", () => {
+  assert.throws(() => fold(LOG, [], { name: STANDING, text: "- **No heading.**\n" }), /STANDING\.md/);
 });

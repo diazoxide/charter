@@ -13,6 +13,11 @@
 // Each fragment's entries go FIRST under their heading, newest on top as the file already
 // reads, and fragments are taken in name order. A heading `## [Unreleased]` does not have yet is
 // made, in Keep a Changelog's order. Nothing already in the file moves.
+//
+// `changes/STANDING.md`, when it is there, is a standing notice: written like a fragment, put
+// under `## [Unreleased]` by every fold that does not find it there already, and never deleted,
+// so every version's notes carry it until a pull request removes the file. The rename's
+// compatibility window is announced this way until 1.0 (ADR 0091, #1386).
 import { readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +25,10 @@ import { fileURLToPath } from "node:url";
 /** Keep a Changelog's section headings, in the order a version lists them. */
 export const HEADINGS = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 
-/** The directory fragments live in, and the one file in it that is not a fragment. */
+/** Where fragments live, the standing notice, and the files there that are not fragments. */
 export const FRAGMENTS_DIR = "changes";
-const NOT_A_FRAGMENT = "README.md";
+export const STANDING = "STANDING.md";
+const NOT_FRAGMENTS = ["README.md", STANDING];
 
 /**
  * A fragment's sections, as `[heading, entry]` pairs in the order it gives them. Refuses a
@@ -58,13 +64,21 @@ export function sections({ name, text }) {
   });
 }
 
-/** `changelog` with every fragment's entries under `## [Unreleased]`. */
-export function fold(changelog, fragments) {
+/**
+ * `changelog` with every fragment's entries under `## [Unreleased]`, and the standing notice's
+ * (`{ name, text }`, or nothing) on top of them unless `## [Unreleased]` already holds them.
+ */
+export function fold(changelog, fragments, notice = null) {
   const byHeading = new Map();
-  for (const fragment of [...fragments].sort((a, b) => a.name.localeCompare(b.name))) {
-    for (const [heading, entry] of sections(fragment)) {
-      byHeading.set(heading, [...(byHeading.get(heading) ?? []), entry]);
+  const add = (heading, entry) => byHeading.set(heading, [...(byHeading.get(heading) ?? []), entry]);
+  if (notice) {
+    const unreleased = unreleasedOf(changelog);
+    for (const [heading, entry] of sections(notice)) {
+      if (!unreleased.includes(entry)) add(heading, entry);
     }
+  }
+  for (const fragment of [...fragments].sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const [heading, entry] of sections(fragment)) add(heading, entry);
   }
   const lines = changelog.split("\n");
   for (const heading of HEADINGS) {
@@ -72,6 +86,15 @@ export function fold(changelog, fragments) {
     if (entries) insert(lines, heading, entries.join("\n\n").split("\n"));
   }
   return lines.join("\n");
+}
+
+/** The text of `## [Unreleased]`, up to the next version or the link references. */
+function unreleasedOf(changelog) {
+  const lines = changelog.split("\n");
+  const start = lines.findIndex((line) => /^## \[Unreleased\]/.test(line));
+  if (start === -1) return "";
+  const end = lines.findIndex((line, i) => i > start && (/^## /.test(line) || /^\[[^\]]+\]: /.test(line)));
+  return lines.slice(start, end === -1 ? lines.length : end).join("\n");
 }
 
 /** Puts `block` first under `### heading` in `## [Unreleased]`, making the heading if need be. */
@@ -109,16 +132,27 @@ export function pending(root) {
     throw e;
   }
   // A file here that is not a fragment would be skipped and its entry lost, so it is refused.
-  const strays = names.filter((name) => name !== NOT_A_FRAGMENT && !/^[^.].*[^.]\.md$/.test(name));
+  const strays = names.filter((name) => !NOT_FRAGMENTS.includes(name) && !/^[^.].*[^.]\.md$/.test(name));
   if (strays.length > 0)
     throw new Error(
       `changes/ holds ${strays.join(", ")}, which is not a fragment: name each one <slug>.md`,
     );
-  return names.filter((name) => name !== NOT_A_FRAGMENT).sort();
+  return names.filter((name) => !NOT_FRAGMENTS.includes(name)).sort();
+}
+
+/** `root`'s standing notice as `{ name, text }`, or `null` when it has none. */
+export function standing(root) {
+  try {
+    return { name: STANDING, text: readFileSync(join(root, FRAGMENTS_DIR, STANDING), "utf8") };
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 const USAGE = `usage: node tools/changelog-fold.mjs [--check | --help]
-  (no argument)  fold every fragment in changes/ into CHANGELOG.md and delete it
+  (no argument)  fold every fragment in changes/ into CHANGELOG.md and delete it; the standing
+                 notice changes/STANDING.md is folded in too, once, and kept
   --check        exit 1 when a fragment is waiting to be folded; writes nothing`;
 
 /**
@@ -144,7 +178,7 @@ export function foldInto(root) {
     name,
     text: readFileSync(join(root, FRAGMENTS_DIR, name), "utf8"),
   }));
-  writeFileSync(path, fold(readFileSync(path, "utf8"), fragments));
+  writeFileSync(path, fold(readFileSync(path, "utf8"), fragments, standing(root)));
   for (const name of names) rmSync(join(root, FRAGMENTS_DIR, name));
   return names;
 }

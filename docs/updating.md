@@ -193,7 +193,8 @@ What a release brought is written as it merges, one changelog fragment per pull 
 ```sh
 # 1. one PR, merged:
 #    - `node tools/changelog-fold.mjs`: every fragment in changes/ goes under `## [Unreleased]`,
-#      first under its heading, and is deleted
+#      first under its heading, and is deleted; the standing notice changes/STANDING.md goes
+#      there too and stays
 #    - CHANGELOG.md: rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, put an empty
 #      `## [Unreleased]` above it, and point the link references at the bottom at the new
 #      tag (`[Unreleased]: …/compare/vX.Y.Z...HEAD`, `[X.Y.Z]: …/releases/tag/vX.Y.Z`)

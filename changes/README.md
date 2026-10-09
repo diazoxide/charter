@@ -18,4 +18,10 @@ written exactly as it will read in `CHANGELOG.md`:
 Release prep runs `node tools/changelog-fold.mjs`, which puts each entry first under its heading
 in `## [Unreleased]` and deletes the fragment. A dev build folds them into its own copy before it
 is built, so About purlis shows them. CI's tool tests fold every fragment here, so one the script
-cannot place fails the pull request. This file is the one in `changes/` that is not a fragment.
+cannot place fails the pull request.
+
+`STANDING.md` is not a fragment either. It is a standing notice, written like one, that every
+fold puts under `## [Unreleased]` unless it is there already, and never deletes, so every
+version's notes carry it until a pull request removes the file. It announces the end of the
+rename's compatibility window until 1.0 (ADR 0091); the pull request that closes the window
+removes it. Apart from these two files, everything here is a fragment.
