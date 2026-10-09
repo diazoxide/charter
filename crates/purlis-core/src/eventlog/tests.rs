@@ -1027,7 +1027,7 @@ fn seqs(got: &[Delivery]) -> Vec<u64> {
     got.iter()
         .filter_map(|delivery| match delivery {
             Delivery::Event(event) => Some(event.seq),
-            Delivery::Missed { .. } => None,
+            Delivery::Missed { .. } | Delivery::Ahead { .. } => None,
         })
         .collect()
 }
@@ -2063,5 +2063,82 @@ fn a_new_run_begun_over_a_live_child_ends_it_completed_and_superseded() {
             "completed".to_owned(),
             "superseded".to_owned()
         )]
+    );
+}
+
+#[test]
+fn a_cursor_ahead_of_the_log_is_told_so_and_gets_every_event_written_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    // The client held 1 to 5; a power loss took 4 and 5 off the disk.
+    append_n(&mut log, 3);
+    let mut subscription = subscribe(dir.path(), 5);
+
+    let told = subscription.poll().unwrap();
+    // The next host numbers its events from 4 again: each one reaches the client.
+    append_n(&mut log, 3);
+    let after = subscription.poll().unwrap();
+    let then = subscription.poll().unwrap();
+
+    assert_eq!(
+        told,
+        vec![Delivery::Ahead {
+            cursor: 5,
+            log_ends_at: 3
+        }]
+    );
+    assert_eq!(seqs(&after), vec![4, 5, 6]);
+    assert_eq!(after.len(), 3, "told once: {after:?}");
+    assert!(then.is_empty());
+    assert_eq!(subscription.cursor(), 6);
+}
+
+#[test]
+fn a_cursor_ahead_of_a_log_with_nothing_in_it_is_told_so_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    let mut subscription = subscribe(dir.path(), 2);
+
+    let told = subscription.poll().unwrap();
+    append_n(&mut log, 1);
+
+    assert_eq!(
+        told,
+        vec![Delivery::Ahead {
+            cursor: 2,
+            log_ends_at: 0
+        }]
+    );
+    assert_eq!(seqs(&subscription.poll().unwrap()), vec![1]);
+}
+
+#[test]
+fn a_cursor_at_the_end_of_the_log_or_behind_it_is_never_told_it_is_ahead() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = Log::open(dir.path(), DEVICE).unwrap();
+    append_n(&mut log, 3);
+    let ahead = |got: &[Delivery]| got.iter().any(|d| matches!(d, Delivery::Ahead { .. }));
+
+    let mut at_the_end = subscribe(dir.path(), 3);
+    assert!(!ahead(&at_the_end.poll().unwrap()));
+    assert!(!ahead(&subscribe(dir.path(), 1).poll().unwrap()));
+    assert!(!ahead(&subscribe(dir.path(), 0).poll().unwrap()));
+    append_n(&mut log, 1);
+    assert_eq!(seqs(&at_the_end.poll().unwrap()), vec![4]);
+}
+
+#[test]
+fn a_cursor_ahead_of_a_log_whose_segment_was_just_sealed_is_measured_on_the_sealed_one() {
+    let dir = tempfile::tempdir().unwrap();
+    sealed_segment(dir.path(), 1..=4, 1);
+    let _log = Log::open(dir.path(), DEVICE).unwrap();
+
+    assert!(subscribe(dir.path(), 4).poll().unwrap().is_empty());
+    assert_eq!(
+        subscribe(dir.path(), 6).poll().unwrap(),
+        vec![Delivery::Ahead {
+            cursor: 6,
+            log_ends_at: 4
+        }]
     );
 }

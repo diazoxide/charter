@@ -125,6 +125,10 @@ fn follow(
                 Delivery::Missed { after, resumes_at } => {
                     panic!("nothing is old enough to be missed: {after}..{resumes_at}")
                 }
+                Delivery::Ahead {
+                    cursor,
+                    log_ends_at,
+                } => panic!("no line the client held was lost: {cursor} > {log_ends_at}"),
             }
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -236,6 +240,12 @@ fn a_client_that_subscribes_again_at_every_poll_while_segments_are_sealed_misses
                             "round {round}: nothing is old enough to be missed: {after}..{resumes_at}"
                         )
                     }
+                    Delivery::Ahead {
+                        cursor,
+                        log_ends_at,
+                    } => panic!(
+                        "round {round}: no line the client held was lost: {cursor} > {log_ends_at}"
+                    ),
                 }
             }
             cursor = subscription.cursor();

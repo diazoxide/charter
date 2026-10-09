@@ -26,7 +26,8 @@
 //! **How it is read** (FD-24): a client [`subscribe`]s from its cursor, the last `seq` it
 //! holds, and gets every later event in order, each once, across sealed segments and across a
 //! writer that was killed and started again. A cursor older than what [`Retention`] keeps is
-//! told so ([`Delivery::Missed`]), never given a silent gap.
+//! told so ([`Delivery::Missed`]), never given a silent gap; and so is a cursor ahead of the
+//! log ([`Delivery::Ahead`]), after a power loss took lines the client had read.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -673,6 +674,16 @@ pub enum Delivery {
         after: u64,
         resumes_at: u64,
     },
+    /// The client's `cursor` is past the log's last event, `log_ends_at` (0 for none): the
+    /// log lost lines the client had already read (a power loss, since a line is `fsync`ed
+    /// only as the host answers it), and the next host numbers its events from after
+    /// `log_ends_at` again. The stream carries on from there, so each of those events reaches
+    /// the client; what it held past `log_ends_at` is no longer in the log, and it rebuilds
+    /// from what follows. Never a silent skip of an event that reuses a number (#941).
+    Ahead {
+        cursor: u64,
+        log_ends_at: u64,
+    },
 }
 
 /// A client's place in one device's log ([`subscribe`]): it reads every event after its
@@ -690,6 +701,10 @@ pub struct Subscription {
     reading: Option<Reading>,
     /// The first seq of the last segment read to its end, so it is not read again.
     past: u64,
+    /// Whether the log has been seen to reach the cursor, so it is not ahead of it. Asked
+    /// until it has: a log that has reached the cursor can only lose lines past it by losing
+    /// the client with them, as one machine.
+    reached: bool,
 }
 
 /// The segment a subscription is reading.
@@ -711,6 +726,7 @@ pub fn subscribe(dir: &Path, since: u64) -> Subscription {
         last: since,
         reading: None,
         past: 0,
+        reached: since == 0,
     }
 }
 
@@ -723,6 +739,29 @@ impl Subscription {
     /// Every event written since the last poll, in order, each once. Never blocks: an empty
     /// answer means nothing new yet.
     pub fn poll(&mut self) -> io::Result<Vec<Delivery>> {
+        let mut got = self.read_on()?;
+        if !got.is_empty() {
+            self.reached = true;
+        } else if !self.reached {
+            let end = log_end(&self.dir)?;
+            self.reached = true;
+            if end < self.last {
+                got.push(Delivery::Ahead {
+                    cursor: self.last,
+                    log_ends_at: end,
+                });
+                self.last = end;
+                // From the start again, with the cursor where the log is.
+                self.reading = None;
+                self.past = 0;
+                got.extend(self.read_on()?);
+            }
+        }
+        Ok(got)
+    }
+
+    /// What [`Subscription::poll`] reads: every event after the cursor that is there now.
+    fn read_on(&mut self) -> io::Result<Vec<Delivery>> {
         let mut got = Vec::new();
         loop {
             let mut reading = match self.reading.take() {
@@ -809,6 +848,28 @@ impl Subscription {
                 Err(why) => return Err(why),
             }
         }
+    }
+}
+
+/// The `seq` of the last whole event in the log in `dir`, 0 for none: the segment being
+/// written's, or where that has none, the newest sealed segment's, which is never pruned.
+/// Read in that order, so a seal between the two reads is seen in one or the other.
+fn log_end(dir: &Path) -> io::Result<u64> {
+    let live = match File::open(dir.join(FILE)) {
+        Ok(mut file) => last_seq(&mut file)?,
+        Err(why) if why.kind() == io::ErrorKind::NotFound => None,
+        Err(why) => return Err(why),
+    };
+    if let Some(seq) = live {
+        return Ok(seq);
+    }
+    match segments(dir)?.last() {
+        Some((_, path)) => match File::open(path) {
+            Ok(mut file) => Ok(last_seq(&mut file)?.unwrap_or(0)),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(why) => Err(why),
+        },
+        None => Ok(0),
     }
 }
 
