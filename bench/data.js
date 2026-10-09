@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791550872797,
+  "lastUpdate": 1791552627934,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4956,6 +4956,48 @@ window.BENCHMARK_DATA = {
             "value": 101.32307399999999,
             "unit": "ms",
             "extra": "median of 5 runs: 100.629, 101.083, 101.323, 101.907, 102.206 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "46f00b13065e818503e612b17a53bb90309d20d1",
+          "message": "The purlis binary finds the app bundle it shipped in\n\nThe command line, the footer's badges, the events a command tells and the\nsession-start briefing passed no bundle, so a built-in extension reached\nnone of them from the CLI. The binary now finds its bundle from its own\nexecutable's real path (extension::bundle): Contents/Resources/extensions\nbeside Contents/MacOS in a macOS .app, and usr/lib/purlis/extensions beside\nusr/bin in a .deb or a mounted AppImage. No environment variable, setting\nor record takes part. A binary outside a bundle, or a layout with a link\nbetween the executable's directory and the extensions directory, gets no\nbuilt-ins, and its line after an unknown word says it is outside the app's\nbundle.\n\nADR 0041 gains the amendment; the release workflow now checks the Linux\npackages keep the extensions under usr/lib/purlis exactly.\n\nCloses #1366\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T17:21:26+04:00",
+          "tree_id": "0cf4789e7c82d467924ab14febbd870bc30b6ba3",
+          "url": "https://github.com/purlis/purlis/commit/46f00b13065e818503e612b17a53bb90309d20d1"
+        },
+        "date": 1791552626950,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.37004950000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.356, 0.363, 0.370, 0.373, 0.374 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.602916,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.582, 16.584, 16.603, 16.623, 16.682 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.000181,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.840, 101.966, 102.000, 102.817, 103.026 ms"
           }
         ]
       }
