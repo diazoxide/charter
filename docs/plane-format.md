@@ -2376,8 +2376,23 @@ beside a purlis one is removed when the record is published (V93i).
   default) or `"llm"` in any case, in `charter.toml` (see the table above). A `[repos.<name>]`
   that does not set it follows `[plane].assisted_by`. A repository the project does not hold gets
   the full form.
-- **Read by:** nothing in purlis yet. `git log --format='%(trailers)'` and
-  `git interpret-trailers --parse` read them.
+- **Read by:** `purlis_core::provenance::Claims::read`, which every reader in purlis goes through
+  (AU-15, RC-15 and FG-11 are to be its first callers); outside purlis,
+  `git log --format='%(trailers)'` and `git interpret-trailers --parse` read them. **One rule for
+  readers** (#1019):
+  - Read the trailer block as git parses it (`git log --format='%(trailers:only,unfold)'`), never
+    the whole message: a body line that only looks like a trailer claims nothing.
+  - A key is read under every spelling it has had (`Purlis-Chat` and `Charter-Chat` are one key),
+    in any case, as git compares trailer keys. A value that is not one word of printable ASCII
+    of at most 100 characters claims nothing, as it would not be written.
+  - The same value twice is one claim. **Two or more different values for one key mean the
+    commit's provenance for that key is unknown**: a reader says that several are claimed, and
+    attributes the commit to none of them. It does not take the last value as purlis's. purlis
+    appends its own line only where the same line is not already there, and an agent can type
+    any line after it as well as before it, so the position of a line says nothing about who
+    wrote it. A commit can come to carry several by an agent typing its own, or by a cherry-pick
+    or an amend that brings another chat's along.
+  - The other keys still stand: only the key with several values is unknown.
 
 ### `workspaces/<ws>/.worktrees/<repo>/<piece>/` — pieces
 
