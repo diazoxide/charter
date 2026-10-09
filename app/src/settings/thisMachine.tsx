@@ -2,6 +2,7 @@ import { useSyncExternalStore, type ReactNode } from "react";
 import { commands, type MachineProject, type ThisMachine } from "../bindings";
 import { Choice } from "./components";
 import type { LiveSetting, SettingsGroup } from "./groups";
+import { channelMoved, readChannel, useUpdateChannel } from "../updateChannel";
 
 /**
  * **You › This machine** (ST-2, #1226; V91r): what this machine's store holds — its recent
@@ -97,15 +98,36 @@ async function reread() {
   }));
 }
 
+/**
+ * **The store changed elsewhere** — a pin on the project strip, another window, the CLI — while
+ * the group is on screen (#1240): it is read again when the window comes back into focus or into
+ * view, the cheap cover, since the core says nothing when its store changes. The channel too.
+ */
+function cameBack() {
+  if (document.visibilityState === "hidden") return;
+  void reread();
+  readChannel();
+}
+
+/** Something in this window changed the store outside the group: read it again if it is up. */
+export function machineChanged(): void {
+  if (listeners.size > 0) void reread();
+}
+
 function subscribe(listener: () => void) {
   // The first row on screen starts afresh: the store may have changed while none was.
   if (listeners.size === 0) {
     held = START;
     void reread();
+    window.addEventListener("focus", cameBack);
+    document.addEventListener("visibilitychange", cameBack);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+    if (listeners.size > 0) return;
+    window.removeEventListener("focus", cameBack);
+    document.removeEventListener("visibilitychange", cameBack);
   };
 }
 
@@ -414,7 +436,8 @@ const channel: LiveSetting = {
   useControl: function useChannel() {
     const id = "you.machine.channel";
     const { error } = useMachine(id);
-    const now = useSyncExternalStore(subscribeChannel, () => chosen);
+    // One value with the title bar's updater (#1240).
+    const now = useUpdateChannel();
     return {
       grouped: true,
       error,
@@ -427,7 +450,7 @@ const channel: LiveSetting = {
           onValueChange={(to) =>
             acting(id, async () => {
               const done = await commands.setUpdateChannel(to);
-              if (done.status === "ok") setChosen(to);
+              if (done.status === "ok") channelMoved(to);
               return done;
             })
           }
@@ -436,24 +459,3 @@ const channel: LiveSetting = {
     };
   },
 };
-
-/** The channel this machine is on, once asked. */
-let chosen: string | undefined;
-const channelListeners = new Set<() => void>();
-function setChosen(to: string | undefined) {
-  chosen = to;
-  for (const one of channelListeners) one();
-}
-function subscribeChannel(listener: () => void) {
-  if (channelListeners.size === 0) {
-    chosen = undefined;
-    void commands
-      .updateChannel()
-      .then((now) => setChosen(typeof now === "string" ? now : undefined))
-      .catch(() => undefined);
-  }
-  channelListeners.add(listener);
-  return () => {
-    channelListeners.delete(listener);
-  };
-}
