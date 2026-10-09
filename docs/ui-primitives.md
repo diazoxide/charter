@@ -158,8 +158,16 @@ heading with Open and Remove, and holds Add; the page draws that entry alone (`a
 its rows, Rename and Remove. The page keeps its writes under its collection's group
 (`Collection.home`), so a Remove there lands the person on that group, where its Undo is. The
 core adds `rename(root, base, id, to)`, allowed only while nothing uses the entry (V91k); it is
-an `EntryOp` like the others, and its Undo is the rename back. A picker's New… for the collection
-opens its Add form and picks what was added.
+an `EntryOp` like the others, and its Undo is the rename back. A refused rename names each user
+and whether it **follows** a rename everywhere (`Referrer::follows`, #1380): when every user
+does, the refusal is drawn as what a rename would change ("Renaming this profile also changes 1
+setting that uses it"), before anything is written, and the form offers **Rename everywhere**
+(`rename_everywhere`, the op's `everywhere`), which renames the entry and those users in one
+write of one file, so a failure leaves nothing half-renamed; its Undo is the rename back
+everywhere. A profile's users that follow are the local file's own `[harness] default`; the
+project's default is every teammate's and never follows, so while it names the profile the
+rename stays refused. A picker's New… for the collection opens its Add form and picks what was
+added.
 
 ## The Notice is a house piece too, by its own amendment
 

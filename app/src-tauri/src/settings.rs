@@ -324,11 +324,13 @@ pub struct EntryFieldRefusal {
 }
 
 /// Something that uses an entry, which stops its removal. `group` is the Settings group it is
-/// changed in (`project.saving`) when it is a setting.
+/// changed in (`project.saving`) when it is a setting; `follows`, whether a rename everywhere
+/// (#1380) changes it too, in the one write that renames the entry.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct EntryReferrer {
     pub what: String,
     pub group: Option<String>,
+    pub follows: bool,
 }
 
 /// What adding or removing a collection entry answered: the file as it now stands, or every
@@ -529,9 +531,12 @@ pub(crate) fn remove_profile(
     }
 }
 
-/// Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
-/// otherwise (`purlis_core::settings::harness_profiles::rename`). Answers the renamed entry's
-/// identity as `added`: what its Undo renames back.
+/// Rename the profile called `id` to `to`. Plainly, only while nothing uses it — refused,
+/// naming them, otherwise, each saying whether it `follows` a rename everywhere: that refusal is
+/// what the window shows before anything changes. `everywhere` renames it and every user that
+/// follows in one write, and is refused the same way while one does not (#1380;
+/// `purlis_core::settings::harness_profiles::rename_everywhere`). Answers the renamed entry's
+/// identity as `added`: what its Undo renames back, the same way.
 #[tauri::command]
 #[specta::specta]
 pub async fn rename_project_profile(
@@ -540,11 +545,14 @@ pub async fn rename_project_profile(
     base: Option<String>,
     id: String,
     to: String,
+    everywhere: bool,
 ) -> Result<EntryWritten, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || rename_profile(&root, base.as_deref(), &id, &to))
-        .await
-        .map_err(|err| format!("renaming the profile did not finish: {err}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        rename_profile(&root, base.as_deref(), &id, &to, everywhere)
+    })
+    .await
+    .map_err(|err| format!("renaming the profile did not finish: {err}"))?
 }
 
 /// [`rename_project_profile`], without a runtime.
@@ -553,8 +561,14 @@ pub(crate) fn rename_profile(
     base: Option<&str>,
     id: &str,
     to: &str,
+    everywhere: bool,
 ) -> Result<EntryWritten, String> {
-    match settings::harness_profiles::rename(root, base, id, to) {
+    let renamed = if everywhere {
+        settings::harness_profiles::rename_everywhere(root, base, id, to)
+    } else {
+        settings::harness_profiles::rename(root, base, id, to)
+    };
+    match renamed {
         Ok(id) => Ok(EntryWritten::Saved {
             file: file_of(root, SettingsWhich::Local)?,
             added: Some(id),
@@ -698,6 +712,7 @@ fn refused(refusal: settings::collection::Refusal) -> EntryWritten {
             .map(|one| EntryReferrer {
                 what: one.what,
                 group: one.group.map(|group| group.id().to_owned()),
+                follows: one.follows,
             })
             .collect(),
         reasons: refusal.file,
@@ -1140,6 +1155,7 @@ mod tests {
             [EntryReferrer {
                 what: "The repo billing (inventory/repos.json) is on git.acme.dev.".into(),
                 group: None,
+                follows: false,
             }]
         );
     }
@@ -1333,7 +1349,7 @@ mod tests {
         assert_eq!(added.as_deref(), Some(entries[0].id.as_str()));
 
         let EntryWritten::Saved { file, .. } =
-            rename_profile(root, Some(&file.text), &entries[0].id, "work").unwrap()
+            rename_profile(root, Some(&file.text), &entries[0].id, "work", false).unwrap()
         else {
             panic!("a profile nothing uses is renamed");
         };
@@ -1343,6 +1359,8 @@ mod tests {
             panic!("the profile the default harness names is not removed");
         };
         assert_eq!(referrers[0].group.as_deref(), Some("project.harness"));
+        // The project's default is every teammate's: a rename everywhere does not change it.
+        assert!(!referrers[0].follows);
     }
 
     /// A plane that is a git repo whose `charter.local.toml` is ignored, so the Local layer is

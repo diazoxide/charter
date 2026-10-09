@@ -74,6 +74,9 @@ pub struct Referrer {
     /// The Settings group it is changed in when it is a setting: the address a deep link
     /// opens (SE-22). `None` for what is not changed in Settings (a catalogued repo).
     pub group: Option<crate::doctor::SettingsGroup>,
+    /// Whether a rename everywhere (#1380) changes it too, in the one write that renames the
+    /// entry. One that does not keeps a rename refused, whichever way it is asked.
+    pub follows: bool,
 }
 
 /// Every reason an add or a remove wrote nothing. At least one part is not empty.

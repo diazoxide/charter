@@ -2225,11 +2225,14 @@ export const commands = {
 	 */
 	removeProjectProfile: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_profile", { plane, base, id })),
 	/**
-	 *  Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
-	 *  otherwise (`purlis_core::settings::harness_profiles::rename`). Answers the renamed entry's
-	 *  identity as `added`: what its Undo renames back.
+	 *  Rename the profile called `id` to `to`. Plainly, only while nothing uses it — refused,
+	 *  naming them, otherwise, each saying whether it `follows` a rename everywhere: that refusal is
+	 *  what the window shows before anything changes. `everywhere` renames it and every user that
+	 *  follows in one write, and is refused the same way while one does not (#1380;
+	 *  `purlis_core::settings::harness_profiles::rename_everywhere`). Answers the renamed entry's
+	 *  identity as `added`: what its Undo renames back, the same way.
 	 */
-	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to })),
+	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string, everywhere: boolean) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to, everywhere })),
 	/**
 	 *  **The host field, checked as it is typed** (#1405): why `host` is not a host the sandbox
 	 *  takes, or `null` when it is one. The core's own parser
@@ -3919,11 +3922,13 @@ export type EntryKind = "folder" | "file" |
 
 /**
  *  Something that uses an entry, which stops its removal. `group` is the Settings group it is
- *  changed in (`project.saving`) when it is a setting.
+ *  changed in (`project.saving`) when it is a setting; `follows`, whether a rename everywhere
+ *  (#1380) changes it too, in the one write that renames the entry.
  */
 export type EntryReferrer = {
 	what: string,
 	group: string | null,
+	follows: boolean,
 };
 
 /**  One field of a collection entry, as the Add form holds it: a list is one entry per line. */

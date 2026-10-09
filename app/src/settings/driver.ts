@@ -60,8 +60,10 @@ export type EntryOp =
   | { collection: string; base: string | null; add: Readonly<Record<string, string>> }
   | { collection: string; base: string | null; remove: string }
   /** A rename of the entry `rename` to `to` (ST-4, V91k): refused, naming them, while
-   *  something uses the entry. Its Undo is the rename back. */
-  | { collection: string; base: string | null; rename: string; to: string }
+   *  something uses the entry — which is what is shown before anything changes. `everywhere`
+   *  (#1380) renames it and each user that {@link EntryReferrer.follows} in one write, refused
+   *  while one does not. Its Undo is the rename back, the same way. */
+  | { collection: string; base: string | null; rename: string; to: string; everywhere?: boolean }
   /** A confirm of the entry `confirm` (#1341): your own sandbox host, which reaches nothing
    *  until Settings confirms it on this machine. It has no Undo. */
   | { collection: string; base: string | null; confirm: string };
@@ -77,8 +79,9 @@ export function entryOf(op: EntryOp): string | undefined {
         : undefined;
 }
 
-/** Something that uses an entry, which stops its removal, and the group it is changed in. */
-export type EntryReferrer = { what: string; group: string | null };
+/** Something that uses an entry, which stops its removal, and the group it is changed in;
+ *  `follows`: a rename everywhere changes it too (#1380). */
+export type EntryReferrer = { what: string; group: string | null; follows: boolean };
 
 /** Why an add or a remove wrote nothing: by field, by what uses the entry, and for the file. */
 export type EntryRefusal = {

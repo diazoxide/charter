@@ -90,12 +90,20 @@ const ALT: Profile = { name: "alt", kind: "codex", command: ["codex", "--alt"] }
 const USED: EntryReferrer = {
   what: '[harness] default = "work" in charter.toml starts new chats on it.',
   group: "project.harness",
+  follows: false,
 };
+
+/** The local file's own default naming `name`: a user a rename everywhere changes too (#1380). */
+const usedHere = (name: string): EntryReferrer => ({
+  what: `[harness] default = "${name}" in charter.local.toml starts new chats on it.`,
+  group: "project.harness",
+  follows: true,
+});
 
 type Asked =
   | { cmd: "add"; base: string | null; entry: ProfileEntry }
   | { cmd: "remove"; base: string | null; id: string }
-  | { cmd: "rename"; base: string | null; id: string; to: string }
+  | { cmd: "rename"; base: string | null; id: string; to: string; everywhere: boolean }
   | { cmd: "raw"; base: string | null; text: string }
   | { cmd: "edits"; edits: SettingsEdit[] };
 
@@ -121,17 +129,26 @@ const option = (name: string, source = "built-in") => ({
   sandbox: null,
 });
 
-/** The core, as a model of the window's contract with it. `used` names who uses a profile. */
+/** The core, as a model of the window's contract with it. `used` names who uses a profile;
+ *  `localDefault` is the profile the local file's own default names, which follows a rename
+ *  everywhere. */
 function core({
   profiles: start = [WORK, ALT],
-  used = () => [],
+  used: usedElsewhere = () => [],
+  localDefault,
   refuseAdd,
 }: {
   profiles?: Profile[];
   used?: (name: string) => EntryReferrer[];
+  localDefault?: string;
   refuseAdd?: (entry: ProfileEntry) => EntryWritten | undefined;
 } = {}) {
   let profiles = [...start];
+  let named = localDefault;
+  const used = (name: string) => [
+    ...usedElsewhere(name),
+    ...(name === named ? [usedHere(name)] : []),
+  ];
   let shared = SHARED;
   /** Every text the file has been, and the profiles it was: what a whole-text write puts back. */
   const seen = new Map<string, Profile[]>([[text(profiles), profiles]]);
@@ -211,7 +228,8 @@ function core({
         case "rename_project_profile": {
           const id = given.id as string;
           const to = given.to as string;
-          asked.push({ cmd: "rename", base, id, to });
+          const everywhere = given.everywhere as boolean;
+          asked.push({ cmd: "rename", base, id, to, everywhere });
           if (moved()) return refusal({ reasons: [MOVED] });
           const was = profiles.find((one) => idOf(one) === id);
           if (!was)
@@ -221,7 +239,9 @@ function core({
               fields: [{ field: "name", why: `profile '${to}' is not a name purlis accepts` }],
             });
           const users = used(was.name);
-          if (users.length > 0) return refusal({ referrers: users });
+          if (users.length > 0 && (!everywhere || users.some((one) => !one.follows)))
+            return refusal({ referrers: users });
+          if (everywhere && named === was.name) named = to;
           const renamed = { ...was, name: to };
           profiles = profiles.map((one) => (one === was ? renamed : one));
           seen.set(text(profiles), profiles);
@@ -431,6 +451,7 @@ describe("Rename a profile", () => {
       base: text([WORK, ALT]),
       id: idOf(ALT),
       to: "fast",
+      everywhere: false,
     });
     expect(screen.getByText("Renamed alt to fast.")).toBeVisible();
 
@@ -460,6 +481,44 @@ describe("Rename a profile", () => {
     expect(said).toHaveTextContent("This profile is not renamed while this uses it:");
     expect(said).toHaveTextContent(USED.what);
     expect(names()).toEqual(["work", "alt"]);
+    // The project's default is every teammate's: nothing offers to rename it along.
+    expect(within(form).queryByRole("button", { name: "Rename everywhere" })).toBeNull();
+  });
+
+  it("shows what a rename everywhere changes before it writes, then renames both in one write", async () => {
+    // #1380: the first Rename writes nothing and says what would change; Rename everywhere is
+    // one write of the profile and its user; its Undo renames both back.
+    const { asked, names } = core({ localDefault: "work" });
+    await atProject();
+    await open("work");
+
+    await userEvent.click(screen.getByRole("button", { name: "Rename work" }));
+    const form = screen.getByRole("form", { name: "Rename work" });
+    await userEvent.type(within(form).getByLabelText("New name"), "2");
+    await userEvent.click(within(form).getByRole("button", { name: "Rename" }));
+
+    const said = await within(screen.getByRole("group", { name: "work" })).findByRole("status");
+    expect(said).toHaveTextContent("Renaming this profile also changes 1 setting that uses it:");
+    expect(said).toHaveTextContent(usedHere("work").what);
+    expect(screen.queryByText(/is not renamed while/)).toBeNull();
+    expect(names()).toEqual(["work", "alt"]);
+
+    await userEvent.click(within(form).getByRole("button", { name: "Rename everywhere" }));
+
+    await waitFor(() => expect(shown()).toHaveAccessibleName("work2"));
+    expect(names()).toEqual(["work2", "alt"]);
+    expect(asked.at(-1)).toEqual({
+      cmd: "rename",
+      base: text([WORK, ALT]),
+      id: idOf(WORK),
+      to: "work2",
+      everywhere: true,
+    });
+    expect(screen.getByText("Renamed work to work2 and what used it.")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(names()).toEqual(["work", "alt"]));
+    expect(asked.at(-1)).toMatchObject({ cmd: "rename", to: "work", everywhere: true });
   });
 
   it("says a refused name under its field and keeps the form open", async () => {
