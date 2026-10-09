@@ -8,7 +8,16 @@ import {
   crumbsOf,
   hiddenNeeding,
 } from "./tabChats";
-import { homeOf, noTabs, openTab, panesOf, selectTab, switchTabTo, type Tabs } from "./tabs";
+import {
+  homeOf,
+  moveToOwnTab,
+  noTabs,
+  openTab,
+  panesOf,
+  selectTab,
+  switchTabTo,
+  type Tabs,
+} from "./tabs";
 
 /** A listed chat: `parent` is the chat that started it, as a task unless said otherwise. */
 function listed(
@@ -177,6 +186,38 @@ describe("the chats of a tab that are waiting and are not on screen", () => {
 
   it("is nothing for a quiet list", () => {
     expect(hiddenNeeding(tabs(), tabOf(tabs(), 1), askedBy, [])).toEqual([]);
+  });
+
+  describe("a task moved to a tab of its own (#1601)", () => {
+    /** talk (4) in a tab of its own, with steward 2's tab in front. */
+    const moved = () => {
+      const own = moveToOwnTab(tabs(), 4, "", null, null, askedBy);
+      return selectTab(own, tabOf(own, 2));
+    };
+
+    it("puts the hand on the tab of the session that asked, while its own tab is behind", () => {
+      const all = moved();
+      expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [4])).toEqual([4]);
+      // Its own tab's mark is its own chat's, as for any tab's own chat.
+      expect(hiddenNeeding(all, tabOf(all, 4), askedBy, [4])).toEqual([]);
+      expect(hiddenNeeding(all, tabOf(all, 2), askedBy, [4])).toEqual([]);
+    });
+
+    it("and its own tasks too, which went with it", () => {
+      const all = moved();
+      expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [6])).toEqual([6]);
+      expect(hiddenNeeding(all, tabOf(all, 4), askedBy, [6])).toEqual([6]);
+    });
+
+    it("puts no hand on the session's tab while the task's own tab is in front", () => {
+      const all = selectTab(moved(), tabOf(moved(), 4));
+      expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [4, 6])).toEqual([]);
+    });
+
+    it("never for a handoff, which is no task of the chat it came from", () => {
+      const all = selectTab(tabs(), tabOf(tabs(), 2));
+      expect(hiddenNeeding(all, tabOf(all, 1), askedBy, [3, 8])).toEqual([]);
+    });
   });
 });
 

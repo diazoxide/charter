@@ -27,7 +27,8 @@
 
 - **A session's tab still lists a task that has a tab or a pane of its own.** Its chip counts
   it and its menu marks it "in its own tab" or "beside it"; picking it there brings that tab or
-  pane forward (#1489).
+  pane forward. While a task in its own tab waits for you and that tab is not in front, the
+  session's chip wears the hand and names it (#1489, #1601).
 - **The close button on a session's tab is the only close on the strip.** It closes the session
   and asks once about the tasks still working, as before. The dialog now says how many of the
   session's tasks have a tab of their own: those tabs close with the session's, and a task you

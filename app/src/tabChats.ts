@@ -236,6 +236,11 @@ export function placedCrumbsOf(
  * left a tab on, and then went elsewhere, is not on screen when it asks. The session's own
  * chat counts when its pane shows another chat. While its pane shows it, the tab's own state
  * mark is that chat's, in front or behind, as it is for a session with no tasks.
+ *
+ * **A task moved to a tab of its own still asks through the session that asked it** (#1601):
+ * while its own tab is not in front, it and its own tasks are counted for the tab of the chat
+ * that asked it too, so the session's chip wears the hand and names it. A handoff is no task
+ * (`askedByOf`), so it never is.
  */
 export function hiddenNeeding(
   tabs: Tabs,
@@ -249,7 +254,12 @@ export function hiddenNeeding(
   const shown = new Map(shownIn(tabs, id).map((one) => [one.pane, one.session]));
   return waiting.filter((session) => {
     const home = homeOf(tabs, session, askedBy);
-    if (home === undefined || home.tab !== id) return false;
+    if (home === undefined) return false;
+    if (home.tab !== id) {
+      if (tabs.inFront === home.tab) return false;
+      const asker = askedBy(home.own);
+      return asker !== undefined && homeOf(tabs, asker, askedBy)?.tab === id;
+    }
     const onPane = shown.get(home.pane) === session;
     return home.own === session ? !onPane : !(onPane && front);
   });
