@@ -366,6 +366,10 @@ changes nothing more.
   hand-written. A file that carries the marker in any other shape was edited by hand, copied
   to another name, or only quotes it. Both are left as they are and named. A link is never
   followed.
+- **What this machine kept for the sub-agents goes too**: the in-flight records under the
+  state folder's `dispatch-inflight/` and its `agent-personas.json`. Hooks that are gone wrote
+  them, nothing reads them, and they are never committed. A link, or anything else in that
+  folder, is left and named.
 - **A file that stays under a persona's name cannot be started.** A sub-agent call to that
   name is refused as a call to the persona, and the fix says so on that file's line.
 - **It cannot tell a generated file whose charter text you edited from one that is only out

@@ -106,8 +106,9 @@ pub enum FixId {
     /// it; a hand-written file, or one somebody edited, is left and named. In each persona's
     /// own definition it rewrites `model:` to `profile:` where the project offers a profile
     /// of that name, and a `color:` that Claude Code spells otherwise than purlis (`cyan`,
-    /// `magenta`) to purlis's name for it. It reports, and leaves, the keys nothing reads now.
-    /// It makes no commit, and running it twice changes nothing more. Offered by the
+    /// `magenta`) to purlis's name for it. It reports, and leaves, the keys nothing reads now,
+    /// and removes the in-flight records and agent map this machine kept for the sub-agents
+    /// (#1460). It makes no commit, and running it twice changes nothing more. Offered by the
     /// `personas` row when a generated sub-agent file is still there. Applied only by name
     /// ([`FixId::by_name_only`]): it changes committed files every teammate pulls
     /// ([`persona_agents`]).
