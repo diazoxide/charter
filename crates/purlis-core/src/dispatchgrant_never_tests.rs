@@ -163,7 +163,14 @@ fn a_chat_nobody_is_at_is_refused_a_pair_the_person_said_never_to_with_that_sent
         never: never("steward", "devops"),
         ..InForce::default()
     };
-    let answer = unattended(Some("steward"), "devops", &grants, &Locks::none(), true);
+    let answer = unattended(
+        Some("steward"),
+        "devops",
+        &grants,
+        &Locks::none(),
+        false,
+        true,
+    );
     assert_eq!(
         answer,
         Answer::Refused(Refusal::Never("steward".to_owned(), "devops".to_owned()))
@@ -268,17 +275,17 @@ fn any_persona_leaves_the_rule_for_a_chat_nobody_is_at_as_it_was() {
     let none = Locks::none();
     // A standing grant, so it counts for a sandboxed chat nobody is at.
     assert_eq!(
-        unattended(Some("steward"), "devops", &grants, &none, true),
+        unattended(Some("steward"), "devops", &grants, &none, false, true),
         Answer::Covered
     );
     // With no sandbox it still dispatches to no other persona.
     assert_eq!(
-        unattended(Some("steward"), "devops", &grants, &none, false),
+        unattended(Some("steward"), "devops", &grants, &none, false, false),
         Answer::Refused(Refusal::Unsandboxed("devops".to_owned()))
     );
     // And a persona without it is refused, never asked.
     assert!(matches!(
-        unattended(Some("qa"), "devops", &grants, &none, true),
+        unattended(Some("qa"), "devops", &grants, &none, false, true),
         Answer::Refused(Refusal::Missing(_))
     ));
 }

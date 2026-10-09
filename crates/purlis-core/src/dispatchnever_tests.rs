@@ -230,7 +230,14 @@ fn a_record_that_does_not_read_lets_no_grant_cover_any_pair_of_two_personas() {
             Covers::Covered
         );
         // A chat nobody is at is refused, in a sentence that says why.
-        let answer = unattended(Some("steward"), "devops", &grants, &Locks::none(), true);
+        let answer = unattended(
+            Some("steward"),
+            "devops",
+            &grants,
+            &Locks::none(),
+            false,
+            true,
+        );
         assert_eq!(answer, Answer::Refused(Refusal::NeversUnread), "{broken:?}");
     }
     assert_eq!(
