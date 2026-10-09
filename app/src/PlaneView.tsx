@@ -5881,6 +5881,7 @@ export const PlaneView = memo(function PlaneView({
             ask: askOffer,
             // Not from a shell: it is on no harness profile to start the persona's chat on.
             askable: (session) => !shells.has(session),
+            branch: nearBranch,
           }),
     [
       askedBy,
@@ -5927,6 +5928,7 @@ export const PlaneView = memo(function PlaneView({
       restartable,
       askOffer,
       shells,
+      nearBranch,
     ],
   );
 
