@@ -247,6 +247,12 @@ pub fn want(plane: &Path) -> BTreeMap<String, String> {
     out
 }
 
+/// Whether [`want`] can ever offer a workspace folder `rel`: the paths whose offers, noted in
+/// the project's ledger, may vouch for a withdraw here ([`unwanted`]).
+fn offered_here(rel: &str) -> bool {
+    rel == layer::SETTINGS
+}
+
 /// Whether `dir` is a workspace directory of THIS plane that charter may write into.
 ///
 /// A `workspaces/<ws>` committed as a symlink out of the plane would otherwise plant the
@@ -414,7 +420,11 @@ fn unwanted(
             continue;
         };
         let have = layer::digest(&have);
+        // Only a path this layer offers a workspace folder ([`want`]). The ledger also notes
+        // the agents and skills a CHECKOUT is offered, at the same relative paths, and an
+        // offer made to a checkout vouches for nothing in a workspace folder.
         if record.recorded(rel).contains(&have)
+            && offered_here(rel)
             && offered.get(rel).is_some_and(|all| all.contains(&have))
         {
             out.push(rel.clone());
@@ -1558,6 +1568,32 @@ mod tests {
             std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
             "MINE\n"
         );
+    }
+
+    #[test]
+    fn an_offer_made_to_a_checkout_vouches_for_nothing_in_a_workspace_folder() {
+        // The ledger notes the agents a checkout is offered, at the same relative path a
+        // workspace folder could hold a file of the operator's. A record naming that file,
+        // with that text, must not get it withdrawn here: this layer never offered it.
+        let (plane, ws) = plane();
+        let agent = ".claude/agents/ops.md";
+        crate::guest::note_offered(
+            plane.path(),
+            &BTreeMap::from([(agent.to_owned(), "# ops\n".to_owned())]),
+        );
+        assert!(crate::guest::read_offered(plane.path()).contains_key(agent));
+        std::fs::create_dir_all(ws.join(".claude/agents")).unwrap();
+        std::fs::write(ws.join(agent), "# ops\n").unwrap();
+        forge_record(&ws, &[(agent, "# ops\n")]);
+
+        assert!(
+            !status(plane.path(), &ws, &want(plane.path()))
+                .iter()
+                .any(|(rel, _)| rel == agent)
+        );
+        let did = wire(plane.path(), &ws);
+        assert!(!did.iter().any(|r| r.rel == agent), "{did:?}");
+        assert_eq!(std::fs::read_to_string(ws.join(agent)).unwrap(), "# ops\n");
     }
 
     #[test]
