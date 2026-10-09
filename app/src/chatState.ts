@@ -93,6 +93,13 @@ export type ChatStates = {
    * change it.
    */
   readonly children: Readonly<Record<number, readonly ChildAgent[]>>;
+  /**
+   * The chats stopped, now, on a prompt their harness put to the person mid-turn: a
+   * permission or a question (#1601, `Moved.asking`). Never an idle chat or a failed task,
+   * which `needsYou` also holds. Under `heardAt`'s rule: only the chat's own snapshots change
+   * it, and the one that says it got past its prompt, its turn ended or it ended takes it out.
+   */
+  readonly asking: Readonly<Record<number, true>>;
 };
 
 /** One task that came to nothing, as its asking chat's item is told it (`Need`'s
@@ -119,6 +126,7 @@ export const nothingKnown: ChatStates = {
   needs: {},
   failedTasks: {},
   children: {},
+  asking: {},
 };
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
@@ -158,6 +166,11 @@ export function movedAt(states: ChatStates, session: number): number {
 }
 
 /** Whether `session` is in the needs-you queue. */
+/** Whether chat `session` is stopped, now, on its harness's prompt (#1601, `ChatStates.asking`). */
+export function waitsOnItsPrompt(states: ChatStates, session: number): boolean {
+  return states.asking[session] === true;
+}
+
 export function isAsking(states: ChatStates, session: number): boolean {
   return states.needsYou.includes(session);
 }
@@ -337,7 +350,23 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     children: newerChat
       ? withChildren(states.children, move.session, move.children)
       : states.children,
+    asking: newerChat
+      ? withAsking(states.asking, move.session, move.asking === true)
+      : states.asking,
   };
+}
+
+/** `asking` with `session` in it or out of it, and the same map where that is so already. */
+function withAsking(
+  by: Readonly<Record<number, true>>,
+  session: number,
+  asking: boolean,
+): Readonly<Record<number, true>> {
+  if ((by[session] === true) === asking) return by;
+  if (asking) return { ...by, [session]: true };
+  return Object.fromEntries(
+    Object.entries(by).filter(([one]) => Number(one) !== session),
+  ) as Record<number, true>;
 }
 
 /**

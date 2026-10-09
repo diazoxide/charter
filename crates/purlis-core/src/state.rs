@@ -399,8 +399,8 @@ pub struct Chat {
     /// **A `Notification` while a turn runs, and only then.** Claude Code also nudges a chat
     /// left idle after its turn with a `Notification`, and that one asks nothing: the turn is
     /// over and the chat is only waiting. Both put the chat in the needs-you queue, which is
-    /// why this is a fact of its own and not `needs_you`. Not part of what a reader is shown
-    /// (the `was` of [`Chat::reported_from`]), so it never makes a report a move of its own.
+    /// why this is a fact of its own and not `needs_you`. Only while the chat still waits on
+    /// that prompt is it part of what a reader is shown ([`Chat::waits_on_its_prompt`], #1601).
     asking: bool,
     /// How many prompts have started a turn of this chat since the app started it.
     turns: u32,
@@ -474,6 +474,15 @@ impl Chat {
     /// permission or a question, never the nudge of a chat that has finished its turn.
     pub fn asking(&self) -> bool {
         self.asking
+    }
+
+    /// **Whether the chat is stopped on the prompt it asked mid-turn, now** (#1601): it asked
+    /// ([`Chat::asking`]) and nothing has moved it on since: no answer in the window or past
+    /// its prompt ([`Chat::answered`]), no end of its turn, no new prompt and no end of its
+    /// program. What the window keeps a chat's "waiting on you" Notice up for, past purlis's
+    /// own hold of the prompt.
+    pub fn waits_on_its_prompt(&self) -> bool {
+        self.asking && self.state == State::Waiting
     }
 
     /// How many prompts have started a turn of this chat, as the app has heard them.
@@ -582,11 +591,14 @@ impl Chat {
     }
 
     /// What a reader of this chat is shown, so a move can be told from no move by comparing
-    /// it before and after. [`Chat::asking`] and the turn count are not part of it.
-    fn seen(&self) -> (State, bool, usize, usize, usize, usize, usize) {
+    /// it before and after. The turn count is not part of it, and [`Chat::asking`] only while
+    /// the chat waits on its prompt (#1601): the end of that wait is a move even where the
+    /// chat stays waiting, as at the end of the turn that asked.
+    fn seen(&self) -> (State, bool, bool, usize, usize, usize, usize, usize) {
         (
             self.state,
             self.needs_you(),
+            self.waits_on_its_prompt(),
             self.reports.len(),
             self.refusals.len(),
             self.needs.len(),
@@ -816,7 +828,8 @@ impl Chat {
     }
 
     /// The person answered, in the window, the prompt this chat showed in the middle of a turn
-    /// (HP-6). The turn goes on: it is running again and no longer waits on them, and `asking`
+    /// (HP-6), or in its pane, as a tool of its own that came back says
+    /// ([`crate::doing::Said::goes_on_past_a_prompt`], #1601). The turn goes on: it is running again and no longer waits on them, and `asking`
     /// stays set until the turn ends, as it does for a prompt answered anywhere. Nothing for a
     /// chat that was not asking mid-turn. Answers whether anything a reader can see changed.
     pub fn answered(&mut self) -> bool {
@@ -1245,8 +1258,9 @@ impl Board {
             .is_some_and(|tracked| tracked.chat.ignored())
     }
 
-    /// The person answered chat `number`'s prompt in the window ([`Chat::answered`]). Answers
-    /// whether anything a reader can see changed.
+    /// The person answered chat `number`'s prompt in the window, or in its pane as a tool of
+    /// its own that came back says ([`Chat::answered`]). Answers whether anything a reader can
+    /// see changed.
     pub fn answered(&mut self, number: u32) -> bool {
         let changed = self
             .chats
@@ -1361,6 +1375,14 @@ impl Board {
         self.chats
             .get(&number)
             .is_some_and(|tracked| tracked.chat.asking())
+    }
+
+    /// Whether chat `number` is stopped on the prompt it asked mid-turn, now
+    /// ([`Chat::waits_on_its_prompt`], #1601). A chat the board does not have waits on nothing.
+    pub fn waits_on_its_prompt(&self, number: u32) -> bool {
+        self.chats
+            .get(&number)
+            .is_some_and(|tracked| tracked.chat.waits_on_its_prompt())
     }
 
     /// How many prompts have started a turn of this chat ([`Chat::turns`]); none for a chat the
@@ -2550,15 +2572,69 @@ mod tests {
     }
 
     #[test]
-    fn a_question_is_not_a_second_move_of_a_chat_already_waiting() {
-        // The flag is not in what a reader is shown: a `Stop` after a question moves nothing
-        // on the board, so the window is not told twice and no second notification fires.
+    fn a_question_that_ends_with_its_turn_is_a_move_and_raises_nothing() {
+        // #1601: the window draws a chat stopped on its prompt, so the end of that wait is a
+        // move it is told of, even where the chat stays waiting and in the queue. It is no
+        // second item: nothing is raised for the person.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Notification, Some(A)));
+        let was = board.standing(7);
+
+        assert!(board.reported(&report(7, Event::Stop, Some(A))));
+        assert!(!board.asking(7));
+        assert!(!raised(was, board.standing(7)));
+    }
+
+    #[test]
+    fn a_chat_waits_on_its_prompt_from_the_question_to_its_answer_or_its_turn_s_end() {
+        // #1601: what the window keeps a Notice for. Asked mid-turn and not answered yet.
         let mut chat = Chat::new();
         chat.reported(Event::UserPromptSubmit);
-        chat.reported(Event::Notification);
+        assert!(!chat.waits_on_its_prompt(), "working");
 
-        assert!(!chat.reported(Event::Stop));
-        assert!(!chat.asking());
+        chat.reported(Event::Notification);
+        assert!(chat.waits_on_its_prompt());
+
+        // Answered: the turn goes on, and nothing waits on the person, though the turn is
+        // still one that asked.
+        assert!(chat.answered());
+        assert!(chat.asking());
+        assert!(!chat.waits_on_its_prompt());
+
+        // Asked again, then the turn ends: not waiting on its prompt, only idle.
+        chat.reported(Event::Notification);
+        assert!(chat.waits_on_its_prompt());
+        chat.reported(Event::Stop);
+        assert!(!chat.waits_on_its_prompt());
+
+        // The nudge of a chat left idle is no prompt of its own.
+        chat.reported(Event::Notification);
+        assert!(!chat.waits_on_its_prompt());
+
+        // And the program's end ends it.
+        let mut ended = Chat::new();
+        ended.reported(Event::UserPromptSubmit);
+        ended.reported(Event::Notification);
+        ended.exited(Some(1));
+        assert!(!ended.waits_on_its_prompt());
+    }
+
+    #[test]
+    fn the_board_says_which_chat_waits_on_its_prompt() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        assert!(!board.waits_on_its_prompt(7));
+        board.reported(&report(7, Event::Notification, Some(A)));
+        assert!(board.waits_on_its_prompt(7));
+        assert!(board.answered(7));
+        assert!(!board.waits_on_its_prompt(7));
+        assert!(
+            !board.waits_on_its_prompt(9),
+            "a chat the board does not have"
+        );
     }
 
     #[test]

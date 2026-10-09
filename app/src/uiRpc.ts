@@ -4486,6 +4486,15 @@ export type Moved = {
 	 */
 	needs?: Need[] | null,
 	/**
+	 *  Whether this chat is stopped, now, on a prompt its harness put to the person in the
+	 *  middle of a turn (#1601, `purlis_core::state::Board::waits_on_its_prompt`): a
+	 *  permission or a question, never the nudge of a chat whose turn is over, and never a
+	 *  task that failed. It stands past purlis's own hold of the prompt, until the prompt is
+	 *  answered, the chat gets past it, its turn ends or it ends. `true` or `null`, which is
+	 *  every other chat.
+	 */
+	asking?: boolean | null,
+	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
 	 *  **What lets the window put its events back in order.** Every `Moved` is built under the

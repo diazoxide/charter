@@ -103,7 +103,13 @@ export type NoticeProps = WayOut & {
  * chat. Its ways out act on its own chat, as they always did: the Notice is that chat's, drawn
  * here. Nothing is provided for the chat on screen, whose Notices read as they always have.
  */
-export const NoticeOf = createContext<{ whose: string; onGo: () => void } | null>(null);
+export const NoticeOf = createContext<{
+  whose: string;
+  onGo: () => void;
+  /** Whether the chat is a task below the pane's session rather than the session's own chat:
+   *  read off the core's lineage where `whose` is built, never off the name (#1601). */
+  task?: boolean;
+} | null>(null);
 
 export function Notice(props: NoticeProps) {
   const { cause, tone = "news", at = "band", label, persona, children, under } = props;

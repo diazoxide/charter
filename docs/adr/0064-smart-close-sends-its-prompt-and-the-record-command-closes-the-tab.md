@@ -609,12 +609,15 @@ answered only where it always was:
 
 - the asking session's tab wears the hand from the moment the prompt is held on the chat's
   permission hook, before the harness says anything else;
-- the session's pane carries a Notice naming the task by its whole path and what it asks (the
-  harness's own line, as the needs-you list already shows it: one line, credential shapes
-  masked, drawn as text), with **Show the task**, for as long as purlis holds the prompt on
-  the hook (up to a minute, `harness::hooked::HOOK_TIMEOUT`). Past it the harness's own
-  prompt decides in the task's pane, the Notice and the needs-you row go, and the hand stays
-  from the harness's `Notification`;
+- the session's pane carries a Notice naming the task by its whole path, with **Show the
+  task**. While purlis holds the prompt on the hook (up to a minute,
+  `harness::hooked::HOOK_TIMEOUT`) it also says what the prompt asks (the harness's own line,
+  as the needs-you list already shows it: one line, credential shapes masked, drawn as text).
+  Past that hold the harness's own prompt decides in the task's pane and the needs-you row
+  goes, and the Notice stays, without the prompt's words, for as long as the board says the
+  task is stopped on its prompt: from the harness's `Notification` in the middle of a turn
+  until the prompt is answered in the window, a tool of the task's own comes back (it was
+  answered in the task's pane, which no hook says), its turn ends, or it ends (#1601);
 - the asking chat's next turn is told in one line, once for each prompt, that the task waits on
   the person, and that only the person answers it, in the task's own tab.
 

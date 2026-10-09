@@ -72,6 +72,14 @@ pub struct Moved {
     /// for nothing of the kind, and emptied by the chat's next prompt, or by Ignore.
     #[specta(optional)]
     pub needs: Option<Vec<Need>>,
+    /// Whether this chat is stopped, now, on a prompt its harness put to the person in the
+    /// middle of a turn (#1601, `purlis_core::state::Board::waits_on_its_prompt`): a
+    /// permission or a question, never the nudge of a chat whose turn is over, and never a
+    /// task that failed. It stands past purlis's own hold of the prompt, until the prompt is
+    /// answered, the chat gets past it, its turn ends or it ends. `true` or `null`, which is
+    /// every other chat.
+    #[specta(optional)]
+    pub asking: Option<bool>,
     /// Which snapshot of the board this is — bigger was taken later (charter-app#248).
     ///
     /// **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -885,8 +893,15 @@ impl Hooks {
             doing: {
                 let doings = Arc::clone(&doings);
                 let board = Arc::clone(&board);
+                let moved = Arc::clone(&moved);
+                let plane = plane.clone();
                 Box::new(move |said| {
                     if said.agent.is_none() {
+                        if let Some(what) =
+                            got_past_its_prompt(&board, &plane, said.chat, &said.doing)
+                        {
+                            moved(what);
+                        }
                         doings.heard(&board, said.chat, said.doing);
                     }
                 })
@@ -1537,6 +1552,28 @@ impl ChatBoard for Hooks {
     }
 }
 
+/// **A tool of chat `chat`'s own came back while it was stopped on its prompt** (#1601): the
+/// person answered the prompt in the chat's pane, which no hook says, and its turn goes on, as
+/// for an answer in the window (`Board::answered`). What the window is told, or nothing for a
+/// chat that waited on no prompt or a line that says no tool came back
+/// (`purlis_core::doing::Said::goes_on_past_a_prompt`). Before the chat's line is told, so the
+/// line is drawn for a chat the board has running again.
+fn got_past_its_prompt(
+    board: &Mutex<Board>,
+    plane: &PlaneId,
+    chat: u32,
+    said: &purlis_core::doing::Said,
+) -> Option<Moved> {
+    if !said.goes_on_past_a_prompt() {
+        return None;
+    }
+    let mut board = held_board(board);
+    if !board.waits_on_its_prompt(chat) {
+        return None;
+    }
+    moving(&mut board, plane, chat, |board| board.answered(chat))
+}
+
 /// Makes one move of chat `session` on the board, and answers what the window must now be
 /// told where a reader would see a difference: [`seen_by`], with whether the move raised
 /// something for the person (`Moved::raised`), read off where the chat stood before and
@@ -1605,6 +1642,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
                 .collect::<Vec<Need>>(),
         )
         .filter(|needs| !needs.is_empty()),
+        asking: board.waits_on_its_prompt(session).then_some(true),
         counts_only: false,
         raised: false,
         children: board
@@ -1797,6 +1835,111 @@ mod tests {
             agent: None,
             detail: purlis_core::state::Detail::default(),
         }
+    }
+
+    fn said(session: u32, event: purlis_core::state::Event) -> Report {
+        Report {
+            event,
+            ..stop(session)
+        }
+    }
+
+    /// Hooks holding chat `session` stopped, mid-turn, on its harness's prompt.
+    fn stopped_on_its_prompt(session: u32) -> (Hooks, Moved) {
+        use purlis_core::state::{Event, Waits};
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks = Hooks::deaf(plane);
+        hooks.board().opened(session, None, None);
+        for event in [Event::SessionStart, Event::UserPromptSubmit] {
+            apply(
+                &hooks.board,
+                &hooks.plane,
+                &said(session, event),
+                Waits::default(),
+            );
+        }
+        let asked = apply(
+            &hooks.board,
+            &hooks.plane,
+            &said(session, Event::Notification),
+            Waits::default(),
+        )
+        .moved
+        .expect("asking is a move");
+        (hooks, asked)
+    }
+
+    #[test]
+    fn the_window_is_told_a_chat_is_stopped_on_its_prompt_until_its_turn_ends() {
+        // #1601: past purlis's own hold of a permission prompt (about a minute), the window
+        // still draws the task as waiting on the person, from the board.
+        use purlis_core::state::{Event, Waits};
+        let (hooks, asked) = stopped_on_its_prompt(7);
+        assert_eq!(
+            (asked.state.as_str(), asked.asking),
+            ("waiting", Some(true))
+        );
+        // A window that opens now is told the same.
+        assert_eq!(now(&hooks.board, hooks.plane.clone(), 7).asking, Some(true));
+
+        // The turn ends: still waiting, still in the queue, and no longer on its prompt. The
+        // window is told, and nothing interrupts the person for it.
+        let ended = apply(
+            &hooks.board,
+            &hooks.plane,
+            &said(7, Event::Stop),
+            Waits::default(),
+        )
+        .moved
+        .expect("the end of the wait is a move");
+        assert_eq!((ended.state.as_str(), ended.asking), ("waiting", None));
+        assert!(!ended.interrupts());
+    }
+
+    #[test]
+    fn a_tool_of_its_own_that_came_back_takes_a_chat_past_its_prompt() {
+        // #1601: the person answered the prompt in the task's own pane, which no hook says.
+        use purlis_core::doing::{Kind, Said};
+        let (hooks, _) = stopped_on_its_prompt(7);
+        let past = |said: Said| got_past_its_prompt(&hooks.board, &hooks.plane, 7, &said);
+
+        // A tool about to run may be the call being asked about; a helper back is not the
+        // chat's own answer. Neither moves it.
+        assert!(
+            past(Said::Began {
+                kind: Kind::Command,
+                name: None
+            })
+            .is_none()
+        );
+        assert!(
+            past(Said::Ended {
+                kind: Some(Kind::Helper)
+            })
+            .is_none()
+        );
+        assert!(hooks.board().waits_on_its_prompt(7));
+
+        let moved = past(Said::Ended {
+            kind: Some(Kind::Command),
+        })
+        .expect("a move");
+        assert_eq!(
+            (moved.state.as_str(), moved.asking, moved.needs_you),
+            ("running", None, false)
+        );
+        // Once: a chat at work is past nothing.
+        assert!(
+            past(Said::Ended {
+                kind: Some(Kind::Command)
+            })
+            .is_none()
+        );
+        // And a chat the board does not have moves nowhere.
+        assert!(
+            got_past_its_prompt(&hooks.board, &hooks.plane, 9, &Said::Ended { kind: None })
+                .is_none()
+        );
     }
 
     #[test]

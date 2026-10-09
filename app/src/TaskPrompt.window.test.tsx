@@ -221,7 +221,13 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
       await said("chat-stop", { plane: PLANE, session, phase: "stopped" });
     },
     /** The core says chat `session` moved to `state`, with `queue` asking for the person. */
-    move: async (session: number, state: State, at: number, queue: number[] = []) => {
+    move: async (
+      session: number,
+      state: State,
+      at: number,
+      queue: number[] = [],
+      more: Partial<Moved> = {},
+    ) => {
       const moved: Moved = {
         plane: PLANE,
         session,
@@ -235,6 +241,7 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
         children: [],
         needs: null,
         stopped: null,
+        ...more,
       };
       await said("chat-moved", moved);
     },
@@ -387,5 +394,97 @@ describe("a task stopped on a permission prompt", () => {
     });
     expect(notice.querySelector("img")).toBeNull();
     expect(notice.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("stays after purlis's hold of the prompt ends, from the board, until the task goes on", async () => {
+    // #1601: purlis holds a permission prompt on the hook for about a minute. Past it the
+    // harness's own prompt decides in the task's pane, and the person who comes back later
+    // still has to be told the task waits on them.
+    const { said, move } = await drawn(withTasks());
+    await waitFor(() => expect(onScreen()).toEqual([1]));
+    await move(5, "running", 1);
+    await asks(said, [prompt(5, "Run purlis persona where")]);
+    await waitFor(() => expect(promptNotice(5)).not.toBeNull());
+
+    // The harness shows its own prompt and says it asks; purlis's hold ends.
+    await move(5, "waiting", 2, [5], { asking: true });
+    await asks(said, []);
+
+    const notice = await waitFor(() => {
+      const found = promptNotice(5);
+      if (found === null) throw new Error("no Notice for sweep's prompt");
+      return found;
+    });
+    // Without the prompt's words, which only the hold carried.
+    expect(notice.textContent).toBe(
+      "“sweep” (a task of “steward 1”) is stopped on a prompt and waiting on you. Answer it in its own pane.Show the task",
+    );
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Show the task"]);
+    expect(hand("steward 1")).not.toBeNull();
+
+    // Answered in its pane: a tool of its came back and the core has it running again.
+    await move(5, "running", 3);
+
+    await waitFor(() => expect(promptNotice(5)).toBeNull());
+  });
+
+  it("goes when the task's turn ends or the task ends", async () => {
+    const { said, move, ended } = await drawn(withTasks());
+    await move(5, "waiting", 1, [5], { asking: true });
+    await move(4, "waiting", 2, [4, 5], { asking: true });
+    await waitFor(() => expect(promptNotice(5)).not.toBeNull());
+    await waitFor(() => expect(promptNotice(4)).not.toBeNull());
+
+    // Its turn ends: it waits on the person as any idle chat does, stopped on no prompt.
+    await move(5, "waiting", 3, [4, 5]);
+    await waitFor(() => expect(promptNotice(5)).toBeNull());
+
+    await ended(4);
+    await said("chat-moved", {
+      plane: PLANE,
+      session: 4,
+      state: "done",
+      needs_you: false,
+      queue: [5],
+      moved_at: 4,
+      sequence: 4,
+      reports: [],
+      refusals: [],
+      children: [],
+    } satisfies Moved);
+    await waitFor(() => expect(promptNotice(4)).toBeNull());
+  });
+
+  it("names the session's own chat by a field, whatever its name says", async () => {
+    // #1601 item 4: the button was picked by looking for " (a task of " in the name.
+    const open = withTasks();
+    open[0] = chat(1, "alpha", { label: "notes (a task of “ops”)" });
+    const { said } = await drawn(open);
+    await asks(said, [prompt(5, "Run purlis persona where")]);
+    const toTask = await waitFor(() => {
+      const found = promptNotice(5);
+      if (found === null) throw new Error("no Notice for sweep's prompt");
+      return found;
+    });
+    fireEvent.click(within(toTask).getByRole("button", { name: "Show the task" }));
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+
+    // Now the session's own chat is the one off screen, and it stops on a prompt.
+    await asks(said, [prompt(1, "Run cargo test")]);
+
+    const notice = await waitFor(() => {
+      const found = promptNotice(1);
+      if (found === null) throw new Error("no Notice for the session's own prompt");
+      return found;
+    });
+    expect(
+      within(notice)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Show it"]);
   });
 });

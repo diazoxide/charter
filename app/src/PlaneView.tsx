@@ -5443,7 +5443,7 @@ export const PlaneView = memo(function PlaneView({
    * whose it is first, since nothing that waits for the person may be off screen.
    */
   const frontOthers = useMemo(() => {
-    const others: Record<number, { session: number; whose: string }[]> = {};
+    const others: Record<number, { session: number; whose: string; task: boolean }[]> = {};
     const id = tabs.inFront;
     if (id === undefined) return others;
     for (const one of frontShown) {
@@ -5455,6 +5455,7 @@ export const PlaneView = memo(function PlaneView({
           session: chat.session,
           // The whole path, from the core's record of who asked whom (#1508, V100-56).
           whose: whoseOf(chat, own, listedChats),
+          task: chat.session !== own.session,
         }));
     }
     return others;
@@ -8723,6 +8724,8 @@ type HiddenChat = {
   /** Whose its Notices are, as each says first: `steward 4`, or a task by its whole path,
    *  `deep (a task of steward 4 › talk)` (#1508). */
   whose: string;
+  /** Whether it is a task below the pane's session, not the session's own chat (#1601). */
+  task: boolean;
   notices: ReactNode;
 };
 
@@ -8759,6 +8762,7 @@ function PaneNotices({
           key={other.session}
           session={other.session}
           whose={other.whose}
+          task={other.task}
           onShowChat={onShowChat}
         >
           {other.notices}
@@ -8772,17 +8776,19 @@ function PaneNotices({
 function NoticeOfChat({
   session,
   whose,
+  task,
   onShowChat,
   children,
 }: {
   session: number;
   whose: string;
+  task: boolean;
   onShowChat: (session: number) => void;
   children: ReactNode;
 }) {
   const of = useMemo(
-    () => ({ whose, onGo: () => onShowChat(session) }),
-    [onShowChat, session, whose],
+    () => ({ whose, task, onGo: () => onShowChat(session) }),
+    [onShowChat, session, task, whose],
   );
   return <NoticeOf.Provider value={of}>{children}</NoticeOf.Provider>;
 }
@@ -9344,7 +9350,7 @@ function LayoutPanes({
   /** The finished row of each task a pane was left on when it ended, by pane (#1485). */
   finished: Readonly<Record<number, FinishedTask>>;
   /** The chats that live in each pane other than the one it shows, by pane. */
-  others: Readonly<Record<number, readonly { session: number; whose: string }[]>>;
+  others: Readonly<Record<number, readonly { session: number; whose: string; task: boolean }[]>>;
   /** What each pane asks for several of its tasks at once, by pane (#1508). */
   asked: Readonly<Record<number, ReactNode>>;
   /** The permission prompts this project's chats hold open on their hooks, for the Notice of
