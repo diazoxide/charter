@@ -1926,7 +1926,8 @@ impl Chats {
     /// the order of their numbers, and none when no chat's tab is in front.
     ///
     /// A tab is its session's, so "in front" names the tab's own chat whatever its panes
-    /// draw. On screen with it is every chat that has a pane in that tab ([`Self::tab_shows`]
+    /// draw; a tab that opened on a view stands for the first chat beside it, and the window
+    /// says every other chat there is beside that one (#1525). On screen with it is every chat that has a pane in that tab ([`Self::tab_shows`]
     /// says which, #1489), and each pane draws its own chat or the chat it was switched to
     /// (#1486). So this is: the chat in front, or the task its pane shows in place of it; and
     /// for every chat beside it, the same. A task in a tab of its own is in front itself.
