@@ -20,7 +20,7 @@ import { endEveryChat, pressAndStart } from "../opening.js";
  * ends, and the profile file it rewrites it puts back.
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-strip="Tabs"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 /** The line opencode's card says for what it lacks, and the card's label after it. */
 const TYPED_INTO =
@@ -52,9 +52,7 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.textContent ?? ""),
   );
 }

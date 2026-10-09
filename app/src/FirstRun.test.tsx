@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { type Interrupts, countInterrupts, withinTheBudget } from "./interruptBudget";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * The first run (FR-4, #603): a new machine reaches a working chat with no prompt about
@@ -632,7 +633,7 @@ describe("the repo's agent instructions", () => {
     await openRepoByPath(REPO);
 
     await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     const offer = await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ });
     // Beside the chat, not in front of it: the chat is what the operator came for.
     expect(offer).toHaveAttribute("aria-selected", "false");
@@ -660,7 +661,7 @@ describe("the repo's agent instructions", () => {
     await openRepoByPath(REPO);
 
     // The chat's tab is drawn, which is when an offer would have been made beside it.
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     await within(strip).findByRole("tab", { selected: true });
     await waitFor(() => expect(calls("start_chat")).toHaveLength(1));
     // The chat, and the first task offered beside it (FR-28), and nothing else.
@@ -673,7 +674,7 @@ describe("the repo's agent instructions", () => {
     const { calls } = withInstructions();
     render(<App />);
     const person = await openRepoByPath(REPO);
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     await person.click(
       await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
     );
@@ -705,7 +706,7 @@ describe("the repo's agent instructions", () => {
     withInstructions();
     render(<App />);
     const person = await openRepoByPath(REPO);
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     await person.click(
       await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
     );
@@ -737,7 +738,7 @@ describe("the repo's agent instructions", () => {
     );
     render(<App />);
     const person = await openRepoByPath(REPO);
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     await person.click(
       await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
     );
@@ -773,7 +774,7 @@ describe("the repo's agent instructions", () => {
     });
     render(<App />);
     const person = await openRepoByPath(REPO);
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     await person.click(
       await within(strip).findByRole("tab", { name: /Memory from the repo · widget/ }),
     );
@@ -887,7 +888,7 @@ describe("no harness found (FR-29)", () => {
     const person = await openRepoByPath(REPO);
 
     // Not the picker: there is nothing on this machine it could start.
-    const strip = await screen.findByRole("tablist", { name: "Tabs" });
+    const strip = await findStripNamed("Tabs");
     const setup = await within(strip).findByRole("tab", { name: /Set up a harness · widget/ });
     expect(setup).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument();

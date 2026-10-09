@@ -8,6 +8,7 @@ import { emit } from "@tauri-apps/api/event";
 import App from "../App";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
+import { stripNamed } from "../test-strips";
 
 /**
  * **The quiet gears, and ⌘, at the focused level** (SE-23, #1173; V89g, V89i on #558).
@@ -93,11 +94,11 @@ function core(plane: string | null) {
   );
 }
 
-const projects = () => screen.getByRole("tablist", { name: "Projects" });
-const workspaces = () => screen.getByRole("tablist", { name: "Workspaces" });
-const chatTabs = () => within(screen.getByRole("tablist", { name: "Tabs" })).queryAllByRole("tab");
+const projects = () => stripNamed("Projects");
+const workspaces = () => stripNamed("Workspaces");
+const chatTabs = () => within(stripNamed("Tabs")).queryAllByRole("tab");
 const inFront = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .find((tab) => tab.getAttribute("aria-selected") === "true");
 

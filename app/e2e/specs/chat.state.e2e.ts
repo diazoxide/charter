@@ -44,11 +44,10 @@ async function doing(tab: WebdriverIO.Element): Promise<string> {
 /** The one tab on screen, once there is one. */
 async function theTab(): Promise<WebdriverIO.Element> {
   await browser.waitUntil(
-    async () =>
-      (await $$('[role="tablist"][aria-label="Tabs"] [role="tab"]').getElements()).length >= 1,
+    async () => (await $$('[data-strip="Tabs"] [role="tab"]').getElements()).length >= 1,
     { timeout: 20_000, timeoutMsg: "no tab ever appeared" },
   );
-  return await $('[role="tablist"][aria-label="Tabs"] [role="tab"]').getElement();
+  return await $('[data-strip="Tabs"] [role="tab"]').getElement();
 }
 
 /** Waits until the tab says `state`, and says what it said instead if it never does. */

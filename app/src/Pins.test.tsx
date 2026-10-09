@@ -4,6 +4,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { stripNamed } from "./test-strips";
 
 /**
  * Pinning, against the whole window (ADR 0039, stored per ADR 0040).
@@ -151,7 +152,7 @@ async function runFromPalette(typed: string) {
   await userEvent.keyboard("{Enter}");
 }
 
-const strip = (name: string) => screen.getByRole("tablist", { name });
+const strip = (name: string) => stripNamed(name);
 /** The names on a strip — leaving out the plane root's tab, which is first on every workspace
  *  strip, is never a pin, and is tested on its own (`Workspaces.test.tsx`, SI-1). */
 const namesIn = (name: string, inside: string) =>

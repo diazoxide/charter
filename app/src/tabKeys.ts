@@ -39,7 +39,8 @@ export function closeOnDelete(
   if (offer === undefined || !deletes(event)) return;
   event.preventDefault();
   const tab = event.currentTarget;
-  const strip = tab.closest<HTMLElement>('[role="tablist"]');
+  // The strip the tab is drawn in, not its tablist, which holds nothing (#1204).
+  const strip = tab.closest<HTMLElement>("[data-strip]");
   onPress(offer);
   if (strip) backOnTheStripWhenGone(tab, strip);
 }

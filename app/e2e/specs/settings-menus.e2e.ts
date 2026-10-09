@@ -26,9 +26,9 @@ import { closeProject } from "../opening.js";
  * first.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
-const WORKSPACES = '[role="tablist"][aria-label="Workspaces"]';
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const PROJECTS = '[data-strip="Projects"]';
+const WORKSPACES = '[data-strip="Workspaces"]';
+const TABS = '[data-strip="Tabs"]';
 const LEVEL = '[role="radiogroup"][aria-label="Level"]';
 
 const mine = (() => {

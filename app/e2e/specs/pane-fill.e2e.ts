@@ -120,14 +120,12 @@ async function untilShows(index: number, text: string): Promise<void> {
   );
 }
 
-/** The names on the tab strip, left to right. Scoped to that tablist: the workspaces strip is
+/** The names on the tab strip, left to right. Scoped to that strip: the workspaces strip is
  *  a tablist too. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.querySelector(".tab-name")?.textContent ?? ""),
   );
 }

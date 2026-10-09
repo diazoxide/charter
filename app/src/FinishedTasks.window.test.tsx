@@ -15,6 +15,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, OpenChat } from "./bindings";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A chat's finished tasks, against the whole window** (#1485): a task ends at its report, and
@@ -229,7 +230,7 @@ const theRow = (group: HTMLElement, name: string) => {
 };
 
 const tabNames = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 

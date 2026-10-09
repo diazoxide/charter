@@ -13,6 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * **The window is four regions** (ADR 0038), against the whole app, because three of
@@ -181,7 +182,7 @@ async function openAChat() {
 
 /** Focuses a workspace from the strip, which is the axis (ADR 0036). */
 async function focus(workspace: string) {
-  const tab = within(screen.getByRole("tablist", { name: "Workspaces" }))
+  const tab = within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".workspace-name")?.textContent === workspace);
   if (!tab) throw new Error(`no ${workspace} on the strip`);
@@ -204,7 +205,7 @@ describe("the four regions", () => {
     expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
     expect(await screen.findByTestId("panels")).toBeInTheDocument();
     expect(await screen.findByLabelText("Repository state")).toBeInTheDocument();
-    expect(screen.getByRole("tablist", { name: "Tabs" })).toBeInTheDocument();
+    expect(stripNamed("Tabs")).toBeInTheDocument();
   });
 
   it("has exactly one thing called Workspaces, and it is the strip", async () => {
@@ -215,7 +216,7 @@ describe("the four regions", () => {
     // The strip itself, and not the explorer: the explorer draws as soon as the project does,
     // and the strip only once the plane has been read — so waiting on the explorer would ask
     // this question before the thing it is about exists.
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await screen.findByTestId("clone-svc");
 
     expect(screen.getAllByLabelText("Workspaces")).toHaveLength(1);
@@ -429,7 +430,7 @@ describe("the four regions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
     expect(screen.queryByTestId("explorer")).not.toBeInTheDocument();
     // The centre is still there: a window with no panes is not a state a button can reach.
-    expect(screen.getByRole("tablist", { name: "Tabs" })).toBeInTheDocument();
+    expect(stripNamed("Tabs")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: false }));
     expect(await screen.findByTestId("explorer")).toBeInTheDocument();

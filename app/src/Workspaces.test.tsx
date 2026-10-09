@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * The workspace axis: **projects, then workspaces, then chats** (ADR 0036).
@@ -155,20 +156,17 @@ const called = (tab: HTMLElement) =>
   tab.querySelector(".workspace-name")?.textContent ?? tab.getAttribute("aria-label");
 
 /** The workspaces, as the strip lists them. */
-const strip = () =>
-  within(screen.getByRole("tablist", { name: "Workspaces" }))
-    .getAllByRole("tab")
-    .map(called);
+const strip = () => within(stripNamed("Workspaces")).getAllByRole("tab").map(called);
 
 const focused = () =>
-  within(screen.getByRole("tablist", { name: "Workspaces" }))
+  within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
     .map(called);
 
 /** The chats, as the strip under the workspaces lists them. */
 const chatTabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
@@ -182,7 +180,7 @@ async function openAChat() {
 
 /** Focuses a workspace from the strip, which is the axis. */
 async function focus(workspace: string) {
-  const tab = within(screen.getByRole("tablist", { name: "Workspaces" }))
+  const tab = within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .find((one) => called(one) === workspace);
   if (!tab) throw new Error(`no ${workspace} on the strip; it lists ${strip().join(", ")}`);
@@ -211,9 +209,7 @@ describe("the workspace strip", () => {
 
     await vi.waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta"]));
     await waitFor(() => {
-      for (const tab of within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole(
-        "tab",
-      ))
+      for (const tab of within(stripNamed("Workspaces")).getAllByRole("tab"))
         expect(tab.style.transition).toBe("");
     });
   });
@@ -352,7 +348,7 @@ describe("the workspace strip", () => {
     render(<App />);
     await vi.waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta"]));
 
-    const beta = within(screen.getByRole("tablist", { name: "Workspaces" }))
+    const beta = within(stripNamed("Workspaces"))
       .getAllByRole("tab")
       .find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta");
 
@@ -367,7 +363,7 @@ describe("the workspace strip", () => {
     render(<App />);
     await vi.waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta"]));
 
-    const tabs = within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole("tab");
+    const tabs = within(stripNamed("Workspaces")).getAllByRole("tab");
     const beta = tabs.find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta");
     const alpha = tabs.find((tab) => tab.querySelector(".workspace-name")?.textContent === "alpha");
 
@@ -429,7 +425,7 @@ describe("the workspace strip", () => {
     render(<App />);
     await waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta"]));
     const needs = () =>
-      within(screen.getByRole("tablist", { name: "Workspaces" }))
+      within(stripNamed("Workspaces"))
         .getAllByRole("tab")
         .find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta")
         ?.querySelector(".workspace-needs")?.textContent;
@@ -505,7 +501,7 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
 
       await openAChat();
 
-      const front = within(screen.getByRole("tablist", { name: "Tabs" })).getByRole("tab", {
+      const front = within(stripNamed("Tabs")).getByRole("tab", {
         selected: true,
       });
       expect(front).toBeInTheDocument();
@@ -618,7 +614,7 @@ describe("the strip that is drawn", () => {
 describe("the plane root's tab (SI-1)", () => {
   /** The root tab itself. */
   const rootTab = () =>
-    within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+    within(stripNamed("Workspaces")).getByRole("tab", {
       name: "Plane root",
     });
 
@@ -647,7 +643,7 @@ describe("the plane root's tab (SI-1)", () => {
 
     const tab = await waitFor(rootTab);
     expect(tab.getAttribute("aria-describedby")).toBeNull();
-    const alpha = within(screen.getByRole("tablist", { name: "Workspaces" }))
+    const alpha = within(stripNamed("Workspaces"))
       .getAllByRole("tab")
       .find((one) => called(one) === "alpha");
     expect(alpha?.getAttribute("aria-describedby")).not.toBeNull();

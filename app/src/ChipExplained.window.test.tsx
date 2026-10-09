@@ -15,6 +15,7 @@ import type { OpenChat } from "./bindings";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The first dispatch on a machine explains the chip, once** (#1501, V100-55), against the
@@ -246,7 +247,7 @@ const onScreen = () =>
 
 /** The tab called `name` on the strip. */
 const tabOf = (name: string) => {
-  const found = within(screen.getByRole("tablist", { name: "Tabs" }))
+  const found = within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".tab-name")?.textContent === name);
   if (found === undefined) throw new Error(`no tab is called ${name}`);

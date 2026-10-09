@@ -15,6 +15,7 @@ import type { NotStarted } from "./bindings";
 import { countsInStatusBar, IMPORTANCE } from "./Notice";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * **Notices under the strip, against the whole window** (NO-2 #1229, rulings V91i, V91j).
@@ -218,7 +219,7 @@ describe("a dismissed Notice", () => {
     relaunch();
     core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
 
     expect(screen.queryByText(/^delta is gone/)).toBeNull();
@@ -235,7 +236,7 @@ describe("a dismissed Notice", () => {
     relaunch();
     ({ asked } = core([chat(1, "one")], { gone: [] }));
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await waitFor(() => expect(keptLast(asked)).toEqual([]));
     expect(disk.dismissed).toEqual({});
 
@@ -258,14 +259,14 @@ describe("a dismissed Notice", () => {
       relaunch();
       ({ asked } = core([chat(1, "one")], { gone: ["delta"], pins }));
       render(<App />);
-      await screen.findByRole("tablist", { name: "Workspaces" });
+      await findStripNamed("Workspaces");
       await settle();
     }
 
     relaunch();
     core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
     expect(screen.queryByText(/^delta is gone/)).toBeNull();
   }, 20_000); // Five launches: given the time five take on a loaded machine.
@@ -282,7 +283,7 @@ describe("a dismissed Notice", () => {
     relaunch();
     core(fresh, { gone: [] });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
     expect(screen.queryByText(/came back as a new chat/)).toBeNull();
   });
@@ -297,13 +298,13 @@ describe("a dismissed Notice", () => {
     relaunch();
     core(fresh, { gone: [], chats: "refuses" });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
 
     relaunch();
     core(fresh, { gone: [] });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
     expect(screen.queryByText(/came back as a new chat/)).toBeNull();
   });
@@ -339,7 +340,7 @@ describe("a dismissed Notice", () => {
     relaunch();
     core(resumed("conv-a"), { gone: [] });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await settle();
     expect(screen.queryByText(/was resumed/)).toBeNull();
 
@@ -466,7 +467,7 @@ describe("the Notices under the strip", () => {
     expect(document.activeElement).toBe(more);
 
     await userEvent.click(more);
-    await userEvent.click(screen.getByRole("tablist", { name: "Workspaces" }));
+    await userEvent.click(stripNamed("Workspaces"));
     expect(more.getAttribute("aria-expanded")).toBe("false");
   });
 

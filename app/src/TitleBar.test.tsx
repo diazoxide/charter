@@ -9,6 +9,7 @@ import { DEFAULT_TEXT } from "./textSize";
 import { TitleBar } from "./TitleBar";
 import { HELP } from "./About";
 import type { About, Moved, OpenChat, PlaneSaving, RepoSaving } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The title bar's own rules**, on the component, and **what the bar holds in the window**
@@ -550,7 +551,7 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
   }
 
   const bar = () => screen.getByTestId("title-bar");
-  const strip = () => screen.getByRole("tablist", { name: "Projects" });
+  const strip = () => stripNamed("Projects");
 
   it("holds the project tabs, the window's only project strip, each with its needs-you count", async () => {
     const { move } = core();
@@ -564,7 +565,9 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
     move(TWO, "waiting", 1);
 
     expect(await within(bar()).findByLabelText("1 chats need you in two")).toBeInTheDocument();
-    expect(within(bar()).getByRole("tablist", { name: "Projects" })).toBe(strip());
+    expect(within(bar()).getByRole("tablist", { name: "Projects" }).closest("[data-strip]")).toBe(
+      strip(),
+    );
   });
 
   it("holds the project strip's show-more, with what it hides that needs you, and its +", async () => {
@@ -574,7 +577,7 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get(this: HTMLElement) {
-        return this.getAttribute("aria-label") === "Projects"
+        return this.getAttribute("data-strip") === "Projects"
           ? leastAt(LEAST.project, DEFAULT_TEXT.window)
           : 0;
       },
@@ -611,9 +614,7 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
         <App />
       </StrictMode>,
     );
-    await waitFor(() =>
-      expect(screen.getByRole("tablist", { name: "Workspaces" })).toHaveTextContent("alpha"),
-    );
+    await waitFor(() => expect(stripNamed("Workspaces")).toHaveTextContent("alpha"));
 
     expect(bar()).not.toHaveTextContent("alpha");
     expect(bar()).not.toHaveTextContent(/running|counting chats/);

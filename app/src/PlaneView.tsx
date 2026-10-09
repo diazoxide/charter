@@ -270,6 +270,7 @@ import { hasTasks, type Ended, type Needing } from "./tabTasks";
 import { readUsed, type UsedAsk } from "./tasksUsed";
 import { finishedBucketOf, taskBucketOf } from "./taskBuckets";
 import { stateClock } from "./stateClock";
+import { StripTablist, useTabIds } from "./StripTablist";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { BriefButton, BriefOpener, BriefPanel, type BriefAsk, type OpenBrief } from "./Brief";
@@ -440,7 +441,7 @@ type Typed =
  * because he glanced at project B.
  *
  * It draws nothing rather than being hidden with CSS: a hidden
- * `[role="tablist"][aria-label="Tabs"]` is a second tab strip for every query in this app and
+ * `[data-strip="Tabs"]` is a second tab strip for every query in this app and
  * in the scenario tests to trip over, and a hidden pane is a terminal being fitted to a box
  * with no size.
  *
@@ -2055,6 +2056,8 @@ export const PlaneView = memo(function PlaneView({
    *  down: when the pins alone do not fit, what does not fit goes behind show-more too, so the
    *  strip never scrolls and never loses its `+`. */
   const { strip: workspaceStrip, width: workspaceRoom } = useRoom(onWorkspaceStrip.length);
+  /** The workspace tabs' ids, which the strip's tablist owns them by (#1204). */
+  const workspaceTabId = useTabIds();
   // The floors grow with the window's text (charter-app#283, `fits.leastAt`).
   const windowText = useTextSizes().window;
   const workspaceLeast = leastAt(LEAST.workspace, windowText);
@@ -2255,10 +2258,12 @@ export const PlaneView = memo(function PlaneView({
    * open. `fits.ts` holds the whole of why the answer is arithmetic over one measured width
    * rather than an intersection measurement over fifty tabs, and what it costs.
    *
-   * The `+` and the show-more button are siblings of this tablist rather than children of
+   * The `+` and the show-more button are siblings of this strip rather than children of
    * it, so its own width is already what is left for tabs and `controls` goes on nothing.
    */
   const { strip: measured, width: room } = useRoom(onStrip.length);
+  /** The chat tabs' ids, which the strip's tablist owns them by (#1204). */
+  const chatTabId = useTabIds();
   /** The chat strip itself, for handing the keyboard back to a tab after a rename. */
   const chatStrip = useRef<HTMLElement | null>(null);
   /** Unique to this view, so two projects' tabs never name each other's fresh marks. */
@@ -6689,8 +6694,7 @@ export const PlaneView = memo(function PlaneView({
               <RovingFocusGroup.Root asChild orientation="horizontal" {...workspaceStop}>
                 <div
                   className="workspaces-strip"
-                  role="tablist"
-                  aria-label="Workspaces"
+                  data-strip="Workspaces"
                   ref={workspaceStrip}
                   style={
                     {
@@ -6699,7 +6703,13 @@ export const PlaneView = memo(function PlaneView({
                     } as CSSProperties
                   }
                 >
-                  {workspacesShown.shown.map((workspace) => {
+                  {/* The tablist, which owns the tabs and not the gear beside one (#1204,
+                      `StripTablist.tsx`). */}
+                  <StripTablist
+                    name="Workspaces"
+                    ids={workspacesShown.shown.map((_, place) => workspaceTabId(place))}
+                  />
+                  {workspacesShown.shown.map((workspace, place) => {
                     const offer = by(`workspace.focus:${workspace}`);
                     // **The plane root** (SI-1): first, fixed, an icon with the operator's
                     // tooltip, and a menu of its own — it is not a workspace.
@@ -6734,6 +6744,7 @@ export const PlaneView = memo(function PlaneView({
                               >
                                 <button
                                   role="tab"
+                                  id={workspaceTabId(place)}
                                   className={root ? "plane-root" : undefined}
                                   aria-label={root ? OUTSIDE_TITLE : undefined}
                                   aria-selected={workspace === focused}
@@ -6845,12 +6856,18 @@ export const PlaneView = memo(function PlaneView({
             <RovingFocusGroup.Root asChild orientation="horizontal" {...chatStop}>
               <div
                 className="tabs"
-                role="tablist"
-                aria-label="Tabs"
+                data-strip="Tabs"
                 ref={strip}
                 style={{ "--least": `${chatLeast}px`, "--chip": `${chipWidth}px` } as CSSProperties}
               >
-                {shown.map((id) => (
+                {/* The tablist, which owns the tabs and not the `×`, fresh mark and task chip
+                    beside each (#1204, `StripTablist.tsx`). Not a tab being renamed: its name
+                    box is drawn in its place, and is not a tab. */}
+                <StripTablist
+                  name="Tabs"
+                  ids={shown.flatMap((id, place) => (renaming === id ? [] : [chatTabId(place)]))}
+                />
+                {shown.map((id, place) => (
                   <SortableTab key={id} id={String(id)} fixed={isBackground(id)}>
                     {({ sortable, style }) => (
                       /* Right-click is the third reader of the catalogue (`Menus.tsx`).
@@ -6886,6 +6903,7 @@ export const PlaneView = memo(function PlaneView({
                             >
                               <button
                                 role="tab"
+                                id={chatTabId(place)}
                                 aria-selected={id === tabs.inFront}
                                 aria-label={chipSays(tabs.byId[id].name)}
                                 title={chipSays(tabs.byId[id].name)}
@@ -6952,6 +6970,7 @@ export const PlaneView = memo(function PlaneView({
                               >
                                 <button
                                   role="tab"
+                                  id={chatTabId(place)}
                                   aria-selected={id === tabs.inFront}
                                   // What a press does that the tab's name does not say (#1486):
                                   // in front and showing a task, it goes back to the session.

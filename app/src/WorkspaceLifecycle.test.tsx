@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetRepoClones } from "./repoClones";
+import { stripNamed } from "./test-strips";
 
 /**
  * Making a workspace and deleting one, from the window.
@@ -206,14 +207,14 @@ function core(
 /** The workspaces, as the strip lists them — after the plane root's tab, which is first on
  *  every strip and tested on its own (`Workspaces.test.tsx`, SI-1). */
 const strip = () =>
-  within(screen.getByRole("tablist", { name: "Workspaces" }))
+  within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.querySelector(".workspace-name")?.textContent);
 
 /** Right-clicks a workspace tab and waits for charter's own menu. */
 async function menuOn(workspace: string) {
-  const tab = within(screen.getByRole("tablist", { name: "Workspaces" }))
+  const tab = within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".workspace-name")?.textContent === workspace);
   if (!tab) throw new Error(`no ${workspace} on the strip; it lists ${strip().join(", ")}`);
@@ -496,9 +497,9 @@ describe("making a workspace", () => {
     render(<App />);
     await settled();
 
-    // Beside the tabs and not among them: the strip's controls are a sibling of the tablist,
+    // Beside the tabs and not among them: the strip's controls are a sibling of the strip,
     // so a `role="tab"` query never picks this up and the collapse never hides it.
-    const row = screen.getByRole("tablist", { name: "Workspaces" }).parentElement as HTMLElement;
+    const row = stripNamed("Workspaces").parentElement as HTMLElement;
     const plus = within(row).getByRole("button", { name: "New workspace…" });
     // Icon-only, like the project strip's two: the catalogue's words are its `aria-label`,
     // which is what a screen reader reads and what this test just found it by.
@@ -595,7 +596,7 @@ describe("a plane with no workspace yet", () => {
 
     const empty = await screen.findByTestId("empty-plane");
     expect(empty).toHaveTextContent("No workspaces yet");
-    const row = screen.getByRole("tablist", { name: "Workspaces" }).parentElement as HTMLElement;
+    const row = stripNamed("Workspaces").parentElement as HTMLElement;
     expect(within(row).getByRole("button", { name: "New workspace…" })).toBeInTheDocument();
 
     await userEvent.click(within(empty).getByRole("button", { name: "Create a workspace" }));
@@ -702,7 +703,7 @@ describe("a workspace's settings (charter-app#280, SE-20)", () => {
     );
     // Filed on beta's strip, which is now the one in front.
     expect(
-      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+      within(stripNamed("Workspaces")).getByRole("tab", {
         selected: true,
       }),
     ).toHaveTextContent("beta");

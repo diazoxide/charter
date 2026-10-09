@@ -4,6 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A chat moving re-renders that chat's row and nothing else** (SC-3, research 02 §5.6).
@@ -113,7 +114,7 @@ function moving(session: number, state: State, at: number, queue: number[] = [])
 }
 
 const marksOnTheStrip = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("img", {
+  within(stripNamed("Tabs")).getAllByRole("img", {
     name: /./,
   });
 
@@ -180,7 +181,7 @@ describe("a chat moving", () => {
 
     move(moving(2, "done", 10));
 
-    const tabs = within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab");
+    const tabs = within(stripNamed("Tabs")).getAllByRole("tab");
     expect(within(tabs[1]).getByRole("img").getAttribute("aria-label")).toMatch(/done|finished/i);
     expect(within(tabs[0]).getByRole("img").getAttribute("aria-label")).not.toMatch(
       /done|finished/i,

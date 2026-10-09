@@ -44,13 +44,11 @@ async function planeRoot(): Promise<string> {
   return (await said.getText()).trim();
 }
 
-/** The names on the tab strip. Scoped to that tablist: the workspace strip is one too. */
+/** The names on the tab strip. Scoped to that strip: the workspace strip is one too. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.textContent ?? ""),
   );
 }

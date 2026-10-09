@@ -7,6 +7,7 @@ import App from "./App";
 import { LEAST, leastAt } from "./fits";
 import { DEFAULT_TEXT } from "./textSize";
 import type { Moved, OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * The chat strip when it holds more than it has room for (ADR 0039, as amended).
@@ -83,7 +84,7 @@ function measuring(): Room {
   } as unknown as typeof ResizeObserver;
   return {
     roomFor: (tabs) => {
-      const strip = screen.getByRole("tablist", { name: "Tabs" });
+      const strip = stripNamed("Tabs");
       // The floor the strip fits by at the default window text size (charter-app#283).
       widths.set(strip, tabs * leastAt(LEAST.chat, DEFAULT_TEXT.window));
       for (const one of live) {
@@ -92,7 +93,7 @@ function measuring(): Room {
       }
     },
     live: () => {
-      const strip = screen.getByRole("tablist", { name: "Tabs" });
+      const strip = stripNamed("Tabs");
       return live.filter((one) => !one.gone && one.targets.includes(strip)).length;
     },
     stop: () => {
@@ -185,7 +186,7 @@ function moving(session: number, at: number): Moved {
   };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")

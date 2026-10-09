@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * A chat's name, against the whole window (charter-app#254): the default `<persona> <N>`, the
@@ -123,7 +124,7 @@ function core({
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")

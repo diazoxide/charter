@@ -19,7 +19,7 @@ import { closeProject } from "../opening.js";
  * **It leaves the window as it found it**: the project it opens it lets go of.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-strip="Projects"]';
 const BAR = '[data-testid="title-bar"]';
 
 /** git in the fixture: never the machine's own config, so never its signer. Answers what it

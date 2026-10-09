@@ -26,8 +26,8 @@ import { attributesOfEach } from "../reading.js";
  * the project the launch opened is never touched.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const PROJECTS = '[data-strip="Projects"]';
+const TABS = '[data-strip="Tabs"]';
 
 /**
  * A project of this spec's own, under a name of its own, spelled the way charter will.

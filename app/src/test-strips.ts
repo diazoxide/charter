@@ -15,8 +15,13 @@ import { userEvent } from "@testing-library/user-event";
  */
 export function laidOutInARow() {
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-    const strip = this.getAttribute("role") === "tablist";
-    const at = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0;
+    const strip = this.hasAttribute("data-strip");
+    // Among the cells only: a strip's tablist is an element of its own inside it (#1204).
+    const at = this.parentElement
+      ? [...this.parentElement.children]
+          .filter((one) => one.getAttribute("role") !== "tablist")
+          .indexOf(this)
+      : 0;
     const left = strip ? 0 : at * 100;
     const width = strip ? 1000 : 90;
     return {
@@ -31,6 +36,42 @@ export function laidOutInARow() {
       toJSON: () => ({}),
     } as DOMRect;
   });
+}
+
+/**
+ * **The strip whose tablist is called `name`**: the element its tabs, their `×` and gears, and
+ * its own controls are drawn in (#1204, `StripTablist.tsx`).
+ *
+ * Found through the tablist, by its role and name, and not by a class, so a test still says
+ * which tablist it means. Not the tablist itself, which holds nothing: it owns its tabs through
+ * `aria-owns`, which `within` does not follow.
+ */
+export function stripNamed(name: string): HTMLElement {
+  return holding(screen.getByRole("tablist", { name }));
+}
+
+/** {@link stripNamed}, once the strip is drawn. */
+export async function findStripNamed(name: string): Promise<HTMLElement> {
+  return holding(await screen.findByRole("tablist", { name }));
+}
+
+/** {@link stripNamed}, or `null` when no tablist is called `name`. */
+export function queryStripNamed(name: string): HTMLElement | null {
+  const tablist = screen.queryByRole("tablist", { name });
+  return tablist && holding(tablist);
+}
+
+/** The strip a tablist is in, and it must own exactly the tabs drawn there, in their order. */
+function holding(tablist: HTMLElement): HTMLElement {
+  const strip = tablist.closest<HTMLElement>("[data-strip]");
+  if (!strip) throw new Error(`the tablist ${tablist.getAttribute("aria-label")} is in no strip`);
+  const owned = (tablist.getAttribute("aria-owns") ?? "").split(/\s+/).filter(Boolean);
+  const drawn = [...strip.querySelectorAll('[role="tab"]')].map((tab) => tab.id);
+  if (owned.join(" ") !== drawn.join(" "))
+    throw new Error(
+      `the tablist owns [${owned.join(" ")}] but the strip draws [${drawn.join(" ")}]`,
+    );
+  return strip;
 }
 
 /** Picks up the focused tab with the keyboard, presses `arrow` once, and puts it down. */

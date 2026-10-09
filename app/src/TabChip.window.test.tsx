@@ -17,6 +17,7 @@ import type { State } from "./chatState";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
 import { GRACE_MS, REST_MS } from "./tabTasks";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A session's tab wears a chip of its tasks, which opens the menu to switch between them**
@@ -292,7 +293,7 @@ const treeRow = (tree: HTMLElement, name: string) => {
   return found;
 };
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 
 /** The tab of the session called `name`. */
 const tab = (name: string) => {

@@ -32,7 +32,7 @@ import { ask } from "../switching.js";
  *  chat another spec started would otherwise land in this list. */
 async function listed(): Promise<string[]> {
   // In one pass: the strip is drawn while it is polled (charter#506, `reading.ts`).
-  return textOfEach('[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name');
+  return textOfEach('[data-strip="Workspaces"] [role="tab"] .workspace-name');
 }
 
 /** Waits until the strip has read the plane, and says what it found if it never does. */
@@ -74,7 +74,7 @@ async function onAlpha(): Promise<void> {
 async function focus(workspace: string): Promise<void> {
   const tabs = await $$(
     // Not the plane root's icon tab (SI-1), which has no drawn name to compare.
-    '[role="tablist"][aria-label="Workspaces"] [role="tab"]:not(.plane-root)',
+    '[data-strip="Workspaces"] [role="tab"]:not(.plane-root)',
   ).getElements();
   for (const tab of tabs) {
     if ((await tab.$(".workspace-name").getText()) === workspace) {
@@ -639,9 +639,7 @@ describe("the explorer", () => {
     expect((await tabNames()).filter((name) => name === "Files · fix-login")).toHaveLength(1);
 
     // …and closing it and opening it again brings the divider back where it was.
-    await $(
-      '[role="tablist"][aria-label="Tabs"] button[aria-label="Close Files · fix-login"]',
-    ).click();
+    await $('[data-strip="Tabs"] button[aria-label="Close Files · fix-login"]').click();
     await browser.waitUntil(async () => !(await tabNames()).includes("Files · fix-login"), {
       timeout: 20_000,
       timeoutMsg: "the file tab did not close",
@@ -655,9 +653,7 @@ describe("the explorer", () => {
     });
 
     // Put away, so the specs after this one find the explorer's rows and no tab's.
-    await $(
-      '[role="tablist"][aria-label="Tabs"] button[aria-label="Close Files · fix-login"]',
-    ).click();
+    await $('[data-strip="Tabs"] button[aria-label="Close Files · fix-login"]').click();
     await browser.waitUntil(async () => !(await tabNames()).includes("Files · fix-login"), {
       timeout: 20_000,
       timeoutMsg: "the file tab did not close",
@@ -860,9 +856,7 @@ describe("the explorer", () => {
       const from = document.querySelector(
         '[data-testid="explorer"] [data-row="file:svc/fix-login:README.md"]',
       );
-      const to = document.querySelector(
-        '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
-      );
+      const to = document.querySelector('[data-strip="Tabs"] [role="tab"][aria-selected="true"]');
       if (!(from instanceof HTMLElement) || !(to instanceof HTMLElement)) return false;
       const dataTransfer = new DataTransfer();
       for (const [at, type] of [
@@ -1135,7 +1129,7 @@ async function marked(piece: string, path: string, mark: string): Promise<void> 
 /** The chats on the strip, which is the focused workspace's and no other's. */
 async function chatTabs(): Promise<string[]> {
   // In one pass: a chat is being added to the strip while it is polled (charter#506).
-  return textOfEach('[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name');
+  return textOfEach('[data-strip="Tabs"] [role="tab"] .tab-name');
 }
 
 /**
@@ -1223,14 +1217,12 @@ function filesTabsIn(record: string): { key: string; split?: number | null }[] {
 
 /** Every tab on the strip, by name. */
 async function tabNames(): Promise<string[]> {
-  return textOfEach('[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name');
+  return textOfEach('[data-strip="Tabs"] [role="tab"] .tab-name');
 }
 
 /** What the tab in front is called. */
 async function tabInFront(): Promise<string> {
-  const name = await $(
-    '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"] .tab-name',
-  );
+  const name = await $('[data-strip="Tabs"] [role="tab"][aria-selected="true"] .tab-name');
   await name.waitForExist({ timeout: 20_000 });
   return name.getText();
 }

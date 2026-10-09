@@ -16,6 +16,7 @@ import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { forgetThisLaunch } from "./regions";
 import type { Shown } from "./shownState";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The Chats section, against the whole window** (#1447): every running chat of the project
@@ -49,7 +50,7 @@ vi.mock("./SessionPane", () => ({
 
 /** The tab in front, by its session's name. */
 const frontTab = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
@@ -336,7 +337,7 @@ const says = (on: HTMLElement) => ({
   shape: on.querySelector(".shown-state .shape")?.getAttribute("data-shape"),
 });
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .queryAllByRole("tab")

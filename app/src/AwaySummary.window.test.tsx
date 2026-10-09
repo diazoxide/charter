@@ -16,6 +16,7 @@ import type { FinishedTask, Moved, Need, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **While you were away: one summary in place of a pile of Notices** (#1514, V100-65), against
@@ -631,7 +632,7 @@ describe("while you were away, in a window of two projects (#1514)", () => {
 
 /** The projects on the strip, `*` on the one in front. */
 const projectNames = () =>
-  within(screen.getByRole("tablist", { name: "Projects" }))
+  within(stripNamed("Projects"))
     .getAllByRole("tab")
     .map(
       (tab) =>
@@ -642,7 +643,7 @@ const projectNames = () =>
 
 /** One project's tab on the strip, by its name. */
 function projectTab(name: string): HTMLElement {
-  const tab = within(screen.getByRole("tablist", { name: "Projects" }))
+  const tab = within(stripNamed("Projects"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".project-name")?.textContent === name);
   if (!tab) throw new Error(`no project tab called ${name}`);

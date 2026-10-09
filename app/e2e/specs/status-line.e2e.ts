@@ -33,9 +33,7 @@ async function untilTheStripIsRead(): Promise<void> {
   await browser.waitUntil(
     async () => {
       // In one pass: the strip is drawn while it is polled (charter#506, `reading.ts`).
-      const names = await textOfEach(
-        '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
-      );
+      const names = await textOfEach('[data-strip="Workspaces"] [role="tab"] .workspace-name');
       return names.join(",") === "alpha,beta";
     },
     { timeout: 30_000, interval: 250, timeoutMsg: "the strip never listed the fixture plane" },
@@ -47,7 +45,7 @@ async function untilTheStripIsRead(): Promise<void> {
 async function focus(workspace: string): Promise<void> {
   const tabs = await $$(
     // Not the plane root's icon tab (SI-1), which has no drawn name to compare.
-    '[role="tablist"][aria-label="Workspaces"] [role="tab"]:not(.plane-root)',
+    '[data-strip="Workspaces"] [role="tab"]:not(.plane-root)',
   ).getElements();
   for (const tab of tabs) {
     if ((await tab.$(".workspace-name").getText()) === workspace) {

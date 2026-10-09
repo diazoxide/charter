@@ -5,6 +5,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { stripNamed } from "./test-strips";
 
 /**
  * The first task (FR-28, #621): the guided task FR-1 measures, offered beside the first chat.
@@ -146,7 +147,7 @@ async function openTheFirstTask() {
   const person = userEvent.setup();
   await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
   await person.click(screen.getByRole("button", { name: "Open" }));
-  const strip = screen.getByRole("tablist", { name: "Tabs" });
+  const strip = stripNamed("Tabs");
   await person.click(await within(strip).findByRole("tab", { name: /First task · widget/ }));
   const pane = await screen.findByRole("region", { name: "First task · widget" });
   return { person, pane, strip };
@@ -167,7 +168,7 @@ describe("the first task", () => {
     await person.click(screen.getByRole("button", { name: "Open" }));
 
     await waitFor(() => expect(calls("start_chat")).toHaveLength(1));
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     const offer = await within(strip).findByRole("tab", { name: /First task · widget/ });
     // Beside the chat, not in front of it: the chat is what the operator came for.
     expect(offer).toHaveAttribute("aria-selected", "false");
@@ -368,7 +369,7 @@ describe("the first task", () => {
     const person = userEvent.setup();
     await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
     await person.click(screen.getByRole("button", { name: "Open" }));
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     const offer = await within(strip).findByRole("tab", { name: /First task · widget/ });
     refusing = true;
     await person.click(offer);

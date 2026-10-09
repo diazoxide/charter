@@ -54,7 +54,7 @@ function roomFor(room: { Workspaces?: number; Projects?: number }): { restore: (
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get(this: HTMLElement) {
-      const name = this.getAttribute("aria-label");
+      const name = this.getAttribute("data-strip");
       if (name !== "Workspaces" && name !== "Projects") return 0;
       return (room[name] ?? 0) * least[name];
     },

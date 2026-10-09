@@ -6,6 +6,7 @@ import App from "../App";
 import type { DoctorRow, PlaneSaving } from "../bindings";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
+import { stripNamed } from "../test-strips";
 
 /**
  * **Deep links into Settings** (SE-22, #1172; the spec on #558, V89c): a group's stable id is
@@ -103,7 +104,7 @@ async function palette(typed: string) {
 }
 
 const settingsTabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .filter((tab) => /^Settings/.test(tab.textContent ?? ""));
 const nav = () => screen.getByRole("navigation", { name: "Groups" });

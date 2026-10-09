@@ -15,6 +15,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { Activity, ActivityLine, OpenChat, ViewTab } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A session's Activity tab** (#1495) against the whole window: it opens from the chat tab's
@@ -201,7 +202,7 @@ function core(
   };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const selected = () => within(strip()).getByRole("tab", { selected: true }).textContent ?? "";
 
 /** Opens the steward chat's Activity from its tab's menu, and answers its list. */

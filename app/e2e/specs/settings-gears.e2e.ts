@@ -27,8 +27,8 @@ import { closeProject } from "../opening.js";
  * (`plane-closed`, #1242); the × is what an operator presses.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
-const WORKSPACES = '[role="tablist"][aria-label="Workspaces"]';
+const PROJECTS = '[data-strip="Projects"]';
+const WORKSPACES = '[data-strip="Workspaces"]';
 const LEVEL = '[role="radiogroup"][aria-label="Level"]';
 
 const mine = (() => {
@@ -190,8 +190,9 @@ describe("the settings gears, and ⌘, at the focused level", function () {
     });
 
     await levelBecomes("Workspace");
-    await expect(
-      $('[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]'),
-    ).toHaveText(`Workspace settings · ${focused}`, { containing: true });
+    await expect($('[data-strip="Tabs"] [role="tab"][aria-selected="true"]')).toHaveText(
+      `Workspace settings · ${focused}`,
+      { containing: true },
+    );
   });
 });

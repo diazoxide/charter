@@ -381,7 +381,7 @@ one labelled section at the end of `App.css`.
 
 | moves                                      | how                                                      | why                                                                                                     |
 | ------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| a tab being selected, on all three strips  | its surface and lit edge cross-fade, `quick`             | the change the operator just made, answered; hangs off `[role="tablist"]`, so a restyled strip keeps it |
+| a tab being selected, on all three strips  | its surface and lit edge cross-fade, `quick`             | the change the operator just made, answered; hangs off `[data-strip]`, so a restyled strip keeps it     |
 | a strip starting to collapse into `N more` | the button fades in, `enter`                             | says the tabs went somewhere; not replayed as the count changes on resize                               |
 | a popover or menu opening                  | fades in a quarter-rem out of its anchored side, `enter` | says what opened it; hangs off Radix's popper wrapper, so the next popover gets it                      |
 | a dialog, its scrim, the alerts drawer     | fade, no movement, `enter`                               | a question should appear where the eye already is                                                       |

@@ -49,12 +49,15 @@ describe("the window's keyboard reach", () => {
 
   it("makes each strip ONE stop: exactly one tab says 0, the selected one when it is drawn", async () => {
     const strips = await browser.execute(() =>
-      [...document.querySelectorAll('[role="tablist"]')].map((strip) => {
+      [...document.querySelectorAll('[role="tablist"]')].map((tablist) => {
+        // A window strip's tablist owns its tabs and holds nothing (#1204): they are drawn in
+        // the strip around it.
+        const strip = tablist.closest("[data-strip]") ?? tablist;
         const tabs = [...strip.querySelectorAll('[role="tab"]')];
         const stops = tabs.filter((tab) => tab.getAttribute("tabindex") === "0");
         const selected = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
         return {
-          strip: strip.getAttribute("aria-label"),
+          strip: tablist.getAttribute("aria-label"),
           stops: stops.length,
           // A selected tab the strip collapsed into its menu is not drawn, and then the first
           // drawn tab is the stop (`roving.ts`).
@@ -74,8 +77,8 @@ describe("the window's keyboard reach", () => {
       // its tabs first, then the bar's right-hand end.
       const regions: [string, string][] = [
         ["title bar", ".title-bar"],
-        ["workspaces", '[role="tablist"][aria-label="Workspaces"]'],
-        ["chats", '[role="tablist"][aria-label="Tabs"]'],
+        ["workspaces", '[data-strip="Workspaces"]'],
+        ["chats", '[data-strip="Tabs"]'],
         ["explorer", 'nav[aria-label="Explorer"]'],
         ["panes", ".panes"],
         ["attention", '[data-testid="panels"]'],

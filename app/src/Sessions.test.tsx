@@ -14,6 +14,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { SessionRecordRow } from "./bindings";
 import { heardFrom, lostOnResume, type Resuming } from "./sessions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The Sessions panel and Resume** (SI-8d, ADR 0064) against the whole window: the operator's
@@ -191,7 +192,7 @@ function core(
   };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")
@@ -451,7 +452,7 @@ describe("the plane root's tab", () => {
     core();
     render(<App />);
     const rootTab = await waitFor(() =>
-      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+      within(stripNamed("Workspaces")).getByRole("tab", {
         name: "Plane root",
       }),
     );

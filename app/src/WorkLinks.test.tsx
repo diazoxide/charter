@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * A chat's work link, against the whole window (V60, ADR 0088 §3, §4): **Link to work item…**
@@ -113,7 +114,7 @@ function core({
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const theTab = () => within(strip()).getAllByRole("tab")[0];
 const asked = (asks: Asked[], cmd: string) => asks.filter((one) => one.cmd === cmd);
 

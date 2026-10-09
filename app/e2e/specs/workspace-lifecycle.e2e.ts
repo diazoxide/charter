@@ -35,8 +35,8 @@ import { anEmptyRecord, cloneTheFixtureRepos, copyFixturePlane } from "../harnes
  * repo has never taken and a claim in a PR is not one.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
-const WORKSPACES = '[role="tablist"][aria-label="Workspaces"]';
+const PROJECTS = '[data-strip="Projects"]';
+const WORKSPACES = '[data-strip="Workspaces"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 
 /** This spec's own project: the fixture plane, with its repos made into real ones. */
@@ -256,7 +256,7 @@ describe("making a workspace and deleting one", function () {
     expect((await plus.getText()).trim()).toBe("");
     expect(await plus.$("svg").isExisting()).toBe(true);
 
-    // And it is not a tab: it sits beside the tablist, so nothing the strip collapses can
+    // And it is not a tab: it sits beside the strip, so nothing the strip collapses can
     // take it away (charter-app#130/#131).
     expect(await plus.getAttribute("role")).toBe(null);
   });

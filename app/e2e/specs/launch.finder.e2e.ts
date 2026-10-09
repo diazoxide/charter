@@ -19,7 +19,7 @@ import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
  * they all run under CI's own `PATH` against an absolute command.
  */
 const dialog = () => $('[role="dialog"]');
-const TABS = '[role="tablist"][aria-label="Tabs"] [role="tab"]';
+const TABS = '[data-strip="Tabs"] [role="tab"]';
 
 /** The plane and `$HOME` the launcher gave the app (`wdio.finder.conf.ts`). */
 function given(name: "CHARTER_FINDER_PLANE" | "CHARTER_FINDER_HOME"): string {

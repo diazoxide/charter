@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { GoneProject } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A project that is gone offers Locate… and Forget** (NO-5, #1237): in the window's Notice
@@ -108,7 +109,7 @@ function core(over: {
 }
 
 const projectTabs = () =>
-  within(screen.getByRole("tablist", { name: "Projects" }))
+  within(stripNamed("Projects"))
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".project-name")?.textContent);
 

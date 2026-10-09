@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { PersonaMark as Mark } from "./bindings";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * **A persona's icon and colour, wherever the persona appears** (#1449), against the whole
@@ -219,13 +220,13 @@ const marksIn = (inside: Element, persona: string) =>
 
 const ROCKET_ON_TEAL = { mark: "icon", icon: "rocket", initials: undefined, colour: "teal" };
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 
 /** The window, drawn, with its chats on the strip and the plane's marks read. */
 async function opened(marks = DECLARED) {
   const asked = core(marks);
   render(<App />);
-  const tab = await within(await screen.findByRole("tablist", { name: "Tabs" })).findByRole("tab", {
+  const tab = await within(await findStripNamed("Tabs")).findByRole("tab", {
     name: /devops 1/,
   });
   await waitFor(() => expect(marksIn(tab, "devops")).toEqual([ROCKET_ON_TEAL]));
@@ -343,10 +344,7 @@ describe("the persona's view lets the person pick", () => {
       "icon.png is over the 64 KB limit for an icon, so purlis shows the initials instead.";
     core([mark("devops", { colour: "teal", trouble: [why] }), mark("qa")]);
     render(<App />);
-    const tab = await within(await screen.findByRole("tablist", { name: "Tabs" })).findByRole(
-      "tab",
-      { name: /devops 1/ },
-    );
+    const tab = await within(await findStripNamed("Tabs")).findByRole("tab", { name: /devops 1/ });
     await waitFor(() =>
       expect(marksIn(tab, "devops")).toEqual([
         { mark: "initials", icon: undefined, initials: "DE", colour: "teal" },
@@ -378,10 +376,7 @@ describe("the persona's view lets the person pick", () => {
       mark("qa"),
     ]);
     render(<App />);
-    const tab = await within(await screen.findByRole("tablist", { name: "Tabs" })).findByRole(
-      "tab",
-      { name: /devops 1/ },
-    );
+    const tab = await within(await findStripNamed("Tabs")).findByRole("tab", { name: /devops 1/ });
 
     await waitFor(() => expect(marksIn(tab, "devops")[0]).toMatchObject({ mark: "image" }));
     await waitFor(() => expect(drawImage).toHaveBeenCalled());

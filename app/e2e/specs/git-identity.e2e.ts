@@ -23,7 +23,7 @@ import { bandNotice } from "../reading.js";
  * asked. One app process serves the whole run, so it also lets its project go again.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-strip="Projects"]';
 
 const NAME = "no-identity";
 

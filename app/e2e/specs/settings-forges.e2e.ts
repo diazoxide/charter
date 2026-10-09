@@ -19,7 +19,7 @@ import { $, browser, expect } from "@wdio/globals";
  * and a Settings tab this spec opened is closed.
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-strip="Tabs"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 const SETTINGS = "Settings";
 const HOST = "git.st3-e2e.invalid";
@@ -36,9 +36,7 @@ async function planeRoot(): Promise<string> {
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.querySelector(".tab-name")?.textContent ?? tab.textContent ?? ""),
   );
 }

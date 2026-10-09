@@ -61,7 +61,7 @@ async function type(pane: Pane, text: string): Promise<void> {
  *  document-wide `[role="tab"]` would mix a workspace in among them. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
-    [...document.querySelectorAll('[role="tablist"][aria-label="Tabs"] [role="tab"]')].map(
+    [...document.querySelectorAll('[data-strip="Tabs"] [role="tab"]')].map(
       (tab) => tab.textContent ?? "",
     ),
   );
@@ -130,7 +130,7 @@ describe("the window", () => {
     await pressAndStart("New tab");
     // Chained, not one selector: WebdriverIO's `=text` shorthand is a whole selector and
     // cannot follow a CSS descendant part.
-    await $('[role="tablist"][aria-label="Tabs"]').$(`[role="tab"]=${first}`).click();
+    await $('[data-strip="Tabs"]').$(`[role="tab"]=${first}`).click();
 
     const [pane] = await panes();
     await until(pane, "you said: from the first pane");
@@ -198,7 +198,7 @@ describe("the window", () => {
     // appear, so what this catches is the other half: tabs laid out wider than the strip they
     // sit in, which would be tabs clipped and unreachable rather than collapsed and listed.
     const over = await browser.execute(() => {
-      const strip = document.querySelector('[role="tablist"][aria-label="Tabs"]');
+      const strip = document.querySelector('[data-strip="Tabs"]');
       return strip === null ? -1 : strip.scrollWidth - strip.clientWidth;
     });
     expect(over).toBeLessThanOrEqual(1);
@@ -217,7 +217,7 @@ describe("the window", () => {
       const strips = ["Projects", "Workspaces", "Tabs"];
       const narrow: string[] = [];
       for (const named of strips) {
-        const strip = document.querySelector(`[role="tablist"][aria-label="${named}"]`);
+        const strip = document.querySelector(`[data-strip="${named}"]`);
         if (!strip) continue;
         const least = Number.parseFloat(getComputedStyle(strip).getPropertyValue("--least"));
         if (!Number.isFinite(least)) {
@@ -273,9 +273,7 @@ describe("the window", () => {
         (await browser.execute(
           () =>
             document
-              .querySelector(
-                '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
-              )
+              .querySelector('[data-strip="Tabs"] [role="tab"][aria-selected="true"]')
               ?.querySelector(".tab-name")?.textContent ?? "",
         )) === going,
       { timeout: 10_000, timeoutMsg: `the menu did not bring ${going} to the front` },
@@ -283,9 +281,7 @@ describe("the window", () => {
 
     // **And it arrived WITH its close button**, which is what keeps ending a chat two presses
     // rather than one from a menu under the cursor (charter-app#130).
-    await expect(
-      $(`[role="tablist"][aria-label="Tabs"] button[aria-label="End chat ${going}"]`),
-    ).toBeExisting();
+    await expect($(`[data-strip="Tabs"] button[aria-label="End chat ${going}"]`)).toBeExisting();
 
     // **And the strip did not re-order.** The menu sorts by activity; the strip never does.
     // What it draws now is the tab that was brought forward plus some of what it drew before,

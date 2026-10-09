@@ -23,7 +23,7 @@ import { endChat, pressAndStart } from "../opening.js";
 
 type Box = { left: number; right: number; top: number; bottom: number; width: number };
 
-const STRIP = '[role="tablist"][aria-label="Tabs"]';
+const STRIP = '[data-strip="Tabs"]';
 const TASK = "pretended task 1";
 
 async function tabNames(): Promise<string[]> {

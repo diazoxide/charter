@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, NotStarted, OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /** What the picker draws. One profile, so picking is one click. */
 const START_OPTIONS = {
@@ -197,7 +198,7 @@ async function untilTheCoreHas(done: Promise<unknown>) {
 }
 
 const tabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     // The NAME a tab carries, not everything drawn in it: a tab also says what its chat is
     // doing, and these tests are about which tabs exist.
@@ -284,7 +285,7 @@ describe("what the window does with the chats the core already has", () => {
     );
 
     await userEvent.click(
-      within(screen.getByRole("tablist", { name: "Tabs" })).getByRole("tab", {
+      within(stripNamed("Tabs")).getByRole("tab", {
         name: /billing fix/,
       }),
     );
@@ -362,9 +363,7 @@ describe("what the window does with the chats the core already has", () => {
     render(<App />);
     await vi.waitFor(() => expect(tabs()).toEqual(["claude ide.7", "claude ide.8"]));
 
-    await userEvent.click(
-      within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab")[1],
-    );
+    await userEvent.click(within(stripNamed("Tabs")).getAllByRole("tab")[1]);
 
     await vi.waitFor(() =>
       expect(of("chat_in_front", asked).slice(-1)[0]?.args).toEqual({
@@ -377,7 +376,7 @@ describe("what the window does with the chats the core already has", () => {
 
 /** What the tab for `name` says its chat is doing. */
 function stateShown(name: string): string | null | undefined {
-  const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
+  const tab = within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".tab-name")?.textContent === name);
   return tab?.querySelector("[data-state]")?.getAttribute("data-state");

@@ -7,7 +7,7 @@ import { forgetExtensionThemes } from "./Extensions";
 import { forgetExtensionsOn } from "./extensionsOn";
 import { forgetProjectThemes } from "./projectTheme";
 import App from "./App";
-import { sayingSomething } from "./test-strips";
+import { sayingSomething, stripNamed } from "./test-strips";
 
 /**
  * The palette against the whole window: every action it lists reaching what the window
@@ -144,7 +144,7 @@ const rowTitles = () =>
   screen.getAllByRole("option").map((row) => row.querySelector(".palette-title")?.textContent);
 
 const tabNames = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 

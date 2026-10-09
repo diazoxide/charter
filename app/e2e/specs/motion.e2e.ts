@@ -22,8 +22,7 @@ import { browser, expect, $$ } from "@wdio/globals";
 /** Waits until the plane has been read, so the strips have tabs in them to read. */
 async function untilTheStripIsRead(): Promise<void> {
   await browser.waitUntil(
-    async () =>
-      (await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements()).length > 0,
+    async () => (await $$('[data-strip="Workspaces"] [role="tab"]').getElements()).length > 0,
     { timeout: 30_000, interval: 250, timeoutMsg: "the strip never listed the fixture plane" },
   );
 }
@@ -70,7 +69,7 @@ describe("the motion layer", () => {
     await untilTheStripIsRead();
 
     const read = await browser.execute(() => {
-      const tab = document.querySelector('[role="tablist"][aria-label="Workspaces"] [role="tab"]');
+      const tab = document.querySelector('[data-strip="Workspaces"] [role="tab"]');
       if (tab === null) return null;
       const css = getComputedStyle(tab);
       const root = getComputedStyle(document.documentElement);

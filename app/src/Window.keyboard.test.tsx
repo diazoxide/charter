@@ -8,6 +8,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { sequenceIn } from "./tabSequence";
+import { stripNamed } from "./test-strips";
 
 /**
  * **Where Tab goes in the window outside its dialogs** (charter-app#189).
@@ -143,8 +144,7 @@ afterEach(() => {
 });
 
 /** The tabs of one strip, in the order it draws them. */
-const tabsOf = (strip: string) =>
-  within(screen.getByRole("tablist", { name: strip })).getAllByRole("tab");
+const tabsOf = (strip: string) => within(stripNamed(strip)).getAllByRole("tab");
 
 describe("a strip is one Tab stop", () => {
   it("the chat strip: the selected tab is the stop and every other tab says -1", async () => {
@@ -623,7 +623,7 @@ describe("Delete on a focused tab", () => {
     expect(within(palette).getByRole("combobox")).toHaveValue("e");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     // Under the modal palette the strip is hidden from a role query, so it is counted as markup.
-    expect(document.querySelectorAll('[aria-label="Tabs"] [role="tab"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-strip="Tabs"] [role="tab"]')).toHaveLength(3);
   });
 
   it("never fires in a terminal: Delete and Backspace there are the shell's", async () => {

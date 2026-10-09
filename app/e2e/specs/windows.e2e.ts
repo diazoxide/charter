@@ -23,7 +23,7 @@ import { attributesOfEach } from "../reading.js";
  * however the close was asked.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-strip="Projects"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 const MAIN = "main";
 

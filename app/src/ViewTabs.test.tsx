@@ -13,6 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { ExtensionCommand, VaultContents, ViewTab } from "./bindings";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
@@ -221,7 +222,7 @@ function core(
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")
@@ -238,7 +239,7 @@ describe("a persona's own tab", () => {
   it("opens from the persona's row, in front, on the strip in front, beside the chats", async () => {
     const { asked } = core();
     render(<App />);
-    await within(await screen.findByRole("tablist", { name: "Tabs" })).findByRole("tab", {
+    await within(await findStripNamed("Tabs")).findByRole("tab", {
       name: /steward 1/,
     });
 

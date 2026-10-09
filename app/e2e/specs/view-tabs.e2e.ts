@@ -32,8 +32,8 @@ import { copyFixturePlane } from "../harness.js";
  * opens it lets go of.
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const TABS = '[data-strip="Tabs"]';
+const PROJECTS = '[data-strip="Projects"]';
 
 /** What the app answered a command with, insisting it answered at all. */
 async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -59,9 +59,7 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.textContent ?? ""),
   );
 }
@@ -70,9 +68,8 @@ async function tabNames(): Promise<string[]> {
 async function inFront(): Promise<string | null> {
   return browser.execute(
     () =>
-      document.querySelector(
-        '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
-      )?.textContent ?? null,
+      document.querySelector('[data-strip="Tabs"] [role="tab"][aria-selected="true"]')
+        ?.textContent ?? null,
   );
 }
 
@@ -243,7 +240,7 @@ describe("view tabs", function () {
         await browser.execute(
           () =>
             document.querySelector(
-              '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"] .is-preview',
+              '[data-strip="Tabs"] [role="tab"][aria-selected="true"] .is-preview',
             ) !== null,
         ),
       ).toBe(true);
@@ -306,12 +303,11 @@ describe("view tabs", function () {
     async function onAlpha(): Promise<void> {
       await browser.waitUntil(
         async () =>
-          (await $$('[role="tablist"][aria-label="Workspaces"] .workspace-name').getElements())
-            .length >= 2,
+          (await $$('[data-strip="Workspaces"] .workspace-name').getElements()).length >= 2,
         { timeout: 30_000, timeoutMsg: "the workspace strip was never drawn" },
       );
       for (const tab of await $$(
-        '[role="tablist"][aria-label="Workspaces"] [role="tab"]:not(.plane-root)',
+        '[data-strip="Workspaces"] [role="tab"]:not(.plane-root)',
       ).getElements()) {
         if ((await tab.$(".workspace-name").getText()) === "alpha") {
           await tab.click();

@@ -29,7 +29,7 @@ type Box = { left: number; right: number; top: number; bottom: number; width: nu
  *  row also says where: the widest a row gets. */
 const ELSEWHERE = "another-workspace";
 
-const STRIP = '[role="tablist"][aria-label="Tabs"]';
+const STRIP = '[data-strip="Tabs"]';
 
 async function tabNames(): Promise<string[]> {
   return browser.execute(

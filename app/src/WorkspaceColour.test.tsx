@@ -12,6 +12,7 @@ import {
   property,
   tinted,
 } from "./theme/theme";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A workspace's theme and colour, against the whole window** (charter-app#281).
@@ -106,7 +107,7 @@ function core() {
 }
 
 const workspaceTab = (name: string) =>
-  within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+  within(stripNamed("Workspaces")).getByRole("tab", {
     name: new RegExp(name),
   });
 
@@ -151,7 +152,7 @@ describe("a workspace's theme and colour", () => {
     core();
     render(<App />);
     await waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
-    const bar = screen.getByRole("tablist", { name: "Tabs" }).closest("header");
+    const bar = stripNamed("Tabs").closest("header");
     const teal = tinted(BUILT_IN["charter-light"], "teal");
     await waitFor(() =>
       expect(bar?.style.getPropertyValue(property("layer.chat"))).toBe(teal.values["layer.chat"]),

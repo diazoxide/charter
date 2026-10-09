@@ -17,7 +17,7 @@ export { BUDGET_MS, OPEN, heldToBudget, type Switches } from "./switchTimes.js";
  * a switch is measured, so the two cannot drift into measuring different things.
  */
 
-export const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+export const PROJECTS = '[data-strip="Projects"]';
 
 /** What the app answered a command with, insisting it answered at all. */
 export async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {

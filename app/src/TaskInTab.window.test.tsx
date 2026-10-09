@@ -25,6 +25,7 @@ import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetKeyboard } from "./paneKeyboard";
 import { REFERENCE_TYPE } from "./references";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A task opens inside its session's tab** (#1486), against the whole window: pressing a task
@@ -399,7 +400,7 @@ const row = (tree: HTMLElement, name: string) => {
 
 const rows = (tree: HTMLElement) => within(tree).getAllByRole("treeitem");
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .queryAllByRole("tab")

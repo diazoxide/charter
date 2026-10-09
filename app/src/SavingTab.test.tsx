@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { PlaneSaving, RepoSaving } from "./bindings";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * The save indicator and the Saving tab, from the window (charter-app#294): the title bar says
@@ -82,7 +83,7 @@ describe("the save indicator, in the window", () => {
     await userEvent.click(await within(bar).findByRole("button", { name: "Saving: 1 changed" }));
     expect(await screen.findByTestId("saving-view")).toBeInTheDocument();
     const tabs = () =>
-      within(screen.getByRole("tablist", { name: "Tabs" }))
+      within(stripNamed("Tabs"))
         .getAllByRole("tab")
         .filter((tab) => tab.textContent?.includes("Saving"));
     expect(tabs()).toHaveLength(1);
@@ -107,7 +108,7 @@ describe("the project strip (charter-app#302)", () => {
   it("marks a project with unsaved work, and not one with nothing left to save", async () => {
     core();
     render(<App />);
-    const strip = await screen.findByRole("tablist", { name: "Projects" });
+    const strip = await findStripNamed("Projects");
 
     expect(await within(strip).findByRole("img", { name: /^unsaved work in / })).toBeTruthy();
 
