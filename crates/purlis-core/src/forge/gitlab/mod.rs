@@ -14,10 +14,10 @@ use super::pr::{
     AutoMerge, GITLAB_ACTIVE, GITLAB_NOT_MERGEABLE, MergeAs, MergedAt, Opened, Pr, Request, State,
     commit_named, is_ours, not_queued_when, own_mr, pr_of, unknown_state,
 };
-use super::transport::{Call, Field, Method};
+use super::transport::{Call, Field, Method, Reply};
 use super::{
-    ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, listed_branch, listed_description,
-    listed_id, listed_str, listed_topics, mapped, quote, truthy, word_of,
+    Failure, ForgeError, Kind, LIST_TIMEOUT, Raised, falsy, first_field, listed_branch,
+    listed_description, listed_id, listed_str, listed_topics, mapped, quote, truthy, word_of,
 };
 
 mod read;
@@ -55,24 +55,31 @@ const CI: [(&str, &str); 13] = [
 ];
 
 impl GitLab {
-    /// Every page of a GitLab listing, `path_of` naming each page's path.
+    /// Every page of a GitLab listing of `whose` repos, `path_of` naming each page's path. A
+    /// first page `missing` recognises is `None`: there is no such owner to list.
     fn paged(
         &self,
         caller: &Caller,
-        owner: &str,
+        whose: &str,
+        missing: impl Fn(&Reply) -> bool,
         path_of: impl Fn(usize) -> String,
-    ) -> Result<Vec<Value>, ForgeError> {
+    ) -> Result<Option<Vec<Value>>, ForgeError> {
         let mut out = Vec::new();
         let mut page = 1;
         loop {
             let path = path_of(page);
-            let batch = self
+            let found = self
                 .0
-                .strict(caller, &path, "GitLab API call")
+                .found(caller, &path, "GitLab API call", |answer| {
+                    page == 1 && missing(answer)
+                })
                 .map_err(|e| {
-                    let said = format!("listing repos for GitLab group '{owner}' failed: {e}");
+                    let said = format!("listing repos for {whose} failed: {e}");
                     e.reworded(said)
                 })?;
+            let Some(batch) = found else {
+                return Ok(None);
+            };
             let items = batch.as_array().cloned().unwrap_or_default();
             if items.is_empty() {
                 break;
@@ -84,8 +91,17 @@ impl GitLab {
             }
             page += 1;
         }
-        Ok(out)
+        Ok(Some(out))
     }
+}
+
+/// Whether GitLab answered that no group has the name asked: a `404`, by its status where the
+/// transport saw one, else by `glab`'s words or GitLab's own message.
+fn no_such_group(answer: &Reply) -> bool {
+    let both = answer.both();
+    answer.failure() == Failure::NotFound
+        || both.contains("HTTP 404")
+        || both.contains("404 Group Not Found")
 }
 
 /// One GitLab repo as a neutral record (Python's `_normalize`). Its name is its `path`, the
@@ -125,18 +141,40 @@ impl Repos for GitLab {
     fn owned(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
         let owner = owner.as_str();
         let enc = quote(owner);
-        let raw = self.paged(caller, owner, |page| {
+        let group = format!("GitLab group '{owner}'");
+        let listed = self.paged(caller, &group, no_such_group, |page| {
             format!(
                 "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
             )
         })?;
+        let raw = match listed {
+            Some(raw) => raw,
+            // A user namespace is no group, and its own listing has the same record shape, as
+            // a GitHub personal account's has. Only a not-found answer falls back.
+            None => {
+                let user = format!("GitLab user '{owner}' (no group has that name)");
+                self.paged(
+                    caller,
+                    &user,
+                    |_| false,
+                    |page| format!("users/{enc}/projects?per_page=100&page={page}&archived=false"),
+                )?
+                .unwrap_or_default()
+            }
+        };
         Ok(raw.iter().map(normalize).collect())
     }
 
     fn reachable(&self, caller: &Caller, owner: &Owner) -> Result<Vec<RepoRecord>, ForgeError> {
-        let raw = self.paged(caller, owner.as_str(), |page| {
-            format!("projects?membership=true&archived=false&per_page=100&page={page}")
-        })?;
+        let group = format!("GitLab group '{}'", owner.as_str());
+        let raw = self
+            .paged(
+                caller,
+                &group,
+                |_| false,
+                |page| format!("projects?membership=true&archived=false&per_page=100&page={page}"),
+            )?
+            .unwrap_or_default();
         Ok(raw
             .iter()
             .map(normalize)

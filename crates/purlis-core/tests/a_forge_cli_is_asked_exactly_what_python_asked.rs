@@ -654,7 +654,7 @@ mod child {
             "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false",
             1,
             "",
-            "404 Group Not Found",
+            "403 Forbidden",
         );
         assert_eq!(
             scene
@@ -664,7 +664,35 @@ mod child {
             Err(ForgeError::new(
                 "listing repos for GitLab group 'g' failed: GitLab API call failed \
                  (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false): \
-                 404 Group Not Found"
+                 403 Forbidden"
+                    .into()
+            )),
+            "only a group that is not found is asked of the user endpoint"
+        );
+
+        // No group by that name: the user endpoint is asked (#803), and its refusal raises.
+        let neither = Scene::new("gl-neither.test");
+        neither.glab_api(
+            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false",
+            1,
+            "",
+            "404 Group Not Found",
+        );
+        neither.glab_api(
+            "users/g/projects?per_page=100&page=1&archived=false",
+            1,
+            "",
+            "404 User Not Found",
+        );
+        assert_eq!(
+            neither
+                .forge("gitlab")
+                .backend()
+                .owned(&Caller::command(), &Owner::new("g")),
+            Err(ForgeError::new(
+                "listing repos for GitLab user 'g' (no group has that name) failed: GitLab API \
+                 call failed (users/g/projects?per_page=100&page=1&archived=false): \
+                 404 User Not Found"
                     .into()
             ))
         );

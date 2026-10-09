@@ -84,7 +84,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 
 | Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
 |---|---|---|---|---|---|
-| `Repos::owned` | `purlis discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false` | strict | **gaps 1, 2** (#803, #804) |
+| `Repos::owned` | `purlis discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false`, then `users/{owner}/projects?archived=false` on a 404 | strict | **gap 2** (#804) |
 | `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Repos::about` | `purlis ws todo promote` (ADR 0088 §5), before it sends; `purlis doctor`'s `project remote` row (SQ-8); the app's going-LIVE confirmation, which says whether the remote is public (ADR 0051, #1369) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
@@ -269,12 +269,14 @@ away from what the Python charter answered, on purpose (ADR 0046):
   uses it to refuse a secret or a file a ruleset forbids, and that is not a protected branch.
 - **Nothing showed that the network log masks every call.** It is now checked for every recorded
   call on both forges.
+- **A GitLab user namespace could not be discovered** (gap 1, #803). `owned` asked only
+  `groups/{owner}/projects`, which answers `404 Group Not Found` for a user. It now asks
+  `users/{owner}/projects` (`doc/api/projects.md`) on that answer, as GitHub falls back from the
+  org endpoint to the user one; any other refusal still fails. Python asked only the group, so
+  a user namespace that failed there is now discovered (`gitlab_user_namespace`).
 
 Open, each filed:
 
-1. **A GitLab user namespace cannot be discovered** (#803). `owned` asks `groups/{owner}/projects`,
-   which does not answer for a user. GitHub falls back from the org endpoint to the user one;
-   GitLab's equivalent is `GET users/{owner}/projects` (`doc/api/projects.md`).
 2. **GitLab lists repos shared into the group** (#804). `groups/:id/projects` defaults
    `with_shared` to `true` (`doc/api/groups.md`), so a repo another namespace shares with the
    group is discovered as if it were the group's. `with_shared=false` would match GitHub.
