@@ -4783,6 +4783,14 @@ down rather than read off the code.
   them (#1341), each spelled as the sandbox writes it, absent before the first: the window's
   one-time Notice names what was added and taken away since, and "Got it" records the list it
   showed. A change made in this machine's own Settings is recorded as seen as it is written;
+  `presets_seen` — the project's Internet access presets in force (`[sandbox].egress`, each by
+  its word, less any an administrator's policy turns off) and `certificate-checks` where it is
+  on, as this machine last told the person of them (#1385), absent before the first, which
+  reads as the defaults a project starts with (every preset an administrator's policy allows, certificate checks off): the
+  window's one-time Notice names what was turned on and off since, and what each one turned on
+  widens past its hosts (the package caches, the certificate check), and "Got it" records the
+  set it showed. A change saved in this machine's own Settings is recorded as seen as it is
+  written;
   `hosts_mine` — your own `charter.local.toml` hosts you added or confirmed in Settings on this
   machine (#1341), the only ones of that file that grant anything; `writes_mine` — the
   folders you let every chat of this project write on this machine from a block's Notice
@@ -4943,7 +4951,7 @@ down rather than read off the code.
   through every write of this file and moved to `app/dispatch-never.json` the first time the
   nevers are read.
 - **Who writes it:** the app, at each new chat's start, at the offer's answer, when the
-  hosts Notice is read, when the Notice of a project's dispatch grants is answered or its
+  hosts Notice or the presets Notice is read, when the Notice of a project's dispatch grants is answered or its
   "taken away" is read, when the check of `dispatch_seen_at` takes an acceptance off or moves
   to another commit (reading the grants in force or Settings' table writes nothing), and
   at a grant's Allow or Revoke (`sandbox::local`). A sandboxed chat cannot: `.charter/app/` is the integrity class's.

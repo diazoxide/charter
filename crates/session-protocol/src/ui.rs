@@ -136,6 +136,10 @@ pub struct Server {
 /// it, whatever scope the link holds. With them, the commands of the two lists a person
 /// answers from: the Notice that says a teammate's grant arrived (#1506), and the dispatches
 /// refused while nobody was there (#1507), which are offered on a refused chat's word.
+///
+/// **And "Got it" on the Notice that the project's Internet access presets changed** (#1385):
+/// it records that this person was told a preset widens what chats may reach or write, so the
+/// Notice is not shown again. Only the person who read it says so; no link answers it for them.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -207,6 +211,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "allow_dispatch_away",
     "dismiss_dispatch_away",
     "never_dispatch_away",
+    // The person's "Got it" on a Notice that the project's presets changed.
+    "acknowledge_project_presets",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on
