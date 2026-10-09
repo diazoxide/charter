@@ -166,6 +166,10 @@ pub enum Status {
     /// and drops its line out of a shared exclude. Never [`Status::Blocked`] either: nothing
     /// is in the way at the generated path, and the repair is wherever the record goes.
     Unrecorded,
+    /// A mirrored agent or skill purlis wrote here, still exactly as written, that the
+    /// project no longer has: taken out, with its record entry and its line
+    /// (`withdraw_mirrors`).
+    Removed,
 }
 
 /// One generated path and what happened to it.
@@ -384,6 +388,124 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Whether `rel` is under one of the plane's mirrored roots ([`WALKUP_DIRS`]), the root
+/// itself included: a surface spelled as one file mirrors as that path.
+fn mirrored_path(rel: &str) -> bool {
+    WALKUP_DIRS.iter().any(|sub| {
+        rel.strip_prefix(sub)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Whether `record` names any mirrored path at all — the cheap question that decides whether
+/// a plane with nothing to carry still has something to withdraw from `tree`.
+fn names_a_mirror(record: &layer::Record) -> bool {
+    record.paths().any(|rel| mirrored_path(rel))
+}
+
+/// The text at `rel` in `tree`, read only where nothing on the way to it, the file included,
+/// is a link, and only when it is a plain file. `None` for anything else.
+fn own_text(tree: &Path, rel: &str) -> Option<String> {
+    use std::io::Read;
+    let path = tree.join(rel);
+    let mut open = crate::contain::open_no_link(tree, &path).ok()?;
+    if !open.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    open.by_ref()
+        .take(crate::reopen::MAX_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    Some(text)
+}
+
+/// The mirrored agents and skills purlis wrote in `tree` that the project no longer has
+/// (#1583): what [`withdraw_mirrors`] takes out.
+///
+/// READ ONLY. A path qualifies only when every one of these holds, and each is a reason a
+/// file could be somebody else's:
+///
+/// - **the record names it, under a mirrored root.** A path the record does not name is never
+///   purlis's, and the generated settings are not withdrawn here: a checkout's settings stay
+///   the workspace layer's question.
+/// - **the project does not want it, and its own file is proved gone.** A plane file purlis
+///   could not read (refused, a link out of the project, not text) mirrors as nothing, and is
+///   a file somebody is holding, not one the project stopped having. Only "not there" and "a
+///   component is not a directory" prove it gone ([`crate::worktree::listing::exists`]).
+/// - **the copy is still exactly as written.** Its text is read with no link on the way, the
+///   file itself included, and must match a digest the record holds. A copy edited since is
+///   the operator's.
+/// - **git does not track it** (`tracked`). A copy somebody committed is that repository's
+///   content now, and removing it would change a tracked file.
+fn retired_mirrors(
+    plane: &Path,
+    tree: &Path,
+    want: &BTreeMap<String, String>,
+    record: &layer::Record,
+    tracked: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    record
+        .paths()
+        .filter(|rel| mirrored_path(rel) && !want.contains_key(rel.as_str()))
+        .filter(|rel| crate::worktree::listing::exists(&plane.join(rel.as_str())) == Some(false))
+        .filter(|rel| {
+            own_text(tree, rel).is_some_and(|text| record.recorded(rel).contains(&digest(&text)))
+        })
+        .filter(|rel| !tracked(rel))
+        .cloned()
+        .collect()
+}
+
+/// Take out each of `rels` ([`retired_mirrors`]) from `tree`, forget it in `record`, and
+/// say so — `wslayer`'s withdraw, for a checkout.
+///
+/// The link check is asked again at the unlink, not carried from the classification: this is
+/// the destructive verb, and it must not act on a stale answer. A file that will not go stays
+/// in the record, and the next wire tries again. A directory the removal leaves empty goes too,
+/// up to and never including `tree`.
+///
+/// An unwanted mirrored entry whose file is already PROVED gone vouches for nothing and is
+/// forgotten too, so its exclude line leaves with it.
+fn withdraw_mirrors(
+    plane: &Path,
+    tree: &Path,
+    want: &BTreeMap<String, String>,
+    record: &mut layer::Record,
+    rels: Vec<String>,
+) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for rel in rels {
+        let path = tree.join(&rel);
+        if crate::contain::no_link_on_the_way(tree, &path).is_err() {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_err() {
+            continue;
+        }
+        record.forget(&rel);
+        if let Some(parent) = path.parent() {
+            layer::prune_empty(parent.to_path_buf(), tree);
+        }
+        rows.push(Row {
+            rel,
+            status: Status::Removed,
+            why: String::new(),
+        });
+    }
+    let gone: Vec<String> = record
+        .paths()
+        .filter(|rel| mirrored_path(rel) && !want.contains_key(rel.as_str()))
+        .filter(|rel| crate::worktree::listing::exists(&plane.join(rel.as_str())) == Some(false))
+        .filter(|rel| crate::worktree::listing::exists(&tree.join(rel.as_str())) == Some(false))
+        .cloned()
+        .collect();
+    for rel in gone {
+        record.forget(&rel);
+    }
+    rows
+}
+
 /// Charter's record in `tree`, narrowed to the entries that are SETTLED: `{}` for one that
 /// is absent, unreadable, not an object, or holding a key charter could not have written.
 ///
@@ -476,14 +598,22 @@ pub fn tracked(tree: &Path, rel: &str) -> bool {
 /// [`crate::worktree::confine::within_workspace`] for a piece. What this function confines is
 /// each path **below** it, at the moment it is opened, because a committed `.claude` that is
 /// a directory symlink would otherwise send the write wherever the link points.
+///
+/// # A mirror is two-way (#1583)
+///
+/// A mirrored agent or skill the project no longer has is taken out of the checkout again, as
+/// `wslayer`'s withdraw does for a workspace folder — also where the project has nothing left
+/// to carry. Only what `retired_mirrors` proves is purlis's own copy goes.
 pub fn wire(plane: &Path, tree: &Path) -> Wired {
     // One listing per repository for the length of this wire, even when the caller did not
     // open a block: a wire asks the exclude's question twice over by construction.
     let _answers = crate::worktree::listing::answers();
     let want = want(plane);
-    if want.is_empty() {
-        // Nothing to write and nothing to hide. Not a blocked layer and not an incomplete
-        // one: a plane with no settings and no agents has no layer to carry.
+    if want.is_empty() && !names_a_mirror(&layer::read_record(tree)) {
+        // Nothing to write, nothing to hide and nothing to withdraw. Not a blocked layer and
+        // not an incomplete one: a plane with no settings and no agents has no layer to carry.
+        // A record that still names a mirrored agent or skill goes on below, so the copy of a
+        // project's last agent is withdrawn as any other is (#1583).
         return Wired {
             rows: Vec::new(),
             hidden: Hidden::InPlace,
@@ -689,6 +819,11 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
                 }
             }
         }
+        // What the project stopped mirroring goes after the writes and before the record is
+        // published, so the publish below carries both, and the second pass takes the lines
+        // of what went (#1583).
+        let retired = retired_mirrors(plane, tree, &want, &marker, &|rel| tracked(tree, rel));
+        rows.extend(withdraw_mirrors(plane, tree, &want, &mut marker, retired));
         if marker != published {
             // Only when something changed: rewriting the record on every launch would move a
             // checkout's mtimes for a call that changed nothing.
@@ -2958,5 +3093,167 @@ mod tests {
         assert_eq!(found, ["a/b/deep.md", "a/loop", "top.md"]);
         #[cfg(not(unix))]
         assert_eq!(found, ["a/b/deep.md", "top.md"]);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // #1583: a checkout withdraws the mirrored agents and skills the project stopped having
+    // -----------------------------------------------------------------------------------
+
+    const AGENT: &str = ".claude/agents/ops.md";
+
+    /// A plane and a checkout in which purlis wrote `rel` holding `text`, as its record says.
+    fn mirrored_once(
+        rel: &str,
+        text: &str,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf, layer::Record) {
+        let (dir, plane, tree) = plane_with("svc");
+        std::fs::create_dir_all(&plane).unwrap();
+        write_into(&tree, rel, text).unwrap();
+        let mut record = layer::Record::new();
+        record.settle(rel, digest(text));
+        (dir, plane, tree, record)
+    }
+
+    fn untracked(_: &str) -> bool {
+        false
+    }
+
+    #[test]
+    fn a_mirror_the_project_no_longer_has_is_withdrawn_with_its_entry_and_its_empty_folders() {
+        let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
+        let want = BTreeMap::new();
+
+        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        assert_eq!(retired, [AGENT.to_owned()]);
+        let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
+
+        assert_eq!(rows, [row_of(AGENT, Status::Removed, "")]);
+        assert!(!tree.join(AGENT).exists());
+        assert!(!record.names(AGENT), "the entry goes with the file");
+        assert!(
+            !tree.join(".claude").exists(),
+            "a folder left empty goes too: {:?}",
+            std::fs::read_dir(&tree)
+                .unwrap()
+                .flatten()
+                .map(|e| e.path())
+                .collect::<Vec<_>>()
+        );
+        assert!(tree.join(".git").exists(), "and nothing above it");
+    }
+
+    #[test]
+    fn a_file_the_record_does_not_name_is_never_withdrawn_and_keeps_its_folder() {
+        let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
+        std::fs::write(tree.join(".claude/agents/mine.md"), "# mine\n").unwrap();
+        let want = BTreeMap::new();
+
+        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
+
+        assert!(!tree.join(AGENT).exists());
+        assert_eq!(
+            std::fs::read_to_string(tree.join(".claude/agents/mine.md")).unwrap(),
+            "# mine\n"
+        );
+    }
+
+    #[test]
+    fn a_copy_edited_since_purlis_wrote_it_is_the_operators_and_stays() {
+        let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
+        std::fs::write(tree.join(AGENT), "# ops, with my notes\n").unwrap();
+        let want = BTreeMap::new();
+
+        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        assert!(retired.is_empty(), "{retired:?}");
+        withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
+
+        assert_eq!(
+            std::fs::read_to_string(tree.join(AGENT)).unwrap(),
+            "# ops, with my notes\n"
+        );
+        assert!(record.names(AGENT), "and its entry is not purlis's to drop");
+    }
+
+    #[test]
+    fn a_copy_git_tracks_or_the_project_still_wants_stays() {
+        let (_dir, plane, tree, record) = mirrored_once(AGENT, "# ops\n");
+
+        let tracked = |rel: &str| rel == AGENT;
+        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &tracked).is_empty());
+
+        let want = BTreeMap::from([(AGENT.to_owned(), "# ops, newer\n".to_owned())]);
+        assert!(retired_mirrors(&plane, &tree, &want, &record, &untracked).is_empty());
+    }
+
+    #[test]
+    fn a_project_file_purlis_could_not_read_is_held_and_its_copy_stays() {
+        // Not text: `mirrored` skips it, so it is not wanted, and it is still THERE. A file
+        // somebody is holding is not one the project stopped having.
+        let (_dir, plane, tree, record) = mirrored_once(AGENT, "# ops\n");
+        std::fs::create_dir_all(plane.join(".claude/agents")).unwrap();
+        std::fs::write(plane.join(AGENT), [0xff_u8, 0xfe, 0x00]).unwrap();
+        assert!(!want(&plane).contains_key(AGENT));
+
+        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &untracked).is_empty());
+    }
+
+    #[test]
+    fn the_generated_settings_are_not_a_mirror_and_are_never_withdrawn_here() {
+        let (_dir, plane, tree, record) = mirrored_once(SETTINGS, "{}\n");
+
+        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &untracked).is_empty());
+        assert!(!names_a_mirror(&record));
+        assert!(names_a_mirror(&{
+            let mut r = layer::Record::new();
+            r.settle(".claude/skills", digest("x"));
+            r
+        }));
+        assert!(!mirrored_path(".claude/agentsx/a.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mirror_reached_through_a_link_is_never_read_or_removed() {
+        // The copy's digest is right on the far end of the link, which is exactly why it is
+        // no evidence: a committed `.claude` that is a link out of the checkout, and a file
+        // that is itself a link, both stay, and so does what they point at.
+        let (dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("agents")).unwrap();
+        std::fs::write(outside.join("agents/ops.md"), "# ops\n").unwrap();
+        std::fs::remove_dir_all(tree.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&outside, tree.join(".claude")).unwrap();
+        let want = BTreeMap::new();
+
+        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        assert!(retired.is_empty(), "{retired:?}");
+        // And the unlink asks again, whatever it is handed.
+        let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, vec![AGENT.to_owned()]);
+        assert!(rows.is_empty(), "{rows:?}");
+        assert!(outside.join("agents/ops.md").exists());
+
+        std::fs::remove_file(tree.join(".claude")).unwrap();
+        std::fs::create_dir_all(tree.join(".claude/agents")).unwrap();
+        std::os::unix::fs::symlink(outside.join("agents/ops.md"), tree.join(AGENT)).unwrap();
+        assert!(retired_mirrors(&plane, &tree, &want, &record, &untracked).is_empty());
+        let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, vec![AGENT.to_owned()]);
+        assert!(rows.is_empty(), "{rows:?}");
+        assert!(
+            tree.join(AGENT).symlink_metadata().is_ok(),
+            "the link stays"
+        );
+        assert!(outside.join("agents/ops.md").exists());
+    }
+
+    #[test]
+    fn an_unwanted_mirror_already_gone_is_forgotten_so_its_line_leaves() {
+        let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
+        std::fs::remove_file(tree.join(AGENT)).unwrap();
+
+        let rows = withdraw_mirrors(&plane, &tree, &BTreeMap::new(), &mut record, Vec::new());
+
+        assert!(rows.is_empty());
+        assert!(!record.names(AGENT));
     }
 }
