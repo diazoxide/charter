@@ -5508,7 +5508,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   branch holds against the branch it was cut from, read from git. A task that worked in a
   folder other chats work in is told from them by the files its own edit tools wrote while it
   ran (the touching hook's line says whether its tool writes, `wrote`), which the app keeps in
-  memory only, by chat, for the last 64 tasks, as it keeps the explorer's markers (D-86a): no
+  memory only, by chat, for the last 128 chats heard from (every chat's, so another chat's
+  write to a task's file is marked, #1534), as it keeps the explorer's markers (D-86a): no
   store holds them, and after the app is started again its Changes tab says it cannot tell.
 - **Status:** **internal** — written by the app alone, and read by the app and by
   `purlis persona stats`, which counts records by persona.

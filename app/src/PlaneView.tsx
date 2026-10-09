@@ -4935,6 +4935,16 @@ export const PlaneView = memo(function PlaneView({
     },
     [openAskPersona],
   );
+  /** Who already works where the dialog's task would, by the core's sentence (#1534). */
+  const askingFrom = askingPersona?.session;
+  const folderShared = useCallback(
+    async (place: string | null): Promise<string | undefined> => {
+      if (askingFrom === undefined) return undefined;
+      const said = await commands.taskFolderShared(plane, askingFrom, place);
+      return said.status === "ok" ? (said.data ?? undefined) : undefined;
+    },
+    [askingFrom, plane],
+  );
   /**
    * The dialog's answer: the core starts a chat as that persona under the asking chat
    * (`ask_persona_chat`) and tells this window of it as it tells of any chat another chat
@@ -7627,6 +7637,7 @@ export const PlaneView = memo(function PlaneView({
           from={askingPersona.from}
           trouble={askingPersona.trouble}
           asking={askingPersona.busy}
+          folderShared={folderShared}
           onAsk={(name, ask, place) => void sendAsk(name, ask, place)}
           onCancel={() => setAskingPersona(undefined)}
         />

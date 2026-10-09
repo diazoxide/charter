@@ -83,7 +83,7 @@ import { ActivityTab } from "./ActivityTab";
 import { ACTIVITY_VIEW, activitySession, isActivity } from "./activity";
 import { DispatchesTab } from "./DispatchesTab";
 import { TaskChangesTab } from "./TaskChangesTab";
-import { TASK_CHANGES_VIEW, taskChangesOf } from "./taskChanges";
+import { TASK_CHANGES_VIEW, taskChangesOf, taskChangesTitle, taskChangesView } from "./taskChanges";
 import { DISPATCHES_VIEW, isDispatches } from "./dispatches";
 import {
   SAVING_VIEW,
@@ -553,6 +553,7 @@ export function ViewPane({
               })
             }
             onOpenRecord={(path, title) => onOpenView(sessionView(path), sessionTitle(title))}
+            onChanges={(id, task) => onOpenView(taskChangesView(id), taskChangesTitle(task))}
           />
         ) : isActivity(view) ? (
           /* One chat's Activity (#1495): what it and its tasks said to each other, read from

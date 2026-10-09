@@ -42,7 +42,8 @@ const MARKS: Record<TaskFile["mark"], string> = {
  *   each file opens its comparison against where the branch started (`PieceDiff.tsx`). Once it
  *   has ended, the tab offers **Merge** into the branch it was cut from and **Discard branch**.
  * - **A task that worked in a folder other chats work in** lists only the files its own tools
- *   named that git finds changed there, each marked where a sibling named it too. Where purlis
+ *   wrote that git finds changed there, each marked where another chat's tools wrote it too
+ *   (#1534). Where purlis
  *   holds no such list, the tab says so and lists nothing: the folder's changes are never shown
  *   as the task's.
  *

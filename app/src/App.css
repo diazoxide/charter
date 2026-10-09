@@ -6501,7 +6501,8 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
-.dispatch-discard {
+.dispatch-discard,
+.dispatch-changes {
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--border-subtle);
   border-radius: 3px;

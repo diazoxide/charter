@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useFocusBack } from "./EndingChat";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
@@ -31,6 +31,10 @@ export function placeOf(where: Where, workspace: string): string | null {
  * that purlis cuts from the repo this chat works in (the window says *branch*, ADR 0072 §4),
  * or another workspace of the project. Nothing is merged for a branch of its own.
  *
+ * **Tasks already working in the folder it would work in are named before it starts** (#1534):
+ * there are no file locks between tasks, so the dialog says who works there with no branch of
+ * its own, and that a branch of its own keeps them apart. It is said, never enforced.
+ *
  * **It validates nothing but that there is something to send**, for `NewBranch`'s reason: what
  * a task may be called, whether the persona can run a chat, how many may run at once and
  * whether this chat works in a repo a branch can be cut from are the core's rules
@@ -44,6 +48,7 @@ export function AskPersona({
   from,
   trouble,
   asking,
+  folderShared,
   onAsk,
   onCancel,
 }: {
@@ -61,6 +66,9 @@ export function AskPersona({
   workspaces: readonly string[];
   /** Whether purlis is starting the chat right now, so the answer cannot be given twice. */
   asking: boolean;
+  /** The core's sentence naming the open tasks already working at `place` with no branch of
+   *  their own, or `undefined` where none does (`task_folder_shared`). */
+  folderShared?: (place: string | null) => Promise<string | undefined>;
   /** `place` is the core's word for where it works ({@link placeOf}); `null` is this chat's
    *  folder. */
   onAsk: (name: string, ask: string, place: string | null) => void;
@@ -76,6 +84,22 @@ export function AskPersona({
   const handBack = useFocusBack();
   // Another workspace is a pick that needs its second half before there is something to send.
   const placed = where !== "workspace" || workspace !== "";
+  /** Who already works where it would, for the place it is said of. */
+  const [shared, setShared] = useState<{ place: string | null; says: string }>();
+  const place = placeOf(where, workspace);
+  useEffect(() => {
+    if (folderShared === undefined || !placed || place === "worktree") return;
+    let live = true;
+    void folderShared(place)
+      .then((says) => {
+        if (live) setShared(says === undefined ? undefined : { place, says });
+      })
+      // A question that cannot be answered warns of nothing.
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [folderShared, place, placed]);
   const ready = name.trim() !== "" && ask.trim() !== "" && placed && !asking;
   const send = () => {
     if (ready) onAsk(name, ask, placeOf(where, workspace));
@@ -193,6 +217,12 @@ export function AskPersona({
                   />
                 )}
               />
+            )}
+
+            {shared !== undefined && shared.place === place && (
+              <p className="honest" data-testid="ask-folder-shared">
+                {shared.says}
+              </p>
             )}
 
             {trouble && (

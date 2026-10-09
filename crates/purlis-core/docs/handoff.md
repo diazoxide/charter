@@ -504,21 +504,29 @@ its report about what changed. It shows what purlis can tell of that task's own 
   run git in the clone itself; a sandboxed chat cannot write the clone's git data.)
 - **A task that worked in a folder other chats work in** lists the files its own edit tools
   wrote while it ran (never one it only read) that git still finds uncommitted there, each
-  marked where another task of the same chat wrote it too. **It does not see everything the
-  task changed**, and the tab says so: an edit made by a shell command (a formatter, `sed`, a
-  script) and a change the task already committed there are not listed. A file it wrote that
-  another chat or you changed afterwards is listed whole, and only a sibling task's write is
-  marked. The list is kept in memory only, for
-  the last 64 tasks heard from, so after the app is started again, for an older task, or for
-  a harness that reports no file tool (Codex), the tab says it cannot tell and lists nothing.
+  marked with the name of every other chat whose edit tools wrote it too: a sibling task, the
+  asking chat, or any other chat (#1534). **It does not see everything the task changed**, and
+  the tab says so: an edit made by a shell command (a formatter, `sed`, a script) and a change
+  the task already committed there are not listed. A file it wrote that you or a shell command
+  changed afterwards is listed whole, with no mark. The lists are kept in memory only, for the
+  last 128 chats heard from, so after the app is started again, for an older task, or for a
+  harness that reports no file tool (Codex), the tab says it cannot tell and lists nothing.
   Where the folder holds more than 10,000 changes, git lists the first 10,000 and a file of
   the task's past them is not shown; the tab says so.
 
-**Two tasks of one chat in one folder are named.** There are no file locks between tasks.
-When a chat dispatches a task into a folder where another of its tasks still works, with no
-branch of its own, the dispatch's answer names both and says how to keep them apart (`--in
-worktree`), and the asking chat's tab says it to you, by every task's name, for as long as
-they share the folder.
+**Two tasks in one folder are named.** There are no file locks between tasks. When a chat
+dispatches a task into a folder where another task still works, with no branch of its own,
+whichever chat asked for that one (#1534), the dispatch's answer names both and says how to
+keep them apart (`--in worktree`), and the asking chat's tab says it to you, by every task's
+name, for as long as they share the folder. **Ask a persona…** names the tasks already
+working in the folder you pick before it starts one there.
+
+**A task's own branch folder is not the explorer's to merge or remove** (#1534). The
+explorer's **Merge** and **Remove** on that folder say it is the task's and point to its
+**Review changes** (on its finished row, or on the Dispatches tab's row), where the merge and
+the discard keep their guards. Two Removes still go through there: one of a folder that is
+already gone, and one of an ended task's folder in a repo whose own git settings name a
+program, where Discard is refused and its sentence sends you to the explorer.
 
 A worktree whose task was started and whose app was quit before the chat came up is not
 listed on any dispatch: it shows in the explorer as an ordinary branch folder, and is yours to

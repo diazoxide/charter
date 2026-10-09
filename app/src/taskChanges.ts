@@ -58,7 +58,7 @@ export function ownSaid(own: OwnBranch): string {
 
 /** What the tab says above a task's files, where it worked in a folder other chats work in. */
 export const SHARED_SAID =
-  "It worked in a folder other chats work in. Listed are the files its own edit tools wrote that are still uncommitted there. Not listed: edits made by a shell command, changes it already committed, and anything from before the app was last started. A file someone else also changed since is listed whole.";
+  "It worked in a folder other chats work in. Listed are the files its own edit tools wrote that are still uncommitted there. Not listed: edits made by a shell command, changes it already committed, and anything from before the app was last started. A file another chat's edit tools also wrote is marked with that chat's name. One the person or a shell command changed since is listed whole, with no mark.";
 
 /** What the tab says where git found more changes in a shared folder than it lists. */
 export function pastTheCap(more: number): string {
