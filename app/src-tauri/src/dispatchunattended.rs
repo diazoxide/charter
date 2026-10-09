@@ -4,9 +4,10 @@
 //!
 //! # The entry point the dispatch core calls
 //!
-//! [`request_dispatch`]`(held, session, attendance, target, brief)`, in place of
+//! [`request_dispatch_as`]`(held, asking, attendance, target, brief)`, with the asking chat
+//! as the caller read it once (#1543), in place of
 //! [`crate::dispatchgrants::request_dispatch_grant`], which it hands an attended chat's ask to
-//! unchanged. `attendance` is the app's own mark on the chat
+//! unchanged. [`request_dispatch`] is the same for a chat read from its session, for tests. `attendance` is the app's own mark on the chat
 //! ([`purlis_core::dispatchunattended::Mark`]), never a word of the request.
 //!
 //! # What an unattended chat cannot do
@@ -36,9 +37,9 @@ use purlis_core::dispatchgrant::{self, InForce};
 use purlis_core::dispatchunattended::{self, Answer, Attendance};
 use purlis_core::sandbox::policy::Locks;
 
-use crate::dispatchgrants::{
-    Asking, Requested, request_dispatch_grant, request_dispatch_grant_or_refuse,
-};
+use crate::dispatchgrants::{Asking, Requested};
+#[cfg(test)]
+use crate::dispatchgrants::{request_dispatch_grant, request_dispatch_grant_or_refuse};
 
 /// **THE DISPATCH CORE'S ENTRY POINT (#1446).** Chat `session` of `held`'s project, which runs
 /// as `attendance` says, asks to dispatch to persona `target` with `brief`, for a task that
@@ -49,6 +50,7 @@ use crate::dispatchgrants::{
 /// answered here and now: [`Requested::Covered`], [`Requested::Locked`] or
 /// [`Requested::Refused`], and never [`Requested::NeedsGrant`]. Its brief is not kept: nothing
 /// is shown to anyone.
+#[cfg(test)]
 pub fn request_dispatch(
     held: &crate::planes::Held,
     session: u32,
@@ -64,6 +66,24 @@ pub fn request_dispatch(
             request_dispatch_grant_or_refuse(held, session, target, brief, works_in)
         }
     }
+}
+
+/// [`request_dispatch`], for the asking chat as the caller read it (`asking`, its session
+/// included): what the caller decided before asking, and what this answers, go by one read
+/// of who the chat is and what persona it runs with (#1543).
+pub fn request_dispatch_as(
+    held: &crate::planes::Held,
+    asking: Asking,
+    attendance: Attendance,
+    target: &str,
+    brief: &str,
+    works_in: Option<&str>,
+) -> Requested {
+    let uncovered = match attendance {
+        Attendance::Attended => crate::dispatchgrants::Uncovered::AskThePerson,
+        Attendance::Unattended => crate::dispatchgrants::Uncovered::Refuse,
+    };
+    crate::dispatchgrants::requested_as(held, asking, target, brief, uncovered, works_in)
 }
 
 /// **Whether a person is at chat `session`** (#1501): not where its harness ever reported its

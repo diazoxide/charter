@@ -65,7 +65,7 @@ const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   nevers: [],
   any: [],
   nevers_unread: null,
-  project_unsettled: false,
+  project_unsettled: null,
   personas: ["devops", "qa", "steward"],
   kept_blocked: [],
   dormant: [],
@@ -649,63 +649,75 @@ describe("where the list of nevers does not read", () => {
   });
 });
 
-describe("while purlis cannot read the project's history", () => {
-  it("says so at the top, and no grant of the project's accepted here says it counts", async () => {
-    // #1543: the first moments after a launch, and a history git cannot be asked of.
-    const fake = core({
+describe("while the project's grants accepted here are not checked against its history", () => {
+  // #1543: two states, each said as it is.
+  const ACCEPTED_ANY = [
+    { asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE },
+  ] as const;
+  const accepted = (name: string) => rowOf(screen.getByRole("button", { name }));
+  const OURS_ROW = "Remove for everyone: the project's grant for steward to devops";
+  const ANY_ROW = "Remove for everyone: any persona for qa, in this project";
+
+  it("says a dispatch checks first where purlis has not checked since it started", async () => {
+    core({
       grants: [MINE, OURS, THEIRS],
-      standing: {
-        project_unsettled: true,
-        any: [{ asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE }],
-      },
+      standing: { project_unsettled: "not_yet", any: [...ACCEPTED_ANY] },
     });
     render(<Table />);
 
     const notice = (
-      await screen.findByText(/^purlis has not read this project's git history/)
+      await screen.findByText(/^purlis has not checked the project's grants/)
     ).closest("[data-cause]") as HTMLElement;
-    expect(notice).toHaveAttribute("data-cause", "dispatch-project-unsettled");
+    expect(notice).toHaveAttribute("data-cause", "dispatch-project-not-checked");
     expect(notice).toHaveTextContent(
-      "Until it can, no grant of the project's that you accepted counts on this machine",
+      "purlis has not checked the project's grants you accepted against its git history since it started. The next dispatch checks first: where the history reads, they count as before. Where it cannot be read, they do not count: a chat you are at asks you on its own tab, and one nobody is at is refused and listed under Needs you.",
     );
+    // It never says they do not count now: a dispatch may still find them good.
+    expect(notice).not.toHaveTextContent("so no grant");
     const whole = await table();
     expect(notice.compareDocumentPosition(whole) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const accepted = "Accepted, but does not count until purlis can read this project's history.";
-    expect(
-      rowOf(
-        screen.getByRole("button", {
-          name: "Remove for everyone: the project's grant for steward to devops",
-        }),
-      ),
-    ).toHaveTextContent(accepted);
-    expect(
-      rowOf(
-        screen.getByRole("button", {
-          name: "Remove for everyone: any persona for qa, in this project",
-        }),
-      ),
-    ).toHaveTextContent(accepted);
+    const note =
+      "Accepted. Not checked against this project's history since purlis started: the next dispatch checks it first.";
+    for (const name of [OURS_ROW, ANY_ROW]) {
+      expect(accepted(name)).toHaveTextContent(note);
+      expect(accepted(name)).toHaveClass("dispatch-dormant");
+    }
     // Mine counts as it did, and a teammate's that waits says it waits.
+    expect(accepted("Revoke: my grant for steward to devops")).not.toHaveTextContent(note);
     expect(
-      rowOf(screen.getByRole("button", { name: "Revoke: my grant for steward to devops" })),
-    ).not.toHaveTextContent(accepted);
-    expect(
-      rowOf(
-        screen.getByRole("button", {
-          name: "Accept: the project's grant for qa to devops, on this machine",
-        }),
-      ),
-    ).not.toHaveTextContent(accepted);
+      accepted("Accept: the project's grant for qa to devops, on this machine"),
+    ).not.toHaveTextContent(note);
+  });
 
-    // Once a settling lands, Read again draws it as counting.
-    fake.held.standing = stands({
-      any: [{ asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE }],
+  it("says none counts, and who is asked or refused, where the history could not be read", async () => {
+    const fake = core({
+      grants: [MINE, OURS],
+      standing: { project_unsettled: "unread", any: [...ACCEPTED_ANY] },
     });
+    render(<Table />);
+
+    const notice = (
+      await screen.findByText(/^purlis could not read this project's git history/)
+    ).closest("[data-cause]") as HTMLElement;
+    expect(notice).toHaveAttribute("data-cause", "dispatch-project-unread");
+    expect(notice).toHaveTextContent(
+      "purlis could not read this project's git history just now, so no grant of the project's that you accepted counts on this machine. A chat you are at asks you on its own tab, and one nobody is at is refused and listed under Needs you. Each dispatch checks the history again first. Your own grants are as they were.",
+    );
+    const note = "Accepted, but does not count while purlis cannot read this project's history.";
+    for (const name of [OURS_ROW, ANY_ROW]) {
+      expect(accepted(name)).toHaveTextContent(note);
+      expect(accepted(name)).toHaveClass("dispatch-dormant");
+    }
+    expect(accepted("Revoke: my grant for steward to devops")).not.toHaveTextContent(note);
+
+    // Once a settling answers, Read again draws them as counting.
+    fake.held.standing = stands({ any: [...ACCEPTED_ANY] });
     await userEvent.setup().click(within(notice).getByRole("button", { name: "Read again" }));
     await waitFor(() =>
-      expect(screen.queryByText(/^purlis has not read this project's git history/)).toBeNull(),
+      expect(screen.queryByText(/^purlis could not read this project's git history/)).toBeNull(),
     );
-    expect(screen.queryByText(accepted)).toBeNull();
+    expect(screen.queryByText(note)).toBeNull();
+    expect(accepted(OURS_ROW)).not.toHaveClass("dispatch-dormant");
   });
 });
 

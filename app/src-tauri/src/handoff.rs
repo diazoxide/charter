@@ -1808,6 +1808,15 @@ fn dispatch_it(
     dispatch_noting(held, plane, wanted, size).map_err(|not| not.why)
 }
 
+/// **Whether the crossing rule stands aside for a chat nobody is at** (#1543): it was started
+/// with no sandbox and asks for a persona other than the one it runs with (`runs_with`, as
+/// `dispatchgrants::asking_from` read it), so the no-sandbox refusal answers instead
+/// ([`purlis_core::dispatchunattended::answer_of`]). The same comparison that refusal makes,
+/// so the rule never stands aside for a dispatch the refusal would let through.
+fn crossing_stands_aside(to: Option<&str>, runs_with: Option<&str>, sandboxed: bool) -> bool {
+    !sandboxed && to.is_some_and(|to| runs_with != Some(to))
+}
+
 /// Why a dispatch started nothing ([`dispatch_noting`]).
 struct NotDispatched {
     /// The sentence for whoever is on the line for it.
@@ -2032,7 +2041,17 @@ fn dispatch_noting(
     // below), so the crossing's sentence, which says a grant naming the pair would carry it,
     // would send it after a grant that carries nothing. The crossing rule still answers for
     // its own persona, which needs no sandbox.
-    let unsandboxed_to_another = to_another && held.chats().confines_of(from).is_none();
+    //
+    // **"Another persona" is what that refusal itself compares** (`dispatchunattended`'s
+    // `answer_of`): the target against the persona the asking chat runs with, as
+    // `asking_as` read it. Never a second read of the project's default persona, which
+    // could differ from the one the refusal goes by and let a dispatch the refusal reads as
+    // to its own persona past the crossing rule.
+    let unsandboxed_to_another = crossing_stands_aside(
+        pair.to.as_deref(),
+        asking_as.persona.as_deref(),
+        held.chats().confines_of(from).is_some(),
+    );
     if let (Attendance::Unattended, By::Chat, Some(name)) = (attended, wanted.by, crosses_into)
         && workspace.as_deref() != Some(name)
         && !unsandboxed_to_another
@@ -2147,9 +2166,11 @@ fn dispatch_noting(
         // on no persona dispatching to none has no pair to grant.
         let its = match (wanted.by, asked.to.as_deref()) {
             (By::Chat, Some(to)) => {
-                match crate::dispatchunattended::request_dispatch(
+                // As `asking_as` read the chat: the crossing rule above was decided by the
+                // same read (#1543).
+                match crate::dispatchunattended::request_dispatch_as(
                     held,
-                    from,
+                    asking_as.clone(),
                     attended,
                     to,
                     &wanted.brief,
@@ -7964,6 +7985,36 @@ mod tests {
             loss_of(&held, &dispatch),
             Err("That branch's folder is already gone, so there is nothing to discard.".to_owned())
         );
+    }
+
+    #[test]
+    fn the_crossing_rule_stands_aside_exactly_where_the_no_sandbox_refusal_answers() {
+        // #1543 review, F3: the guard and the refusal it defers to compare the same two
+        // things, so the crossing rule never stands aside for a dispatch the refusal reads as
+        // to the chat's own persona, and so lets through.
+        use purlis_core::dispatchgrant::Covers;
+        use purlis_core::dispatchunattended::{Answer, Refusal, answer_of};
+        for (to, runs_with) in [
+            ("devops", Some("steward")),
+            ("steward", Some("steward")),
+            ("devops", None),
+            ("devops", Some("devops")),
+        ] {
+            // Covered: where it would otherwise go through. A chat's own persona is always
+            // covered, and it is the one case the refusal lets by with no sandbox.
+            let refused = matches!(
+                answer_of(Covers::Covered, runs_with, to, false, false),
+                Answer::Refused(Refusal::Unsandboxed(_))
+            );
+            assert_eq!(
+                crossing_stands_aside(Some(to), runs_with, false),
+                refused,
+                "{to} from {runs_with:?}"
+            );
+            // A sandboxed chat is held to the crossing rule whoever it asks for.
+            assert!(!crossing_stands_aside(Some(to), runs_with, true));
+        }
+        assert!(!crossing_stands_aside(None, Some("steward"), false));
     }
 
     #[test]
