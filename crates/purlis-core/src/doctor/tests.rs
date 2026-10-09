@@ -2624,6 +2624,15 @@ fn a_logged_landing_the_default_branch_no_longer_holds_is_a_fail_naming_change_a
         &svc,
         &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
     );
+    // The clone knows its default branch, as one cloned from a forge does.
+    git(
+        &svc,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
     let merge = crate::testgit::run(&svc, &["rev-parse", "HEAD"])
         .out
         .trim()
@@ -2680,6 +2689,15 @@ fn a_logged_landing_this_clone_never_fetched_is_not_read_as_lost() {
     git(
         &svc,
         &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+    );
+    // The default branch is known, so the row does ask: only the unknown commit keeps it quiet.
+    git(
+        &svc,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
     );
     // `landed` logs a commit this clone has never seen: it can under-report, never invent.
     landed(&root, "alpha", "a", "svc");

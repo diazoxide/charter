@@ -33,7 +33,7 @@
 //!   its local one holds it any more: the branch was rewritten (a force-push) after the
 //!   landing. The commit is the one value out of a record that reaches an argv, and only once
 //!   it reads as a commit id ([`land::sha_ok`]) and git resolves it to a commit starting with
-//!   it. A commit git does not know (not fetched here) is not read as lost.
+//!   it. A commit git does not know (never brought to this clone) is not read as lost.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -277,7 +277,7 @@ fn landing_divergences(
 /// The default branch and the logged commit's short id, when `clone` knows the commit a
 /// landing logged and neither its pushed default branch nor its local one holds it: the
 /// branch was rewritten after the landing. `None` when it is held, when the commit is not a
-/// commit id or not known here (never fetched, or gone), or when git could not say. So this can
+/// commit id or not known here (never brought here, or gone), or when git could not say. So this can
 /// under-report, never invent.
 fn landing_lost(
     root: &std::path::Path,
