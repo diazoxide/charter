@@ -46,6 +46,15 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   under `--stream` and `--exec`, then the exit status. stdin is passed through when it is not a
   terminal.
 
+  **A host the chat's hosts do not list.** The command's proxy refuses it, and the command
+  reports that in its own words, which often name no host (kubectl says "Forbidden"). So the
+  proxy's own record of what it refused is what counts: the chat's tab shows the same sandbox
+  block Notice as for the chat's own command, naming that host and port whole, with **Allow
+  for this chat**, **Always allow** and **Keep blocked**. Before the exit status, purlis says on
+  stderr that its sandbox refused that host and that it can be allowed on the tab. A grant
+  reaches the next run once the chat is started again with it, which Allow does once the
+  chat's turn has ended. The host is never read from what the command printed.
+
   **Which vaults a chat may use.** One the vault registry tags for the persona the chat was
   opened as, or one you allowed for that persona on this machine. A vault that is neither is
   refused with a sentence naming the ways forward, and the chat's tab shows a notice with

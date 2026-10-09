@@ -37,6 +37,11 @@
 //!
 //! **A host listed with a port** (`10.0.0.5:6443`, a project's or a person's, #1341) is carried
 //! on that port alone, tunnel or plain; a host without one on the ports above.
+//!
+//! **What it refused is its own record** ([`Refusals`]): each host and port it refused because
+//! no preset or host lists it, as the request named them, once each and at most
+//! [`REFUSALS_KEPT`]. A brokered `secret exec` reads it to tell the asking chat which host its
+//! command was refused (`crate::secrets::brokered`): the proxy's word, never the command's.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -50,6 +55,10 @@ pub const TUNNEL_PORTS: [u16; 1] = [443];
 
 /// The port a plain request is carried to: HTTP's.
 pub const PLAIN_PORTS: [u16; 1] = [80];
+
+/// The most distinct hosts a proxy's [`Refusals`] keeps: a command that tries a thousand hosts
+/// is one pattern, not a thousand Notices.
+pub const REFUSALS_KEPT: usize = 8;
 
 /// The most a request's head may be before it is refused.
 const HEAD_MAX: usize = 16 * 1024;
@@ -141,6 +150,79 @@ fn entry_parts(entry: &str) -> (&str, Option<u16>) {
     }
 }
 
+/// What is told each host and port a proxy refuses, the first time it refuses it.
+pub type Told = Arc<dyn Fn(&str, u16) + Send + Sync + 'static>;
+
+/// **The hosts a proxy refused because nothing lists them**: each host and port once, in the
+/// order refused, at most [`REFUSALS_KEPT`], and told to whoever is listening as it happens.
+/// A request the proxy could not read, or one whose `Host` names another host, is not one: no
+/// grant would let it through.
+#[derive(Clone, Default)]
+pub struct Refusals {
+    kept: Arc<Mutex<Vec<(String, u16)>>>,
+    told: Option<Told>,
+}
+
+impl std::fmt::Debug for Refusals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Refusals")
+            .field("kept", &self.refused())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Refusals {
+    /// A record that tells `told` each refusal it keeps, as it keeps it.
+    pub fn telling(told: Told) -> Self {
+        Self {
+            kept: Arc::default(),
+            told: Some(told),
+        }
+    }
+
+    /// Keeps `host` on `port` as refused, and tells it, unless it is kept already or the
+    /// record is full.
+    pub fn heard(&self, host: &str, port: u16) {
+        {
+            let mut kept = self
+                .kept
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if kept.len() >= REFUSALS_KEPT
+                || kept
+                    .iter()
+                    .any(|(h, p)| *p == port && h.eq_ignore_ascii_case(host))
+            {
+                return;
+            }
+            kept.push((host.to_owned(), port));
+        }
+        if let Some(told) = &self.told {
+            told(host, port);
+        }
+    }
+
+    /// Each refused host and port, as one names it to a grant: `host:port`, an IPv6 address
+    /// in brackets.
+    pub fn refused(&self) -> Vec<String> {
+        self.kept
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(host, port)| host_and_port(host, *port))
+            .collect()
+    }
+}
+
+/// `host` on `port` as a grant names it: `host:port`, an IPv6 address in brackets.
+pub fn host_and_port(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// A running proxy, on a port of the loopback interface. It stops listening when dropped;
 /// a tunnel already open runs until either end closes it.
 #[derive(Debug)]
@@ -148,13 +230,25 @@ pub struct Proxy {
     addr: SocketAddr,
     ports: Vec<u16>,
     stop: Arc<AtomicBool>,
+    refusals: Refusals,
 }
 
 impl Proxy {
     /// A proxy that tunnels to `hosts` on [`TUNNEL_PORTS`] and carries plain requests to them
     /// on [`PLAIN_PORTS`].
     pub fn start(hosts: Vec<String>) -> io::Result<Self> {
-        Self::carrying(hosts, TUNNEL_PORTS.to_vec(), PLAIN_PORTS.to_vec(), LIMITS)
+        Self::start_keeping(hosts, Refusals::default())
+    }
+
+    /// [`Self::start`], keeping what it refuses in `refusals`.
+    pub fn start_keeping(hosts: Vec<String>, refusals: Refusals) -> io::Result<Self> {
+        Self::carrying(
+            hosts,
+            TUNNEL_PORTS.to_vec(),
+            PLAIN_PORTS.to_vec(),
+            LIMITS,
+            refusals,
+        )
     }
 
     /// A proxy that carries `hosts` on `ports`, tunnels and plain requests alike.
@@ -165,7 +259,7 @@ impl Proxy {
     /// A proxy that carries `hosts` on `ports`, tunnels and plain requests alike, within
     /// `limits`.
     pub fn limited(hosts: Vec<String>, ports: Vec<u16>, limits: Limits) -> io::Result<Self> {
-        Self::carrying(hosts, ports.clone(), ports, limits)
+        Self::carrying(hosts, ports.clone(), ports, limits, Refusals::default())
     }
 
     fn carrying(
@@ -173,6 +267,7 @@ impl Proxy {
         tunnel_ports: Vec<u16>,
         plain_ports: Vec<u16>,
         limits: Limits,
+        refusals: Refusals,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
@@ -184,6 +279,7 @@ impl Proxy {
             plain_ports,
             idle: limits.idle,
             head: limits.head,
+            refusals: refusals.clone(),
         });
         let open = Arc::new(AtomicUsize::new(0));
         let stopping = Arc::clone(&stop);
@@ -218,7 +314,17 @@ impl Proxy {
                         });
                 }
             })?;
-        Ok(Self { addr, ports, stop })
+        Ok(Self {
+            addr,
+            ports,
+            stop,
+            refusals,
+        })
+    }
+
+    /// What it has refused because nothing lists it.
+    pub fn refusals(&self) -> &Refusals {
+        &self.refusals
     }
 
     /// The loopback port it listens on.
@@ -261,6 +367,7 @@ struct Allowed {
     plain_ports: Vec<u16>,
     idle: Duration,
     head: Duration,
+    refusals: Refusals,
 }
 
 impl Allowed {
@@ -307,6 +414,7 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
         return;
     }
     if !allowed.carries(&request) {
+        allowed.refusals.heard(&request.host, request.port);
         answer(
             &mut client,
             "403 Forbidden",

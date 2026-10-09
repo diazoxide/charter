@@ -91,6 +91,9 @@ fn count(ctx: &Ctx, v: &Vault) -> Option<u32> {
 /// A vault the chat's persona is not tagged for is refused by the core, and noted here first
 /// for the Notice on the chat's tab (#1430, `crate::vaultroute`): from the same record of the
 /// chat, never from the line.
+///
+/// Each host the run's sandbox refuses is told to `blocked` as the asking chat's block, so its
+/// tab's Notice offers Allow as for a block of the chat's own command.
 pub(crate) fn run_brokered(
     held: &crate::planes::Held,
     plane: &PlaneId,
@@ -98,6 +101,7 @@ pub(crate) fn run_brokered(
     ask: purlis_core::secrets::brokered::Ask,
     reader: Box<dyn std::io::BufRead + Send>,
     writer: Box<dyn std::io::Write + Send>,
+    blocked: purlis_core::secrets::brokered::Told,
 ) {
     use purlis_core::secrets::brokered;
     let Some(open) = held
@@ -132,7 +136,7 @@ pub(crate) fn run_brokered(
         &ask.secret_exec.vault,
         refused,
     );
-    brokered::serve(&asker, ask.secret_exec, reader, writer);
+    brokered::serve(&asker, ask.secret_exec, reader, writer, blocked);
 }
 
 /// Answers `purlis vault list` for chat `chat` of `held` (#1430): every vault the project

@@ -95,6 +95,12 @@ user allowed it for that persona on this machine), runs the command in this chat
 streams the output back with each value's literal text masked. If it is refused with a
 sentence, tell the user that sentence. Do not try to read the vault some other way.
 
+**When the command cannot reach a host** ("Forbidden", a refused connection) and purlis adds
+that its sandbox refused a connection to a host, that host is not one this chat may reach.
+Tell the user the host purlis named: a notice on this chat's tab lets them allow it. Once they
+have, the chat is started again with it, and you run the same command again. Do not retry it
+before then, and do not try to reach the host some other way.
+
 **When a vault is refused for this chat's persona**, the refusal names the ways forward. A
 notice on this chat's tab lets the user press *Allow*; once they have, run the same command
 again, with no restart. Or dispatch the work to the persona the vault is tagged for, with the

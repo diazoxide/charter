@@ -1730,9 +1730,11 @@ impl Planes {
             let held = Arc::downgrade(&held);
             let plane = id.clone();
             let refused = Arc::clone(&self.vault_refused);
-            Arc::new(move |ask, reader, writer| match held.upgrade() {
+            Arc::new(move |ask, reader, writer, blocked| match held.upgrade() {
                 Some(held) => {
-                    crate::vaults::run_brokered(&held, &plane, &*refused, ask, reader, writer);
+                    crate::vaults::run_brokered(
+                        &held, &plane, &*refused, ask, reader, writer, blocked,
+                    );
                 }
                 None => purlis_core::secrets::brokered::not_answered(writer),
             })
