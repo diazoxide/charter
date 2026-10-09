@@ -520,7 +520,13 @@ stepped in, and not what was typed.
   and depth never passes 8.
 - **They are kept in the project's committed settings**, a persona's limits included. A chat
   can edit its own persona's definition, so a limit kept there would be one a chat could raise.
-- **A new start waits** while the machine is short on memory.
+- **A new start waits** while the machine is short on memory. Built in #1467: the last step of
+  the decision, after the grant. "Short" is the operating system's own verdict (macOS's
+  critical memory pressure level; Linux's pressure stall information, else the memory
+  available), and a machine purlis cannot read holds nothing. The dispatch is held, the asking
+  chat is told it waits, the Dispatches tab lists it, and it is decided again once memory
+  frees; after 10 minutes still short it starts nothing and the asking chat is told. The
+  person's own dispatch from a chat's tab does not wait (D-1467-4, delegated).
 
 ### 5. Messages travel along the lineage only, in the first version
 

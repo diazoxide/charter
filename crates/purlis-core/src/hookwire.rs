@@ -1178,6 +1178,15 @@ pub enum Answer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         waiting: Option<String>,
     },
+    /// Nothing has started **yet**: every check let the dispatch through and its grant stands,
+    /// and this machine is short on memory (#1467). The app holds it and decides it again once
+    /// memory frees, against the limits as they are then; where it is still short after
+    /// [`crate::dispatchdecision::MEMORY_WAIT`], nothing starts and the asking chat is told on
+    /// its next turn. `to` is the persona it is for, none for the asking chat's own.
+    WaitingOnMemory {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+    },
     /// What became of an ask after a dispatched task (#1441).
     Task(Box<crate::dispatched::Answered>),
 }

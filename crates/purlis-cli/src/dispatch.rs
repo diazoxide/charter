@@ -371,6 +371,9 @@ pub fn send(
             to,
             waiting: Some(first),
         }) => Err(not_held(from.as_deref(), &to, &ask_name(&ask), &first)),
+        // Held, not refused: every check let it through, and it waits on this machine's memory
+        // (#1467). Not a failure either.
+        Ok(Answer::WaitingOnMemory { to }) => Ok(waiting_on_memory(to.as_deref(), &ask_name(&ask))),
         Ok(Answer::No { why }) => Err(app_refused(&why)),
         Ok(
             Answer::Ticket { .. }
@@ -432,6 +435,22 @@ fn held_for_the_person(from: Option<&str>, to: &str, task: &str) -> String {
         who_asks(from),
         one(to),
         one(task)
+    )
+}
+
+/// What a chat is told where its task waits on this machine's memory (#1467): nothing has
+/// started, it starts by itself once memory frees, and what it hears if it never does.
+fn waiting_on_memory(to: Option<&str>, task: &str) -> String {
+    let one = purlis_core::personas::one_line;
+    let to = to.map_or_else(String::new, |to| format!(" as '{}'", one(to)));
+    format!(
+        "{SAYS} waiting on memory. This machine is short on memory, so '{}'{to} has not \
+         started yet. It starts by itself once memory frees, held to the limits as they are \
+         then, and its report reaches this chat as context on a later turn. If memory is still \
+         short after {} minutes, nothing starts and this chat is told on its next turn. Carry \
+         on with other work, and do not dispatch it again.",
+        one(task),
+        purlis_core::dispatchdecision::MEMORY_WAIT_MINUTES
     )
 }
 
@@ -575,6 +594,7 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
             | Answer::Working(_)
             | Answer::Dispatched { .. }
             | Answer::NeedsGrant { .. }
+            | Answer::WaitingOnMemory { .. }
             | Answer::Task(_),
         )
         | Err(_) => Err(format!(

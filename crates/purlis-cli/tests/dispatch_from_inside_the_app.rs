@@ -394,6 +394,35 @@ fn a_dispatch_the_person_is_asked_about_is_held_and_says_what_happens_next() {
 }
 
 #[test]
+fn a_dispatch_waiting_on_memory_is_held_and_says_what_happens_next() {
+    // #1467: every check let it through, and the machine is short on memory. Held, not
+    // refused: stdout, exit 0, and the bound it waits within.
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app(&tmp, |tickets, connection, ask| {
+        on_a_ticket(tickets, connection, ask, |_| Answer::WaitingOnMemory {
+            to: Some("qa".to_owned()),
+        })
+    });
+
+    let out = dispatch(
+        &root(&tmp),
+        Some(&app),
+        &["--to", "qa", "--name", "check the queue"],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(
+        text(&out.stdout),
+        "purlis dispatch: waiting on memory. This machine is short on memory, so 'check the \
+         queue' as 'qa' has not started yet. It starts by itself once memory frees, held to the \
+         limits as they are then, and its report reaches this chat as context on a later turn. \
+         If memory is still short after 10 minutes, nothing starts and this chat is told on its \
+         next turn. Carry on with other work, and do not dispatch it again.\n"
+    );
+}
+
+#[test]
 fn a_second_dispatch_across_a_pair_the_person_is_being_asked_about_is_not_held() {
     // The person was shown one brief. A second ask across the same pair is not queued beside
     // it: the chat is told which task is waiting, and to ask again afterwards.

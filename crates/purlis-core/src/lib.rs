@@ -101,6 +101,7 @@ pub mod livesub;
 pub mod machine;
 pub mod manifest;
 pub mod mdsection;
+pub mod memorypressure;
 pub mod memscope;
 pub mod memstore;
 pub mod names;

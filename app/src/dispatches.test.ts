@@ -15,6 +15,7 @@ import {
   personasOf,
   saidAt,
   shownDispatches,
+  waitsOnMemory,
   worktreeSaid,
 } from "./dispatches";
 
@@ -236,6 +237,28 @@ describe("the Dispatches tab's filters", () => {
     ).toBe(
       "A handoff for the asking chat's own persona, asked by you, from steward 3: kept blocked by you. Nothing was started.",
     );
+  });
+
+  it("says of a dispatch waiting on memory that it starts by itself, and when it gave up (#1467)", () => {
+    const row: NotStartedRow = {
+      state: "waiting-on-memory",
+      mode: "task",
+      persona: "devops",
+      task: "rotate the keys",
+      asker: "steward 3",
+      by_person: false,
+      at: "2026-10-09T08:30:00Z",
+    };
+    expect(waitsOnMemory(row)).toBe(true);
+    expect(notStartedSaid(row)).toBe(
+      "The task rotate the keys for devops, asked by steward 3: waiting for this machine to free memory (2026-10-09 08:30 UTC). It starts by itself once memory frees, or after 10 minutes starts nothing.",
+    );
+    const gaveUp = { ...row, state: "gave-up-on-memory" };
+    expect(waitsOnMemory(gaveUp)).toBe(false);
+    expect(notStartedSaid(gaveUp)).toBe(
+      "The task rotate the keys for devops, asked by steward 3: this machine was still short on memory after 10 minutes (2026-10-09 08:30 UTC). Nothing was started.",
+    );
+    expect(waitsOnMemory({ ...row, state: "held" })).toBe(false);
   });
 
   it("is one view per project, which no extension's view of the same name is", () => {

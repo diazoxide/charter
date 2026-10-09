@@ -1724,6 +1724,30 @@ impl Planes {
                 });
             })
         });
+        // A dispatch waiting on this machine's memory starts once memory frees, or gives up
+        // past the bound (#1467): looked at on a thread of the project's own, which ends with
+        // the project. Weak for the handoff's reason.
+        {
+            let held = Arc::downgrade(&held);
+            let plane = id.clone();
+            let arrivals = Arc::clone(&self.arrivals);
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(crate::handoff::MEMORY_LOOKED_AT_EVERY);
+                    let Some(held) = held.upgrade() else { break };
+                    // A reading stood in for the machine's is a test's, which looks itself.
+                    if held.held_dispatches().memory().stood_in() {
+                        continue;
+                    }
+                    crate::handoff::memory_freed(
+                        &held,
+                        &plane,
+                        std::time::Instant::now(),
+                        &*arrivals,
+                    );
+                }
+            });
+        }
         // A brokered `secret exec` from one of this plane's chats is run by this plane, which
         // holds the chat's record: its persona and its folder (#1407). Weak for the handoff's
         // reason.

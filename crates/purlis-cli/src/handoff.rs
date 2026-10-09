@@ -332,6 +332,14 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             voice::err(&not_held(from.as_deref(), &to, &first));
             return ExitCode::FAILURE;
         }
+        // Held, not refused: it opens by itself once memory frees (#1467).
+        Host::WaitingOnMemory { to } => {
+            println!(
+                "{}",
+                waiting_on_memory(to.as_deref(), ws, create_vision.is_some())
+            );
+            return ExitCode::SUCCESS;
+        }
         Host::Refused(why) => Some(why),
         Host::None => None,
     };
@@ -440,6 +448,26 @@ fn held_for_the_person(from: Option<&str>, to: &str, ws: &str, creates: bool) ->
          with other work, and do not hand it off again.",
         who_asks(from),
         purlis_core::personas::one_line(to)
+    )
+}
+
+/// What a chat is told where its handoff waits on this machine's memory (#1467).
+fn waiting_on_memory(to: Option<&str>, ws: &str, creates: bool) -> String {
+    let to = to.map_or_else(String::new, |to| {
+        format!(" as '{}'", purlis_core::personas::one_line(to))
+    });
+    let created = if creates {
+        format!(" '{ws}' is created then too, and not before.")
+    } else {
+        String::new()
+    };
+    format!(
+        "{HANDOFF_SAYS} waiting on memory. This machine is short on memory, so nothing has been \
+         opened yet. The chat{to} opens by itself in workspace '{ws}' once memory frees, \
+         started on the brief and held to the limits as they are then.{created} If memory is \
+         still short after {} minutes, nothing opens and this chat is told on its next turn. \
+         Carry on with other work, and do not hand it off again.",
+        purlis_core::dispatchdecision::MEMORY_WAIT_MINUTES
     )
 }
 
@@ -584,6 +612,9 @@ enum Host {
         to: String,
         waiting: Option<String>,
     },
+    /// The app holds the handoff while this machine is short on memory (#1467): every check
+    /// let it through, and nothing has opened yet.
+    WaitingOnMemory { to: Option<String> },
     /// The app answered, and said no, in its own words.
     Refused(String),
     /// There is no app to ask, or it did not answer: the terminal path, unchanged.
@@ -639,6 +670,7 @@ fn in_the_app(
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat, row, note }) => Host::Opened(chat, row, note),
         Ok(Answer::NeedsGrant { from, to, waiting }) => Host::Held { from, to, waiting },
+        Ok(Answer::WaitingOnMemory { to }) => Host::WaitingOnMemory { to },
         Ok(Answer::No { why }) => Host::Refused(why),
         Ok(
             Answer::Ticket { .. }
@@ -694,6 +726,7 @@ pub(crate) fn ticketed() -> Ticketed {
             | Answer::Working(_)
             | Answer::Dispatched { .. }
             | Answer::NeedsGrant { .. }
+            | Answer::WaitingOnMemory { .. }
             | Answer::Task(_),
         )
         | Err(_) => Ticketed::NoApp,

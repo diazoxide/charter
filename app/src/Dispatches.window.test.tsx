@@ -609,6 +609,38 @@ describe("the Dispatches tab", () => {
     expect(screen.queryByTestId("dispatches-empty")).toBeNull();
   });
 
+  it("lists a dispatch waiting on memory, and reads the list again while one waits (#1467)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const waiting: NotStartedRow = {
+        state: "waiting-on-memory",
+        mode: "task",
+        persona: "devops",
+        task: "rotate the keys",
+        asker: "steward 3",
+        by_person: false,
+        at: "2026-10-09T08:30:00Z",
+      };
+      const { asked } = core({ rows: [], notStarted: [waiting] });
+      render(<App />);
+      const panel = await screen.findByTestId("panel-sessions");
+      await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
+
+      const listed = await screen.findAllByTestId("dispatch-not-started");
+      expect(listed.map((one) => one.textContent)).toEqual([
+        "The task rotate the keys for devops, asked by steward 3: waiting for this machine to free memory (2026-10-09 08:30 UTC). It starts by itself once memory frees, or after 10 minutes starts nothing.",
+      ]);
+      expect(listed[0]).toHaveAttribute("data-state", "waiting-on-memory");
+      // It starts by itself, which no change in the project's files announces.
+      const reads = () => asked.filter((one) => one.cmd === "dispatches").length;
+      const before = reads();
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(reads()).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says so when every record in the store is one purlis will not draw", async () => {
     core({ rows: [], undrawn: 1 });
     render(<App />);
