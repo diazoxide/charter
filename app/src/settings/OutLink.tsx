@@ -10,16 +10,21 @@ import { askSettingsAction } from "./links";
 export function OutLink({
   plane,
   action,
+  label,
   children,
 }: {
   plane: PlaneId;
   action: string;
+  /** Its accessible name, where a page names its buttons beyond their words (the dispatch
+   *  table names each by what it shows, then whose row it is on). */
+  label?: string;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       className="ui-setting-reset"
+      aria-label={label}
       // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
       tabIndex={0}
       onClick={() => askSettingsAction(plane, action)}

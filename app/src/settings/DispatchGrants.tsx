@@ -12,6 +12,8 @@ import {
 } from "../bindings";
 import { Notice } from "../Notice";
 import type { RowIds } from "./components";
+import { showPersona } from "./links";
+import { OutLink } from "./OutLink";
 
 /** No grants and no locks: what a core that answers nothing is read as. */
 const NONE: DispatchGrants = {
@@ -345,6 +347,8 @@ export function DispatchGrantsList({
   const unread = standing.nevers_unread;
   const personas = standing.personas;
   const isPersona = (name: string) => personas === null || personas.includes(name);
+  /** Whether `name` is known to be a persona of this project: only those link to a tab. */
+  const hasTab = (name: string) => name !== ANY && personas?.includes(name) === true;
   const isBack = (name: string) => standing.returned.includes(name);
   const tasksLeft = "Tasks already running are left as they are.";
 
@@ -1278,6 +1282,16 @@ export function DispatchGrantsList({
                     <tr>
                       <th colSpan={4} scope="rowgroup" className="dispatch-persona">
                         <span>{group.heading}</span>
+                        {persona !== undefined && hasTab(persona) && (
+                          // A persona stays in its own tab, and the table links to it (#1388).
+                          <OutLink
+                            plane={plane}
+                            action={showPersona(persona)}
+                            label={`Show ${persona}: the persona ${persona}`}
+                          >
+                            {`Show ${persona}`}
+                          </OutLink>
+                        )}
                         {persona !== undefined && !here && (
                           <span className="granted-note">
                             {" "}
@@ -1309,7 +1323,18 @@ export function DispatchGrantsList({
                     {group.targets.map((target) =>
                       rows(
                         isPersona(target.name) ? (
-                          target.name
+                          <>
+                            {target.name}{" "}
+                            {hasTab(target.name) && (
+                              <OutLink
+                                plane={plane}
+                                action={showPersona(target.name)}
+                                label={`Show ${target.name}: the persona ${group.persona ?? "a chat on no persona"} may dispatch to`}
+                              >
+                                {`Show ${target.name}`}
+                              </OutLink>
+                            )}
+                          </>
                         ) : (
                           <>
                             {target.name} <span className="granted-note">(not a persona)</span>
