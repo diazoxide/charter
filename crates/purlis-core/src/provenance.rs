@@ -446,6 +446,97 @@ pub fn change_of(plane: &Path, top: &Path) -> Option<String> {
         .map(|record| record.change)
 }
 
+/// What a commit's trailers claim for one of the provenance keys, read by the one rule every
+/// reader follows (#1019, `docs/plane-format.md`, *Provenance trailers*).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Claim {
+    /// No line names a value for the key, or none that could stand on a trailer line.
+    #[default]
+    Unsaid,
+    /// Every line that names the key names this value, under any spelling it has had.
+    One(String),
+    /// The lines name more than one value, in the order they stand. **The commit's provenance
+    /// for this key is not known**: a reader shows that several are claimed and attributes the
+    /// commit to none of them. The last is not purlis's: purlis appends its own only where the
+    /// same line is not already there, and an agent can type any line after it as well as
+    /// before it, so no position says who wrote a line.
+    Several(Vec<String>),
+}
+
+impl Claim {
+    /// The value, where exactly one is claimed.
+    pub fn one(&self) -> Option<&str> {
+        match self {
+            Self::One(value) => Some(value),
+            Self::Unsaid | Self::Several(_) => None,
+        }
+    }
+
+    fn heard(&mut self, value: &str) {
+        match self {
+            Self::Unsaid => *self = Self::One(value.to_owned()),
+            Self::One(had) if had == value => {}
+            Self::One(had) => *self = Self::Several(vec![std::mem::take(had), value.to_owned()]),
+            Self::Several(had) => {
+                if !had.iter().any(|v| v == value) {
+                    had.push(value.to_owned());
+                }
+            }
+        }
+    }
+}
+
+/// What a commit's provenance trailers claim, key by key ([`Claim`]): the reader's side of the
+/// lines [`append`] writes (#1019).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Claims {
+    pub assisted_by: Claim,
+    pub chat: Claim,
+    pub persona: Claim,
+    pub change: Claim,
+}
+
+impl Claims {
+    /// The claims in `trailers`, the commit's trailer block as git parses it, one `Key: value`
+    /// a line: what `git log --format='%(trailers:only,unfold)'` prints. A reader asks git for
+    /// the block and never greps the whole message, so a body line that only looks like a
+    /// trailer claims nothing.
+    ///
+    /// **The rule** (#1019): a key is read under every spelling it has had (`Purlis-Chat` and
+    /// its older name are one key) and in any case, as git compares trailer keys. A value that
+    /// could not stand on one trailer line (one word of printable ASCII, at most 100 characters)
+    /// is no value, as when it is written. The same value said twice is one claim. Two different values are [`Claim::Several`], and the
+    /// commit's provenance for that key is unknown. They are a claim, not proof, whatever they
+    /// say.
+    pub fn read(trailers: &str) -> Self {
+        let mut claims = Self::default();
+        for line in trailers.lines() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = Some(value.trim().to_owned());
+            let Some(value) = known(&value) else {
+                continue;
+            };
+            let same = |name: &str| name.eq_ignore_ascii_case(key);
+            let claim = if same(ASSISTED_BY) {
+                &mut claims.assisted_by
+            } else if crate::names::TRAILER_CHAT.spellings().any(same) {
+                &mut claims.chat
+            } else if crate::names::TRAILER_PERSONA.spellings().any(same) {
+                &mut claims.persona
+            } else if crate::names::TRAILER_CHANGE.spellings().any(same) {
+                &mut claims.change
+            } else {
+                continue;
+            };
+            claim.heard(value);
+        }
+        claims
+    }
+}
+
 /// `value`, where it can stand on one trailer line as one word: printable ASCII, no space.
 fn known(value: &Option<String>) -> Option<&str> {
     value
