@@ -4899,7 +4899,7 @@ mod tests {
     }
 
     #[test]
-    fn a_handed_off_chat_closed_owing_its_report_is_recorded_as_failed() {
+    fn a_reporting_open_closed_owing_its_report_is_recorded_as_closed_by_the_person() {
         use purlis_core::dispatchrecord::Outcome;
 
         let plane = Plane::new();

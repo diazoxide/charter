@@ -11,8 +11,10 @@
 //!
 //! **A refused start is not an end.** A task whose start the launch refused (every agent was
 //! stopped, a profile wants approving again, a folder moved) waits in the list of chats that
-//! did not start, as any chat does, its dispatch still running. **Retry now** starts it told to
-//! carry on; only **Forget** ends it, and tells the chat that asked ([`forgetting`]).
+//! did not start, its dispatch still running, drawn under the chat that asked (#1497). **Try
+//! to start again** on that row starts it told to carry on ([`retrying`]); **End task** on it
+//! ends it and tells the chat that asked (`crate::unstarted::end`). Forget, for a chat listed
+//! across the window, does the same ([`forgetting`]).
 //!
 //! A dispatch whose chat neither came back nor waits to has ended, **where the record was read
 //! or the person chose to start fresh**: a record that could not be read says nothing about
@@ -361,7 +363,8 @@ pub(crate) fn resuming(
     started
 }
 
-/// **Retry now** on the chat with id `id` that a launch could not start (#1513): as
+/// **Retry now** (or a task row's **Try to start again**) on the chat with id `id` that a
+/// launch could not start (#1513): as
 /// [`resuming`], for the reports kept while it was not open, by its id.
 pub(crate) fn retrying(
     held: &Held,

@@ -7483,6 +7483,13 @@ mod tests {
         a_report_from(&held, session, Stop);
 
         assert!(becomes(|| !is_open(&held, session)), "the tab stayed open");
+        // The window is told the close once it is done: the chat leaves the open list first,
+        // and its close finishes on the hook's thread after that.
+        assert!(
+            becomes(|| phases(&told, session).len() >= 2),
+            "{:?}",
+            phases(&told, session)
+        );
         assert_eq!(
             phases(&told, session),
             [
