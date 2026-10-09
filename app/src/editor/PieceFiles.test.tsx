@@ -253,6 +253,38 @@ describe("Show what changed (FM-11)", () => {
   });
 });
 
+describe("Show what changed in a file's own tab (#1189)", () => {
+  it("is offered for a file the branch changed, and opens its comparison", async () => {
+    core({ "src/lib.rs": { kind: "text", text: "x\n" } }, undefined, undefined, {
+      "src/lib.rs": "changed",
+    });
+    const opened = vi.fn();
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" onOpenView={opened} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show what changed" }));
+
+    expect(opened).toHaveBeenCalledWith(
+      { from: null, view: "piece-diff", key: "alpha/svc/fix-it/src/lib.rs" },
+      "What changed · lib.rs · fix-it",
+    );
+  });
+
+  it("is absent for a file the branch did not change", async () => {
+    core(
+      { "a.txt": { kind: "text", text: "hello\n" }, "b.txt": { kind: "text", text: "" } },
+      undefined,
+      undefined,
+      {
+        "b.txt": "added",
+      },
+    );
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" onOpenView={() => undefined} />);
+
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("hello"));
+    expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
+  });
+});
+
 describe("the preview (FM-2)", () => {
   /** Opens `path` from the tab's tree, which lists exactly it. */
   async function preview(path: string, answer: PieceFile) {

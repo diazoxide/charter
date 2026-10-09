@@ -18,7 +18,8 @@
  * branch, refuses a path that leaves it, and decides what a file is by its bytes.
  *
  * **Show what changed** (FM-11) is beside a file the branch changed against its base, and only
- * there: it opens the file's comparison in a view tab of its own (`PieceDiff.tsx`).
+ * there, in both tabs (#1189): it opens the file's comparison in a view tab of its own
+ * (`PieceDiff.tsx`).
  *
  * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
  * line the cursor is on go to the editor chosen in Settings. The window sends the
@@ -361,19 +362,26 @@ function Shown({
   }
 }
 
-/** One file of a branch, in a tab of its own, brought to `line` when one is given. */
+/**
+ * One file of a branch, in a tab of its own, brought to `line` when one is given. *Show what
+ * changed* is beside it where the branch changed it (#1189), as in the Files tab's preview.
+ */
 export function PieceFileTab({
   plane,
   cut,
   path,
   line,
+  onOpenView,
 }: {
   plane: PlaneId;
   cut: Place;
   path: string;
   line?: number;
+  /** Opens a view tab: the file's comparison. No *Show what changed* without it. */
+  onOpenView?: (view: ViewRef, title: string) => void;
 }) {
   const read = useFile(plane, cut, path) ?? READING;
+  const changed = useChanged(plane, cut, path);
   const at = useCursorLine(path, line);
   const selection = useSelectedLines(path);
   // A jump to a line (a diff, a record) lands in the text at that line; a file opened to be read
@@ -386,6 +394,9 @@ export function PieceFileTab({
         <span className="piece-files-actions">
           <SourceToggle path={path} read={read} source={source} onSource={setSource} />
           <ToYourEditor plane={plane} cut={cut} path={path} line={at.line} />
+          {changed !== undefined && onOpenView !== undefined && (
+            <ShowWhatChanged cut={cut} path={path} onOpenView={onOpenView} />
+          )}
           <ToAChat plane={plane} cut={cut} path={path} lines={selection.lines} />
         </span>
       </header>
@@ -398,6 +409,27 @@ export function PieceFileTab({
         source={source}
       />
     </div>
+  );
+}
+
+/** *Show what changed*: the file's comparison against the branch's base, in a view tab. */
+function ShowWhatChanged({
+  cut,
+  path,
+  onOpenView,
+}: {
+  cut: Place;
+  path: string;
+  onOpenView: (view: ViewRef, title: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      tabIndex={0}
+      onClick={() => onOpenView(pieceDiffView(cut, path), pieceDiffTitle(cut, path))}
+    >
+      Show what changed
+    </button>
   );
 }
 
@@ -536,15 +568,7 @@ export function PieceFilesTab({
                     Open in a tab of its own
                   </button>
                   {changed !== undefined && (
-                    <button
-                      type="button"
-                      tabIndex={0}
-                      onClick={() =>
-                        onOpenView(pieceDiffView(cut, picked), pieceDiffTitle(cut, picked))
-                      }
-                    >
-                      Show what changed
-                    </button>
+                    <ShowWhatChanged cut={cut} path={picked} onOpenView={onOpenView} />
                   )}
                   <ToAChat plane={plane} cut={cut} path={picked} lines={selection.lines} />
                 </span>
