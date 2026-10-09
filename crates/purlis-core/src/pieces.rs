@@ -439,11 +439,11 @@ fn common_git_dir(clone: &Path) -> Option<PathBuf> {
     if meta.is_dir() {
         return Some(dot_git);
     }
-    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let text = plain_file_head(&dot_git)?;
     let git_dir = clone.join(text.lines().next()?.strip_prefix("gitdir:")?.trim());
-    match std::fs::read_to_string(git_dir.join("commondir")) {
-        Ok(common) => Some(git_dir.join(common.trim())),
-        Err(_) => Some(git_dir),
+    match plain_file_head(&git_dir.join("commondir")) {
+        Some(common) => Some(git_dir.join(common.trim())),
+        None => Some(git_dir),
     }
 }
 
@@ -456,14 +456,26 @@ fn common_git_dir(clone: &Path) -> Option<PathBuf> {
 /// its first line is not a creation, as after `git reflog expire` dropped it.
 pub fn branch_created(common: &Path, branch: &str) -> Option<DateTime<Utc>> {
     let reflog = common.join("logs").join("refs").join("heads").join(branch);
+    created_in(plain_file_head(&reflog)?.lines().next()?)
+}
+
+/// The first 4 KiB of the plain file at `path`, as text, or `None`.
+///
+/// Opened without following a link and without blocking, and read only once that open file
+/// says it is a plain file: the clone's git directory is written by the git a chat runs, and a
+/// FIFO planted at a reflog's name would otherwise hold every listing of the branches for good.
+/// The first line is all a caller reads, and a long-lived branch's reflog can be long.
+fn plain_file_head(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let file = crate::contain::nofollow(std::fs::OpenOptions::new().read(true))
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut text = String::new();
-    // The first line is all that is read, and a long-lived branch's reflog can be long.
-    std::io::Read::read_to_string(
-        &mut std::io::Read::take(std::fs::File::open(reflog).ok()?, 4096),
-        &mut text,
-    )
-    .ok()?;
-    created_in(text.lines().next()?)
+    file.take(4096).read_to_string(&mut text).ok()?;
+    Some(text)
 }
 
 /// The instant a reflog line records, when the line is a branch's creation.
