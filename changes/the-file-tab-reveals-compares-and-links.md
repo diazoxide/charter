@@ -10,6 +10,9 @@
   tab's preview and in a file's own tab, copies the file's path in the branch or shows it in your
   file manager, as a tree row's menu does (#1143).
 
+- **Open a changed line in the file tab.** A file's comparison lists where each change starts,
+  and *Open at line …* opens the branch's file tab on that file at that line (#984).
+
 ### Changed
 
 - **A file's comparison reads again when its branch moves.** While the explorer watches the
