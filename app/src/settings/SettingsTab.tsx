@@ -36,6 +36,7 @@ import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawTo
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 import { CollectionView, type Asked } from "./Collection";
+import { useEnteringFocus } from "./entering";
 import { OutLink } from "./OutLink";
 import { standingIn, type Standing } from "./standing";
 
@@ -425,6 +426,8 @@ function Shown({
       ?.focus({ preventScroll: true });
     focusedSetting(place);
   }, [linked, place, target, drawn, declared]);
+  /** Every way into Settings leaves the keyboard on the nav's current group (#1206). */
+  useEnteringFocus(place, own);
   /** What is typed into each file's text, kept while a group is looked at. */
   const [drafts, setDrafts] = useState<Partial<Record<string, RawDraft>>>({});
   const rawFile = raw.find((one) => one.id === editing);

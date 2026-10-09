@@ -302,7 +302,9 @@ shadcn's token names and would have emitted no CSS here (`design-system.md`). It
 parts from the four dialogs below on one decision: **a click outside closes it**, because a
 drawer asks nothing and a stray click cannot answer anything. Radix hands focus back only to a
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
-is the window's, so the drawer remembers where the keyboard was and puts it back itself. Each
+is the window's, so the drawer remembers where the keyboard was and puts it back itself — unless
+the press was a way into Settings, which takes the keyboard to the Settings tab's current group
+instead; the palette, the doctor and a tab's menu do the same (`settings/entering.ts`, #1206). Each
 of its rows is a Notice with the way out the core gives that kind of alert (NO-6 #1238): a
 Settings group, a fix of the doctor's registry, another project or the Saving view. A press that
 leaves the drawer closes it first; a fix keeps it open and says on the row why it was refused.

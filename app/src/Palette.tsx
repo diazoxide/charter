@@ -15,6 +15,7 @@ import type { FileScope, FoundFile, PlaneId } from "./bindings";
 import { hitSaid, scopeSaid, useFileFind } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
+import { landSettingsFocus } from "./settings/entering";
 
 /**
  * The command palette: every action the window can do, reachable by typing.
@@ -447,7 +448,8 @@ export function Palette({
           }}
           onCloseAutoFocus={(e) => {
             e.preventDefault();
-            giveTheKeyboardBack();
+            // A row that went into Settings sent the keyboard there (#1206).
+            if (!landSettingsFocus()) giveTheKeyboardBack();
           }}
         >
           <label className="palette-ask" htmlFor="palette-query">

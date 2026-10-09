@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, Stethoscope } from "lucide-react";
 import { Notice } from "./Notice";
+import { landSettingsFocus } from "./settings/entering";
 import {
   FIXES_WITH_A_FORM,
   GitIdentityForm,
@@ -636,7 +637,15 @@ export function Health({
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
-        <Dialog.Content className="warning doctor" aria-describedby="doctor-depth">
+        <Dialog.Content
+          className="warning doctor"
+          aria-describedby="doctor-depth"
+          onCloseAutoFocus={(event) => {
+            // A row's "Fix it in Settings" sent the keyboard into Settings: Radix would hand it
+            // back to the doctor's button (#1206).
+            if (landSettingsFocus()) event.preventDefault();
+          }}
+        >
           <Dialog.Title>Doctor</Dialog.Title>
           <p className="honest" id="doctor-depth">
             {report === undefined
