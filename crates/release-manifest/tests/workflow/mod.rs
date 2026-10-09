@@ -2,8 +2,8 @@
 //!
 //! A line reader rather than a YAML parser: a workflow's jobs are the two-space keys under
 //! `jobs:`, their settings the four-space keys below them, and their steps the six-space
-//! `- ` items under `steps:`, which is all these tests need, and no YAML crate is in the
-//! workspace for them.
+//! `- ` items under `steps:` (or `steps: &anchor`), which is all these tests need, and no YAML
+//! crate is in the workspace for them.
 
 #![allow(dead_code)] // Each test crate that includes this module uses a different part of it.
 
@@ -108,12 +108,17 @@ impl Job {
     }
 
     /// The job's steps, each as its lines: the `- ` line and every more-indented one after it.
+    /// `steps: &name` counts, since its anchor is only a label on the list. `steps: *name`
+    /// reuses another job's list, which is read in that job, so this one has none of its own.
     pub fn steps(&self) -> Vec<Vec<String>> {
         let mut steps: Vec<Vec<String>> = Vec::new();
         let mut in_steps = false;
         for line in &self.body {
             if line.starts_with("    ") && !line.starts_with("     ") {
-                in_steps = line.trim_end() == "    steps:";
+                in_steps = line.strip_prefix("    steps:").is_some_and(|rest| {
+                    let rest = rest.trim();
+                    rest.is_empty() || (rest.starts_with('&') && !rest.contains(' '))
+                });
                 continue;
             }
             if !in_steps || line.trim().is_empty() {
