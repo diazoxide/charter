@@ -414,8 +414,10 @@ const REPLACED: &str = "the clone's git directory was replaced while the app wor
 
 /// [`runs_a_program`], answering the identity of the git directory too. **Pinned by
 /// identity** (#1415): the directory at `<repo>/.git` is taken by its device and inode before
-/// anything is asked of it, and a check that finds another directory there by the end refuses,
-/// so a rename between the check and the run can't swap another clone in.
+/// anything is asked of it, and a check that finds another directory there by the end refuses.
+/// **A narrowing, not a closed race** (ADR 0067, noted 2026-10-09): git opens the path again
+/// after each comparison, so a swap after one, or a rename away and back between two, gets
+/// past it. The boundary stays the denial of `.git` writes.
 pub fn checked_repo(repo: &Path) -> Result<Checked, String> {
     let shown = repo.display();
     let not_a_clone = || {
