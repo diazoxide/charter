@@ -2366,6 +2366,79 @@ impl Chats {
             return;
         }
         let mut moved = false;
+        // **And the lineage it is the first chat of is still one** (#1456): where the chat the
+        // person started was started again under an id of its own (it had none, or the old one
+        // was let go of), every chat that names its old id as the lineage's root names the new
+        // one, so a chat in the middle that has closed never splits it. A chat in the middle of
+        // a lineage is not its root, and its restart changes no root. Read from what it was,
+        // open or just let go of, and from the chat now in its place.
+        let (was_first, was_id) = {
+            let open = lock(&self.open);
+            match open.get(&session) {
+                Some(one) => (one.chat.from.is_none(), one.chat.identity.id.clone()),
+                None => {
+                    drop(open);
+                    lock(&self.let_go)
+                        .get(&session)
+                        .map_or((false, None), |was| {
+                            (was.from.is_none(), was.identity.id.clone())
+                        })
+                }
+            }
+        };
+        let now_id = lock(&self.open)
+            .get(&started)
+            .filter(|one| one.chat.from.is_none())
+            .and_then(|one| one.chat.identity.id.clone());
+        if was_first && now_id.is_some() && now_id != was_id {
+            let mut open = lock(&self.open);
+            let mut reserved = lock(&self.reserved);
+            // Where it had no id, its lineage's records name no root: the chats below it are
+            // found by who asked whom, and only those are given the new one.
+            let mut below = std::collections::HashSet::from([session]);
+            if was_id.is_none() {
+                loop {
+                    let more: Vec<u32> = open
+                        .iter()
+                        .map(|(number, one)| (*number, one.chat.from.as_ref()))
+                        .chain(
+                            reserved
+                                .iter()
+                                .map(|(number, chat)| (*number, chat.from.as_ref())),
+                        )
+                        .filter(|(number, from)| {
+                            !below.contains(number)
+                                && from.is_some_and(|from| below.contains(&from.chat))
+                        })
+                        .map(|(number, _)| number)
+                        .collect();
+                    if more.is_empty() {
+                        break;
+                    }
+                    below.extend(more);
+                }
+            }
+            let records = open
+                .iter_mut()
+                .map(|(number, one)| (*number, &mut one.chat))
+                .chain(reserved.iter_mut().map(|(number, chat)| (*number, chat)));
+            for (number, chat) in records {
+                if number == session {
+                    continue;
+                }
+                let Some(from) = chat.from.as_mut() else {
+                    continue;
+                };
+                let of_it = match &was_id {
+                    Some(was) => from.root.as_ref() == Some(was),
+                    None => from.root.is_none() && below.contains(&number),
+                };
+                if of_it {
+                    from.root.clone_from(&now_id);
+                    moved = true;
+                }
+            }
+        }
         for one in lock(&self.open).values_mut() {
             if let Some(from) = one.chat.from.as_mut()
                 && from.chat == session
@@ -6796,6 +6869,93 @@ pub(crate) mod tests {
         chats.tab_shows(session, None, Some(session)).unwrap();
         assert_eq!(chats.record().chats[0].beside, None);
         let _ = chats.close(session);
+    }
+
+    /// A chat dispatched from `asker` in the lineage `root`, as a dispatch records it.
+    fn dispatched_from(dir: &std::path::Path, name: &str, asker: u32, root: &str) -> Chat {
+        let mut chat = started_by(dir, name, purlis_core::reopen::Mode::Task);
+        let from = chat.from.as_mut().expect("asked");
+        from.chat = asker;
+        from.root = Some(root.to_owned());
+        chat
+    }
+
+    fn root_of(chats: &Chats, session: u32) -> Option<String> {
+        chats
+            .recorded_chat(session)
+            .and_then(|chat| chat.from)
+            .and_then(|from| from.root)
+    }
+
+    #[test]
+    fn a_lineage_whose_first_chat_comes_back_under_a_new_id_stays_one_with_its_middle_closed() {
+        // #1456: the first chat started again under an id of its own, and the chat between it
+        // and a task below already closed. The walk by who asked whom cannot reach the task, so
+        // the root it names is what keeps the lineage one.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let first = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        let root = chats
+            .recorded_chat(first)
+            .and_then(|chat| chat.identity.id)
+            .expect("an id");
+        let middle = chats
+            .start(&dispatched_from(dir.path(), "ide.8", first, &root), SIZE)
+            .unwrap();
+        let below = chats
+            .start(&dispatched_from(dir.path(), "ide.9", middle, &root), SIZE)
+            .unwrap();
+        let _ = chats.close(middle);
+        // In its place, under an id it was just given.
+        let again = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        let new_root = chats
+            .recorded_chat(again)
+            .and_then(|chat| chat.identity.id)
+            .expect("an id");
+        assert_ne!(new_root, root);
+
+        chats.followed(first, again);
+
+        assert_eq!(root_of(&chats, below).as_deref(), Some(new_root.as_str()));
+        for session in [first, below, again] {
+            let _ = chats.close(session);
+        }
+    }
+
+    #[test]
+    fn a_chat_in_the_middle_of_a_lineage_started_again_changes_no_root() {
+        // Only the chat the person started is a lineage's root: a task below it that comes back
+        // under an id of its own is still in its asker's lineage, and so is what it asked for.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let first = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        let root = chats
+            .recorded_chat(first)
+            .and_then(|chat| chat.identity.id)
+            .expect("an id");
+        let middle = chats
+            .start(&dispatched_from(dir.path(), "ide.8", first, &root), SIZE)
+            .unwrap();
+        let below = chats
+            .start(&dispatched_from(dir.path(), "ide.9", middle, &root), SIZE)
+            .unwrap();
+        let again = chats
+            .start(&dispatched_from(dir.path(), "ide.8", first, &root), SIZE)
+            .unwrap();
+
+        chats.followed(middle, again);
+
+        assert_eq!(root_of(&chats, below).as_deref(), Some(root.as_str()));
+        assert_eq!(root_of(&chats, again).as_deref(), Some(root.as_str()));
+        for session in [first, middle, below, again] {
+            let _ = chats.close(session);
+        }
     }
 
     #[test]
