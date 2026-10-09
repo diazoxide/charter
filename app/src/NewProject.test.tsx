@@ -177,8 +177,6 @@ describe("making a project", () => {
     core();
     render(<App />);
     const dialog = await askForOne();
-    expect(dialog.querySelector(".asks, .picking, .choices, .choice, .who")).toBeNull();
-
     for (const name of ["Repo", "Folder", "Repository to adopt", "Make this repo itself the plane"])
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 

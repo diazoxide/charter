@@ -89,6 +89,11 @@ const PAIRS: [Token, Token, number][] = [
   ["needs-you.base", "surface.hover", 3],
   ["text.secondary", "surface.hover", 4.5],
   ["danger.base", "surface.base", 3],
+  // A button that ends something (`.ends-it`) says so in `danger.base` on the button's own
+  // `control.base`: in a form's `.ui-setting-actions`, `.answer` and `.warning .doing` (#1210).
+  // Held to 3, as `danger.base` on the pane is: the dark theme's pair is 3.73, under the 4.5
+  // body text asks for, and raising it is a palette change, tracked on #1210.
+  ["danger.base", "control.base", 3],
   // The alerts drawer's marks, on the drawer, and the status line's bell on its button.
   ["state.waiting", "surface.overlay", 3],
   ["state.failed", "surface.overlay", 3],

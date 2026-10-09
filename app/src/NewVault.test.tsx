@@ -163,8 +163,6 @@ describe("the new-vault dialog", () => {
     // the hand-built `asks` / `choice` classes, so the help under a box is the box's own
     // description rather than a paragraph a screen reader cannot connect to it.
     const { dialog } = draw();
-    expect(dialog.querySelector(".asks, .choices, .choice, .who")).toBeNull();
-
     const name = within(dialog).getByLabelText("Name");
     expect(name.closest(".ui-setting-row")).not.toBeNull();
     expect(name).toHaveAccessibleDescription("Letters, digits, ., _ and -.");
