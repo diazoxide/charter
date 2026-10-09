@@ -269,12 +269,11 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         // machine with no config directory has no extension to ask.
         if let Some(config) = purlis_core::machine::config_root_if_there() {
             use purlis_core::extension::briefing::{self, Asked};
-            // `BuiltIn::none()`, as `charter statusline`: the binary does not know where an app
-            // bundle is, so a built-in extension neither briefs nor hears a chat start
-            // (ADR 0041's amendment for charter-app#343).
+            // The built-ins of the bundle this binary shipped in, as `purlis statusline` draws
+            // their badges (#1366): none when it is not inside one.
             let briefed = briefing::at_session_start(
                 &config,
-                &purlis_core::extension::BuiltIn::none(),
+                &purlis_core::extension::BuiltIn::of_this_program(),
                 &purlis_core::extension::project::Choices::read_in(hook.root, place.workspace()),
                 &Asked {
                     workspace: workspace.clone(),

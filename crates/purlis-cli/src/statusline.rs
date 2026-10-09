@@ -279,6 +279,7 @@ pub fn run(
                 cwd: &cwd,
                 now,
                 config: config.as_deref(),
+                built_in: purlis_core::extension::BuiltIn::of_this_program(),
             },
         )
     );

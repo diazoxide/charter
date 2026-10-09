@@ -25,7 +25,7 @@ use purlis_core::extension;
 use tauri_plugin_dialog::DialogExt;
 
 /// Where this app's bundle keeps its built-in extensions, relative to its resource directory.
-pub(crate) const BUILT_IN_DIR: &str = "extensions";
+pub(crate) const BUILT_IN_DIR: &str = extension::bundle::BUILT_IN_DIR;
 
 /// The running app's built-in extensions, kept once at launch ([`keep_built_in`]).
 static BUILT_IN: OnceLock<extension::BuiltIn> = OnceLock::new();
@@ -33,7 +33,7 @@ static BUILT_IN: OnceLock<extension::BuiltIn> = OnceLock::new();
 /// This app's built-in extensions, in its resources (charter-app#339).
 ///
 /// **From the app's resource path and from nothing else** — `Contents/Resources/extensions` in
-/// a macOS bundle, `/usr/lib/charter/extensions` in a `.deb` and an AppImage. That path is the
+/// a macOS bundle, `/usr/lib/purlis/extensions` in a `.deb` and an AppImage. That path is the
 /// whole of what makes an extension built in (`extension::BuiltIn`), so it is taken from where
 /// the running app is and never from a file, a setting or the environment. A build with none in
 /// its resources — a development build, a test — has none, and every built-in is simply absent.
