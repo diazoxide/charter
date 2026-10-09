@@ -653,6 +653,38 @@ describe("the list holds still while it is open (#1146)", () => {
     expect(screen.getByRole("group", { name: /ops\.3: Run npm test/ })).toHaveClass("gone");
   });
 
+  it("lets a row the person ignores leave, never dimmed, while the others hold their order", async () => {
+    const pressed: string[] = [];
+    const props = {
+      quiet: [],
+      onPress: (plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`),
+    };
+    const a = needing("/a", 1, "ide", "steward");
+    const b = needing("/a", 2, "ops", "devops");
+    const c = needing("/b", 3, "easydmarc", "devops");
+    const { rerender } = render(<NeedsYouMenu {...props} items={[a, b, c]} />);
+    await userEvent.click(screen.getByRole("button", { name: "3 chats need you" }));
+    await screen.findByRole("menu");
+
+    // Another chat asks ahead of them: the list holds what it opened on.
+    const d = needing("/b", 4, "late", "steward");
+    rerender(<NeedsYouMenu {...props} items={[d, a, b, c]} />);
+    await userEvent.click(screen.getByRole("button", { name: "Ignore ops.2 until it asks again" }));
+    expect(pressed).toEqual(["/a needs.ignore:2"]);
+
+    // The core takes it off the list: it leaves, where a row answered elsewhere stays dimmed.
+    rerender(<NeedsYouMenu {...props} items={[d, c]} />);
+    expect(labels()).toEqual([
+      "Go to ide.1 · ide · steward",
+      "Go to easydmarc.3 · easydmarc · devops",
+    ]);
+    expect(screen.getByRole("menuitem", { name: /^Go to ide\.1/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
   it("lets the keyboard press nothing on a row that went, and skips its answers", async () => {
     const answered: string[] = [];
     const pressed: string[] = [];
