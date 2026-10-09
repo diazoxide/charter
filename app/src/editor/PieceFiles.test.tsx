@@ -6,7 +6,7 @@ import type { ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { jumpTo } from "../fileJump";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
-import type { Offer } from "../actions";
+import { REVEAL_SAID, type Offer } from "../actions";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
@@ -28,11 +28,19 @@ function core(
   editorSays?: string,
   folders?: Record<string, FolderEntry[]>,
   changed: Record<string, ChangeMark> = {},
+  placeSays?: string,
 ) {
   const asked: string[] = [];
   const tree = folders ?? foldersOf(Object.keys(files));
   mockIPC(
     (cmd, args) => {
+      if (cmd === "copy_branch_path" || cmd === "reveal_branch_path") {
+        const a = args as Record<string, unknown>;
+        const absolute = cmd === "copy_branch_path" ? `:${String(a.absolute)}` : "";
+        asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.path}${absolute}`);
+        if (placeSays !== undefined) throw placeSays;
+        return null;
+      }
       if (cmd === "open_in_your_editor") {
         const a = args as Record<string, unknown>;
         asked.push(`${cmd}:${a.workspace}/${a.repo}/${a.piece}:${a.path}:${a.line}:${a.editor}`);
@@ -468,6 +476,61 @@ describe("open in your editor (RC-20)", () => {
 
     await waitFor(() =>
       expect(asked).toContain("open_in_your_editor:alpha/svc/fix-it:src/lib.rs:1:zed"),
+    );
+  });
+});
+
+describe("Copy path and Reveal in the preview's header (#1143)", () => {
+  it("copies the file's path in the branch, and says so", async () => {
+    const asked = core({ "src/lib.rs": { kind: "text", text: "x\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy path" }));
+
+    expect(await screen.findByText("Copied the path of src/lib.rs.")).toBeInTheDocument();
+    expect(asked).toContain("copy_branch_path:alpha/svc/fix-it:src/lib.rs:false");
+  });
+
+  it("reveals the file where the platform's file manager shows it", async () => {
+    const asked = core({ "src/lib.rs": { kind: "text", text: "x\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: REVEAL_SAID }));
+
+    await waitFor(() => expect(asked).toContain("reveal_branch_path:alpha/svc/fix-it:src/lib.rs"));
+  });
+
+  it("says the core's sentence when it refuses", async () => {
+    core(
+      { "a.txt": { kind: "text", text: "x\n" } },
+      undefined,
+      undefined,
+      {},
+      "purlis follows no link",
+    );
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: REVEAL_SAID }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("purlis follows no link");
+  });
+
+  it("is offered beside the file the tree shows, too", async () => {
+    const asked = core({ "src/lib.rs": { kind: "text", text: "x\n" } });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy path" }));
+    await userEvent.click(await screen.findByRole("button", { name: REVEAL_SAID }));
+
+    await waitFor(() =>
+      expect(asked).toEqual(
+        expect.arrayContaining([
+          "copy_branch_path:alpha/svc/fix-it:src/lib.rs:false",
+          "reveal_branch_path:alpha/svc/fix-it:src/lib.rs",
+        ]),
+      ),
     );
   });
 });
