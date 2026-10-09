@@ -4212,12 +4212,18 @@ mod tests {
         // **And it leaves its todo there** (#1471), as a handoff that opened at once does: the
         // brief's first line as it is written, heading marker and all, as the command's
         // recorded todo has it (`handoff-inside-the-app-opens-the-chat-there-and-records-its-
-        // todo`), and never the brief.
-        let todos = purlis_core::workspaces::Plane::open(&plane.root)
-            .workspace("beta")
-            .expect("a name")
-            .todos()
-            .expect("its todos");
+        // todo`), and never the brief. **Waited for**: the Allow's answer runs on a thread of
+        // its own (`planes.rs`, `answers_with`), and it writes the todo only after the chat
+        // has started, so the chat is counted open a moment before the todo is there.
+        let todos = eventually(|| {
+            let todos = purlis_core::workspaces::Plane::open(&plane.root)
+                .workspace("beta")
+                .expect("a name")
+                .todos()
+                .expect("its todos");
+            (!todos.is_empty()).then_some(todos)
+        })
+        .unwrap_or_default();
         assert_eq!(
             todos
                 .iter()
