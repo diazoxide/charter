@@ -115,6 +115,15 @@ grey is given a small fixed chroma, felt rather than noticed, as the strips are 
 white stays white. No colour is written for this anywhere but `app/src/theme/`: a component asks
 `tintVariables` and sets what it answers.
 
+**A persona's mark is tinted the same way, on two tokens only** (#1449). A persona is drawn
+wherever it appears as one `PersonaMark` (`app/src/PersonaMark.tsx`): its custom `icon.png`,
+else its built-in icon, else its initials, on a ground of its colour. The colour is the
+workspace's vocabulary, one of the same eight hues or a `#rrggbb`, and a persona that names none
+is given one of the eight by its name (`colourOfName`), so it is the same on every machine.
+`tintVariables` turns `accent.base` and `accent.surface` to it (`MARK_TOKENS`) on the mark's own
+element and nowhere else: the mark is a small ground with a glyph on it, and the contrast pair
+it needs is the one the workspace tint already holds. No colour is written in the component.
+
 **The chat states and the CI states share a group on purpose.** `.ci-pending` is
 `var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants
 to change that changes one value rather than hunting for the second one.
