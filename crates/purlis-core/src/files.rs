@@ -704,21 +704,41 @@ fn folder_in(base: &Path, folder: &str) -> Result<PathBuf, Refused> {
     Ok(relative)
 }
 
+/// The git call that lists a branch's offered files: what it tracks, and what it does not
+/// track and does not ignore.
+const LS_FILES: [&str; 6] = [
+    "--no-optional-locks",
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+];
+
 /// [`list`], for a folder already found.
 fn files_in(folder: &Path, branch: Branch<'_>) -> Result<Vec<String>, Refused> {
-    let listed = git::run(
-        folder,
-        &[
-            "--no-optional-locks",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ],
-        git::READ,
-    )
-    .map_err(worktree::Refusal::from)?;
+    let listed = git::run(folder, &LS_FILES, git::READ).map_err(worktree::Refusal::from)?;
+    offered_of(&listed, branch)
+}
+
+/// [`files_in`], called off when `stop` is raised (#1137): `Ok(None)` when it was, before git
+/// answered. git can sit out its whole deadline in an open — an ignore file planted as a FIFO —
+/// and a search a person stopped must not wait on it.
+fn files_in_until(
+    folder: &Path,
+    branch: Branch<'_>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Option<Vec<String>>, Refused> {
+    let listed =
+        git::run_until(folder, &LS_FILES, git::READ, stop).map_err(worktree::Refusal::from)?;
+    if listed.code.is_none() && stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(None);
+    }
+    offered_of(&listed, branch).map(Some)
+}
+
+/// The offered list in `listed`, git's answer to [`LS_FILES`], sorted and once each.
+fn offered_of(listed: &git::Run, branch: Branch<'_>) -> Result<Vec<String>, Refused> {
     if !listed.ok() {
         return Err(Refused::Unreadable {
             what: format!("the files of {}", branch.called()),

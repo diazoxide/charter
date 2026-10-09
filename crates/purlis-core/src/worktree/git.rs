@@ -72,6 +72,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The deadline for a READ — a listing, a status, a config lookup.
@@ -1024,6 +1025,31 @@ pub(crate) fn spawn_fed(
     }
 }
 
+/// [`run`], hearing `stop` as well as its deadline: the moment `stop` is raised the child is
+/// ended as [`stop`] ends one, and the answer is as for a passed deadline (`code` is `None`).
+/// The caller tells the two apart by its own flag. For a read a person can call off while it
+/// waits on git — a search's listing of a branch, held in an ignore file that is a FIFO —
+/// rather than sit out the whole deadline.
+pub(crate) fn run_until(
+    dir: &Path,
+    args: &[&str],
+    timeout: Duration,
+    called_off: &AtomicBool,
+) -> Result<Run, GitUnavailable> {
+    let extra = match held(dir, args, Extra::default()) {
+        Ok(extra) => extra,
+        Err(why) => return Ok(refused(why)),
+    };
+    counted(dir, args, || {
+        let raw = wait_raw_until(spawn_with(dir, args, &extra)?, timeout, Some(called_off))?;
+        Ok(Run {
+            code: raw.code,
+            out: String::from_utf8_lossy(&raw.out).into_owned(),
+            err: String::from_utf8_lossy(&raw.err).into_owned(),
+        })
+    })
+}
+
 /// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
 ///
 /// For a caller that must tell "git wrote something that is not UTF-8" from "git wrote U+FFFD",
@@ -1193,7 +1219,16 @@ pub(crate) fn stop(child: &mut Child) {
 }
 
 /// [`wait`], keeping the bytes.
-fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
+fn wait_raw(child: Child, timeout: Duration) -> std::io::Result<RawRun> {
+    wait_raw_until(child, timeout, None)
+}
+
+/// [`wait_raw`], ending the child early too when `called_off` is raised.
+fn wait_raw_until(
+    mut child: Child,
+    timeout: Duration,
+    called_off: Option<&AtomicBool>,
+) -> std::io::Result<RawRun> {
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let (out_tx, out_rx) = std::sync::mpsc::channel();
@@ -1213,7 +1248,9 @@ fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
     let code = loop {
         match child.try_wait()? {
             Some(status) => break status.code(),
-            None if Instant::now() >= deadline => {
+            None if Instant::now() >= deadline
+                || called_off.is_some_and(|off| off.load(Ordering::Relaxed)) =>
+            {
                 stop(&mut child);
                 break None;
             }
