@@ -806,17 +806,40 @@ fn is_file(mode: gix::object::tree::EntryMode) -> bool {
 /// changed into `loose`, each file git does not track and does not ignore into `untracked`, and
 /// each tracked file gone from the working tree into `gone`. Renames are not looked for here:
 /// they are found once, between the two trees ([`between_trees`]).
+///
+/// The untracked files come from a walk of their own ([`untracked_files`]), run beside the
+/// status on a second thread as gix's status runs its own walk, so a folder too deep to read
+/// costs only itself and not the whole read (#1130).
 fn uncommitted(
     repo: &gix::Repository,
     loose: &mut BTreeSet<String>,
     untracked: &mut BTreeSet<String>,
     gone: &mut BTreeSet<String>,
 ) -> Result<(), String> {
+    let walker = repo.clone();
+    std::thread::scope(|scope| {
+        let walk = scope.spawn(move || untracked_files(&walker));
+        let tracked = tracked_changes(repo, loose, gone);
+        let walked = walk
+            .join()
+            .unwrap_or_else(|_| Err("the walk for untracked files stopped".to_string()));
+        tracked?;
+        untracked.extend(walked?);
+        Ok(())
+    })
+}
+
+/// [`uncommitted`]'s tracked half: git's status with no walk for untracked files.
+fn tracked_changes(
+    repo: &gix::Repository,
+    loose: &mut BTreeSet<String>,
+    gone: &mut BTreeSet<String>,
+) -> Result<(), String> {
     use gix::status::{Item, index_worktree};
     let items = repo
         .status(gix::progress::Discard)
         .map_err(|e| e.to_string())?
-        .untracked_files(gix::status::UntrackedFiles::Files)
+        .untracked_files(gix::status::UntrackedFiles::None)
         .index_worktree_submodules(None)
         .index_worktree_options_mut(|options| options.thread_limit = Some(super::status::threads()))
         .tree_index_track_renames(gix::status::tree_index::TrackRenames::Disabled)
@@ -850,17 +873,108 @@ fn uncommitted(
                     }
                 }
             }
-            Item::IndexWorktree(index_worktree::Item::DirectoryContents { entry, .. }) => {
-                use gix::dir::entry::{Kind, Status};
-                let file = matches!(entry.disk_kind, Some(Kind::File | Kind::Symlink));
-                if entry.status == Status::Untracked && file {
-                    untracked.insert(entry.rela_path.to_string());
-                }
-            }
-            Item::IndexWorktree(index_worktree::Item::Rewrite { .. }) => {}
+            // No walk was asked for: nothing comes from one.
+            Item::IndexWorktree(index_worktree::Item::DirectoryContents { .. })
+            | Item::IndexWorktree(index_worktree::Item::Rewrite { .. }) => {}
         }
     }
     Ok(())
+}
+
+/// The longest path, in bytes, a call into the file system takes here. Past it an open fails
+/// (`ENAMETOOLONG`), and gix's walk reads each folder by its whole path from the working
+/// tree's root, so one such folder ends the walk. Windows long paths are taken by the standard
+/// library, so there is no limit to keep below there.
+#[cfg(target_os = "linux")]
+const PATH_MOST: usize = 4096;
+#[cfg(all(unix, not(target_os = "linux")))]
+const PATH_MOST: usize = 1024;
+#[cfg(not(unix))]
+const PATH_MOST: usize = usize::MAX;
+
+/// The longest name of one entry in a folder: room for it is kept when a folder is entered.
+const NAME_MOST: usize = 255;
+
+/// Whether a folder at `rela` (from the working tree's root, `root_len` bytes long) is too
+/// deep to walk: its path, a separator and the longest name in it, with the terminating zero,
+/// would not fit in [`PATH_MOST`]. So every folder the walk enters, and every entry it looks at
+/// in one, can be named in full.
+fn too_deep(root_len: usize, rela: usize, most: usize) -> bool {
+    root_len
+        .saturating_add(1)
+        .saturating_add(rela)
+        .saturating_add(1 + NAME_MOST + 1)
+        > most
+}
+
+/// Each file git does not track and does not ignore, as `git status` lists them, and each
+/// untracked folder too deep to walk ([`too_deep`]) as one entry of its own: a mark that says
+/// "not read past here", which the working tree takes as a file it could not read. A tracked
+/// folder that deep is left to the status of the files git tracks in it.
+fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
+    use gix::dir::entry::{Kind, Status};
+    use gix::dir::walk::{Action, Delegate, EmissionMode, ForDeletionMode};
+    use gix::dir::{EntryRef, entry};
+
+    struct Untracked {
+        root_len: usize,
+        found: BTreeSet<String>,
+        too_deep: BTreeSet<String>,
+    }
+    impl Delegate for Untracked {
+        fn emit(&mut self, entry: EntryRef<'_>, _: Option<entry::Status>) -> Action {
+            if entry.status == Status::Untracked {
+                let path = entry.rela_path.to_string();
+                if matches!(entry.disk_kind, Some(Kind::File | Kind::Symlink))
+                    || self.too_deep.contains(&path)
+                {
+                    self.found.insert(path);
+                }
+            }
+            Action::Continue(())
+        }
+
+        fn can_recurse(
+            &mut self,
+            entry: EntryRef<'_>,
+            for_deletion: Option<ForDeletionMode>,
+            worktree_root_is_repository: bool,
+        ) -> bool {
+            if too_deep(self.root_len, entry.rela_path.len(), PATH_MOST) {
+                self.too_deep.insert(entry.rela_path.to_string());
+                return false;
+            }
+            entry.status.can_recurse(
+                entry.disk_kind,
+                entry.pathspec_match,
+                for_deletion,
+                worktree_root_is_repository,
+            )
+        }
+    }
+
+    let Some(root) = repo.workdir() else {
+        return Ok(BTreeSet::new());
+    };
+    let index = repo.index_or_empty().map_err(|e| e.to_string())?;
+    let options = repo
+        .dirwalk_options()
+        .map_err(|e| e.to_string())?
+        .emit_untracked(EmissionMode::Matching);
+    let mut delegate = Untracked {
+        root_len: root.as_os_str().len(),
+        found: BTreeSet::new(),
+        too_deep: BTreeSet::new(),
+    };
+    repo.dirwalk(
+        &index,
+        None::<&str>,
+        &std::sync::atomic::AtomicBool::new(false),
+        options,
+        &mut delegate,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(delegate.found)
 }
 
 /// The tree of `commit`, or `None` for none.
@@ -1018,6 +1132,90 @@ fn line_diff(old: &[u8], new: &[u8]) -> (Vec<Hunk>, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_is_walked_only_while_its_longest_entry_still_fits_the_path_limit() {
+        // A 20-byte root, `/` and a folder: the folder, `/`, a 255-byte name and the zero.
+        let fits = 1024 - 20 - 1 - (1 + 255 + 1);
+        assert!(!too_deep(20, fits, 1024));
+        assert!(too_deep(20, fits + 1, 1024));
+        assert!(!too_deep(20, 0, 1024));
+        // Nothing wraps past the limit, however long a path is.
+        assert!(too_deep(usize::MAX, usize::MAX, usize::MAX - 1));
+    }
+
+    /// A chain of folders under `at/top`, each named by 200 bytes, longer in all than
+    /// `longer_than` bytes, with a file at its bottom. Built by renames, so no call is handed a
+    /// path longer than a few hundred bytes.
+    fn deep_chain(at: &Path, longer_than: usize) {
+        let top = at.join("top");
+        std::fs::create_dir(&top).unwrap();
+        std::fs::write(top.join("bottom.txt"), "at the bottom\n").unwrap();
+        let (mut length, mut n) = (0, 0);
+        while length <= longer_than {
+            let wrapper = at.join("wrapper");
+            std::fs::create_dir(&wrapper).unwrap();
+            let name = format!("{n:03}{}", "d".repeat(197));
+            std::fs::rename(&top, wrapper.join(&name)).unwrap();
+            std::fs::rename(&wrapper, &top).unwrap();
+            length += name.len() + 1;
+            n += 1;
+        }
+    }
+
+    /// #1130: the walk for untracked files used to end at the first folder too long to name,
+    /// and the whole status with it. In a repository with a separate git directory, as a
+    /// branch's folder is.
+    #[test]
+    fn a_folder_chain_past_the_path_limit_is_one_untracked_entry_and_the_walk_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let work = base.join("work");
+        let git_dir = base.join("work.git");
+        let made = crate::testgit::run(
+            &base,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                &git_dir.display().to_string(),
+                &work.display().to_string(),
+            ],
+        );
+        assert!(made.ok(), "{}", made.err);
+        std::fs::write(work.join("tracked.txt"), "one\n").unwrap();
+        assert!(crate::testgit::run(&work, &["add", "tracked.txt"]).ok());
+        assert!(crate::testgit::run(&work, &["commit", "-q", "-m", "one"]).ok());
+        // Past Linux's 4,096 bytes, and so past macOS's 1,024 too.
+        deep_chain(&work, 4096 + work.as_os_str().len());
+        // Walked after `top`: the walk has to come back from the chain to find it.
+        std::fs::write(work.join("zz-new.txt"), "new\n").unwrap();
+        std::fs::write(work.join("tracked.txt"), "two\n").unwrap();
+
+        let repo = gix::open(&work).unwrap();
+        let (mut loose, mut untracked, mut gone) = Default::default();
+        uncommitted(&repo, &mut loose, &mut untracked, &mut gone)
+            .expect("the status degrades rather than fails");
+
+        assert_eq!(loose, BTreeSet::from(["tracked.txt".to_string()]));
+        assert!(gone.is_empty(), "{gone:?}");
+        assert!(untracked.contains("zz-new.txt"), "{untracked:?}");
+        let in_chain: Vec<&String> = untracked
+            .iter()
+            .filter(|path| path.starts_with("top/"))
+            .collect();
+        assert_eq!(in_chain.len(), 1, "{untracked:?}");
+        assert!(!in_chain[0].ends_with("bottom.txt"), "{untracked:?}");
+        // The folder named is one the walk could still have read, and the first it could not
+        // enter: its parent fits the limit with room for a name, and it does not.
+        let root_len = work.as_os_str().len();
+        assert!(too_deep(root_len, in_chain[0].len(), PATH_MOST));
+        let parent = in_chain[0].rsplit_once('/').unwrap().0;
+        assert!(!too_deep(root_len, parent.len(), PATH_MOST));
+        assert_eq!(untracked.len(), 2, "{untracked:?}");
+    }
 
     #[test]
     fn a_line_that_gains_its_line_end_is_a_changed_line_as_git_shows_it() {
