@@ -19,6 +19,14 @@ use purlis_core::{chatpiece, worktree};
 
 use crate::planes::{PlaneId, Planes};
 
+// What each command was doing, for the sentence a blocking thread that did not finish is
+// answered with (`crate::off_the_window`). Every command here runs git, so each runs off the
+// window's thread (SC-2, #1007): see `off_the_main_thread.rs`.
+const LISTING: &str = "listing the branches";
+const REMOVING: &str = "removing the branch";
+const DECLARING: &str = "declaring the branch done";
+const MERGING: &str = "merging the branch";
+
 /// The piece a chat's directory sits in, against a root the registry has already vouched for.
 ///
 /// Split out from the command for the reason every other verb in this file is: the tests
@@ -103,12 +111,13 @@ pub struct ChatWorktree {
 // answered about a different plane's worktrees.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_of_chat(
+pub async fn worktree_of_chat(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     cwd: String,
 ) -> Result<Option<ChatWorktree>, String> {
-    piece_of_chat(planes.held(&plane)?.root(), Path::new(&cwd))
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(LISTING, move || piece_of_chat(&root, Path::new(&cwd))).await
 }
 
 /// This workspace's pieces for one repo.
@@ -120,13 +129,14 @@ pub fn worktree_of_chat(
 // Rust.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_list(
+pub async fn worktree_list(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     repo: String,
 ) -> Result<Vec<Piece>, String> {
-    pieces_of(planes.held(&plane)?.root(), &workspace, &repo)
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(LISTING, move || pieces_of(&root, &workspace, &repo)).await
 }
 
 /// The listing itself, against a root the registry has already vouched for.
@@ -157,7 +167,7 @@ fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, St
 // (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_remove(
+pub async fn worktree_remove(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
@@ -165,13 +175,11 @@ pub fn worktree_remove(
     piece: String,
     force: bool,
 ) -> Result<(), String> {
-    remove_piece(
-        planes.held(&plane)?.root(),
-        &workspace,
-        &repo,
-        &piece,
-        force,
-    )
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(REMOVING, move || {
+        remove_piece(&root, &workspace, &repo, &piece, force)
+    })
+    .await
 }
 
 /// **The explorer's own Merge and Remove never act on a branch folder purlis cut for a task**
@@ -243,20 +251,19 @@ fn remove_piece(
 // (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_done(
+pub async fn worktree_done(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     repo: String,
     piece: String,
 ) -> Result<(), String> {
-    declare_done(
-        planes.held(&plane)?.root(),
-        planes.config(),
-        &workspace,
-        &repo,
-        &piece,
-    )
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = planes.config().map(Path::to_path_buf);
+    crate::off_the_window(DECLARING, move || {
+        declare_done(&root, config.as_deref(), &workspace, &repo, &piece)
+    })
+    .await
 }
 
 /// The declaration itself, against a root the registry has already vouched for. `config` is
@@ -467,14 +474,18 @@ pub struct Merged {
 // (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_merge(
+pub async fn worktree_merge(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
     repo: String,
     piece: String,
 ) -> Result<Merged, String> {
-    merge_piece(planes.held(&plane)?.root(), &workspace, &repo, &piece)
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window(MERGING, move || {
+        merge_piece(&root, &workspace, &repo, &piece)
+    })
+    .await
 }
 
 /// The merge itself, against a root the registry has already vouched for.
