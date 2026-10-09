@@ -42,11 +42,12 @@ export type RawFile = {
 };
 
 /**
- * An edit of one file, kept by the tab so it survives a look at a group: the text, and the
- * file's text it began from (`base`, `null` for a file not there yet). It lasts until it is
- * saved or discarded.
+ * An edit of one file, kept by the tab so it survives a look at a group: the text, the file's
+ * text it began from (`base`, `null` for a file not there yet), and why its last Save was
+ * refused, while it was (#1198): the refusal is the edit's, so it comes back with it. It lasts
+ * until it is saved or discarded.
  */
-export type RawDraft = { base: string | null; text: string };
+export type RawDraft = { base: string | null; text: string; refused?: readonly string[] };
 
 /** The file's name, without its folder. */
 export function named(file: Shown): string {
@@ -102,7 +103,6 @@ export function RawEditor({
   const heading = useId();
   const box = useRef<HTMLTextAreaElement>(null);
   const [saving, setSaving] = useState(false);
-  const [refused, setRefused] = useState<readonly string[]>();
   const { file } = raw;
   const name = named(file);
   const base = file.exists ? file.text : null;
@@ -110,6 +110,7 @@ export function RawEditor({
   const dirty = draft !== undefined && draft.text !== (draft.base ?? "");
   /** The file is no longer what the edit began from. */
   const moved = draft !== undefined && draft.base !== base;
+  const refused = draft?.refused;
   const focus = () => box.current?.focus();
 
   const save = async () => {
@@ -118,11 +119,12 @@ export function RawEditor({
     setSaving(true);
     const why = await raw.save(draft.base, sent).catch((err: unknown) => [String(err)]);
     setSaving(false);
-    setRefused(why);
     // Once written, the file is what was written: the edit is over, unless more was typed
-    // while the save was on its way, which is then an edit of what was written.
+    // while the save was on its way, which is then an edit of what was written. A refusal is
+    // kept with the edit, whatever was typed since.
     if (why === undefined)
       onDraft((now) => (now && now.text !== sent ? { base: sent, text: now.text } : undefined));
+    else onDraft((now) => (now ? { ...now, refused: why } : now));
     focus();
   };
 
@@ -134,12 +136,11 @@ export function RawEditor({
         {!file.exists && " Not created yet: the first save creates it."} Nothing is written until
         you save, and purlis refuses text it would not read.
       </p>
-      {moved && (
-        <p className="ui-setting-help" role="status">
-          {name} changed on disk since this edit began. Saving it is refused so the change is not
-          lost; Discard shows the file as it now is.
-        </p>
-      )}
+      {/* Mounted whatever it says, so a screen reader hears its first sentence (#1198). */}
+      <p className="ui-setting-help" role="status">
+        {moved &&
+          `${name} changed on disk since this edit began. Saving it is refused so the change is not lost; Discard shows the file as it now is.`}
+      </p>
       <textarea
         ref={box}
         className="ui-field ui-raw-text"
@@ -150,7 +151,11 @@ export function RawEditor({
         aria-label={`${name}, as ${raw.as}`}
         // An edit keeps the text it began from for as long as it lasts.
         onChange={(event) =>
-          onDraft({ base: draft ? draft.base : base, text: event.currentTarget.value })
+          onDraft({
+            base: draft ? draft.base : base,
+            text: event.currentTarget.value,
+            refused: draft?.refused,
+          })
         }
       />
       <div className="ui-raw-actions">
@@ -162,7 +167,6 @@ export function RawEditor({
           tabIndex={0}
           disabled={!(dirty || moved) || saving}
           onClick={() => {
-            setRefused(undefined);
             onDraft(undefined);
             focus();
           }}

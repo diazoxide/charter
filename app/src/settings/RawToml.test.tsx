@@ -278,6 +278,50 @@ describe("Edit as TOML", () => {
     expect(raw("charter.toml")).toHaveValue(`${SHARED_TEXT}# mine\n`);
   });
 
+  it("keeps a save's refusal with the edit when a group is opened and the file's link is pressed again", async () => {
+    const why = "charter.toml is not valid TOML: invalid table header";
+    core({ refuse: [why] });
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "[[broken");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(why);
+
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Groups" })).getByRole("button", {
+        name: "Saving",
+      }),
+    );
+    await editAsToml("charter.toml");
+
+    expect(raw("charter.toml")).toHaveValue(`${SHARED_TEXT}[broken`);
+    expect(screen.getByRole("alert")).toHaveTextContent(`Nothing was saved:${why}`);
+
+    // Discard drops the refusal with the edit.
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the changed-on-disk region mounted, empty until the file moves under an edit", async () => {
+    const { files } = core();
+    await atProject();
+    await editAsToml("charter.toml");
+
+    // There before it has anything to say, so a screen reader hears its first sentence.
+    const editor = () => screen.getByRole("region", { name: "charter.toml" });
+    const region = within(editor()).getByRole("status");
+    expect(region).toBeEmptyDOMElement();
+    await userEvent.type(raw("charter.toml"), "# mine\n");
+
+    files.shared = { ...files.shared, text: `${SHARED_TEXT}# edited by hand\n` };
+    await changedOnDisk();
+
+    await waitFor(() =>
+      expect(region).toHaveTextContent(/charter\.toml changed on disk since this edit began/),
+    );
+    expect(within(editor()).getByRole("status")).toBe(region);
+  });
+
   it("is where a file that is not TOML is mended: its link is there while its groups are not", async () => {
     const { files } = core();
     files.shared = {
