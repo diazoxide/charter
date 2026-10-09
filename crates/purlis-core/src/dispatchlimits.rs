@@ -1166,7 +1166,16 @@ pub fn ceiling(dispatch: &serde_json::Map<String, serde_json::Value>) -> Result<
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
             .filter(|n| (least..=most).contains(n))
-            .ok_or_else(|| format!("its \"{key}\" is not a whole number from {least} to {most}"))?;
+            .ok_or_else(|| {
+                // A limit that is off until set is left off by leaving it out (#1545): an
+                // administrator who wrote 0 to mean "off" is told the fix.
+                let fix = if limit.off_until_set() {
+                    ": remove the key to leave it off"
+                } else {
+                    ""
+                };
+                format!("its \"{key}\" is not a whole number from {least} to {most}{fix}")
+            })?;
         level = level.with(limit, whole);
     }
     Ok(level)

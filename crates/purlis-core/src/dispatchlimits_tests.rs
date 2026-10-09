@@ -1317,7 +1317,19 @@ fn a_policy_caps_the_two_and_a_refused_policy_sets_neither() {
     assert_eq!(limits.set_by(Limit::MinutesPerTask), &Source::Policy);
     let mut zero = serde_json::Map::new();
     zero.insert("tokens-per-session".to_owned(), serde_json::json!(0));
-    assert!(super::ceiling(&zero).is_err());
+    // #1545: a 0 written to mean "off" is refused, and the sentence says how to leave it off.
+    assert_eq!(
+        super::ceiling(&zero).err().as_deref(),
+        Some(
+            "its \"tokens-per-session\" is not a whole number from 1 to 1000000000: remove the \
+             key to leave it off"
+        )
+    );
+    // A limit that is never off says no such thing.
+    let mut depth = serde_json::Map::new();
+    depth.insert("depth".to_owned(), serde_json::json!(99));
+    let said = super::ceiling(&depth).expect_err("refused");
+    assert!(!said.contains("leave it off"), "{said}");
 
     let refused = in_force(
         &nothing(),
