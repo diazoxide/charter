@@ -200,7 +200,7 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_hosts"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 2 + 2 + 3 + 1);
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 2 + 2 + 3 + 1 + 2);
 }
 
 #[tokio::test]

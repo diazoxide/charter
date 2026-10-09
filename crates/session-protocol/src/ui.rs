@@ -151,6 +151,10 @@ pub struct Server {
 /// a folder removed for good. Each is asked first, in the window, and no chat may cause
 /// either, so neither has a form on a link.
 ///
+/// `worktree_remove` and `worktree_merge` are the explorer's remove and merge of any branch
+/// folder (#1534): the person's act on their own repo, from their window, which takes a folder
+/// for good (with `force`, its uncommitted work) or moves the clone. No link carries either.
+///
 /// `allow_sandbox_block_for_tasks` and `keep_sandbox_block_for_tasks` answer several tasks'
 /// sandbox block on one press (#1508), and `allow_sandbox_block` answers one chat's (#1538):
 /// a person's answer given in their own window to the block it showed, which no link carries
@@ -232,6 +236,9 @@ pub const WINDOW_ONLY: &[&str] = &[
     // What a task left on a branch of its own: the person's merge or discard (#1511).
     "task_branch_merge",
     "dispatch_worktree_discard",
+    // The explorer's remove and merge of any branch folder (#1534).
+    "worktree_remove",
+    "worktree_merge",
     // The answer to a chat's sandbox block (#1538), and one to several tasks' (#1508).
     "allow_sandbox_block",
     "allow_sandbox_block_for_tasks",

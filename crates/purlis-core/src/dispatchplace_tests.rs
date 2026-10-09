@@ -598,7 +598,7 @@ fn a_branch_folder_a_record_names_is_its_task_s_and_no_other_is() {
         "api",
         "check-b5rc0def"
     ));
-    // And a doubtful record, one `Tree::of` refuses, still keeps other hands off the folder.
+    // And a record `Tree::of` refuses, which still parses, still keeps other hands off the folder.
     let doubtful = a_record(
         Some(dispatchrecord::Worktree {
             branch: Some("main".to_owned()),

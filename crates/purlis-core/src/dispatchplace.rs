@@ -701,8 +701,8 @@ impl Tree {
 
 /// Whether `record` names the branch folder `piece` of `repo` in `workspace` as its worktree,
 /// by the names on the record alone. A record whose names [`Tree::of`] would not accept still
-/// names its folder here: a doubtful record keeps other hands off the folder, it never opens
-/// one to them.
+/// names its folder here. A record file that does not parse as a record is no record at all
+/// ([`dispatchrecord::list`] skips it), so it names nothing and keeps nobody off a folder.
 pub fn names_folder(record: &Record, workspace: &str, repo: &str, piece: &str) -> bool {
     record.place.workspace.as_deref() == Some(workspace)
         && record
