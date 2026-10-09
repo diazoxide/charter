@@ -422,7 +422,7 @@ jobs:
       - name: Fedora's build dependencies for Tauri, and a display to start the app in
         run: |
           dnf -y install --setopt=install_weak_deps=False \
-            gcc gcc-c++ make pkgconf-pkg-config perl git tar gzip xz which findutils procps-ng \
+            gcc gcc-c++ make pkgconf-pkg-config perl git tar gzip xz which findutils procps-ng gawk \
             curl wget file openssl-devel webkit2gtk4.1-devel libxdo-devel \
             libappindicator-gtk3-devel librsvg2-devel \
             xorg-x11-server-Xvfb xauth dbus-daemon dbus-x11 mesa-dri-drivers             bubblewrap socat
