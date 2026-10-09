@@ -7,6 +7,8 @@ import App from "../App";
 import type { DoctorRow } from "../bindings";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
+import { useRef } from "react";
+import { enterSettings, forgetEntering, landSettingsFocus, useEnteringFocus } from "./entering";
 
 /**
  * **The keyboard goes into Settings on every way in** (#1206; the spec on #558, user story 32):
@@ -346,5 +348,126 @@ describe("every way into Settings leaves the keyboard on the nav's current group
       expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument(),
     );
     await onTheCurrentGroup("Harness & profiles");
+  });
+});
+
+/** A Settings tab's half alone: its nav's current group, in a pane of the window. */
+function Holder({ place, group, front }: { place: string; group: string; front?: boolean }) {
+  const own = useRef<HTMLDivElement>(null);
+  useEnteringFocus(place, own);
+  return (
+    <div className={front === undefined ? undefined : front ? "pane view focused" : "pane view"}>
+      <div ref={own}>
+        <nav className="ui-settings-nav" aria-label={`Groups of ${group}`}>
+          <button type="button" aria-current="true">
+            {group}
+          </button>
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+describe("a way in the person has moved on from (#1600)", () => {
+  afterEach(() => forgetEntering());
+
+  it("is dropped on their next key, before its tab is drawn", async () => {
+    const elsewhere = render(<button type="button">Elsewhere</button>);
+    const button = elsewhere.getByRole("button", { name: "Elsewhere" });
+    button.focus();
+    enterSettings("you");
+
+    await userEvent.keyboard("a");
+    render(<Holder place="you" group="Text" />);
+    await settled();
+
+    expect(button).toHaveFocus();
+  });
+
+  it("is dropped on their next click, before its tab is drawn", async () => {
+    render(<button type="button">Elsewhere</button>);
+    enterSettings("you");
+
+    await userEvent.click(screen.getByRole("button", { name: "Elsewhere" }));
+    render(<Holder place="you" group="Text" />);
+    await settled();
+
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+  });
+
+  it("no longer holds a closing surface's keyboard once they act after it landed", async () => {
+    render(<Holder place="you" group="Text" />);
+    enterSettings("you");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Text" })).toHaveFocus());
+    expect(landSettingsFocus()).toBe(true);
+
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(landSettingsFocus()).toBe(false);
+  });
+
+  it("is not dropped by a modifier key alone", async () => {
+    enterSettings("you");
+
+    await userEvent.keyboard("{Shift}");
+    render(<Holder place="you" group="Text" />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Text" })).toHaveFocus());
+  });
+});
+
+describe("two Settings tabs of one level side by side (#1600, #1292)", () => {
+  afterEach(() => forgetEntering());
+
+  it("the one in the focused pane takes the keyboard, not the first one opened", async () => {
+    render(
+      <>
+        <Holder place="project" group="Behind" front={false} />
+        <Holder place="project" group="In front" front />
+      </>,
+    );
+
+    enterSettings("project");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "In front" })).toHaveFocus());
+  });
+
+  it("the first one opened, when neither pane is the focused one", async () => {
+    render(
+      <>
+        <Holder place="project" group="First" />
+        <Holder place="project" group="Second" />
+      </>,
+    );
+
+    enterSettings("project");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "First" })).toHaveFocus());
+  });
+});
+
+describe("a way in that moves the window's focus to another pane (#1600)", () => {
+  afterEach(() => forgetEntering());
+
+  /** Two Settings tabs of one level split side by side; `focused` is the pane with the focus. */
+  function Split({ focused }: { focused: "left" | "right" }) {
+    return (
+      <>
+        <Holder place="project" group="Left" front={focused === "left"} />
+        <Holder place="project" group="Right" front={focused === "right"} />
+      </>
+    );
+  }
+
+  it("lands in the pane it focused, not the one that had the focus before", async () => {
+    const view = render(<Split focused="right" />);
+
+    // The way in asks, then the window draws the pane it brought forward, as `showView` does.
+    act(() => {
+      enterSettings("project");
+      view.rerender(<Split focused="left" />);
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Left" })).toHaveFocus());
   });
 });

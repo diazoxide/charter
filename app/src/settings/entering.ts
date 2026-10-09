@@ -21,6 +21,13 @@ import { settingsPlace } from "./links";
  * **A surface a way in closed does not hand the keyboard back** to what opened it — the doctor's
  * button, the status line, the terminal the palette was opened over: its closing move asks
  * {@link landSettingsFocus} first, and leaves the keyboard alone while Settings is taking it.
+ *
+ * **The person moving on drops it** (#1600): their next click or key, anywhere, ends the ask —
+ * whether its tab has the keyboard yet or not — so a tab drawn late never takes the keyboard
+ * from where they went, and a surface they close after that hands it back as it always does.
+ *
+ * **Two Settings tabs of one level side by side** (#1292): the one in the window's focused pane
+ * — the one the way in brought forward — takes it; with neither focused, the first one opened.
  */
 
 /** How long a way in waits for its tab to take the keyboard before it is dropped. */
@@ -34,8 +41,9 @@ export const LANDED = 500;
 /** How often a standing ask is tried again. */
 const AGAIN = 50;
 
-/** One tab's way of taking the keyboard: whether it is inside the tab once it has tried. */
-type Taker = () => boolean;
+/** One tab's way of taking the keyboard: whether it is inside the tab once it has tried, and
+ *  whether the tab is in the window's focused pane. */
+type Taker = { take: () => boolean; inFront: () => boolean };
 
 /** The way in standing now: where, until when, and whether its tab has the keyboard yet. */
 let asked: { place: string; until: number; landed: boolean } | undefined;
@@ -53,13 +61,36 @@ export function placeOfView(view: ViewRef, plane?: string): string | undefined {
 /** A way into Settings at `place` was taken: the tab there takes the keyboard once it can. */
 export function enterSettings(place: string): void {
   asked = { place, until: Date.now() + PATIENCE, landed: false };
-  attempt();
+  watchThePerson(true);
+  // Tried once the window has drawn what the way in changed — the tab it brought forward and
+  // the pane it focused — and not against the window as it was before (#1600).
+  if (again !== undefined) clearTimeout(again);
+  again = setTimeout(attempt, 0);
 }
 
 /** The way in standing now, if it has not run out of time. */
 function standing(): typeof asked {
-  if (asked !== undefined && Date.now() > asked.until) asked = undefined;
+  if (asked !== undefined && Date.now() > asked.until) forgetEntering();
   return asked;
+}
+
+/** A key that is only a modifier — held for a shortcut, not yet a move of the person's own. */
+const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "Fn"]);
+
+/** The person's own move: a click or a key ends the standing ask (#1600). */
+function movedOn(event: Event): void {
+  if (event instanceof KeyboardEvent && MODIFIERS.has(event.key)) return;
+  forgetEntering();
+}
+
+/**
+ * Listens for the person's next move while an ask stands. Added during the event that asked —
+ * the click or key of the way in itself — the capture listener on the window is already past,
+ * so that event does not drop its own ask.
+ */
+function watchThePerson(on: boolean): void {
+  const change = on ? window.addEventListener : window.removeEventListener;
+  for (const type of ["pointerdown", "keydown"]) change.call(window, type, movedOn, true);
 }
 
 /** Tries every tab at the asked place; tries again shortly while none has taken it. */
@@ -68,7 +99,10 @@ function attempt(): void {
   again = undefined;
   const now = standing();
   if (now === undefined) return;
-  for (const take of takers.get(now.place) ?? []) {
+  const all = [...(takers.get(now.place) ?? [])];
+  // The tab in the focused pane first; the rest, as they were opened.
+  const front = all.filter((one) => one.inFront());
+  for (const { take } of front.length > 0 ? front : all) {
     if (take()) {
       if (!now.landed) asked = { ...now, until: Date.now() + LANDED, landed: true };
       return;
@@ -95,6 +129,7 @@ export function forgetEntering(): void {
   if (again !== undefined) clearTimeout(again);
   again = undefined;
   asked = undefined;
+  watchThePerson(false);
 }
 
 /**
@@ -104,7 +139,7 @@ export function forgetEntering(): void {
  */
 export function useEnteringFocus(place: string, holder: RefObject<HTMLElement | null>): void {
   useEffect(() => {
-    const take: Taker = () => {
+    const take = () => {
       const root = holder.current;
       if (root === null || !root.isConnected) return false;
       if (root.contains(document.activeElement)) return true;
@@ -116,10 +151,13 @@ export function useEnteringFocus(place: string, holder: RefObject<HTMLElement | 
       target.focus({ preventScroll: true });
       return root.contains(document.activeElement);
     };
+    // The window marks the pane that has its focus (`PlaneView`'s view panes).
+    const inFront = () => holder.current?.closest(".pane.view.focused") != null;
+    const taker: Taker = { take, inFront };
     const all = takers.get(place) ?? new Set<Taker>();
-    takers.set(place, all.add(take));
+    takers.set(place, all.add(taker));
     return () => {
-      all.delete(take);
+      all.delete(taker);
       if (all.size === 0) takers.delete(place);
     };
   }, [place, holder]);

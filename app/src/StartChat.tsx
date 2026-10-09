@@ -226,6 +226,22 @@ export function StartChat({
   // focus trap's own opening move both aim at mount, and which of them lands last is not
   // something to leave to ordering: the trap is told to do nothing and this is focused here.
   const cancel = useRef<HTMLButtonElement>(null);
+  // What had the keyboard when the dialog came up — the `+` it was opened from, or the terminal
+  // a shortcut was typed in — read once, on the first draw (#1600). The window closes the dialog
+  // by no longer drawing it, and the focus trap's own way back lands on the page instead.
+  const [opener] = useState(() =>
+    document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null,
+  );
+  // Whether it was left with nothing started — Escape or Cancel. Only then does the keyboard go
+  // back to the opener: a start hands it to the new chat, and Settings or the install shell take
+  // it where they open.
+  const cancelled = useRef(false);
+  const leave = () => {
+    cancelled.current = true;
+    onCancel();
+  };
 
   return (
     // Escape starts nothing, and it is the dialog's own Escape rather than a listener on the
@@ -234,7 +250,7 @@ export function StartChat({
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        if (!open) leave();
       }}
     >
       <Dialog.Portal>
@@ -252,6 +268,13 @@ export function StartChat({
             // key finds.
             e.preventDefault();
             cancel.current?.focus();
+          }}
+          // Left with nothing started, the keyboard goes back where it was, when that is still
+          // on the page; otherwise the trap's default.
+          onCloseAutoFocus={(e) => {
+            if (!cancelled.current || opener === null || !opener.isConnected) return;
+            e.preventDefault();
+            opener.focus({ preventScroll: true });
           }}
         >
           <Dialog.Title id="start-chat">Start a chat</Dialog.Title>
@@ -486,7 +509,7 @@ export function StartChat({
               `docs/ui-primitives.md` holds the measurement and the engine's own rule. */}
           <div className="answer">
             {/* Cancel first and focused: see `onOpenAutoFocus` above. */}
-            <button ref={cancel} tabIndex={0} onClick={onCancel}>
+            <button ref={cancel} tabIndex={0} onClick={leave}>
               Cancel
             </button>
             {picked?.approval ? (

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { StartOptions } from "./bindings";
 import { StartChat } from "./StartChat";
@@ -267,6 +268,67 @@ describe("the picker a chat starts from", () => {
 
     expect(onCancel).toHaveBeenCalled();
     expect(onStart).not.toHaveBeenCalled();
+  });
+
+  describe("the keyboard once it closes (#1600)", () => {
+    // The window draws the dialog once the options are read, and closes it by no longer
+    // drawing it: the whole dialog goes at once, as `PlaneView` does it.
+    function Window() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            New tab
+          </button>
+          {open && (
+            <StartChat
+              options={options()}
+              onStart={() => setOpen(false)}
+              onApprove={vi.fn()}
+              onCancel={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+
+    async function opened() {
+      render(<Window />);
+      const user = userEvent.setup();
+      const plus = screen.getByRole("button", { name: "New tab" });
+      plus.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog", { name: "Start a chat" });
+      return { plus, user };
+    }
+
+    it("goes back to the + that opened it on Escape", async () => {
+      const { plus, user } = await opened();
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(plus).toHaveFocus());
+    });
+
+    it("goes back to the + on Cancel", async () => {
+      const { plus, user } = await opened();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(plus).toHaveFocus());
+    });
+
+    it("is left for the new chat on a start", async () => {
+      const { plus, user } = await opened();
+
+      await user.click(screen.getByRole("button", { name: "Start" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(plus).not.toHaveFocus();
+    });
   });
 
   it("starts on the profile and the persona that were picked", async () => {
