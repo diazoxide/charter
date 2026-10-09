@@ -115,10 +115,26 @@ fn isolated_answer(
             // The clone's git calls are given the git directory the check resolved, so the
             // worktree is cut from the repository that was checked (D-1335-9) — that very
             // directory, compared again before every call and once after (#1415).
-            match (git::isolation(), checked.first()) {
+            let code = match (git::isolation(), checked.first()) {
                 (Some(held), Some((tree, found))) => cut_pinned(&held, tree, found, &mut say, add),
                 _ => add(&mut say),
+            };
+            // Cut by git that read none of your config, so it ran no filter of yours (#1413):
+            // a checkout whose .gitattributes asks for one, Git LFS above all, holds what is
+            // stored, and the answer says so.
+            if code == 0
+                && let Ok(folder) = crate::worktree::path_for(root, &ask.workspace, repo, piece)
+            {
+                let at = folder
+                    .strip_prefix(root)
+                    .unwrap_or(&folder)
+                    .display()
+                    .to_string();
+                for note in repocmd::unread::filter_notes(&folder, piece, &at) {
+                    say(Say::Warn(note));
+                }
             }
+            code
         }
     };
     Answer::Said {

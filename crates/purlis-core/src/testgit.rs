@@ -52,6 +52,15 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> git::Run {
     git::run_untimed(dir, &argv).expect("git runs")
 }
 
+/// [`run`] reading neither the machine's global git config nor its system one
+/// (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, the runner's isolation), for a
+/// fixture whose own `add` or `commit` a machine's config would change. A machine with Git LFS
+/// installed defines the `lfs` filter globally, so a fixture `.gitattributes` that names it had
+/// its own files committed as LFS pointers on such a machine (CI's, train 67).
+pub(crate) fn run_unconfigured(dir: &Path, args: &[&str]) -> git::Run {
+    git::isolated(&git::Isolated::default(), || run(dir, args))
+}
+
 /// A `HOME` whose `.gitconfig` signs every commit and tag with a signer that fails and
 /// leaves a mark — the developer machine of charter-app#191, 1Password swapped for a script.
 /// Answers the home and the file the signer touches when it is asked.

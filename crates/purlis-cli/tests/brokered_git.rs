@@ -235,17 +235,32 @@ fn said(out: &Output, root: &Path) -> String {
     err(out).replace(&root.display().to_string(), "<root>")
 }
 
+/// What a brokered run says beside the terminal's (#1413): the note that git run by the app
+/// ran no filter of the person's config, which the fixture's `.gitattributes` names.
+const FILTER_NOTE: &str = "names the `mark` filter";
+
+/// `said` split into the filter notes and everything else.
+fn noted(said: &str) -> (Vec<String>, String) {
+    let (notes, rest): (Vec<&str>, Vec<&str>) =
+        said.lines().partition(|line| line.contains(FILTER_NOTE));
+    (
+        notes.into_iter().map(str::to_owned).collect(),
+        rest.join("\n"),
+    )
+}
+
 const IN_THE_CHILD: &str = "BROKERED_GIT_CHILD";
 
 #[test]
-fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_terminal_says() {
+fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_terminal_says_and_the_filter_skipped()
+ {
     purlis_core::unsteered!();
     let Some(base) = std::env::var_os(IN_THE_CHILD) else {
         let tmp = tempfile::tempdir().unwrap();
         let home = std::fs::canonicalize(tmp.path()).unwrap().join("home");
         purlis_core::testrun::rerun(
             &[
-                "a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_terminal_says",
+                "a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_terminal_says_and_the_filter_skipped",
             ],
             &[
                 (IN_THE_CHILD, tmp.path().as_os_str()),
@@ -280,7 +295,16 @@ fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_ter
         err(&there)
     );
     assert_eq!(there.status.code(), here.status.code());
-    assert_eq!(said(&there, &brokered), said(&here, &terminal));
+    // The terminal's own words, and one note of the filter it skipped, which the
+    // terminal's git ran (#1413).
+    let (notes, rest) = noted(&said(&there, &brokered));
+    let (none, terminal_said) = noted(&said(&here, &terminal));
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        none.is_empty(),
+        "the terminal said a brokered note: {none:?}"
+    );
+    assert_eq!(rest, terminal_said);
     let Ok(Ask::Git(git)) = asked.recv_timeout(Duration::from_secs(5)) else {
         panic!("the app was not asked to clone");
     };
@@ -316,7 +340,16 @@ fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_ter
         "a global-config filter ran on a worktree cut for a chat: {}",
         err(&there)
     );
-    assert_eq!(said(&there, &brokered), said(&here, &terminal));
+    // The terminal's own words, and one note of the filter it skipped, which the
+    // terminal's git ran (#1413).
+    let (notes, rest) = noted(&said(&there, &brokered));
+    let (none, terminal_said) = noted(&said(&here, &terminal));
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        none.is_empty(),
+        "the terminal said a brokered note: {none:?}"
+    );
+    assert_eq!(rest, terminal_said);
     let Ok(Ask::Git(git)) = asked.recv_timeout(Duration::from_secs(5)) else {
         panic!("the app was not asked to cut a worktree");
     };
