@@ -1,9 +1,11 @@
-//! A workspace's memory and todos, used through the store held by descriptor (V74, #1064).
+//! A workspace's memory and todos, a persona's memory and the shared store, used through the
+//! store held by descriptor (V74, #1064; D-90c, #1194).
 //!
-//! [`super`]'s operations take a store by its path, which a link planted in the workspace can
+//! [`super`]'s operations take a store by its path, which a link planted in the project can
 //! redirect between the check and the write. When that path is a workspace's store,
-//! `<project>/workspaces/<ws>/<store>` (or a directory directly in it, its `archive/`), each
-//! operation hands over to its twin here, which holds the store through [`crate::held`] and
+//! `<project>/workspaces/<ws>/<store>`, or a persona's memory, `<project>/personas/<name>/memory`
+//! (`_shared` included), or a directory directly in one (its `archive/`), each operation hands
+//! over to its twin here, which holds the store through [`crate::held`] and
 //! touches nothing by path again. The rules are [`super`]'s: the same names, the same index
 //! lines, the same refusals in the same words, and the same path gates asked first, so a link
 //! out of the project is refused in the sentence it always was. What is new is that a link
@@ -25,38 +27,51 @@ use super::{
     index_line, index_rewritten, listed_in, md_name, memory_body, no_such, title_in,
 };
 
-/// A workspace's store, named by the path a caller gave: where it is, and what it is.
+/// A held store, named by the path a caller gave: where it is, and what it is.
 pub(super) struct Spot<'a> {
     /// The path the caller named it by, which every path handed back is built from.
     dir: &'a Path,
     root: &'a Path,
-    ws: String,
-    store: String,
+    owner: Owner,
     /// The directories below the store, when one of them was named: `archive`.
     subs: Vec<String>,
 }
 
+/// Whose store a [`Spot`] is.
+enum Owner {
+    /// `workspaces/<ws>/<store>`.
+    Workspace { ws: String, store: String },
+    /// `personas/<name>/memory`: a persona's memory, or the shared store's (`_shared`).
+    Persona(String),
+}
+
 /// How a store named by a path is reached.
 pub(super) enum Reach<'a> {
-    /// A workspace's store, or a directory in one: held by descriptor.
+    /// A workspace's store or a persona's memory, or a directory in one: held by descriptor.
     Held(Spot<'a>),
     /// A path below `<root>/workspaces/` that is not a workspace's store spelled plainly: a
     /// `..` in it, or one too short to name a store. Refused, never used by path, so the hold
     /// does not rest on how a caller built the path.
     Refused(io::Error),
-    /// Anything else (a persona's store, charter's own state): reached by path, as before.
+    /// Anything else (charter's own state): reached by path, as before.
     ByPath,
 }
 
 /// How `dir` is reached: held when it is `<root>/workspaces/<ws>/<store>` or a directory in
-/// one, refused when it is any other path below `<root>/workspaces/`.
+/// one, or a persona's memory `<root>/personas/<name>/memory` (the shared store's too) or a
+/// directory in it (D-90c, #1194); refused when it is any other path below
+/// `<root>/workspaces/`.
 pub(super) fn reach<'a>(root: &'a Path, dir: &'a Path) -> Reach<'a> {
     let Ok(below) = dir.strip_prefix(root) else {
         return Reach::ByPath;
     };
     let mut components = below.components();
-    if components.next() != Some(std::path::Component::Normal("workspaces".as_ref())) {
-        return Reach::ByPath;
+    match components.next() {
+        Some(std::path::Component::Normal(first)) if first == "workspaces" => {}
+        Some(std::path::Component::Normal(first)) if first == "personas" => {
+            return persona_reach(root, dir, components);
+        }
+        _ => return Reach::ByPath,
     }
     let refused = || {
         Reach::Refused(refused(format!(
@@ -82,8 +97,35 @@ pub(super) fn reach<'a>(root: &'a Path, dir: &'a Path) -> Reach<'a> {
     Reach::Held(Spot {
         dir,
         root,
-        ws: (*ws).to_owned(),
-        store: (*store).to_owned(),
+        owner: Owner::Workspace {
+            ws: (*ws).to_owned(),
+            store: (*store).to_owned(),
+        },
+        subs: subs.iter().map(|sub| (*sub).to_owned()).collect(),
+    })
+}
+
+/// [`reach`] below `<root>/personas/`: a persona's `memory/`, or a directory in it, is held as
+/// a workspace's store is (D-90c); every other path there (`persona.md`, `refs/`) is reached by
+/// path, as before. Only plain names are held: a path with `..` or `.` in it is left to the
+/// path gates, which answer for it as they always did.
+fn persona_reach<'a>(root: &'a Path, dir: &'a Path, rest: std::path::Components<'a>) -> Reach<'a> {
+    let Some(parts) = rest
+        .map(|part| match part {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<&str>>>()
+    else {
+        return Reach::ByPath;
+    };
+    let [name, "memory", subs @ ..] = parts.as_slice() else {
+        return Reach::ByPath;
+    };
+    Reach::Held(Spot {
+        dir,
+        root,
+        owner: Owner::Persona((*name).to_owned()),
         subs: subs.iter().map(|sub| (*sub).to_owned()).collect(),
     })
 }
@@ -115,10 +157,14 @@ fn unheld(unheld: Unheld) -> io::Error {
 impl Spot<'_> {
     /// The store, held, made as `make` says, and the directory below it that was named.
     pub(super) fn held(&self, make: Make) -> io::Result<Option<Store>> {
-        let place = Place::Workspace(self.ws.clone());
-        let Some(mut store) =
-            Store::hold(self.root, &place, &self.store, make, Who::Operator).map_err(unheld)?
-        else {
+        let held = match &self.owner {
+            Owner::Workspace { ws, store } => {
+                let place = Place::Workspace(ws.clone());
+                Store::hold(self.root, &place, store, make, Who::Operator).map_err(unheld)?
+            }
+            Owner::Persona(name) => self.persona_memory(name, make)?,
+        };
+        let Some(mut store) = held else {
             return Ok(None);
         };
         for sub in &self.subs {
@@ -128,6 +174,49 @@ impl Spot<'_> {
             };
         }
         Ok(Some(store))
+    }
+
+    /// Persona `name`'s `memory/`, held from the project's root one plain name at a time
+    /// (`personas`, the persona, `memory`), as [`crate::brokered`] writes one. `Make::All`
+    /// makes all three; `Make::Store` makes `memory/` in a persona that is there, and `_shared/`
+    /// too, which no definition makes.
+    fn persona_memory(&self, name: &str, make: Make) -> io::Result<Option<Store>> {
+        let all = make == Make::All || (make == Make::Store && name == crate::personas::SHARED);
+        let Some(personas) = Store::hold(
+            self.root,
+            &Place::PlaneRoot,
+            "personas",
+            if all { Make::Store } else { Make::Nothing },
+            Who::Operator,
+        )
+        .map_err(unheld)?
+        else {
+            return Ok(None);
+        };
+        // Named from here on as the store it leads to, as [`hold_any`] names it: a link on the
+        // way reaches outside the persona store (or the shared store), never "its workspace".
+        let within = if name == crate::personas::SHARED {
+            "the shared store"
+        } else {
+            "the persona store"
+        };
+        let personas = personas.named(self.said(), within.to_owned());
+        let Some(persona) = personas.sub(name, all).map_err(unheld)? else {
+            return if make == Make::Nothing {
+                Ok(None)
+            } else {
+                Err(refused(format!("no persona '{name}'")))
+            };
+        };
+        persona.sub("memory", make != Make::Nothing).map_err(unheld)
+    }
+
+    /// The store as a sentence names it: `workspaces/alpha/memory`, `personas/devops/memory`.
+    fn said(&self) -> String {
+        match &self.owner {
+            Owner::Workspace { ws, store } => format!("workspaces/{ws}/{store}"),
+            Owner::Persona(name) => format!("personas/{name}/memory"),
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -220,12 +309,9 @@ pub(super) fn listed(spot: &Spot) -> BTreeSet<String> {
 /// [`super::ensure_index`] for a workspace's store: the store and its index made, with
 /// `header`, when they are not there. The index's path.
 pub(super) fn ensure_index(spot: &Spot, header: &str) -> io::Result<PathBuf> {
-    let store = spot.held(Make::All)?.ok_or_else(|| {
-        refused(format!(
-            "workspaces/{}/{} could not be made",
-            spot.ws, spot.store
-        ))
-    })?;
+    let store = spot
+        .held(Make::All)?
+        .ok_or_else(|| refused(format!("{} could not be made", spot.said())))?;
     let header = if header.ends_with('\n') {
         header.to_owned()
     } else {
@@ -237,12 +323,9 @@ pub(super) fn ensure_index(spot: &Spot, header: &str) -> io::Result<PathBuf> {
 
 /// [`super::index_append`] for a workspace's store. Takes no lock, as that does not.
 pub(super) fn index_append(spot: &Spot, filename: &str, title: &str) -> io::Result<()> {
-    let store = spot.held(Make::All)?.ok_or_else(|| {
-        refused(format!(
-            "workspaces/{}/{} could not be made",
-            spot.ws, spot.store
-        ))
-    })?;
+    let store = spot
+        .held(Make::All)?
+        .ok_or_else(|| refused(format!("{} could not be made", spot.said())))?;
     let line = format!("{}\n", index_line(title, filename));
     store
         .append(INDEX, INDEX_FALLBACK, line.as_bytes())
@@ -261,12 +344,9 @@ pub(super) fn write(
     index: bool,
     stamp: chrono::NaiveDateTime,
 ) -> io::Result<PathBuf> {
-    let store = spot.held(Make::All)?.ok_or_else(|| {
-        refused(format!(
-            "workspaces/{}/{} could not be made",
-            spot.ws, spot.store
-        ))
-    })?;
+    let store = spot
+        .held(Make::All)?
+        .ok_or_else(|| refused(format!("{} could not be made", spot.said())))?;
     let _held = store.lock().map_err(busy)?;
     let name = write_in(&store, spot, text, title, timestamped, kind, index, stamp)?;
     Ok(spot.path(&name))
