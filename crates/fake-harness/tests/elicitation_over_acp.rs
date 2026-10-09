@@ -201,6 +201,29 @@ fn the_window_declines_or_dismisses_an_elicitation_by_its_option() {
 }
 
 #[test]
+fn a_permission_request_is_never_answered_as_a_form_whatever_its_options_are_named() {
+    let dir = tempfile::tempdir().expect("a worktree");
+    let (chat, events, _asks) = start(dir.path());
+    let turn = prompt_aside(&chat, "ask in form words");
+    let seen = events_until(&events, |event| matches!(event, Event::Raised(_)));
+    let Some(Event::Raised(raised)) = seen.last() else {
+        panic!("no permission raised: {seen:#?}");
+    };
+
+    for answer in [Elicited::Accept(BTreeMap::new()), Elicited::Decline] {
+        let option = answer.option();
+        assert_eq!(
+            chat.answer_elicitation(&raised.id, answer, the_window()),
+            Err(Refused::NotAnOption(option.to_owned()))
+        );
+    }
+    // Still open, and its own option reaches the agent as chosen.
+    chat.answer(&raised.id, "decline", the_window())
+        .expect("answered");
+    assert_eq!(said(&turn, &events).0, "chose decline");
+}
+
+#[test]
 fn cancelling_the_turn_answers_a_waiting_elicitation_cancel_and_withdraws_its_ask() {
     let dir = tempfile::tempdir().expect("a worktree");
     let (chat, events, asks) = start(dir.path());

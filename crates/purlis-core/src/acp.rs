@@ -777,6 +777,16 @@ fn elicited(
     by: Answerer,
 ) -> Result<Applied, Refused> {
     let option = answer.option();
+    // A permission request is never answered as a form, even when the agent named one of its
+    // options as an elicitation's answers are named: the agent would hear `cancelled` while the
+    // registry recorded the option chosen.
+    if let Some(Waiter {
+        owed: Owed::Permission(_),
+        ..
+    }) = waiting.get(id)
+    {
+        return Err(Refused::NotAnOption(option.to_owned()));
+    }
     // The values are checked first, so an answer that does not fit leaves the ask open, and
     // only for the window, so no other client learns anything of the form from a refusal.
     let content = match (&answer, waiting.get(id)) {
@@ -804,7 +814,7 @@ fn elicited(
             Owed::Elicitation { responder, .. } => {
                 responder.respond(CreateElicitationResponse::new(action))
             }
-            // Not reached: the registry refuses an elicitation's option on a permission ask.
+            // Not reached: a permission request is refused above, under the same lock.
             Owed::Permission(responder) => responder.respond(cancelled()),
         };
     }

@@ -4,7 +4,8 @@
 //! What it does with a prompt is chosen by the prompt's text:
 //!
 //! - `ask`: asks permission to run `rm -rf build`, then says which option it was given, and
-//!   whether it was given it after a `session/cancel`;
+//!   whether it was given it after a `session/cancel`; `ask in form words` does the same with
+//!   options named `accept` and `decline`, the ids an elicitation's ask offers;
 //! - `withdraw`: asks permission, then withdraws the request with `$/cancel_request`;
 //! - `foreign`: asks permission and reports text for another session's id;
 //! - `die`: exits in the middle of the turn;
@@ -123,8 +124,15 @@ fn prompt(
     text: &str,
 ) -> Result<&'static str, String> {
     match text {
-        "ask" => {
-            send(out, &permission(900, SESSION))?;
+        "ask" | "ask in form words" => {
+            let mut request = permission(900, SESSION);
+            if text == "ask in form words" {
+                request["params"]["options"] = json!([
+                    {"optionId": "accept", "name": "Allow once", "kind": "allow_once"},
+                    {"optionId": "decline", "name": "Reject", "kind": "reject_once"},
+                ]);
+            }
+            send(out, &request)?;
             let mut cancelled = false;
             let answer = loop {
                 let Some(message) = next(lines, script)? else {

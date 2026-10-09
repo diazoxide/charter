@@ -472,13 +472,15 @@ fn format_word(format: &StringFormat) -> String {
 
 /// `text` as plain text: without any character a window draws as nothing or draws elsewhere
 /// (a control, a format character, a bidirectional override), its line breaks kept only where
-/// `lines` (and otherwise read as spaces), trimmed, and cut to `most` bytes ending in `…`.
+/// `lines` (and otherwise read as spaces), trimmed, and cut to `most` bytes ending in `…`. The
+/// Unicode line and paragraph separators are line breaks too, so neither starts a line in a
+/// one-line label.
 pub fn plain(text: &str, most: usize, lines: bool) -> String {
     let shown: String = text
         .chars()
         .filter_map(|c| match c {
-            '\n' if lines => Some('\n'),
-            '\n' | '\t' => Some(' '),
+            '\n' | '\u{2028}' | '\u{2029}' if lines => Some('\n'),
+            '\n' | '\t' | '\u{2028}' | '\u{2029}' => Some(' '),
             c if drawn_otherwise(c) => None,
             c => Some(c),
         })
