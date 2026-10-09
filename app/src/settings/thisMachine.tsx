@@ -168,38 +168,45 @@ function waiting(read: Read) {
   return undefined;
 }
 
-/** One entry of a list: what it is, what is said about it, and its one action. */
+/** An entry's button: what it says, what a screen reader calls it, and what it does. */
+type EntryAction = { action: string; label: string; onAction: () => void };
+
+function EntryButton({ action, label, onAction }: EntryAction) {
+  return (
+    <button
+      type="button"
+      className="ui-setting-reset"
+      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+      tabIndex={0}
+      aria-label={label}
+      onClick={onAction}
+    >
+      {action}
+    </button>
+  );
+}
+
+/** One entry of a list: what it is, what is said about it, and its action (or two). */
 function Entry({
   name,
   path,
   note,
-  action,
-  label,
-  onAction,
+  before,
+  ...main
 }: {
   name: string;
   path?: string;
   note?: string;
-  action: string;
-  /** What the action's button is called to a screen reader: the action and the entry. */
-  label: string;
-  onAction: () => void;
-}) {
+  /** An action offered before the entry's own, as Locate… is before Forget. */
+  before?: EntryAction;
+} & EntryAction) {
   return (
     <li className="ui-machine-entry">
       <span className="ui-machine-name">{name}</span>
       {path !== undefined && <span className="ui-machine-path">{path}</span>}
       {note !== undefined && <span className="ui-setting-badge">{note}</span>}
-      <button
-        type="button"
-        className="ui-setting-reset"
-        // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
-        tabIndex={0}
-        aria-label={label}
-        onClick={onAction}
-      >
-        {action}
-      </button>
+      {before !== undefined && <EntryButton {...before} />}
+      <EntryButton {...main} />
     </li>
   );
 }
@@ -243,7 +250,7 @@ function list(
 const recents = list(
   "you.machine.recents",
   "Recent projects",
-  "The projects purlis offers when it opens. Forget takes one off this machine, with its pins and approval; it is asked about again the next time it is opened. One that has moved or gone can be forgotten here too.",
+  "The projects purlis offers when it opens. Forget takes one off this machine, with its pins and approval; it is asked about again the next time it is opened. One that has moved or gone can be located where it is now, or forgotten.",
   (machine) => ({
     empty: "No recent projects.",
     entries: machine.projects.map((one) => (
@@ -252,6 +259,11 @@ const recents = list(
         name={one.name}
         path={one.path}
         note={one.gone === null ? undefined : "gone"}
+        before={
+          one.gone === null
+            ? undefined
+            : { action: "Locate…", label: `Locate ${one.name}`, onAction: () => void locate(one) }
+        }
         action="Forget"
         label={`Forget ${one.name}`}
         onAction={() => acting("you.machine.recents", () => commands.forgetProject(one.path))}
@@ -259,6 +271,24 @@ const recents = list(
     )),
   }),
 );
+
+/**
+ * **Locate…** for a recent that has moved or gone (#1291), as `GoneProjectNotice` does it (NO-5):
+ * a folder is asked for, and the core re-points the entry once it has checked a project is
+ * there (`locate_project`); the approval does not travel with the path. A cancelled dialog does
+ * nothing, not even end another row's Undo. A refusal is said in the row. Nothing is opened
+ * from Settings: the entry now lists where the project is, and opening it, through the trust
+ * gate, is the opener's.
+ */
+async function locate(project: MachineProject) {
+  const picked = await commands.pickProject().catch(() => null);
+  if (picked === null || picked.status !== "ok" || !picked.data) return;
+  const folder = picked.data;
+  acting("you.machine.recents", async () => {
+    const located = await commands.locateProject(project.path, folder);
+    return located.status === "ok" ? { status: "ok" } : located;
+  });
+}
 
 /**
  * Unpins `workspace` in `project`, or the project itself — for a pin whose workspace is gone,
