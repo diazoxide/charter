@@ -22,7 +22,13 @@ purlis persona where          # in a chat purlis started: who asked for it, its 
                               # and where else this persona is working right now
 ```
 
-The first rung that names a persona wins:
+**In a chat purlis started, the persona is fixed when the chat starts.** The app sets
+`$PURLIS_PERSONA` to it, and it stays for the chat's whole life: `purlis persona use` is
+refused there and writes nothing. Nothing in the chat selects another one. To have another
+persona do the work, dispatch to it (below).
+
+Only outside such a chat, in a terminal of your own, is a persona selected. There the first
+rung that names a persona wins:
 
 1. `--persona`
 2. `$PURLIS_PERSONA` (a value that is empty or only whitespace counts as unset)
@@ -35,9 +41,8 @@ The first rung that names a persona wins:
 
 A selection can name a persona that no longer exists, for example one left behind by
 `purlis persona remove`. It still wins, and it resolves to **no persona**, not to the
-default. `purlis persona list` says so and names the way out. For a selection that is
-`purlis persona use <name>` or `purlis persona clear`. For the variable it is unsetting
-`$PURLIS_PERSONA`.
+default. `purlis persona list` says so and names the way out: `purlis persona use <name>` or
+`purlis persona clear` for a selection, unsetting `$PURLIS_PERSONA` for the variable.
 
 ## Work as the one this chat runs as
 
@@ -70,6 +75,19 @@ shows who exists.
   devops" is `purlis dispatch --to devops`, never `purlis handoff --persona devops`.
   `purlis dispatch list` shows this chat's tasks, and `wait`, `tell`, `answer` and `cancel`
   work on one.
+
+- **When this chat is the task**, it owes the chat that dispatched it one report, and it can
+  talk to that chat while it works:
+
+  ```bash
+  purlis dispatch note "<progress>"       # a note; nothing waits on it, so carry on
+  purlis dispatch ask "<question>"        # a question; this chat waits for the answer
+  purlis dispatch report --outcome done|blocked|failed "<what you found or did>"
+  ```
+
+  Ask only what the brief cannot answer, and never guess past a question you asked: if the
+  wait runs out, end the turn, and the answer is handed to the next one. The report ends the
+  task.
 
 - **Partial or ambiguous match:** name the persona you would use and ask before dispatching.
 - **No persona fits:** say so. Offer to create one only when the domain is large enough to
