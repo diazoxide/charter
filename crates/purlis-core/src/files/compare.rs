@@ -910,7 +910,8 @@ fn too_deep(root_len: usize, rela: usize, most: usize) -> bool {
 /// Each file git does not track and does not ignore, as `git status` lists them, and each
 /// untracked folder too deep to walk ([`too_deep`]) as one entry of its own: a mark that says
 /// "not read past here", which the working tree takes as a file it could not read. A tracked
-/// folder that deep is left to the status of the files git tracks in it.
+/// folder that deep is walked as before: holding it back would hide the untracked files in it,
+/// so a folder there too long to name still fails the read rather than drop a change.
 fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
     use gix::dir::entry::{Kind, Status};
     use gix::dir::walk::{Action, Delegate, EmissionMode, ForDeletionMode};
@@ -940,7 +941,12 @@ fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
             for_deletion: Option<ForDeletionMode>,
             worktree_root_is_repository: bool,
         ) -> bool {
-            if too_deep(self.root_len, entry.rela_path.len(), PATH_MOST) {
+            // Only a folder git does not track is held back: it is marked in its own place.
+            // A tracked folder may hold untracked files a mark could not stand for, so it is
+            // walked as before and a failure there still fails the read, never hides a file.
+            if entry.status == Status::Untracked
+                && too_deep(self.root_len, entry.rela_path.len(), PATH_MOST)
+            {
                 self.too_deep.insert(entry.rela_path.to_string());
                 return false;
             }
@@ -1215,6 +1221,62 @@ mod tests {
         let parent = in_chain[0].rsplit_once('/').unwrap().0;
         assert!(!too_deep(root_len, parent.len(), PATH_MOST));
         assert_eq!(untracked.len(), 2, "{untracked:?}");
+    }
+
+    /// The guard holds back only untracked folders. A tracked folder close enough to the limit
+    /// that a longest name would not fit is still walked, so a short untracked file in it is
+    /// still found: holding the folder back would have hidden it, with no mark in its place.
+    #[test]
+    fn a_tracked_folder_near_the_path_limit_is_still_walked_for_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let work = base.join("work");
+        let git_dir = base.join("work.git");
+        let made = crate::testgit::run(
+            &base,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                &git_dir.display().to_string(),
+                &work.display().to_string(),
+            ],
+        );
+        assert!(made.ok(), "{}", made.err);
+        let root_len = work.as_os_str().len();
+        // A folder path `rela` bytes long: past the guard's line, and still far inside the
+        // limit for a short name.
+        let rela = PATH_MOST - root_len - 200;
+        let mut folder = String::new();
+        let mut n = 0;
+        while folder.len() < rela {
+            if !folder.is_empty() {
+                folder.push('/');
+            }
+            let room = (rela - folder.len()).min(200);
+            folder.push_str(&format!(
+                "{n:03}{}",
+                "d".repeat(room.saturating_sub(3).max(1))
+            ));
+            n += 1;
+        }
+        assert!(too_deep(root_len, folder.len(), PATH_MOST));
+        std::fs::create_dir_all(work.join(&folder)).unwrap();
+        std::fs::write(work.join(&folder).join("kept.txt"), "kept\n").unwrap();
+        let tracked = format!("{folder}/kept.txt");
+        assert!(crate::testgit::run(&work, &["add", "--", &tracked]).ok());
+        assert!(crate::testgit::run(&work, &["commit", "-q", "-m", "deep"]).ok());
+        std::fs::write(work.join(&folder).join("new.txt"), "new\n").unwrap();
+
+        let repo = gix::open(&work).unwrap();
+        let (mut loose, mut untracked, mut gone) = Default::default();
+        uncommitted(&repo, &mut loose, &mut untracked, &mut gone).expect("read");
+
+        assert!(loose.is_empty(), "{loose:?}");
+        assert!(gone.is_empty(), "{gone:?}");
+        assert_eq!(untracked, BTreeSet::from([format!("{folder}/new.txt")]));
     }
 
     #[test]
