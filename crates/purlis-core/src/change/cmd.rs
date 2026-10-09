@@ -520,7 +520,7 @@ pub fn show(
 /// A blocker is ticked only when it has landed by the land gate's definition (#877): merged,
 /// and landed by purlis. One merged outside purlis is crossed, with the gate's reason.
 pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String> {
-    let (merged, of) = observation.landed();
+    let (merged, of) = observation.merged();
     let mut lines = vec![format!(
         "  read from the forge at {} · {merged} of {of} merged · nothing here is stored",
         now_iso(observation.at)

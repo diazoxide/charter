@@ -247,6 +247,15 @@ and 185 (`rst`); generated rows 31, 40, 204, 217, 225, 364, 374, 448, 602, 677, 
 fixture with git repositories cannot be built where the edit was made; the replay checks every
 row on CI.
 
+**And the hint says what `&` does, and comes with an alias chain too deep to follow (#1093).**
+A `cd` sent to the background by `&` never moves the shell at all, so the sentence now says that
+apart from the `;`, `||` and newline case; all 29 answers above took the new wording, replaced
+byte for byte. The refusal of an alias chain longer than purlis follows (`bra`, "past where
+purlis follows them") gains the same hint, before its closing "The plane root is one working
+tree…", where the same kind of `cd` comes before it: generated rows 443, 1149 and 1256. Chosen as
+the rows above were, by reading each line's segments as the walk does; the replay checks every
+row on CI.
+
 ## The session recording
 
 Re-record with:

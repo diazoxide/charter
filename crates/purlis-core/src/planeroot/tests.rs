@@ -309,6 +309,51 @@ fn a_cd_not_joined_by_and_and_is_told_to_join_it() {
     );
 }
 
+/// An alias chain too deep to follow is refused with the same hint for a loose `cd` (#1093),
+/// and the hint says what `&` does: a backgrounded `cd` never moves the shell.
+#[test]
+fn an_alias_chain_too_deep_is_told_to_join_a_loose_cd_too() {
+    let f = fixture();
+    let r = std::path::Path::new(&f.root);
+    // zzd0 -> zzd1 -> ... -> zzd5 -> checkout: past MAX_ALIAS_HOPS.
+    for hop in 0..=MAX_ALIAS_HOPS {
+        git(
+            r,
+            &[
+                "config",
+                &format!("alias.zzd{hop}"),
+                &format!("zzd{}", hop + 1),
+            ],
+        );
+    }
+    git(
+        r,
+        &[
+            "config",
+            &format!("alias.zzd{}", MAX_ALIAS_HOPS + 1),
+            "checkout",
+        ],
+    );
+    for cmd in [
+        "cd /nonexistent-dir; git zzd0 feature",
+        "cd /nonexistent-dir & git zzd0 feature",
+    ] {
+        let said = branch(&f, cmd).expect("refused");
+        assert!(
+            said.contains("past where purlis follows them"),
+            "{cmd:?}: {said}"
+        );
+        assert!(said.contains(LOOSE_CD_HINT), "{cmd:?}: {said}");
+    }
+    let said = branch(&f, "git zzd0 feature").expect("refused");
+    assert!(said.contains("past where purlis follows them"), "{said}");
+    assert!(!said.contains(LOOSE_CD_HINT), "{said}");
+    assert!(
+        LOOSE_CD_HINT.contains("one sent to the background by `&` never moves the shell"),
+        "{LOOSE_CD_HINT}"
+    );
+}
+
 /// git is recognised by what runs, not how it is spelled: on APFS and NTFS `GIT` runs git (#346).
 #[test]
 fn a_git_spelled_in_capitals_is_git() {
