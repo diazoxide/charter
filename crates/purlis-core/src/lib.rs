@@ -31,6 +31,7 @@ pub mod didnotstart;
 pub mod diffscan;
 pub mod dispatch;
 pub mod dispatchdecision;
+pub mod dispatchdormant;
 pub mod dispatched;
 pub mod dispatchgrant;
 pub mod dispatchguard;

@@ -544,14 +544,15 @@ function PolicyLocks({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
 }
 
 /**
- * **The dispatch grants** on the page (#1437): which persona's chats may dispatch to which, at
- * each level, with who granted it and when, each revocable. What policy locks is the next row's.
+ * **The dispatch grants** on the page (#1437, #1504): the one table of which persona's chats may
+ * dispatch to which, where each grant comes from, "any persona", the pairs said never to, and
+ * what a removed persona left, each with its action. What policy locks is the next row's.
  */
 export function dispatchGrantsSetting(plane: PlaneId, file: string): LiveSetting {
   return {
     id: `${DISPATCH}.grants`,
     label: "Dispatch grants",
-    help: `Which persona may dispatch to which without asking you. Revoke makes the next dispatch ask again. Everyone in this project is kept in ${file}, which your team follows.`,
+    help: `Which persona may dispatch to which without asking you, and where each grant comes from. Taking one back stops new dispatches only: tasks already running are left as they are. The project's grants are kept in ${file}, which your team follows.`,
     useControl: function useDispatchGrants() {
       return {
         grouped: true,

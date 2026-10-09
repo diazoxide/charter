@@ -56,6 +56,11 @@ pub async fn persona_create(
             delegate_when.as_deref(),
             parent.as_deref(),
         );
+        // A name that was just taken was no persona's a moment ago: a grant made for one chat
+        // that still names it was an earlier persona's, and the new one inherits none (#1504).
+        if said.is_ok() {
+            held.dispatch_grants().persona_gone(name.trim());
+        }
         // Told whether or not it was made: a refusal moved nothing, and listing the personas
         // again costs one directory read.
         held.wrote(&["personas".to_owned()]);
@@ -110,6 +115,11 @@ pub async fn persona_remove(
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
         let said = remove_in(held.root(), &name);
+        // A removed persona's grants are in force for no chat (#1504): the core marked the
+        // name gone, and the grants made for one chat that name it are this app's to end.
+        if said.is_ok() {
+            held.dispatch_grants().persona_gone(&name);
+        }
         held.wrote(&["personas".to_owned()]);
         said
     })
