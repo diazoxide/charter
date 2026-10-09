@@ -165,4 +165,23 @@ describe("the project's hosts Notice", () => {
       screen.queryByRole("status", { name: "The project's hosts changed" }),
     ).not.toBeInTheDocument();
   });
+
+  // #1407: what no watcher reports (another window's write, a hand's edit) is read on focus.
+  it("is read again when the window comes back into focus", async () => {
+    let state = QUIET;
+    mockIPC((cmd) => (cmd === "sandbox_state" ? state : null));
+    render(<ProjectHostsNotice plane={PLANE} onReview={() => {}} />);
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "The project's hosts changed" })).toBeNull(),
+    );
+
+    state = CHANGED;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(
+      await screen.findByRole("status", { name: "The project's hosts changed" }),
+    ).toBeInTheDocument();
+  });
 });
