@@ -15,7 +15,9 @@
 //! chat writes ([`super::PLANTED`]), a brokered write refuses any change under `[sandbox]`
 //! ([`super::changes_a_sandbox_key`]). Each entry goes through [`Host::parse`], so it is refused
 //! for everything a project's host is: a private address is one exact address with an optional
-//! exact port, and no wildcard or range ever names addresses.
+//! exact port, and no wildcard or range ever names addresses. A table for a persona the project
+//! does not define is refused where the project's personas are known, as a Settings save knows
+//! them (#1407): it would grant nothing.
 //!
 //! **Allowed on each machine, bound to what was shown** (D-1362-7). A persona's hosts are
 //! committed, so a teammate can change them; and they are the hosts that reach past the
@@ -73,7 +75,15 @@ pub struct Grants {
 
 /// What `[sandbox] personas` holds: each persona's grants, and each thing in it that is not
 /// taken, as one sentence.
-pub fn read(value: Option<&toml::Value>, file: &str) -> (BTreeMap<String, Grants>, Vec<String>) {
+///
+/// `known` is the personas the project defines, where the reader knows them: a table for any
+/// other is refused and grants nothing (#1407). A persona made later is read at the next read.
+/// `None` checks no name against the project, as where only the file's text is at hand.
+pub fn read(
+    value: Option<&toml::Value>,
+    file: &str,
+    known: Option<&[String]>,
+) -> (BTreeMap<String, Grants>, Vec<String>) {
     let mut out = BTreeMap::new();
     let mut refused = Vec::new();
     let Some(value) = value else {
@@ -93,6 +103,13 @@ pub fn read(value: Option<&toml::Value>, file: &str) -> (BTreeMap<String, Grants
             refused.push(format!(
                 "{here} in {file} is not a persona's name, so it grants nothing — a persona's \
                  name is lowercase letters, digits and hyphens"
+            ));
+            continue;
+        }
+        if known.is_some_and(|known| !known.iter().any(|name| name == persona)) {
+            refused.push(format!(
+                "{here} in {file} names no persona of this project, so it grants nothing — make \
+                 the persona first, or take its table out"
             ));
             continue;
         }

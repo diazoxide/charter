@@ -455,6 +455,12 @@ impl Said {
 
     /// What `top`, a parsed `charter.toml`, says.
     pub fn of(top: Option<&toml::Table>) -> Self {
+        Self::of_known(top, None)
+    }
+
+    /// [`Self::of`], with `known`, the personas the project defines: a grant under
+    /// `[sandbox.personas.<name>]` for any other is refused ([`persona::read`], #1407).
+    pub fn of_known(top: Option<&toml::Table>, known: Option<&[String]>) -> Self {
         let Some(table) = top.and_then(|top| top.get(TABLE)) else {
             return Self::default();
         };
@@ -530,7 +536,7 @@ impl Said {
                 false
             }
         };
-        let (personas, not) = persona::read(table.get(persona::KEY), FILE);
+        let (personas, not) = persona::read(table.get(persona::KEY), FILE, known);
         refused.extend(not.into_iter().map(Refusal::Persona));
         // The forge preset lets a project's `[[forge]]` hosts through, but not one the sandbox
         // refuses: said here, while the sandbox and that preset are on (#1405).
@@ -565,14 +571,24 @@ impl Said {
 /// whole table, and this machine's `charter.local.toml`, which holds the person's own hosts and
 /// nothing else of the sandbox ([`hosts`], #1341).
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
+    refusals_of(text, file, None)
+}
+
+/// [`refusals`] for the project at `root`, which also refuses a grant for a persona it does not
+/// define ([`Said::of_known`], #1407): what the Settings tab's save asks.
+pub fn refusals_at(root: &Path, text: &str, file: &str) -> Vec<String> {
+    refusals_of(text, file, Some(&crate::personaverbs::names(root)))
+}
+
+fn refusals_of(text: &str, file: &str, known: Option<&[String]>) -> Vec<String> {
     if file == crate::profiles::LOCAL_FILE {
         return local_refusals(text);
     }
     if file != FILE {
         return Vec::new();
     }
-    Plane::of(Some(text))
-        .said()
+    let top = text.parse::<toml::Table>().ok();
+    Said::of_known(top.as_ref(), known)
         .refused
         .iter()
         .map(ToString::to_string)
