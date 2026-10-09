@@ -18,3 +18,7 @@
 - **A file's comparison reads again when its branch moves.** While the explorer watches the
   branch, the comparison tab compares again by itself, keeping the comparison on screen until the
   new one comes; *Compare again* still asks at any time (#1189).
+
+- **"Choose your editor in Settings first" links to Settings.** In the file tab and a file's
+  comparison, the sentence now has a *Choose your editor* link that opens Settings at the Editor
+  group with its setting focused (#1201).

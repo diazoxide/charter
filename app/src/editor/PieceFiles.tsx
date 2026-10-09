@@ -48,6 +48,7 @@ import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
 import { useYourEditor } from "../yourEditor";
+import { askSettingsLink, type SettingsLink } from "../settings/links";
 import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
 
@@ -147,6 +148,11 @@ function useCursorLine(path: string | undefined, start?: number) {
   return { line, moved: (line: number) => setMoved({ path, start, line }) };
 }
 
+/** What *Open in your editor* says when no editor is chosen. */
+const NO_EDITOR = "Choose your editor in Settings first.";
+/** Where an editor is chosen: Settings › You › Editor, its one setting focused (SE-22). */
+const CHOOSE_EDITOR: SettingsLink = { group: "you.editor", setting: "you.editor.yours" };
+
 /**
  * What a header's button answered — the core's refusal, or what was done — said under the
  * buttons as a status: *Open in your editor*'s, *Copy path*'s and Reveal's.
@@ -161,7 +167,7 @@ function Said({ children }: { children: ReactNode }) {
 
 /**
  * *Open in your editor*: the button, and the sentence when nothing opened. With no editor
- * chosen it asks for one rather than guess.
+ * chosen it asks for one rather than guess, and links to where one is chosen (#1201).
  */
 export function ToYourEditor({
   plane,
@@ -184,7 +190,7 @@ export function ToYourEditor({
     setSaid(trouble === undefined ? undefined : { about, trouble });
   const open = () => {
     if (editor === undefined) {
-      say("Choose your editor in Settings first.");
+      say(NO_EDITOR);
       return;
     }
     say(undefined);
@@ -200,7 +206,23 @@ export function ToYourEditor({
       <button type="button" tabIndex={0} onClick={open}>
         {`Open in your editor at line ${line}`}
       </button>
-      {trouble !== undefined && <Said>{trouble}</Said>}
+      {trouble !== undefined && (
+        <Said>
+          {trouble}
+          {trouble === NO_EDITOR && (
+            <>
+              {" "}
+              <button
+                type="button"
+                tabIndex={0}
+                onClick={() => askSettingsLink(plane, CHOOSE_EDITOR)}
+              >
+                Choose your editor
+              </button>
+            </>
+          )}
+        </Said>
+      )}
     </>
   );
 }
