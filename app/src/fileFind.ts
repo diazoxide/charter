@@ -51,17 +51,54 @@ export function scopeSaid(scope: FileScope, nameOf: (plane: PlaneId) => string):
   }
 }
 
+/** A run of a row's text, and whether the query matched its letters. */
+export type Part = { text: string; matched: boolean };
+
+/**
+ * `chars[from..to]` cut into runs that the query matched and runs it did not. `matched` holds
+ * indices of the path's characters — code points, as the core counts them (`Hit::matched`),
+ * which is why the path is read as `Array.from` reads it and never by UTF-16 unit.
+ */
+export function marked(
+  chars: readonly string[],
+  from: number,
+  to: number,
+  matched: ReadonlySet<number>,
+): Part[] {
+  const parts: Part[] = [];
+  for (let at = from; at < to; at++) {
+    const hit = matched.has(at);
+    const last = parts.at(-1);
+    if (last !== undefined && last.matched === hit) last.text += chars[at];
+    else parts.push({ text: chars[at], matched: hit });
+  }
+  return parts;
+}
+
 /** A hit, as its row says it: the file's name, then where it is — its folder, its branch and
- *  its project — so two files of the same name are told apart. */
+ *  its project — so two files of the same name are told apart. `marks` is the same name and
+ *  folder cut where the query matched letters (#1131), and the rest of `where` after them. */
 export function hitSaid(
   hit: FoundFile,
   nameOf: (plane: PlaneId) => string,
-): { name: string; where: string } {
+): { name: string; where: string; marks: { name: Part[]; folder: Part[]; after: string } } {
   const cut = hit.path.lastIndexOf("/");
   const name = hit.path.slice(cut + 1);
   const folder = cut < 0 ? "" : hit.path.slice(0, cut);
   const where = [folder, placeName(hit), nameOf(hit.plane)].filter((part) => part !== "");
-  return { name, where: where.join(" · ") };
+  const chars = Array.from(hit.path);
+  const slash = chars.lastIndexOf("/");
+  const matched = new Set(hit.matched);
+  const after = [placeName(hit), nameOf(hit.plane)].filter((part) => part !== "").join(" · ");
+  return {
+    name,
+    where: where.join(" · "),
+    marks: {
+      name: marked(chars, slash + 1, chars.length, matched),
+      folder: slash < 0 ? [] : marked(chars, 0, slash, matched),
+      after: folder === "" ? after : ` · ${after}`,
+    },
+  };
 }
 
 /** The branch a hit is in, as the file tab names one. */

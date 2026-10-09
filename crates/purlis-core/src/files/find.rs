@@ -59,11 +59,15 @@ impl Named {
     }
 }
 
-/// One file found: which place of the scope, by its index, and its path in that branch.
+/// One file found: which place of the scope, by its index, its path in that branch, and which
+/// of the path's letters the query matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub at: usize,
     pub path: String,
+    /// The matched letters, as indices of the path's characters (Unicode scalar values, not
+    /// bytes), ascending and each once: what the row marks (#1131).
+    pub matched: Vec<u32>,
 }
 
 /// What a find answered: the hits, best first; every place of the scope that could not be
@@ -225,6 +229,7 @@ impl Finder {
                     found.hits.push(Hit {
                         at,
                         path: path.clone(),
+                        matched: letters(&pattern, &mut matcher, path),
                     });
                     if found.hits.len() == most {
                         return found;
@@ -241,6 +246,18 @@ impl Finder {
 /// [`Finder`] used once.
 pub fn find(scope: &[Place<'_>], query: &str, most: usize) -> Found {
     Finder::default().find(scope, query, most)
+}
+
+/// Which of `path`'s characters `pattern` matched, ascending and each once. Asked only for the
+/// hits answered, so a keystroke pays for at most `most` of them.
+fn letters(pattern: &Pattern, matcher: &mut Matcher, path: &str) -> Vec<u32> {
+    let mut buf = Vec::new();
+    let mut indices = Vec::new();
+    pattern.indices(Utf32Str::new(path, &mut buf), matcher, &mut indices);
+    // Each atom's indices are appended as it matched them (nucleo's own note on `indices`).
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 fn named(branch: Branch<'_>) -> Named {
@@ -303,4 +320,41 @@ fn opens(listing: &Listing, path: &str) -> bool {
         && resolved
             .strip_prefix(&listing.base)
             .is_ok_and(|inside| listing.paths.binary_search(&super::slashed(inside)).is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matched(query: &str, path: &str) -> Vec<u32> {
+        let pattern = Pattern::new(
+            query,
+            CaseMatching::Smart,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+        letters(
+            &pattern,
+            &mut Matcher::new(Config::DEFAULT.match_paths()),
+            path,
+        )
+    }
+
+    #[test]
+    fn the_letters_a_query_matched_are_named_by_their_place_in_the_path() {
+        assert_eq!(matched("pal", "app/src/Palette.tsx"), [8, 9, 10]);
+    }
+
+    #[test]
+    fn two_words_mark_each_letter_once_in_order() {
+        let marked = matched("src pal", "app/src/Palette.tsx");
+
+        assert_eq!(marked, [4, 5, 6, 8, 9, 10]);
+    }
+
+    #[test]
+    fn a_letter_is_counted_as_a_character_not_a_byte() {
+        // `é` is two bytes and one character: the `m` after it is character 5, byte 6.
+        assert_eq!(matched("mn", "café/menu.md"), [5, 7]);
+    }
 }

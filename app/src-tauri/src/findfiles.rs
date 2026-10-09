@@ -73,6 +73,9 @@ pub struct FoundFile {
     /// No piece is the repo's own folder.
     pub piece: Option<String>,
     pub path: String,
+    /// Which of the path's letters the query matched, as indices of its characters (code
+    /// points, not bytes or UTF-16 units), ascending: what the row marks.
+    pub matched: Vec<u32>,
 }
 
 /// What one keystroke found.
@@ -219,6 +222,7 @@ fn found_in(
                     repo: one.repo.clone(),
                     piece: one.piece.clone(),
                     path: hit.path,
+                    matched: hit.matched,
                 }
             })
             .collect(),
@@ -376,6 +380,7 @@ mod tests {
             repo: "thing".into(),
             piece: Some("piece".into()),
             path: "docs/guide.md".into(),
+            matched: vec![5, 6, 7, 8, 9],
         };
         assert_eq!(narrow.files, [guide(&first)]);
         assert_eq!(narrow.branches, 1);
