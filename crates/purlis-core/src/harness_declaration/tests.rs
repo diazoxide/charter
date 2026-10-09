@@ -850,7 +850,14 @@ fn a_project_never_takes_the_name_purlis_gives_a_harness_it_ships() {
 
 #[test]
 fn a_terminals_newline_is_one_of_the_keys_a_terminal_reads_as_enter() {
-    for newline in ["\\r", "\\n", "\\r\\n", "\\u001b\\r", "\\\\\\r"] {
+    for newline in [
+        "\\r",
+        "\\n",
+        "\\r\\n",
+        "\\u001b\\r",
+        "\\\\\\r",
+        "\\u001b[13;2u",
+    ] {
         let dir = project(&[(
             "gemini.toml",
             &declaring(&format!("[terminal]\nnewline = \"{newline}\"")),
@@ -859,7 +866,16 @@ fn a_terminals_newline_is_one_of_the_keys_a_terminal_reads_as_enter() {
         assert!(read.refused.is_empty(), "{newline}: {:?}", read.refused);
         assert!(read.get("gemini").unwrap().terminal.newline.is_some());
     }
-    for newline in ["x", "\\r\\r", "\\u001b[2~", "rm -rf ~\\r", "\\u0003", "\\t"] {
+    for newline in [
+        "x",
+        "\\r\\r",
+        "\\u001b[2~",
+        "rm -rf ~\\r",
+        "\\u0003",
+        "\\t",
+        "\\u001b[13;5u",
+        "\\u001b[13;2u\\r",
+    ] {
         let why = refused(
             "gemini",
             &declaring(&format!("[terminal]\nnewline = \"{newline}\"")),
@@ -868,8 +884,9 @@ fn a_terminals_newline_is_one_of_the_keys_a_terminal_reads_as_enter() {
             why.starts_with("harnesses/gemini.toml's [terminal] newline is ")
                 && why.ends_with(
                     "which is not one of the keys a terminal reads as a new line: \"\\r\", \
-                     \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, \
-                     or remove the line and the chat keeps the terminal's own Enter."
+                     \"\\n\", \"\\r\\n\", \"\\u001b\\r\", \"\\\\\\r\" or \"\\u001b[13;2u\". \
+                     Write one of them, or remove the line and the chat keeps the terminal's \
+                     own Enter."
                 ),
             "{newline}: {why}"
         );

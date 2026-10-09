@@ -675,9 +675,10 @@ fn session(
 }
 
 /// The bytes a declaration's `[terminal] newline` may be: the keys terminals read as a new
-/// line in a prompt's input (Enter, line feed, both, Alt+Enter, and a backslash before Enter).
+/// line in a prompt's input (Enter, line feed, both, Alt+Enter, a backslash before Enter, and
+/// Shift+Enter in the kitty keyboard encoding, CSI 13;2u).
 /// It is typed into the program's terminal, so it is never free text (#1119).
-const NEWLINES: [&str; 5] = ["\r", "\n", "\r\n", "\x1b\r", "\\\r"];
+const NEWLINES: [&str; 6] = ["\r", "\n", "\r\n", "\x1b\r", "\\\r", "\x1b[13;2u"];
 
 fn terminal(raw: RawTerminal, at: &dyn Fn(&str) -> String) -> Result<Terminal, String> {
     let ready_to_type = match raw.ready_to_type.as_deref() {
@@ -704,8 +705,8 @@ fn terminal(raw: RawTerminal, at: &dyn Fn(&str) -> String) -> Result<Terminal, S
         Some(newline) if !NEWLINES.contains(&newline) => {
             return Err(format!(
                 "{} is {}, which is not one of the keys a terminal reads as a new line: \"\\r\", \
-                 \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, or \
-                 remove the line and the chat keeps the terminal's own Enter.",
+                 \"\\n\", \"\\r\\n\", \"\\u001b\\r\", \"\\\\\\r\" or \"\\u001b[13;2u\". Write one of \
+                 them, or remove the line and the chat keeps the terminal's own Enter.",
                 at("[terminal] newline"),
                 shown::short(&format!("{newline:?}"))
             ));
