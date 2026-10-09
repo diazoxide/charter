@@ -212,6 +212,46 @@ fn a_1password_setting_that_reads_as_a_flag_is_refused() {
 }
 
 #[test]
+fn an_account_is_held_to_the_address_rule_the_guided_set_up_holds_it_to() {
+    // #1542: the same rule as `setup::clean_account`, not only "does not start with '-'".
+    for bad in [
+        "acme 1password.com",
+        "acme.1password.com;x",
+        "$(x)",
+        "_acme",
+        "-acme",
+    ] {
+        let plane = Plane::new(&[]);
+        let request = AddRequest {
+            op_vault: Some("Eng".into()),
+            account: Some(bad.into()),
+            ..req("o", "1password")
+        };
+        let mut io = Rec::default();
+        assert_eq!(add(&plane.ctx, &request, &mut io), 1, "{bad}");
+        assert!(
+            io.said().contains("not an account or a sign-in address"),
+            "{bad}: {}",
+            io.said()
+        );
+        assert!(!plane.ctx.local_registry().exists(), "{bad}");
+    }
+    // A pasted link is read as the address it names, as the guided set-up reads it.
+    let plane = Plane::new(&[]);
+    let request = AddRequest {
+        op_vault: Some("Eng".into()),
+        account: Some("https://acme.1password.eu/".into()),
+        ..req("o", "1password")
+    };
+    let mut io = Rec::default();
+    assert_eq!(add(&plane.ctx, &request, &mut io), 0, "{}", io.said());
+    assert_eq!(
+        local_entry(&plane, "o")["config"]["account"],
+        "acme.1password.eu"
+    );
+}
+
+#[test]
 fn a_bad_name_or_an_unknown_persona_is_refused_before_anything_is_written() {
     let plane = Plane::new(&[]);
     let mut io = Rec::default();
