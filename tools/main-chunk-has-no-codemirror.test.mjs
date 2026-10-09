@@ -79,6 +79,18 @@ test("CodeMirror reached through a static import of the entry fails too", () => 
   );
 });
 
+test("an editor moved whole into the entry fails once, not as a stale marker", () => {
+  const chunks = lazyEditor();
+  chunks.set(
+    "assets/index-a1.js",
+    `${chunks.get("assets/index-a1.js")}${EDITOR}`,
+  );
+  chunks.delete("assets/PieceFiles-d4.js");
+  const said = check({ html: HTML, chunks });
+  assert.equal(said.failures.length, 1, said.failures.join("\n"));
+  assert.match(said.failures[0], /assets\/index-a1\.js .*cm-editor/);
+});
+
 test("a build with no CodeMirror anywhere fails, so a stale marker is never a pass", () => {
   const chunks = lazyEditor();
   chunks.set("assets/PieceFiles-d4.js", `export{};`);
