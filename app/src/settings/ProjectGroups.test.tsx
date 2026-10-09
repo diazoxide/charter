@@ -157,6 +157,8 @@ function core({
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
   const sent: Sent[] = [];
   const count = { extensions: 0, saving: 0, themeDrawn: 0 };
+  /** The doctor fixes asked for, by id: discover (#1390). */
+  const fixes: string[] = [];
   mockIPC(
     (cmd, args) => {
       const given = (args ?? {}) as Record<string, unknown>;
@@ -183,6 +185,14 @@ function core({
           return [];
         case "sandbox_state":
           return sandbox;
+        case "plane_doctor_fix":
+          fixes.push(given.fix as string);
+          return {
+            fix: given.fix,
+            refused: null,
+            said: ["+ web: catalogued from github acme"],
+            complete: true,
+          };
         case "save_project_settings": {
           const which = given.which as SettingsWhich;
           const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
@@ -196,7 +206,7 @@ function core({
     },
     { shouldMockEvents: true },
   );
-  return { sent, count };
+  return { sent, count, fixes };
 }
 
 beforeEach(() => {
@@ -599,6 +609,35 @@ const SAVES_IN_FORCE: SavingInForce = {
   plane_left_out: null,
   repos_left_out: null,
 };
+
+describe("Saving's way to discover (#1390)", () => {
+  it("says no repo is catalogued, and Discover runs the doctor's discover and reads again", async () => {
+    const { count, fixes } = core();
+    const saving = await at("Saving");
+
+    const row = within(saving).getByRole("group", { name: "Repos not catalogued" });
+    expect(row).toHaveAccessibleDescription(
+      /No repo is catalogued in inventory\/repos\.json or named by either file/,
+    );
+    const before = count.saving;
+    await userEvent.click(within(row).getByRole("button", { name: "Discover repos" }));
+
+    expect(await within(row).findByText("+ web: catalogued from github acme")).toBeInTheDocument();
+    expect(fixes).toEqual(["discover"]);
+    await waitFor(() => expect(count.saving).toBeGreaterThan(before));
+  });
+
+  it("is offered beside catalogued repos too, for one not catalogued yet", async () => {
+    core({ shared: SAVES_SHARED, saving: SAVES_IN_FORCE });
+    const saving = await at("Saving");
+
+    expect(
+      within(saving).getByRole("group", { name: "Repos not catalogued" }),
+    ).toHaveAccessibleDescription(
+      /A repo inventory\/repos\.json does not catalogue has no save policy here/,
+    );
+  });
+});
 
 describe("the project's own save keys, in Saving (charter-app#300, ADR 0051)", () => {
   it("has every [plane] save key, with the value charter.toml holds", async () => {

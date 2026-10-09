@@ -148,7 +148,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
     return true;
   };
   const groups = useMemo(
-    () => (project.state === "read" ? projectGroups(project.read) : []),
+    () => (project.state === "read" ? projectGroups(project.read, project.reread) : []),
     [project],
   );
   // Each file as its whole text (SE-19, V89d), written through the level's driver: the core
