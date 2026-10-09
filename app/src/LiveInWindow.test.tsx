@@ -58,6 +58,8 @@ function core() {
       };
     if (cmd === "workspace_live_preview")
       return { live: false, files: ["workspaces/beta/workspace.md"], remote: null, mode: "commit" };
+    if (cmd === "workspace_live")
+      return { said: ["✓ Workspace 'beta' is now LIVE"], notSaved: "Refusing to save" };
     return null;
   });
   return asked;
@@ -84,6 +86,24 @@ describe("LIVE and LOCAL, in the window", () => {
 
     expect(await screen.findByRole("alertdialog", { name: "Make beta live?" })).toBeTruthy();
     expect(asked.some((a) => a.cmd === "workspace_live")).toBe(false);
+  });
+});
+
+describe("a switch whose save did not happen", () => {
+  it("opens the project's Saving tab from the dialog (NO-8, #1296)", async () => {
+    core();
+    render(<App />);
+    const strip = await screen.findByRole("tablist", { name: "Workspaces" });
+    fireEvent.contextMenu(await within(strip).findByRole("tab", { name: /beta/ }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Make beta live/ }),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Make live" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Go to Saving" }));
+
+    expect(await screen.findByRole("tab", { name: /Saving/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });
 

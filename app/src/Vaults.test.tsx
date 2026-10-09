@@ -136,13 +136,15 @@ describe("the Vaults section", () => {
     expect(screen.queryByText("op CLI not on PATH")).not.toBeInTheDocument();
   });
 
-  it("draws the core's refusal rather than an empty list", async () => {
-    core(new Error("vault registry vaults.json is corrupt: not a JSON object"));
+  it("draws the core's refusal rather than an empty list, with Read again", async () => {
+    const asked = core(new Error("vault registry vaults.json is corrupt: not a JSON object"));
     draw();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "vault registry vaults.json is corrupt",
-    );
+    expect(await screen.findByText(/vault registry vaults\.json is corrupt/)).toBeTruthy();
     expect(screen.queryByTestId("list-vaults-empty")).not.toBeInTheDocument();
+
+    // NO-8's follow-up (#1296): the panel reads once, so its refusal offers the retry.
+    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
+    await waitFor(() => expect(asked).toHaveLength(2));
   });
 
   it("is one Tab stop, and Up and Down move between vaults (charter-app#189)", async () => {

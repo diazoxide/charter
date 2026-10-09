@@ -18,6 +18,15 @@ export function askWayOut(plane: string, way: WayOut["way"]): void {
   window.dispatchEvent(new CustomEvent<WayOut>(WAY_OUT, { detail: { plane, way } }));
 }
 
+/** The window event that asks a project's window for its Saving tab: a dialog's way out to
+ *  where a save that did not happen is mended (LiveDialog, NO-8's follow-up #1296). */
+export const OPEN_SAVING = "charter-open-saving";
+
+/** Ask the window of the project `plane` to open its Saving tab (`PlaneView` hears it). */
+export function askSavingTab(plane: string): void {
+  window.dispatchEvent(new CustomEvent<{ plane: string }>(OPEN_SAVING, { detail: { plane } }));
+}
+
 /** Say that a save of some project finished. */
 export function tellSaved(): void {
   window.dispatchEvent(new Event(PLANE_SAVED));

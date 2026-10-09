@@ -49,7 +49,7 @@ const READ_ONCE =
 /** A vault's read, health and write refusals. */
 const VAULT =
   "a vault tab's read, health and write refusals: the provider's own sentence names what to " +
-  "do (sign in, unlock). Read again is NO-8's follow-up; a write's refusal is ACTION's case";
+  "do (sign in, unlock), and the vault's box has Read again; a write's refusal is ACTION's case";
 /** An extension view's refusals. */
 const VIEWS =
   "an extension view's refusals: its Refresh reads again, and the view is the extension's, so " +
@@ -64,7 +64,9 @@ const VIEWS =
 const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "About.tsx": {
     count: 1,
-    why: READ_ONCE,
+    why:
+      "a dialog's read refusal: an inline error, not a Notice (V91n). Read again beside it is " +
+      "the retry (NO-8's follow-up, #1296)",
   },
   "ActivityTab.tsx": {
     count: 2,
@@ -181,7 +183,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "LiveDialog.tsx": {
     count: 2,
-    why: ACTION,
+    why:
+      ACTION +
+      ". A switch whose save did not happen offers Go to Saving, where the save is mended " +
+      "(NO-8's follow-up, #1296)",
   },
   "MemoryArchiveTab.tsx": {
     count: 3,
@@ -268,10 +273,6 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       ". Also a save's own output, line by line: what the last press answered, not a standing line",
   },
   "SearchTab.tsx": { count: 1, why: "the search's progress, a live value" },
-  "SessionRecordTab.tsx": {
-    count: 1,
-    why: READ_ONCE,
-  },
   "StartChat.tsx": {
     count: 3,
     why:
@@ -306,10 +307,6 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "VaultTab.tsx": {
     count: 7,
     why: VAULT,
-  },
-  "Vaults.tsx": {
-    count: 1,
-    why: READ_ONCE,
   },
   "Views.tsx": {
     count: 5,

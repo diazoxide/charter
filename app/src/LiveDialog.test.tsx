@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { LiveDialog } from "./LiveDialog";
+import { OPEN_SAVING } from "./saving";
 import type { LivePreview, LiveSwitched, RemoteReaders } from "./bindings";
 
 afterEach(() => {
@@ -190,6 +191,27 @@ describe("LiveDialog", () => {
     expect(onDone).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the Saving tab for a save that did not happen (NO-8, #1296)", async () => {
+    core(preview(), {
+      said: ["✓ Workspace 'ide' is now LIVE"],
+      notSaved: "Refusing to save — a secret-shaped value in a memory/ref file",
+    });
+    const onDone = vi.fn();
+    const asked: unknown[] = [];
+    const hear = (event: Event) => asked.push((event as CustomEvent).detail);
+    window.addEventListener(OPEN_SAVING, hear);
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={onDone} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Make live" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Go to Saving" }));
+    window.removeEventListener(OPEN_SAVING, hear);
+
+    // What the switch said is still reported, and the project's Saving tab is asked for: it is
+    // where the save is mended.
+    expect(onDone).toHaveBeenCalledWith(["✓ Workspace 'ide' is now LIVE"]);
+    expect(asked).toEqual([{ plane: PLANE }]);
   });
 
   it("tells a project not yet asked how it saves that the save waits for that answer", async () => {

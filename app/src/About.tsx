@@ -102,9 +102,25 @@ export function AboutCharter() {
           <Dialog.Title>About purlis</Dialog.Title>
           <div id="about-what">
             {trouble !== undefined ? (
-              <p className="honest doctor-trouble" role="alert">
-                purlis could not read what this version brought: {trouble}
-              </p>
+              <>
+                <p className="honest doctor-trouble" role="alert">
+                  purlis could not read what this version brought: {trouble}
+                </p>
+                {/* The dialog reads once (NO-8's follow-up, #1296): this is the retry, where
+                    closing and opening it again was. */}
+                <div className="doing">
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setTrouble(undefined);
+                      ask();
+                    }}
+                  >
+                    Read again
+                  </button>
+                </div>
+              </>
             ) : about === undefined ? (
               <p className="pending">reading what this version brought…</p>
             ) : (

@@ -190,7 +190,7 @@ function draw(
         views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
-        vaults={on.vaults === undefined ? undefined : { vaults: on.vaults }}
+        vaults={on.vaults === undefined ? undefined : { vaults: on.vaults, reload: () => {} }}
         onAddTodo={on.onAddTodo}
       />
     );
