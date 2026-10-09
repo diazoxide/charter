@@ -8,9 +8,10 @@
 //! also names what `remove` never counts and still deletes: the files git ignores.
 //!
 //! [`landed`] is the question no other verb asks: whether every commit of a piece's branch is
-//! already in the branch it was cut from. It is what lets purlis take a finished piece away
-//! without being told to, and it is deliberately narrower than "git would let me delete it":
-//! a branch that was only pushed somewhere is not merged, and is kept.
+//! already in the branch it was cut from, or every file it changed reads there as it has it (a
+//! squash merge). It is what lets purlis take a finished piece's folder away without being
+//! told to, and it is deliberately narrower than "git would let me delete it": a branch that
+//! was only pushed somewhere is not merged, and is kept.
 
 use std::path::Path;
 
@@ -134,6 +135,10 @@ pub fn drop_if_merged(plane: &Path, ws: &str, repo: &str, branch: &str) -> bool 
 pub enum Landed {
     /// Every commit of `branch` is in `base`.
     Yes { branch: String, base: String },
+    /// Not its commits, but every file `branch` changed reads in `base` as the branch has it:
+    /// squashed, rebased or picked in (#1472). git does not find it merged, so the branch
+    /// itself is kept wherever it is taken away: it is the one place those commits are.
+    Carried { branch: String, base: String },
     /// It holds commits `base` does not.
     No,
     /// purlis cannot say: the folder is gone, the piece is on another branch than `branch` or
@@ -202,7 +207,98 @@ pub fn landed(plane: &Path, ws: &str, repo: &str, piece: &str, branch: &str) -> 
             branch: branch.to_owned(),
             base: (*base).to_owned(),
         },
-        Ok(seen) if seen.code == Some(1) => Landed::No,
+        // Not by its commits: squashed, rebased or picked into the base, which git cannot
+        // see by ancestry. Asked of the files instead (#1472).
+        Ok(seen) if seen.code == Some(1) => match carried_in(&clone, branch, base) {
+            Some(true) => Landed::Carried {
+                branch: branch.to_owned(),
+                base: (*base).to_owned(),
+            },
+            _ => Landed::No,
+        },
         _ => Landed::Unknown,
+    }
+}
+
+/// **Whether `base` holds, file by file, everything `branch` changed**, though not its commits:
+/// what a squash merge, a rebase or a picked commit leaves. `None` where git did not answer.
+///
+/// Every path the branch changed since it parted from the base must read the same in the base
+/// as at the branch's tip ([`carried`]). Two reads of names, and no file is read through a
+/// filter or an external diff. A base that changed one of those files again since is not
+/// found carried, so the branch is kept: never a false "merged".
+///
+/// **This lets a folder go, never a commit** ([`Landed::Carried`]): the folder is taken away
+/// and the branch stays, an ordinary branch of the repo, since git does not find it merged.
+fn carried_in(clone: &Path, branch: &str, base: &str) -> Option<bool> {
+    let (branch, base) = (name::as_ref(branch), name::as_ref(base));
+    let parted = git::run(clone, &["merge-base", &branch, &base], git::READ)
+        .ok()
+        .filter(git::Run::ok)?;
+    let parted = parted.line().to_owned();
+    if parted.is_empty() {
+        return None;
+    }
+    let names = |from: &str, to: &str| -> Option<Vec<String>> {
+        let seen = git::run(
+            clone,
+            &[
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                from,
+                to,
+                "--",
+            ],
+            git::READ,
+        )
+        .ok()
+        .filter(git::Run::ok)?;
+        Some(
+            seen.out
+                .split('\0')
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
+    };
+    let changed = names(&parted, &branch)?;
+    let differs = names(&branch, &base)?;
+    Some(carried(&changed, &differs))
+}
+
+/// Whether a branch that changed the paths `changed` is carried by a base that differs from
+/// its tip only in the paths `differs`: none of the paths it changed reads otherwise there.
+fn carried(changed: &[String], differs: &[String]) -> bool {
+    let differs: std::collections::HashSet<&str> = differs.iter().map(String::as_str).collect();
+    !changed.iter().any(|path| differs.contains(path.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::carried;
+
+    fn paths(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_base_that_reads_as_the_branch_in_every_file_it_changed_carries_it() {
+        // Squashed: the base differs from the branch's tip only where others worked.
+        assert!(carried(&paths(&["src/a.rs", "b.md"]), &paths(&["c.txt"])));
+        // Nothing differs at all: the base is the branch's tree.
+        assert!(carried(&paths(&["src/a.rs"]), &[]));
+    }
+
+    #[test]
+    fn one_file_the_branch_changed_that_reads_otherwise_in_the_base_is_not_carried() {
+        // Not merged, or merged and changed again since: kept either way.
+        assert!(!carried(
+            &paths(&["src/a.rs", "b.md"]),
+            &paths(&["c.txt", "b.md"])
+        ));
     }
 }
