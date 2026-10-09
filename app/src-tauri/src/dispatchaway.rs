@@ -572,7 +572,12 @@ pub fn never(
         workspace: None,
     };
     (on.audit)(&audited)?;
-    if let Err(why) = dispatchgrant::never(on.root, &pair) {
+    // When it was said, on no chat's question (#1464): the table says it came from here.
+    let said = purlis_core::dispatchnever::Said {
+        at: Some(on.at),
+        chat: None,
+    };
+    if let Err(why) = dispatchgrant::never_said_as(on.root, &pair, said) {
         // Recorded as lifted, so the log never ends on a never that is not there.
         if let Err(unsaid) = (on.audit)(&dispatchgrant::Audited {
             act: dispatchgrant::Act::LiftNever,

@@ -5044,7 +5044,12 @@ down rather than read off the code.
   exactly as it is spelled and is never dropped for its spelling: one whose names are no
   persona's refuses nothing real, and a `"*"` in one is not a pattern. An entry that is not two
   strings makes the whole file unread, since what it meant to refuse is unknown. Any other key,
-  at the top or in an entry, is kept as it is written.
+  at the top or in an entry, is kept as it is written. **An entry may also say when, and on
+  which chat's question** (#1464): `at`, seconds since 1970, and `chat`, the asking chat's name
+  as its tab showed it (none for a never said on a needs-you item). Settings' table says both,
+  as the Granted list says of a grant. Neither is part of the never: an entry without them,
+  or with an `at` that is not a number or a `chat` that is not a string, refuses the same, and
+  a never said again keeps when it was first said.
 - **Not kept here:** **Keep blocked**, the Notice's other no, is the app's memory and no file's.
   It is held per chat and per pair, so that chat asking again is refused at once and not asked
   twice, and is gone when the chat closes or purlis quits; a new chat is asked. **It is not

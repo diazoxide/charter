@@ -595,7 +595,23 @@ pub fn nevers_unread(root: &Path) -> Option<String> {
 /// project's file, so it is yours alone and nothing a teammate commits lifts it. Refused,
 /// with nothing written, where that record does not read.
 pub fn never(root: &Path, pair: &Pair) -> std::io::Result<()> {
-    crate::dispatchnever::add(root, &pair.asking, &pair.target)
+    never_said_as(root, pair, crate::dispatchnever::Said::default())
+}
+
+/// [`never`], with when it was said and on which chat's question (#1464): what Settings' table
+/// says of it.
+pub fn never_said_as(
+    root: &Path,
+    pair: &Pair,
+    said: crate::dispatchnever::Said,
+) -> std::io::Result<()> {
+    crate::dispatchnever::add_said(root, &pair.asking, &pair.target, said)
+}
+
+/// [`nevers`], each with when it was said and on which chat's question, where that is known
+/// (#1464). Empty where the record does not read.
+pub fn nevers_said(root: &Path) -> Vec<crate::dispatchnever::Entry> {
+    crate::dispatchnever::entries(root)
 }
 
 /// **Lifts the never for `asking` to `target`**: Settings' own action. Answers whether there

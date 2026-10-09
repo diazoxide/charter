@@ -812,10 +812,13 @@ export function DispatchGrantsList({
         : earlier !== undefined
           ? ` It was said of an earlier persona named ${earlier}, and still holds for this one.`
           : "";
+    // When it was said, and on which chat's question, where that is known (#1464).
+    const at = when(one.at);
+    const from = `${one.chat === null ? "" : `, from ${one.chat}`}${at === "" ? "" : `, ${at}`}`;
     return {
       key: `never:${one.asking}\u001f${one.target}`,
       says: <strong>Never</strong>,
-      note: `You said so on this machine. No grant covers it, and no ${one.asking} chat is asked. It also holds for a chain that starts from ${one.asking}: a chat working for a ${one.asking} chat does not dispatch to ${one.target} either.${whose}`,
+      note: `You said so on this machine${from}. No grant covers it, and no ${one.asking} chat is asked. It also holds for a chain that starts from ${one.asking}: a chat working for a ${one.asking} chat does not dispatch to ${one.target} either.${whose}`,
       // A never is not limited to a workspace: it holds in every one.
       everywhere: "Every workspace",
       offers: [
