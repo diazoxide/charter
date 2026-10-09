@@ -1849,8 +1849,9 @@ pub(crate) fn moved_name(
 /// to the second, which [`moved_name`] can give only to the minute. It names **the same memory
 /// in the same store's form** and nothing else: one plain name, with the same name as
 /// [`moved_name`]'s once a journal's prefix is taken off either, and a journal's prefix exactly
-/// when `timestamped`. So all it can choose is the prefix's stamp; anything else is
-/// `InvalidInput`, and it is never a way to rename a memory.
+/// when `timestamped`. So all it can choose is the prefix's stamp, and that stamp must be a real
+/// date and time (#1610); anything else is `InvalidInput`, and it is never a way to rename a
+/// memory.
 fn moved_as(
     name: &str,
     text: &str,
@@ -1865,7 +1866,7 @@ fn moved_as(
     one_segment(exact)?;
     let exact = md_name(exact);
     let bare = unstamped(&exact);
-    if bare == unstamped(&dest) && (bare != exact) == timestamped {
+    if bare == unstamped(&dest) && (bare != exact) == timestamped && real_stamp(&exact, bare) {
         Ok(exact)
     } else {
         Err(invalid(&format!(
@@ -1874,6 +1875,24 @@ fn moved_as(
             unstamped(&dest).strip_suffix(".md").unwrap_or(&dest)
         )))
     }
+}
+
+/// Whether `name`'s journal prefix, when it has one (`bare` is `name` without it), is a date and
+/// time that exists. [`unstamped`] checks the shape only, which is right for reading the names
+/// already on disk, but a name an undo asks for is written, so `99999999-999999-` is refused.
+fn real_stamp(name: &str, bare: &str) -> bool {
+    if name == bare {
+        return true;
+    }
+    let Some(stamp) = name
+        .strip_suffix(bare)
+        .and_then(|prefix| prefix.strip_suffix('-'))
+    else {
+        return false;
+    };
+    // chrono reads a second of `60` as a leap second; no journal name is stamped with one.
+    chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S")
+        .is_ok_and(|when| chrono::Timelike::nanosecond(&when) < 1_000_000_000)
 }
 
 /// Why a move found its target store taken.
@@ -2727,5 +2746,59 @@ mod gate_tests {
         let refused = ensure_index(dir.path(), &store, "# Memory").unwrap_err();
 
         crate::rewrite::frozen::names(&refused, &store.join(INDEX));
+    }
+}
+
+#[cfg(test)]
+mod restore_as_tests {
+    use super::*;
+
+    fn now() -> chrono::NaiveDateTime {
+        "2026-03-02T09:14:00".parse().unwrap()
+    }
+
+    fn asked(restore_as: &str, timestamped: bool) -> std::io::Result<String> {
+        moved_as(
+            "a-fact.md",
+            "# A fact\n",
+            timestamped,
+            now(),
+            Some(restore_as),
+        )
+    }
+
+    #[test]
+    fn a_stamp_that_is_a_real_date_and_time_is_kept_to_the_second() {
+        assert_eq!(
+            asked("20260302-091437-a-fact", true).unwrap(),
+            "20260302-091437-a-fact.md"
+        );
+        assert_eq!(
+            asked("20240229-235959-a-fact", true).unwrap(),
+            "20240229-235959-a-fact.md"
+        );
+        assert_eq!(asked("a-fact", false).unwrap(), "a-fact.md");
+    }
+
+    #[test]
+    fn a_stamp_of_the_right_shape_that_is_no_date_and_time_is_refused() {
+        for name in [
+            "99999999-999999-a-fact",
+            "20261302-091437-a-fact",
+            "20260230-091437-a-fact",
+            "20250229-091437-a-fact",
+            "20260302-240000-a-fact",
+            "20260302-096037-a-fact",
+            "20260302-091460-a-fact",
+        ] {
+            let refused = asked(name, true).unwrap_err();
+            assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput, "{name}");
+        }
+    }
+
+    #[test]
+    fn names_already_on_disk_are_still_read_by_shape() {
+        // Reading is not where a stamp is checked: a journal name of any digits keeps its name.
+        assert_eq!(unstamped("99999999-999999-a-fact.md"), "a-fact.md");
     }
 }

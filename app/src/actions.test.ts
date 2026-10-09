@@ -46,6 +46,7 @@ import {
   type Doing,
   type Now,
   type Offer,
+  type Ran,
   RESTART_NOTE,
   noteOf,
   restartNoteNoState,
@@ -690,6 +691,98 @@ describe("the one list of actions", () => {
     await run(offers, "worktree.discard", hands);
 
     expect(hands.calls).toEqual(["removeWorktree:svc/fix-it,true"]);
+  });
+
+  describe("a piece's Merge, Remove and Done while one is on its way (#1610)", () => {
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix/login" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+
+    /** Hands whose three piece verbs land only when `land` is called. */
+    function held() {
+      const hands = doing();
+      let land: (answer: Ran) => void = () => {};
+      const landing = new Promise<Ran>((resolve) => (land = resolve));
+      const slow = (what: string) =>
+        vi.fn(async (one: Cut) => {
+          hands.calls.push(`${what}:${one.repo}/${one.piece}`);
+          return landing;
+        });
+      hands.mergeWorktree = slow("mergeWorktree");
+      hands.removeWorktree = slow("removeWorktree");
+      hands.declareWorktreeDone = slow("declareWorktreeDone");
+      return { hands, land: (answer: Ran) => land(answer) };
+    }
+
+    it.each([
+      ["worktree.merge:svc/fix-it", "mergeWorktree:svc/fix-it"],
+      ["worktree.remove:svc/fix-it", "removeWorktree:svc/fix-it"],
+      ["worktree.done:svc/fix-it", "declareWorktreeDone:svc/fix-it"],
+    ])("sends one command for two presses of %s", async (id, sent) => {
+      const { hands, land } = held();
+
+      const first = run(offers, id, hands);
+      const second = await run(offers, id, hands);
+      // Said nothing: the first press's answer is the one to read.
+      expect(second).toEqual({ ok: true });
+      land({ ok: true, said: "landed" });
+
+      expect(await first).toEqual({ ok: true, said: "landed" });
+      expect(hands.calls).toEqual([sent]);
+    });
+
+    it("refuses Remove while a Merge of the same piece is on its way, and says why", async () => {
+      const { hands, land } = held();
+
+      const merging = run(offers, "worktree.merge:svc/fix-it", hands);
+      const removing = await run(offers, "worktree.remove:svc/fix-it", hands);
+      land({ ok: true });
+      await merging;
+
+      expect(removing).toEqual({
+        ok: false,
+        refused: "fix-it is still merging. Try again once that has landed.",
+      });
+      expect(hands.calls).toEqual(["mergeWorktree:svc/fix-it"]);
+    });
+
+    it("lets a refused press be pressed again", async () => {
+      const { hands, land } = held();
+
+      const first = run(offers, "worktree.merge:svc/fix-it", hands);
+      land({ ok: false, refused: "Not a fast-forward." });
+      await first;
+      const again = held();
+      const second = run(offers, "worktree.merge:svc/fix-it", again.hands);
+      again.land({ ok: true });
+      await second;
+
+      expect(again.hands.calls).toEqual(["mergeWorktree:svc/fix-it"]);
+    });
+
+    it("lets go of the piece when the command throws", async () => {
+      const hands = doing();
+      hands.mergeWorktree = vi.fn(async () => {
+        throw new Error("the bridge went away");
+      });
+
+      await expect(run(offers, "worktree.merge:svc/fix-it", hands)).rejects.toThrow("bridge");
+      await run(offers, "worktree.merge:svc/fix-it", doing());
+
+      expect(hands.mergeWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds each piece on its own", async () => {
+      const other = { ...cut, piece: "other", branch: "other" };
+      const both = catalogue(now({ plane: "/plane", pieces: [cut, other] }));
+      const { hands, land } = held();
+
+      const one = run(both, "worktree.merge:svc/fix-it", hands);
+      const two = run(both, "worktree.merge:svc/other", hands);
+      land({ ok: true });
+      await Promise.all([one, two]);
+
+      expect(hands.calls).toEqual(["mergeWorktree:svc/fix-it", "mergeWorktree:svc/other"]);
+    });
   });
 
   it("offers each piece of the focused workspace's files, in the light editor (RC-5)", () => {
