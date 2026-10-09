@@ -174,6 +174,9 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
         Ok(workspace) => workspace,
         Err(why) => return fail(format!("workspace '{ws}' could not be read ({why})")),
     };
+    // The read and the write under one lock (#1249 U2): a clone recording its repo meanwhile
+    // would otherwise lose its row to the manifest read before it.
+    let held = workspace.manifest_lock();
     let (doc, owner) = workspace.manifest();
     let Some(mut doc) = doc else {
         return fail(match owner {
@@ -192,7 +195,9 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
     if rows.len() == before {
         return fail(format!("workspace '{ws}' does not name '{repo}'"));
     }
-    if let Err(why) = workspace.write_manifest_as(&doc, owner != Ownership::Operator) {
+    let written = workspace.write_manifest_as(&doc, owner != Ownership::Operator);
+    drop(held);
+    if let Err(why) = written {
         return fail(format!(
             "workspaces/{ws}/workspace.json could not be written ({}), so '{repo}' is still in it.",
             crate::shown::short(&why.to_string())
@@ -230,6 +235,7 @@ fn forget_in_manifest(root: &Path, ws: &str, repo: &str, say: Sink) {
     let Ok(workspace) = crate::workspaces::Plane::open(root).workspace(ws) else {
         return;
     };
+    let _held = workspace.manifest_lock();
     let (doc, owner) = workspace.manifest();
     if owner == Ownership::Operator {
         say(Say::Warn(format!(
@@ -430,6 +436,45 @@ mod membership {
         let (doc, owner) = alpha(dir.path()).manifest();
         assert_eq!(owner, manifest::Ownership::Operator);
         assert_eq!(doc.unwrap()["repos"], serde_json::json!([{"name": "kept"}]));
+    }
+
+    /// #1249 U2: a removal waits for the manifest's lock and reads the manifest under it, so a
+    /// row another writer added while it waited is kept.
+    #[test]
+    fn a_removal_racing_another_writer_loses_neither_row() {
+        let dir = plane();
+        let root = dir.path().to_path_buf();
+        alpha(&root)
+            .write_manifest(&serde_json::json!({
+                "name": "alpha",
+                "repos": [{"name": "gone"}, {"name": "kept"}],
+            }))
+            .unwrap();
+        let held = alpha(&root).manifest_lock();
+        let removing = {
+            let root = root.clone();
+            std::thread::spawn(move || run(&root, "alpha", "gone"))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            alpha(&root).manifest().0.unwrap()["repos"],
+            serde_json::json!([{"name": "gone"}, {"name": "kept"}]),
+            "the removal wrote while another writer held the lock"
+        );
+        // The other writer — a clone recording its repo — adds a row while it holds the lock.
+        alpha(&root)
+            .write_manifest(&serde_json::json!({
+                "name": "alpha",
+                "repos": [{"name": "added"}, {"name": "gone"}, {"name": "kept"}],
+            }))
+            .unwrap();
+        drop(held);
+        let (code, said) = removing.join().unwrap();
+        assert_eq!(code, 0, "{said:?}");
+        assert_eq!(
+            alpha(&root).manifest().0.unwrap()["repos"],
+            serde_json::json!([{"name": "added"}, {"name": "kept"}])
+        );
     }
 
     #[test]

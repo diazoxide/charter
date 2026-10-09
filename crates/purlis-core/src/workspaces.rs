@@ -550,7 +550,23 @@ impl Workspace {
         )
     }
 
+    /// **Held for one read-modify-write of `workspace.json`** (#1249 U2, #1292): every writer
+    /// reads the whole manifest, changes it and writes it back whole, so two at once — a clone
+    /// recording its repo while a removal drops another, or the CLI racing the window — would
+    /// lose the earlier one's change. Taken before the read, released after the write.
+    ///
+    /// It is [`crate::rewrite::Lock`] on the workspace's directory, whose inode survives the
+    /// manifest's replace (and a rename of the folder). Best effort, as that lock is. **Never
+    /// take it while holding it**, nor call a writer that takes it: a second lock on the same
+    /// directory in one process waits for the first.
+    pub fn manifest_lock(&self) -> crate::rewrite::Lock {
+        crate::rewrite::Lock::on(&self.dir)
+    }
+
     /// Write `workspace.json`, stamping the digest last and replacing the file atomically.
+    ///
+    /// The write itself takes no lock: a writer that read the manifest first holds
+    /// [`Self::manifest_lock`] across both.
     ///
     /// The stamp takes the place of the key already there ([`manifest::stamp`]), so a
     /// document charter wrote keeps its key order and one a hand wrote keeps the position it
