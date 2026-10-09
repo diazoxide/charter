@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791542314942,
+  "lastUpdate": 1791545684477,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4788,6 +4788,48 @@ window.BENCHMARK_DATA = {
             "value": 101.74356350000001,
             "unit": "ms",
             "extra": "median of 5 runs: 101.370, 101.523, 101.744, 101.771, 101.805 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "5fff8e9fb4d9b3015b890f880e201466c33780a9",
+          "message": "Keep the travelling-Local test honest, and say merged before landed\n\nChoices::read now keeps the project root, so the three assertions in\na_local_file_that_would_travel_decides_nothing.rs that compared it with\nchoices made from text would fail: the derived equality compares the\nroot too. `Choices::of_project` attaches the root, `read` uses it, and\nthe test's expected values say where they were read.\n\nWith a blocker merged outside purlis, a merged member that waited on it\nwas described as \"merged ahead of its blocker\", which claims an order\nnobody saw. It merged before its blocker landed, and that is what the\nrow and the changes view now say.\n\nRefs #1371\nRefs #1093\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-09T15:07:23+04:00",
+          "tree_id": "775d3de89f2d7eeef68a1bdde1e613fd55347985",
+          "url": "https://github.com/purlis/purlis/commit/5fff8e9fb4d9b3015b890f880e201466c33780a9"
+        },
+        "date": 1791545683813,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.271374,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.268, 0.270, 0.271, 0.274, 0.284 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.481527,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.454, 16.469, 16.482, 16.546, 16.576 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.0689565,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.164, 100.849, 101.069, 101.451, 101.620 ms"
           }
         ]
       }
