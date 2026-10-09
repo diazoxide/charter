@@ -292,6 +292,10 @@ fn allowed_only(repo: &mut gix::Repository) -> Result<(), String> {
 /// How a branch is opened: the repository's own config and the operator's (`~/.gitconfig`,
 /// `~/.config/git`), with their includes; never the system's, never git's own binary asked
 /// where its config is, never the environment's `GIT_*`.
+///
+/// Opened at the folder named, never found by climbing: `safe.bareRepository`, which every git
+/// process purlis starts is given, does not reach gitoxide, and [`open`] refuses a folder that
+/// is not its repository's work tree, so a bare repository is never read here (#1415, #1550).
 fn options() -> gix::open::Options {
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.user = true;
@@ -452,6 +456,22 @@ fn rolled_up(changes: &[Change]) -> Vec<Rolled> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1550: gitoxide is given no `safe.bareRepository`, and needs none: a bare repository
+    /// where a clone should be is refused, never read in its place.
+    #[test]
+    fn a_bare_repository_where_a_clone_should_be_is_never_read() {
+        let plane = tempfile::tempdir().unwrap();
+        let clone = plane.path().join("workspaces").join("alpha").join("widget");
+        std::fs::create_dir_all(&clone).unwrap();
+        assert!(crate::testgit::run_unconfigured(&clone, &["init", "-q", "--bare", "."]).ok());
+        let branch = Branch {
+            ws: "alpha",
+            repo: "widget",
+            piece: None,
+        };
+        assert!(open(plane.path(), branch).is_err());
+    }
 
     #[test]
     fn of_what_the_config_said_only_the_keys_a_read_needs_are_kept() {

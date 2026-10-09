@@ -247,7 +247,24 @@ const NO_PROGRAMS: [&str; 6] = [
 /// repository a chat made in a folder it writes, which no `.git` path covers, is never found by
 /// discovery and read in place of the clone meant. Nothing purlis runs finds a bare repository
 /// implicitly: one it means is named with `--git-dir`, or is a remote URL. A test's own fixture
-/// git, which runs in the bare remotes it made, is told otherwise ([`crate::testgit`]).
+/// git, which runs in the bare repositories it made as remotes, is told otherwise
+/// ([`crate::testgit`]).
+///
+/// **"Every git call" is every git process purlis starts** (#1550). A branch the files view
+/// reads with gitoxide (`files::status`) starts no git, so this key does not reach it, and it
+/// needs none: the branch is opened at the folder purlis names, never found by climbing, and is
+/// refused unless that folder is its repository's work tree, so a bare repository is never
+/// read in its place.
+///
+/// **On git 2.38 to 2.44** the key also refuses a repository's own `.git` folder as the folder
+/// git runs in (git 2.45 allows that one). The session's and the hooks' guards
+/// ([`run_as_session`], [`run_in_hook`]) can then fail where the session's own git, which is
+/// not given the key, would not. Each fails the safe way. The project-root guard asks about the
+/// project's top, never a `.git` folder. The commit guard asks only of a `revert` or a
+/// `merge --ff-only`, which need a work tree, so the session's own command fails inside a
+/// `.git` folder too. A hook runs at the top of its work tree, and git names `GIT_DIR` for it
+/// where it is elsewhere. `purlis scan`'s `rev-parse --show-toplevel` fails inside a `.git`
+/// folder on every git.
 pub(crate) const BARE_ONLY_WHEN_NAMED: &str = "safe.bareRepository=explicit";
 
 /// The diff verbs that ignore `diff.ignoreSubmodules`, and are told on their own command line.
