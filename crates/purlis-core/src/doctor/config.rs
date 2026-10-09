@@ -521,6 +521,11 @@ pub(super) fn schema(d: &Doctor) -> Row {
 /// surface asks, so this row and `charter version` cannot disagree about a pin. A pin this
 /// charter meets, and one on the Python charter's line, are fine; drift is a warning that sends
 /// the reader to `charter version`, which says how to conform either side.
+///
+/// **A pin on a project that follows the dev channel is a warning first** (#1036), whatever
+/// the verdict: the status line raises `PinBesideDev` for it ([`crate::alerts`]), met or not,
+/// because the pin and the channel each name a different charter. Doctor asks the same
+/// question the same way, so the two surfaces cannot disagree about it either.
 pub(super) fn version_lock(d: &Doctor) -> Row {
     const NAME: &str = "version lock";
     let cfg = match &d.config {
@@ -547,6 +552,20 @@ pub(super) fn version_lock(d: &Doctor) -> Row {
         }
     };
     let shown = |pin: &str| super::one_line(pin, super::DISPLAY_LIMIT);
+    if let Some(pin) = locked
+        && crate::alerts::follows_dev(cfg)
+    {
+        return Row::warn(
+            NAME,
+            format!(
+                "pinned {} and follows the dev channel: {}",
+                shown(pin),
+                crate::alerts::TWO_CHARTERS
+            ),
+            "Run: purlis version  (says how to conform the plane or the app)",
+        )
+        .in_settings(SettingsGroup::General);
+    }
     match crate::adopt::pin_verdict(locked) {
         PinVerdict::Unpinned => Row::ok(NAME, "not pinned"),
         PinVerdict::Met(pin) => Row::ok(

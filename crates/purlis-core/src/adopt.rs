@@ -143,8 +143,10 @@ pub const VERSION_LINE: &str = concat!(
 );
 
 /// What a plane's `[charter] version` pin says against this charter — ADR 0045, and the one
-/// comparison every surface asks (`charter version`, the status line's alert row, the window's
-/// pin dialog). ADR 0030's rule, kept: no surface compares a pin its own way.
+/// comparison every surface asks (`charter version`, doctor's `version lock` row, the status
+/// line's alert row, the window's pin dialog). ADR 0030's rule, kept: no surface compares a pin
+/// its own way. A pin beside the dev channel is a warning before any verdict, on the status
+/// line and in doctor alike, by one test ([`crate::alerts`], #1036).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinVerdict {
     /// The plane pins nothing.

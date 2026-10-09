@@ -371,6 +371,10 @@ The pin names a version of **this app**: the number `purlis version` prints. `pu
 version` shows that number and the pin, and its exit status is the part a script reads — 0
 with no pin, 0 when the pin is met, 1 when it is not (drift). The window marks drift in its status bar.
 
+A pin beside `[update] channel = "dev"` is warned about whatever it names, met or not: the pin
+and the dev channel each name a different purlis. The status line's alerts and `purlis
+doctor`'s `version lock` row both say so.
+
 This purlis does not install anything to meet a pin. It is a binary inside the app, and the
 app is what moves it (see [install.md](install.md)), so `purlis version sync` and `purlis
 version bump` are refused by name rather than run.
