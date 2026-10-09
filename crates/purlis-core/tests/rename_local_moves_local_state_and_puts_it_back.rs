@@ -313,9 +313,9 @@ fn the_undo_gives_back_the_before_state_byte_for_byte() {
     assert!(again == before, "{:?}", differ(&again, &before));
 }
 
+/// #1285: the exclude line escapes the `*`, and the undo knows that line as its own.
 #[test]
 fn a_project_whose_path_holds_a_pattern_character_is_ignored_and_undone_as_written() {
-    // #1285: the exclude line escapes the `*`, and the undo knows that line as its own.
     purlis_core::unsteered!();
     let m = machine_in("work/a*b", "work");
 
