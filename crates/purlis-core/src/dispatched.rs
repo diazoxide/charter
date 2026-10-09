@@ -4045,6 +4045,43 @@ mod tests {
         );
     }
 
+    /// **The asking chat is still told the person answered, once the task has closed**
+    /// (#1551). What the person said is the asking chat's to know whatever became of the
+    /// task: it was asked that question, and must not answer it or wait for it.
+    #[test]
+    fn the_asking_chat_is_still_told_the_person_answered_after_the_task_closed() {
+        let mut ledger = asked();
+        ledger
+            .person_answers(
+                TASK,
+                "check the queue",
+                Some(ASKER),
+                1,
+                "Which queue?",
+                "The second.",
+            )
+            .expect("answered");
+
+        ledger.forget(TASK, Some((ASKER, "check the queue")));
+
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::PersonAnsweredFor(TASK)]
+        );
+        let said = handed(&mut ledger, ASKER);
+        assert!(
+            matches!(
+                said.as_slice(),
+                [crate::dispatchtalk::PersonSaid::AnsweredFor { chat, text, .. }]
+                    if *chat == TASK && text == "The second."
+            ),
+            "{said:?}"
+        );
+        // Nothing is kept of the closed task's own side.
+        assert!(handed(&mut ledger, TASK).is_empty());
+        assert_eq!(ledger.nudge_step(TASK, WAITING), Vec::new());
+    }
+
     #[test]
     fn the_person_s_answer_to_a_question_the_chat_answered_changes_nothing() {
         let mut ledger = asked();
