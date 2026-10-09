@@ -70,6 +70,14 @@ pub struct Scan {
     /// Whether the commit changes the allowlist file itself, which only a commit made outside a
     /// chat may.
     pub changes_the_allowlist: bool,
+    /// **Whether the commit stages a project file whose `[sandbox]`, `[chat_env]` or
+    /// `[dispatch]` tables differ from that file in the working tree** (#1464), wherever the
+    /// project sits in the repository. A chat's `pre-commit` refuses it, as a brokered write is
+    /// refused ([`crate::brokered::runs_under_differs`]). **A staged or working file that cannot
+    /// be read, or one staged as anything but a regular file, is refused too.** Committing the
+    /// file as it stands in the working tree is not this. Like every arm of the hooks, a guard
+    /// against mistakes (ADR 0074).
+    pub stages_what_a_chat_runs_under: bool,
 }
 
 /// [`staged`], filtered through charter's own entries and the repository's allowlist as it is at
@@ -90,10 +98,88 @@ pub fn checked(repo: &Path) -> Result<Scan, String> {
     .filter(|run| run.code == Some(0))
     .ok_or("git could not name the files the commit changes")?;
     let mut scan = through_the_allowlist(repo, found);
-    scan.changes_the_allowlist = String::from_utf8_lossy(&changed.out)
+    let names = String::from_utf8_lossy(&changed.out);
+    scan.changes_the_allowlist = names.split('\0').any(scanallow::is_the_file);
+    scan.stages_what_a_chat_runs_under = names
         .split('\0')
-        .any(scanallow::is_the_file);
+        .filter(|name| is_a_project_file(name))
+        .any(|name| staged_runs_under_differs(repo, name));
     Ok(scan)
+}
+
+/// Whether `name`, as git names a file from the top of the work tree, is the project's file or
+/// its local settings beside it, under any name purlis reads them by, compared case-folded as
+/// [`crate::brokered::guard`] compares them.
+///
+/// **Matched on the last part of the path**, as [`crate::brokered::guard`] matches a part: a
+/// project may be a folder inside a larger repository, and git names its file from the top
+/// of the work tree (`ops/purlis.toml`). A file of that name anywhere in the repository is
+/// held to the same rule.
+fn is_a_project_file(name: &str) -> bool {
+    let last = name.rsplit('/').next().unwrap_or(name);
+    [crate::names::PLANE_MANIFEST, crate::names::LOCAL_SETTINGS]
+        .iter()
+        .flat_map(|one| std::iter::once(one.write).chain(one.reads.iter().copied()))
+        .any(|file| file.eq_ignore_ascii_case(last))
+}
+
+/// **Whether the staged `name` holds other `[sandbox]`, `[chat_env]` or `[dispatch]` tables
+/// than the file in the working tree** of `repo`, or either cannot be read: [`Scan`]'s
+/// [`Scan::stages_what_a_chat_runs_under`]. It fails closed: a staged blob git does not show,
+/// a working file that is there and does not read, or a text that is not UTF-8 refuses. **So
+/// does a file staged as anything but a regular file** (a link, a submodule, a conflict's
+/// several entries), and a working file that is not one.
+fn staged_runs_under_differs(repo: &Path, name: &str) -> bool {
+    let asked = |args: &[&str]| {
+        git::run_in_hook(repo, args, git::READ)
+            .ok()
+            .filter(|run| run.code == Some(0))
+    };
+    // What the index holds under the name: none where the commit deletes the file, else one
+    // entry, of a regular file's mode.
+    let Some(listed) = asked(&[
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        &format!(":(literal){name}"),
+    ]) else {
+        return true;
+    };
+    let entries: Vec<&[u8]> = listed
+        .out
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let staged: Option<Vec<u8>> = match entries.as_slice() {
+        [] => None,
+        [entry] if entry.starts_with(b"100644 ") || entry.starts_with(b"100755 ") => {
+            match asked(&["show", &format!(":{name}")]) {
+                Some(run) => Some(run.out),
+                None => return true,
+            }
+        }
+        _ => return true,
+    };
+    let path = repo.join(name);
+    let working: Option<Vec<u8>> = match std::fs::symlink_metadata(&path) {
+        Err(none) if none.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(there) if there.is_file() => match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(_) => return true,
+        },
+        _ => return true,
+    };
+    if staged == working {
+        return false;
+    }
+    fn text(bytes: Option<&[u8]>) -> Result<Option<&str>, std::str::Utf8Error> {
+        bytes.map(std::str::from_utf8).transpose()
+    }
+    match (text(staged.as_deref()), text(working.as_deref())) {
+        (Ok(staged), Ok(working)) => crate::brokered::runs_under_differs(staged, working),
+        _ => true,
+    }
 }
 
 /// `found`, split into what is refused and what an entry lets through: charter's own entries
@@ -585,6 +671,15 @@ pub const ALLOWLIST_REFUSAL: &str = "purlis: commit refused — it changes .char
      the commit (`git restore --staged .charter-scan-allow.toml`); the operator reviews and \
      commits an entry. Do not use --no-verify; the operator has been told.\n";
 
+/// What a chat's commit is refused with where it stages a change to what chats run under that
+/// the project's file in the working tree does not hold (#1464).
+pub const RUNS_UNDER_REFUSAL: &str = "purlis: commit refused — it stages a version of the \
+     project's file (purlis.toml) whose [sandbox], [chat_env] or [dispatch] tables differ from \
+     the file in the working tree, or one purlis cannot read as a regular file. A chat never \
+     changes what chats run under or who may dispatch to whom. Take it out of the commit \
+     (`git restore --staged <the file>`), or stage the file as it is. Do not use --no-verify; \
+     the operator has been told.\n";
+
 /// What a chat's push of a range that changes the allowlist is refused with.
 pub const PUSH_ALLOWLIST_REFUSAL: &str = "purlis: push refused — it would publish a change to \
      .charter-scan-allow.toml, the scan's allowlist. The operator pushes an allowlist change \
@@ -979,6 +1074,84 @@ mod tests {
         // And staging it is the change a chat's commit may not make.
         testgit::run(&repo, &["add", scanallow::FILE]);
         assert!(checked(&repo).unwrap().changes_the_allowlist);
+    }
+
+    #[test]
+    fn a_staged_project_file_whose_dispatch_or_sandbox_differs_from_the_working_one_is_flagged() {
+        // #1464: a change to `[dispatch]` or `[sandbox]` put into the index without touching
+        // the file in the working tree, which a sandboxed chat is denied writing.
+        let (_dir, repo) = repo();
+        let file = crate::names::PLANE_MANIFEST.write;
+        let base = "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+        std::fs::write(repo.join(file), base).unwrap();
+        testgit::run(&repo, &["add", file]);
+        testgit::run(&repo, &["commit", "-q", "-m", "base"]);
+        assert!(!checked(&repo).unwrap().stages_what_a_chat_runs_under);
+
+        // Staged as the working tree holds it: a person's change, theirs to commit.
+        let renamed = "schema = 1\nname = \"x\"\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+        std::fs::write(repo.join(file), renamed).unwrap();
+        testgit::run(&repo, &["add", file]);
+        assert!(!checked(&repo).unwrap().stages_what_a_chat_runs_under);
+        let wider = "schema = 1\n[dispatch.grants]\nsteward = [\"devops\", \"*\"]\n";
+        std::fs::write(repo.join(file), wider).unwrap();
+        testgit::run(&repo, &["add", file]);
+        assert!(!checked(&repo).unwrap().stages_what_a_chat_runs_under);
+
+        // The working file put back, the wider grant left in the index.
+        std::fs::write(repo.join(file), base).unwrap();
+        assert!(checked(&repo).unwrap().stages_what_a_chat_runs_under);
+        // A change outside those tables, staged alone, is not this.
+        testgit::run(&repo, &["add", file]);
+        std::fs::write(repo.join(file), renamed).unwrap();
+        assert!(!checked(&repo).unwrap().stages_what_a_chat_runs_under);
+
+        // The file deleted from the index while the working tree keeps it.
+        std::fs::write(repo.join(file), base).unwrap();
+        testgit::run(&repo, &["rm", "-q", "--cached", file]);
+        assert!(checked(&repo).unwrap().stages_what_a_chat_runs_under);
+    }
+
+    #[test]
+    fn a_project_in_a_folder_of_a_bigger_repository_is_held_to_the_same_rule() {
+        // #1464 review: git names the file from the top of the work tree (`ops/purlis.toml`).
+        let (_dir, repo) = repo();
+        let file = format!("ops/{}", crate::names::PLANE_MANIFEST.write);
+        std::fs::create_dir(repo.join("ops")).unwrap();
+        let base = "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+        std::fs::write(repo.join(&file), base).unwrap();
+        testgit::run(&repo, &["add", &file]);
+        testgit::run(&repo, &["commit", "-q", "-m", "base"]);
+
+        let wider = "schema = 1\n[dispatch.grants]\nsteward = [\"devops\", \"*\"]\n";
+        std::fs::write(repo.join(&file), wider).unwrap();
+        testgit::run(&repo, &["add", &file]);
+        assert!(!checked(&repo).unwrap().stages_what_a_chat_runs_under);
+        std::fs::write(repo.join(&file), base).unwrap();
+        assert!(checked(&repo).unwrap().stages_what_a_chat_runs_under);
+        // And under another case, as a case-insensitive disk opens it.
+        assert!(is_a_project_file("ops/PURLIS.TOML"));
+        assert!(is_a_project_file("a/b/charter.local.toml"));
+        assert!(!is_a_project_file("ops/purlis.toml.bak"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_file_staged_as_a_link_is_flagged_whatever_it_points_at() {
+        // #1464 review: the index entry's kind, not only its text.
+        let (_dir, repo) = repo();
+        let file = crate::names::PLANE_MANIFEST.write;
+        std::fs::write(repo.join("other.toml"), "schema = 1\n").unwrap();
+        std::fs::write(repo.join(file), "schema = 1\n").unwrap();
+        testgit::run(&repo, &["add", "other.toml", file]);
+        testgit::run(&repo, &["commit", "-q", "-m", "base"]);
+        // Staged as a link, with a regular file of the same text left in the working tree.
+        std::fs::remove_file(repo.join(file)).unwrap();
+        std::os::unix::fs::symlink("other.toml", repo.join(file)).unwrap();
+        testgit::run(&repo, &["add", file]);
+        std::fs::remove_file(repo.join(file)).unwrap();
+        std::fs::write(repo.join(file), "schema = 1\n").unwrap();
+        assert!(checked(&repo).unwrap().stages_what_a_chat_runs_under);
     }
 
     #[test]

@@ -382,16 +382,27 @@ fn planted_name(name: &str) -> bool {
 /// Whether `after` holds different `[sandbox]`, `[chat_env]` or `[dispatch]` tables from
 /// `before` (none: no file). A text that is not TOML changes them: it cannot be read to say it does not.
 fn changes_what_a_chat_runs_under(before: Option<&str>, after: &str) -> bool {
-    let tables = |text: &str| -> Option<Vec<Option<toml::Value>>> {
+    runs_under_differs(before, Some(after))
+}
+
+/// **Whether two texts of a project file hold different `[sandbox]`, `[chat_env]` or
+/// `[dispatch]` tables** (none: no file): what a chat's commit is held to (#1464,
+/// [`crate::diffscan::Scan::stages_what_a_chat_runs_under`]) as a brokered write is. The same
+/// text never differs; a text that is not TOML differs from any other, since it cannot be read
+/// to say it does not.
+pub fn runs_under_differs(one: Option<&str>, other: Option<&str>) -> bool {
+    if one == other {
+        return false;
+    }
+    let tables = |text: Option<&str>| -> Option<Vec<Option<toml::Value>>> {
+        let Some(text) = text else {
+            return Some(vec![None; RUNS_UNDER.len()]);
+        };
         let top = text.parse::<toml::Table>().ok()?;
         Some(RUNS_UNDER.iter().map(|t| top.get(*t).cloned()).collect())
     };
-    let was = match before {
-        None => Some(vec![None; RUNS_UNDER.len()]),
-        Some(text) => tables(text),
-    };
-    match (was, tables(after)) {
-        (Some(was), Some(now)) => was != now,
+    match (tables(one), tables(other)) {
+        (Some(one), Some(other)) => one != other,
         _ => true,
     }
 }
