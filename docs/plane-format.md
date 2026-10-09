@@ -5731,8 +5731,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   (`acquisition-acme.md`), and it is shown in the window, as its whole path is by the tree's
   live marker. Which tools are heard is which tools a hook is armed on (`hookreg`): for Claude
   Code, before `Bash`, `Read`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and
-  purlis's dispatch tools, and after `Bash`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent`,
-  `Skill` and `SendMessage`; every opencode tool before it runs; Codex's shell alone.
+  purlis's dispatch tools, and after `Bash`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent`
+  and `Skill`; every opencode tool before it runs; Codex's shell alone.
 - **Status:** **internal** — bound by the app while a plane is open and gone with it. Nothing
   reads it but the connection it serves. **purlis only.**
 - **Tier:** Clone state, transient — it lives as long as the app has the plane open.

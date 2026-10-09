@@ -44,7 +44,14 @@ fn two_machines_with_the_same_hostname_write_separate_logs() {
 
     for config in [laptop_a.path(), laptop_b.path()] {
         let name = dispatch::log_name(Some(config), "MacBook-Pro");
-        dispatch::record(plane.path(), "devops", when(), &name).expect("a dispatch row");
+        dispatch::record_handoff(
+            plane.path(),
+            dispatch::Placement::Here,
+            false,
+            when(),
+            &name,
+        )
+        .expect("a handoff row");
         let who = pieces::Who {
             session: None,
             persona: None,
@@ -81,7 +88,14 @@ fn a_renamed_machine_keeps_one_log() {
 
     for host in ["MacBook-Pro", "aarons-laptop"] {
         let name = dispatch::log_name(Some(laptop.path()), host);
-        dispatch::record(plane.path(), "devops", when(), &name).expect("a dispatch row");
+        dispatch::record_handoff(
+            plane.path(),
+            dispatch::Placement::Here,
+            false,
+            when(),
+            &name,
+        )
+        .expect("a handoff row");
     }
 
     assert_eq!(

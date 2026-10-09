@@ -295,15 +295,13 @@ fn outside_a_project_a_sub_agent_call_is_not_this_hooks_to_refuse() {
 }
 
 #[test]
-fn a_returned_helper_and_a_message_to_one_are_no_longer_logged() {
+fn a_returned_helper_is_no_longer_logged() {
     // #1451: the hook rows were "which persona was sent out as a sub-agent", which is never.
     let p = Plane::new();
     p.persona("devops", "role: Ops");
     let mut done = dispatch_of("Explore");
     done["tool_response"] = serde_json::json!([{"type": "text", "text": "ok. agentId: a1b2c3d4"}]);
     assert_eq!(p.ask(done, posttooluse_dispatch), Answer::Nothing);
-    let message = serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": "devops"}});
-    assert_eq!(p.ask(message, posttooluse_message), Answer::Nothing);
     assert!(!dispatch::dir(&p.root).exists());
     assert!(!p.root.join(".charter/agent-personas.json").exists());
 }
@@ -450,10 +448,6 @@ fn outside_a_plane_the_post_hooks_say_and_write_nothing() {
         (
             serde_json::json!({"tool_name": "Skill", "tool_input": {"skill": "x"}}),
             posttooluse_skill,
-        ),
-        (
-            serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": "x"}}),
-            posttooluse_message,
         ),
     ] {
         assert_eq!(p.ask(payload, f), Answer::Nothing);

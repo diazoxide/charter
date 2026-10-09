@@ -31,9 +31,10 @@
 //! - **The routing ask on `pretooluse-edit`** (`_route_mark_take`): it answered a mark the
 //!   persona roster set under `routing: require`, and `routing:` is retired (charter#369).
 //!   Work for another persona goes to a chat of its own, by dispatch (#1434).
-//! - **The dispatch log's hook rows** (`posttooluse_dispatch`, `posttooluse_message`) and the
-//!   in-flight ask of `pretooluse_dispatch`: each was about a persona sent out as a sub-agent,
-//!   which a persona never is now (#1451). `pretooluse_dispatch` refuses that call instead.
+//! - **The dispatch log's hook rows** (`posttooluse_dispatch`, and `posttooluse-message`, which
+//!   is answered as a no-op now, [`crate::hookreg::NO_OPS`]) and the in-flight ask of
+//!   `pretooluse_dispatch`: each was about a persona sent out as a sub-agent, which a persona
+//!   never is now (#1451). `pretooluse_dispatch` refuses that call instead.
 //! - **The turn markers** (`_turn_begin`, `_turn_bump`, `_turn_end`) and `notify.plane_changed`:
 //!   the tmux frame's spinner and repaint. The app has its own (`hookwire`).
 //! - **`_record_reported_session`**: opencode's session report inside a tmux frame.
@@ -732,18 +733,12 @@ pub fn posttooluse_skill(hook: &Hook) -> Answer {
     Answer::Nothing
 }
 
-/// `posttooluse_dispatch`: nothing, since #1451. It logged which persona a `Task`/`Agent` call
-/// was sent to; a persona is no longer a sub-agent, so there is no such call to log, and a
-/// dispatch to a persona is recorded by the app that starts its chat. The word stays answered
-/// because an installed plugin still names it.
+/// `posttooluse_dispatch`: nothing to the harness, since #1451. It logged which persona a
+/// `Task`/`Agent` call was sent to; a persona is no longer a sub-agent, so there is no such
+/// call to log, and a dispatch to a persona is recorded by the app that starts its chat. The
+/// word stays wired because the app hears it: a helper came back, which ends "waiting on a
+/// helper" in the chat's line of what it is doing ([`crate::doing`]).
 pub fn posttooluse_dispatch(_hook: &Hook) -> Answer {
-    Answer::Nothing
-}
-
-/// `posttooluse_message`: nothing, since #1451. It logged a `SendMessage` to a persona's
-/// sub-agent as a resume of that persona; there is no such sub-agent now. The word stays
-/// answered because an installed plugin still names it.
-pub fn posttooluse_message(_hook: &Hook) -> Answer {
     Answer::Nothing
 }
 

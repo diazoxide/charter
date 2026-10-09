@@ -137,7 +137,6 @@ pub fn handler(name: &str) -> Option<Handler> {
         "posttooluse" => toolhooks::posttooluse,
         "posttooluse-skill" => toolhooks::posttooluse_skill,
         "posttooluse-dispatch" => toolhooks::posttooluse_dispatch,
-        "posttooluse-message" => toolhooks::posttooluse_message,
         // The harness is told nothing: what these hooks find goes to the app ([`blocks`]).
         BLOCKED | BLOCKED_ON_FAILURE => says_nothing,
         _ => return None,
