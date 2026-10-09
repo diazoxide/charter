@@ -588,6 +588,34 @@ fn a_chat_is_heard_once_a_minute_per_block_and_a_handful_a_minute_in_all() {
     );
 }
 
+/// A host refused a moment after another is its own block, with its own Notice to allow it:
+/// the same block is the same block on the same target, whichever road told it.
+#[test]
+fn another_host_refused_within_the_minute_is_heard_and_the_same_one_is_not() {
+    let mut throttle = Throttle::default();
+    let now = std::time::Instant::now();
+    let host = block(Operation::Connect, Kind::Host, false);
+    assert!(throttle.lets_on(3, &host, Some("api.example.com:443"), now));
+    assert!(
+        throttle.lets_on(3, &host, Some("cluster.example-k8s.com:6443"), now),
+        "another host is its own block"
+    );
+    assert!(
+        !throttle.lets_on(3, &host, Some("API.example.com:443"), now),
+        "the same host again at once, in any case"
+    );
+    assert!(
+        throttle.lets_on(3, &host, None, now),
+        "a host the report did not name is its own block too"
+    );
+    assert!(!throttle.lets(3, &host, now), "and is that one again");
+    // Still at most a handful a minute, whatever hosts a chat names.
+    let let_through = (0..100)
+        .filter(|n| throttle.lets_on(3, &host, Some(&format!("h{n}.example:443")), now))
+        .count();
+    assert_eq!(let_through, Throttle::PER_CHAT - 3);
+}
+
 #[test]
 fn a_block_says_its_operation_and_kind_in_one_phrase() {
     assert_eq!(

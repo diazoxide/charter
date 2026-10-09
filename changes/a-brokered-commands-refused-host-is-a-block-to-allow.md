@@ -7,5 +7,6 @@
   sandbox block Notice naming the host and port the proxy refused, with Allow for this chat,
   Always allow and Keep blocked, and purlis says on the command's stderr that its sandbox
   refused that host and where to allow it. The host comes from the proxy's own record, never
-  from the command's output. Once allowed, the chat is started again with it and the next run
-  reaches the host.
+  from the command's output, and one that carries a value from the vault is never named or
+  offered. Once allowed, the chat is started again with it and the next run reaches the host.
+  A second host refused within a minute now gets its own Notice instead of being held back.

@@ -32,8 +32,10 @@
 //!    so the chat could not raise it itself. The host comes from the proxy's record
 //!    ([`crate::sandbox::egress::Refusals`]), never from what the command printed. Before the
 //!    exit status, purlis says the same in its own words on stderr ([`refused_note`]), so a chat
-//!    that sees only "Forbidden" can tell the person where to allow it. A grant reaches the
-//!    next run once the chat is started again with it, which its Allow owes it.
+//!    that sees only "Forbidden" can tell the person where to allow it, masked as every frame
+//!    is. A refused host that carries one of the run's values is never named, told or offered:
+//!    purlis says only that one was withheld ([`WITHHELD_NOTE`]). A grant reaches the next run
+//!    once the chat is started again with it, which its Allow owes it.
 //!
 //! Every run is recorded as `secret-exec` with `brokered`, the chat and its persona; every
 //! refusal is logged with the chat's number and the vault's name, never a value.
@@ -648,6 +650,22 @@ pub fn refused_note(target: &str) -> String {
     )
 }
 
+/// Whether `target`, a host the run's proxy refused, carries any of the run's `values`, as the
+/// mask would find it or in another case (a host is the same host in any case).
+fn carries_a_value(target: &str, values: &[String]) -> bool {
+    let target = target.to_lowercase();
+    values
+        .iter()
+        .filter(|value| !value.is_empty())
+        .any(|value| target.contains(&value.to_lowercase()))
+}
+
+/// What purlis says instead of naming a refused host that carries one of the run's values:
+/// nothing of the host, and no Notice offers it.
+pub const WITHHELD_NOTE: &str = "purlis's sandbox refused this command a connection to a host \
+                                 that carries a value from the vault, so purlis does not name \
+                                 it and offers no way to allow it.";
+
 /// Writes `frame` on `writer` as one line.
 fn send(writer: &mut dyn Write, frame: &Frame) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(frame).map_err(std::io::Error::other)?;
@@ -761,13 +779,21 @@ pub(crate) fn serve_in(
     };
     // What runs beside the child for as long as it does: the egress proxy carrying the chat's
     // hosts, telling the chat's tab each host it refuses, and a temp directory of its own.
+    // A host that carries one of the run's values is never told: no Notice names it and no
+    // grant is made from it. The values are known once the run is prepared, which is after its
+    // proxy starts; until then nothing is told.
+    let values: Arc<std::sync::OnceLock<Vec<String>>> = Arc::default();
     let refusals = crate::sandbox::egress::Refusals::telling({
         let chat = asker.chat;
+        let values = Arc::clone(&values);
         Arc::new(move |host: &str, port: u16| {
-            told(refused_block(
-                chat,
-                crate::sandbox::egress::host_and_port(host, port),
-            ));
+            let target = crate::sandbox::egress::host_and_port(host, port);
+            if values
+                .get()
+                .is_some_and(|values| !carries_a_value(&target, values))
+            {
+                told(refused_block(chat, target));
+            }
         })
     });
     let beside = match Beside::start(wrap, confines, refusals.clone()) {
@@ -819,6 +845,12 @@ pub(crate) fn serve_in(
         Err(Stopped::Said(code, why)) => return refuse(&mut *writer, code, why),
         Err(Stopped::Signal(code)) => return refuse(&mut *writer, code, "stopped".to_owned()),
     };
+    let _ = values.set(prepared.secret_values.clone());
+    #[cfg(test)]
+    if let Wrap::Refusing(target) = wrap {
+        let (host, port) = target.rsplit_once(':').expect("host:port");
+        refusals.heard(host, port.parse().expect("a port"));
+    }
     let program = match on_path(&command[0], &prepared.env) {
         Some(program) => program,
         None => {
@@ -918,8 +950,16 @@ pub(crate) fn serve_in(
         &mut *writer,
         &prepared.secret_values,
     );
-    for target in refusals.refused() {
-        let _ = send(&mut *writer, &Frame::Note(refused_note(&target)));
+    let (withheld, named): (Vec<String>, Vec<String>) = refusals
+        .refused()
+        .into_iter()
+        .partition(|target| carries_a_value(target, &prepared.secret_values));
+    for target in named {
+        let note = super::redact_str(&refused_note(&target), &prepared.secret_values);
+        let _ = send(&mut *writer, &Frame::Note(note));
+    }
+    if !withheld.is_empty() {
+        let _ = send(&mut *writer, &Frame::Note(WITHHELD_NOTE.to_owned()));
     }
     let _ = send(&mut *writer, &Frame::Exit(code));
     drop(prepared);
@@ -948,9 +988,8 @@ impl Beside {
             #[cfg(test)]
             Wrap::Unwrapped => tempfile::tempdir().map(Self::Pretend),
             #[cfg(test)]
-            Wrap::Refusing(target) => {
-                let (host, port) = target.rsplit_once(':').expect("host:port");
-                refusals.heard(host, port.parse().expect("a port"));
+            Wrap::Refusing(_) => {
+                drop(refusals);
                 tempfile::tempdir().map(Self::Pretend)
             }
         }

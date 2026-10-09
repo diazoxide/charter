@@ -852,23 +852,48 @@ pub const THROTTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(
 /// [`Throttle::PER_CHAT`] blocks a minute in all. A chat holds its own token, so it can send
 /// the app as many block lines as it likes; each one kept rewrites the store, and this keeps
 /// that to a handful a minute and the real blocks in it from being pushed out.
+///
+/// **The same block is the same block on the same target** ([`Throttle::lets_on`]): a host
+/// refused a minute after another is its own block, with its own Notice to allow it, or the
+/// second would have no Allow for a minute. Hosts compare without case.
 #[derive(Debug, Default)]
 pub struct Throttle {
-    heard: std::collections::HashMap<u32, Vec<(Block, std::time::Instant)>>,
+    heard: std::collections::HashMap<u32, Vec<(Block, Option<String>, std::time::Instant)>>,
 }
 
 impl Throttle {
     /// The most blocks one chat is heard in a [`THROTTLE_WINDOW`].
     pub const PER_CHAT: usize = 10;
 
-    /// Whether chat `chat`'s `block`, heard at `now`, is let through; remembered if it is.
+    /// Whether chat `chat`'s `block`, naming no target, heard at `now`, is let through;
+    /// remembered if it is.
     pub fn lets(&mut self, chat: u32, block: &Block, now: std::time::Instant) -> bool {
+        self.lets_on(chat, block, None, now)
+    }
+
+    /// Whether chat `chat`'s `block` on `target` (the host or path a grant would name, where
+    /// the block names one), heard at `now`, is let through; remembered if it is.
+    pub fn lets_on(
+        &mut self,
+        chat: u32,
+        block: &Block,
+        target: Option<&str>,
+        now: std::time::Instant,
+    ) -> bool {
         let heard = self.heard.entry(chat).or_default();
-        heard.retain(|(_, at)| now.saturating_duration_since(*at) < THROTTLE_WINDOW);
-        if heard.len() >= Self::PER_CHAT || heard.iter().any(|(one, _)| one == block) {
+        heard.retain(|(_, _, at)| now.saturating_duration_since(*at) < THROTTLE_WINDOW);
+        let same = |one: &Block, on: &Option<String>| {
+            one == block
+                && match (on.as_deref(), target) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                    _ => false,
+                }
+        };
+        if heard.len() >= Self::PER_CHAT || heard.iter().any(|(one, on, _)| same(one, on)) {
             return false;
         }
-        heard.push((*block, now));
+        heard.push((*block, target.map(str::to_owned), now));
         true
     }
 }
