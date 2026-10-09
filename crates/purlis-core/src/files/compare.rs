@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 
-use super::status::{Change, MARKED, Mark, Opened, open, plain, recorded_base};
+use super::status::{Change, MARKED, Mark, Opened, open, plain};
 use super::{Branch, Refused};
 use crate::worktree::name;
 
@@ -466,11 +466,10 @@ fn resolve(
     let what = || format!("the changes of {}", branch.called());
     let refused = |why: String| Refused::Unreadable { what: what(), why };
     let head_commit = || repo.head_commit().ok().map(|commit| commit.id);
+    // The recorded base, else the repo's own folder's upstream for the branch it is on (#1130).
     let based = |name: Option<&str>, tip: gix::ObjectId| {
-        let recorded = name
-            .and_then(|name| opened.recorded.get(name))
-            .and_then(|value| recorded_base(repo, value, tip));
-        recorded.map(|b| (b.fork, b.named))
+        name.and_then(|name| opened.based(name, tip))
+            .map(|b| (b.fork, b.named))
     };
     let current = || {
         repo.head_name()
@@ -908,8 +907,9 @@ fn too_deep(root_len: usize, rela: usize, most: usize) -> bool {
 }
 
 /// Each file git does not track and does not ignore, as `git status` lists them, and each
-/// untracked folder too deep to walk ([`too_deep`]) as one entry of its own: a mark that says
-/// "not read past here", which the working tree takes as a file it could not read. A tracked
+/// untracked folder too deep to walk ([`too_deep`]) or that does not open ([`opens`]) as one
+/// entry of its own: a mark that says "not read past here", which the working tree takes as a
+/// file it could not read. A tracked
 /// folder that deep is walked as before: holding it back would hide the untracked files in it,
 /// so a folder there too long to name still fails the read rather than drop a change.
 fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
@@ -917,17 +917,19 @@ fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
     use gix::dir::walk::{Action, Delegate, EmissionMode, ForDeletionMode};
     use gix::dir::{EntryRef, entry};
 
-    struct Untracked {
+    struct Untracked<'a> {
+        root: &'a Path,
         root_len: usize,
         found: BTreeSet<String>,
-        too_deep: BTreeSet<String>,
+        /// The untracked folders not walked into, each marked in its own place.
+        held_back: BTreeSet<String>,
     }
-    impl Delegate for Untracked {
+    impl Delegate for Untracked<'_> {
         fn emit(&mut self, entry: EntryRef<'_>, _: Option<entry::Status>) -> Action {
             if entry.status == Status::Untracked {
                 let path = entry.rela_path.to_string();
                 if matches!(entry.disk_kind, Some(Kind::File | Kind::Symlink))
-                    || self.too_deep.contains(&path)
+                    || self.held_back.contains(&path)
                 {
                     self.found.insert(path);
                 }
@@ -944,18 +946,27 @@ fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
             // Only a folder git does not track is held back: it is marked in its own place.
             // A tracked folder may hold untracked files a mark could not stand for, so it is
             // walked as before and a failure there still fails the read, never hides a file.
-            if entry.status == Status::Untracked
-                && too_deep(self.root_len, entry.rela_path.len(), PATH_MOST)
-            {
-                self.too_deep.insert(entry.rela_path.to_string());
+            let untracked = entry.status == Status::Untracked;
+            if untracked && too_deep(self.root_len, entry.rela_path.len(), PATH_MOST) {
+                self.held_back.insert(entry.rela_path.to_string());
                 return false;
             }
-            entry.status.can_recurse(
+            let recurse = entry.status.can_recurse(
                 entry.disk_kind,
                 entry.pathspec_match,
                 for_deletion,
                 worktree_root_is_repository,
-            )
+            );
+            // An untracked folder the walk could not read — no permission, gone since it was
+            // listed — would end the walk, and the status with it: it is held back the same way.
+            if recurse && untracked {
+                let rela = gix::path::from_bstr(&*entry.rela_path);
+                if !opens(&self.root.join(rela)) {
+                    self.held_back.insert(entry.rela_path.to_string());
+                    return false;
+                }
+            }
+            recurse
         }
     }
 
@@ -968,9 +979,10 @@ fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
         .map_err(|e| e.to_string())?
         .emit_untracked(EmissionMode::Matching);
     let mut delegate = Untracked {
+        root,
         root_len: root.as_os_str().len(),
         found: BTreeSet::new(),
-        too_deep: BTreeSet::new(),
+        held_back: BTreeSet::new(),
     };
     repo.dirwalk(
         &index,
@@ -981,6 +993,26 @@ fn untracked_files(repo: &gix::Repository) -> Result<BTreeSet<String>, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(delegate.found)
+}
+
+/// Whether `folder` opens as a folder, following no link: what the walk is about to read. The
+/// open is closed at once; a folder that changes between this and the walk's read is a race
+/// this does not close (#1130).
+#[cfg(unix)]
+fn opens(folder: &Path) -> bool {
+    use rustix::fs::{Mode, OFlags};
+    rustix::fs::open(
+        folder,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .is_ok()
+}
+
+#[cfg(not(unix))]
+fn opens(folder: &Path) -> bool {
+    std::fs::symlink_metadata(folder).is_ok_and(|meta| meta.is_dir())
+        && std::fs::read_dir(folder).is_ok()
 }
 
 /// The tree of `commit`, or `None` for none.
@@ -1236,6 +1268,65 @@ mod tests {
         let parent = in_chain[0].rsplit_once('/').unwrap().0;
         assert!(!too_deep(root_len, parent.len(), PATH_MOST));
         assert_eq!(untracked.len(), 2, "{untracked:?}");
+    }
+
+    /// #1130 (train 20's review): an untracked folder the walk cannot open — here one with no
+    /// permissions at all — costs only itself. It is one untracked entry, as a too-deep folder
+    /// is, and the untracked files after it are still found. Skipped as root, whom a mode-000
+    /// folder does not stop.
+    #[cfg(unix)]
+    #[test]
+    fn an_untracked_folder_that_cannot_be_opened_is_one_entry_and_the_walk_goes_on() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let work = base.join("work");
+        let made = crate::testgit::run(
+            &base,
+            &["init", "-q", "-b", "main", &work.display().to_string()],
+        );
+        assert!(made.ok(), "{}", made.err);
+        std::fs::write(work.join("tracked.txt"), "one\n").unwrap();
+        assert!(crate::testgit::run(&work, &["add", "tracked.txt"]).ok());
+        assert!(
+            crate::testgit::run(
+                &work,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "one",
+                ]
+            )
+            .ok()
+        );
+        let shut = work.join("shut");
+        std::fs::create_dir(&shut).unwrap();
+        std::fs::write(shut.join("inside.txt"), "unseen\n").unwrap();
+        // Walked after `shut`: the walk has to go on past it to find it.
+        std::fs::write(work.join("zz-new.txt"), "new\n").unwrap();
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let repo = gix::open(&work).unwrap();
+        let (mut loose, mut untracked, mut gone) = Default::default();
+        let read = uncommitted(&repo, &mut loose, &mut untracked, &mut gone);
+        // Opened again before anything is asserted, so the temp folder can be removed.
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        read.expect("the status degrades rather than fails");
+        assert!(loose.is_empty(), "{loose:?}");
+        assert!(gone.is_empty(), "{gone:?}");
+        assert_eq!(
+            untracked,
+            BTreeSet::from(["shut".to_string(), "zz-new.txt".to_string()])
+        );
     }
 
     /// The guard holds back only untracked folders. A tracked folder close enough to the limit
