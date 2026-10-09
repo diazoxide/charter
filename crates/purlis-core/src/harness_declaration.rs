@@ -703,7 +703,7 @@ fn terminal(raw: RawTerminal, at: &dyn Fn(&str) -> String) -> Result<Terminal, S
         }
         Some(newline) if !NEWLINES.contains(&newline) => {
             return Err(format!(
-                "{} is {}, and it is one of the keys a terminal reads as a new line: \"\\r\", \
+                "{} is {}, which is not one of the keys a terminal reads as a new line: \"\\r\", \
                  \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, or \
                  remove the line and the chat keeps the terminal's own Enter.",
                 at("[terminal] newline"),
