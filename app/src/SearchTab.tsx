@@ -13,9 +13,12 @@
  * What is searched, and what never is, is the core's (`contentSearch.ts`). This draws.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CaseSensitive, FileText, LoaderCircle, Regex, Search, WholeWord } from "lucide-react";
+import { CaseSensitive, LoaderCircle, Regex, Search, WholeWord } from "lucide-react";
 import type { PlaneId, SearchedFile } from "./bindings";
 import { EmptyState } from "./EmptyState";
+import { FileIcon } from "./FileIcon";
+import { useFileIcons } from "./projectTheme";
+import { iconFor } from "./theme/icons";
 import {
   projectCalled,
   scopeCalled,
@@ -405,7 +408,7 @@ function Hits({
                 </div>
               )}
               <div className="search-file-head" aria-hidden="true">
-                <FileText className="node-icon" />
+                <HitIcon file={file} name={name} />
                 <span className="search-file-name">{name}</span>
                 {folder !== "" && <span className="search-file-folder">{folder}</span>}
                 <span className="search-count">{file.count}</span>
@@ -468,4 +471,14 @@ function Hits({
       )}
     </>
   );
+}
+
+/**
+ * **A hit's file, drawn as the file trees draw it** (#1145; #1103 story 27): through `FileIcon`,
+ * with the icon theme its own project picks in its own workspace — a search over every open
+ * project draws each project's hits in that project's icons.
+ */
+function HitIcon({ file, name }: { file: SearchedFile; name: string }) {
+  const icons = useFileIcons(file.plane, file.workspace);
+  return <FileIcon symbol={iconFor(icons, { name, folder: false })} />;
 }

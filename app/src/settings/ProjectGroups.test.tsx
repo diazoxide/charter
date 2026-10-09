@@ -154,6 +154,7 @@ function core({
   sandbox = SANDBOX_OFF,
   refuse = undefined as string[] | undefined,
   personas = [] as string[],
+  iconThemes = [] as { extension: string; name: string; text: string }[],
 } = {}) {
   const files: Record<SettingsWhich, SettingsFile> = { shared, local };
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
@@ -185,6 +186,8 @@ function core({
           return themeNow().draws;
         case "extensions_on":
           return [];
+        case "extension_icon_themes":
+          return iconThemes;
         case "sandbox_state":
           return sandbox;
         case "start_options":
@@ -521,6 +524,101 @@ describe("the theme, in Appearance (charter-app#273)", () => {
     await userEvent.selectOptions(await screen.findByLabelText("Theme"), "charter-light");
 
     await waitFor(() => expect(count.themeDrawn).toBeGreaterThan(before));
+  });
+});
+
+describe("the icons, in Appearance (#1145)", () => {
+  const SOLARIZED: ProjectExtension = {
+    id: "solarized",
+    name: "Solarized",
+    state: "on",
+    source: "default",
+    settings: [],
+    ignored: [],
+  };
+  const SETI = { extension: "solarized", name: "Seti", text: "{}" };
+  const picks = (pick: string, file: SettingsFile = SHARED): SettingsFile => ({
+    ...file,
+    fields: [...file.fields, field(["theme", "icons"], { kind: "text", value: pick })],
+  });
+
+  it("offers charter's own and every icon theme an approved extension contributes", async () => {
+    core({ extensions: [SOLARIZED], iconThemes: [SETI] });
+    await at("Appearance");
+
+    const pick = await screen.findByLabelText("Icons");
+    await waitFor(() =>
+      expect(
+        within(pick)
+          .getAllByRole("option")
+          .map((option) => [option.getAttribute("value"), option.textContent]),
+      ).toEqual([
+        ["", "not set — charter-icons"],
+        ["charter-icons", "charter-icons (built in)"],
+        ["solarized/Seti", "Seti (Solarized)"],
+      ]),
+    );
+  });
+
+  it("writes the pick, and not set removes it", async () => {
+    const { sent } = core({ extensions: [SOLARIZED], iconThemes: [SETI] });
+    await at("Appearance");
+
+    const pick = await screen.findByLabelText("Icons");
+    await waitFor(() => expect(within(pick).getAllByRole("option")).toHaveLength(3));
+    await userEvent.selectOptions(pick, "solarized/Seti");
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].edits).toEqual([
+      {
+        path: [{ key: "theme" }, { key: "icons" }],
+        value: { kind: "text", value: "solarized/Seti" },
+      },
+    ]);
+
+    await userEvent.selectOptions(screen.getByLabelText("Icons"), "");
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1].edits).toEqual([{ path: [{ key: "theme" }, { key: "icons" }], value: null }]);
+  });
+
+  it("keeps a held pick nothing offers shown, and says why charter's own is drawn", async () => {
+    core({
+      shared: picks("solarized/Gone"),
+      extensions: [SOLARIZED],
+      iconThemes: [SETI],
+    });
+    const group = await at("Appearance");
+
+    expect(await screen.findByLabelText("Icons")).toHaveValue("solarized/Gone");
+    await waitFor(() =>
+      expect(group).toHaveTextContent(
+        "charter.toml picks “Gone” from solarized, but solarized contributes no icon theme called “Gone” — so the built-in charter-icons is drawn",
+      ),
+    );
+  });
+
+  it("says a pick whose extension is off is not drawn, under the file that won", async () => {
+    core({
+      shared: picks("solarized/Seti"),
+      local: picks("acme/Shapes", LOCAL),
+      extensions: [{ ...SOLARIZED, state: "off", source: "local" }, EXTENSIONS[0]],
+      iconThemes: [SETI],
+    });
+    const group = await at("Appearance");
+
+    await waitFor(() =>
+      expect(group).toHaveTextContent(
+        "charter.local.toml picks “Shapes” from acme, but this machine has not approved acme — so the built-in charter-icons is drawn",
+      ),
+    );
+    expect(group).not.toHaveTextContent("picks “Seti”");
+  });
+
+  it("says nothing of a pick that is drawn", async () => {
+    core({ shared: picks("solarized/Seti"), extensions: [SOLARIZED], iconThemes: [SETI] });
+    const group = await at("Appearance");
+
+    await waitFor(() => expect(screen.getByLabelText("Icons")).toHaveValue("solarized/Seti"));
+    expect(group).not.toHaveTextContent("is drawn");
   });
 });
 
