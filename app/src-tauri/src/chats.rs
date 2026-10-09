@@ -453,12 +453,13 @@ type Deciding = Box<
         + Sync,
 >;
 
-/// The chats of a project that run under a sandbox other than the one a start would compile
-/// for them now (#1428): what the window's Notice counts after a sandbox setting changes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The chats of a project still running under an older sandbox (#1428), for the Notice after
+/// a sandbox setting changes: those that run under a sandbox other than the one a start would
+/// compile for them now. The window is sent this type itself (`chats_on_older_sandbox`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct OlderSandbox {
     /// The chats, by session, lowest first.
-    pub chats: Vec<OnOlder>,
+    pub chats: Vec<OnOlderSandbox>,
 }
 
 #[cfg(test)]
@@ -469,14 +470,15 @@ impl OlderSandbox {
     }
 }
 
-/// One chat on an older sandbox ([`OlderSandbox`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnOlder {
+/// One chat still running under an older sandbox ([`OlderSandbox`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct OnOlderSandbox {
     pub session: u32,
-    /// What stands for what the project's settings would decide of this chat's sandbox at a
-    /// start now ([`Settled::key`]): the same while that stays the same, so one change is told
-    /// once however often it is asked about, and whichever other chat restarts meanwhile. It
-    /// is kept on disk with a dismissal, so it is the same on every build of purlis.
+    /// What stands for what the project's settings decide of this chat's sandbox now
+    /// ([`Settled::key`]): a dismissal of the Notice is kept for each chat by it, so the
+    /// Notice is shown once for each change, and one chat restarting does not bring it back
+    /// for another. It is kept on disk with a dismissal, so it is the same on every build of
+    /// purlis.
     pub change: String,
 }
 
@@ -1479,7 +1481,7 @@ impl Chats {
                 Some(Decided::Unsandboxed(_)) | None => None,
             };
             if now != started {
-                chats.push(OnOlder {
+                chats.push(OnOlderSandbox {
                     session,
                     change: Settled::key(now.as_ref()),
                 });

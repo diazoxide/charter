@@ -1863,24 +1863,6 @@ async fn restart_chat(
     .map_err(|err| format!("purlis could not restart the chat: {err}"))?
 }
 
-/// The chats of a project still running under an older sandbox (#1428), for the Notice after
-/// a sandbox setting changes.
-#[derive(serde::Serialize, specta::Type)]
-struct OlderSandbox {
-    /// The chats, by session, lowest first.
-    chats: Vec<OnOlderSandbox>,
-}
-
-/// One chat still running under an older sandbox.
-#[derive(serde::Serialize, specta::Type)]
-struct OnOlderSandbox {
-    session: u32,
-    /// What stands for what the project's settings decide of this chat's sandbox now: a
-    /// dismissal of the Notice is kept for each chat by it, so the Notice is shown once for
-    /// each change, and one chat restarting does not bring it back for another.
-    change: String,
-}
-
 /// **The chats this project has open that run under a sandbox other than the one the
 /// project's settings decide for them now** (#1428), or none. The window asks when the
 /// project's settings change, when its chats do, and after each of its own sandbox commands
@@ -1893,22 +1875,11 @@ struct OnOlderSandbox {
 async fn chats_on_older_sandbox(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
-) -> Result<Option<OlderSandbox>, String> {
+) -> Result<Option<chats::OlderSandbox>, String> {
     let held = planes.held(&plane)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        held.chats().on_older_sandbox().map(|older| OlderSandbox {
-            chats: older
-                .chats
-                .into_iter()
-                .map(|one| OnOlderSandbox {
-                    session: one.session,
-                    change: one.change,
-                })
-                .collect(),
-        })
-    })
-    .await
-    .map_err(|err| format!("purlis could not read the chats' sandbox: {err}"))
+    tauri::async_runtime::spawn_blocking(move || held.chats().on_older_sandbox())
+        .await
+        .map_err(|err| format!("purlis could not read the chats' sandbox: {err}"))
 }
 
 /// **Starts chat `session` again without the sandbox** (#1342): the person's choice on a block's
