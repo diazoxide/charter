@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791531930048,
+  "lastUpdate": 1791533022048,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4578,6 +4578,48 @@ window.BENCHMARK_DATA = {
             "value": 104.342896,
             "unit": "ms",
             "extra": "median of 5 runs: 102.968, 102.968, 104.343, 104.471, 105.846 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "5b17d37f635dd3160d1c3b0038fcd7f0372a6d2c",
+          "message": "Check every opened project before naming an export, and harden the chat check\n\nReview of #1542: M2 and fold-ins A to E.\n\n- The hint after a conversion names a variable only when no vault of\n  this project or of any other project this machine opened still reads\n  it, since a shell profile's export is the whole machine's. Where\n  another project could not be checked, it speaks for this project\n  alone (`Marked::checked_every_project`, also on the app's\n  `SetupDone`).\n- Only a name a shell can export is ever named, so a committed source\n  never reaches a terminal raw.\n- The wording no longer claims a chat is exposed (a chat starts from an\n  allowlisted environment) or that the token sits outside the Keychain\n  after a change to the app's sign-in: it is the person's own shells\n  and what they start.\n- The `--token-stdin` chat check also reads the machine store under the\n  account's home as the user database records it, so an environment\n  pointed at an empty store does not hide the person's projects. A\n  fenced build reads no store outside its fence.\n- Of each project only the chats' processes are read, leniently, from a\n  record of any version (`reopen::chat_pids`). A doubt says how to clear\n  it: delete the record named, or forget that project under Settings,\n  This machine; and the token can be given in the vault's tab.\n- Tests for each, at the CLI too, and for a project a window had open.\n\nRefs #1542\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T11:56:31+04:00",
+          "tree_id": "b6d779abe65f6c7a40ad105ecaca1b09044790d0",
+          "url": "https://github.com/purlis/purlis/commit/5b17d37f635dd3160d1c3b0038fcd7f0372a6d2c"
+        },
+        "date": 1791533021009,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5206999999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.510, 0.518, 0.521, 0.558, 0.563 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.949353000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.670, 16.798, 16.949, 17.030, 17.150 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.364626,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.907, 102.216, 103.365, 105.534, 106.931 ms"
           }
         ]
       }
