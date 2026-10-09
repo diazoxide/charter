@@ -2104,6 +2104,34 @@ button.show-more:focus-visible {
   line-height: 1.4;
 }
 
+/* **Where an Allow holds** (#1505), on the dispatch question: two choices under the answers
+   and above the brief. The group may shrink to a narrow pane, its choices go one under another
+   when they do not fit side by side, and a workspace's long name breaks rather than widen the
+   Notice. */
+.dispatch-within {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.9rem;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0.25rem 0;
+  font-size: 0.78rem;
+}
+
+.dispatch-within p {
+  flex: 1 1 100%;
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dispatch-within label {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .block-report-actions {
   display: flex;
   gap: 0.5rem;
@@ -8030,6 +8058,13 @@ h2.sidebar-title .node-icon {
 
 .dispatch-table thead th {
   color: var(--text-secondary);
+}
+
+/* The list that changes which workspace a grant holds in (#1505): never wider than its
+   column, so a workspace's long name does not push the table past the page. */
+.dispatch-table select.dispatch-workspace {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .dispatch-table thead th:nth-child(1) {

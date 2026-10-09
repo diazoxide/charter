@@ -1660,6 +1660,7 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
                 asking: Some("steward"),
                 target: "devops",
                 level: Level::You,
+                workspace: None,
             },
         )
         .unwrap();
@@ -1677,6 +1678,7 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
             "level": "you",
             "asking": "steward",
             "target": "devops",
+            "workspace": null,
         })
     );
 
@@ -1690,6 +1692,7 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
                 asking: Some("steward"),
                 target: "devops",
                 level: Level::You,
+                workspace: None,
             },
         )
         .unwrap();

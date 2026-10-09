@@ -302,6 +302,7 @@ fn the_committed_file_s_grants_are_read_pair_by_pair_in_file_order() {
                 pair("qa", "devops")
             ],
             any: vec![],
+            limited: vec![],
             refused: vec![],
         }
     );
@@ -385,6 +386,7 @@ fn a_grant_and_a_revoke_are_trust_events_naming_the_pair_and_the_level() {
         asking: Some("steward"),
         target: "devops",
         level: Level::Project,
+        workspace: None,
     };
     assert_eq!(made.kind(), "trust.dispatch.grant");
     assert_eq!(
@@ -396,6 +398,7 @@ fn a_grant_and_a_revoke_are_trust_events_naming_the_pair_and_the_level() {
             "level": "project",
             "asking": "steward",
             "target": "devops",
+            "workspace": null,
         })
     );
     let taken = Audited {

@@ -1930,6 +1930,16 @@ fn dispatch_noting(
         return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned().into());
     }
     let asking_as = crate::dispatchgrants::asking_from(&asking, from, asker.clone(), root);
+    // **Where the task works** (#1505): the workspace a handoff moves into, else the one the
+    // dispatch names or cuts its worktree in, else the asking chat's own; none at the
+    // project's root. Each from this app's own record, and it is where the chat is then
+    // started, so a grant limited to one workspace is judged against where the work runs.
+    let works_in = purlis_core::dispatchwithin::works_in(
+        moves_into.as_deref(),
+        ground.workspace(),
+        workspace.as_deref(),
+    )
+    .map(str::to_owned);
     // **A chat nobody is at crosses into another workspace only under a grant that already
     // stands** (D-1453-16): the person's on this machine or the project's acknowledged one,
     // read here with no grant of one chat. Its own persona's rule does not carry it across:
@@ -1966,8 +1976,13 @@ fn dispatch_noting(
         // What the decision reads of grants only orders its answer: a limit before a question
         // to the person. A chat nobody is at has no grant of one chat read for it.
         let grants = match attended {
-            Attendance::Attended => held.dispatch_grants().in_force(root, &asking_as),
-            Attendance::Unattended => dispatchgrant::InForce::read(root, Vec::new()),
+            Attendance::Attended => {
+                held.dispatch_grants()
+                    .in_force_for(root, &asking_as, works_in.as_deref())
+            }
+            Attendance::Unattended => {
+                dispatchgrant::InForce::read(root, Vec::new()).for_task_in(works_in.as_deref())
+            }
         };
         let asked = held.chats().deciding_over(|open, starting| {
             dispatchdecision::asked_by_a_chat(
@@ -2036,6 +2051,7 @@ fn dispatch_noting(
                     attended,
                     to,
                     &wanted.brief,
+                    works_in.as_deref(),
                 ) {
                     Requested::Covered(its) => Some(its),
                     Requested::NeedsGrant { pending } => {
@@ -2432,6 +2448,10 @@ pub fn answered(
             }
         }
     };
+    // **Whatever one start the person's answer carried ends here**, on every arm: started,
+    // held again, or refused before it reached the grant store. It was for this dispatch as
+    // they read it, so nothing of it is left for a later ask with another brief.
+    held.dispatch_grants().end_once(answer.pending.id);
     // **A task the person allowed that did not start is a failed row under the chat that
     // asked, and that chat's report** (#1497): told once, as a task's report is, and not also
     // as the app's word on a held dispatch. A handoff is not a task, and keeps that word.

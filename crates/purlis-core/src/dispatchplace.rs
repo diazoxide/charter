@@ -600,7 +600,10 @@ pub fn said_to_the_asker(ground: &Ground, cut: Option<&Cut>, sandboxed: bool) ->
 
 /// **Why a chat nobody is at may not start a chat in another workspace** (D-1453-16), or
 /// `None` where it may: a grant that already stands, the person's on this machine or the
-/// project's acknowledged one, names the pair. A grant made for one chat does not count;
+/// project's acknowledged one, names the pair **and covers `workspace`, the one the new chat
+/// is to work in** (#1505): it holds in any workspace, or it is limited to that one. A grant
+/// limited to the asking chat's own workspace, or to any third, does not carry a chat across.
+/// A grant made for one chat does not count;
 /// **neither does "any persona"** (#1503: where nobody is there to see it, a chat crosses into
 /// another workspace as another persona only under a grant that names the two), and neither
 /// does the rule that a chat's own persona needs none: with nobody to see it, a chat
@@ -620,7 +623,7 @@ pub fn nobody_to_ask(
     let stands = target.is_some_and(|target| {
         asking != Some(target)
             && matches!(
-                grants.named_level_of(asking, target),
+                grants.named_level_in(asking, target, Some(workspace)),
                 Some(Level::You | Level::Project)
             )
     });

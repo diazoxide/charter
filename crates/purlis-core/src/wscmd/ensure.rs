@@ -59,6 +59,14 @@ pub fn ensure(
             crate::personas::one_line(name)
         ));
     }
+    // **Before a workspace is made under a name** (#1505): a dispatch grant limited to that
+    // name was made for a workspace that is gone, and is counted so now, while the name is
+    // still nobody's, so the workspace made here inherits none of them
+    // ([`crate::dispatchwithin::noticed`]). Every maker of a workspace folder comes through
+    // here: `create`, `fork`, `restore`, `use`, and a handoff that makes its workspace.
+    if !workspace.dir().exists() {
+        crate::dispatchwithin::noticed(root);
+    }
     // `create_dir_all`, so an existing directory is not an error: `ensure` is idempotent and
     // is reached from a launch path where raising would cost the operator their tab.
     let _ = std::fs::create_dir_all(workspace.dir());

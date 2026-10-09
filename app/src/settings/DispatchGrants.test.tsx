@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { DispatchGrant, DispatchGrants, DispatchStanding } from "../bindings";
-import { DispatchGrantsList, dispatchSourceSaid } from "./DispatchGrants";
+import { DispatchGrantsList, dispatchSourceSaid, dispatchWorkspaceSaid } from "./DispatchGrants";
 import { grantedGroup } from "./GrantedList";
 import type { LiveSetting } from "./groups";
 import { forgetGroups, settingsPlace, useShownGroup } from "./links";
@@ -29,6 +29,8 @@ const grant = (over: Partial<DispatchGrant>): DispatchGrant => ({
   locked: null,
   waiting: false,
   declined: false,
+  workspace: null,
+  nowhere: null,
   ...over,
 });
 
@@ -57,6 +59,9 @@ const state = (over: Partial<DispatchGrants> = {}): DispatchGrants => ({
   ...over,
 });
 
+/** What a grant of "any persona" that holds in any workspace says of its workspace. */
+const ANYWHERE = { workspace: null, nowhere: null, id: null } as const;
+
 const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   nevers: [],
   any: [],
@@ -66,6 +71,7 @@ const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   dormant: [],
   returned: [],
   back: [],
+  workspaces: [],
   ...over,
 });
 
@@ -360,7 +366,15 @@ describe("any persona", () => {
     const fake = core({});
     fake.on("allow_dispatch_to_any", ({ asking, level }) => {
       fake.held.standing = stands({
-        any: [{ asking: asking as string, level: level as "you", waiting: false, declined: false }],
+        any: [
+          {
+            asking: asking as string,
+            level: level as "you",
+            waiting: false,
+            declined: false,
+            ...ANYWHERE,
+          },
+        ],
       });
     });
     render(<Table />);
@@ -395,7 +409,9 @@ describe("any persona", () => {
 
   it("is set for the project, saying it changes the committed file, and is cleared here", async () => {
     const fake = core({
-      standing: { any: [{ asking: "qa", level: "you", waiting: false, declined: false }] },
+      standing: {
+        any: [{ asking: "qa", level: "you", waiting: false, declined: false, ...ANYWHERE }],
+      },
     });
     fake.on("allow_dispatch_to_any", () => {});
     fake.on("revoke_dispatch_to_any", () => {
@@ -432,12 +448,14 @@ describe("any persona", () => {
 
   it("shows a teammate's as waiting, with Accept and Not on my machine", async () => {
     const fake = core({
-      standing: { any: [{ asking: "steward", level: "project", waiting: true, declined: false }] },
+      standing: {
+        any: [{ asking: "steward", level: "project", waiting: true, declined: false, ...ANYWHERE }],
+      },
     });
     fake.on("accept_project_dispatch", () => {});
     fake.on("decline_project_dispatch", () => {
       fake.held.standing = stands({
-        any: [{ asking: "steward", level: "project", waiting: true, declined: true }],
+        any: [{ asking: "steward", level: "project", waiting: true, declined: true, ...ANYWHERE }],
       });
     });
     render(<Table />);
@@ -610,7 +628,7 @@ describe("a persona that is away, and another under its name", () => {
       grants: [MINE, OURS],
       standing: {
         personas: ["qa", "steward"],
-        any: [{ asking: "devops", level: "you", waiting: false, declined: false }],
+        any: [{ asking: "devops", level: "you", waiting: false, declined: false, ...ANYWHERE }],
         nevers: [{ asking: "steward", target: "devops" }],
       },
     });
@@ -904,7 +922,7 @@ describe("with the keyboard, and to a screen reader", () => {
     core({
       grants: [MINE, OURS, THEIRS],
       standing: {
-        any: [{ asking: "qa", level: "project", waiting: true, declined: false }],
+        any: [{ asking: "qa", level: "project", waiting: true, declined: false, ...ANYWHERE }],
         nevers: [{ asking: "qa", target: "steward" }],
         back: ["devops"],
         dormant: [{ asking: "qa", target: "devops", any: false, was: "devops" }],
@@ -951,6 +969,310 @@ describe("with the keyboard, and to a screen reader", () => {
     expect(reached).toEqual(buttons.map((one) => one.getAttribute("aria-label")));
     expect(new Set(reached).size).toBe(reached.length);
     for (const name of reached) expect(name).toMatch(/steward|qa|devops/);
+  });
+});
+
+/**
+ * **Which workspace a grant holds in** (#1505): the column says it for every grant, the person
+ * changes it there for a grant of their own or of the project's, and a grant whose workspace
+ * is gone says it covers nothing.
+ */
+describe("which workspace a grant holds in", () => {
+  const WORKSPACES = ["runners", "web"];
+  const IN_RUNNERS = grant({
+    id: "in\u001fyou\u001fsteward\u001fdevops\u001frunners",
+    workspace: "runners",
+  });
+  const workspaceOf = (name: string) => screen.findByRole("combobox", { name });
+
+  it("says where each grant holds: any workspace, one workspace, or where one chat's task works", async () => {
+    core({
+      grants: [
+        MINE,
+        grant({ ...IN_RUNNERS, target: "qa", id: "in\u001fyou\u001fsteward\u001fqa\u001frunners" }),
+        grant({
+          ...CHAT,
+          target: "prod",
+          workspace: "web",
+          id: "chat\u001fc1\u001fsteward\u001fprod\u001fweb",
+        }),
+        grant({ ...CHAT, id: "chat\u001fc1\u001fsteward\u001fqa\u001f" }),
+      ],
+      standing: { workspaces: WORKSPACES, personas: ["devops", "prod", "qa", "steward"] },
+    });
+    render(<Table />);
+
+    expect(await workspaceOf("Workspace: my grant for steward to devops")).toHaveValue("");
+    expect(await workspaceOf("Workspace: my grant for steward to qa")).toHaveValue("runners");
+    // A grant made for one chat is for the task it was allowed for, and is not changed here.
+    const inWeb = rowOf(
+      screen.getByRole("button", { name: "Revoke: this chat's grant for steward to prod in web" }),
+    );
+    expect(inWeb).toHaveTextContent("In web");
+    expect(within(inWeb).queryByRole("combobox")).toBeNull();
+    const atRoot = rowOf(
+      screen.getByRole("button", { name: "Revoke: this chat's grant for steward to qa" }),
+    );
+    expect(atRoot).toHaveTextContent("At the project's root");
+    expect(dispatchWorkspaceSaid(null)).toBe("Any workspace");
+    expect(dispatchWorkspaceSaid("runners")).toBe("In runners");
+  });
+
+  it("narrows my grant to a workspace only once I confirm, and says what stops being covered", async () => {
+    const fake = core({ grants: [MINE], standing: { workspaces: WORKSPACES } });
+    fake.on("set_dispatch_workspace", () => {
+      fake.held.grants = [IN_RUNNERS];
+    });
+    render(<Table />);
+
+    const user = userEvent.setup();
+    const list = await workspaceOf("Workspace: my grant for steward to devops");
+    await user.selectOptions(list, "runners");
+    // Nothing is sent, and the list still says what is true, until the question is answered.
+    expect(fake.wrote()).toEqual([]);
+    expect(list).toHaveValue("");
+    const question = screen.getByRole("group", { name: "Confirm" });
+    expect(question).toHaveTextContent(
+      "Limit this grant to runners? steward chats will dispatch to devops without asking you only for work in runners. For work anywhere else the next dispatch asks you. Tasks already running are left as they are.",
+    );
+    await user.click(within(question).getByRole("button", { name: "Limit to runners" }));
+
+    await waitFor(() =>
+      expect(fake.sent("set_dispatch_workspace")).toEqual([
+        {
+          plane: PLANE,
+          asking: "steward",
+          target: "devops",
+          level: "you",
+          from: null,
+          to: "runners",
+        },
+      ]),
+    );
+    expect(await workspaceOf("Workspace: my grant for steward to devops")).toHaveValue("runners");
+    expect(await screen.findByText(/It now holds in runners only\./)).toBeInTheDocument();
+  });
+
+  it("puts a change away on Cancel and sends nothing", async () => {
+    const fake = core({ grants: [IN_RUNNERS], standing: { workspaces: WORKSPACES } });
+    render(<Table />);
+
+    const user = userEvent.setup();
+    const list = await workspaceOf("Workspace: my grant for steward to devops");
+    await user.selectOptions(list, "");
+    const question = screen.getByRole("group", { name: "Confirm" });
+    expect(question).toHaveTextContent(
+      "Let this grant hold in any workspace? steward chats will dispatch to devops for work in every workspace of this project, and at its root, without asking you.",
+    );
+    await user.click(within(question).getByRole("button", { name: "Cancel" }));
+    expect(fake.wrote()).toEqual([]);
+    expect(list).toHaveValue("runners");
+    await waitFor(() => expect(list).toHaveFocus());
+  });
+
+  it("changes a project grant's workspace for everyone, saying it edits the committed file first", async () => {
+    const ours = grant({
+      id: "in\u001fproject\u001fsteward\u001fdevops\u001frunners",
+      level: "project",
+      by: "Dana",
+      workspace: "runners",
+    });
+    const fake = core({ grants: [ours], standing: { workspaces: WORKSPACES } });
+    fake.on("set_dispatch_workspace", () => {});
+    render(<Table />);
+
+    const user = userEvent.setup();
+    await user.selectOptions(
+      await workspaceOf("Workspace: the project's grant for steward to devops"),
+      "web",
+    );
+    const question = screen.getByRole("group", { name: "Confirm" });
+    expect(question).toHaveTextContent(
+      "This changes purlis.toml, the project's committed file, for everyone: your teammates get it when they pull it, and each accepts it on their own machine.",
+    );
+    await user.click(within(question).getByRole("button", { name: "Limit to web" }));
+    await waitFor(() =>
+      expect(fake.sent("set_dispatch_workspace")).toEqual([
+        {
+          plane: PLANE,
+          asking: "steward",
+          target: "devops",
+          level: "project",
+          from: "runners",
+          to: "web",
+        },
+      ]),
+    );
+  });
+
+  it("draws a grant whose workspace is gone as covering nothing, with Remove", async () => {
+    const gone = grant({
+      id: "in\u001fyou\u001fsteward\u001fdevops\u001fold",
+      workspace: "old",
+      nowhere:
+        "old is not a workspace of this project now, so this grant covers nothing. A grant does not follow a workspace that was renamed: set its workspace again, or remove it.",
+    });
+    const fake = core({ grants: [gone], standing: { workspaces: WORKSPACES } });
+    fake.on("revoke_dispatch_grant", () => {
+      fake.held.grants = [];
+    });
+    render(<Table />);
+
+    const remove = await screen.findByRole("button", {
+      name: "Remove: my grant for steward to devops in old",
+    });
+    const row = rowOf(remove);
+    expect(row).toHaveClass("dispatch-dormant");
+    expect(row).toHaveTextContent(
+      "A grant does not follow a workspace that was renamed: set its workspace again, or remove it.",
+    );
+    // There is no workspace of that name to count it for.
+    expect(screen.queryByRole("button", { name: /Count it again/ })).toBeNull();
+    const said = await press("Remove: my grant for steward to devops in old", "Remove");
+    expect(said).toContain("It covers nothing now, so nothing changes for any chat.");
+    await waitFor(() =>
+      expect(fake.sent("revoke_dispatch_grant")).toEqual([{ plane: PLANE, id: gone.id }]),
+    );
+  });
+
+  it("offers Count it again where a workspace was made again under the name", async () => {
+    const stale = grant({
+      ...IN_RUNNERS,
+      nowhere:
+        "A workspace named runners was removed or renamed after this grant was made, so it covers nothing in the one that is there now.",
+    });
+    const fake = core({ grants: [stale], standing: { workspaces: WORKSPACES } });
+    fake.on("set_dispatch_workspace", () => {
+      fake.held.grants = [IN_RUNNERS];
+    });
+    render(<Table />);
+
+    const said = await press(
+      "Count it again: my grant for steward to devops in runners",
+      "Count it again",
+    );
+    expect(said).toContain(
+      "Let this grant hold in the workspace named runners that is there now? It was made for an earlier workspace of that name.",
+    );
+    await waitFor(() =>
+      expect(fake.sent("set_dispatch_workspace")).toEqual([
+        {
+          plane: PLANE,
+          asking: "steward",
+          target: "devops",
+          level: "you",
+          from: "runners",
+          to: "runners",
+        },
+      ]),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Revoke: my grant for steward to devops in runners",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts a project grant again on this machine without touching the committed file", async () => {
+    const stale = grant({
+      id: "in\u001fproject\u001fsteward\u001fdevops\u001frunners",
+      level: "project",
+      by: "Dana",
+      workspace: "runners",
+      nowhere:
+        "A workspace named runners was removed or renamed after this grant was made, so it covers nothing in the one that is there now.",
+    });
+    const fake = core({ grants: [stale], standing: { workspaces: WORKSPACES } });
+    fake.on("accept_project_dispatch_in", () => {});
+    render(<Table />);
+
+    const said = await press(
+      "Count it again: the project's grant for steward to devops in runners",
+      "Count it again",
+    );
+    expect(said).toContain("Follow this grant on this machine for the workspace named runners");
+    expect(said).toContain("purlis.toml is not changed.");
+    await waitFor(() =>
+      expect(fake.sent("accept_project_dispatch_in")).toEqual([
+        { plane: PLANE, asking: "steward", target: "devops", workspace: "runners" },
+      ]),
+    );
+    // Never the command that edits the project's file.
+    expect(fake.sent("set_dispatch_workspace")).toEqual([]);
+  });
+
+  it("accepts a teammate's grant for one workspace for that workspace", async () => {
+    const theirs = grant({
+      id: "in\u001fproject\u001fqa\u001fdevops\u001fweb",
+      asking: "qa",
+      level: "project",
+      by: "Dana",
+      waiting: true,
+      workspace: "web",
+    });
+    const fake = core({ grants: [theirs], standing: { workspaces: WORKSPACES } });
+    fake.on("accept_project_dispatch_in", () => {});
+    render(<Table />);
+
+    const said = await press(
+      "Accept: the project's grant for qa to devops in web, on this machine",
+      "Accept",
+    );
+    expect(said).toContain(
+      "qa chats will dispatch to devops for work in web here without asking you, and for work anywhere else they still ask.",
+    );
+    await waitFor(() =>
+      expect(fake.sent("accept_project_dispatch_in")).toEqual([
+        { plane: PLANE, asking: "qa", target: "devops", workspace: "web" },
+      ]),
+    );
+    expect(fake.sent("accept_project_dispatch")).toEqual([]);
+  });
+
+  it("draws any persona limited to a workspace as a line of its own, cleared by its id", async () => {
+    const fake = core({
+      standing: {
+        workspaces: WORKSPACES,
+        any: [
+          {
+            asking: "qa",
+            level: "you",
+            waiting: false,
+            declined: false,
+            workspace: "web",
+            nowhere: null,
+            id: "in\u001fyou\u001fqa\u001f*\u001fweb",
+          },
+        ],
+      },
+    });
+    fake.on("revoke_dispatch_grant", () => {});
+    render(<Table />);
+
+    expect(await workspaceOf("Workspace: my grant for qa to any persona")).toHaveValue("web");
+    // Beside it, "any persona" in any workspace is still not allowed, and can be.
+    expect(
+      screen.getByRole("button", { name: "Allow for me: qa may dispatch to any persona" }),
+    ).toBeInTheDocument();
+    await press("Clear: any persona for qa in web, for me on this machine", "Clear");
+    await waitFor(() =>
+      expect(fake.sent("revoke_dispatch_grant")).toEqual([
+        { plane: PLANE, id: "in\u001fyou\u001fqa\u001f*\u001fweb" },
+      ]),
+    );
+  });
+
+  it("says a never holds in every workspace", async () => {
+    core({
+      standing: { workspaces: WORKSPACES, nevers: [{ asking: "steward", target: "devops" }] },
+    });
+    render(<Table />);
+
+    const lift = await screen.findByRole("button", {
+      name: "Lift: never for steward dispatching to devops",
+    });
+    expect(rowOf(lift)).toHaveTextContent("Every workspace");
+    expect(within(rowOf(lift)).queryByRole("combobox")).toBeNull();
   });
 });
 
