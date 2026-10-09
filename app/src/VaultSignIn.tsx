@@ -494,6 +494,18 @@ export function VaultSignIn({
   );
 }
 
+/**
+ * What a finished conversion says of the variables the vault was read through before that no
+ * vault reads now (#1542): the export left in a shell profile is the one copy of the token
+ * outside the keyring. Empty when there are none.
+ */
+export function saidOfTheOldExport(done: SetupDone): string {
+  const names = done.no_longer_read.map((name) => `$${name}`);
+  if (names.length === 0) return "";
+  const listed = names.join(", ");
+  return `No vault reads ${listed} any more. If your shell's startup files export it, remove that line: until then every shell started from them carries the token outside the Keychain.`;
+}
+
 /** What a finished set-up says of the other vaults ticked: which got the token, which not. */
 export function saidOfTheOthers(done: SetupDone): string {
   const parts: string[] = [];

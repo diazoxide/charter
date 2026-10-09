@@ -945,6 +945,7 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
         contents: converted,
         marked: [],
         skipped: [{ name: "edge", why: "changed", said: null }],
+        no_longer_read: [],
       },
     });
     const onChanged = draw();
@@ -998,6 +999,43 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     expect(onChanged).toHaveBeenCalled();
     noValueAnywhere(GIVEN);
     expect(asked.filter((one) => JSON.stringify(one.args).includes(GIVEN))).toHaveLength(1);
+  });
+
+  it("after a conversion, asks for the export no vault reads any more to be removed", async () => {
+    const bound = onePassword({
+      secrets: [],
+      count: 0,
+      identity: [{ variable: "OP_TEAM_TOKEN", held: "unset", kept: false }],
+      refused: { kind: "no-token", why: "vault 'ops' is read through $OP_TEAM_TOKEN." },
+    });
+    core(bound, {
+      vault_setup_begin: { setup: 4, op_vaults: [], listing: null, alike: [] },
+      vault_setup_test: { items: 1, item: "charter-ops", item_there: true, failed: null },
+      vault_setup_change: {
+        contents: onePassword({ identity: kept("keyring") }),
+        marked: [],
+        skipped: [],
+        no_longer_read: ["OP_TEAM_TOKEN"],
+      },
+    });
+    draw();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change how this vault signs in" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "How ops signs in" });
+    await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
+    await within(dialog).findByText(/purlis has the token for this set-up/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await within(dialog).findByRole("status");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Store" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart. No vault reads $OP_TEAM_TOKEN any more. If your shell's startup files export it, remove that line: until then every shell started from them carries the token outside the Keychain.",
+    );
+    noValueAnywhere(GIVEN);
   });
 
   it("offers Store anyway beside the reason when the test did not pass", async () => {

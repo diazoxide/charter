@@ -220,6 +220,12 @@ replaced by the keyring record in this machine's half. The next read uses it; no
 restarted and nothing is exported. A vault the committed half binds is converted on this
 machine alone, and `vaults.json` is left as it is.
 
+**After a conversion, remove the old export.** When no registered vault reads the variable any
+more, the tab (and `vault add --token-stdin`) names it and asks for its `export` line to be
+taken out of your shell's startup files. Until it is, every shell started from them carries the
+token outside the keyring, and once no vault declares the variable, nothing strips it from a
+chat by name. A variable another vault still reads is not named: that vault still needs it.
+
 **An identity read from an environment variable is still supported**, for a machine with no
 keyring and for CI, and is no longer what the app sets up:
 

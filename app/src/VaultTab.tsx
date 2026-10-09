@@ -16,7 +16,7 @@ import {
 import { useTabStop } from "./roving";
 import { Field, SettingActions, SettingRow } from "./settings/components";
 import { counted } from "./Vaults";
-import { saidOfTheOthers, VaultSignIn } from "./VaultSignIn";
+import { saidOfTheOldExport, saidOfTheOthers, VaultSignIn } from "./VaultSignIn";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
@@ -467,7 +467,9 @@ export function VaultTab({
                   window.dispatchEvent(
                     new CustomEvent<Stored>(STORED, { detail: { plane, vault } }),
                   );
-                  const others = saidOfTheOthers(done);
+                  const others = [saidOfTheOthers(done), saidOfTheOldExport(done)]
+                    .filter((said) => said !== "")
+                    .join(" ");
                   const unread = done.contents.refused !== null;
                   setNote({
                     said: `${
@@ -475,7 +477,8 @@ export function VaultTab({
                         ? "How this vault signs in is stored, and the vault still could not be read: the reason is above."
                         : "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart."
                     }${others === "" ? "" : ` ${others}`}`,
-                    trouble: unread || done.skipped.length > 0,
+                    // An export left to remove is asked of the person: it stays until read.
+                    trouble: unread || done.skipped.length > 0 || done.no_longer_read.length > 0,
                   });
                 }}
               />

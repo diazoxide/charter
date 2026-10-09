@@ -545,13 +545,57 @@ pub enum NotMarked {
     Failed(String),
 }
 
-/// What became of the ticked vaults.
+/// What became of the ticked vaults, and which variables the vault was read through before
+/// that nothing reads now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Marked {
     /// Given the token, each under its own item and record.
     pub marked: Vec<String>,
     /// Ticked and not given it, with why.
     pub skipped: Vec<(String, NotMarked)>,
+    /// The variables the vault was read through before a conversion that no registered vault
+    /// declares any more, sorted (#1542). The person's shell profile may still export one of
+    /// them, and it is then the one copy of the token outside the keyring, which no chat is
+    /// held back from by name any more: what is said after a conversion asks them to remove
+    /// it.
+    pub no_longer_read: Vec<String>,
+}
+
+/// Of the variables in `was`, those no vault of the registry declares now, sorted. A
+/// registry that cannot be read names none: telling the person to remove an export another
+/// vault still reads would break that vault.
+fn no_longer_read(ctx: &Ctx, was: &BTreeSet<String>) -> Vec<String> {
+    let Ok(doc) = registry::load_registry(ctx) else {
+        return Vec::new();
+    };
+    let still: BTreeSet<String> = registry::vaults(&doc)
+        .keys()
+        .filter_map(|name| registry::vault_in(&doc, name).ok())
+        .flat_map(|vault| sources_of(&vault))
+        .collect();
+    was.iter()
+        .filter(|source| !identity::kept(source) && !still.contains(*source))
+        .cloned()
+        .collect()
+}
+
+/// What is said of the variables a conversion left no vault reading ([`Marked::no_longer_read`]):
+/// remove their export. `None` where there are none.
+pub fn remove_the_export(names: &[String]) -> Option<String> {
+    let listed = match names {
+        [] => return None,
+        [one] => format!("${one}"),
+        many => many
+            .iter()
+            .map(|n| format!("${n}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    Some(format!(
+        "No vault reads {listed} any more. If your shell's startup files export it, remove that \
+         line: until then every shell started from them, and every program started from such \
+         a shell, carries the token outside the keyring."
+    ))
 }
 
 /// The distinct sources `vault` is read through.
@@ -847,6 +891,7 @@ pub fn create(ctx: &Ctx, req: &Request) -> Result<Marked, VaultError> {
         .as_ref()
         .map(|old| identity::items_recorded(ctx, old))
         .unwrap_or_default();
+    let was_read_through = was.as_ref().map(sources_of).unwrap_or_default();
 
     let mut cfg = Map::new();
     cfg.insert("op-vault".into(), Value::String(place.op_vault.clone()));
@@ -867,7 +912,10 @@ pub fn create(ctx: &Ctx, req: &Request) -> Result<Marked, VaultError> {
             req.share,
         )?;
         identity::forget(ctx, &replaced);
-        return Ok(Marked::default());
+        return Ok(Marked {
+            no_longer_read: no_longer_read(ctx, &was_read_through),
+            ..Marked::default()
+        });
     };
 
     cfg.insert(
@@ -924,7 +972,11 @@ pub fn create(ctx: &Ctx, req: &Request) -> Result<Marked, VaultError> {
             keyring::STORE_NAME
         );
     }
-    Ok(mark(ctx, token, &kept_sources(), &req.name, &req.also))
+    let marked = mark(ctx, token, &kept_sources(), &req.name, &req.also);
+    Ok(Marked {
+        no_longer_read: no_longer_read(ctx, &was_read_through),
+        ..marked
+    })
 }
 
 /// The refusal for a change the committed half stands in the way of.
@@ -1012,7 +1064,10 @@ pub fn change(
         };
         registry::save_local(ctx, &local)?;
         identity::forget(ctx, &replaced);
-        return Ok(Marked::default());
+        return Ok(Marked {
+            no_longer_read: no_longer_read(ctx, &was),
+            ..Marked::default()
+        });
     };
 
     if !token_only || was.len() > 1 {
@@ -1070,8 +1125,16 @@ pub fn change(
     identity::traced(ctx, &now);
     identity::forget(ctx, &replaced);
     // The others are those bound as this vault WAS: to its variable, or to a kept token.
-    let basis = if was.is_empty() { kept_sources() } else { was };
-    Ok(mark(ctx, token, &basis, name, also))
+    let basis = if was.is_empty() {
+        kept_sources()
+    } else {
+        was.clone()
+    };
+    let marked = mark(ctx, token, &basis, name, also);
+    Ok(Marked {
+        no_longer_read: no_longer_read(ctx, &was),
+        ..marked
+    })
 }
 
 /// Whether this process runs inside a chat (or a shell) the app started, as far as purlis can

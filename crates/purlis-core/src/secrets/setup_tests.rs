@@ -905,6 +905,79 @@ fn a_vault_bound_to_a_variable_is_converted_and_read_at_once_with_no_export() {
 }
 
 #[test]
+fn a_converted_vault_names_the_variable_nothing_reads_any_more() {
+    // #1542: the export in the person's shell profile is the one copy of the token left
+    // outside the keyring, and nothing strips it from chats once no vault declares it.
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &[]).unwrap();
+
+    assert_eq!(marked.no_longer_read, ["OP_TEAM_TOKEN"]);
+    assert!(marked.marked.is_empty() && marked.skipped.is_empty());
+}
+
+#[test]
+fn a_variable_another_vault_still_reads_is_not_named_after_a_conversion() {
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    bound(&set, "edge", "Edge", "OP_TEAM_TOKEN");
+
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &[]).unwrap();
+    assert!(marked.no_longer_read.is_empty(), "edge still reads it");
+
+    // Ticked too, edge keeps its binding and reads the keyring first: the variable is still
+    // one a vault declares, so it is not named either.
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    bound(&set, "edge", "Edge", "OP_TEAM_TOKEN");
+    let listed = alike_of(&set.ctx, "team");
+    let marked = change(
+        &set.ctx,
+        "team",
+        &SignIn::Token(GOOD.into()),
+        None,
+        &[tick(&listed, "edge")],
+    )
+    .unwrap();
+    assert_eq!(marked.marked, ["edge"]);
+    assert!(marked.no_longer_read.is_empty());
+}
+
+#[test]
+fn a_vault_changed_to_the_app_names_the_variable_it_was_read_through() {
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    let marked = change(&set.ctx, "team", &SignIn::App, None, &[]).unwrap();
+    assert_eq!(marked.no_longer_read, ["OP_TEAM_TOKEN"]);
+
+    // A vault whose token was kept names no variable: there was none to export.
+    let set = Set::new("unused");
+    create(&set.ctx, &request("team", GOOD)).unwrap();
+    let marked = change(&set.ctx, "team", &SignIn::Token(OTHER.into()), None, &[]).unwrap();
+    assert!(marked.no_longer_read.is_empty());
+}
+
+#[test]
+fn vault_add_on_a_vault_bound_to_a_variable_says_to_remove_the_old_export() {
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    let mut rec = Rec {
+        stdin: GOOD.into(),
+        ..Default::default()
+    };
+    let mut req = add_request("team");
+    req.op_vault = None;
+
+    assert_eq!(vaultcmd::add(&set.ctx, &req, &mut rec), 0, "{}", rec.said());
+
+    let said = rec.said();
+    assert!(said.contains("$OP_TEAM_TOKEN"), "{said}");
+    assert!(said.contains("shell's startup files"), "{said}");
+    assert!(!all_of(&rec).contains(GOOD));
+}
+
+#[test]
 fn a_vault_the_committed_half_binds_is_converted_in_this_machines_half_alone() {
     let set = Set::new("unused");
     set.commit(

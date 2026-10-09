@@ -6317,6 +6317,11 @@ export type SetupDone = {
 	contents: VaultContents,
 	marked: string[],
 	skipped: SetupSkipped[],
+	/**
+	 *  The variables the vault was read through before that no vault reads now (#1542): the
+	 *  tab asks for their export to be removed from the shell's startup files.
+	 */
+	no_longer_read: string[],
 };
 
 /**
