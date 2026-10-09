@@ -42,8 +42,8 @@ export function youGroups(): SettingsGroup[] {
     {
       id: "you.chats",
       label: "Chats list",
-      help: "How the list of chats in the sidebar is drawn, on this machine.",
-      settings: [chatRows, chatsGrouped, tasksTabbed],
+      help: "How chats are listed and summed up, on this machine.",
+      settings: [chatRows, chatsGrouped, tasksTabbed, awaySummary],
     },
     thisMachineGroup(),
   ];
@@ -177,6 +177,26 @@ const chatsGrouped: Setting = {
           ids={ids}
           checked={grouped}
           onCheckedChange={(to) => setChatsListPrefs({ grouped: to })}
+        />
+      ),
+    };
+  },
+};
+
+/** Whether coming back to the window sums up what happened while away (#1514, V100-73). */
+const awaySummary: Setting = {
+  id: "you.chats.away",
+  label: "Away summary",
+  help: "When you come back after five minutes or more away from this window (in another app or window, or with no key or pointer on it), one Notice per project says what happened meanwhile: tasks done, tasks failed and chats waiting on you, each a link to them. It hides nothing, and going to a failed task marks it looked at, as its needs-you item does. Off, nothing is summed up, and every chat and task says how it stands in its row, as it always does.",
+  useControl: function useAwaySummary() {
+    const { away } = useChatsListPrefs();
+    return {
+      control: (ids) => (
+        <Choice
+          kind="toggle"
+          ids={ids}
+          checked={away}
+          onCheckedChange={(to) => setChatsListPrefs({ away: to })}
         />
       ),
     };
