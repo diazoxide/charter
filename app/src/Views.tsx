@@ -67,6 +67,8 @@ import {
   MEMORY_VIEW,
   SHARED_MEMORY_VIEW,
   archiveOf,
+  archiveTitle,
+  archiveView,
   isMemory,
   memoryRefOf,
 } from "./memories";
@@ -593,6 +595,11 @@ export function ViewPane({
             changed={changed + onDisk}
             onSaved={(memory) => onMemorySaved?.(view, memory)}
             onClose={() => onCloseView?.(view)}
+            // A gone memory's tab becomes its store's archive (#1191): nothing is left in it.
+            onOpenArchive={
+              onShowInstead &&
+              (() => onShowInstead(view, archiveView(memoryAt.scope), archiveTitle(memoryAt.scope)))
+            }
           />
         ) : archiveAt !== undefined ? (
           /* A store's archive (KN-4): what was deleted from it, read-only, each with Restore.

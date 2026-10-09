@@ -130,7 +130,7 @@ function memory(slug: string): MemoryView {
 }
 
 /** The core. The persona's memories are the ones not archived. */
-function core() {
+function core({ gone = [] as string[] } = {}) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const archived = new Set<string>();
   mockIPC((cmd, args) => {
@@ -177,7 +177,8 @@ function core() {
       };
     if (cmd === "memory_read") {
       const slug = String(given.slug);
-      return archived.has(slug) ? null : memory(slug);
+      // `gone`: archived behind the window's back, still on the list it last read.
+      return archived.has(slug) || gone.includes(slug) ? null : memory(slug);
     }
     if (cmd === "memory_archive") {
       archived.add(String(given.slug));
@@ -355,5 +356,25 @@ describe("Delete, in the window", () => {
     await memoryUndo();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("a memory that is not there any more", () => {
+  it("offers its store's archive, which takes the gone memory's tab (#1191)", async () => {
+    const { asked } = core({ gone: ["never-pkill"] });
+    render(<App />);
+    await userEvent.click(await memoryRowIn("never-pkill"));
+    const gone = await screen.findByTestId("view-gone");
+
+    await userEvent.click(within(gone).getByRole("button", { name: "Open steward's archive" }));
+
+    await waitFor(() =>
+      expect(tabNames()).toEqual(["steward 1", "steward", "Archived memory · steward"]),
+    );
+    await waitFor(() =>
+      expect(asked.find((one) => one.cmd === "memory_archived")?.args).toMatchObject({
+        scope: { kind: "persona", name: "steward" },
+      }),
+    );
   });
 });
