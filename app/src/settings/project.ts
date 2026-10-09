@@ -29,6 +29,7 @@ import {
   SHARED,
   textAt,
   themeGroup,
+  valueAt,
   type Control,
   type Entries,
   type Saving,
@@ -250,6 +251,61 @@ function hostsCollection(file: SettingsFile, name: "hosts" | "myHosts"): Collect
         kind: "text",
       },
     ],
+  };
+}
+
+/** Where the mark that a profile asks before it acts is kept: `[harness] asks` (#1522). */
+export const ASKS = key("harness", "asks");
+
+/** The built-ins whose harness asks by its own default, which need no mark (#1522). */
+const ASKS_BY_DEFAULT: readonly string[] = ["claude", "codex"];
+
+/**
+ * **Which profiles ask before they act** (#1522): a box per profile the project offers, ticked
+ * where `[harness] asks` in the Local file names it. A chat one chat starts for another (a task,
+ * a handoff, your Ask from a tab) starts only on a profile that asks, so ticking one is the
+ * one-click way back after such a start was refused. The built-in `claude` and `codex` ask by
+ * their own default and are drawn ticked and fixed; a table of the Local file with one of their
+ * names is not the built-in, and has a box of its own. Window-only: the box writes the Local
+ * file through the settings save, which a chat is never served.
+ */
+export function asksControl(read: ProjectRead): Control {
+  const tables = new Set(
+    (read.local.entries ?? [])
+      .filter((one) => one.collection === "profiles")
+      .map((one) => one.values.find((value) => value.field === "name")?.value ?? one.label),
+  );
+  const byDefault = (name: string) => ASKS_BY_DEFAULT.includes(name) && !tables.has(name);
+  const marked = (file: Shown): string[] => {
+    const value = valueAt(file, ASKS);
+    return value?.kind === "list" ? [...value.value] : [];
+  };
+  const names = [...new Set([...(read.entries.profile ?? KINDS), ...tables])];
+  return {
+    id: JSON.stringify(ASKS),
+    label: "Profiles that ask before they act",
+    hint: "A task, a handoff or your Ask from a tab starts only on a profile ticked here. Tick one only once its harness asks you before it acts: opencode allows every action unless its own configuration says otherwise.",
+    kind: "checks",
+    options: names.map((name) =>
+      byDefault(name)
+        ? {
+            value: name,
+            label: `${name} (asks by its own default)`,
+            disabled: true,
+            title: "The built-in profile asks by its harness's own default.",
+          }
+        : { value: name, label: name },
+    ),
+    read: (file) => [...new Set([...marked(file), ...names.filter(byDefault)])].join("\n"),
+    edits: (draft, file) => {
+      const before = marked(file);
+      const value = draft
+        .split("\n")
+        .map((one) => one.trim())
+        .filter((one) => one !== "" && (!byDefault(one) || before.includes(one)));
+      // None ticked: the key goes, as an emptied list does.
+      return [{ path: ASKS, value: value.length === 0 ? null : { kind: "list", value } }];
+    },
   };
 }
 
@@ -516,6 +572,7 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
         ...fromShared("project.harness", sharedGeneral.filter(isDefaultHarness)),
         ...fromLocal("project.harness", [
           ...asked(harness, local, read).controls,
+          asksControl(read),
           listAt(
             key("chat_env", "pass"),
             "Environment passed to chats",
