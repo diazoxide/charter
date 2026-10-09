@@ -68,6 +68,8 @@ import { neighbour } from "./tabTasks";
 import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
+import { SETTINGS_GROUPS } from "./settings/catalogue";
+import { askSettingsLink, linkToGroup, settingsPlace } from "./settings/links";
 import {
   changesTitle,
   changesView,
@@ -429,6 +431,10 @@ export type Does =
   /** Opens the Settings tab at the You level (SE-23): this machine's settings, whatever is
    *  focused, so they stay one palette row away while a project is in front (V89c). */
   | { verb: "openYourSettings" }
+  /** Opens Settings at one group (#1201): a row per group, by the group's address. A You group
+   *  carries the project in front when there is one, and none when the window has no project;
+   *  a Project group carries its project, and a Workspace group its project and workspace. */
+  | { verb: "openSettingsGroup"; group: string; plane?: string; workspace?: string }
   /** Opens a new chat for one curation action on one subject, with the action's prompt typed
    *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
@@ -1726,6 +1732,7 @@ export function catalogue(now: Now): Offer[] {
     ...can("settings.you", "Your settings…", { verb: "openYourSettings" }),
     note: "Your text sizes and your editor, on this machine.",
   });
+  offers.push(...settingsGroupRows(now.plane, now.focused === OUTSIDE ? undefined : now.focused));
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — which is how the persona rows get a menu without a second
@@ -2653,6 +2660,19 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openYourSettings":
       doing.openYourSettings();
       return DID;
+    case "openSettingsGroup":
+      // Through the window's link into Settings (SE-22), which brings the level's tab forward
+      // with the group shown and puts the keyboard in it. With no project there is no window
+      // of one to ask: the group is shown at You's place and Your settings… opens it.
+      if (does.plane === undefined) {
+        linkToGroup(settingsPlace("you"), does.group);
+        doing.openYourSettings();
+      } else
+        askSettingsLink(does.plane, {
+          group: does.group,
+          ...(does.workspace === undefined ? {} : { workspace: does.workspace }),
+        });
+      return DID;
     case "curate":
       return doing.curate(does.subject, does.action);
     case "quit":
@@ -2672,6 +2692,54 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "nothing":
       return DID;
   }
+}
+
+/**
+ * **One row per Settings group** (#1201; SE-22's follow-ups): "Your settings: Text", "Project
+ * settings: Saving", "Workspace settings: Repos". Each level's groups are named after the row
+ * that opens the level (Your settings…, Project settings…, Workspace settings…), so a label two
+ * levels share — Appearance, Extensions, Plugins, Dispatch — is told apart by its level, and
+ * typing the group's name finds every level's.
+ *
+ * You's groups are the machine's and are always listed; the project in front's when there is
+ * one; and the focused workspace's only, as the Workspace settings… row is about the workspace
+ * the panels show. The labels are `settings/catalogue.ts`'s, held to the builders by its test.
+ */
+function settingsGroupRows(plane: string | undefined, workspace: string | undefined): Offer[] {
+  const opens = (group: string, extra: { plane?: string; workspace?: string }): Does => ({
+    verb: "openSettingsGroup",
+    group,
+    ...extra,
+  });
+  const rows: Offer[] = SETTINGS_GROUPS.you.map((one) => ({
+    ...can(
+      `settings.group:${one.id}`,
+      `Your settings: ${one.label}`,
+      opens(one.id, plane === undefined ? {} : { plane }),
+    ),
+    note: `On this machine, at ${one.label}.`,
+  }));
+  if (plane === undefined) return rows;
+  for (const one of SETTINGS_GROUPS.project)
+    rows.push({
+      ...can(
+        `settings.group:${one.id}`,
+        `Project settings: ${one.label}`,
+        opens(one.id, { plane }),
+      ),
+      note: `The project's Settings, at ${one.label}.`,
+    });
+  if (workspace === undefined) return rows;
+  for (const one of SETTINGS_GROUPS.workspace)
+    rows.push({
+      ...can(
+        `settings.group:${one.id}:${workspace}`,
+        `Workspace settings: ${one.label}`,
+        opens(one.id, { plane, workspace }),
+      ),
+      note: `${workspace}: Settings at its level, at ${one.label}.`,
+    });
+  return rows;
 }
 
 /**
