@@ -9823,6 +9823,13 @@ mod tests {
         assert_eq!(told, None);
         assert_eq!(held.chats().open_now().len(), before);
         assert_eq!(kept(), [("devops".to_owned(), Some("beta".to_owned()), 1)]);
+        // And the window lists it: "any persona" is not what settles a crossing.
+        let listed = crate::dispatchaway::listed_at(held.root());
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(
+            (listed[0].target.as_str(), listed[0].workspace.as_deref()),
+            ("devops", Some("beta"))
+        );
         // The same work as a task into beta: the same refusal, the same entry.
         let (task, _) = dispatch_in(
             &held,

@@ -451,6 +451,7 @@ pub(crate) fn reopening(
         root,
         record.persona.as_deref(),
         &profile,
+        record.asker.by_person,
     ) {
         return Err(refused);
     }

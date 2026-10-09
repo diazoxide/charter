@@ -225,6 +225,8 @@ enum Again {
     Reopened,
     /// A persona chat the person started with Ask from a tab, started again.
     Asked,
+    /// Its task, which the person asked for with Ask from a tab, finished and is reopened.
+    ReopenedAsked,
 }
 
 /// [`started_again_refusal`], said for `how` it is being started.
@@ -268,6 +270,12 @@ fn refusal_on(
                  again. List '{shown}' for {persona} under [dispatch.profiles] in the \
                  project's file and start it again, or close it and ask again."
             ),
+            Again::ReopenedAsked => format!(
+                "You started this task with Ask as persona '{persona}' on profile '{shown}', \
+                 and the project now lists {lists} for that persona, so it was not reopened. \
+                 List '{shown}' for {persona} under [dispatch.profiles] in the project's file \
+                 and reopen it, or ask again. Its report is still here to read."
+            ),
         });
     }
     let flag = crate::dispatchunattended::bypass_in(command?)?;
@@ -294,6 +302,13 @@ fn refusal_on(
              command in Settings › Harness and start it again, or close it and ask again on a \
              profile that asks."
         ),
+        Again::ReopenedAsked => format!(
+            "You started this task with Ask, and its profile '{shown}' now starts its harness \
+             with the permission prompts off ({flag}), which a persona chat started that way \
+             never runs with, so it was not reopened. Take that out of the profile's command \
+             in Settings › Harness and reopen it, or ask again on a profile that asks. Its \
+             report is still here to read."
+        ),
     })
 }
 
@@ -313,8 +328,21 @@ pub fn task_profile_refusal(root: &Path, persona: Option<&str>, profile: &str) -
 /// reopened on that profile now**, or `None` where it may: [`task_profile_refusal`]'s two
 /// rules, said for a Reopen. There is no chat to start again or to close: the sentence says
 /// the task was not reopened, what to mend, and that its report is still there.
-pub fn task_reopen_refusal(root: &Path, persona: Option<&str>, profile: &str) -> Option<String> {
-    task_refusal_on(Again::Reopened, root, persona, profile)
+///
+/// `by_person` is the record's: a task the person asked for with Ask from a tab is told so,
+/// never that another chat dispatched it.
+pub fn task_reopen_refusal(
+    root: &Path,
+    persona: Option<&str>,
+    profile: &str,
+    by_person: bool,
+) -> Option<String> {
+    let how = if by_person {
+        Again::ReopenedAsked
+    } else {
+        Again::Reopened
+    };
+    task_refusal_on(how, root, persona, profile)
 }
 
 fn task_refusal_on(
@@ -623,6 +651,30 @@ mod tests {
             {
                 assert!(!said.contains("start it again") && !said.contains("close it"));
             }
+        }
+    }
+
+    #[test]
+    fn a_reopen_of_a_task_the_person_asked_for_is_never_told_another_chat_dispatched_it() {
+        let other = names(&["other"]).unwrap();
+        let yolo = words(&["claude", "--dangerously-skip-permissions"]);
+        for (command, listed) in [(None, Some(&other)), (Some(&yolo), None)] {
+            let (command, listed) = (command.map(Vec::as_slice), listed.map(Vec::as_slice));
+            let said = refusal_on(
+                Again::ReopenedAsked,
+                Some("devops"),
+                "work",
+                command,
+                listed,
+            )
+            .expect("refused as a reopen is");
+            assert!(said.starts_with("You started this task with Ask"), "{said}");
+            assert!(said.contains("so it was not reopened"), "{said}");
+            assert!(
+                said.ends_with("Its report is still here to read."),
+                "{said}"
+            );
+            assert!(!said.contains("dispatched by another chat"), "{said}");
         }
     }
 

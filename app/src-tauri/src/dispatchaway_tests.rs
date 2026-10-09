@@ -1032,3 +1032,45 @@ fn an_item_whose_workspace_is_gone_says_so_before_the_press_and_its_digest_moves
     );
     assert!(world.audited().is_empty());
 }
+
+// ---- a crossing is kept until a grant that carries a crossing answers it (re-review, MB1) ---------
+
+#[test]
+fn a_crossing_refused_despite_any_persona_stays_listed_until_a_named_grant_for_the_workspace() {
+    let world = World::new();
+    // Steward may dispatch to any persona: that is no grant a crossing goes by.
+    sandbox::local::grant_dispatch_any(world.root(), "steward").expect("any persona");
+    purlis_core::dispatchaway::keep_crossing(world.root(), "steward", "devops", "web", NOW)
+        .expect("kept");
+
+    // The window's own list, not the raw record: listed, and still in the record after.
+    let item = listed_now(&world);
+    assert_eq!(item.len(), 1, "{item:?}");
+    assert_eq!(item[0].workspace.as_deref(), Some("web"));
+    assert_eq!(listed_now(&world).len(), 1, "a read took nothing out");
+
+    // A grant that names the pair for another workspace does not answer it either.
+    let pair = Pair::new("steward", "devops").expect("a pair");
+    purlis_core::dispatchwithin::grant_yours(world.root(), &pair, &Within::of(Some("ide")))
+        .expect("granted for ide");
+    assert_eq!(listed_now(&world).len(), 1);
+
+    // Its Allow is what a crossing needs, and then it goes.
+    let shown = listed_now(&world).remove(0).shown;
+    world
+        .on(|on| allow(on, "steward", "devops", Some("web"), Some(&shown)))
+        .expect("allowed");
+    assert!(listed_now(&world).is_empty());
+    assert!(purlis_core::dispatchaway::list(world.root(), NOW).is_empty());
+}
+
+#[test]
+fn a_crossing_is_settled_by_a_never_as_any_entry_is() {
+    let world = World::new();
+    sandbox::local::grant_dispatch_any(world.root(), "steward").expect("any persona");
+    purlis_core::dispatchaway::keep_crossing(world.root(), "steward", "devops", "web", NOW)
+        .expect("kept");
+    say_never(world.root(), "steward", "devops");
+    assert!(listed_now(&world).is_empty());
+    assert!(purlis_core::dispatchaway::list(world.root(), NOW).is_empty());
+}

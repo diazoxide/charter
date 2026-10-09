@@ -310,10 +310,25 @@ pub fn shown(on: &On<'_>) -> Shown {
         // Judged as the refusal was: for a task in the entry's workspace (#1505), so a grant
         // limited to another workspace settles nothing here.
         let there = standing.clone().for_task_in(entry.workspace.as_deref());
+        let judged = dispatchgrant::covers(Some(&entry.asking), &entry.target, &there, on.locks);
+        // A crossing is settled only by what carries a crossing: a grant that names the pair
+        // and covers that workspace (D-1453-16). "Any persona" is what it was refused despite,
+        // so it settles nothing here. A never, a lock and a persona gone settle it as any.
         let open = known(&entry.asking)
             && known(&entry.target)
-            && dispatchgrant::covers(Some(&entry.asking), &entry.target, &there, on.locks)
-                == Covers::NeedsGrant;
+            && if entry.crossing {
+                matches!(judged, Covers::Covered | Covers::NeedsGrant)
+                    && !matches!(
+                        there.named_level_in(
+                            Some(&entry.asking),
+                            &entry.target,
+                            entry.workspace.as_deref()
+                        ),
+                        Some(Level::You | Level::Project)
+                    )
+            } else {
+                judged == Covers::NeedsGrant
+            };
         if !open {
             let one = (entry.asking, entry.target, entry.workspace);
             if !shown.settled.contains(&one) {
@@ -699,7 +714,7 @@ pub fn refused_crossing(
     if asking.held || held.chats().confines_of(asking.session).is_none() {
         return said;
     }
-    match away::keep(held.root(), persona, target, Some(workspace), now_secs()) {
+    match away::keep_crossing(held.root(), persona, target, workspace, now_secs()) {
         Ok(kept) if kept.listed() => {
             tell_the_window(held);
             away::told(&said)
@@ -726,6 +741,13 @@ fn tell_the_window(held: &crate::planes::Held) {
             tracing::warn!("purlis: the window was not told of a refusal that was kept ({why})");
         }
     }
+}
+
+/// The list of the project at `root` as the window reads it ([`listed`]): for the tests of
+/// other modules, which hold no window.
+#[cfg(test)]
+pub(crate) fn listed_at(root: &Path) -> Vec<AwayRefusal> {
+    reading(root, listed)
 }
 
 fn now_secs() -> u64 {
