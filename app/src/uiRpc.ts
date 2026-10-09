@@ -6035,6 +6035,18 @@ export type SearchedPart = {
  */
 export type SecretValue = string;
 
+/**  **One task's block, as the person saw it** on the question: what the window sends back. */
+export type SeenBlock = {
+	/**  The task's number. */
+	task: number,
+	/**  The block's operation and kind, by the words the window was told. */
+	operation: string,
+	kind: string,
+	what: GrantWhat,
+	/**  The host or folder shown for this task. */
+	target: string,
+};
+
 /**  One session record, as the palette and the Sessions panel name it. */
 export type SessionRecordRow = {
 	/**  Its plane-relative path — what it is opened and resumed by (`sessionrecord::locate`). */
@@ -6588,6 +6600,17 @@ export type TaskQuestion = {
 	number: number,
 	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
 	question: string,
+};
+
+/**  What one answer to several tasks did (#1508). */
+export type TasksAnswered = {
+	/**  The sentence the Notice says. */
+	said: string,
+	/**
+	 *  The tasks it answered: each listed one, or, where keeping failed part way, those it
+	 *  allowed before it failed. The window puts their blocks away and restarts them.
+	 */
+	answered: number[],
 };
 
 /**  What the window is answered for one ask. */

@@ -145,6 +145,10 @@ pub struct Server {
 /// left on a branch of its own (#1511, V100-67): a merge into the branch it was cut from, and
 /// a folder removed for good. Each is asked first, in the window, and no chat may cause
 /// either, so neither has a form on a link.
+///
+/// `allow_sandbox_block_for_tasks` and `keep_sandbox_block_for_tasks` answer several tasks'
+/// sandbox block on one press (#1508): a person's answer given in their own window, which no
+/// link carries a second way to give.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -221,6 +225,9 @@ pub const WINDOW_ONLY: &[&str] = &[
     // What a task left on a branch of its own: the person's merge or discard (#1511).
     "task_branch_merge",
     "dispatch_worktree_discard",
+    // One answer to several tasks' sandbox block (#1508).
+    "allow_sandbox_block_for_tasks",
+    "keep_sandbox_block_for_tasks",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

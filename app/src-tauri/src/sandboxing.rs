@@ -672,14 +672,15 @@ pub struct Allowed {
 }
 
 /// Seconds since 1970, now.
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
 }
 
 /// Writes the audit of a grant or revoke, and answers whether it was written.
-type Audit<'a> = &'a dyn Fn(Option<u32>, &sandbox::grant::Audited<'_>) -> Result<(), String>;
+pub(crate) type Audit<'a> =
+    &'a dyn Fn(Option<u32>, &sandbox::grant::Audited<'_>) -> Result<(), String>;
 
 /// The project's file a host is kept in at `level`: yours or the committed one.
 fn hosts_file(level: sandbox::grant::Level) -> purlis_core::settings::Which {
@@ -700,10 +701,34 @@ fn allow(
     machine: &sandbox::Machine,
     chats: &crate::chats::Chats,
     session: u32,
-    (what, target, level): (GrantWhat, &str, GrantLevel),
+    asked: (GrantWhat, &str, GrantLevel),
     audit: Audit<'_>,
     at: u64,
 ) -> Result<Allowed, String> {
+    let folder = chats.folder_of(session);
+    let (what, level) = judged(root, machine, folder.as_deref(), session, asked)?;
+    kept(root, chats, session, (&what, level), audit, at)?;
+    Ok(Allowed {
+        said: format!(
+            // No target in the sentence: it is the chat's choice, and the window shows it apart.
+            "Allowed {}. The chat restarts on the same conversation once its turn ends, and is \
+             told to retry.",
+            level.said()
+        ),
+    })
+}
+
+/// **What allowing `target` for chat `session` would grant**, judged by the core and never
+/// taken from the window's word: a host by the project's own hosts' rules, a folder against
+/// the allowlist from `folder`, the folder the chat was started in (none for a chat that is not
+/// open), and either past an administrator's policy (#1343). Nothing is kept or audited here.
+pub(crate) fn judged(
+    root: &std::path::Path,
+    machine: &sandbox::Machine,
+    folder: Option<&std::path::Path>,
+    session: u32,
+    (what, target, level): (GrantWhat, &str, GrantLevel),
+) -> Result<(sandbox::grant::What, sandbox::grant::Level), String> {
     use sandbox::grant::{self, Level, What};
     let level = Level::from(level);
     if level == Level::Project && what == GrantWhat::Write {
@@ -723,10 +748,10 @@ fn allow(
         }
         GrantWhat::Host => What::Host(grant::host(target).map_err(|why| why.to_string())?),
         GrantWhat::Write => {
-            let folder = chats.folder_of(session).ok_or_else(|| {
+            let folder = folder.ok_or_else(|| {
                 format!("purlis did not allow anything for chat {session}: it is not open.")
             })?;
-            let ground = grant::Ground::of(root, &folder, machine);
+            let ground = grant::Ground::of(root, folder, machine);
             What::Write(grant::write(target, &ground.place()).map_err(|why| why.to_string())?)
         }
     };
@@ -735,6 +760,21 @@ fn allow(
     if let Some(why) = sandbox::policy::Locks::of(root).refuses_grant(&what, level) {
         return Err(why);
     }
+    Ok((what, level))
+}
+
+/// **Keeps a grant [`judged`] made for chat `session`**: audited first, then kept where
+/// `level` keeps it, and the chat owed a restart on its conversation. An audit that cannot be
+/// written keeps nothing.
+pub(crate) fn kept(
+    root: &std::path::Path,
+    chats: &crate::chats::Chats,
+    session: u32,
+    (what, level): (&sandbox::grant::What, sandbox::grant::Level),
+    audit: Audit<'_>,
+    at: u64,
+) -> Result<(), String> {
+    use sandbox::grant::{self, Level, What};
     let target = what.target();
     audit(
         Some(session),
@@ -745,8 +785,8 @@ fn allow(
             level,
         },
     )?;
-    let told = grant::told(&what, level);
-    match (&what, level) {
+    let told = grant::told(what, level);
+    match (what, level) {
         (_, Level::Chat) => chats.grant(session, what.clone(), at, told)?,
         (What::Host(host), Level::You | Level::Project) => {
             purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
@@ -763,7 +803,7 @@ fn allow(
             root,
             sandbox::local::Made {
                 what: what.word().to_owned(),
-                target: target.clone(),
+                target,
                 level: level.word().to_owned(),
                 at,
                 chat: None,
@@ -773,14 +813,7 @@ fn allow(
         // The grant stands, and is audited; only the Granted list's "when" is lost.
         tracing::warn!("purlis: a sandbox grant was kept without when it was made ({why})");
     }
-    Ok(Allowed {
-        said: format!(
-            // No target in the sentence: it is the chat's choice, and the window shows it apart.
-            "Allowed {}. The chat restarts on the same conversation once its turn ends, and is \
-             told to retry.",
-            level.said()
-        ),
-    })
+    Ok(())
 }
 
 /// **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
@@ -798,7 +831,7 @@ pub fn allow_sandbox_block(
 ) -> Result<Allowed, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    allow(
+    let allowed = allow(
         &root,
         &sandbox::Machine::this(),
         held.chats(),
@@ -806,7 +839,12 @@ pub fn allow_sandbox_block(
         (what, &target, level),
         &|number, audited| held.hooks().record_grant(&root, number, audited),
         now_secs(),
-    )
+    )?;
+    // Answered: no question for several tasks can answer it again (#1508).
+    held.chats()
+        .blocks()
+        .answered_on_its_own(session, what, &target);
+    Ok(allowed)
 }
 
 /// The chats of this project owed a restart (#1342, #1428): to take a grant, or because the

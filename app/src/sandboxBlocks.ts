@@ -29,9 +29,20 @@ export function blocked(blocks: Blocks, told: ChatBlocked): Blocks {
   return { ...blocks, [told.session]: [...mine, told].slice(-AT_MOST_PER_CHAT) };
 }
 
-/** `blocks` without chat `session`'s `block`. */
-export function putAway(blocks: Blocks, session: number, block: ChatBlocked): Blocks {
-  const left = (blocks[session] ?? []).filter((one) => !same(one, block));
+/**
+ * `blocks` without chat `session`'s `block`. `exactly`: only while the chat's block is still
+ * the one answered, naming the same host or folder; a newer one that arrived meanwhile stays
+ * up, unanswered (#1508).
+ */
+export function putAway(
+  blocks: Blocks,
+  session: number,
+  block: ChatBlocked,
+  exactly = false,
+): Blocks {
+  const left = (blocks[session] ?? []).filter(
+    (one) => !same(one, block) || (exactly && one.target !== block.target),
+  );
   const others = Object.fromEntries(
     Object.entries(blocks).filter(([held]) => Number(held) !== session),
   );
@@ -42,6 +53,8 @@ export function putAway(blocks: Blocks, session: number, block: ChatBlocked): Bl
 export function useSandboxBlocks(plane: PlaneId | undefined): {
   blocks: Blocks;
   dismiss: (session: number, block: ChatBlocked) => void;
+  /** Puts `block` away only while it is still the chat's block, naming the same target. */
+  answered: (session: number, block: ChatBlocked) => void;
 } {
   // Held with the project it is about, so a window moved to another project shows none of the
   // last one's in the very render it moves.
@@ -78,7 +91,12 @@ export function useSandboxBlocks(plane: PlaneId | undefined): {
       setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block) })),
     [],
   );
-  return { blocks, dismiss };
+  const answered = useCallback(
+    (session: number, block: ChatBlocked) =>
+      setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block, true) })),
+    [],
+  );
+  return { blocks, dismiss, answered };
 }
 
 /** No blocks. */
