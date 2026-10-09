@@ -523,6 +523,10 @@ enum Command {
     /// dispatch` (with `--in workspace:<name>` when it must run elsewhere). A handoff is
     /// fire-and-forget: the person's work moves to a chat they will read themselves.
     ///
+    /// **Put a flag first:** `purlis handoff --name "<task>" <workspace> <<'BRIEF'`. A chat the
+    /// app starts on Claude Code runs that spelling without its harness asking first; a line
+    /// that starts with the workspace is still a handoff, and the harness asks about it.
+    ///
     /// **The app opens the chat.** Run from a chat the purlis app started, the new chat
     /// opens there as a tab in the workspace you name. With no app running, nothing is
     /// opened and purlis says to open the app. In front of that purlis refuses a handoff

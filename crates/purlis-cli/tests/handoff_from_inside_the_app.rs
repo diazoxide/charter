@@ -525,6 +525,11 @@ fn the_handoff_commands_help_says_the_one_route_in_the_same_words() {
         !help.contains("Ask the new chat to report back"),
         "--report is not offered as the way to get an answer: {help}"
     );
+    // The spelling a Claude Code chat runs without its harness asking: a flag first (#1471).
+    assert!(
+        help.contains("flag first:** `purlis handoff --name \"<task>\" <workspace> <<'BRIEF'`"),
+        "{help}"
+    );
     // And the retired report back says what sends a report now.
     assert!(
         help.contains("`purlis handoff report` is retired: it sends nothing, and names `purlis dispatch report`"),
