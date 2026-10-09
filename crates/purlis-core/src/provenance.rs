@@ -454,14 +454,15 @@ pub fn change_of(plane: &Path, top: &Path) -> Option<String> {
 /// reader follows (#1019, `docs/plane-format.md`, *Provenance trailers*).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Claim {
-    /// No line names a value for the key, or none that could stand on a trailer line.
+    /// No line names the key, or one value that could not stand on a trailer line does.
     #[default]
     Unsaid,
     /// Every line that names the key names this value, under any spelling it has had.
     One(String),
     /// The lines name more than one value, in the order they stand. **The commit's provenance
     /// for this key is not known**: a reader shows that several are claimed and attributes the
-    /// commit to none of them. The last is not purlis's: purlis appends its own only where the
+    /// commit to none of them. A value that could not stand on a trailer line is one of them,
+    /// shown as [`crate::shown::readable`] makes it. The last is not purlis's: purlis appends its own only where the
     /// same line is not already there, and an agent can type any line after it as well as
     /// before it, so no position says who wrote a line.
     Several(Vec<String>),
@@ -476,16 +477,25 @@ impl Claim {
         }
     }
 
-    fn heard(&mut self, value: &str) {
-        match self {
-            Self::Unsaid => *self = Self::One(value.to_owned()),
-            Self::One(had) if had == value => {}
-            Self::One(had) => *self = Self::Several(vec![std::mem::take(had), value.to_owned()]),
-            Self::Several(had) => {
-                if !had.iter().any(|v| v == value) {
-                    had.push(value.to_owned());
-                }
-            }
+    /// The claim the distinct values `heard` for one key make, in the order they stood: each
+    /// with whether it could stand on a trailer line ([`known`]).
+    fn of(heard: Vec<(String, bool)>) -> Self {
+        match heard.as_slice() {
+            [] => Self::Unsaid,
+            [(value, true)] => Self::One(value.clone()),
+            [(_, false)] => Self::Unsaid,
+            _ => Self::Several(
+                heard
+                    .into_iter()
+                    .map(|(value, known)| {
+                        if known {
+                            value
+                        } else {
+                            crate::shown::readable(&value, MOST)
+                        }
+                    })
+                    .collect(),
+            ),
         }
     }
 }
@@ -507,45 +517,60 @@ impl Claims {
     /// trailer claims nothing.
     ///
     /// **The rule** (#1019): a key is read under every spelling it has had (`Purlis-Chat` and
-    /// its older name are one key) and in any case, as git compares trailer keys. A value that
-    /// could not stand on one trailer line (one word of printable ASCII, at most 100 characters)
-    /// is no value, as when it is written. The same value said twice is one claim. Two different values are [`Claim::Several`], and the
+    /// its older name are one key) and in any case, as git compares trailer keys. The same
+    /// value said twice is one claim. Two different values are [`Claim::Several`], and the
     /// commit's provenance for that key is unknown. They are a claim, not proof, whatever they
     /// say.
+    ///
+    /// **A value that could not stand on one trailer line** (one word of printable ASCII, at
+    /// most 100 characters) is not a value purlis would write, and alone it claims nothing. It
+    /// is still a line naming the key, so beside any other value it makes the key
+    /// [`Claim::Several`] (#1021): a malformed second `Purlis-Chat:` line leaves the chat
+    /// unknown rather than letting the well-formed one stand alone. Reading fails closed,
+    /// because nothing tells which of the two lines was the commit's.
     pub fn read(trailers: &str) -> Self {
-        let mut claims = Self::default();
+        let (mut assisted_by, mut chat, mut persona, mut change) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for line in trailers.lines() {
             let Some((key, value)) = line.split_once(':') else {
                 continue;
             };
             let key = key.trim();
-            let value = Some(value.trim().to_owned());
-            let Some(value) = known(&value) else {
-                continue;
-            };
+            let value = value.trim();
             let same = |name: &str| name.eq_ignore_ascii_case(key);
-            let claim = if same(ASSISTED_BY) {
-                &mut claims.assisted_by
+            let heard: &mut Vec<(String, bool)> = if same(ASSISTED_BY) {
+                &mut assisted_by
             } else if crate::names::TRAILER_CHAT.spellings().any(same) {
-                &mut claims.chat
+                &mut chat
             } else if crate::names::TRAILER_PERSONA.spellings().any(same) {
-                &mut claims.persona
+                &mut persona
             } else if crate::names::TRAILER_CHANGE.spellings().any(same) {
-                &mut claims.change
+                &mut change
             } else {
                 continue;
             };
-            claim.heard(value);
+            if !heard.iter().any(|(had, _)| had == value) {
+                heard.push((value.to_owned(), one_word(value)));
+            }
         }
-        claims
+        Self {
+            assisted_by: Claim::of(assisted_by),
+            chat: Claim::of(chat),
+            persona: Claim::of(persona),
+            change: Claim::of(change),
+        }
     }
 }
 
 /// `value`, where it can stand on one trailer line as one word: printable ASCII, no space.
 fn known(value: &Option<String>) -> Option<&str> {
-    value
-        .as_deref()
-        .filter(|v| !v.is_empty() && v.len() <= MOST && v.bytes().all(|b| b.is_ascii_graphic()))
+    value.as_deref().filter(|v| one_word(v))
+}
+
+/// Whether `value` can stand on one trailer line as one word: printable ASCII, no space, at
+/// most [`MOST`] bytes.
+fn one_word(value: &str) -> bool {
+    !value.is_empty() && value.len() <= MOST && value.bytes().all(|b| b.is_ascii_graphic())
 }
 
 #[cfg(test)]

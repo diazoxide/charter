@@ -2392,7 +2392,9 @@ beside a purlis one is removed when the record is published (V93i).
     the whole message: a body line that only looks like a trailer claims nothing.
   - A key is read under every spelling it has had (`Purlis-Chat` and `Charter-Chat` are one key),
     in any case, as git compares trailer keys. A value that is not one word of printable ASCII
-    of at most 100 characters claims nothing, as it would not be written.
+    of at most 100 characters would not be written, and alone it claims nothing. Beside any
+    other value for the key it is a second claim, so the key has several (below): reading fails
+    closed, since nothing says which line was the commit's (#1021).
   - The same value twice is one claim. **Two or more different values for one key mean the
     commit's provenance for that key is unknown**: a reader says that several are claimed, and
     attributes the commit to none of them. It does not take the last value as purlis's. purlis
