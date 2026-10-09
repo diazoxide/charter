@@ -832,6 +832,19 @@ fn a_record_cut_off_before_it_names_its_folder_holds_every_folder_of_its_repo() 
         }
     }
 
+    // A task named "piece" is no key: the record still never named its folder.
+    let mut named_piece = record.clone();
+    named_piece.task = Some("piece".to_owned());
+    let text = serde_json::to_string_pretty(&named_piece).unwrap();
+    a_record_file(&root, &text[..text.rfind("\"piece\"").unwrap()]);
+    assert_eq!(
+        held_in_folder(&root, "alpha", "api", "chat-1"),
+        Some(InFolder::Unread(ID.to_owned())),
+        "{}",
+        &text[..text.rfind("\"piece\"").unwrap()]
+    );
+    let text = serde_json::to_string_pretty(&record).unwrap();
+
     // Cut off before it names the repo, it cannot tell a branch folder's task from a plain
     // folder's, and holds nothing.
     a_record_file(&root, &text[..text.find("\"repo\"").unwrap()]);
