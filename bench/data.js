@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791515511397,
+  "lastUpdate": 1791519082325,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4116,6 +4116,48 @@ window.BENCHMARK_DATA = {
             "value": 101.73828,
             "unit": "ms",
             "extra": "median of 5 runs: 101.328, 101.684, 101.738, 101.895, 102.288 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e914aaf28e242b77c312c93dbd59de589debba94",
+          "message": "Where the tickets of train 66 meet: the person's Stop reads the one notion of a prompt\n\nTrain 63's stop engine decided on the board's `asking` alone, while the\nwindow's question and the asking chat's cancel read #1525's prompt rule.\nThe two disagreed both ways: after a prompt answered in the window, Stop\nand get its report interrupted the task and then ended it with no report;\nand with a permission ask open in the window and no Notification heard, a\nstop of the chat above it, or Stop them as its asker closed, interrupted\nthe task and typed its last-turn line into it.\n\nThe engine's facts now carry `ask_open`, and its three rules (the last\nturn, whether an interrupted task takes its line, and when a queued line\nis sent) read `Facts::prompt_showing`, which is\n`dispatched::Seen::prompt_showing`: an ask open in the window is a prompt\nin front of the person, and one answered there is not. A task with one\nopen is ended as it stands and nothing is typed into it; a task whose\nprompt was answered is asked for its report. Tested both ways, by the\ntask's own stop and by its asker's stop with what is below it. The\nasking chat's list and wait read the same rule for \"waiting on the\nperson\".\n\nStop all tasks (#1498) and purlis's stop at a time limit (#1512) press the\nsame stop with each task's own facts, so they read the same rule: a task\nwith an ask open is ended as it stands, one whose prompt was answered is\nasked for its report (tested on one press of both).\n\nThe Activity tab's restore test (#1495) now expects the view tab the person\nleft in front to come back in front, as #1525's restore does.\n\nThe typed smart close's test waits for the window's Closed step as it\nwaits for the tab to go: the chat leaves the open list before its close\nfinishes and tells the window, and the test read the log in between.\n\nReview fold-ins:\n- The UI RPC guard names the persona-hosts Allow once, beside the rule's\n  29, so the two lists make the 34.\n- A #1519 test is named for what it asserts: closed by the person.\n- The restart docs and the changelog name the task row's Try to start\n  again and End task.\n- A test pins that a task put back after a refused End task still carries\n  the instruction to carry on.\n\nRefs #1525, #1488, #1513, #1519, #1362\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T08:09:58+04:00",
+          "tree_id": "e69de44defed26c372ae0810a72724eb5028f5f5",
+          "url": "https://github.com/purlis/purlis/commit/e914aaf28e242b77c312c93dbd59de589debba94"
+        },
+        "date": 1791519081159,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5381085,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.503, 0.522, 0.538, 0.541, 0.553 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.102849499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.900, 17.084, 17.103, 17.147, 17.659 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.2423445,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.219, 104.625, 105.242, 105.274, 106.830 ms"
           }
         ]
       }
