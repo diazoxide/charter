@@ -190,6 +190,94 @@ fn the_repos_own_folder_has_no_recorded_base_so_it_marks_what_is_not_committed()
     assert_eq!(status.base, None);
 }
 
+/// The repo's own folder on `main`, following `<remote>/main` (#1130): the upstream holds one
+/// commit `main` lacks (`theirs`), and `main` one the upstream lacks (`local`). No network: the
+/// remote-tracking ref is written where a fetch would have left it.
+fn following_an_upstream(f: &support::Fixture, remote: &str) {
+    f.commit(&f.clone, "pushed");
+    support::git(&f.clone, &["checkout", "-q", "-b", "elsewhere"]);
+    f.commit(&f.clone, "theirs");
+    support::git(
+        &f.clone,
+        &["update-ref", &format!("refs/remotes/{remote}/main"), "HEAD"],
+    );
+    support::git(&f.clone, &["checkout", "-q", "main"]);
+    support::git(&f.clone, &["branch", "-q", "-D", "elsewhere"]);
+    f.commit(&f.clone, "local");
+    support::git(&f.clone, &["config", "branch.main.remote", remote]);
+    support::git(
+        &f.clone,
+        &["config", "branch.main.merge", "refs/heads/main"],
+    );
+}
+
+#[test]
+fn the_repos_own_folder_is_marked_against_its_upstream() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    following_an_upstream(&f, "origin");
+    write(&f.clone, "README.md", "changed\n");
+
+    let status = files::status(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo)).unwrap();
+
+    // What `main` has that the upstream lacks, committed or not; never what the upstream
+    // gained since (`theirs`).
+    assert_eq!(
+        marks(&status.changes),
+        [
+            ("README.md", Mark::Changed, None),
+            ("local", Mark::Added, None)
+        ]
+    );
+    assert_eq!(status.base.as_deref(), Some("origin/main"));
+}
+
+#[test]
+fn an_upstream_whose_remote_is_not_one_plain_name_is_no_base() {
+    purlis_core::unsteered!();
+    for remote in ["a/b", "a..b"] {
+        let f = support::plane_with_clone("thing");
+        // `a..b` cannot be a ref git writes, so only the config names it.
+        if remote.contains("..") {
+            f.commit(&f.clone, "local");
+            support::git(&f.clone, &["config", "branch.main.remote", remote]);
+            support::git(
+                &f.clone,
+                &["config", "branch.main.merge", "refs/heads/main"],
+            );
+        } else {
+            following_an_upstream(&f, remote);
+        }
+        write(&f.clone, "README.md", "changed\n");
+
+        let status = files::status(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo)).unwrap();
+
+        assert_eq!(
+            marks(&status.changes),
+            [("README.md", Mark::Changed, None)],
+            "{remote}"
+        );
+        assert_eq!(status.base, None, "{remote}");
+    }
+}
+
+#[test]
+fn an_upstream_that_names_no_ref_is_no_base() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    support::git(&f.clone, &["config", "branch.main.remote", "origin"]);
+    support::git(
+        &f.clone,
+        &["config", "branch.main.merge", "refs/heads/main"],
+    );
+    write(&f.clone, "README.md", "changed\n");
+
+    let status = files::status(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo)).unwrap();
+
+    assert_eq!(marks(&status.changes), [("README.md", Mark::Changed, None)]);
+    assert_eq!(status.base, None);
+}
+
 #[test]
 fn an_ignored_file_is_never_marked() {
     purlis_core::unsteered!();

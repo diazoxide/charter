@@ -118,6 +118,41 @@ fn a_branch_with_no_recorded_base_says_it_has_none_rather_than_a_count() {
     }
 }
 
+/// The repo's own folder on `main`, following `<remote>/main` (#1130): the upstream holds one
+/// commit `main` lacks (`theirs`), and `main` one the upstream lacks (`local`). No network: the
+/// remote-tracking ref is written where a fetch would have left it.
+fn following_an_upstream(f: &support::Fixture, remote: &str) {
+    f.commit(&f.clone, "pushed");
+    support::git(&f.clone, &["checkout", "-q", "-b", "elsewhere"]);
+    f.commit(&f.clone, "theirs");
+    support::git(
+        &f.clone,
+        &["update-ref", &format!("refs/remotes/{remote}/main"), "HEAD"],
+    );
+    support::git(&f.clone, &["checkout", "-q", "main"]);
+    support::git(&f.clone, &["branch", "-q", "-D", "elsewhere"]);
+    f.commit(&f.clone, "local");
+    support::git(&f.clone, &["config", "branch.main.remote", remote]);
+    support::git(
+        &f.clone,
+        &["config", "branch.main.merge", "refs/heads/main"],
+    );
+}
+
+#[test]
+fn the_repos_own_folder_counts_from_its_upstream_as_git_does() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    following_an_upstream(&f, "origin");
+
+    let apart = files::ahead_behind(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo)).unwrap();
+
+    let (behind, ahead) = git_counts(&f.clone, "@{upstream}");
+    assert_eq!((apart.ahead, apart.behind), (ahead, behind));
+    assert_eq!((apart.ahead, apart.behind), (1, 1));
+    assert_eq!(apart.base.as_deref(), Some("origin/main"));
+}
+
 #[test]
 fn a_recorded_base_that_names_no_commit_is_treated_as_none() {
     purlis_core::unsteered!();

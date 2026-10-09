@@ -5,8 +5,11 @@
 //! records about a piece, `branch.<branch>.charterBase` in the clone's config (ADR 0027,
 //! `worktree::add`), and the changes are counted from where the branch left it (the merge
 //! base), so what the base gained since is not the branch's change. A branch with no recorded
-//! base — the repo's own folder, a branch cut by plain git — is marked against its last
-//! commit: what is not committed yet.
+//! base — a branch cut by plain git — is marked against its last commit: what is not committed
+//! yet. **The repo's own folder records none, so its upstream stands in** (#1130): the branch
+//! `branch.<head>.remote` and `.merge` name, as `refs/remotes/<remote>/<branch>`, read from the
+//! config before it is cut and held to the same rule as a recorded base. With no upstream that
+//! passes, it too is marked against its last commit.
 //!
 //! **Read by gitoxide in a short-lived, bounded child of charter's own binary, starting no
 //! program** (D-88f, D-88h). The app reads this on its own after every write an agent makes,
@@ -107,12 +110,10 @@ pub(super) fn status_here(plane: &Path, branch: Branch<'_>) -> Result<Status, Re
         why,
     };
     let opened = open(plane, branch)?;
-    let charter_base = opened.head_base();
     let held = super::compare::hold(plane, &opened.base).map_err(unreadable)?;
+    let head = opened.repo.head_commit().ok().map(|commit| commit.id);
+    let based = head.and_then(|head| opened.head_based(head));
     let repo = opened.repo;
-    let head = repo.head_commit().ok().map(|commit| commit.id);
-    let based =
-        charter_base.and_then(|value| head.and_then(|head| recorded_base(&repo, &value, head)));
     let (since, named) = match based {
         Some(Based { fork, named, .. }) => (Some(fork), Some(named)),
         None => (head, None),
@@ -189,6 +190,10 @@ pub(super) fn open(plane: &Path, branch: Branch<'_>) -> Result<Opened, Refused> 
         }
     }
     let recorded = recorded_values(&opened);
+    let upstream = match piece {
+        None => upstream_of_head(&opened),
+        Some(_) => None,
+    };
     allowed_only(&mut opened).map_err(|why| Refused::Unreadable {
         what: branch.called().to_string(),
         why,
@@ -197,6 +202,7 @@ pub(super) fn open(plane: &Path, branch: Branch<'_>) -> Result<Opened, Refused> 
         base,
         repo: opened,
         recorded,
+        upstream,
     })
 }
 
@@ -208,14 +214,78 @@ pub(super) struct Opened {
     /// The base each branch was cut from, as recorded (`branch.<name>.charterBase`), read before
     /// the config was cut: by branch name, for the branches that record exactly one value.
     pub(super) recorded: BTreeMap<String, String>,
+    /// The repo's own folder's upstream (#1130), read before the config was cut: the branch
+    /// checked out there by name, and the remote-tracking ref it follows, validated by
+    /// [`upstream_of_head`]. Always `None` for a piece, which records its base.
+    pub(super) upstream: Option<(String, String)>,
 }
 
 impl Opened {
-    /// The base recorded for the branch checked out in the folder, if it records one.
-    pub(super) fn head_base(&self) -> Option<String> {
-        let current = self.repo.head_name().ok()??;
-        self.recorded.get(&current.shorten().to_string()).cloned()
+    /// The base of the branch checked out in the folder, resolved against `head`: its recorded
+    /// base, else, in the repo's own folder, its upstream; `None` when neither resolves to a
+    /// commit `head` shares.
+    pub(super) fn head_based(&self, head: gix::ObjectId) -> Option<Based> {
+        let current = self.repo.head_name().ok()??.shorten().to_string();
+        self.based(&current, head)
     }
+
+    /// [`Self::head_based`], for the branch `name` with its tip at `tip`: the upstream stands in
+    /// only for the branch it was read for.
+    pub(super) fn based(&self, name: &str, tip: gix::ObjectId) -> Option<Based> {
+        if let Some(value) = self.recorded.get(name) {
+            return recorded_base(&self.repo, value, tip);
+        }
+        let (of, upstream) = self.upstream.as_ref()?;
+        if of != name {
+            return None;
+        }
+        let mut reference = self.repo.find_reference(upstream.as_str()).ok()?;
+        let at = reference.peel_to_commit().ok()?.id;
+        let named = reference.name().shorten().to_string();
+        let fork = self.repo.merge_base(at, tip).ok()?.detach();
+        Some(Based { at, fork, named })
+    }
+}
+
+/// The remote-tracking ref the branch checked out in `repo` follows (`@{upstream}`), as
+/// `(branch, refs/remotes/<remote>/<merged>)`: read from `branch.<branch>.remote` and
+/// `branch.<branch>.merge`, each holding exactly one value. **Read, never trusted**: anything
+/// working in the folder can write its config, so the remote must be one plain name — no `/`,
+/// not `.` (a local upstream) — the merged branch must be under `refs/heads/`, and the whole
+/// must be a ref name git would accept (no `..`, no control characters). Anything else is no
+/// upstream. Only a remote-tracking ref is ever named, never a pattern or a path.
+fn upstream_of_head(repo: &gix::Repository) -> Option<(String, String)> {
+    let head = repo.head_name().ok()??;
+    let head = head
+        .as_ref()
+        .category_and_short_name()
+        .and_then(|(kind, short)| {
+            (kind == gix::refs::Category::LocalBranch).then(|| short.to_string())
+        })?;
+    name::branch_name_ok(&head).ok()?;
+    let config = repo.config_snapshot();
+    let mut remotes = Vec::new();
+    let mut merges = Vec::new();
+    for section in config.plumbing().sections_by_name("branch")? {
+        if section.header().subsection_name().map(|n| n.to_string()) != Some(head.clone()) {
+            continue;
+        }
+        remotes.extend(section.values("remote").iter().map(|v| v.to_string()));
+        merges.extend(section.values("merge").iter().map(|v| v.to_string()));
+    }
+    let ([remote], [merge]) = (remotes.as_slice(), merges.as_slice()) else {
+        return None;
+    };
+    let (remote, merge) = (remote.trim(), merge.trim());
+    name::branch_name_ok(remote).ok()?;
+    if remote.contains('/') || remote == "." {
+        return None;
+    }
+    let merged = merge.strip_prefix("refs/heads/")?;
+    name::branch_name_ok(merged).ok()?;
+    let full = format!("refs/remotes/{remote}/{merged}");
+    gix::refs::FullName::try_from(full.as_str()).ok()?;
+    Some((head, full))
 }
 
 /// The config keys a read uses, `section.key`, lower-cased: how the working tree is read and
@@ -349,22 +419,20 @@ pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<Ahea
         why,
     };
     let opened = open(plane, branch)?;
-    let charter_base = opened.head_base();
-    let repo = opened.repo;
     let none = AheadBehind {
         ahead: 0,
         behind: 0,
         base: None,
     };
-    let Some(head) = repo.head_commit().ok().map(|commit| commit.id) else {
+    let Some(head) = opened.repo.head_commit().ok().map(|commit| commit.id) else {
         return Ok(none);
     };
-    let Some(Based { at, named, .. }) = charter_base
-        .as_deref()
-        .and_then(|value| recorded_base(&repo, value, head))
-    else {
+    // The same base the markers count from: the recorded one, else the repo's own folder's
+    // upstream, so the header and the tree never disagree on what the branch is measured by.
+    let Some(Based { at, named, .. }) = opened.head_based(head) else {
         return Ok(none);
     };
+    let repo = opened.repo;
     let count = |from: gix::ObjectId, hidden: gix::ObjectId| -> Result<usize, String> {
         let walk = repo
             .rev_walk([from])
