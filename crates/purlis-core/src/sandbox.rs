@@ -214,22 +214,9 @@ impl Plane {
     /// The hosts of its `[[forge]]` blocks, without a port: a sandbox allows a host. A host that
     /// is not one ([`crate::forge::host_ok`]) is never added.
     fn forge_hosts(&self) -> Vec<String> {
-        let Some(forges) = self
-            .top
-            .as_ref()
-            .and_then(|top| top.get("forge"))
-            .and_then(toml::Value::as_array)
-        else {
-            return Vec::new();
-        };
-        forges
-            .iter()
-            .filter_map(|forge| forge.get("host")?.as_str())
-            .filter(|host| crate::forge::host_ok(host))
-            .map(|host| host.split(':').next().unwrap_or(host))
-            // A host as a project's own hosts are taken (#1341): never this machine, a
-            // link-local or metadata address, or a name ending in a number.
-            .filter_map(|host| hosts::Host::parse(host).ok())
+        forge_hosts_of(self.top.as_ref())
+            .into_iter()
+            .filter_map(|(_, host)| host.ok())
             .map(|host| host.to_string())
             .collect()
     }
@@ -350,6 +337,10 @@ pub enum Refusal {
     CertificateChecksNotABool,
     /// Something in `personas` that grants nothing ([`persona::read`]), as one sentence.
     Persona(String),
+    /// A `[[forge]]` host the sandbox does not let chats reach while the `forge` preset is on
+    /// ([`forge_hosts_of`]): as written, and why. Said, not a change: the forge still works
+    /// outside the sandbox.
+    ForgeHost(String, String),
 }
 
 impl fmt::Display for Refusal {
@@ -401,8 +392,36 @@ impl fmt::Display for Refusal {
                  stay off"
             ),
             Self::Persona(said) => f.write_str(said),
+            Self::ForgeHost(written, why) => write!(
+                f,
+                "forge.host in {FILE} names {written}, which the sandbox does not let chats \
+                 reach: {why}"
+            ),
         }
     }
+}
+
+/// Each `[[forge]]` host of `top` that is a host at all ([`crate::forge::host_ok`]), as written,
+/// with what the sandbox makes of it without its port: taken as a project's own hosts are
+/// (#1341), so never this machine, a link-local or metadata address, or a name ending in a
+/// number. A refused one is never let through ([`Plane::forge_hosts`]) and is said
+/// ([`Refusal::ForgeHost`], #1405).
+fn forge_hosts_of(top: Option<&toml::Table>) -> Vec<(String, Result<hosts::Host, String>)> {
+    let Some(forges) = top
+        .and_then(|top| top.get("forge"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    forges
+        .iter()
+        .filter_map(|forge| forge.get("host")?.as_str())
+        .filter(|host| crate::forge::host_ok(host))
+        .map(|host| {
+            let bare = host.split(':').next().unwrap_or(host);
+            (host.to_owned(), hosts::Host::parse(bare))
+        })
+        .collect()
 }
 
 /// What a plane's `charter.toml` says about the sandbox: the policy where it is on, and each
@@ -513,6 +532,15 @@ impl Said {
         };
         let (personas, not) = persona::read(table.get(persona::KEY), FILE);
         refused.extend(not.into_iter().map(Refusal::Persona));
+        // The forge preset lets a project's `[[forge]]` hosts through, but not one the sandbox
+        // refuses: said here, while the sandbox and that preset are on (#1405).
+        if on && egress.contains(&Preset::Forge) {
+            refused.extend(
+                forge_hosts_of(top)
+                    .into_iter()
+                    .filter_map(|(written, host)| Some(Refusal::ForgeHost(written, host.err()?))),
+            );
+        }
         let written = Policy {
             egress,
             hosts,
