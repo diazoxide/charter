@@ -2467,11 +2467,12 @@ fn dispatch_noting(
         }
         _ => None,
     };
-    // A second task of the asking chat in the same folder, with no branch of its own, is
-    // named beside the first (#1511, V100-68): there are no file locks. The person who chose
-    // the place in the window reads it on the asking chat's tab instead.
+    // A second task in the same folder, with no branch of its own, is named beside the first
+    // (#1511, V100-68), whichever chat asked for it (#1534): there are no file locks. The
+    // person who chose the place in the window read it in the dialog, and reads it on the
+    // asking chat's tab.
     let sharing = match (&wanted.moved, wanted.by) {
-        (None, By::Chat) => crate::taskchanges::shares_a_folder(held, from, arrived.session, false),
+        (None, By::Chat) => crate::taskchanges::shares_a_folder(held, arrived.session, false),
         _ => None,
     };
     let noted: Vec<String> = note

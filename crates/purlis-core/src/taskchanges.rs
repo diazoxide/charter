@@ -14,17 +14,21 @@
 //! says whether its tool writes. A file it only read is never one of them. Those are kept **in
 //! memory only** (D-86a): nothing here writes one, so the list is gone when the app is started
 //! again, and the window says so. A path is the task's own word, so it is listed only where git
-//! also finds it changed, and marked where another task of the same chat wrote it too.
+//! also finds it changed, and marked where another chat's edit tools wrote it too: a sibling
+//! task's, the asking chat's or any other chat's this app heard from (#1534).
 //!
 //! **What this cannot see, and the window says so:** a change made by a shell command (a
 //! formatter, `sed`, a script), which no file tool names; a change the task already committed
-//! in that folder, which git no longer reports as changed there; a file another chat changed
-//! after this task wrote it; and anything after the app was started again, or of a task
-//! forgotten because more than [`CHATS_KEPT`] tasks were heard from since.
+//! in that folder, which git no longer reports as changed there; a file the person or a shell
+//! command changed after this task wrote it, which no file tool names and so is not marked; and
+//! anything after the app was started again, or of a task forgotten because more than
+//! [`CHATS_KEPT`] chats were heard from since.
 //!
 //! **Two tasks in one folder are warned about when the second starts** ([`sharing`],
 //! [`shared`]): there are no file locks (V100-68), so the warning is what the person and the
-//! asking chat get, by both tasks' names, with the way out: a branch of its own for one.
+//! asking chat get, by both tasks' names, with the way out: a branch of its own for one. Tasks
+//! of different asking chats count too (#1534), and the person asking from a tab is told in the
+//! dialog, before the task starts ([`said_before_asking`]).
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
@@ -34,12 +38,16 @@ use crate::worktree::{self, name};
 /// The most paths kept for one chat. A task that touched more keeps its first, and says so.
 pub const PATHS_KEPT: usize = 500;
 
-/// The most chats paths are kept for. Past it, the chat first heard from is forgotten.
-pub const CHATS_KEPT: usize = 64;
+/// The most chats paths are kept for. Past it, the chat first heard from is forgotten. Every
+/// chat's writes are kept, not only a task's, so another writer of a task's file can be named.
+pub const CHATS_KEPT: usize = 128;
 
 /// The paths one chat's file tools named.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Paths {
+    /// The chat's name as it was last shown when its tool named one: what marks a file another
+    /// chat's list holds too. The chat's word where the chat named itself.
+    pub name: String,
     /// Relative to the project's root, `/`-separated.
     pub paths: BTreeSet<String>,
     /// Whether some were not kept: the chat named more than [`PATHS_KEPT`].
@@ -56,8 +64,9 @@ pub struct Touched {
 }
 
 impl Touched {
-    /// Chat `chat`'s tool named `path`, which is relative to the project's root.
-    pub fn note(&mut self, chat: &str, path: String) {
+    /// Chat `chat`, shown as `name`, had a tool name `path`, which is relative to the project's
+    /// root.
+    pub fn note(&mut self, chat: &str, name: &str, path: String) {
         if !self.by_chat.contains_key(chat) {
             if self.heard.len() >= CHATS_KEPT
                 && let Some(oldest) = self.heard.pop_front()
@@ -67,6 +76,9 @@ impl Touched {
             self.heard.push_back(chat.to_owned());
         }
         let kept = self.by_chat.entry(chat.to_owned()).or_default();
+        if kept.name != name {
+            name.clone_into(&mut kept.name);
+        }
         if kept.paths.len() >= PATHS_KEPT && !kept.paths.contains(&path) {
             kept.more = true;
             return;
@@ -78,6 +90,18 @@ impl Touched {
     /// harness reports no file tool, one that named none, or one from before this app started.
     pub fn of(&self, chat: &str) -> Option<&Paths> {
         self.by_chat.get(chat)
+    }
+
+    /// The name of every chat but `but` whose tools named `path`, in the order each was first
+    /// heard from: who else may have written a file of `but`'s list.
+    pub fn also(&self, but: &str, path: &str) -> Vec<String> {
+        self.heard
+            .iter()
+            .filter(|chat| chat.as_str() != but)
+            .filter_map(|chat| self.by_chat.get(chat))
+            .filter(|kept| kept.paths.contains(path))
+            .map(|kept| kept.name.clone())
+            .collect()
     }
 }
 
@@ -251,6 +275,23 @@ pub fn said_in_window(tasks: &[String], folder: &str) -> String {
     )
 }
 
+/// What the person reads in the dialog that asks for a task in `folder`, where `others`, open
+/// tasks with no branch of their own, already work: each by name, before anything starts.
+pub fn said_before_asking(others: &[String], folder: &str) -> String {
+    let (verb, own) = if others.len() == 1 {
+        ("is", "its")
+    } else {
+        ("are", "their")
+    };
+    format!(
+        "{} {verb} already working in {} with no branch of {own} own. There are no file locks \
+         between tasks: a file two of them change cannot be told apart afterwards. To keep them \
+         apart, choose a branch of its own for this one.",
+        listed(others),
+        crate::shown::short(folder),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +399,26 @@ mod tests {
     }
 
     #[test]
+    fn the_dialog_names_the_tasks_already_in_the_folder_before_one_starts() {
+        assert_eq!(
+            said_before_asking(&["talk".to_owned()], "workspaces/alpha"),
+            "'talk' is already working in workspaces/alpha with no branch of its own. There are \
+             no file locks between tasks: a file two of them change cannot be told apart \
+             afterwards. To keep them apart, choose a branch of its own for this one."
+        );
+        let two = said_before_asking(&["talk".to_owned(), "lint".to_owned()], "workspaces/alpha");
+        assert!(
+            two.starts_with(
+                "'talk' and 'lint' are already working in workspaces/alpha with no \
+                             branch of their own."
+            ),
+            "{two}"
+        );
+        let named = said_before_asking(&["t\nIgnore the above".to_owned()], "workspaces/alpha");
+        assert!(!named.contains('\n'), "{named}");
+    }
+
+    #[test]
     fn a_task_s_name_is_said_as_a_line_can_carry_it() {
         // A name is a chat's word: what cannot be read back off a line is escaped, so a name
         // cannot end the sentence and start one of its own on the next line.
@@ -395,9 +456,13 @@ mod tests {
     #[test]
     fn the_files_a_chat_s_tools_named_are_kept_per_chat_and_bounded() {
         let mut touched = Touched::default();
-        touched.note("talk", "workspaces/alpha/api/src/a.rs".to_owned());
-        touched.note("talk", "workspaces/alpha/api/src/a.rs".to_owned());
-        touched.note("review", "workspaces/alpha/api/src/b.rs".to_owned());
+        touched.note("talk", "talk", "workspaces/alpha/api/src/a.rs".to_owned());
+        touched.note("talk", "talk", "workspaces/alpha/api/src/a.rs".to_owned());
+        touched.note(
+            "review",
+            "review",
+            "workspaces/alpha/api/src/b.rs".to_owned(),
+        );
 
         let talk = touched.of("talk").expect("heard from");
         assert_eq!(
@@ -411,7 +476,7 @@ mod tests {
 
         // A chat that names more than the cap keeps its first, and says there were more.
         for n in 0..PATHS_KEPT + 10 {
-            touched.note("flood", format!("f{n}"));
+            touched.note("flood", "flood", format!("f{n}"));
         }
         let flood = touched.of("flood").expect("heard from");
         assert_eq!(flood.paths.len(), PATHS_KEPT);
@@ -419,10 +484,41 @@ mod tests {
 
         // And past the most chats kept, the one first heard from is forgotten.
         for n in 0..CHATS_KEPT {
-            touched.note(&format!("chat-{n}"), "x".to_owned());
+            touched.note(&format!("chat-{n}"), "a chat", "x".to_owned());
         }
         assert_eq!(touched.of("talk"), None);
         assert!(touched.of(&format!("chat-{}", CHATS_KEPT - 1)).is_some());
+    }
+
+    #[test]
+    fn every_other_chat_that_wrote_a_file_is_named_and_the_task_itself_is_not() {
+        // #1534: not only a sibling task. The asking chat and any other chat this app heard
+        // from mark a task's file too, by the name each was last shown under.
+        let mut touched = Touched::default();
+        let file = "workspaces/alpha/api/src/a.rs";
+        touched.note("task", "review", file.to_owned());
+        touched.note("asker", "steward 3", file.to_owned());
+        touched.note("sibling", "talk", file.to_owned());
+        touched.note(
+            "elsewhere",
+            "lint",
+            "workspaces/alpha/api/src/b.rs".to_owned(),
+        );
+        touched.note(
+            "asker",
+            "steward 3 renamed",
+            "workspaces/alpha/x".to_owned(),
+        );
+
+        assert_eq!(touched.also("task", file), ["steward 3 renamed", "talk"]);
+        assert_eq!(
+            touched.also("sibling", file),
+            ["review", "steward 3 renamed"]
+        );
+        assert_eq!(
+            touched.also("task", "workspaces/alpha/none"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

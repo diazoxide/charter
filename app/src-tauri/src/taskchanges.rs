@@ -10,9 +10,10 @@
 //! - **The list** ([`task_changes`]). A task on a branch of its own: what that branch changed
 //!   against the branch it was cut from, which is the task's alone. A task that worked in a
 //!   folder other chats work in: the files its own edit tools wrote ([`Touched`], in memory
-//!   only) that git still finds uncommitted there, each marked where a sibling wrote it too. It
-//!   cannot see a shell command's edits, the task's own commits there, or anything after a
-//!   restart, and the tab says so. Where purlis holds no such list it says that too.
+//!   only) that git still finds uncommitted there, each marked where another chat's edit tools
+//!   wrote it too. It cannot see a shell command's edits, the person's, the task's own commits
+//!   there, or anything after a restart, and the tab says so. Where purlis holds no such list it
+//!   says that too.
 //! - **Merge** ([`task_branch_merge_question`], [`task_branch_merge`]). The person's act, in
 //!   two steps: the question reads what would land, and the answer hands it back, so what is
 //!   merged is what they were shown or nothing is. A fast-forward or a refusal that says why.
@@ -37,17 +38,17 @@ use purlis_core::taskchanges::{self as core, Paths, Working};
 use crate::piecefiles::{ChangeMark, FileChange};
 use crate::planes::{Held, PlaneId, Planes};
 
-/// The files each task's edit tools wrote while this app has been running
+/// The files each chat's edit tools wrote while this app has been running
 /// (`purlis_core::taskchanges::Touched`): in memory only, and never written (D-86a).
 #[derive(Default)]
 pub struct Touched(Mutex<core::Touched>);
 
 impl Touched {
-    fn note(&self, chat: &str, path: String) {
+    fn note(&self, chat: &str, name: &str, path: String) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .note(chat, path);
+            .note(chat, name, path);
     }
 
     fn of(&self, chat: &str) -> Option<Paths> {
@@ -57,15 +58,25 @@ impl Touched {
             .of(chat)
             .cloned()
     }
+
+    /// Every other chat whose edit tools wrote `path`, by name ([`core::Touched::also`]).
+    fn also(&self, but: &str, path: &str) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .also(but, path)
+    }
 }
 
-/// A file tool of chat `touching.chat` named a path: kept for a chat a dispatch started where
-/// the tool writes ([`core::keeps`]), once it is confined to that chat's own folder, as a path
-/// of the project. The chat's word, so it marks nothing by itself: the Changes tab lists only
-/// the ones git also finds changed.
+/// A file tool of chat `touching.chat` named a path: kept where the tool writes
+/// ([`core::keeps`]), once it is confined to that chat's own folder, as a path of the project.
+/// **Every chat's, not only a task's** (#1534): a task's Changes list is its own writes, and
+/// another chat's writes to the same file, the asking chat's or any other's, are what mark it
+/// as maybe not the task's alone. The chat's word, so it marks nothing by itself: the Changes
+/// tab lists only the ones git also finds changed.
 pub(crate) fn touched(held: &Held, touching: &purlis_core::hookwire::Touching) {
-    // Only what an edit tool wrote: a file a task read is not its change.
-    if !core::keeps(touching) || held.chats().handed_from(touching.chat).is_none() {
+    // Only what an edit tool wrote: a file a chat read is not its change.
+    if !core::keeps(touching) {
         return;
     }
     let Some(at) = held.chats().chat_at(touching.chat) else {
@@ -78,7 +89,11 @@ pub(crate) fn touched(held: &Held, touching: &purlis_core::hookwire::Touching) {
         return;
     };
     if let Some(path) = core::in_project(held.root(), &cwd, &inside) {
-        held.touched_files().note(&id, path);
+        let name = held
+            .chats()
+            .shown_name(touching.chat)
+            .unwrap_or_else(|| "another chat".to_owned());
+        held.touched_files().note(&id, &name, path);
     }
 }
 
@@ -95,8 +110,9 @@ pub(crate) struct TaskFile {
     /// Where a renamed file came from: a name to show, never a path to open.
     pub from: Option<String>,
     pub uncommitted: bool,
-    /// The other tasks of the same chat whose edit tools wrote this file too, by name: its
-    /// change may be theirs in part. Another chat's or the person's edits are not marked.
+    /// The other chats whose edit tools wrote this file too, by name: a sibling task, the
+    /// asking chat or any other this app heard from. Its change may be theirs in part. The
+    /// person's own edits, and a shell command's, are not marked: no file tool names them.
     pub also: Vec<String>,
 }
 
@@ -160,7 +176,7 @@ const NOT_KEPT: &str = "purlis cannot say which files this task changed. It work
                         other chats work in, where what tells tasks apart is the files each \
                         one's own edit tools wrote. Those are kept in memory only, and none is \
                         held for this task: the app was started again since it ran, more than \
-                        64 tasks were heard from since, its harness reports no file tool, or it \
+                        128 chats were heard from since, its harness reports no file tool, or it \
                         wrote no file with one (a shell command's edits are not seen).";
 
 /// The task's name: the one its dispatch gave it, else its chat's.
@@ -259,37 +275,18 @@ fn of_its_own_branch(held: &Held, record: &Record, changes: &mut TaskChanges) {
     }
 }
 
-/// The other tasks of the chat that asked for `record`, each with the files its tools named.
-fn siblings(held: &Held, record: &Record) -> Vec<(String, Paths)> {
-    dispatchrecord::list(held.root())
-        .into_iter()
-        .filter(|other| {
-            other.id != record.id
-                && other.mode == dispatchrecord::Mode::Task
-                && dispatchrecord::same_chat(&other.asker.chat, &record.asker.chat)
-        })
-        .filter_map(|other| {
-            let kept = held.touched_files().of(other.worker.chat.id.as_deref()?)?;
-            Some((name_of(&other), kept))
-        })
-        .collect()
-}
-
 /// What a task that worked in a folder other chats work in changed: the files its own edit
 /// tools wrote that git still finds uncommitted there, and nothing else of that folder's.
 fn of_a_shared_folder(held: &Held, record: &Record, changes: &mut TaskChanges) {
-    let kept = record
-        .worker
-        .chat
-        .id
-        .as_deref()
-        .and_then(|id| held.touched_files().of(id));
-    let Some(kept) = kept else {
+    let Some(chat) = record.worker.chat.id.as_deref() else {
+        changes.unknown = Some(NOT_KEPT.to_owned());
+        return;
+    };
+    let Some(kept) = held.touched_files().of(chat) else {
         changes.unknown = Some(NOT_KEPT.to_owned());
         return;
     };
     changes.more = kept.more;
-    let others = siblings(held, record);
     // By place, each with the paths named inside it and the project's path for each.
     let mut by_place: BTreeMap<(String, String, Option<String>), BTreeMap<String, String>> =
         BTreeMap::new();
@@ -308,11 +305,7 @@ fn of_a_shared_folder(held: &Held, record: &Record, changes: &mut TaskChanges) {
         let place = changed_in(held, (&workspace, &repo, piece.as_deref()), |change| {
             let whole = named.get(&change.path)?;
             Some(TaskFile {
-                also: others
-                    .iter()
-                    .filter(|(_, theirs)| theirs.paths.contains(whole))
-                    .map(|(name, _)| name.clone())
-                    .collect(),
+                also: held.touched_files().also(chat, whole),
                 path: change.path,
                 mark: change.mark,
                 from: change.from,
@@ -353,8 +346,8 @@ pub(crate) fn changes_of(held: &Held, id: &str) -> Result<TaskChanges, String> {
 /// What the task of dispatch `id` changed, and no other task's (#1511): for a task on a
 /// branch of its own, everything that branch holds against the branch it was cut from; for a
 /// task that worked in a folder other chats work in, the files its own edit tools wrote that
-/// git still finds uncommitted there, each marked where another task of the same chat wrote it
-/// too: not a shell command's edits, and not what the task committed there. Where purlis cannot
+/// git still finds uncommitted there, each marked where another chat's edit tools wrote it too:
+/// not a shell command's edits, and not what the task committed there. Where purlis cannot
 /// say which files were the task's, it says so and lists none.
 #[tauri::command]
 #[specta::specta]
@@ -532,49 +525,56 @@ pub(crate) async fn task_branch_merge(
 // Two tasks in one folder
 // ---------------------------------------------------------------------------------------
 
-/// The open tasks chat `asker` asked for, in the order they started, as the same-folder
-/// question reads them. `but` leaves one out.
-fn open_tasks_of(held: &Held, asker: u32, but: Option<u32>) -> Vec<Working> {
+/// One open task, as the same-folder question reads it: the chat that asked for it, and it.
+struct OpenTask {
+    asker: u32,
+    working: Working,
+}
+
+/// Every open task of the project, of whichever chat asked for it, in the order they started.
+/// `but` leaves one out.
+fn open_tasks(held: &Held, but: Option<u32>) -> Vec<OpenTask> {
     let mut open: Vec<_> = held
         .chats()
         .open_now()
         .into_iter()
         .filter(|chat| Some(chat.session) != but)
-        .filter(|chat| {
-            chat.from
-                .as_ref()
-                .is_some_and(|from| from.chat == asker && from.mode == Mode::Task)
+        .filter_map(|chat| {
+            let from = chat.from.as_ref().filter(|from| from.mode == Mode::Task)?;
+            Some((from.chat, chat))
         })
         .collect();
     // A chat's number is dealt as it starts, so the numbers are the order they started in.
-    open.sort_by_key(|chat| chat.session);
+    open.sort_by_key(|(_, chat)| chat.session);
     open.into_iter()
-        .filter_map(|chat| {
-            Some(Working {
-                name: held
-                    .chats()
-                    .shown_name(chat.session)
-                    .unwrap_or_else(|| chat.name.clone()),
-                cwd: chat.cwd?,
+        .filter_map(|(asker, chat)| {
+            Some(OpenTask {
+                asker,
+                working: Working {
+                    name: held
+                        .chats()
+                        .shown_name(chat.session)
+                        .unwrap_or_else(|| chat.name.clone()),
+                    cwd: chat.cwd?,
+                },
             })
         })
         .collect()
 }
 
-/// **What is said beside the start of task `new`, which chat `asker` asked for, where another
-/// task of that chat already works in its folder** (V100-68): both by name. To the asking
-/// chat, with the word that gives a task a branch of its own; to the person, who chose the
-/// place in the window, in the window's words. Nothing where it works alone: a task given a
-/// branch of its own stands in a folder cut for it.
-pub(crate) fn shares_a_folder(
-    held: &Held,
-    asker: u32,
-    new: u32,
-    by_person: bool,
-) -> Option<String> {
+/// What `tasks` are, as the core's same-folder rules read them.
+fn working(tasks: Vec<OpenTask>) -> Vec<Working> {
+    tasks.into_iter().map(|task| task.working).collect()
+}
+
+/// **What is said beside the start of task `new`, where another open task already works in its
+/// folder** (V100-68): both by name, whichever chat asked for the other (#1534). To the asking chat, with the word that gives a task a branch of its own;
+/// to the person, who chose the place in the window, in the window's words. Nothing where it
+/// works alone: a task given a branch of its own stands in a folder cut for it.
+pub(crate) fn shares_a_folder(held: &Held, new: u32, by_person: bool) -> Option<String> {
     let at = held.chats().chat_at(new)?;
     let cwd = at.cwd?;
-    let others = core::sharing(&cwd, &open_tasks_of(held, asker, Some(new)));
+    let others = core::sharing(&cwd, &working(open_tasks(held, Some(new))));
     if others.is_empty() {
         return None;
     }
@@ -591,7 +591,8 @@ pub(crate) fn shares_a_folder(
     })
 }
 
-/// A folder two or more tasks of one chat work in at once, as that chat's tab says it.
+/// A folder two or more open tasks work in at once, one of them a task of the chat whose tab
+/// says it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct SharedFolder {
     /// The folder, relative to the project.
@@ -602,10 +603,19 @@ pub(crate) struct SharedFolder {
     pub says: String,
 }
 
-/// The folders two or more open tasks of chat `asker` work in.
+/// The folders where an open task of chat `asker` works beside another open task, of that chat
+/// or of any other (#1534).
 pub(crate) fn shared_by(held: &Held, asker: u32) -> Vec<SharedFolder> {
-    core::shared(&open_tasks_of(held, asker, None))
+    let tasks = open_tasks(held, None);
+    let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or(path.to_path_buf());
+    let mine: Vec<_> = tasks
+        .iter()
+        .filter(|task| task.asker == asker)
+        .map(|task| real(&task.working.cwd))
+        .collect();
+    core::shared(&working(tasks))
         .into_iter()
+        .filter(|shared| mine.contains(&real(&shared.folder)))
         .map(|shared| {
             let folder = crate::dispatches::folder(held.root(), &shared.folder);
             SharedFolder {
@@ -617,9 +627,10 @@ pub(crate) fn shared_by(held: &Held, asker: u32) -> Vec<SharedFolder> {
         .collect()
 }
 
-/// The folders two or more open tasks of chat `session` work in with no branch of their own
-/// (#1511, V100-68): what its tab warns about, by every task's name. There are no file
-/// locks between tasks, so a file two of them change cannot be told apart afterwards.
+/// The folders where an open task of chat `session` works with no branch of its own beside
+/// another open task, of that chat or of any other (#1511, #1534, V100-68): what its tab warns
+/// about, by every task's name. There are no file locks between tasks, so a file two of them
+/// change cannot be told apart afterwards.
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn tasks_sharing_a_folder(
@@ -631,6 +642,46 @@ pub(crate) fn tasks_sharing_a_folder(
     Ok(shared_by(&held, session))
 }
 
+/// What the dialog asking for a task from chat `session`'s tab says before it starts one at
+/// `place`, where open tasks already work there with no branch of their own; `None` where none
+/// does. `place` is the dialog's word: `None` for that chat's folder, `workspace:<name>` for
+/// another workspace's. A task given a branch of its own works in a folder purlis cuts for it
+/// alone, so nothing is said of `worktree`.
+pub(crate) fn sharing_before_asking(
+    held: &Held,
+    session: u32,
+    place: Option<&str>,
+) -> Option<String> {
+    let folder = match dispatchplace::asked(place).ok()? {
+        None => held.chats().chat_at(session)?.cwd?,
+        Some(dispatchplace::Where::Workspace(name)) => {
+            dispatchplace::workspace_folder(held.root(), &name).ok()?.1
+        }
+        Some(dispatchplace::Where::Worktree) => return None,
+    };
+    let others = core::sharing(&folder, &working(open_tasks(held, None)));
+    (!others.is_empty()).then(|| {
+        core::said_before_asking(&others, &crate::dispatches::folder(held.root(), &folder))
+    })
+}
+
+/// What **Ask a persona…** from chat `session`'s tab says before it starts a task at `place`
+/// (#1534): the open tasks already working in that folder with no branch of their own, by
+/// name, or `null` where none is. `place` is the dialog's word for where it works: `null` for
+/// that chat's folder, `workspace:<name>` for another workspace, `worktree` for a branch of its
+/// own, of which nothing is said. It starts nothing and changes nothing.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn task_folder_shared(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    place: Option<String>,
+) -> Result<Option<String>, String> {
+    let held = planes.held(&plane)?;
+    Ok(sharing_before_asking(&held, session, place.as_deref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,8 +689,8 @@ mod tests {
     #[test]
     fn the_files_a_task_s_tools_named_are_kept_by_its_chat_and_no_other_s() {
         let touched = Touched::default();
-        touched.note("talk", "workspaces/alpha/api/a.rs".to_owned());
-        touched.note("review", "workspaces/alpha/api/b.rs".to_owned());
+        touched.note("talk", "talk", "workspaces/alpha/api/a.rs".to_owned());
+        touched.note("review", "review", "workspaces/alpha/api/b.rs".to_owned());
 
         let talk = touched.of("talk").expect("heard from");
 
@@ -653,7 +704,7 @@ mod tests {
     #[test]
     fn the_cannot_tell_sentence_names_the_number_of_tasks_kept() {
         assert!(
-            NOT_KEPT.contains(&format!("more than {} tasks", core::CHATS_KEPT)),
+            NOT_KEPT.contains(&format!("more than {} chats", core::CHATS_KEPT)),
             "{NOT_KEPT}"
         );
     }

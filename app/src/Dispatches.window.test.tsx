@@ -227,6 +227,18 @@ function core(
       if (on.loss instanceof Error) throw on.loss.message;
       return on.loss;
     }
+    if (cmd === "task_changes")
+      return {
+        id: given.id,
+        task: "fix the queue",
+        running: false,
+        own: { repo: "api", branch: "fix-the-queue-b5rc0def", standing: "kept", acts: true },
+        places: [],
+        elsewhere: [],
+        more: false,
+        said: null,
+        unknown: null,
+      };
     if (cmd === "dispatch_worktree_discard") {
       if (on.discardRefused !== undefined) throw on.discardRefused;
       return null;
@@ -649,6 +661,25 @@ describe("a dispatch's own branch", () => {
     // A dispatch that had no branch of its own says nothing of one.
     expect(where("01K6P")).toHaveTextContent(/^alpha$/);
     expect(within(row("01K6P")).queryByRole("button", { name: /Discard/ })).toBeNull();
+  });
+
+  it("opens a kept branch's Changes tab, where it is merged, from its row (#1534)", async () => {
+    const { asked } = core({ rows: WITH_BRANCHES });
+    render(<App />);
+    await opened();
+    const REVIEW = "Review changes of fix the queue";
+    expect(within(row("01K6M")).queryByRole("button", { name: /Review changes/ })).toBeNull();
+    expect(within(row("01K6P")).queryByRole("button", { name: /Review changes/ })).toBeNull();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: REVIEW }));
+
+    await waitFor(() => expect(selected()).toContain("Changes · fix the queue"));
+    await waitFor(() =>
+      expect(asked.find((one) => one.cmd === "task_changes")?.args).toEqual({
+        plane: PLANE,
+        id: "01K6W",
+      }),
+    );
   });
 
   it("asks before it discards, naming every file that would go and what the branch keeps", async () => {

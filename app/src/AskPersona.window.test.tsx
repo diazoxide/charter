@@ -88,6 +88,8 @@ type Core = {
   refusals?: VaultRefused[];
   /** What the steward chat asked of other personas, held for the person. */
   dispatches?: DispatchPending[];
+  /** The core's sentence for the tasks already working at each place, by its word. */
+  shared?: Record<string, string>;
 };
 
 /** Vault devops, refused to the steward chat: it is tagged for devops. */
@@ -153,6 +155,10 @@ function core(now: Core) {
       if (cmd === "ask_persona_offer") return now.offer;
       if (cmd === "vault_refusals") return now.refusals ?? [];
       if (cmd === "dispatch_grants_needed") return now.dispatches ?? [];
+      if (cmd === "task_folder_shared") {
+        const place = (args as { place: string | null }).place ?? "here";
+        return now.shared?.[place] ?? null;
+      }
       if (cmd === "ask_persona_chat") {
         if (now.refused !== undefined) throw new Error(now.refused);
         return 9;
@@ -292,6 +298,35 @@ describe("Ask a persona from a chat's tab", () => {
         },
       ]),
     );
+  });
+
+  it("names the tasks already working where it would work, before it starts (#1534)", async () => {
+    const HERE =
+      "'lint' is already working in workspaces/alpha with no branch of its own. There are no file locks between tasks: a file two of them change cannot be told apart afterwards. To keep them apart, choose a branch of its own for this one.";
+    const { asked } = await aStewardChat({ shared: { here: HERE } });
+    await userEvent.click(within(await tabMenu()).getByRole("menuitem", { name: "Ask devops…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ask devops" });
+
+    expect(await within(dialog).findByTestId("ask-folder-shared")).toHaveTextContent(HERE);
+    expect(asked("task_folder_shared")).toContainEqual({ plane: PLANE, session: 4, place: null });
+
+    // A branch of its own is a folder purlis cuts for it alone: nothing is said, or asked.
+    const before = asked("task_folder_shared").length;
+    await userEvent.click(within(dialog).getByRole("radio", { name: "A branch of its own" }));
+    await waitFor(() => expect(within(dialog).queryByTestId("ask-folder-shared")).toBeNull());
+    expect(asked("task_folder_shared").length).toBe(before);
+
+    // Another workspace where nobody works says nothing either.
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Another workspace" }));
+    await userEvent.selectOptions(within(dialog).getByLabelText("Workspace"), "beta");
+    await waitFor(() =>
+      expect(asked("task_folder_shared")).toContainEqual({
+        plane: PLANE,
+        session: 4,
+        place: "workspace:beta",
+      }),
+    );
+    expect(within(dialog).queryByTestId("ask-folder-shared")).toBeNull();
   });
 
   it("asks which workspace before it sends a chat into another one", async () => {

@@ -1094,8 +1094,8 @@ export const commands = {
 	 *  What the task of dispatch `id` changed, and no other task's (#1511): for a task on a
 	 *  branch of its own, everything that branch holds against the branch it was cut from; for a
 	 *  task that worked in a folder other chats work in, the files its own edit tools wrote that
-	 *  git still finds uncommitted there, each marked where another task of the same chat wrote it
-	 *  too: not a shell command's edits, and not what the task committed there. Where purlis cannot
+	 *  git still finds uncommitted there, each marked where another chat's edit tools wrote it too:
+	 *  not a shell command's edits, and not what the task committed there. Where purlis cannot
 	 *  say which files were the task's, it says so and lists none.
 	 */
 	taskChanges: (plane: PlaneId, id: string) => typedError<TaskChanges, string>(__TAURI_INVOKE("task_changes", { plane, id })),
@@ -1115,11 +1115,20 @@ export const commands = {
 	 */
 	taskBranchMerge: (plane: PlaneId, id: string, seen: BranchMerge) => typedError<TaskMerged, string>(__TAURI_INVOKE("task_branch_merge", { plane, id, seen })),
 	/**
-	 *  The folders two or more open tasks of chat `session` work in with no branch of their own
-	 *  (#1511, V100-68): what its tab warns about, by every task's name. There are no file
-	 *  locks between tasks, so a file two of them change cannot be told apart afterwards.
+	 *  The folders where an open task of chat `session` works with no branch of its own beside
+	 *  another open task, of that chat or of any other (#1511, #1534, V100-68): what its tab warns
+	 *  about, by every task's name. There are no file locks between tasks, so a file two of them
+	 *  change cannot be told apart afterwards.
 	 */
 	tasksSharingAFolder: (plane: PlaneId, session: number) => typedError<SharedFolder[], string>(__TAURI_INVOKE("tasks_sharing_a_folder", { plane, session })),
+	/**
+	 *  What **Ask a persona…** from chat `session`'s tab says before it starts a task at `place`
+	 *  (#1534): the open tasks already working in that folder with no branch of their own, by
+	 *  name, or `null` where none is. `place` is the dialog's word for where it works: `null` for
+	 *  that chat's folder, `workspace:<name>` for another workspace, `worktree` for a branch of its
+	 *  own, of which nothing is said. It starts nothing and changes nothing.
+	 */
+	taskFolderShared: (plane: PlaneId, session: number, place: string | null) => typedError<string | null, string>(__TAURI_INVOKE("task_folder_shared", { plane, session, place })),
 	/**
 	 *  The finished tasks of the project's open chats, oldest first, for the rows under each
 	 *  (#1485). On a blocking thread, as it reads every record.
@@ -6958,7 +6967,10 @@ export type SetupTick = {
 	digest: string,
 };
 
-/**  A folder two or more tasks of one chat work in at once, as that chat's tab says it. */
+/**
+ *  A folder two or more open tasks work in at once, one of them a task of the chat whose tab
+ *  says it.
+ */
 export type SharedFolder = {
 	/**  The folder, relative to the project. */
 	folder: string,
@@ -7252,8 +7264,9 @@ export type TaskFile = {
 	from: string | null,
 	uncommitted: boolean,
 	/**
-	 *  The other tasks of the same chat whose edit tools wrote this file too, by name: its
-	 *  change may be theirs in part. Another chat's or the person's edits are not marked.
+	 *  The other chats whose edit tools wrote this file too, by name: a sibling task, the
+	 *  asking chat or any other this app heard from. Its change may be theirs in part. The
+	 *  person's own edits, and a shell command's, are not marked: no file tool names them.
 	 */
 	also: string[],
 };

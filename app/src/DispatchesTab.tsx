@@ -54,6 +54,9 @@ const WHILE_RUNNING_MS = 5000;
  * that holds work stays. Commits made in the folder on no branch are the one thing a discard
  * loses, and the question names them as lost. The paths the person was shown go back with the
  * answer, and the core removes nothing where the folder holds other paths by then. A refusal (a chat is still open in it) stands as a Notice.
+ * **Review changes** beside it opens the task's Changes tab (#1534), with what its branch
+ * changed and the person's Merge: the same tab its finished row in the chats list opens, so a
+ * row cleared there still reaches it here.
  *
  * The window says this of a branch and its folder, never of a worktree (ADR 0072 §4).
  */
@@ -62,6 +65,7 @@ export function DispatchesTab({
   changed,
   onShowChat,
   onOpenRecord,
+  onChanges,
 }: {
   plane: PlaneId;
   /** Bumped when the project changes on disk: the tab reads again. */
@@ -70,6 +74,9 @@ export function DispatchesTab({
   onShowChat: (session: number) => void;
   /** Open the session record at `path`, called `title`. */
   onOpenRecord: (path: string, title: string) => void;
+  /** Open the Changes tab of the task of dispatch `id`, called `task`; none is offered
+   *  without it. */
+  onChanges?: (id: string, task: string) => void;
 }) {
   const [said, setSaid] = useState<{ read?: Dispatches; trouble?: string }>();
   const [filter, setFilter] = useState<DispatchFilter>(EVERY_DISPATCH);
@@ -274,6 +281,18 @@ export function DispatchesTab({
                     {row.worktree !== null && (
                       <span className="dispatch-worktree" data-standing={row.worktree.standing}>
                         {worktreeSaid(row.worktree)}
+                        {row.worktree.standing === "kept" && onChanges !== undefined && (
+                          <button
+                            type="button"
+                            className="dispatch-changes"
+                            tabIndex={0}
+                            aria-label={`Review changes of ${row.task}`}
+                            title="Opens what its own branch changed, with Merge and Discard."
+                            onClick={() => onChanges(row.id, row.task)}
+                          >
+                            Review changes
+                          </button>
+                        )}
                         {row.worktree.discard && (
                           <button
                             type="button"
