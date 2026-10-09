@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791510780242,
+  "lastUpdate": 1791512393846,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3990,6 +3990,48 @@ window.BENCHMARK_DATA = {
             "value": 104.6947505,
             "unit": "ms",
             "extra": "median of 5 runs: 102.694, 103.770, 104.695, 105.020, 106.108 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "13b16012b45ccd2e67edc35a274ae918db61c29e",
+          "message": "ChatDoing SC-3 test: give it the heavy window tests' 20 s limit\n\nThe fifty-working-tasks test ran past vitest's 5 s default on CI (5047 ms\nand 5154 ms, main dc13fc21) while the whole suite ran in parallel on a\nloaded runner; alone it takes about a second. What it checks is draws:\nonly the changed chat's second line redraws, no row does, counted through\nthe mocked useDoingSaid and chatDoingId. It never asserted a time budget,\nso the wall-clock limit was incidental. It now carries the same\n{ timeout: 20_000 } as the heavy window tests in MemoryLists and Notices,\nwith a comment saying why. No assertion changed.\n\nRefs #1551\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T06:18:33+04:00",
+          "tree_id": "9184630f5c8b2e94c83fcf06205e79b86ec7b229",
+          "url": "https://github.com/purlis/purlis/commit/13b16012b45ccd2e67edc35a274ae918db61c29e"
+        },
+        "date": 1791512392710,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5310145,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.525, 0.528, 0.531, 0.531, 0.542 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.0032675,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.542, 16.839, 17.003, 17.041, 17.042 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.29757899999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.115, 103.986, 104.298, 105.028, 105.541 ms"
           }
         ]
       }
