@@ -1,8 +1,8 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { LoaderCircle } from "lucide-react";
 import { useBranchFolders, type BranchFolderRef } from "../branchFolders";
-import type { Indexed, StatusRead } from "../branchStatus";
+import { branchKey, type Indexed, type StatusRead } from "../branchStatus";
 import {
   childOf,
   fileFold,
@@ -15,10 +15,12 @@ import {
   type TreeItem,
 } from "../Explorer";
 import type { Offer } from "../actions";
-import type { PlaneId } from "../bindings";
+import { commands, type OpenChat, type PlaneId } from "../bindings";
 import { useFileIcons } from "../projectTheme";
 import { placeName, type Place } from "../pieceViews";
 import { useTabStop } from "../roving";
+import { useReferenceChats } from "../references";
+import { touchingIn, useTouching, type Touching, type Touches } from "../touching";
 
 /**
  * **A branch's files as a tree, in its file tab** (FM-2, #1103 F3): the explorer's own file rows
@@ -30,6 +32,10 @@ import { useTabStop } from "../roving";
  * Home and End from the roving focus, Right opening a folder or moving into it, Left closing it
  * or moving to its parent, and type-ahead. Enter or a click on a file picks it, and the file
  * picked is the tree's `aria-selected` row and where the keyboard comes back in.
+ *
+ * **What a chat is touching is marked live** (#1154), with the explorer's own dot (FM-6): the
+ * file and each folder above it, naming the chat. The tab learns where its branch is and which
+ * chats are open only once a chat touches something ({@link useTouchingHere}).
  *
  * **No cap of its own.** The flat list it replaces drew 500 paths of the whole branch (#947);
  * a tree reads one folder when it is opened, and the core answers a folder's first 5,000
@@ -58,8 +64,9 @@ export function BranchTree({
   const [showIgnored, setShowIgnored] = useState(false);
   const reads = useBranchFolders(plane, workspace, openUnder(workspace, top, expanded));
   const icons = useFileIcons(plane, workspace);
+  const touching = useTouchingHere(plane, place);
   // The explorer's file rows, with no change marks and nothing narrowed: the file tab shows the
-  // branch as it is (FM-4's marks and filter are the explorer's).
+  // branch as it is (FM-4's marks and filter are the explorer's). What chats touch is marked.
   const files: FilesOf = {
     workspace,
     expanded,
@@ -70,6 +77,7 @@ export function BranchTree({
     changedOnly: false,
     filter: "",
     levels: new Map(),
+    touching: touching.size === 0 ? undefined : new Map([[branchKey(place), touching]]),
   };
   const rows = fileTreeRows(workspace, top, files);
   const drawn = rows.filter((row) => row.drawn);
@@ -166,6 +174,97 @@ export function BranchTree({
     </div>
   );
 }
+
+/**
+ * **What the chats are touching in `place`'s branch** (#1154): the explorer's `touchingIn` for
+ * the one branch this tab draws.
+ *
+ * The explorer has the branch's folder and the workspace's chats to hand; a tab has neither, so
+ * it asks the core — and only once a chat of the project has touched something, so a tab open
+ * on a quiet project asks nothing. The folder is asked once per branch (`worktree_list` for a
+ * worktree, `workspace_panels` for a repo's own folder), and the open chats again only when a
+ * touch comes from a chat not yet known, once per such set of chats. A chat is named as its tab
+ * is where the window lends the names (`references.tsx`), else by the core's name for it.
+ */
+function useTouchingHere(plane: PlaneId, place: Place): Touching {
+  const touches = useTouching(plane);
+  const lent = useReferenceChats();
+  const folder = useFolderOnce(plane, place, touches.length > 0);
+  const open = useOpenChatsFor(plane, touches);
+  const named =
+    lent === undefined || lent.plane !== plane
+      ? open
+      : open.map((chat) => ({
+          ...chat,
+          name: lent.chats.find((one) => one.session === chat.session)?.name ?? chat.name,
+        }));
+  return touchingIn(touches, named, folder);
+}
+
+/** Where `place`'s branch is on disk, asked once `wanted`; nothing while it is unknown or when
+ *  the core could not say. */
+function useFolderOnce(plane: PlaneId, place: Place, wanted: boolean): string | undefined {
+  const { workspace, repo, piece } = place;
+  const key = `${String(plane)}\n${workspace}\n${repo}\n${piece ?? ""}`;
+  const [held, setHeld] = useState<{ key: string; folder?: string }>();
+  const known = held?.key === key;
+  useEffect(() => {
+    if (!wanted || known) return;
+    let gone = false;
+    const told = (folder?: string) => {
+      if (!gone) setHeld({ key, folder });
+    };
+    const asked =
+      piece === null
+        ? commands
+            .workspacePanels(plane, workspace)
+            .then((said) => (said.status === "ok" ? said.data?.paths[repo] : undefined))
+        : commands
+            .worktreeList(plane, workspace, repo)
+            .then((said) =>
+              said.status === "ok"
+                ? said.data?.find((one) => one.piece === piece)?.path
+                : undefined,
+            );
+    // A refusal is an answer too: no marks, rather than an ask per render.
+    asked.then(told, () => told(undefined));
+    return () => {
+      gone = true;
+    };
+  }, [wanted, known, key, plane, workspace, repo, piece]);
+  return known ? held.folder : undefined;
+}
+
+/** The project's open chats, asked again only when `touches` names a chat not yet known. */
+function useOpenChatsFor(plane: PlaneId, touches: Touches): readonly OpenChat[] {
+  const [held, setHeld] = useState<{ plane: PlaneId; chats: readonly OpenChat[] }>();
+  const chats = held?.plane === plane ? held.chats : NO_CHATS;
+  const unknown = [...new Set(touches.map((one) => one.session))]
+    .filter((session) => !chats.some((chat) => chat.session === session))
+    .sort((a, b) => a - b)
+    .join(",");
+  /** The unknown chats last asked about, so a touch by a chat that has since closed is asked
+   *  about once, not on every render. */
+  const asked = useRef<string>(undefined);
+  useEffect(() => {
+    const about = `${String(plane)}\n${unknown}`;
+    if (unknown === "" || asked.current === about) return;
+    asked.current = about;
+    let gone = false;
+    commands.openedChats(plane).then(
+      (said) => {
+        if (!gone && said.status === "ok") setHeld({ plane, chats: said.data ?? NO_CHATS });
+      },
+      () => undefined,
+    );
+    return () => {
+      gone = true;
+    };
+  }, [plane, unknown]);
+  return chats;
+}
+
+const NO_CHATS: readonly OpenChat[] = [];
 
 const NONE_READ: ReadonlyMap<string, StatusRead> = new Map();
 const NONE_INDEXED: ReadonlyMap<string, Indexed> = new Map();
