@@ -965,18 +965,31 @@ fn gitleaks() -> &'static [(&'static str, &'static str, Regex)] {
     })
 }
 
+/// The prefixes whose token body is letters and digits only, each with that body. npm's token
+/// is `npm_` and 36 letters and digits (npm's "About access tokens"), while npm and pnpm read
+/// their own settings from variables spelled `npm_config_<name>` — `npm_` and an underscore-
+/// joined name the general body would take for a token (#1364). The floor stays the general
+/// sixteen, so a truncated token is still found.
+const ALPHANUMERIC_BODY: [(&str, &str); 1] = [("npm_", "[A-Za-z0-9]{16,}")];
+
 fn prefixed_token() -> &'static Regex {
     static TOKEN: OnceLock<Regex> = OnceLock::new();
     TOKEN.get_or_init(|| {
         let prefixes: Vec<String> = CREDENTIAL_PREFIXES
             .iter()
+            .filter(|p| !ALPHANUMERIC_BODY.iter().any(|(own, _)| own == *p))
             .map(|p| regex::escape(p))
+            .collect();
+        let alphanumeric: Vec<String> = ALPHANUMERIC_BODY
+            .iter()
+            .map(|(prefix, body)| format!("{}{body}", regex::escape(prefix)))
             .collect();
         // The token is its own group: the class in front of it consumes the character before
         // it, which is the newline when a token opens its line.
         Regex::new(&format!(
-            r"(?:^|[^A-Za-z0-9_-])(?P<token>(?:{})[A-Za-z0-9_-]{{16,}})",
-            prefixes.join("|")
+            r"(?:^|[^A-Za-z0-9_-])(?P<token>(?:{})[A-Za-z0-9_-]{{16,}}|{})",
+            prefixes.join("|"),
+            alphanumeric.join("|")
         ))
         .expect("a pattern this module wrote")
     })
@@ -1663,7 +1676,45 @@ mod documented_token_tests {
         );
         tokens.push(["xapp-1-", &fake_body(40)].concat());
         tokens.push(["xwfp-", &fake_body(40)].concat());
+        tokens.push(["npm_", &fake_body(36)].concat());
         tokens
+    }
+
+    /// npm's and pnpm's own settings, spelled as npm reads them from the environment, are
+    /// names and not npm tokens: a token's body is letters and digits only (#1364). Built in
+    /// halves, so the line that adds them is not refused by a scanner from before the fix.
+    #[test]
+    fn npms_own_setting_names_are_not_an_npm_token() {
+        for name in [
+            ["npm", "_config_store_dir"].concat(),
+            ["npm", "_config_cache_dir"].concat(),
+            ["npm", "_config_registry"].concat(),
+            ["npm", "_package_json"].concat(),
+        ] {
+            for text in [
+                name.clone(),
+                format!("export {name}=/Users/Shared/pnpm-store"),
+                format!("vars: &[\"pnpm_config_store_dir\", \"{name}\"],"),
+            ] {
+                assert_eq!(secret_kind(&text), None, "{text}");
+                assert_eq!(token_kind(&text), None, "{text}");
+                assert!(leaks(&text).is_empty(), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_npm_token_beside_its_setting_name_is_still_found() {
+        let token = ["npm_", &fake_body(36)].concat();
+        let line = format!("{}={token}", ["npm", "_config__authToken"].concat());
+        assert_eq!(token_kind(&line), Some("a token by its forge's prefix"));
+        let at = line.find('=').expect("the line has an equals sign") + 1;
+        let forge: Vec<_> = leaks(&line)
+            .into_iter()
+            .filter(|leak| leak.rule == "forge-token")
+            .map(|leak| leak.span)
+            .collect();
+        assert_eq!(forge, vec![at..line.len()], "the token, and not the name");
     }
 
     #[test]
