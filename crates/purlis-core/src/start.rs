@@ -72,8 +72,9 @@ pub struct Start {
 
 /// **The persona grants the recorded chat `chat` runs with** in the project at `root`: what
 /// [`ready`] compiles its sandbox with when it starts again from its record (the start's
-/// [`Start::held`] and [`Start::persona`] are the record's). The one answer the start and a
-/// handoff from that chat both take (#1362, D-1362-5).
+/// [`Start::held`] and [`Start::persona`] are the record's). The one answer the start and the
+/// dispatch grants' reading of that chat as an asking chat both take (#1362, D-1362-5); a
+/// handoff from it is decided as a dispatch is (#1444).
 pub fn runs_with(chat: &crate::reopen::Chat, root: &Path) -> Option<String> {
     grants_persona(chat.held.as_ref(), chat.persona.as_deref(), || {
         persona_for_a_new_chat(root)
