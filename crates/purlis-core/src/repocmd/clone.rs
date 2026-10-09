@@ -556,6 +556,9 @@ fn record_membership(request: &Request, members: &[String], say: Sink) {
         return;
     };
     let now = request.now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
+    // From the first look to the last write, one lock (#1249 U2): a removal or another clone
+    // writing in between would lose its change to the manifest read here.
+    let _held = ws.manifest_lock();
     let (_, owner) = ws.manifest();
     if owner == Ownership::Absent {
         let rows: Vec<Value> = repos::clones(request.root, request.ws)
@@ -643,6 +646,52 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
         (dir, root)
+    }
+
+    /// #1249 U2: recording a clone waits for the manifest's lock and reads under it, so a
+    /// row another writer dropped or added while it waited stays as that writer left it.
+    #[test]
+    fn recording_a_clone_racing_another_writer_loses_neither_change() {
+        let (_dir, root) = plane();
+        let ws = Plane::open(&root).workspace("alpha").unwrap();
+        ws.write_manifest(&json!({"name": "alpha", "repos": [{"name": "gone"}]}))
+            .unwrap();
+        let held = ws.manifest_lock();
+        let recording = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let mut said = Vec::new();
+                record_membership(
+                    &Request {
+                        root: &root,
+                        ws: "alpha",
+                        repos: &[],
+                        now: chrono::Utc::now(),
+                        author: "tester",
+                        hosts: None,
+                    },
+                    &["widget".to_owned()],
+                    &mut |line| said.push(line),
+                );
+                said
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            ws.manifest().0.unwrap()["repos"],
+            json!([{"name": "gone"}]),
+            "the clone wrote while another writer held the lock"
+        );
+        // The other writer — a removal — drops a row while it holds the lock.
+        ws.write_manifest(&json!({"name": "alpha", "repos": []}))
+            .unwrap();
+        drop(held);
+        let said = recording.join().unwrap();
+        assert_eq!(
+            ws.manifest().0.unwrap()["repos"],
+            json!([{"name": "widget"}]),
+            "{said:?}"
+        );
     }
 
     #[test]
