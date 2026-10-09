@@ -19,9 +19,13 @@
 //! to a thread of its own.
 //!
 //! Smart close's offer, its start and its cancel stay synchronous, for a terminal's reason. They
-//! run no git and read only what the app holds in memory, well under 1 ms. The start types its
-//! prompt into the chat's pane, and a cancel pressed straight after must land after it: Tauri
-//! keeps that order only for synchronous commands.
+//! run no git, and the offer and the cancel read only what the app holds in memory, well under
+//! 1 ms. The start can also touch the disk: for a task that had reported and was about to be
+//! ended, it stands that end down (`dispatched::stand_down`), which reads the project's dispatch
+//! records to find the task's newest one and writes it again marked kept open (#1610). Only a
+//! task's start does that, once. The start types its prompt into the chat's pane, and a cancel
+//! pressed straight after must land after it: Tauri keeps that order only for synchronous
+//! commands, and that order is worth the one read and write.
 //!
 //! A terminal's own commands stay synchronous on purpose. They take well under 5 ms, and the
 //! window relies on their order: a pane's resize must land before the watch that follows it

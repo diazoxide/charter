@@ -520,6 +520,12 @@ fn an_undo_name_that_is_not_the_same_memory_in_the_stores_form_is_refused() {
         // A journal's name has its prefix, and a persona's has none.
         (ws("alpha"), "a-fact"),
         (ws("alpha"), "2026030-091437-a-fact"),
+        // A prefix of the right shape that is no date and time (#1610).
+        (ws("alpha"), "99999999-999999-a-fact"),
+        (ws("alpha"), "20261302-091437-a-fact"),
+        (ws("alpha"), "20260230-091437-a-fact"),
+        (ws("alpha"), "20260302-240000-a-fact"),
+        (ws("alpha"), "20260302-091460-a-fact"),
         (persona("devops"), "20260302-091437-a-fact"),
     ] {
         let refused =
