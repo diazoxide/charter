@@ -49,42 +49,115 @@ fn portable_file(ctx: &Ctx, p: &Path) -> String {
     }
 }
 
-/// `util.git_ignores`: whether git would ignore `path` inside `root`, or `None` when `root` is
-/// not a repository. Asked of `git check-ignore`, the authority on the question.
-pub fn git_ignores(root: &Path, path: &Path) -> Option<bool> {
-    let git = |args: &[&std::ffi::OsStr]| {
-        let mut command = std::process::Command::new("git");
-        command
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        crate::forklock::status(&mut command).ok()
-    };
-    let repo = git(&["rev-parse".as_ref(), "--git-dir".as_ref()])?;
-    if !repo.success() {
-        return None;
-    }
-    let ignored = git(&["check-ignore".as_ref(), "-q".as_ref(), path.as_os_str()])?;
-    Some(ignored.success())
+/// What git says of one path ([`git_ignores`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ignores {
+    /// The folder is in no repository, or no git can be started on this machine: nothing there
+    /// is committed.
+    NoRepository,
+    /// git ignores the path.
+    Ignored,
+    /// git would take the path.
+    Kept,
+    /// git could not be asked: a folder whose `.git` link purlis will not follow, a git that did
+    /// not answer in time, or a path git cannot be handed. The sentence says
+    /// which. The path may still be committed by the person's own git, so this warns as
+    /// [`Ignores::Kept`] does (#1476).
+    Unasked(String),
 }
 
-/// `_unignored_plaintext`: the path, if a plaintext file there would be committed.
-pub fn unignored_plaintext(ctx: &Ctx, configured: &str) -> Option<String> {
+/// `util.git_ignores`: whether git would ignore `path` inside `root`. Asked of
+/// `git check-ignore`, the authority on the question, through the hardened runner
+/// ([`crate::worktree::git`], #1476): a constructed environment, no program a config names,
+/// and the folder's link checked before git follows it. Only git's own "not a git repository"
+/// is [`Ignores::NoRepository`]; every other failure is [`Ignores::Unasked`].
+pub fn git_ignores(root: &Path, path: &Path) -> Ignores {
+    use crate::worktree::git;
+    // `None` where no git can be started on this machine: then nothing here commits either.
+    let ask = |args: &[&str]| match git::run(root, args, git::READ) {
+        Err(_) => None,
+        Ok(run) if run.code.is_none() => Some(Err(format!(
+            "git did not answer within {} seconds",
+            git::READ.as_secs()
+        ))),
+        Ok(run) => Some(Ok(run)),
+    };
+    match ask(&["rev-parse", "--git-dir"]) {
+        None => return Ignores::NoRepository,
+        Some(Ok(run)) if run.ok() => {}
+        Some(Ok(run)) if run.err.contains("not a git repository") => {
+            return Ignores::NoRepository;
+        }
+        Some(Ok(run)) => return Ignores::Unasked(said(&run.err)),
+        Some(Err(why)) => return Ignores::Unasked(why),
+    }
+    let Some(path) = path.to_str() else {
+        return Ignores::Unasked("its path is not text git can be handed".to_owned());
+    };
+    match ask(&["check-ignore", "-q", "--", path]) {
+        None => Ignores::NoRepository,
+        Some(Ok(run)) if run.code == Some(0) => Ignores::Ignored,
+        Some(Ok(run)) if run.code == Some(1) => Ignores::Kept,
+        Some(Ok(run)) => Ignores::Unasked(said(&run.err)),
+        Some(Err(why)) => Ignores::Unasked(why),
+    }
+}
+
+/// git's words, or the runner's sentence, as one line.
+fn said(err: &str) -> String {
+    let line = err.trim().trim_start_matches("fatal: ");
+    if line.is_empty() {
+        "git failed without saying why".to_owned()
+    } else {
+        line.lines().next().unwrap_or(line).to_owned()
+    }
+}
+
+/// A plaintext file inside the project that git would commit, or that purlis could not ask git
+/// about ([`unignored_plaintext`]). Shown as the start of the sentence that warns of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unignored {
+    /// The path, relative to the project.
+    pub path: String,
+    /// Why git could not be asked, where it could not.
+    pub unasked: Option<String>,
+}
+
+impl std::fmt::Display for Unignored {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.unasked {
+            None => write!(
+                f,
+                "'{}' is inside the control plane and NOT gitignored",
+                self.path
+            ),
+            Some(why) => write!(
+                f,
+                "'{}' is inside the control plane, and purlis could not ask git whether it \
+                 ignores it ({why})",
+                self.path
+            ),
+        }
+    }
+}
+
+/// `_unignored_plaintext`: the path, if a plaintext file there would be committed, or git
+/// could not be asked whether it would.
+pub fn unignored_plaintext(ctx: &Ctx, configured: &str) -> Option<Unignored> {
     let p = ctx.vault_file_path(configured);
     let rp = super::resolve(&p)?;
     let rr = super::resolve(&ctx.root)?;
-    let rel = rp.strip_prefix(&rr).ok()?.to_path_buf();
+    let path = rp.strip_prefix(&rr).ok()?.to_string_lossy().into_owned();
     match git_ignores(&ctx.root, &p) {
-        None | Some(true) => None,
-        Some(false) => Some(rel.to_string_lossy().into_owned()),
+        Ignores::NoRepository | Ignores::Ignored => None,
+        Ignores::Kept => Some(Unignored {
+            path,
+            unasked: None,
+        }),
+        Ignores::Unasked(why) => Some(Unignored {
+            path,
+            unasked: Some(why),
+        }),
     }
 }
 
@@ -438,7 +511,7 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
         && let Some(unignored) = unignored_plaintext(ctx, file)
     {
         io.say(Say::Err(format!(
-            "'{unignored}' is inside the control plane and NOT gitignored — a plain-file vault \
+            "{unignored} — a plain-file vault \
              stores plaintext, so the next `purlis save` would commit these credentials."
         )));
         let vaults_dir = ctx
