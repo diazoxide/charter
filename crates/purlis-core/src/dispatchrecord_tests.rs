@@ -1552,12 +1552,28 @@ fn a_task_the_person_ended_says_which_way_in_words_of_its_own_and_never_folds() 
     // Which limit is the record's own, kept before its end: a task below it says so.
     let below = Record {
         limit: Some(crate::dispatchlimits::Reached::Above { limit: 30 }),
-        ..record
+        ..record.clone()
     };
     let how = Finished::of(&below).unwrap();
     assert_eq!(
         (how.word(), how.key()),
         ("stopped with the task above it", "stopped_with_above")
+    );
+    // And a task stopped because its session reached its token limit (#1457).
+    let spent = Record {
+        limit: Some(crate::dispatchlimits::Reached::Tokens {
+            limit: 100_000,
+            used: 120_000,
+        }),
+        ..record
+    };
+    let how = Finished::of(&spent).unwrap();
+    assert_eq!(
+        (how.word(), how.key()),
+        (
+            "stopped at its session's token limit",
+            "stopped_at_token_limit"
+        )
     );
 
     // A cancel its asking chat asked for stays a cancel, and folds.

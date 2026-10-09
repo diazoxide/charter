@@ -151,6 +151,11 @@ describe("a task", () => {
     expect(said({ board: "done", task: sent("stopped_with_above") })).toBe(
       "square stopped with the task above it",
     );
+    // #1457: a task stopped because its session reached its token limit says that limit.
+    expect(said({ board: "done", task: sent("stopped_at_token_limit") })).toBe(
+      "square stopped at its session's token limit",
+    );
+    expect(kind(sent("stopped_at_token_limit"))).toBe("stopped-at-limit");
   });
 
   it("is told from a chat waiting on the person by word and by shape, with colour removed", () => {

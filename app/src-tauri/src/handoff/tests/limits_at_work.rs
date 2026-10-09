@@ -1,5 +1,5 @@
-//! A task's working time held to its limit, and a session's tokens shown against theirs
-//! (#1512, V100-59).
+//! A task's working time held to its limit, and a session's tokens held to theirs (#1512,
+//! V100-59, #1457).
 //!
 //! Against the app's own records, on a pretend session host, as the tests beside it are. The
 //! app's clock is called by hand, at moments the test names.
@@ -257,28 +257,149 @@ fn a_task_past_its_time_takes_its_own_tasks_with_it_deepest_first_and_names_them
 }
 
 #[test]
-fn an_inflated_token_figure_refuses_nothing_and_stops_nothing() {
-    // #1512, #1457: the figure is one a chat can alter, for its own conversation or another's.
+fn at_the_token_limit_a_task_is_refused_with_the_figure_and_the_tasks_at_work_report() {
+    // #1512, #1457: the figure is kept where no sandboxed chat can write it.
+    let (_plane, host, _planes, id, held, steward) = a_steward_under("tokens-per-session = 100000");
+    let task = a_task_of(&held, &id, steward, "check prod");
+    let below = a_task_of(&held, &id, task, "check one host");
+    rests(&held, steward);
+    rests(&held, below);
+    works(&held, task);
+    has_used(&held, steward, 60_000, 0);
+    has_used(&held, task, 40_000, 5_000);
+
+    // A new task of the session is refused, with the figure and where it is changed.
+    let (refused, _) = dispatch(
+        &held,
+        &id,
+        &Tickets::default(),
+        steward,
+        None,
+        "check staging",
+    );
+    let Answer::No { why } = &refused else {
+        panic!("refused, not {refused:?}");
+    };
+    assert!(why.contains("used 105k tokens"), "{why}");
+    assert!(why.contains("may use 100k here"), "{why}");
+    assert!(why.contains("Settings › Project › Dispatch"), "{why}");
+
+    the_clock_looks_at(&held, now());
+
+    // Every task at work is asked for its report, each told it was its session's tokens.
+    let reached = Reached::Tokens {
+        limit: 100_000,
+        used: 105_000,
+    };
+    assert!(held.stopping().is_stopping(task));
+    assert!(held.stopping().is_stopping(below));
+    assert_eq!(
+        host.typed(below),
+        vec![crate::stopping::sent_at_a_limit(reached).into_bytes()]
+    );
+    // Deepest first: the task waits for the one below to end.
+    assert!(host.typed(task).is_empty(), "{:?}", host.typed(task));
+    // The session itself is never stopped, and a second look begins no second stop.
+    assert!(!held.stopping().is_stopping(steward));
+    the_clock_looks_at(&held, now());
+    assert_eq!(host.typed(below).len(), 1);
+    // Its row says the figure against the limit.
+    let said = row_of(&held, steward).at_limit.expect("shown");
+    assert_eq!(said.row, "at its token limit (105k of 100k)");
+
+    a_turn_begins(&held, below);
+    let answer = tasks_report(
+        &held,
+        &id,
+        &Tickets::default(),
+        below,
+        Outcome::Done,
+        Some("host one is fine"),
+    );
+    assert!(matches!(answer, Answer::Reported { .. }), "{answer:?}");
+    its_turn_ends(&held, below);
+    assert_eq!(record_of(&held, below).limit, Some(reached));
+
+    // Then the task: its turn is ended, then it is asked in the same words.
+    assert_eq!(host.typed(task), vec![ESCAPE.to_vec()]);
+    its_turn_has_stopped(&held, task);
+    assert_eq!(
+        host.typed(task)[1],
+        crate::stopping::sent_at_a_limit(reached).into_bytes()
+    );
+    a_turn_begins(&held, task);
+    let answer = tasks_report(
+        &held,
+        &id,
+        &Tickets::default(),
+        task,
+        Outcome::Blocked,
+        Some("half done"),
+    );
+    assert!(matches!(answer, Answer::Reported { .. }), "{answer:?}");
+    its_turn_ends(&held, task);
+    assert_eq!(record_of(&held, task).limit, Some(reached));
+    let words = purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(steward));
+    assert_eq!(words.len(), 1, "{words:?}");
+    let told = purlis_core::handback::context(&words, false).expect("told");
+    assert!(told.contains("at its session's token limit"), "{told}");
+    assert!(told.contains("Its session had used 105k tokens"), "{told}");
+    assert!(told.contains(LIMIT_ENDED), "{told}");
+}
+
+#[test]
+fn a_task_of_a_session_at_its_token_limit_the_person_is_typing_into_is_left() {
+    let (_plane, host, _planes, id, held, steward) = a_steward_under("tokens-per-session = 100000");
+    let task = a_task_of(&held, &id, steward, "check prod");
+    rests(&held, steward);
+    works(&held, task);
+    has_used(&held, steward, 200_000, 0);
+    held.operator_input(task, b"use the staging cluster instead\r")
+        .expect("sent");
+
+    the_clock_looks_at(&held, now());
+
+    assert!(!held.stopping().is_stopping(task));
+    assert_eq!(
+        host.typed(task),
+        vec![b"use the staging cluster instead\r".to_vec()]
+    );
+}
+
+#[test]
+fn a_figure_written_where_a_chat_writes_its_pointers_refuses_nothing_and_stops_nothing() {
+    // #1457: the file a chat could write, under its conversation's name, is no longer read.
     let (_plane, host, _planes, id, held, steward) = a_steward_under("tokens-per-session = 100000");
     let task = a_task_of(&held, &id, steward, "check prod");
     rests(&held, steward);
     rests(&held, task);
-    has_used(&held, steward, 1_000_000_000, 0);
-    has_used(&held, task, 1_000_000_000, 0);
+    for chat in [steward, task] {
+        let conversation = held
+            .board()
+            .conversation(chat)
+            .or_else(|| {
+                held.chats()
+                    .recorded_chat(chat)
+                    .and_then(|one| one.resume)
+                    .map(|id| id.as_str().to_owned())
+            })
+            .expect("the chat's conversation");
+        let sessions = purlis_core::usage::sessions_dir(held.root());
+        std::fs::create_dir_all(&sessions).expect("the folder");
+        std::fs::write(
+            sessions.join(format!("{conversation}.spend")),
+            "{\"input_tokens\":1000000000}\n",
+        )
+        .expect("written");
+    }
 
     the_clock_looks_at(&held, now());
 
     assert!(!held.stopping().is_stopping(task));
     assert!(host.typed(task).is_empty());
+    assert_eq!(row_of(&held, steward).at_limit, None);
     let more = a_task_of(&held, &id, steward, "check staging");
-    assert!(
-        open_chats(&held).contains(&more),
-        "a dispatch is not refused"
-    );
-    // The row shows the figure against the limit, and says it is not enforced yet.
-    let said = row_of(&held, steward).at_limit.expect("shown");
-    assert!(said.row.contains("of 100k"), "{}", said.row);
-    assert!(said.row.contains("not enforced yet"), "{}", said.row);
+    assert!(open_chats(&held).contains(&more), "not refused");
 }
 
 #[test]
@@ -301,10 +422,7 @@ fn a_session_s_tokens_count_its_ended_tasks_from_what_their_records_kept() {
     the_clock_looks_at(&held, now());
 
     let said = row_of(&held, steward).at_limit.expect("past it");
-    assert_eq!(
-        said.row,
-        "past its token limit (105k of 100k) · not enforced yet"
-    );
+    assert_eq!(said.row, "at its token limit (105k of 100k)");
 }
 
 #[test]
@@ -341,8 +459,5 @@ fn a_session_past_its_token_limit_says_so_as_soon_as_its_chats_are_put_back() {
     assert!(!round_due, "told of the put back, not timed out");
 
     let said = row_of(&held, steward).at_limit.expect("shown at once");
-    assert_eq!(
-        said.row,
-        "past its token limit (150k of 100k) · not enforced yet"
-    );
+    assert_eq!(said.row, "at its token limit (150k of 100k)");
 }

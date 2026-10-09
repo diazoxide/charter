@@ -312,6 +312,12 @@ pub struct Moment<'a> {
     /// worktree in one (#1453, [`crate::dispatchplace::Ground::workspace`]). `None` is the
     /// asking chat's own.
     pub works_in: Option<&'a str>,
+    /// **The tokens the asking chat's session has used** (#1512): the chat the person started
+    /// and every task below it, open or ended, as their harnesses reported them, read by the
+    /// app from where no sandboxed chat can write (#1457). Asked only for a task, and only
+    /// where a `tokens-per-session` limit is set here or where the task would work, since the
+    /// reading walks the session's records.
+    pub session_tokens: &'a dyn Fn() -> u64,
 }
 
 /// What a chat's dispatch comes to: the decision, and the facts the app starts the persona
@@ -491,6 +497,30 @@ pub fn asked_by_a_chat(
             decision = Decision::Refused(Refused::Limit(off));
         } else if matches!(held_there, Decision::Refused(_)) {
             decision = held_there;
+        }
+    }
+    // **The session's tokens** (#1512): a new task is refused where its session is at the
+    // limit set here or where it would work, the stricter. Read only where one is set. A
+    // handoff begins a session of its own, so it is not held to this one's.
+    if moment.mode == Mode::Task && !matches!(decision, Decision::Refused(_)) {
+        let theirs = elsewhere.map(|there| {
+            crate::dispatchlimits::of(
+                root,
+                Some(there),
+                pair.asking.as_deref(),
+                pair.to.as_deref(),
+            )
+        });
+        let binding = [Some(&limits), theirs.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|limits| limits.tokens_per_session.is_some())
+            .min_by_key(|limits| limits.tokens_per_session);
+        if let Some(binding) = binding
+            && let Some(refused) =
+                crate::dispatchlimits::tokens_refused(binding, (moment.session_tokens)())
+        {
+            decision = Decision::Refused(Refused::Limit(refused));
         }
     }
     let depth = lineage.depth.saturating_add(1).min(DEEPEST);
@@ -1307,6 +1337,7 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
+                session_tokens: &|| 0,
             },
         )
     }
@@ -1328,6 +1359,7 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
+                session_tokens: &|| 0,
             },
         )
     }
@@ -1549,6 +1581,7 @@ mod tests {
                     mode: Mode::Task,
                     counted: Counted::Tasks,
                     works_in,
+                    session_tokens: &|| 0,
                 },
             )
             .decision
@@ -1592,6 +1625,7 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
+                session_tokens: &|| 0,
             },
         );
         assert!(needs(said.decision));
@@ -1621,6 +1655,7 @@ mod tests {
                     mode: Mode::Task,
                     counted: Counted::Tasks,
                     works_in,
+                    session_tokens: &|| 0,
                 },
             )
         };
@@ -1664,6 +1699,69 @@ mod tests {
     }
 
     #[test]
+    fn a_task_of_a_session_at_its_token_limit_is_refused_and_a_handoff_is_not() {
+        // #1512, #1457. The asking chat works in `alpha`; its session has used `used`.
+        let ask = |manifest: &str, works_in: Option<&str>, mode: Mode, used: u64| {
+            let root = a_project(manifest);
+            std::fs::create_dir_all(root.path().join("workspaces/beta")).unwrap();
+            let asking = Chat {
+                cwd: Some(root.path().join("workspaces/alpha")),
+                ..chat(Some("steward"))
+            };
+            let read = std::cell::Cell::new(0);
+            let asked = asked_by_a_chat(
+                root.path(),
+                1,
+                None,
+                &Moment {
+                    open: &[(1, &asking)],
+                    working: &|_| true,
+                    default: None,
+                    grants: &InForce::default(),
+                    profile: None,
+                    by: By::Chat,
+                    mode,
+                    counted: Counted::Tasks,
+                    works_in,
+                    session_tokens: &|| {
+                        read.set(read.get() + 1);
+                        used
+                    },
+                },
+            );
+            (asked.decision, read.get())
+        };
+        let limit = "[dispatch]\ntokens-per-session = 100000\n";
+        // Under it, a task starts; at it, it is refused with the figure.
+        assert_eq!(ask(limit, None, Mode::Task, 99_999).0, Decision::Start);
+        let (decision, _) = ask(limit, None, Mode::Task, 100_000);
+        let Decision::Refused(Refused::Limit(crate::dispatchlimits::Refused::SessionTokens {
+            limit: 100_000,
+            used: 100_000,
+            ..
+        })) = decision
+        else {
+            panic!("{decision:?}");
+        };
+        // A handoff begins a session of its own, and reads no tokens.
+        assert_eq!(
+            ask(limit, None, Mode::Handoff, 1_000_000),
+            (Decision::Start, 0)
+        );
+        // Where no limit is set, the tokens are never read.
+        assert_eq!(ask("", None, Mode::Task, u64::MAX), (Decision::Start, 0));
+        // A task sent into a workspace with a lower limit is held to that one.
+        let there = "[dispatch.workspaces.beta]\ntokens-per-session = 50000\n";
+        assert_eq!(ask(there, None, Mode::Task, 60_000).0, Decision::Start);
+        assert!(matches!(
+            ask(there, Some("beta"), Mode::Task, 60_000).0,
+            Decision::Refused(Refused::Limit(
+                crate::dispatchlimits::Refused::SessionTokens { limit: 50_000, .. }
+            ))
+        ));
+    }
+
+    #[test]
     fn a_handoff_is_held_to_the_limits_of_the_workspace_it_moves_into_and_its_own() {
         // D-T61-7. The asking chat works in `alpha` and hands off into `works_in`: the same
         // two reads a task's `--in workspace:` gets, whoever is at the chat.
@@ -1688,6 +1786,7 @@ mod tests {
                     mode: Mode::Handoff,
                     counted,
                     works_in,
+                    session_tokens: &|| 0,
                 },
             )
         };
@@ -3111,6 +3210,7 @@ mod tests {
                 mode: Mode::Task,
                 counted: Counted::Tasks,
                 works_in: None,
+                session_tokens: &|| 0,
             },
         )
     }

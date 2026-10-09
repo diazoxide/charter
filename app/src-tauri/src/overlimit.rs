@@ -1,4 +1,4 @@
-//! **A task's working time held to its limit, and a session's tokens shown against theirs**
+//! **A task's working time held to its limit, and a session's tokens held to theirs**
 //! (#1512, V100-59): the two dispatch limits that are off until the person sets them
 //! ([`purlis_core::dispatchlimits::Limit::off_until_set`]).
 //!
@@ -23,11 +23,13 @@
 //!   person is in the middle of is left for the next look**: one showing a prompt or a
 //!   question, or one the person has typed into since its harness last spoke, or with such a
 //!   task below it.
-//! - **Tokens per session are shown, and decide nothing yet** (#1457): the figure is what each
-//!   chat's harness reported through a file a chat can write, for its own conversation or
-//!   another's. So the clock only notes a session past its limit ([`tokens_shown`]), and its row
-//!   says the figure against the limit with "not enforced yet". No dispatch is refused and no
-//!   task is stopped by it.
+//! - **At `tokens-per-session`** (#1512), the session's tasks at work are asked for their
+//!   report by the same stop, each with the session's figure, and its row says the figure
+//!   against the limit ([`tokens_shown`]); a new task of it is refused at the dispatch
+//!   (`dispatchdecision`, [`session_tokens_now`]). **A task the person is in the middle of is
+//!   left for the next look**, as for the time limit. The figure is each chat's as its harness
+//!   reported it, kept by the chat's id where no sandboxed chat can write (#1457), so a chat
+//!   can neither raise another's nor lower its own.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -160,7 +162,7 @@ fn open_in_session(open: &[(u32, &Chat)], top: u32) -> Vec<u32> {
 /// harnesses reported them: its open chats from their own figures, kept by each chat's id where
 /// no sandboxed chat can write (#1457), and its ended
 /// tasks, at any depth, from what their records kept (`ended`, the store's ended tasks, read
-/// once by the caller). Each chat once, by its id. **Shown, and decides nothing.**
+/// once by the caller). Each chat once, by its id: what `tokens-per-session` is held to.
 pub(crate) fn session_tokens(
     root: &Path,
     open: &[(u32, &Chat)],
@@ -408,6 +410,7 @@ pub(crate) fn look_at(held: &Arc<Held>, now: chrono::DateTime<chrono::Utc>) {
         }
     }
     if tokens {
+        stop_at_the_token_limit(held, &found.spent);
         let shown = {
             let mut kept = kept();
             let before = shown_of(&kept, root);
@@ -434,6 +437,47 @@ pub(crate) fn look_at(held: &Arc<Held>, now: chrono::DateTime<chrono::Utc>) {
         crate::stopping::stop_at_a_limit(held, task, reached);
         kept().clocks.remove(&(root.to_owned(), id));
     }
+}
+
+/// **Asks the tasks at work of each session in `spent` for their report** (#1512): the topmost
+/// task at work on each branch, with everything below it, by the stop the time limit uses. A
+/// branch the person is in the middle of is left for the next look; one already being stopped
+/// is left to its stop.
+fn stop_at_the_token_limit(held: &Arc<Held>, spent: &[(u32, u64, u32)]) {
+    for (top, used, limit) in spent {
+        let reached = Reached::Tokens {
+            limit: *limit,
+            used: *used,
+        };
+        let at_work = crate::handoff::at_work_below(held, *top);
+        let topmost = at_work.iter().copied().filter(|task| {
+            held.chats()
+                .handed_from(*task)
+                .is_none_or(|from| !at_work.contains(&from.chat))
+        });
+        for task in topmost.collect::<Vec<_>>() {
+            // **Never under the person's hands**: left for the next look.
+            let below = crate::handoff::at_work_below(held, task);
+            if std::iter::once(task)
+                .chain(below)
+                .any(|chat| the_person_is_in(held, chat))
+            {
+                continue;
+            }
+            crate::stopping::stop_at_a_limit(held, task, reached);
+        }
+    }
+}
+
+/// **The tokens chat `chat`'s session has used now**, among the chats `open` (#1512): what a
+/// new task of it is held to, read only where a `tokens-per-session` limit is set. The store's
+/// ended records are read as the clock reads them, and kept for its next look.
+pub(crate) fn session_tokens_now(root: &Path, open: &[(u32, &Chat)], chat: u32) -> u64 {
+    // Read with the clock's lock let go, as a look reads it.
+    let mut store = kept().stores.remove(root).unwrap_or_default();
+    let records = store.read(root);
+    kept().stores.insert(root.to_owned(), store);
+    session_tokens(root, open, &records.ended, session_of(open, chat))
 }
 
 /// What the rows of project `root` say of tokens, sorted: to tell whether a look changed it.
@@ -539,9 +583,9 @@ fn time_each(
     }
 }
 
-/// **What session chat `chat`'s row says of its tokens**, where the clock last found it past
-/// its token limit: the figure against the limit, and that it is not enforced yet. Read from
-/// what the clock kept: no file is read for a row.
+/// **What session chat `chat`'s row says of its tokens**, where the clock last found it at its
+/// token limit: the figure against the limit. Read from what the clock kept: no file is read for
+/// a row.
 pub(crate) fn tokens_shown(held: &Held, chat: u32) -> Option<crate::atlimit::AtLimit> {
     let (used, limit) = *kept().tokens.get(&(held.root().to_owned(), chat))?;
     let used_said = dispatchlimits::spelled(used);
@@ -549,12 +593,12 @@ pub(crate) fn tokens_shown(held: &Held, chat: u32) -> Option<crate::atlimit::AtL
     Some(crate::atlimit::AtLimit {
         limit,
         own: false,
-        row: format!("past its token limit ({used_said} of {limit_said}) · not enforced yet"),
+        row: format!("at its token limit ({used_said} of {limit_said})"),
         said: format!(
             "This session has used {used_said} tokens, its own chat and its tasks together as \
-             their harnesses reported them, and its limit is {limit_said}. The token limit is \
-             not enforced yet: a chat can alter the figure it counts, so nothing is refused or \
-             stopped by it. You can change it in Settings › Project › Dispatch."
+             their harnesses reported them, and its limit is {limit_said}. It starts no new \
+             task, and its tasks at work are asked for their report. You can change it in \
+             Settings › Project › Dispatch."
         ),
     })
 }

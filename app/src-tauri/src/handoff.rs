@@ -2118,6 +2118,9 @@ fn dispatch_noting(
                         Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
                     },
                     works_in: moves_into.as_deref().or(ground.workspace()),
+                    // Read only where a token limit is set, from where no sandboxed chat can
+                    // write (#1457).
+                    session_tokens: &|| crate::overlimit::session_tokens_now(root, open, from),
                 },
             )
         });
@@ -3094,6 +3097,22 @@ pub(crate) fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
              which is {limit}. Wait for one to finish, or raise the limit \
              {IN_SETTINGS}.",
             short(persona)
+        ),
+        Refused::Limit(Limit::SessionTokens { limit, used, by }) => format!(
+            "This chat's session has used {} tokens, its own chat and its tasks together as \
+             their harnesses reported them, which is as many as a session may use here ({}). \
+             {}",
+            purlis_core::dispatchlimits::spelled(*used),
+            purlis_core::dispatchlimits::spelled(u64::from(*limit)),
+            if matches!(
+                by,
+                purlis_core::dispatchlimits::Source::Policy
+                    | purlis_core::dispatchlimits::Source::PolicyRefused
+            ) {
+                purlis_core::dispatchlimits::ASK_AN_ADMINISTRATOR.to_owned()
+            } else {
+                format!("Raise the limit {IN_SETTINGS}, or start a new chat.")
+            },
         ),
         Refused::Limit(Limit::PersonaFull { persona, limit, .. }) => format!(
             "As many chats already run as {} as may at once, which is {limit}. Wait for one to \

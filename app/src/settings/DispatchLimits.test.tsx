@@ -184,8 +184,8 @@ describe("Settings › Project › Dispatch", () => {
 
     const note = await screen.findByTestId("dispatch-tokens-time-note");
     expect(note.textContent).toContain("off until set");
-    expect(note.textContent).toContain("Tokens per session is not enforced yet");
-    expect(note.textContent).toContain("a chat can alter the figure it counts");
+    expect(note.textContent).toContain("a session starts no new task");
+    expect(note.textContent).toContain("never one you are answering or typing in");
     expect(note.textContent).toContain("a harness that reports no tokens is not counted");
     expect(note.textContent).toContain("working time only");
   });

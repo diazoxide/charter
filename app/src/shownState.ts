@@ -138,6 +138,13 @@ const STOPPED_WITH_ABOVE: Shown = {
   shape: "square",
   token: "text.muted",
 };
+/** **purlis stopped it because its session reached its token limit** (#1512, #1457). */
+const STOPPED_AT_TOKEN_LIMIT: Shown = {
+  kind: "stopped-at-limit",
+  word: "stopped at its session's token limit",
+  shape: "square",
+  token: "text.muted",
+};
 const UNREPORTED: Shown = {
   kind: "unreported",
   word: "ended without a report",
@@ -187,6 +194,7 @@ const BY_THE_PERSON: ReadonlyMap<string, Shown> = new Map([
   // The app's fact that it stopped the task at a limit the person set (#1512).
   ["stopped_at_limit", STOPPED_AT_LIMIT],
   ["stopped_with_above", STOPPED_WITH_ABOVE],
+  ["stopped_at_token_limit", STOPPED_AT_TOKEN_LIMIT],
 ]);
 
 /**

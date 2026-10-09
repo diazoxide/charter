@@ -1220,13 +1220,28 @@ fn with_neither_limit_set_nothing_changes() {
 }
 
 #[test]
-fn the_token_limit_is_shown_with_its_figure_and_refuses_nothing_yet() {
-    // #1512, #1457: the figure is one a chat can alter, so nothing is decided by it.
+fn at_the_token_limit_a_task_is_refused_with_the_figure_and_where_to_change_it() {
+    // #1512, #1457: the figure is kept where no sandboxed chat can write it.
     let limits = committed("[dispatch]\ntokens-per-session = 500000\n");
     assert_eq!(limits.tokens_per_session, Some(500_000));
     assert_eq!(tokens_past(&limits, 499_999), None);
     assert_eq!(tokens_past(&limits, 512_000), Some(500_000));
-    // However far past it a session is, a dispatch is decided as if it were not set.
+    assert_eq!(tokens_refused(&limits, 499_999), None);
+    let refused = tokens_refused(&limits, 512_000).expect("refused");
+    assert_eq!(
+        refused,
+        Refused::SessionTokens {
+            limit: 500_000,
+            used: 512_000,
+            by: Source::Project,
+        }
+    );
+    assert_eq!(refused.limit(), Some(Limit::TokensPerSession));
+    let said = refused.say();
+    assert!(said.contains("used 512k tokens"), "{said}");
+    assert!(said.contains("may use 500k here"), "{said}");
+    assert!(said.contains(ASK_THE_PERSON), "{said}");
+    // The decision on counts alone reads no tokens: the caller holds a task to them.
     assert_eq!(decide(&limits, &quiet()), Decision::Allowed);
     let files = Files::of(
         Some("[dispatch.workspaces.alpha]\ntokens-per-session = 9\n"),
@@ -1234,6 +1249,13 @@ fn the_token_limit_is_shown_with_its_figure_and_refuses_nothing_yet() {
     );
     assert!(files.sets(Limit::TokensPerSession, &no_policy()));
     assert!(!files.sets(Limit::MinutesPerTask, &no_policy()));
+    // What the tasks at work are told, with the figure.
+    let reached = Reached::Tokens {
+        limit: 500_000,
+        used: 512_000,
+    };
+    assert!(reached.say().contains("Its session had used 512k tokens"));
+    assert_eq!(reached.named(), "at its session's token limit");
 }
 
 #[test]

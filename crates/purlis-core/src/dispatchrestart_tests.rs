@@ -200,6 +200,7 @@ fn the_chain_above_a_task_comes_back_with_it_and_the_loop_rule_still_refuses() {
             mode: crate::dispatchdecision::Mode::Task,
             counted: crate::dispatchdecision::Counted::Tasks,
             works_in: None,
+            session_tokens: &|| 0,
         },
     );
     assert_eq!(

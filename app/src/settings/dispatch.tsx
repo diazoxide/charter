@@ -421,10 +421,10 @@ function useDispatchTable(
             Minutes per task counts a task&apos;s working time only, not time it waits on you or on
             its own tasks, nor time purlis was closed; a task past it is asked for its report and
             ended, and its own tasks with it, though never while you are answering or typing in it.
-            Tokens per session is not enforced yet: a session&apos;s row shows its figure against
-            the limit, and nothing is refused or stopped by it, because a chat can alter the figure
-            it counts. Tokens are counted as each harness reports them: a harness that reports no
-            tokens is not counted.
+            At tokens per session, a session starts no new task and its tasks at work are asked for
+            their report, though never one you are answering or typing in; its row shows its figure
+            against the limit. Tokens are counted as each harness reports them: a harness that
+            reports no tokens is not counted.
           </p>
         )}
         {!held && (
@@ -567,7 +567,7 @@ export function dispatchGroup(plane: PlaneId, file = "the project's settings fil
   return {
     id: DISPATCH,
     label: "Dispatch",
-    help: "How many tasks a chat may start, how deep a chain may go, how fast chats may message each other, how long a task may work, and a session's tokens, shown and not enforced yet.",
+    help: "How many tasks a chat may start, how deep a chain may go, how fast chats may message each other, how long a task may work, and how many tokens a session may use.",
     settings: [
       {
         id: `${DISPATCH}.limits`,

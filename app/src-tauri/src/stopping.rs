@@ -142,6 +142,14 @@ pub const TASK_ABOVE_AT_A_LIMIT_PROMPT: &str = "purlis is stopping this task: th
      in a few lines, with `purlis dispatch report --outcome blocked \"<summary>\"` (or --outcome \
      done or failed, whichever is true). This chat ends when the turn does.";
 
+/// [`TASK_AT_A_LIMIT_PROMPT`], for a task of a session purlis stops at its token limit
+/// (#1512, #1457): every task of the session is asked, at any depth.
+pub const TASK_AT_THE_TOKEN_LIMIT_PROMPT: &str = "purlis is stopping this task: its session \
+     reached the token limit the person set for a session. Start nothing new. In this one turn, \
+     report what you did and what is left undone in a few lines, with `purlis dispatch report \
+     --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
+     chat ends when the turn does.";
+
 /// The bytes the prompt is sent as, to a task when `task` and to a handoff otherwise: one
 /// bracketed paste, then Enter, in one write.
 pub fn sent_as(task: bool) -> String {
@@ -155,6 +163,7 @@ pub fn sent_at_a_limit(reached: purlis_core::dispatchlimits::Reached) -> String 
     let prompt = match reached {
         purlis_core::dispatchlimits::Reached::Time { .. } => TASK_AT_A_LIMIT_PROMPT,
         purlis_core::dispatchlimits::Reached::Above { .. } => TASK_ABOVE_AT_A_LIMIT_PROMPT,
+        purlis_core::dispatchlimits::Reached::Tokens { .. } => TASK_AT_THE_TOKEN_LIMIT_PROMPT,
     };
     format!("{}\r", crate::curation::bracketed(prompt))
 }
@@ -1593,9 +1602,10 @@ pub(crate) fn stop_all_tasks_in_a_test(
     stop_all_tasks_of(held, session, asked)
 }
 
-/// **purlis stops `task` at its time limit** (#1512, V100-59), with everything below it,
+/// **purlis stops `task` at its time limit, or at its session's token limit** (#1512, V100-59),
+/// with everything below it,
 /// deepest first, by the stop Stop and get its report is ([`Way::Report`]). A chat below it
-/// is stopped as "with the task above it" ([`Reached::Above`]), never as past a time of its
+/// is stopped, at a time limit, as "with the task above it" ([`Reached::Above`]), never as past a time of its
 /// own. A task that is not open, not a task, or already being stopped is left as it is: a stop
 /// already under way has its one short turn, and this begins no second one. Answers how many it
 /// stops. Each stopped chat's record keeps which limit, so its finished row says it.
@@ -1610,8 +1620,10 @@ pub(crate) fn stop_at_a_limit(
     reached: purlis_core::dispatchlimits::Reached,
 ) -> u32 {
     use purlis_core::dispatchlimits::Reached;
+    // A session's token limit is every task's of it, at any depth: each is told that one.
     let above = match reached {
         Reached::Time { limit, .. } | Reached::Above { limit } => Reached::Above { limit },
+        tokens @ Reached::Tokens { .. } => tokens,
     };
     let (acts, count) = {
         let _deciding = held.chats().deciding();

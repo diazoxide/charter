@@ -4673,7 +4673,9 @@ export type How = "done" | "cancelled" | "blocked" | "failed" |
 /**  purlis stopped it at its time limit (#1512). */
 "stopped_at_limit" | 
 /**  purlis stopped it with the task above it, at that task's time limit (#1512). */
-"stopped_with_above";
+"stopped_with_above" | 
+/**  purlis stopped it because its session reached its token limit (#1512, #1457). */
+"stopped_at_token_limit";
 
 /**  How a task came to nothing (`purlis_core::state::HowFailed`), as the window is sent it. */
 export type HowFailed = 
