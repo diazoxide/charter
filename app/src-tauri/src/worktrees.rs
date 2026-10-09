@@ -194,13 +194,13 @@ pub async fn worktree_remove(
 /// (#1534). A task's folder is merged or discarded from its Changes tab, where the guards a
 /// task's folder needs hold (`purlis_core::dispatchplace::merge` and `discard`): the commit the
 /// person was shown, the task ended and no chat standing in the folder, the brokered route, and
-/// only the branch purlis cut. These two have none of them, so a folder a dispatch record
-/// names is refused here with where to go instead, `force` or not.
+/// only the branch purlis cut. These two have none of them, so a folder the dispatch store
+/// holds is refused here with where to go instead, `force` or not.
 ///
-/// Two Removes are let through. One whose folder is already gone: it only takes git's stale
-/// registration, and nothing is in it to lose. And one of an ended task in a repo the brokered
-/// route runs no git in (its own git settings name a program): Discard is refused there, and
-/// its sentence sends the person to this row, which is theirs to use on their own repo.
+/// The rule is the core's (`dispatchplace::kept_from_the_explorer`), read as `purlis worktree
+/// remove` reads it: a record that does not read holds the folder its text names, and names
+/// match without regard to case. Two Removes are let through: one whose folder is already
+/// gone, and one of an ended task in a repo the brokered route runs no git in.
 fn not_a_task_s(
     plane: &Path,
     workspace: &str,
@@ -208,22 +208,11 @@ fn not_a_task_s(
     piece: &str,
     merging: bool,
 ) -> Result<(), String> {
-    let Some(record) = purlis_core::dispatchplace::task_in_folder(plane, workspace, repo, piece)
-    else {
-        return Ok(());
-    };
-    let there = worktree::path_for(plane, workspace, repo, piece)
-        .is_ok_and(|folder| folder.symlink_metadata().is_ok());
-    if !merging && !there {
-        return Ok(());
-    }
-    if !merging && !record.running() && no_discard_there(plane, workspace, repo) {
-        return Ok(());
-    }
-    let task = record.task.unwrap_or(record.worker.chat.name);
-    Err(purlis_core::dispatchplace::left_to_its_task(
-        &task, piece, merging,
-    ))
+    let no_discard = || no_discard_there(plane, workspace, repo);
+    purlis_core::dispatchplace::kept_from_the_explorer(
+        plane, workspace, repo, piece, merging, no_discard,
+    )
+    .map_or(Ok(()), Err)
 }
 
 /// Whether the brokered route refuses to run git in `repo`'s clone, so a task's Discard there
@@ -738,6 +727,43 @@ mod tests {
         // A branch folder no record names is the explorer's, as before.
         worktree::add(&root, "alpha", "thing", "mine", None).unwrap();
         remove_piece(&root, "alpha", "thing", "mine", false).expect("not a task's");
+    }
+
+    #[test]
+    fn the_explorer_reads_the_dispatch_store_as_purlis_worktree_remove_does() {
+        // #1534: a record that does not read still holds the folder its text names, and a name
+        // typed in another case is the same folder where the file system folds case.
+        let (_dir, root, clone) = plane();
+        let added = worktree::add(&root, "alpha", "thing", "check", None).unwrap();
+        std::fs::write(added.path.join("work.txt"), "work\n").unwrap();
+        git(&added.path, &["add", "-A"]);
+        git(&added.path, &["commit", "-q", "-m", "work"]);
+        let id = a_task_in(&root, "check");
+        #[cfg(target_os = "macos")]
+        assert!(
+            remove_piece(&root, "ALPHA", "Thing", "CHECK", true)
+                .unwrap_err()
+                .contains("Changes tab"),
+            "a case variant of a task's folder is the task's"
+        );
+
+        let file = purlis_core::dispatchrecord::dir(&root).join(format!("{id}.json"));
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, &text[..text.find("\"brief\"").unwrap()]).unwrap();
+
+        let merged = merge_piece(&root, "alpha", "thing", "check").unwrap_err();
+        assert!(merged.contains("cannot read"), "{merged}");
+        assert!(merged.contains(&id), "{merged}");
+        assert!(merged.ends_with("Nothing was merged."), "{merged}");
+        in_the_windows_words(&merged);
+        for force in [false, true] {
+            let removed = remove_piece(&root, "alpha", "thing", "check", force).unwrap_err();
+            assert!(removed.contains(&id), "{removed}");
+            assert!(removed.ends_with("Nothing was removed."), "{removed}");
+            in_the_windows_words(&removed);
+        }
+        assert!(added.path.join("work.txt").is_file(), "nothing was removed");
+        assert!(!clone.join("work.txt").exists(), "nothing was merged");
     }
 
     #[test]

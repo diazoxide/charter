@@ -740,8 +740,9 @@ pub enum InFolder {
 /// **What holds the branch folder `piece` of `repo` in `workspace`**, where anything in the
 /// dispatch store of the project at `root` does: the task a record names it for, or else a
 /// record that does not read but whose text names the workspace, the repo and the folder,
-/// each as a JSON string. [`task_in_folder`] skips the second; a guard that must fail closed
-/// reads this.
+/// each as a JSON string, or names the workspace and the repo and was cut off before it names
+/// a folder ([`cut_before_the_piece`]). [`task_in_folder`] skips the second; a guard that must
+/// fail closed reads this.
 ///
 /// **The names are matched without regard to ASCII case**: they are typed at a terminal, and
 /// on a file system that folds case (macOS's, by default) `Check-1` names the folder `check-1`
@@ -765,15 +766,50 @@ pub fn held_in_folder(root: &Path, workspace: &str, repo: &str, piece: &str) -> 
     }
     let names = |text: &str| {
         let text = text.to_ascii_lowercase();
-        [workspace, repo, piece].iter().all(|name| {
+        let named = |name: &str| {
             serde_json::to_string(&name.to_ascii_lowercase())
                 .is_ok_and(|quoted| text.contains(quoted.as_str()))
-        })
+        };
+        named(workspace) && named(repo) && (named(piece) || cut_before_the_piece(&text))
     };
     dispatchrecord::unread(root)
         .into_iter()
         .find(|(_, text)| names(text))
         .map(|(id, _)| InFolder::Unread(id))
+}
+
+/// Whether `text`, a record file that does not read, **was cut off before it names its
+/// worktree's folder** (#1534): it is not JSON at all, the mark of a write cut short, and its
+/// `"piece"` key is missing or its value runs to the end of the text unclosed. Such a record
+/// may be the task of any folder of the repo it names, so [`held_in_folder`] holds every one:
+/// a guard that fails closed holds a little more, never less. A record cut off before it names
+/// the repo is not held this way: from what is left, a task in a branch folder cannot be told
+/// from one in a plain folder, and holding every folder of the workspace for either would keep
+/// the person off their own.
+fn cut_before_the_piece(text: &str) -> bool {
+    if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+        return false;
+    }
+    let Some(at) = text.rfind("\"piece\"") else {
+        return true;
+    };
+    let rest = text[at + "\"piece\"".len()..].trim_start();
+    let Some(rest) = rest.strip_prefix(':') else {
+        return rest.is_empty();
+    };
+    let Some(value) = rest.trim_start().strip_prefix('"') else {
+        return rest.trim().is_empty();
+    };
+    let mut escaped = false;
+    for c in value.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return false,
+            _ => {}
+        }
+    }
+    true
 }
 
 /// **What keeps `purlis worktree remove` off a branch folder purlis cut for a task** (#1534):
@@ -797,24 +833,11 @@ pub fn kept_from_removal(
     delete_branch: bool,
     no_discard_there: impl FnOnce() -> bool,
 ) -> Option<String> {
-    let held = held_in_folder(root, workspace, repo, piece)?;
-    let there = worktree::path_for(root, workspace, repo, piece)
-        .is_ok_and(|folder| folder.symlink_metadata().is_ok());
-    let goes = match &held {
-        InFolder::Task(record) => !there || (!record.running() && no_discard_there()),
-        InFolder::Unread(_) => !there,
-    };
+    let (held, goes) = holding(root, workspace, repo, piece, no_discard_there)?;
     let shown_piece = crate::shown::short(piece);
     match held {
         InFolder::Unread(id) if !goes || delete_branch => {
-            let file = dispatchrecord::dir(root).join(format!("{id}.json"));
-            let file = file.strip_prefix(root).unwrap_or(&file);
-            Some(format!(
-                "'{shown_piece}' is named by a dispatch record purlis cannot read ({}), so it is \
-                 kept as a task's folder. If no task works there, move that file out of its \
-                 folder and run this again. Nothing was removed.",
-                crate::shown::short(&file.to_string_lossy())
-            ))
+            Some(unread_holds(root, &id, piece, "run this again", false))
         }
         InFolder::Task(record) if !goes => {
             let task = record.task.unwrap_or(record.worker.chat.name);
@@ -836,6 +859,77 @@ pub fn kept_from_removal(
         }
         _ => None,
     }
+}
+
+/// **What keeps the explorer's own Merge (`merging`) or Remove off a branch folder purlis cut
+/// for a task** (#1534), in the window's words, where `None` lets the act go on: the same
+/// reading as [`kept_from_removal`], so the window and `purlis worktree remove` cannot drift.
+/// A folder [`held_in_folder`] finds is refused, `force` or not, and the person is sent to the
+/// task's Changes tab; one held by a record that does not read is refused naming that record,
+/// so the person can see what keeps it.
+///
+/// A Merge is never let through. A Remove is, in the two cases [`kept_from_removal`] lets one
+/// through: a folder already gone, and an ended task's folder in a repo the brokered route
+/// runs no git in (`no_discard_there`, asked only then). The window never deletes a branch.
+pub fn kept_from_the_explorer(
+    root: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    merging: bool,
+    no_discard_there: impl FnOnce() -> bool,
+) -> Option<String> {
+    let (held, goes) = if merging {
+        (held_in_folder(root, workspace, repo, piece)?, false)
+    } else {
+        holding(root, workspace, repo, piece, no_discard_there)?
+    };
+    if goes {
+        return None;
+    }
+    Some(match held {
+        InFolder::Unread(id) => unread_holds(root, &id, piece, "try again", merging),
+        InFolder::Task(record) => left_to_its_task(
+            &record.task.unwrap_or(record.worker.chat.name),
+            piece,
+            merging,
+        ),
+    })
+}
+
+/// What [`held_in_folder`] finds in `piece`, and whether a removal of it goes on all the same:
+/// its folder is already gone, or it is an ended task's in a repo the brokered route runs no
+/// git in (`no_discard_there`, asked only for such a task).
+fn holding(
+    root: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    no_discard_there: impl FnOnce() -> bool,
+) -> Option<(InFolder, bool)> {
+    let held = held_in_folder(root, workspace, repo, piece)?;
+    let there = worktree::path_for(root, workspace, repo, piece)
+        .is_ok_and(|folder| folder.symlink_metadata().is_ok());
+    let goes = match &held {
+        InFolder::Task(record) => !there || (!record.running() && no_discard_there()),
+        InFolder::Unread(_) => !there,
+    };
+    Some((held, goes))
+}
+
+/// The sentence for `piece`, held by record `id`, which does not read: which file holds it, and
+/// how the person lets it go, `again` being how they then retry.
+fn unread_holds(root: &Path, id: &str, piece: &str, again: &str, merging: bool) -> String {
+    let file = dispatchrecord::dir(root).join(format!("{id}.json"));
+    let file = file.strip_prefix(root).unwrap_or(&file);
+    format!(
+        "'{}' is named by a dispatch record purlis cannot read ({}), so it is kept as a task's \
+         folder. If no task works there, move that file out of its folder and {again}. Nothing \
+         was {}.",
+        crate::shown::short(piece),
+        crate::shown::short(&file.to_string_lossy()),
+        if merging { "merged" } else { "removed" }
+    )
 }
 
 /// What the explorer's own Merge (`merging`) or Remove says of `piece`, the branch folder
