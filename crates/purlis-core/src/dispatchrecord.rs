@@ -1077,12 +1077,33 @@ pub fn kept_undelivered(root: &Path, id: &str, kept: Option<&str>) -> io::Result
     })
 }
 
-/// The report of task `id` was handed to the chat that asked, reopened (#1513): it is owed to
-/// nobody from here. `false` for a record that is not there or owes none. **Answers `true`
-/// once for a record**, under the store's lock, so two reopens of one chat hand the report
-/// over once between them.
-pub fn delivered_late(root: &Path, id: &str) -> io::Result<bool> {
-    change(root, id, |record| record.undelivered.take().is_some())
+/// The report of task `id` is being handed to the chat that asked, reopened and started
+/// (#1513): it is owed to nobody from here. Answers what the record said of it, where the
+/// copy kept for the workspace is now, and `None` for a record that is not there or owes none.
+/// **Answers it once for a record**, under the store's lock, so two reopens of one chat hand
+/// the report over once between them.
+pub fn delivered_late(root: &Path, id: &str) -> io::Result<Option<Undelivered>> {
+    let mut taken = None;
+    change(root, id, |record| {
+        taken = record.undelivered.take();
+        taken.is_some()
+    })?;
+    Ok(taken)
+}
+
+/// **The report of task `id`, still owed, is kept for its workspace again under `kept`**
+/// (#1513): a start of the chat that asked took the copy back and did not happen. `false`, and
+/// nothing written, for a record that no longer owes it: another reopen handed it over
+/// meanwhile. A name that is not one a kept report has is not written.
+pub fn kept_again(root: &Path, id: &str, kept: Option<&str>) -> io::Result<bool> {
+    let kept = kept.filter(|name| crate::handback::a_kept_name(name));
+    change(root, id, |record| match record.undelivered.as_mut() {
+        Some(owed) => {
+            owed.kept = kept.map(str::to_owned);
+            true
+        }
+        None => false,
+    })
 }
 
 /// **The ended tasks whose reports reached no chat, and that `asked` answers for** (#1513,

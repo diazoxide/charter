@@ -1039,47 +1039,114 @@ fn a_chat_under_the_asker_s_number_that_is_not_the_store_s_asker_is_not_told() {
 
 #[test]
 fn two_reopens_at_once_hand_a_report_over_once_between_them() {
-    // F6: the claim is under the store's lock, so two threads racing take it once.
+    // F6: the claim is under the store's lock, so two threads racing hand it over once.
     let (_d, root) = project();
     reported_to_nobody(&root);
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let racers: Vec<_> = (0..2)
-        .map(|_| {
+    let racers: Vec<_> = [12, 13]
+        .into_iter()
+        .map(|chat| {
             let (root, barrier) = (root.clone(), std::sync::Arc::clone(&barrier));
             std::thread::spawn(move || {
                 barrier.wait();
-                take_back(&root, by_the_steward).len()
+                let owing = take_back(&root, by_the_steward);
+                hand_to(&root, &owing, chat)
             })
         })
         .collect();
 
-    let taken: usize = racers
+    let handed: usize = racers
         .into_iter()
         .map(|racer| racer.join().expect("it ran"))
         .sum();
 
-    assert_eq!(taken, 1);
+    assert_eq!(handed, 1);
+    let read =
+        handback::take(&root, For::Chat(12)).len() + handback::take(&root, For::Chat(13)).len();
+    assert_eq!(read, 1);
 }
 
+// ---- a hand-over that does not finish (#1546) -------------------------------------------------
+
 #[test]
-fn a_task_settled_as_the_project_opens_is_kept_for_the_chat_that_asked() {
-    // The record of open chats does not bring the task back: it has ended, and the chat that
-    // asked is told when it comes back, as after a launch.
+fn a_start_that_never_finished_leaves_the_report_owed_on_its_record_and_the_next_reopen_has_it() {
     let (_d, root) = project();
-    let made = dispatched(&root);
+    let (record, report) = reported_to_nobody(&root);
 
-    assert_eq!(
-        dispatchrecord::settle_on_open(&root, at("2026-10-09T09:00:00Z")),
-        1
-    );
+    // Taken back as the chat that asked starts, and the app dies before the start ends.
+    let _lost = take_back(&root, by_the_steward);
 
+    // The workspace's copy is gone, and the record still says the report is owed.
+    assert!(handback::take(&root, For::Place(&alpha())).is_empty());
     assert!(
-        dispatchrecord::read(&root, &made.id)
+        dispatchrecord::read(&root, &record.id)
             .unwrap()
             .undelivered
             .is_some()
     );
+    // The next reopen is handed it, from the record, once.
     let owing = take_back(&root, by_the_steward);
-    assert_eq!(owing.len(), 1);
-    assert!(owing[0].report.task.as_ref().unwrap().unreported);
+    assert_eq!(hand_to(&root, &owing, 12), 1);
+    assert_eq!(handback::take(&root, For::Chat(12)), [report]);
+    assert!(take_back(&root, by_the_steward).is_empty());
+}
+
+#[test]
+fn a_hand_over_that_cannot_be_written_is_given_back() {
+    let (_d, root) = project();
+    let (record, report) = reported_to_nobody(&root);
+    let owing = take_back(&root, by_the_steward);
+    // Chat 12's folder cannot be made: a file has its name.
+    std::fs::create_dir_all(handback::dir(&root)).unwrap();
+    let blocked = handback::dir(&root).join("chat-12");
+    std::fs::write(&blocked, "").unwrap();
+
+    assert_eq!(hand_to(&root, &owing, 12), 0);
+
+    // Owed again on its record, and kept for its workspace again.
+    let kept = dispatchrecord::read(&root, &record.id)
+        .unwrap()
+        .undelivered
+        .and_then(|owed| owed.kept)
+        .expect("kept for the workspace again");
+    assert!(kept.starts_with("workspace-alpha/"), "{kept}");
+    // And the next reopen that can be written to is handed it, once.
+    std::fs::remove_file(&blocked).unwrap();
+    let owing = take_back(&root, by_the_steward);
+    assert!(handback::take(&root, For::Place(&alpha())).is_empty());
+    assert_eq!(hand_to(&root, &owing, 12), 1);
+    assert_eq!(handback::take(&root, For::Chat(12)), [report]);
+}
+
+#[test]
+fn a_start_given_back_after_another_reopen_handed_it_over_keeps_nothing_again() {
+    let (_d, root) = project();
+    let (record, _report) = reported_to_nobody(&root);
+    let first = take_back(&root, by_the_steward);
+    let second = take_back(&root, by_the_steward);
+
+    // The second started and was handed it; the first did not start.
+    assert_eq!(hand_to(&root, &second, 12), 1);
+    give_back(&root, &first);
+
+    assert!(handback::take(&root, For::Place(&alpha())).is_empty());
+    assert_eq!(
+        dispatchrecord::read(&root, &record.id).unwrap().undelivered,
+        None
+    );
+}
+
+#[test]
+fn a_copy_kept_again_while_another_reopen_started_goes_with_its_claim() {
+    let (_d, root) = project();
+    let (_record, report) = reported_to_nobody(&root);
+    let first = take_back(&root, by_the_steward);
+    let second = take_back(&root, by_the_steward);
+
+    // The first did not start, and kept it for the workspace again; the second then started.
+    give_back(&root, &first);
+    assert_eq!(hand_to(&root, &second, 12), 1);
+
+    assert!(handback::take(&root, For::Place(&alpha())).is_empty());
+    assert_eq!(handback::take(&root, For::Chat(12)), [report]);
 }
