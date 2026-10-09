@@ -190,26 +190,79 @@ fn the_flag_still_outranks_the_environment() {
 }
 
 #[test]
-fn current_prints_the_resolved_workspace_and_nothing_else() {
+fn current_prints_the_name_on_stdout_and_the_rung_that_decided_on_stderr() {
+    // #999: stdout stays the one line a script takes; the sentence saying WHY that is the
+    // answer goes to stderr, where charter always put it.
     let tmp = tempfile::tempdir().unwrap();
     let root = plane(tmp.path().join("plane"), &["alpha"]);
 
     // From outside the plane, where nothing about the directory says where the caller is: at
     // the plane root, a session that chose nothing is in no workspace (SI-1b, `plane_root.rs`).
+    // With no pane id, the last rung says why nothing persisted.
     let ran = run_in(&root, tmp.path(), &["workspace", "current"], &[]);
     assert_eq!(ran.out, "default\n");
-    // Nothing on stderr: charter explains the rung there and this port does not, and a
-    // scenario in the differential run records that as the difference it is.
-    assert_eq!(ran.err, "");
     assert_eq!(
-        run(
-            &root,
-            &["workspace", "current"],
-            &[("CHARTER_WORKSPACE", "alpha")]
-        )
-        .out,
-        "alpha\n"
+        ran.err,
+        "• via default (no pane id — nothing persists between sessions)\n"
     );
+
+    let ran = run(
+        &root,
+        &["workspace", "current"],
+        &[("CHARTER_WORKSPACE", "alpha")],
+    );
+    assert_eq!(ran.out, "alpha\n");
+    assert_eq!(ran.err, "• via $CHARTER_WORKSPACE\n");
+
+    let tree = root.join("workspaces/alpha/svc");
+    std::fs::create_dir_all(&tree).unwrap();
+    let ran = run_in(&root, &tree, &["workspace", "current"], &[]);
+    assert_eq!(
+        (ran.out.as_str(), ran.err.as_str()),
+        ("alpha\n", "• via cwd\n")
+    );
+}
+
+#[test]
+fn persona_current_says_which_rung_decided_without_touching_its_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"), &[]);
+
+    let ran = run(
+        &root,
+        &["persona", "current"],
+        &[("CHARTER_PERSONA", "devops")],
+    );
+    assert_eq!(ran.out, "devops\n");
+    assert_eq!(ran.err, "• via $CHARTER_PERSONA\n");
+
+    let ran = run(&root, &["persona", "current"], &[]);
+    assert_eq!(
+        (ran.out.as_str(), ran.err.as_str()),
+        ("(none)\n", "• via none\n")
+    );
+}
+
+#[test]
+fn setting_a_vision_confirms_where_it_was_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"), &["alpha"]);
+
+    let ran = run(
+        &root,
+        &["workspace", "vision", "Ship it", "-w", "alpha"],
+        &[],
+    );
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    assert_eq!(ran.out, "");
+    assert_eq!(
+        ran.err,
+        "✓ Vision set for 'alpha' → workspaces/alpha/workspace.md\n"
+    );
+
+    // Showing it is not setting it: the vision on stdout, nothing on stderr.
+    let ran = run(&root, &["workspace", "vision", "-w", "alpha"], &[]);
+    assert_eq!((ran.out.as_str(), ran.err.as_str()), ("Ship it\n", ""));
 }
 
 #[test]

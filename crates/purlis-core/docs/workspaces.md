@@ -157,9 +157,10 @@ defaults — `workspaces/.default` and `[workspace] default` — do not speak fo
 for a caller outside the plane. Unlike a chat the app started there, it can still move:
 `purlis workspace use <name>` puts it in that workspace from then on.
 
-`purlis workspace current` prints the answer, the name alone, for a script. `purlis
-status` prints it *and the rung that produced it*, which is usually the faster question to
-ask when the answer surprised you.
+`purlis workspace current` prints the answer, the name alone, on stdout for a script, and
+the rung that produced it on stderr (`• via cwd`). `purlis status` prints both *and* what
+else bears on the workspace, which is usually the faster question to ask when the answer
+surprised you.
 
 `$PURLIS_WORKSPACE` is stripped of surrounding whitespace, so `" billing "` selects
 `billing`. A value that is empty or holds only whitespace names nothing and counts as unset:

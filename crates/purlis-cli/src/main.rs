@@ -5,15 +5,6 @@
 //! against a copy of a fixture plane and compares the tree it leaves with what the Python
 //! charter left.
 //!
-//! One thing this binary does NOT do yet, recorded in the harness rather than left to be
-//! discovered, and planned in #999:
-//!
-//! - **Not every command prints its confirmation.** charter says `✓ Vision set for 'alpha' →
-//!   …` on stderr, and `vision` here is still silent (`todo` speaks since M8.5). The memory commands
-//!   (`memory.rs`) are ported whole, their output included, and so is the one line of stdout
-//!   `workspace current` and `persona current` print — the sentence explaining which rung
-//!   decided is not.
-//!
 //! **`-w` and `--persona` are optional, and M2.9 is what made them so.** Every rung of both
 //! resolution ladders lives in [`purlis_core::active`]; this file only decides which flag
 //! feeds each one. Until then `charter recall` with no flags — how a harness calls it at
@@ -2729,7 +2720,22 @@ fn run(command: Command) -> Result<u8, String> {
             println!("{}", here.plane.root().display());
         }
         Command::Workspace(WorkspaceCommand::Current) => {
-            println!("{}", here.active_workspace(None)?);
+            // The name alone on stdout, for a script; the rung that decided it on stderr, for
+            // the person asking why (#999). Both off ONE resolution, as `status` does, so the
+            // reason given is the rung that produced the name.
+            if let Some(by) = here.plane_root(None) {
+                return Err(purlis_core::active::plane_root_refusal(
+                    here.plane.root(),
+                    by,
+                ));
+            }
+            let chosen =
+                purlis_core::active::workspace(&here.asking(None, here.workspace_env.as_deref()));
+            println!("{}", chosen.name);
+            voice::info(&format!(
+                "via {}",
+                purlis_core::active::workspace_source(&here.ids, chosen.rung)
+            ));
         }
         Command::Guard { verb } => {
             use purlis_core::guardcmd::{self, Bucket};
@@ -2823,7 +2829,13 @@ fn run(command: Command) -> Result<u8, String> {
                 return Err(format!("no workspace '{}'", ws.name()));
             }
             match text.as_deref().filter(|t| !t.is_empty()) {
-                Some(text) => ws.set_vision(text).map_err(|e| e.to_string())?,
+                Some(text) => {
+                    ws.set_vision(text).map_err(|e| e.to_string())?;
+                    voice::ok(&format!(
+                        "Vision set for '{0}' → workspaces/{0}/workspace.md",
+                        ws.name()
+                    ));
+                }
                 None => {
                     let vision = ws.vision();
                     if !vision.is_empty() {
