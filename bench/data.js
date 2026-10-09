@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791564723505,
+  "lastUpdate": 1791567312408,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5334,6 +5334,48 @@ window.BENCHMARK_DATA = {
             "value": 105.5456825,
             "unit": "ms",
             "extra": "median of 5 runs: 103.496, 105.081, 105.546, 106.951, 107.120 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "482c80281828954de1caab5413ecfb8ebe31cfea",
+          "message": "Declare the upstream's remote in the ahead/behind fixture, as a clone does\n\nThe test compares purlis's count with git's own `@{upstream}...HEAD`,\nand git maps `branch.main.merge` to a remote-tracking ref only through\nthe remote's fetch refspec. The fixture set the branch's remote and\nmerge but declared no remote, so git refused (\"not stored as a\nremote-tracking branch\") before anything was compared. The remote is now\ndeclared with the refspec `git clone` writes; nothing is fetched from it\nand no assertion changed.\n\nRefs #1130\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T21:30:24+04:00",
+          "tree_id": "048cb7b82ff813ed728fc1d8a7f5a732bda3b4c1",
+          "url": "https://github.com/purlis/purlis/commit/482c80281828954de1caab5413ecfb8ebe31cfea"
+        },
+        "date": 1791567311731,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.6291789999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.607, 0.627, 0.629, 0.638, 0.692 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.013136999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.955, 15.992, 16.013, 16.028, 16.534 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.119333,
+            "unit": "ms",
+            "extra": "median of 5 runs: 99.343, 101.067, 101.119, 103.219, 103.320 ms"
           }
         ]
       }
