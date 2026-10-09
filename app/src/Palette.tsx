@@ -12,7 +12,7 @@ import {
   type Ran,
 } from "./actions";
 import type { FileScope, FoundFile, PlaneId } from "./bindings";
-import { hitSaid, scopeSaid, useFileFind } from "./fileFind";
+import { hitSaid, scopeSaid, useFileFind, type Part } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
 
@@ -599,7 +599,7 @@ export function Palette({
                 <ul id="palette-files" className="palette-rows" role="listbox" aria-label="Files">
                   {fileRows.map((file, at) => {
                     const index = rows.length + at;
-                    const { name, where } = hitSaid(file, files.nameOf);
+                    const { marks } = hitSaid(file, files.nameOf);
                     return (
                       <li
                         key={`${file.plane}\n${file.workspace}\n${file.repo}\n${file.piece ?? ""}\n${file.path}`}
@@ -609,8 +609,13 @@ export function Palette({
                         className={index === aimed ? "palette-row aimed" : "palette-row"}
                         onClick={() => openFile(file)}
                       >
-                        <span className="palette-title">{name}</span>
-                        <span className="palette-why">{where}</span>
+                        <span className="palette-title">
+                          <Marked parts={marks.name} />
+                        </span>
+                        <span className="palette-why">
+                          <Marked parts={marks.folder} />
+                          {marks.after}
+                        </span>
                       </li>
                     );
                   })}
@@ -621,6 +626,20 @@ export function Palette({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** A file row's text with the letters the query matched marked (#1131): `<mark>`, which a
+ *  screen reader may announce as highlighted and which reads the same as plain text. */
+function Marked({ parts }: { parts: readonly Part[] }) {
+  return parts.map((part, at) =>
+    part.matched ? (
+      <mark key={at} className="palette-matched">
+        {part.text}
+      </mark>
+    ) : (
+      part.text
+    ),
   );
 }
 

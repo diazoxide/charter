@@ -4847,6 +4847,16 @@ h2.sidebar-title .node-icon {
   opacity: 0.55;
 }
 
+/* The letters a ⌘P query matched (#1131): weight and an underline, not a colour, so the mark
+   reads the same on the aimed row and in every theme. */
+.palette-matched {
+  color: inherit;
+  background: none;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .palette-why {
   margin-left: auto;
   font-size: 0.8rem;

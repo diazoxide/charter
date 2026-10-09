@@ -32,12 +32,13 @@ const switchTo = (plane: string, available: boolean): Offer => ({
   does: { verb: "selectProject", plane },
 });
 
-const file = (path: string, plane: PlaneId = PLANE): FoundFile => ({
+const file = (path: string, plane: PlaneId = PLANE, matched: number[] = []): FoundFile => ({
   plane,
   workspace: BRANCH.workspace,
   repo: BRANCH.repo,
   piece: BRANCH.piece,
   path,
+  matched,
 });
 
 /** The core, answering `find_files` with `answer(scope, query)` and recording each ask. */
@@ -109,6 +110,32 @@ describe("⌘P's files", () => {
       "login.tssrc/a · fix-login · alpha",
       "login.tsfix-login · beta",
     ]);
+  });
+
+  it("mark the letters the query matched, in the name and in the folder (#1131)", async () => {
+    // `s` of src, then `login`: characters 0 and 6 to 10 of `src/a/login.ts`.
+    core(() => ({
+      files: [
+        file("src/a/login.ts", PLANE, [0, 6, 7, 8, 9, 10]),
+        file("café/menü.md", PLANE, [5, 7]),
+      ],
+      branches: 1,
+      refused: [],
+      partial: [],
+    }));
+    opened([switchTo(PLANE, false)]);
+
+    await userEvent.keyboard("slogin");
+
+    const [login, menu] = within(
+      await screen.findByRole("listbox", { name: "Files" }),
+    ).getAllByRole("option");
+    const marks = (row: HTMLElement) =>
+      [...row.querySelectorAll("mark")].map((mark) => mark.textContent);
+    expect(marks(login)).toEqual(["login", "s"]);
+    expect(login.textContent).toBe("login.tssrc/a · fix-login · alpha");
+    // Counted in characters, as the core counts them: `é` is one, though it is two bytes.
+    expect(marks(menu)).toEqual(["m", "n"]);
   });
 
   it("show their scope, which Tab widens and Shift+Tab narrows", async () => {

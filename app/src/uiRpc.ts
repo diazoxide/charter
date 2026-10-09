@@ -3804,6 +3804,11 @@ export type FoundFile = {
 	/**  No piece is the repo's own folder. */
 	piece: string | null,
 	path: string,
+	/**
+	 *  Which of the path's letters the query matched, as indices of its characters (code
+	 *  points, not bytes or UTF-16 units), ascending: what the row marks.
+	 */
+	matched: number[],
 };
 
 /**  How a number reads, as the window colours it — `purlis_core::usage::Tone`. */
