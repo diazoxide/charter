@@ -780,14 +780,14 @@ fn read(words: &[String]) -> Vec<Word<'_>> {
     out
 }
 
-fn is_flag(word: &str) -> bool {
+pub(crate) fn is_flag(word: &str) -> bool {
     let head = word.split('=').next().unwrap_or(word);
     word.starts_with('-') && word.len() > 1 && !head.contains(char::is_whitespace)
 }
 
 /// `word` as a flag and the value attached to it: `--sandbox=x` and `-sx` are `-s`/`--sandbox`
 /// with `x`.
-fn split(word: &str) -> (&str, Option<&str>) {
+pub(crate) fn split(word: &str) -> (&str, Option<&str>) {
     if word.starts_with("--") {
         return match word.split_once('=') {
             Some((flag, value)) => (flag, Some(value)),

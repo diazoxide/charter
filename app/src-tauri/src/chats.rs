@@ -1037,6 +1037,11 @@ impl Chats {
         let Some(profile) = chat.profile.clone() else {
             return self.start_as_opted(chat, size, false, why, opt_out.as_ref());
         };
+        // **A chat a dispatch started is held, each time it is started again, to what the
+        // dispatch was held to** (#1509): a profile the project lists for its persona, where
+        // it lists any, and one whose command does not switch the harness's prompts off. Both
+        // may have changed since it was dispatched, and nobody chose the change for this chat.
+        purlis_core::dispatchprofiles::may_start_again(&self.project, chat)?;
         let ready = purlis_core::start::ready(
             &purlis_core::start::Start {
                 profile: Some(profile),
@@ -5736,6 +5741,113 @@ pub(crate) mod tests {
 
         assert!(chats.would_not_start().is_empty());
         chats.end_all();
+    }
+
+    /// [`one_on_work`], with its one chat dispatched by another as persona `devops`.
+    fn one_dispatched_on_work(root: &std::path::Path) -> Record {
+        let record = one_on_work(root);
+        Record {
+            chats: vec![Chat {
+                persona: Some("devops".to_owned()),
+                from: Some(purlis_core::reopen::HandedFrom {
+                    chat: 1,
+                    name: "steward 1".to_owned(),
+                    workspace: purlis_core::active::Place::Workspace("ide".to_owned()),
+                    report: purlis_core::reopen::Owed::Due,
+                    mode: purlis_core::reopen::Mode::Task,
+                    depth: 1,
+                    root: None,
+                    by_person: false,
+                }),
+                ..record.chats[0].clone()
+            }],
+            ..record
+        }
+    }
+
+    #[test]
+    fn a_dispatched_chat_is_not_put_back_on_a_profile_that_now_asks_nobody() {
+        // #1509: the profile's command is looked up again at every start. Where it has come
+        // to switch the prompts off since the dispatch, nobody chose that for this chat.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), ", \"--dangerously-skip-permissions\"");
+        let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
+
+        let open = chats.put_back(&one_dispatched_on_work(&root), SIZE);
+
+        assert!(open.is_empty(), "a dispatched chat started asking nobody");
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert!(
+            waiting[0].why.starts_with(
+                "This chat was dispatched by another chat, and its profile 'work' now starts \
+                 its harness with the permission prompts off (--dangerously-skip-permissions)"
+            ),
+            "{}",
+            waiting[0].why
+        );
+        // It says what the person can do.
+        assert!(
+            waiting[0].why.contains("Settings › Harness"),
+            "{}",
+            waiting[0].why
+        );
+
+        // The person's own chat on that profile is not held to this: it waits on the
+        // approval any new command does, and nothing else.
+        let (own, _) = recorded();
+        let own = own.in_project(&root);
+        own.put_back(&one_on_work(&root), SIZE);
+        let waiting = own.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert!(!waiting[0].why.contains("dispatched"), "{}", waiting[0].why);
+        assert!(waiting[0].approval.is_some());
+    }
+
+    #[test]
+    fn a_dispatched_chat_is_not_put_back_on_a_profile_the_project_stopped_listing() {
+        // #1509: the project's list is read again too. A chat dispatched on `work` before the
+        // project listed only another profile for its persona does not come back on `work`.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        std::fs::write(
+            root.join(purlis_core::plane::MANIFEST),
+            "[dispatch.profiles]\ndevops = [\"other\"]\n",
+        )
+        .expect("the manifest");
+        let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
+
+        let open = chats.put_back(&one_dispatched_on_work(&root), SIZE);
+
+        assert!(
+            open.is_empty(),
+            "a dispatched chat started on an unlisted profile"
+        );
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(
+            waiting[0].why,
+            "This chat was dispatched as persona 'devops' on profile 'work', and the project \
+             now lists only 'other' for that persona, so it was not started again. List 'work' \
+             for devops under [dispatch.profiles] in the project's file and start it again, or \
+             close it and dispatch the work again."
+        );
+
+        // Listed again, the same record is no longer refused for the list: it gets as far as
+        // the approval a profile nobody approved waits on.
+        std::fs::write(
+            root.join(purlis_core::plane::MANIFEST),
+            "[dispatch.profiles]\ndevops = [\"other\", \"work\"]\n",
+        )
+        .expect("the manifest");
+        let (listed, _) = recorded();
+        let listed = listed.in_project(&root);
+        listed.put_back(&one_dispatched_on_work(&root), SIZE);
+        let waiting = listed.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert!(!waiting[0].why.contains("dispatched"), "{}", waiting[0].why);
     }
 
     #[test]
