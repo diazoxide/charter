@@ -396,8 +396,10 @@ only, by its full name, for Claude Code only, and an operator's `ask` or `deny` 
   entrance and not the other protected nothing.
 - **It answers nothing beyond the chat's own tasks.** The app reads the list from its own
   record of the chat that asks, bound to the sender: the tasks that chat dispatched, and the
-  ones the person started from its tab, listed by name and state and no more. It takes no
-  argument, so it cannot name another chat.
+  ones the person started from its tab, and no other chat's. Each row carries the task's chat
+  number, name, persona, the workspace it works in, its state, how long ago it started, and
+  the branch purlis cut for it with how that branch stands: the app's own record, never a
+  brief or a transcript. It takes no argument, so it cannot name another chat.
 - **A helper's call is still refused in front of it.** The dispatch hook's matcher names the
   tool, and a sub-agent's call of it is refused as before: the pre-allow stands in for the
   harness's prompt and nothing else.

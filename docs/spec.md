@@ -392,13 +392,13 @@ how it is cited and nothing here is renumbered.
     the command that ends it, and, since V79, an `allow` for each of purlis's five read-only
     MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
     `change_status`), for `persona_where` (#1450) and for `dispatch_list` (#1463), while its
-    writes and `ask_operator` still ask. Since V98b it also carries an `allow` for `purlis dispatch` by each spelling
-    it has (`--name`, `--to`, `--profile` first, and `report`), never a bare wildcard, and for
-    the `dispatch` and `dispatch_report` tools: consent to a dispatch is purlis's own dispatch
-    grant, which the app asks the person for, so the harness does not ask beside it. Since
-    #1444 it carries the same for `purlis handoff`, by each flag its line can start with and
-    its `report`: a handoff is a dispatch in handoff mode, decided the same way, and `init`
-    no longer writes an `ask` rule for it. Codex's approval and
+    writes and `ask_operator` still ask. Since V98b it also carries an `allow` for `purlis
+    dispatch` by each spelling it has (`--name`, `--to`, `--profile` first, and `report`),
+    never a bare wildcard, and for the `dispatch` and `dispatch_report` tools: consent to a
+    dispatch is purlis's own dispatch grant, which the app asks the person for, so the harness
+    does not ask beside it. Since #1444 it carries the same for `purlis handoff`, by each flag
+    its line can start with and its `report`: a handoff is a dispatch in handoff mode, decided
+    the same way, and `init` no longer writes an `ask` rule for it. Codex's approval and
     sandbox are whole-session switches, so it carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
     in front. **Smart close puts the chat into the background** (SI-8f): its tab shrinks to a
     fixed chip — the chat's icon and the breathing mark, the name in its tooltip — at the chat

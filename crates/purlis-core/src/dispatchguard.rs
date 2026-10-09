@@ -223,24 +223,60 @@ pub fn text_refusal(cmd: &str) -> Option<(&'static str, String)> {
     if !crate::livesub::may_substitute(cmd) {
         return None;
     }
-    let (sub, shape, inner) = a_text_subcommand(cmd)?;
-    // In the call as written, or in the string the shell runs the subcommand in: a
-    // substitution single-quoted on the outside is live when that string is run.
-    let hit = crate::livesub::live_substitution(cmd)
-        .or_else(|| inner.as_deref().and_then(crate::livesub::live_substitution))?;
+    let ((sub, shape), hit) = in_the_call(cmd).or_else(|| in_a_body_a_shell_runs(cmd))?;
     let (kind, effect) = if crate::livesub::is_process_substitution(hit) {
         ("process", "run and replace with a path")
     } else {
         ("command", "replace")
+    };
+    // A6's remedy, measured there: a report carries markdown code spans, and most carry an
+    // apostrophe, so single quotes alone fail on exactly the text this refuses.
+    let tool = if sub == "report" {
+        format!(
+            " Or send it with the `{}` tool, whose text no shell reads.",
+            crate::chattools::DISPATCH_REPORT
+        )
+    } else {
+        String::new()
     };
     Some((
         REASON_TEXT_SOURCE,
         format!(
             "`purlis dispatch {sub}` sends its text as it is written here, and this call has a \
              live {kind} substitution in it, which the shell would {effect} before purlis \
-             reads it. Write the text out in plain words: purlis dispatch {shape}"
+             reads it. Write the text out in plain words: purlis dispatch {shape}. Keep a \
+             backtick literal by backslash-escaping each one (`\\`code\\``), which leaves \
+             apostrophes working, or single-quote the whole text when it holds none.{tool}"
         ),
     ))
+}
+
+/// A text subcommand found in the call's segments, and a live substitution in the call as
+/// written or in the string a shell runs it in: a substitution single-quoted on the outside is
+/// live when that string is run.
+fn in_the_call(cmd: &str) -> Option<((&'static str, &'static str), &'static str)> {
+    let (sub, shape, inner) = a_text_subcommand(cmd)?;
+    let hit = crate::livesub::live_substitution(cmd)
+        .or_else(|| inner.as_deref().and_then(crate::livesub::live_substitution))?;
+    Some(((sub, shape), hit))
+}
+
+/// A text subcommand in a heredoc body a shell runs (`bash <<'EOF'`), and a live substitution
+/// in that body **as the shell reads it**: quoting the delimiter keeps the body from expanding
+/// on its way in, and the shell then runs every line of it. Which bodies a shell runs is the
+/// plan A7 and the leak guard share ([`crate::leakguard::lines_a_command_could_run`]).
+fn in_a_body_a_shell_runs(cmd: &str) -> Option<((&'static str, &'static str), &'static str)> {
+    let run: Vec<String> = crate::leakguard::lines_a_command_could_run(cmd)
+        .into_iter()
+        .filter(|(_, in_a_run_body)| *in_a_run_body)
+        .map(|(row, _)| row)
+        .collect();
+    if run.is_empty() {
+        return None;
+    }
+    let body = run.join("\n");
+    let ((sub, shape), hit) = in_the_call(&body)?;
+    Some(((sub, shape), hit))
 }
 
 // ----------------------------------------------------------------------------------------
@@ -761,6 +797,13 @@ mod tests {
                 "purlis dispatch report --outcome done \"$(cat <<'EOF'\nfixed it\nEOF\n)\"",
                 "report",
             ),
+            // A body a shell runs: its quoted delimiter keeps it from expanding on the way
+            // in, and the shell then runs the line, substitution and all.
+            ("bash <<'EOF'\npurlis dispatch note \"$(id)\"\nEOF", "note"),
+            (
+                "sh <<'EOF'\ncd svc\npurlis dispatch tell 9 \"`id`\"\nEOF",
+                "tell",
+            ),
         ] {
             let (reason, said) = text_refusal(cmd).unwrap_or_else(|| panic!("{cmd:?}"));
             assert_eq!(reason, REASON_TEXT_SOURCE);
@@ -775,9 +818,20 @@ mod tests {
                 "`purlis dispatch note` sends its text as it is written here, and this call \
                  has a live command substitution in it, which the shell would replace before \
                  purlis reads it. Write the text out in plain words: purlis dispatch note \
-                 \"<note>\""
+                 \"<note>\". Keep a backtick literal by backslash-escaping each one \
+                 (`\\`code\\``), which leaves apostrophes working, or single-quote the whole \
+                 text when it holds none."
                     .to_owned()
             )
+        );
+        // A report can also go by the tool, which no shell reads.
+        let (_, said) =
+            text_refusal("purlis dispatch report --outcome done \"$(id)\"").expect("refused");
+        assert!(
+            said.ends_with(
+                "Or send it with the `dispatch_report` tool, whose text no shell reads."
+            ),
+            "{said}"
         );
         let (_, said) = text_refusal("purlis dispatch tell 9 \"$(cat <(id))\"").expect("refused");
         assert!(said.contains("live command substitution"), "{said}");
@@ -799,6 +853,8 @@ mod tests {
             "purlis dispatch note \"a \\$(literal) one\"",
             "purlis dispatch tell 9 \"$NAME is set\"",
             "purlis dispatch answer 9 \"the blue one\"",
+            // A body a reader takes is data, whatever it mentions.
+            "cat > notes.md <<'EOF'\npurlis dispatch note \"$(id)\"\nEOF",
             // A dispatch's brief is its heredoc, judged as a brief, not here.
             "purlis dispatch --name x <<'B'\nrun $(this) later\nB",
             // Subcommands that send no text.
