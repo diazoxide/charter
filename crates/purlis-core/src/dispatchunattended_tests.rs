@@ -33,9 +33,10 @@ fn missing(asking: Option<&str>, target: &str) -> Answer {
     }))
 }
 
-/// [`super::covers`] for a chat the app started inside a sandbox.
+/// [`super::covers`] for a chat the app started inside a sandbox, in a project whose file
+/// names no pair this machine has not reviewed.
 fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Locks) -> Answer {
-    super::covers(asking, target, grants, policy, true)
+    super::covers(asking, target, grants, policy, false, true)
 }
 
 // ---- which grants count -------------------------------------------------------------------------
@@ -181,6 +182,42 @@ fn the_refusal_names_the_missing_pair_and_where_a_person_grants_it() {
 }
 
 #[test]
+fn whether_the_project_names_the_pair_is_the_file_s_word_and_not_what_is_in_force() {
+    // #1586: a pair the file names that nobody here reviewed is not in force here, so what is
+    // in force cannot say the file names it. The caller asks the file, as the app does.
+    let unreviewed = super::covers(
+        Some("steward"),
+        "devops",
+        &InForce::default(),
+        &Locks::none(),
+        true,
+        true,
+    );
+    assert!(
+        matches!(&unreviewed, Answer::Refused(Refusal::Missing(missing)) if missing.unreviewed),
+        "{unreviewed:?}"
+    );
+    // And a project pair in force here is covered whatever the caller says of the file.
+    let accepted = InForce {
+        project: vec![pair("steward", "devops")],
+        ..InForce::default()
+    };
+    for named in [true, false] {
+        assert_eq!(
+            super::covers(
+                Some("steward"),
+                "devops",
+                &accepted,
+                &Locks::none(),
+                named,
+                true
+            ),
+            Answer::Covered
+        );
+    }
+}
+
+#[test]
 fn a_project_pair_nobody_reviewed_on_this_machine_is_refused_and_says_to_review_it() {
     // D-1437-R1: the grant answers "needs a grant" for a pair the project's file names and
     // this machine has not acknowledged. For an unattended chat that is a refusal.
@@ -251,12 +288,26 @@ fn an_unattended_chat_with_no_sandbox_dispatches_to_no_other_persona_whatever_is
     };
     // Sandboxed, the grant covers it.
     assert_eq!(
-        super::covers(Some("steward"), "devops", &granted, &Locks::none(), true),
+        super::covers(
+            Some("steward"),
+            "devops",
+            &granted,
+            &Locks::none(),
+            false,
+            true
+        ),
         Answer::Covered
     );
 
     for grants in [granted.clone(), InForce::default()] {
-        let answer = super::covers(Some("steward"), "devops", &grants, &Locks::none(), false);
+        let answer = super::covers(
+            Some("steward"),
+            "devops",
+            &grants,
+            &Locks::none(),
+            false,
+            false,
+        );
 
         assert_eq!(
             answer,
@@ -281,18 +332,26 @@ fn an_unattended_chat_with_no_sandbox_dispatches_to_no_other_persona_whatever_is
             "devops",
             &InForce::default(),
             &Locks::none(),
+            false,
             false
         ),
         Answer::Covered
     );
     let all = locks(r#"{"owner": "IT", "dispatch": {"allow": false}}"#);
     assert!(matches!(
-        super::covers(Some("steward"), "devops", &granted, &all, false),
+        super::covers(Some("steward"), "devops", &granted, &all, false, false),
         Answer::Locked(_)
     ));
     // A chat on no persona has no persona of its own to dispatch to.
     assert_eq!(
-        super::covers(None, "devops", &InForce::default(), &Locks::none(), false),
+        super::covers(
+            None,
+            "devops",
+            &InForce::default(),
+            &Locks::none(),
+            false,
+            false
+        ),
         Answer::Refused(Refusal::Unsandboxed("devops".to_owned()))
     );
 }

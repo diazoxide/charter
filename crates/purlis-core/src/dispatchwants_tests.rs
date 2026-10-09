@@ -110,6 +110,7 @@ fn a_chat_nobody_is_at_is_refused_whatever_its_persona_wants() {
         "devops",
         &InForce::read(root, Vec::new()),
         &Locks::none(),
+        false,
         true,
     );
     assert!(

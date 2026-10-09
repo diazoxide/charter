@@ -193,21 +193,21 @@ pub const SETTINGS: &str = "Settings › Project › Dispatch";
 /// and `policy`: [`crate::dispatchgrant::covers`], asked without the grants made for one chat,
 /// and with "ask the person" answered as a refusal. `sandboxed` is whether the app started
 /// the chat inside a sandbox: one it did not dispatches to its own persona and no other.
+///
+/// `named_by_the_project` is [`answer_of`]'s: whether the project's committed file names the
+/// pair, **as the file says it** (#1586). What is in force here cannot tell: a pair the file
+/// names that nobody on this machine has reviewed is not in force (D-1437-R1), so the caller
+/// asks the file, as the app does.
 pub fn covers(
     asking: Option<&str>,
     target: &str,
     grants: &InForce,
     policy: &Locks,
+    named_by_the_project: bool,
     sandboxed: bool,
 ) -> Answer {
     let mut standing = grants.clone();
     standing.chat.clear();
-    let named_by_the_project = asking.is_some_and(|asking| {
-        grants
-            .project
-            .iter()
-            .any(|pair| pair.asking == asking && pair.target == target)
-    });
     answer_of(
         dispatchgrant::covers(asking, target, &standing, policy),
         asking,

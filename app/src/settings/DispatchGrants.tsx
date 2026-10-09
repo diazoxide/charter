@@ -195,7 +195,9 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  * - **Add a grant** (#1465, V100-24) makes a standing grant with no dispatch waiting: the asking
  *   persona, the one it may dispatch to, for me or for the project, and in which workspace
  *   (V100-27). It is what a chat nobody is at needs, since no Notice is raised for one. The
- *   core holds it to every rule an Allow is held to and says why where it refuses.
+ *   core holds it to every rule an Allow is held to and says why where it refuses. Where a
+ *   name it picks waits for **Give back**, it says under the form that what it adds is not in
+ *   force until then (#1586).
  *
  * Every press asks first, in a line under its row, and says what it will and will not do:
  * taking a grant back stops new dispatches only, and a task already running is left as it is.
@@ -1036,6 +1038,12 @@ export function DispatchGrantsList({
       setAdding({ from, to, level, where, ...over });
     };
     const within = inAny ? "in any workspace" : `for work in ${where}`;
+    // A name waiting for Give back (#1586): what is added for it stays out of force until then.
+    const back = [from, to].find(isBack);
+    const waits =
+      back === undefined
+        ? undefined
+        : `${back} was gone, and the persona of that name now is not the one that left: a grant added for it is not in force until you Give back to ${back}, in the table above.`;
     const offer: Offer = {
       yes: "Add grant",
       about: `${from} may dispatch to ${to}, ${level === "you" ? "for me on this machine" : "for everyone in this project"}, ${inAny ? "in any workspace" : where === "" ? "choose where it holds" : `in ${where}`}`,
@@ -1043,7 +1051,7 @@ export function DispatchGrantsList({
         level === "you"
           ? `Let ${from} chats dispatch to ${to} ${within}, for you on this machine? They will not ask you first, and a chat nobody is at may use it too. ${to} chats work with their own access.`
           : `Let ${from} chats dispatch to ${to} ${within}, for everyone in this project? This changes ${file}, the project's committed file: your teammates get it when they pull it, and each accepts it on their own machine. Here it counts at once, a chat nobody is at included. ${to} chats work with their own access.`,
-      done: `Allowed ${level === "you" ? "for you on this machine" : "for everyone in this project"}, ${inAny ? "in any workspace" : where === "" ? "choose where it holds" : `in ${where}`}: ${from} chats dispatch to ${to} without asking you.${yetToCount(from, to)}`,
+      done: `Allowed ${level === "you" ? "for you on this machine" : "for everyone in this project"}, ${inAny ? "in any workspace" : where === "" ? "choose where it holds" : `in ${where}`}: ${from} chats dispatch to ${to} without asking you.${yetToCount(from, to)}${waits === undefined ? "" : ` ${waits}`}`,
       run: async () =>
         ran(await commands.addDispatchGrant(plane, from, to, level, inAny ? null : where)),
     };
@@ -1137,6 +1145,11 @@ export function DispatchGrantsList({
         >
           {offer.yes}
         </button>
+        {waits !== undefined && (
+          <p role="note" className="granted-note">
+            {waits}
+          </p>
+        )}
         {asking?.line === ADD && confirmation(asking)}
       </div>
     );

@@ -1639,6 +1639,37 @@ describe("adding a grant (#1465)", () => {
     ).toBeInTheDocument();
   });
 
+  it("says under the form where a name it picks is waiting for Give back (#1586)", async () => {
+    // A grant added for such a name is out of force until Give back: the form says so before
+    // the press, and the press says it again once it is done.
+    const fake = core({ standing: { returned: ["devops"] } });
+    fake.on("add_dispatch_grant", () => {});
+    render(<Table />);
+    await table();
+    const form = screen.getByRole("group", { name: /Add a grant/ });
+    const user = userEvent.setup();
+    const from = within(form).getByRole("combobox", { name: "Chats running as" });
+    const to = within(form).getByRole("combobox", { name: "May dispatch to" });
+    await user.selectOptions(from, "steward");
+    await user.selectOptions(to, "qa");
+    expect(within(form).queryByRole("note")).toBeNull();
+
+    await user.selectOptions(to, "devops");
+    const waiting =
+      "devops was gone, and the persona of that name now is not the one that left: a grant added for it is not in force until you Give back to devops, in the table above.";
+    expect(within(form).getByRole("note")).toHaveTextContent(waiting);
+    // The asking name too.
+    await user.selectOptions(from, "devops");
+    expect(within(form).getByRole("note")).toHaveTextContent(waiting);
+
+    await press(/^Add grant: /, "Add grant");
+    expect(
+      await screen.findByText(
+        `Allowed for you on this machine, in any workspace: devops chats dispatch to qa without asking you. ${waiting}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("is not offered where the project has fewer than two personas", async () => {
     core({ standing: { personas: ["steward"] } });
     render(<Table />);
