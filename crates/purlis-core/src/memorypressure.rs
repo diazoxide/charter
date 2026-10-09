@@ -5,7 +5,8 @@
 //! measurement on a machine under pressure:
 //!
 //! - **macOS**: the kernel's memory pressure level, `kern.memorystatus_vm_pressure_level`,
-//!   read by running `/usr/sbin/sysctl -n` (a `sysctlbyname` call would need `unsafe`). It is
+//!   read by running `/usr/sbin/sysctl -n` (a `sysctlbyname` call would need `unsafe`), by
+//!   its full path, with no shell and no environment, for at most two seconds. It is
 //!   `1` while memory is normal, `2` while the system warns and `4` when it is critical. Only
 //!   critical is short (D-1467-1): a Mac sits at the warning level for hours under ordinary
 //!   heavy use while memory is still being compressed, and holding every dispatch for that
@@ -73,13 +74,64 @@ pub fn read() -> Memory {
 
 #[cfg(target_os = "macos")]
 fn macos() -> Memory {
-    let ran = crate::forklock::output(
-        std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "kern.memorystatus_vm_pressure_level"]),
-    );
-    match ran {
-        Ok(out) if out.status.success() => macos_level(&String::from_utf8_lossy(&out.stdout)),
-        _ => Memory::Unread,
+    let mut sysctl = std::process::Command::new("/usr/sbin/sysctl");
+    sysctl.args(["-n", "kern.memorystatus_vm_pressure_level"]);
+    bounded_output(&mut sysctl, READ_DEADLINE, READ_MOST)
+        .map_or(Memory::Unread, |said| macos_level(&said))
+}
+
+/// How long the machine's reader may take: it is asked on a dispatch's own path.
+#[cfg(any(target_os = "macos", test))]
+const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The most of the reader's output read: a level is one number.
+#[cfg(any(target_os = "macos", test))]
+const READ_MOST: u64 = 64;
+
+/// What `command` printed, at most `most` bytes, where it exits successfully within
+/// `deadline`; `None` otherwise, and a command still running at the deadline is killed.
+///
+/// Run with no environment, no input and its errors dropped, so a reader asked on a dispatch's
+/// path can neither hang it nor take anything from purlis's own environment.
+#[cfg(any(target_os = "macos", test))]
+fn bounded_output(
+    command: &mut std::process::Command,
+    deadline: std::time::Duration,
+    most: u64,
+) -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = crate::forklock::spawn(
+        command
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
+    let until = std::time::Instant::now() + deadline;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                let mut said = String::new();
+                child
+                    .stdout
+                    .take()?
+                    .take(most)
+                    .read_to_string(&mut said)
+                    .ok()?;
+                return Some(said);
+            }
+            Ok(None) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(Some(_)) => return None,
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 
@@ -175,6 +227,44 @@ impl Gauge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_reader_is_bounded_in_time_and_in_what_it_reads() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+        let said = bounded_output(Command::new("/bin/echo").arg("4"), READ_DEADLINE, READ_MOST);
+        assert_eq!(said.as_deref().map(str::trim), Some("4"));
+        // A reader that does not answer in time is killed and reads as nothing.
+        let began = Instant::now();
+        let hung = bounded_output(
+            Command::new("/bin/sleep").arg("30"),
+            Duration::from_millis(200),
+            READ_MOST,
+        );
+        assert_eq!(hung, None);
+        assert!(
+            began.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            began.elapsed()
+        );
+        // One that fails reads as nothing.
+        assert_eq!(
+            bounded_output(
+                &mut Command::new("/usr/bin/false"),
+                READ_DEADLINE,
+                READ_MOST
+            ),
+            None
+        );
+        // No more than the cap is kept.
+        let long = bounded_output(
+            Command::new("/bin/echo").arg("1".repeat(1000)),
+            READ_DEADLINE,
+            READ_MOST,
+        );
+        assert_eq!(long.map(|s| s.len()), Some(READ_MOST as usize));
+    }
 
     #[test]
     fn macos_is_short_only_at_the_critical_level() {
