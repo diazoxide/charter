@@ -114,6 +114,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 4,
     why: ACTION,
   },
+  "EmptyState.tsx": {
+    count: 1,
+    why:
+      'the role a caller passes (`role="status"`) for an empty state that is a surface\'s ' +
+      "answer, not a standing line: each caller is listed here by its own count",
+  },
   "Cockpit.tsx": {
     count: 1,
     why: "a branch's apart count, said as it changes: a live value, not a line",
@@ -315,6 +321,13 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: VIEWS,
   },
   "editor/BranchTree.tsx": { count: 1, why: "the branch tree's read refusal, inside the editor" },
+  "editor/PieceDiff.tsx": {
+    count: 5,
+    why:
+      "the comparison tab's whole answer when it draws no merge view: reading, the core's " +
+      "refusal, or why no line is drawn (#1189). The tab's own Compare again and Open in your " +
+      "editor, at its top, are the way out",
+  },
   "editor/PieceFiles.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },
   "references.tsx": {
     count: 1,

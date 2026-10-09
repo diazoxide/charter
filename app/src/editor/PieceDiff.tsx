@@ -7,6 +7,10 @@
  * its own (`hunks.ts`). **Nothing is ever drawn as an empty diff**: a file the branch did not
  * change, a binary one, one past 2 MiB, one charter cannot read, or a path the core refuses is
  * said in a sentence.
+ *
+ * **Each sentence is a status** (#1189): the reading, the refusal and the change with no line in
+ * it are said to a screen reader as they come, and the merge view is named after the file and
+ * what it is compared against.
  */
 import { useEffect, useState } from "react";
 import { FileDiff as FileDiffMark, LoaderCircle } from "lucide-react";
@@ -96,9 +100,13 @@ function against(shown: WhatChanged): string {
 function Compared({ path, read }: { path: string; read: Read }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (read.kind === "reading")
-    return <EmptyState mark={LoaderCircle} headline={`Comparing ${path}…`} size="panel" />;
+    return (
+      <EmptyState mark={LoaderCircle} headline={`Comparing ${path}…`} size="panel" role="status" />
+    );
   if (read.kind === "refused")
-    return <EmptyState headline={read.why} size="panel" testid="piece-diff-trouble" />;
+    return (
+      <EmptyState headline={read.why} size="panel" role="status" testid="piece-diff-trouble" />
+    );
   const { diff, base } = read.shown;
   const said = noLine(name, read.shown, base ?? "its last commit");
   switch (diff.kind) {
@@ -109,6 +117,7 @@ function Compared({ path, read }: { path: string; read: Read }) {
           headline={`${name} is a binary file, so its lines are not compared`}
           body={TO_YOUR_EDITOR}
           size="panel"
+          role="status"
           testid="piece-diff-trouble"
         />
       );
@@ -119,6 +128,7 @@ function Compared({ path, read }: { path: string; read: Read }) {
           headline={`${name} is ${sized(diff.bytes)}, past what the comparison draws (2 MiB)`}
           body={TO_YOUR_EDITOR}
           size="panel"
+          role="status"
           testid="piece-diff-trouble"
         />
       );
@@ -129,10 +139,17 @@ function Compared({ path, read }: { path: string; read: Read }) {
           headline={said.headline}
           body={said.body}
           size="panel"
+          role="status"
           testid="piece-diff-trouble"
         />
       ) : (
-        <MergeViewer path={path} base={diff.base} head={diff.head} hunks={diff.hunks} />
+        <MergeViewer
+          path={path}
+          base={diff.base}
+          head={diff.head}
+          hunks={diff.hunks}
+          label={`What changed in ${path} ${against(read.shown)}`}
+        />
       );
   }
 }

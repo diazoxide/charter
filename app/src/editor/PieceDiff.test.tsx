@@ -152,3 +152,48 @@ describe("what changed in one file (FM-11)", () => {
     await waitFor(() => expect(asked).toHaveLength(2));
   });
 });
+
+describe("what changed, to a screen reader (#1189)", () => {
+  it("says the comparison is being read as a status", () => {
+    mockIPC(() => new Promise(() => {}));
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Comparing src/lib.rs…");
+  });
+
+  it("says a refusal and a change with no line in it as a status", async () => {
+    core("'src/same.rs' is not a file this branch changed against its base");
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/same.rs" />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "'src/same.rs' is not a file this branch changed against its base",
+      ),
+    );
+    cleanup();
+
+    core(changed({ kind: "text", base: "same\n", head: "same\n", hunks: [] }));
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="run.sh" />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("No line of run.sh differs from main"),
+    );
+  });
+
+  it("names the merge view after the file and what it is compared against", async () => {
+    core(
+      changed({
+        kind: "text",
+        base: "one\n",
+        head: "ONE\n",
+        hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 }],
+      }),
+    );
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+
+    expect(
+      await screen.findByRole("group", { name: "What changed in src/lib.rs against main" }),
+    ).toHaveAttribute("data-testid", "merge-viewer");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
