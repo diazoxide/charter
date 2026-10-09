@@ -420,8 +420,9 @@ fn own_text(tree: &Path, rel: &str) -> Option<String> {
     Some(text)
 }
 
-/// The file, in the project's `<state>/app/`, that lists every mirrored text the project has
-/// offered a checkout ([`note_offered`]).
+/// The file, in the project's `<state>/app/`, that lists every text the project has offered
+/// at a path it may later withdraw ([`note_offered`]): the mirrored agents and skills a
+/// checkout gets, and the generated settings a workspace folder gets ([`crate::wslayer`]).
 const OFFERED: &str = "mirrors-offered.json";
 
 /// The most digests [`OFFERED`] keeps for one path, newest last: every edit of an agent is a
@@ -432,13 +433,19 @@ const MOST_OFFERED: usize = 32;
 /// (`<state>/app`, by each spelling of the state folder), and NOT the checkout's own record,
 /// which sits in the chat's own tree: a record a chat can write cannot be what proves a file
 /// is purlis's to delete.
-fn offered_path(plane: &Path) -> PathBuf {
+pub(crate) fn offered_path(plane: &Path) -> PathBuf {
     names::state(plane).join("app").join(OFFERED)
 }
 
-/// What [`OFFERED`] holds: `{path: [digest, …]}` for the mirrored paths only. Absent,
+/// The paths [`OFFERED`] notes: every one purlis may withdraw a copy at, in a checkout or in a
+/// workspace folder. The machine-local settings are left out: the harness writes there too.
+fn offerable(rel: &str) -> bool {
+    mirrored_path(rel) || rel == SETTINGS
+}
+
+/// What [`OFFERED`] holds: `{path: [digest, …]}` for the [`offerable`] paths only. Absent,
 /// unreadable, behind a link, or not that shape is nothing offered, which withdraws nothing.
-fn read_offered(plane: &Path) -> BTreeMap<String, Vec<String>> {
+pub(crate) fn read_offered(plane: &Path) -> BTreeMap<String, Vec<String>> {
     crate::contain::read_text_no_link(plane, &offered_path(plane))
         .map(|text| parse_offered(&text))
         .unwrap_or_default()
@@ -449,7 +456,7 @@ fn parse_offered(text: &str) -> BTreeMap<String, Vec<String>> {
         return BTreeMap::new();
     };
     doc.into_iter()
-        .filter(|(rel, _)| layer::key_ok(rel) && mirrored_path(rel))
+        .filter(|(rel, _)| layer::key_ok(rel) && offerable(rel))
         .filter_map(|(rel, digests)| {
             let digests: Vec<String> = digests
                 .as_array()?
@@ -461,14 +468,14 @@ fn parse_offered(text: &str) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-/// Note each mirrored text `want` offers in [`OFFERED`], so a copy of it can be withdrawn
+/// Note each [`offerable`] text `want` offers in [`OFFERED`], so a copy of it can be withdrawn
 /// once the project stops having it (#1583). Written only when something is new, and under
 /// the folder's lock. A write that fails (a sandboxed caller, a read-only project) notes
 /// nothing, and what is not noted is never withdrawn: the safe direction.
-fn note_offered(plane: &Path, want: &BTreeMap<String, String>) {
+pub(crate) fn note_offered(plane: &Path, want: &BTreeMap<String, String>) {
     let offers: Vec<(&String, String)> = want
         .iter()
-        .filter(|(rel, _)| mirrored_path(rel))
+        .filter(|(rel, _)| offerable(rel))
         .map(|(rel, text)| (rel, digest(text)))
         .collect();
     let known = read_offered(plane);
@@ -3253,6 +3260,7 @@ mod tests {
             BTreeMap::from([
                 (AGENT.to_owned(), text.to_owned()),
                 (SETTINGS.to_owned(), "{}\n".to_owned()),
+                (LOCAL_SETTINGS.to_owned(), "{}\n".to_owned()),
             ])
         };
 
@@ -3260,8 +3268,12 @@ mod tests {
         let noted = read_offered(plane);
         assert_eq!(
             noted,
-            BTreeMap::from([(AGENT.to_owned(), vec![digest("# ops\n")])]),
-            "the generated settings are no mirror and are not noted"
+            BTreeMap::from([
+                (AGENT.to_owned(), vec![digest("# ops\n")]),
+                (SETTINGS.to_owned(), vec![digest("{}\n")]),
+            ]),
+            "the generated settings are noted for a workspace folder's withdraw; the \
+             machine-local ones, which the harness writes too, are not"
         );
         let written = std::fs::metadata(offered_path(plane))
             .unwrap()
@@ -3291,7 +3303,9 @@ mod tests {
 
         // A file of another shape, or naming what is no mirror, offers nothing.
         assert!(parse_offered("[1]").is_empty());
-        assert!(parse_offered(r#"{"../x": ["a"], ".claude/settings.json": ["a"]}"#).is_empty());
+        assert!(
+            parse_offered(r#"{"../x": ["a"], ".claude/settings.local.json": ["a"]}"#).is_empty()
+        );
     }
 
     #[test]

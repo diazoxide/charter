@@ -306,9 +306,15 @@ pub fn status(
     let record = layer::read_record(dir);
     let mut rows = found(plane, dir, want_all, &record);
     rows.extend(
-        unwanted(plane, dir, want_all, &record)
-            .into_iter()
-            .map(|rel| (rel, Found::Unwanted)),
+        unwanted(
+            plane,
+            dir,
+            want_all,
+            &record,
+            &crate::guest::read_offered(plane),
+        )
+        .into_iter()
+        .map(|rel| (rel, Found::Unwanted)),
     );
     rows
 }
@@ -365,6 +371,13 @@ fn found(
 /// since edited is not charter's to delete, and unreadable counts as not charter's for the
 /// same reason.
 ///
+/// **Only a text purlis itself offered at that very path** (`offered`, the project's ledger
+/// [`crate::guest::read_offered`]). The record sits in the workspace folder, where a chat may
+/// be able to write it, so on its own it proves nothing: a forged entry naming the operator's
+/// own file, with that file's digest, would otherwise have purlis delete it. The ledger lives
+/// in the project's app state, which no chat can write, and nothing noted is nothing
+/// withdrawn (#1583).
+///
 /// **Never a held path**: a plane file charter cannot READ is not a plane that stopped
 /// declaring something, and withdrawing over it took every workspace's `enabledPlugins`,
 /// `env` and `deny` away over a typo.
@@ -373,6 +386,7 @@ fn unwanted(
     dir: &Path,
     want_all: &BTreeMap<String, String>,
     record: &Record,
+    offered: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
     let held = layer::held(plane);
     let mut roots: BTreeSet<&str> = GENERATED_ROOTS.into_iter().collect();
@@ -399,7 +413,10 @@ fn unwanted(
         let Ok(have) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if record.recorded(rel).contains(&layer::digest(&have)) {
+        let have = layer::digest(&have);
+        if record.recorded(rel).contains(&have)
+            && offered.get(rel).is_some_and(|all| all.contains(&have))
+        {
             out.push(rel.clone());
         }
     }
@@ -453,7 +470,8 @@ fn withdraw(
     record: &mut Record,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
-    for rel in unwanted(plane, dir, want_all, record) {
+    let offered = crate::guest::read_offered(plane);
+    for rel in unwanted(plane, dir, want_all, record, &offered) {
         let path = dir.join(rel.as_str());
         // Re-checked at the moment of the unlink, not carried from the classification: this
         // is the destructive verb, and it is the one that must not act on a stale answer.
@@ -537,6 +555,9 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     // A record charter wrote under its old name is charter's record still: moved to the
     // purlis name before it is read, bytes unchanged, so what it vouched for stays charter's.
     let _ = layer::carry_over(dir);
+    // Before anything is written or withdrawn: a copy goes later only if this says purlis
+    // offered that text here.
+    crate::guest::note_offered(plane, &want_all);
     let mut record = layer::read_record(dir);
     let before = record.clone();
     let mut rows = withdraw(plane, dir, &want_all, &mut record);
@@ -1471,6 +1492,104 @@ mod tests {
             "{did:?} must not touch a file outside charter's generated roots"
         );
         assert!(ws.join("README.md").exists());
+    }
+
+    /// Write `entries` as the workspace folder's record, the way anything that can write
+    /// the folder could.
+    fn forge_record(ws: &Path, entries: &[(&str, &str)]) {
+        let doc: serde_json::Map<String, serde_json::Value> = entries
+            .iter()
+            .map(|(rel, text)| ((*rel).to_owned(), layer::digest(text).into()))
+            .collect();
+        std::fs::write(ws.join(layer::MARKER), serde_json::to_string(&doc).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_forged_record_naming_the_operators_own_file_under_a_generated_root_withdraws_nothing() {
+        // The record sits in the workspace folder, where a chat may be able to write it. One
+        // naming the operator's own file under `.claude/`, with that file's digest, must not
+        // get purlis to delete it: purlis never offered that text there.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        let ws = dir.path().join("workspaces").join("alpha");
+        let mine = ".claude/notes/mine.md";
+        std::fs::create_dir_all(ws.join(".claude/notes")).unwrap();
+        std::fs::write(ws.join(mine), "the operator's\n").unwrap();
+        forge_record(&ws, &[(mine, "the operator's\n")]);
+
+        assert!(
+            !status(dir.path(), &ws, &want(dir.path()))
+                .iter()
+                .any(|(rel, _)| rel == mine),
+            "a file purlis never offered is not reported as purlis's to withdraw"
+        );
+        let did = wire(dir.path(), &ws);
+        assert!(!did.iter().any(|r| r.rel == mine), "{did:?}");
+        assert_eq!(
+            std::fs::read_to_string(ws.join(mine)).unwrap(),
+            "the operator's\n"
+        );
+    }
+
+    #[test]
+    fn a_forged_record_naming_the_operators_own_settings_withdraws_nothing() {
+        // The plane offers nothing, and the operator keeps a settings file of their own in
+        // the workspace folder. A record naming it is not proof purlis wrote it.
+        let (plane, ws) = plane();
+        std::fs::write(plane.path().join(layer::SETTINGS), r#"{"hooks":{}}"#).unwrap();
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
+        std::fs::write(ws.join(layer::SETTINGS), "MINE\n").unwrap();
+        forge_record(&ws, &[(layer::SETTINGS, "MINE\n")]);
+
+        assert_eq!(status(plane.path(), &ws, &want(plane.path())), []);
+        assert_eq!(rows(&wire(plane.path(), &ws)), []);
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
+            "MINE\n"
+        );
+
+        // Offered at that path once, but another text: still not this file.
+        crate::guest::note_offered(
+            plane.path(),
+            &BTreeMap::from([(layer::SETTINGS.to_owned(), "{}\n".to_owned())]),
+        );
+        assert_eq!(rows(&wire(plane.path(), &ws)), []);
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
+            "MINE\n"
+        );
+    }
+
+    #[test]
+    fn a_copy_purlis_offered_goes_and_nothing_goes_when_nothing_was_noted() {
+        // The genuine case: purlis wrote the settings, noted the offer, and the plane then
+        // stopped declaring anything.
+        let (plane, ws) = plane();
+        wire(plane.path(), &ws);
+        let ledger = crate::guest::offered_path(plane.path());
+        assert!(
+            ledger.exists(),
+            "the offer is noted where no chat can write"
+        );
+
+        let (other, other_ws) = self::plane();
+        wire(other.path(), &other_ws);
+        // Nothing could be noted, or the note is gone: fail closed.
+        std::fs::remove_file(crate::guest::offered_path(other.path())).unwrap();
+        for p in [&plane, &other] {
+            std::fs::write(p.path().join(layer::SETTINGS), r#"{"hooks":{}}"#).unwrap();
+        }
+
+        assert_eq!(
+            rows(&wire(plane.path(), &ws)),
+            [(layer::SETTINGS, Did::Removed)]
+        );
+        assert!(!ws.join(layer::SETTINGS).exists());
+        assert_eq!(rows(&wire(other.path(), &other_ws)), []);
+        assert!(
+            other_ws.join(layer::SETTINGS).exists(),
+            "with no note, nothing is withdrawn"
+        );
     }
 
     #[test]
