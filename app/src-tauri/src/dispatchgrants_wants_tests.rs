@@ -166,6 +166,25 @@ fn the_question_offers_a_box_for_each_wanted_persona_nothing_answers_for_yet() {
 }
 
 #[test]
+fn a_persona_the_person_said_never_to_for_a_chat_above_is_not_a_box() {
+    // #1548: a task of a lead chat asks. The person said never to lead's chats dispatching to
+    // qa, which the decision refuses for this chat too, so qa is no box on its question.
+    let world = wanting();
+    define(world.root(), "lead", "");
+    dispatchgrant::never(world.root(), &Pair::new("lead", "qa").unwrap()).expect("kept");
+    let (store, _) = store();
+    let below_lead = Asking {
+        above: dispatchchain::Above::Known(vec![Some("lead".to_owned())]),
+        ..chat(3, Some("steward"))
+    };
+    let id = pending_of(&world.request(&store, below_lead, "devops", BRIEF));
+    assert_eq!(boxes(&shown(&world, &store, id)), ["docs"]);
+    // Another steward chat, with nobody above it, is offered both.
+    let id = pending_of(&world.request(&store, chat(4, Some("steward")), "devops", BRIEF));
+    assert_eq!(boxes(&shown(&world, &store, id)), ["docs", "qa"]);
+}
+
+#[test]
 fn a_wanted_persona_with_a_question_of_its_own_waiting_is_not_a_box() {
     let world = wanting();
     let (store, _) = store();

@@ -27,8 +27,8 @@
 //!   since "any persona" is Settings' alone;
 //! - no more than [`MOST`] are offered, however long the line is, and in alphabetical order,
 //!   so where a box stands is not the file's to choose ([`also`]);
-//! - a pair already granted, refused by the person or locked by policy is not offered
-//!   ([`also`]).
+//! - a pair already granted, refused by the person or locked by policy is not offered, nor
+//!   one the person refused for a chat above the asking one in its chain ([`also`]).
 //!
 //! `purlis persona lint`, and so the doctor's count of persona findings, says each thing in
 //! the line that is ignored ([`Ignored::said`]).
@@ -53,6 +53,7 @@
 
 use std::path::Path;
 
+use crate::dispatchchain::Above;
 use crate::dispatchgrant::{Covers, InForce};
 use crate::sandbox::policy::Locks;
 
@@ -272,15 +273,25 @@ pub fn of(root: &Path, persona: &str) -> Wants {
 /// for yet, so not one a grant covers, the person said never to, or a policy locks. None for a
 /// chat on no persona. **In alphabetical order**, whatever order the line writes them in: where
 /// a box stands on the question is not the file's to choose.
+///
+/// **Nor one the person said never to for a chat `above` the asking one** (#1548, ADR 0090):
+/// the decision refuses that dispatch from this chat
+/// ([`crate::dispatchgrant::covers_in_chain`]), so it is no box either. Where purlis cannot
+/// read the chain ([`Above::Unread`]), a persona any never names is left out.
 pub fn also(
     root: &Path,
     asking: Option<&str>,
     target: &str,
     grants: &InForce,
     locks: &Locks,
+    above: &Above,
 ) -> Vec<String> {
     let Some(asking) = asking else {
         return Vec::new();
+    };
+    let refused_above = |wanted: &str| match above {
+        Above::Known(chain) => grants.refuses_above(chain, wanted).is_some(),
+        Above::Unread => grants.refuses_any_to(wanted),
     };
     let mut offered: Vec<String> = of(root, asking)
         .personas
@@ -289,6 +300,7 @@ pub fn also(
         .filter(|wanted| {
             crate::dispatchgrant::covers(Some(asking), wanted, grants, locks) == Covers::NeedsGrant
         })
+        .filter(|wanted| !refused_above(wanted))
         .collect();
     offered.sort();
     offered

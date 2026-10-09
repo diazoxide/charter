@@ -133,6 +133,36 @@ pub fn recovered(
     None
 }
 
+/// **Who is above a chat in its chain, as its own record keeps it**: what the dispatch
+/// question reads to leave out a box the decision would refuse ([`crate::dispatchwants::also`]).
+/// Read from the record alone, with no walk and no dispatch records, so for an older record
+/// it fails closed: [`Above::Unread`], and fewer boxes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Above {
+    /// The personas above it, nearest first, `None` for a chat on no persona. Empty for the
+    /// chat the person started, which is also the default.
+    Known(Vec<Option<String>>),
+    /// A record written before the chain was kept: any persona may be above it.
+    Unread,
+}
+
+impl Default for Above {
+    fn default() -> Self {
+        Self::Known(Vec::new())
+    }
+}
+
+impl Above {
+    /// What `chat`'s own record keeps: nothing above a chat no dispatch started, the chain a
+    /// dispatched chat keeps, and [`Above::Unread`] for one that keeps none.
+    pub fn of(chat: &Chat) -> Self {
+        match chat.from.as_ref() {
+            None => Self::default(),
+            Some(from) => from.above.clone().map_or(Self::Unread, Self::Known),
+        }
+    }
+}
+
 /// A chat on the way up: one the app has open, or one known only by its id from a record.
 enum At<'a> {
     Open(&'a Chat),

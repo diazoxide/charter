@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use super::*;
+use crate::dispatchchain::Above;
 use crate::dispatchgrant::{ChatPair, Covers, InForce, covers};
 use crate::sandbox::policy::Locks;
 use crate::secrets::{Ctx, Env};
@@ -382,8 +383,16 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
         ("ops", &persona("ops", "")),
     ]);
     let root = project.path();
-    let offered =
-        |grants: &InForce, locks: &Locks| also(root, Some("steward"), "devops", grants, locks);
+    let offered = |grants: &InForce, locks: &Locks| {
+        also(
+            root,
+            Some("steward"),
+            "devops",
+            grants,
+            locks,
+            &Above::default(),
+        )
+    };
     // The asked pair is the question itself, never a box under it.
     assert_eq!(
         offered(&InForce::default(), &Locks::none()),
@@ -417,8 +426,71 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
     );
     // A chat on no persona has no definition, so nothing is offered.
     assert_eq!(
-        also(root, None, "devops", &InForce::default(), &Locks::none()),
+        also(
+            root,
+            None,
+            "devops",
+            &InForce::default(),
+            &Locks::none(),
+            &Above::default()
+        ),
         [] as [&str; 0]
+    );
+}
+
+#[test]
+fn a_question_leaves_out_a_persona_the_person_said_never_to_for_a_chat_above() {
+    // #1548: the decision refuses a dispatch to a persona the person said never to for a chat
+    // above the asking one (ADR 0090), so the question offers no box for it either.
+    let project = project(&[
+        ("steward", &persona("steward", "wants: [qa, ops]\n")),
+        ("devops", &persona("devops", "")),
+        ("qa", &persona("qa", "")),
+        ("ops", &persona("ops", "")),
+    ]);
+    let root = project.path();
+    let grants = InForce {
+        never: vec![("lead".to_owned(), "ops".to_owned())],
+        ..InForce::default()
+    };
+    let offered = |above: &Above| {
+        also(
+            root,
+            Some("steward"),
+            "devops",
+            &grants,
+            &Locks::none(),
+            above,
+        )
+    };
+    // The person's own chat: nothing above it, both are offered.
+    assert_eq!(offered(&Above::default()), ["ops", "qa"]);
+    // A task of a lead chat: ops is refused for it, and is no box.
+    let below_lead = Above::Known(vec![Some("lead".to_owned()), None]);
+    assert_eq!(offered(&below_lead), ["qa"]);
+    // A chain purlis cannot read whole may hold lead: a persona any never names is no box.
+    assert_eq!(offered(&Above::Unread), ["qa"]);
+    // What the chat's own record keeps is what is above it.
+    let mut task = crate::reopen::Chat::default();
+    assert_eq!(Above::of(&task), Above::default());
+    task.from = Some(crate::reopen::HandedFrom {
+        chat: 1,
+        name: "lead 1".to_owned(),
+        workspace: crate::active::Place::PlaneRoot,
+        report: crate::reopen::Owed::Due,
+        mode: crate::reopen::Mode::Task,
+        depth: 1,
+        root: None,
+        above: None,
+        by_person: false,
+    });
+    assert_eq!(Above::of(&task), Above::Unread);
+    if let Some(from) = task.from.as_mut() {
+        from.above = Some(vec![Some("lead".to_owned())]);
+    }
+    assert_eq!(
+        Above::of(&task),
+        Above::Known(vec![Some("lead".to_owned())])
     );
 }
 

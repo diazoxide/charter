@@ -398,6 +398,7 @@ fn allowing_a_tasks_dispatch_for_this_chat_allows_nothing_for_its_session_or_sib
         name: format!("chat {session}"),
         persona: Some("steward".to_owned()),
         held: false,
+        above: purlis_core::dispatchchain::Above::Known(Vec::new()),
     };
     let store = Store::default();
     let ask = |session: u32| {
