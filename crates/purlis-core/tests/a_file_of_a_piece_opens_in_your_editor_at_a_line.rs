@@ -18,6 +18,13 @@ fn cut(f: &support::Fixture, piece: &str) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap()
 }
 
+/// The arguments a program is handed: `said`, then the file, as the operating system spells it.
+fn words(said: &[&str], file: std::path::PathBuf) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = said.iter().map(|word| word.into()).collect();
+    args.push(file.into_os_string());
+    args
+}
+
 /// No `$VISUAL` and no `$EDITOR`.
 fn no_variables(_: &str) -> Option<String> {
     None
@@ -128,12 +135,7 @@ fn visual_is_run_as_a_program_with_the_line_and_the_file_as_arguments() {
         launched,
         Launch::Program {
             program: "emacsclient".to_string(),
-            args: vec![
-                "-c".to_string(),
-                "a b".to_string(),
-                "+40".to_string(),
-                piece.join("README.md").display().to_string(),
-            ],
+            args: words(&["-c", "a b", "+40"], piece.join("README.md")),
         }
     );
 }
@@ -151,10 +153,7 @@ fn editor_is_used_when_visual_is_not_set() {
         launched,
         Launch::Program {
             program: "gvim".to_string(),
-            args: vec![
-                "+2".to_string(),
-                piece.join("README.md").display().to_string()
-            ],
+            args: words(&["+2"], piece.join("README.md")),
         }
     );
 }
@@ -172,12 +171,7 @@ fn a_shell_line_in_editor_is_split_into_words_and_never_run_by_a_shell() {
         launched,
         Launch::Program {
             program: "gvim;".to_string(),
-            args: vec![
-                "touch".to_string(),
-                "$HOME/x".to_string(),
-                "+2".to_string(),
-                piece.join("README.md").display().to_string()
-            ],
+            args: words(&["touch", "$HOME/x", "+2"], piece.join("README.md")),
         }
     );
 }
@@ -279,4 +273,62 @@ fn the_editor_program_is_started_with_each_argument_as_it_was_given() {
             piece.join("a dir/it's $HOME.md").display()
         )
     );
+}
+
+/// A stand-in editor that runs `body` as a shell script, started through [`youreditor::start`]
+/// as `$EDITOR` would be: what `start` answered, and how long it took.
+#[cfg(unix)]
+fn started_as_editor(
+    dir: &std::path::Path,
+    name: &str,
+    body: &str,
+) -> (Result<(), String>, std::time::Duration) {
+    let editor = stand_in::program(dir, name, &format!("#!/bin/sh\n{body}\n"));
+    let began = std::time::Instant::now();
+    let answered = youreditor::start(&editor.display().to_string(), &[]);
+    (answered, began.elapsed())
+}
+
+#[cfg(unix)]
+#[test]
+fn an_editor_that_fails_at_once_is_said_and_not_dropped() {
+    purlis_core::unsteered!();
+    let dir = tempfile::tempdir().unwrap();
+
+    // What vi does with no terminal: it reads the end of its input and exits 1, saying nothing.
+    let (answered, _) = started_as_editor(dir.path(), "a-terminal-editor", "exit 1");
+
+    let refused = answered.unwrap_err();
+    assert!(refused.contains("exited at once, with code 1"), "{refused}");
+    assert!(
+        refused.contains("a terminal editor needs a terminal"),
+        "{refused}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_editor_still_open_after_a_moment_is_an_editor_that_opened() {
+    purlis_core::unsteered!();
+    let dir = tempfile::tempdir().unwrap();
+
+    let (answered, took) = started_as_editor(dir.path(), "a-windowed-editor", "sleep 4");
+
+    assert_eq!(answered, Ok(()));
+    assert!(
+        took < std::time::Duration::from_millis(3500),
+        "start waited for the editor to close: {took:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_editor_that_hands_the_file_on_and_exits_with_success_opened() {
+    purlis_core::unsteered!();
+    let dir = tempfile::tempdir().unwrap();
+
+    // What `gvim` and `emacsclient -n` do: hand the file to a window and exit 0.
+    let (answered, _) = started_as_editor(dir.path(), "a-forking-editor", "exit 0");
+
+    assert_eq!(answered, Ok(()));
 }
