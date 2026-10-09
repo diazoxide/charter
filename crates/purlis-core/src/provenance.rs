@@ -185,8 +185,12 @@ impl Provenance {
         };
         let assisted = match (form, known(&self.model)) {
             (Form::Llm, _) => BARE.to_owned(),
-            (Form::Full, Some(model)) => format!("{harness}:{model}"),
-            (Form::Full, None) => harness.to_owned(),
+            // A model too long to stand beside its harness on one value is not known
+            // either: the bare harness is written, never a value its reader would drop.
+            (Form::Full, Some(model)) if harness.len() + 1 + model.len() <= MOST => {
+                format!("{harness}:{model}")
+            }
+            (Form::Full, _) => harness.to_owned(),
         };
         let mut out = vec![format!("{ASSISTED_BY}: {assisted}")];
         for (key, value) in [

@@ -662,3 +662,39 @@ fn what_append_writes_reads_back_as_what_was_stamped() {
     assert_eq!(claims.persona.one(), p.persona.as_deref());
     assert_eq!(claims.change.one(), p.change.as_deref());
 }
+
+#[test]
+fn a_model_as_long_as_one_is_kept_still_fits_beside_every_harness_and_reads_back() {
+    // #1021 review: the trailer's value is `<harness>:<model>`, and its reader drops a value
+    // over the bound, so the longest model kept must fit beside the longest harness word.
+    for kind in ["claude", "codex", "opencode"] {
+        let harness = harness_word(kind).expect("a harness word");
+        assert!(
+            harness.len() + 1 + crate::state::Model::MOST <= MOST,
+            "{harness}"
+        );
+    }
+    let longest = "m".repeat(crate::state::Model::MOST);
+    assert!(crate::state::Model::new(&longest).is_some());
+    assert!(crate::state::Model::new(&format!("{longest}m")).is_none());
+
+    let said = Provenance {
+        harness: Some("claude-code".into()),
+        model: Some(longest.clone()),
+        ..Provenance::default()
+    };
+    let line = said.trailers(Form::Full).remove(0);
+    assert_eq!(line, format!("Assisted-by: claude-code:{longest}"));
+    assert_eq!(
+        Claims::read(&line).assisted_by.one(),
+        Some(format!("claude-code:{longest}").as_str())
+    );
+
+    // A model that would not fit beside its harness, however it got here, leaves the harness
+    // alone rather than a line its reader would pass over.
+    let too_long = Provenance {
+        model: Some(format!("{longest}m")),
+        ..said
+    };
+    assert_eq!(too_long.trailers(Form::Full)[0], "Assisted-by: claude-code");
+}

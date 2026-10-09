@@ -1467,7 +1467,8 @@ struct ChatOnDisk {
     #[serde(default, skip_serializing_if = "is_zero")]
     pid: u32,
     /// The model the chat's harness reported, or absent — see [`Chat::model`]. A value that is
-    /// not one word of printable ASCII, at most 100 bytes, reads as absent.
+    /// not one word of printable ASCII, at most [`crate::state::Model::MOST`] (88) bytes,
+    /// reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     model: String,
 }

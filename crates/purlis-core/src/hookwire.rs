@@ -3103,7 +3103,7 @@ mod tests {
         for odd in [
             serde_json::json!("two words"),
             serde_json::json!(""),
-            serde_json::json!("x".repeat(101)),
+            serde_json::json!("x".repeat(crate::state::Model::MOST + 1)),
             serde_json::json!("mod\u{e8}le"),
             serde_json::json!(4),
         ] {
