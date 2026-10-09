@@ -16,7 +16,36 @@
 //! instance.
 
 use std::fs::File;
+use std::io;
 use std::ops::{Deref, DerefMut};
+use std::time::{Duration, Instant};
+
+/// How long [`lock_within`] sleeps between tries.
+const A_TRY_EVERY: Duration = Duration::from_millis(5);
+
+/// Takes `file`'s exclusive lock, trying again every few milliseconds, or answers
+/// [`io::ErrorKind::TimedOut`] once `wait` has passed with another holder still on it: a wait
+/// that ends, where `File::lock` waits for as long as the holder likes. `what` is what the file
+/// is, as the error says it ("another process held {what} for 250 ms").
+///
+/// A caller that is refused this way has not got the lock, and goes on as one that could not
+/// read what it guards: it never reads or writes it unlocked.
+pub fn lock_within(file: File, wait: Duration, what: &str) -> io::Result<Held> {
+    let started = Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Held::locked(file)),
+            Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= wait => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("another process held {what} for {} ms", wait.as_millis()),
+                ));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(A_TRY_EVERY),
+            Err(std::fs::TryLockError::Error(why)) => return Err(why),
+        }
+    }
+}
 
 /// A [`File`] this process holds an `flock` on, unlocked when it is dropped.
 #[derive(Debug)]
@@ -78,5 +107,39 @@ mod tests {
             .try_lock()
             .expect("the lock is free once its holder is dropped");
         drop(a_forked_child_s_copy);
+    }
+
+    #[test]
+    fn a_lock_another_holder_keeps_is_waited_for_only_so_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.lock");
+        let holder = File::create(&path).unwrap();
+        holder.lock().unwrap();
+
+        let started = Instant::now();
+        let refused = lock_within(
+            File::open(&path).unwrap(),
+            Duration::from_millis(100),
+            "the test's lock",
+        )
+        .expect_err("the holder keeps it");
+        let waited = started.elapsed();
+
+        assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+        assert_eq!(
+            refused.to_string(),
+            "another process held the test's lock for 100 ms"
+        );
+        assert!(
+            waited >= Duration::from_millis(100) && waited < Duration::from_secs(2),
+            "waited {waited:?}"
+        );
+
+        // Let go of, it is taken, and let go of again when the taker is dropped.
+        drop(holder);
+        let taken = lock_within(File::open(&path).unwrap(), Duration::from_millis(100), "it")
+            .expect("free now");
+        drop(taken);
+        File::open(&path).unwrap().try_lock().expect("free again");
     }
 }
