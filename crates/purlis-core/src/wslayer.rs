@@ -693,6 +693,7 @@ fn guest_rows(plane: &Path, dir: &Path, tree: &Path) -> Vec<Row> {
                 crate::guest::Status::Unreadable => Did::Unreadable,
                 crate::guest::Status::Withheld => Did::Withheld,
                 crate::guest::Status::Unrecorded => Did::Unrecorded,
+                crate::guest::Status::Removed => Did::Removed,
             },
         })
         .collect();
