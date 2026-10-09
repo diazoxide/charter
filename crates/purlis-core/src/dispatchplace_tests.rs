@@ -795,6 +795,131 @@ fn a_record_that_does_not_read_keeps_the_command_off_the_folder_its_text_names()
     assert!(kept_from_removal(&root, "alpha", "api", piece, true, || true).is_some());
 }
 
+/// Writes `text` as record [`ID`]'s file in the store of the project at `root`.
+fn a_record_file(root: &Path, text: &str) {
+    let dir = dispatchrecord::dir(root);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{ID}.json")), text).unwrap();
+}
+
+#[test]
+fn a_record_cut_off_before_it_names_its_folder_holds_every_folder_of_its_repo() {
+    // #1534 (train 18's follow-up): a write cut short after the workspace and the repo may be
+    // the task of any folder of that repo, so each is held; another repo's or workspace's is not.
+    let (_dir, root) = project();
+    let record = a_record(Some(a_tree("check-b5rc0def", None)), Some("alpha"));
+    let text = serde_json::to_string_pretty(&record).unwrap();
+    for cut in [
+        text.find("\"piece\"").unwrap(),
+        text.find("\"piece\"").unwrap() + "\"piece\": \"che".len(),
+        text.find("\"piece\"").unwrap() + "\"piece\":".len(),
+    ] {
+        a_record_file(&root, &text[..cut]);
+        for piece in ["check-b5rc0def", "chat-1", "Mine"] {
+            assert_eq!(
+                held_in_folder(&root, "alpha", "api", piece),
+                Some(InFolder::Unread(ID.to_owned())),
+                "{piece}: {}",
+                &text[..cut]
+            );
+        }
+        for (ws, repo) in [("beta", "api"), ("alpha", "web")] {
+            assert_eq!(
+                held_in_folder(&root, ws, repo, "chat-1"),
+                None,
+                "{ws} {repo}"
+            );
+        }
+    }
+
+    // Cut off before it names the repo, it cannot tell a branch folder's task from a plain
+    // folder's, and holds nothing.
+    a_record_file(&root, &text[..text.find("\"repo\"").unwrap()]);
+    assert_eq!(held_in_folder(&root, "alpha", "api", "chat-1"), None);
+
+    // JSON that is whole but no record was not cut off: it holds only the folder it names.
+    a_record_file(
+        &root,
+        "{\"v\": 1, \"place\": {\"workspace\": \"alpha\", \"worktree\": {\"repo\": \"api\"}}}",
+    );
+    assert_eq!(held_in_folder(&root, "alpha", "api", "chat-1"), None);
+    // And a torn record that names another folder holds only that one.
+    a_record_file(&root, &text[..text.len() - 40]);
+    assert_eq!(held_in_folder(&root, "alpha", "api", "chat-1"), None);
+}
+
+#[test]
+fn the_explorer_s_merge_and_remove_read_the_store_as_the_command_does() {
+    // #1534: the window's guard is the core's reading, so it fails closed on a record that does
+    // not read and matches names without regard to case, as `purlis worktree remove` does.
+    let (_dir, root) = project();
+    let piece = "check-b5rc0def";
+    a_folder(&root, piece);
+    let kept = |ws: &str, repo: &str, typed: &str, merging: bool| {
+        kept_from_the_explorer(&root, ws, repo, typed, merging, || true)
+    };
+    assert_eq!(
+        kept("alpha", "api", piece, true),
+        None,
+        "no record names it"
+    );
+    assert_eq!(
+        kept("alpha", "api", piece, false),
+        None,
+        "no record names it"
+    );
+
+    // A running task's: refused with where to go instead, in the window's words.
+    let mut running = a_record(Some(a_tree(piece, None)), Some("alpha"));
+    running.ended = None;
+    stored(&root, &running);
+    for merging in [true, false] {
+        assert_eq!(
+            kept("alpha", "api", piece, merging),
+            Some(left_to_its_task("check the queue", piece, merging))
+        );
+        // Typed in another case: a Merge is held wherever; a Remove where the file system
+        // folds case, as macOS's does, so the folder is there to lose.
+        if merging || cfg!(target_os = "macos") {
+            assert!(kept("ALPHA", "Api", "Check-B5RC0DEF", merging).is_some());
+        }
+    }
+
+    // An ended task's in a repo the brokered route runs no git in: the Remove Discard sends the
+    // person to goes; a Merge never does.
+    stored(&root, &a_record(Some(a_tree(piece, None)), Some("alpha")));
+    assert_eq!(kept("alpha", "api", piece, false), None);
+    assert!(
+        kept_from_the_explorer(&root, "alpha", "api", piece, false, || false).is_some(),
+        "where Discard works, the folder is left to it"
+    );
+    assert!(kept("alpha", "api", piece, true).is_some());
+
+    // A record that does not read: held, naming the file that holds it.
+    let text = serde_json::to_string_pretty(&running).unwrap();
+    a_record_file(&root, &text[..text.len() - 40]);
+    for (merging, done) in [(true, "merged"), (false, "removed")] {
+        let said = kept("alpha", "api", piece, merging).expect("an unread record holds it");
+        assert!(
+            said.starts_with("'check-b5rc0def' is named by a dispatch record purlis cannot read ("),
+            "{said}"
+        );
+        assert!(said.contains(&format!("{ID}.json")), "{said}");
+        assert!(said.contains("and try again."), "{said}");
+        assert!(said.ends_with(&format!("Nothing was {done}.")), "{said}");
+        assert!(!said.to_lowercase().contains("worktree"), "{said}");
+        assert!(!said.contains("--"), "{said}");
+        if merging || cfg!(target_os = "macos") {
+            assert!(kept("ALPHA", "API", "CHECK-B5RC0DEF", merging).is_some());
+        }
+    }
+
+    // Its folder gone: a Remove only takes git's registration; a Merge is still the task's.
+    std::fs::remove_dir_all(root.join("workspaces/alpha/.worktrees/api").join(piece)).unwrap();
+    assert_eq!(kept("alpha", "api", piece, false), None);
+    assert!(kept("alpha", "api", piece, true).is_some());
+}
+
 #[test]
 fn a_chat_started_in_another_workspace_is_told_where_it_works_and_where_its_asker_does() {
     assert_eq!(

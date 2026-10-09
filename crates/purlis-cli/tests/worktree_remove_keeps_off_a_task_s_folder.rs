@@ -163,3 +163,36 @@ fn a_folder_a_dispatch_record_names_is_kept_forced_or_not_and_its_branch_with_it
     let out = p.purlis(&["wt", "remove", "svc", "mine", "-w", "alpha", "--force"]);
     assert!(out.status.success(), "{}", said(&out));
 }
+
+/// On a file system that folds case, as macOS's does by default, `CHECK-B5RC0DEF` is the
+/// folder `check-b5rc0def`, which git would then remove: the guard matches names without
+/// regard to case (#1534). Gated to macOS, where the folder typed in another case is there.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_task_s_folder_typed_in_another_case_is_kept_all_the_same() {
+    let p = Project::new();
+    let folder = p.cut("check-b5rc0def");
+    p.a_torn_record_naming("check-b5rc0def");
+
+    let out = p.purlis(&[
+        "wt",
+        "remove",
+        "svc",
+        "CHECK-B5RC0DEF",
+        "-w",
+        "alpha",
+        "--force",
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let text = said(&out);
+    assert!(
+        text.contains("is named by a dispatch record purlis cannot read"),
+        "{text}"
+    );
+    assert!(folder.join("work.txt").is_file(), "the folder is kept");
+    p.git(
+        &p.clone,
+        &["rev-parse", "--verify", "refs/heads/check-b5rc0def"],
+    );
+}
