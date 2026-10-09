@@ -3687,6 +3687,55 @@ fn a_forge_host_is_taken_as_a_host_is() {
     }
 }
 
+/// #1405: a `[[forge]]` host the sandbox does not let through is said, in the reader's voice,
+/// while the sandbox and the `forge` preset are on; never otherwise.
+#[test]
+fn a_forge_host_the_sandbox_drops_is_said() {
+    let forge = "[[forge]]\nkind = \"gitlab\"\nhost = \"169.254.169.254\"\n\n\
+                 [[forge]]\nkind = \"gitlab\"\nhost = \"git.example.org:8443\"\n";
+    let on = said(&format!("[sandbox]\nmode = \"on\"\n{forge}"));
+    let forged: Vec<String> = on
+        .refused
+        .iter()
+        .filter(|refusal| matches!(refusal, Refusal::ForgeHost(..)))
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(forged.len(), 1, "{:?}", on.refused);
+    assert!(
+        forged[0].starts_with(
+            "forge.host in charter.toml names 169.254.169.254, which the sandbox does not let \
+             chats reach: "
+        ),
+        "{}",
+        forged[0]
+    );
+    // The host stays out of what chats reach, as before.
+    assert!(
+        !Plane::of(Some(&format!("[sandbox]\nmode = \"on\"\n{forge}")))
+            .granted_hosts(&policy::Locks::none())
+            .contains(&"169.254.169.254".to_owned())
+    );
+    // Not while the sandbox is off, nor while the project turns the forge preset off.
+    for quiet in [
+        forge.to_owned(),
+        format!("[sandbox]\nmode = \"on\"\negress = [\"model-providers\"]\n{forge}"),
+    ] {
+        assert!(
+            !said(&quiet)
+                .refused
+                .iter()
+                .any(|refusal| matches!(refusal, Refusal::ForgeHost(..))),
+            "{quiet}"
+        );
+    }
+    // A Settings save says it too.
+    assert!(
+        refusals(&format!("[sandbox]\nmode = \"on\"\n{forge}"), FILE)
+            .iter()
+            .any(|why| why.contains("169.254.169.254")),
+    );
+}
+
 /// Review of #1341, 8: the Notice names a project's `[[forge]]` hosts with its own, while the
 /// `forge` preset lets every chat reach them.
 #[test]

@@ -62,6 +62,26 @@ fn taking_the_offer_turns_the_sandbox_on_and_keeps_every_line_the_operator_wrote
     assert!(!offer_due(project.path()), "asked once");
 }
 
+/// #1405: a `[[forge]]` host the sandbox does not let through is said once the sandbox is on,
+/// and never stops the offer from turning it on.
+#[test]
+fn taking_the_offer_turns_the_sandbox_on_beside_a_forge_host_it_does_not_let_through() {
+    let project =
+        a_project("schema = 1\n[[forge]]\nkind = \"gitlab\"\nhost = \"169.254.169.254\"\n");
+
+    answer(project.path(), Answer::TurnOn).expect("answered");
+
+    let said = Plane::read(project.path()).said();
+    assert!(said.policy.is_some());
+    assert!(
+        said.refused
+            .iter()
+            .any(|refusal| matches!(refusal, crate::sandbox::Refusal::ForgeHost(..))),
+        "{:?}",
+        said.refused
+    );
+}
+
 #[test]
 fn a_sandbox_table_without_a_mode_gains_the_mode_and_keeps_its_egress() {
     let project = a_project("schema = 1\n\n[sandbox]\negress = [\"forge\"]\n");

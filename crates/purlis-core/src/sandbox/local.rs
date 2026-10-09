@@ -446,7 +446,19 @@ fn turn_on(root: &Path) -> io::Result<()> {
         let before = Plane::of(Some(now)).said();
         let written = Plane::of(Some(&next));
         let after = written.said();
-        if written.unreadable() || after.policy.is_none() || after.refused != before.refused {
+        // A `[[forge]]` host the sandbox does not let through is said once it is on (#1405):
+        // a consequence of turning it on, not a sign the edit missed.
+        let edit_refused = |said: &super::Said| -> Vec<super::Refusal> {
+            said.refused
+                .iter()
+                .filter(|refusal| !matches!(refusal, super::Refusal::ForgeHost(..)))
+                .cloned()
+                .collect()
+        };
+        if written.unreadable()
+            || after.policy.is_none()
+            || edit_refused(&after) != edit_refused(&before)
+        {
             return Err(unedited());
         }
         Ok(Some(next))
