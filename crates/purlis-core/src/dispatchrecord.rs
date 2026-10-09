@@ -1179,16 +1179,17 @@ pub fn clear_forgetting(root: &Path, id: &str) -> io::Result<bool> {
 }
 
 /// The chat `asker` closed: the rows of the finished tasks it asked for go with it (V100-10),
-/// and what each said is forgotten ([`clear_forgetting`], #1520). How many were cleared. Their
-/// records stay.
-pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
+/// and what each said is forgotten ([`clear_forgetting`], #1520). The ids of those cleared,
+/// so an open Activity tab can be told (#1556). Their records stay.
+pub fn clear_for(root: &Path, asker: &ChatRef) -> Vec<String> {
     list(root)
         .into_iter()
         .filter(|record| {
             !record.cleared && Finished::of(record).is_some() && asked_by(record, asker)
         })
         .filter(|record| clear_forgetting(root, &record.id).unwrap_or(false))
-        .count()
+        .map(|record| record.id)
+        .collect()
 }
 
 /// What removing a workspace left in the store ([`workspace_removed`]).

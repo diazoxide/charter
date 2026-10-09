@@ -278,7 +278,7 @@ fn it_is_cleared_as_every_finished_row_is_and_its_record_stays() {
         at("2026-10-08T09:01:00Z"),
     )
     .unwrap();
-    assert_eq!(dispatchrecord::clear_for(&root, &steward()), 1);
+    assert_eq!(dispatchrecord::clear_for(&root, &steward()).len(), 1);
     assert!(dispatchrecord::read(&root, &other.id).unwrap().cleared);
 }
 
@@ -623,7 +623,7 @@ fn a_task_tried_again_and_refused_again_is_one_row_with_a_count_and_the_latest_r
     // The earlier records stay, cleared: nothing is rewritten or lost.
     assert!(dispatchrecord::read(&root, &first.id).unwrap().cleared);
     // A row the person cleared is not counted into a later one.
-    assert_eq!(dispatchrecord::clear_for(&root, &steward()), 2);
+    assert_eq!(dispatchrecord::clear_for(&root, &steward()).len(), 2);
     let again = record(
         &root,
         None,

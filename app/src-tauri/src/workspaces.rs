@@ -278,6 +278,8 @@ pub fn workspace_remove(
     // The window reads the sidebar straight after (FD-10b).
     held.workspaces_moved();
     if removed.is_ok() {
+        // An open Activity tab stops showing what the removal forgot (#1556).
+        crate::activity::forgotten_in(&held, &workspace);
         heard.tell(&app, plane, root, Event::WorkspaceRemoved { workspace });
     }
     removed

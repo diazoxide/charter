@@ -136,6 +136,30 @@ describe("the timeline the core answered", () => {
       [3, null],
     ]);
   });
+
+  it("drops the words of a line told again as forgotten, and its question with them (#1556)", () => {
+    const asked = line({
+      dispatch: "01K6D1",
+      n: 1,
+      kind: "question",
+      text: "Which host?",
+      asks: 5,
+    });
+    const made = [
+      line({ dispatch: "01K6D1", n: 0, kind: "dispatched", from_key: "01K6STEWARD" }),
+      asked,
+    ].reduce(heard, timelineOf(read([])));
+    expect([...answerable(made.lines)]).toEqual(["01K6D1:1"]);
+
+    // Clear finished, the asking chat's close or a workspace's removal forgot its words.
+    const told = heard(made, { ...asked, text: "", expired: true, asks: null, depth: 0 });
+
+    expect(told.lines.map((one) => [one.line.n, one.line.text, one.line.expired])).toEqual([
+      [0, "", false],
+      [1, "", true],
+    ]);
+    expect([...answerable(told.lines)]).toEqual([]);
+  });
 });
 
 describe("a file more than one report names", () => {

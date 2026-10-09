@@ -300,10 +300,17 @@ pub(crate) fn asker_closed(held: &Held, session: u32) {
         return;
     }
     let root = held.root().to_path_buf();
+    let project = held.weak();
     let cleared = std::thread::Builder::new()
         .name("purlis-finished-rows".into())
         .spawn(move || {
-            dispatchrecord::clear_for(&root, &me);
+            let forgot = dispatchrecord::clear_for(&root, &me);
+            // An open Activity tab stops showing what was forgotten (#1556).
+            if let Some(held) = project.upgrade() {
+                for id in &forgot {
+                    crate::activity::forgotten(&held, id);
+                }
+            }
         });
     if let Err(why) = cleared {
         tracing::warn!("purlis: a closed chat's finished rows were not cleared ({why})");
@@ -390,6 +397,10 @@ pub(crate) fn clear(held: &Held, ids: &[String]) -> u32 {
         .collect();
     for row in rows.iter().filter(|row| cleared.contains(&&row.id)) {
         held.task_failure_cleared(row.asker, &row.id);
+    }
+    // An open Activity tab stops showing what was forgotten (#1556).
+    for id in &cleared {
+        crate::activity::forgotten(held, id);
     }
     u32::try_from(cleared.len()).unwrap_or(u32::MAX)
 }

@@ -10,7 +10,8 @@
 //! (`crate::dispatches`): where it opens one ([`dispatched`]), where it takes a message on one
 //! ([`said`], [`unkept`]) and where it closes one ([`ended`]). Each tells what the record now
 //! says, never anything a chat sent, and to every Activity tab of the project: a tab keeps the
-//! lines that are its session's.
+//! lines that are its session's. **A line whose words were forgotten is told again** as it now
+//! stands, with none ([`forgotten`], #1556), so a tab stops showing them.
 //!
 //! **A line carries a chat's words, so it goes to the window that holds the project and to no
 //! other** ([`to_its_window`]): where no window holds it yet, nothing is sent, and the tab that
@@ -367,6 +368,48 @@ pub(crate) fn ended(held: &Held, id: &str) {
         lines.last().filter(|line| line.outcome.is_some()),
         None,
     );
+}
+
+/// **What the two chats of dispatch `id` said was forgotten** (#1556): Clear finished, the
+/// asking chat's close, or a workspace's removal emptied its words. An open Activity tab is
+/// told each line whose words are gone, as it stands now, and draws it in place of the line it
+/// holds ([`ActivityLine::dispatch`] and `n` name it), so it stops showing words purlis no
+/// longer keeps without reading the timeline again. Nothing is told of a record a timeline
+/// does not list.
+pub(crate) fn forgotten(held: &Held, id: &str) {
+    let Some(record) = dispatchrecord::read(held.root(), id) else {
+        return;
+    };
+    let lines = forgotten_lines(&record);
+    if lines.is_empty() {
+        return;
+    }
+    let open = crate::dispatches::open_chats(held);
+    for line in &lines {
+        held.tell_activity(drawn(line, &open, 0));
+    }
+}
+
+/// [`forgotten`], for every dispatch that worked in workspace `ws` and has ended: what its
+/// removal forgot (`dispatchrecord::workspace_removed`).
+pub(crate) fn forgotten_in(held: &Held, ws: &str) {
+    for record in dispatchrecord::list(held.root()) {
+        if record.place.workspace.as_deref() == Some(ws) && !record.running() {
+            forgotten(held, &record.id);
+        }
+    }
+}
+
+/// The lines of `record` whose words are no longer kept, where a timeline lists it: a task's,
+/// holding only text purlis draws. None of the words that are gone, and none of anything else.
+fn forgotten_lines(record: &Record) -> Vec<Line> {
+    if record.mode != Mode::Task || !dispatchrecord::sound(record) {
+        return Vec::new();
+    }
+    activity::lines_of(record, 1)
+        .into_iter()
+        .filter(|line| line.expired)
+        .collect()
 }
 
 /// How often an open project's dispatch records are looked at for what their chats said past
@@ -726,6 +769,74 @@ mod tests {
 
         // The window holding it, and no other: the window holding another project hears none.
         assert_eq!(read(&counts), [1, 0, 1]);
+    }
+
+    #[test]
+    fn what_was_forgotten_is_told_line_by_line_with_no_words_and_nothing_else() {
+        // #1556: an open tab is told the lines whose words Clear finished took, so it stops
+        // showing them.
+        use purlis_core::dispatchrecord::{Asker, Ending, Report, Worker};
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let now = chrono::Utc::now();
+        let task = |mode: Mode| purlis_core::dispatchrecord::Opening {
+            mode,
+            asker: Asker {
+                chat: chat(3, Some("01K6ASKER0000000000000000A"), "steward 3"),
+                ..Asker::default()
+            },
+            persona: None,
+            worker: Worker {
+                chat: chat(7, Some("01K6W0RKER000000000000000B"), "talk"),
+                ..Worker::default()
+            },
+            task: Some("talk".to_owned()),
+            place: purlis_core::dispatchrecord::Place::default(),
+            brief: "the brief".to_owned(),
+            report_owed: true,
+        };
+        let said_and_done = |mode: Mode| {
+            let id = dispatchrecord::open(&root, task(mode), now).unwrap().id;
+            for text in ["Which region?", "eu-west-1"] {
+                dispatchrecord::said(&root, &id, dispatchtalk::Kind::Note, text, now).unwrap();
+            }
+            dispatchrecord::close(
+                &root,
+                &id,
+                Ending {
+                    report: Some(Report {
+                        outcome: Outcome::Done,
+                        text: "Done.".to_owned(),
+                        changed: Default::default(),
+                    }),
+                    usage: None,
+                },
+                now,
+            )
+            .unwrap();
+            id
+        };
+        let id = said_and_done(Mode::Task);
+        let read = || dispatchrecord::read(&root, &id).unwrap();
+
+        // Nothing is forgotten yet: nothing to tell.
+        assert!(forgotten_lines(&read()).is_empty());
+
+        assert!(dispatchrecord::clear_forgetting(&root, &id).unwrap());
+        let told = forgotten_lines(&read());
+
+        let named: Vec<(u32, bool, &str)> = told
+            .iter()
+            .map(|line| (line.n, line.expired, line.text.as_str()))
+            .collect();
+        assert_eq!(named, [(1, true, ""), (2, true, "")]);
+        // A handoff is on no timeline: nothing of one is told.
+        let handoff = said_and_done(Mode::Handoff);
+        let mut record = dispatchrecord::read(&root, &handoff).unwrap();
+        for said in &mut record.talk {
+            said.text.clear();
+        }
+        assert!(forgotten_lines(&record).is_empty());
     }
 
     #[test]
