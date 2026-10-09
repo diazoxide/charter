@@ -139,8 +139,7 @@ fn refresh_readme(root: &Path, say: Sink) -> Roster {
         }
         return Roster::Unread;
     }
-    let (generic, total) = dispatch::generic_share(&counts);
-    let Some(new) = roster::splice(&current, &roster::block(root, &rows, generic, total)) else {
+    let Some(new) = roster::splice(&current, &roster::block(root, &rows)) else {
         return Roster::Unchanged;
     };
     if new == current {
