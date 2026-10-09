@@ -239,7 +239,9 @@ import {
   tasksPlacedBelow,
   showOwn,
   showOwnIn,
+  panesSaid,
   shownIn,
+  type PaneSaid,
   shownLive,
   switchTabTo,
   taskShownIn,
@@ -1223,19 +1225,13 @@ export const PlaneView = memo(function PlaneView({
    * differs, for the order's reasons above. A pane back on its own chat, and a chat whose pane
    * is gone, say so, with nothing.
    *
-   * **The one command for it**: nothing else says to the core what a pane shows.
+   * **The one command for it**: nothing else says to the core what a pane shows. What it says
+   * is `panesSaid`'s: in a tab that opened on a view, the chat it puts in front stands for the
+   * tab, so every other chat beside the view is looked at with it (#1525).
    */
   useEffect(() => {
     if (!viewsHeard) return;
-    const said = new Map<number, PaneSaid>();
-    for (const id of tabs.order) {
-      const lead = chatOf(tabs, id);
-      for (const one of shownIn(tabs, id)) {
-        const shown = one.session === one.own ? null : one.session;
-        const beside = lead === undefined || lead === one.own ? null : lead;
-        if (shown !== null || beside !== null) said.set(one.own, { shown, beside });
-      }
-    }
+    const said = panesSaid(tabs);
     const was = lastShownSaid.current;
     lastShownSaid.current = said;
     /** Says it, and where the core did not take it, forgets having said it: the next change
@@ -8331,10 +8327,6 @@ const ROOT_WORD = "plane root";
 /** The core's word for the same place, where a finished task worked there
  *  (`FinishedTask.place`). */
 const CORE_ROOT_WORD = "project root";
-
-/** What the core is told of one chat's pane (`tab_shows`): the chat it shows in place of its
- *  own, and the chat whose tab it is in where it is not that tab's own. */
-type PaneSaid = { shown: number | null; beside: number | null };
 
 /** No row of the Chats list is on screen: what the clock is read with until the list says. */
 const NO_ROWS_DRAWN: ReadonlySet<number> = new Set();

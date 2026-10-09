@@ -6,8 +6,8 @@
   once you answer. A task whose harness starts a turn of its own after its report is treated as a
   later turn: it is ended when that turn ends (#1525).
 - **A task you read beside a view is not ended under you.** In a tab that opened on a view, such
-  as a persona card, with a chat split beside it, a task that chat shows now counts as the one you
-  are looking at, as it does in any other tab (#1525).
+  as a persona card, with chats split beside it, a task any of those chats shows now counts as
+  one you are looking at, as it does in any other tab (#1525).
 - **Closing a project no longer takes away the hook socket of the same project opened again.** A
   project that stops listening removes only the socket file it made, and stops at once even when
   that file was removed or replaced while it listened (#1525).

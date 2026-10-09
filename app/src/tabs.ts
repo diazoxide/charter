@@ -612,6 +612,33 @@ export function chatInFrontOf(tabs: Tabs, id: number): number | undefined {
   return chatOf(tabs, id) ?? panesOf(tabs, id)[0]?.session;
 }
 
+/** What the core is told of one chat's pane (`tab_shows`): the chat it shows in place of its
+ *  own, and the chat whose tab it is in where it is not that tab's own. */
+export type PaneSaid = { shown: number | null; beside: number | null };
+
+/**
+ * **What the core is told of every chat's pane** (`tab_shows`, #1486, #1489), by the pane's own
+ * chat: the task it shows in place of that chat, and the chat whose tab it is in. A pane that
+ * shows its own chat as its tab's lead says nothing, and is left out.
+ *
+ * **The tab's chat is the one it puts in front** ({@link chatInFrontOf}), the same chat
+ * `chat_in_front` names, so that the core's `looked_at` finds every chat of the tab in front by
+ * it: in a tab that opened on a view, every chat beside the view but the first is said to be in
+ * the first one's tab (#1525). Said by {@link chatOf}, a second chat there was beside nothing.
+ */
+export function panesSaid(tabs: Tabs): Map<number, PaneSaid> {
+  const said = new Map<number, PaneSaid>();
+  for (const id of tabs.order) {
+    const lead = chatInFrontOf(tabs, id);
+    for (const one of shownIn(tabs, id)) {
+      const shown = one.session === one.own ? null : one.session;
+      const beside = lead === undefined || lead === one.own ? null : lead;
+      if (shown !== null || beside !== null) said.set(one.own, { shown, beside });
+    }
+  }
+  return said;
+}
+
 /**
  * The name a new chat started beside this tab's panes is given: the name of the first chat in
  * it, or nothing when it has none — a view's tab split to start a chat starts one with a name of

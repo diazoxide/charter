@@ -13,6 +13,7 @@ import {
   openTab,
   openView,
   panesOf,
+  panesSaid,
   replaceSession,
   restoreShown,
   selectTab,
@@ -378,5 +379,31 @@ describe("the chat a tab puts in front of the person", () => {
 
     // A tab of views only has none.
     expect(chatInFrontOf(viewed, tab)).toBeUndefined();
+  });
+});
+
+describe("what the core is told of each chat's pane", () => {
+  const CARD: ViewRef = { from: null, view: "persona", key: "steward" };
+
+  it("says nothing of a chat alone in its own tab", () => {
+    expect(panesSaid(twoSessions())).toEqual(new Map());
+  });
+
+  it("says a chat split beside another is in that chat's tab", () => {
+    const tabs = splitFocusedPane(openTab(noTabs(), 1), "row", 2);
+    expect(panesSaid(tabs)).toEqual(new Map([[2, { shown: null, beside: 1 }]]));
+  });
+
+  it("says every chat beside a view is in the tab of the chat that view's tab puts in front", () => {
+    // A view's tab split twice: two chats beside the card. The chat in front of the person is
+    // the first of them (`chatInFrontOf`), and the second is in its tab, so the core takes a
+    // task the second shows to be looked at too (#1525).
+    const viewed = openView(noTabs(), CARD, "steward", "alpha");
+    const tab = viewed.order[0];
+    const both = splitFocusedPane(splitFocusedPane(viewed, "row", 1), "row", 2);
+    const lead = chatInFrontOf(both, tab);
+    expect(panesOf(both, tab).map((one) => one.session)).toHaveLength(2);
+    const other = lead === 1 ? 2 : 1;
+    expect(panesSaid(both)).toEqual(new Map([[other, { shown: null, beside: lead }]]));
   });
 });
