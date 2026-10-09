@@ -320,9 +320,9 @@ pub(crate) const PLUGIN_DIR: &str = "plugin";
 /// window hidden, the window not focused, or a different chat in front. At fifty sessions a
 /// popup about the chat already on screen is noise, and noise is how a queue stops being read.
 ///
-/// One wait cannot notify twice: the board answers "something changed" only on a change, so a
-/// `Stop` that lands on a chat already waiting from a `Notification` moves nothing and says
-/// nothing.
+/// One wait cannot notify twice: a `Stop` that lands on a chat already waiting from a
+/// `Notification` is a move the window is told (the chat is no longer stopped on its prompt,
+/// #1601), and it raises nothing, so it sends no notification (`Moved::interrupts`).
 fn told(app: &tauri::AppHandle, moved: Moved) {
     windows::emit_for_plane(app, &moved.plane.clone(), "chat-moved", &moved);
     // Only a move of the chat's own interrupts (#1491): a task that finished changes what the

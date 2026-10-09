@@ -166,16 +166,26 @@ pub enum Said {
 }
 
 impl Said {
-    /// **Whether this says its chat got past a prompt it was stopped on** (#1601): the person
-    /// answered it in the chat's own pane, which no hook says. A tool of the chat's own that
-    /// came back says it, since a tool runs only once the prompt before it is answered: the
-    /// call it asked about ran, or the turn went on to another that did.
+    /// **Whether this can say its chat got past a prompt it was stopped on** (#1601): the
+    /// person answered it in the chat's own pane, which no hook says. A tool of the chat's own
+    /// that came back says it, once one began after the chat asked
+    /// ([`Said::starts_a_tool_of_its_own`], `state::Chat::tool_said`): a tool runs only once
+    /// the prompt before it is answered, and one already at work when the chat asked comes back
+    /// whatever the person does.
     ///
     /// - **Not a tool about to run**: that may be the very call the prompt is about, heard
     ///   after its prompt was.
     /// - **Not a helper that came back**: another of its helpers may be the one asking.
     pub fn goes_on_past_a_prompt(&self) -> bool {
         matches!(self, Self::Ended { kind } if *kind != Some(Kind::Helper))
+    }
+
+    /// **Whether this says a tool of its chat's own began** (#1601): heard after the chat came
+    /// to wait on its prompt, it is what a tool that comes back must follow before it says the
+    /// chat got past the prompt (`state::Chat::tool_said`). Not a helper: another of its
+    /// helpers may be the one asking.
+    pub fn starts_a_tool_of_its_own(&self) -> bool {
+        matches!(self, Self::Began { kind, .. } if *kind != Kind::Helper)
     }
 
     /// The same, believing nothing of it: a kind only a hook can see
@@ -655,6 +665,17 @@ mod tests {
         // A tool about to run may be the very call being asked about, heard late.
         assert!(!unnamed(Kind::Command).goes_on_past_a_prompt());
         assert!(!named(Kind::Editing, "a.rs").goes_on_past_a_prompt());
+    }
+
+    #[test]
+    fn a_tool_of_its_own_about_to_run_is_one_that_began_and_a_helper_is_not() {
+        // #1601: what a tool that comes back must follow to say its chat got past its prompt.
+        for kind in [Kind::Command, Kind::Editing, Kind::Reading, Kind::Tool] {
+            assert!(unnamed(kind).starts_a_tool_of_its_own(), "{kind:?}");
+            assert!(!ended(kind).starts_a_tool_of_its_own(), "{kind:?}");
+        }
+        assert!(named(Kind::Editing, "a.rs").starts_a_tool_of_its_own());
+        assert!(!unnamed(Kind::Helper).starts_a_tool_of_its_own());
     }
 
     /// A line as the window is told it: in flight, or `over`.

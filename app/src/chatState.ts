@@ -165,12 +165,12 @@ export function movedAt(states: ChatStates, session: number): number {
   return states.movedAt[session] ?? 0;
 }
 
-/** Whether `session` is in the needs-you queue. */
 /** Whether chat `session` is stopped, now, on its harness's prompt (#1601, `ChatStates.asking`). */
 export function waitsOnItsPrompt(states: ChatStates, session: number): boolean {
   return states.asking[session] === true;
 }
 
+/** Whether `session` is in the needs-you queue. */
 export function isAsking(states: ChatStates, session: number): boolean {
   return states.needsYou.includes(session);
 }

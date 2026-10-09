@@ -22,7 +22,8 @@ import { Notice, NoticeOf } from "./Notice";
  *   the prompt in full, or from the title bar's needs-you list: purlis never approves a
  *   harness's prompt in the person's place.
  * - **It goes when the prompt does**: answered in the window, got past in the chat's pane (a
- *   tool of its came back), the turn that asked ended, or the chat ended.
+ *   tool of its own began after the prompt and one came back), the turn that asked ended, its
+ *   next prompt, or the chat ended.
  */
 export function TaskPromptNotice({
   session,
