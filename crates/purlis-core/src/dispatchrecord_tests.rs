@@ -1934,3 +1934,61 @@ fn a_chat_that_closes_forgets_what_its_finished_tasks_said() {
         assert!(kept.report.is_some());
     }
 }
+
+#[test]
+fn a_removed_workspace_s_tasks_forget_what_they_said_and_their_records_are_counted() {
+    let (_d, root) = project();
+    // `a_handoff` works in `beta`; one task there talked and ended, one runs on.
+    let ended = a_task_that_talked(&root, "check prod", 7, 1);
+    let running = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:05:00Z"),
+    )
+    .unwrap();
+    said(
+        &root,
+        &running.id,
+        crate::dispatchtalk::Kind::Note,
+        "Still up.",
+        at("2026-10-07T12:05:10Z"),
+    )
+    .unwrap();
+    // Another workspace's is not touched.
+    let elsewhere = planted(&root, |record| {
+        record.place.workspace = Some("alpha".to_owned());
+        record.messages = 1;
+        record.talk = vec![Said {
+            at: "2026-10-07T12:01:00+00:00".to_owned(),
+            kind: crate::dispatchtalk::Kind::Note,
+            text: "Elsewhere.".to_owned(),
+            by: None,
+            unread: false,
+            left_out: false,
+        }];
+        record.ended = Some("2026-10-07T12:02:00+00:00".to_owned());
+    });
+
+    let left = workspace_removed(&root, "beta").unwrap();
+
+    assert_eq!(
+        left,
+        LeftBehind {
+            records: 2,
+            forgot: 1,
+            running: 1,
+        }
+    );
+    assert_eq!(read(&root, &ended).unwrap().talk[0].text, "");
+    assert_eq!(read(&root, &running.id).unwrap().talk[0].text, "Still up.");
+    assert_eq!(read(&root, &elsewhere).unwrap().talk[0].text, "Elsewhere.");
+    // No store at all leaves nothing.
+    let (_e, empty) = project();
+    assert_eq!(
+        workspace_removed(&empty, "beta").unwrap(),
+        LeftBehind::default()
+    );
+}

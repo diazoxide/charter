@@ -1065,6 +1065,57 @@ pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
         .count()
 }
 
+/// What removing a workspace left in the store ([`workspace_removed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LeftBehind {
+    /// The records of dispatches that worked in it, which stay, each with its brief and report,
+    /// until they are collected as every record is.
+    pub records: usize,
+    /// How many of those had what their two chats said forgotten now.
+    pub forgot: usize,
+    /// How many of those are still running, and keep their words until they end and for
+    /// [`TALK_KEPT_FOR`] after.
+    pub running: usize,
+}
+
+/// **Workspace `ws` was removed** (#1520): what the tasks that worked in it and their asking
+/// chats said to each other is forgotten, as Clear finished forgets it (every `text` in `talk`
+/// emptied, on a dispatch that has ended), and the records are counted, so the removal can say
+/// what it leaves behind. A dispatch still running keeps its words until it ends.
+///
+/// No store is nothing left. **An error where the store is there and cannot be read**, which
+/// is what a sandboxed chat finds: "nothing left" and "could not look" are two answers.
+pub fn workspace_removed(root: &Path, ws: &str) -> io::Result<LeftBehind> {
+    match std::fs::read_dir(dir(root)) {
+        Ok(_) => {}
+        Err(none) if none.kind() == io::ErrorKind::NotFound => return Ok(LeftBehind::default()),
+        Err(why) => return Err(why),
+    }
+    let mut left = LeftBehind::default();
+    for record in list(root) {
+        if record.place.workspace.as_deref() != Some(ws) {
+            continue;
+        }
+        left.records += 1;
+        if record.running() {
+            left.running += 1;
+        }
+        let forgot = change(root, &record.id, |record| {
+            if record.running() || record.talk.iter().all(|said| said.text.is_empty()) {
+                return false;
+            }
+            for said in &mut record.talk {
+                said.text.clear();
+            }
+            true
+        })?;
+        if forgot {
+            left.forgot += 1;
+        }
+    }
+    Ok(left)
+}
+
 /// The newest task whose persona chat had the id `worker`, where a record names one: what a
 /// chat reopened from a finished task is told it was ([`crate::dispatched`]).
 pub fn task_worked_by(root: &Path, worker: &str) -> Option<Record> {
