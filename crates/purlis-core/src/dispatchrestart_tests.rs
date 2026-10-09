@@ -798,6 +798,7 @@ fn a_task_the_person_stopped_is_told_as_a_stop_and_one_still_running_as_nothing(
             record: None,
             below: Vec::new(),
             limit: None,
+            branch: None,
         })
     );
     handback::leave(&root, For::Chat(12), &told).unwrap();

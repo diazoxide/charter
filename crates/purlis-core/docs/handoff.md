@@ -258,6 +258,9 @@ which, in purlis's own words:
 - **Close now.** Its program is ended at once. The chat that asked is told `closed by the
   person`, with no report.
 
+Where the task worked on a branch of its own, either word names that branch from purlis's
+record, as its report would have (#1472).
+
 **Either takes a second step.** A task that is not mid-turn is asked about where you pressed:
 "Stop it" or "Close it", beside "Keep", which has the keyboard. A task mid-turn, or with tasks
 of its own still working, is asked about in one question. **Closing a task's tab ends
