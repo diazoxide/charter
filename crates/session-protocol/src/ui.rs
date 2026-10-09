@@ -212,6 +212,7 @@ pub const WINDOW_ONLY: &[&str] = &[
     // Settings' table: every change of what stands.
     "lift_dispatch_never",
     "allow_dispatch_to_any",
+    "add_dispatch_grant",
     "revoke_dispatch_to_any",
     "revoke_dispatch_grant",
     "accept_project_dispatch",
@@ -260,6 +261,7 @@ pub const STANDING_DISPATCH: &[&str] = &[
     "never_dispatch",
     "lift_dispatch_never",
     "allow_dispatch_to_any",
+    "add_dispatch_grant",
     "revoke_dispatch_to_any",
     "revoke_dispatch_grant",
     "accept_project_dispatch",

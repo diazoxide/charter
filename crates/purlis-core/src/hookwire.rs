@@ -5410,6 +5410,9 @@ mod tests {
             r#"{"allow_dispatch_to_any":{"chat":4,"asking":"steward","level":"project"}}"#,
             r#"{"chat":4,"allow_dispatch_to_any":{"asking":"steward","level":"you"},"token":"t"}"#,
             r#"{"revoke_dispatch_to_any":{"chat":4,"asking":"steward","level":"you"}}"#,
+            // #1465: a standing grant made in Settings, by the window command's name.
+            r#"{"add_dispatch_grant":{"chat":4,"asking":"steward","target":"devops","level":"project","workspace":null}}"#,
+            r#"{"chat":4,"add_dispatch_grant":{"asking":"steward","target":"devops","level":"you"},"token":"t"}"#,
             r#"{"dispatch_standing":{"chat":4}}"#,
             r#"{"dispatch_never":[{"asking":"steward","target":"devops"}]}"#,
             r#"{"dispatch_any":["steward"]}"#,

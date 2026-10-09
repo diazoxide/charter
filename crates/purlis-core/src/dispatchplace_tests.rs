@@ -680,9 +680,9 @@ fn a_chat_nobody_is_at_crosses_into_another_workspace_only_under_a_standing_gran
         "this chat runs with its harness's permission prompts off, so nobody is here to \
          answer for it, and such a chat starts a chat in another workspace ('beta') only under \
          a grant that already stands: no grant that already stands lets steward chats dispatch \
-         to devops. Only a person makes one, for themselves on this machine or for this \
-         project; Settings › Project › Dispatch lists the grants that stand. Until then, leave \
-         out `--in` and the new chat works in this chat's folder."
+         to devops. Only a person makes one, under Settings › Project › Dispatch: for \
+         themselves on this machine or for this project, in that workspace or in any. Until \
+         then, leave out `--in` and the new chat works in this chat's folder."
     );
     // A grant made for one chat does not count.
     let for_one_chat = InForce {

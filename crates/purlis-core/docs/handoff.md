@@ -1207,10 +1207,11 @@ dispatch from such a chat is never one that asks.
   chat, and a pair an administrator's policy locks is refused with the policy's sentence.
 - **A missing grant is a refusal, not a Notice.** Nothing starts, nothing is kept waiting for
   you and nothing appears on the chat's tab, so no grant can be made from an unattended chat's
-  ask. The chat is told which pair is missing and that only a person makes the grant: dispatch
-  to that persona once from a chat you are at, and choose **Allow for me on this machine** or
-  **Allow for everyone in this project**. Settings › Project › Dispatch lists the grants that
-  stand, and **Revoke** takes one back.
+  ask. The chat is told which pair is missing and that only a person makes the grant, under
+  Settings › Project › Dispatch: **Add a grant** there makes one for you on this machine or
+  for everyone in this project, in one workspace or in any, with no dispatch waiting (#1465).
+  The same table lists the grants that stand, and **Revoke** takes one back. A dispatch from
+  a chat you are at still asks, and its **Allow** makes a grant too.
 - **Only from inside the sandbox.** A grant that stands is kept in files, and so is how a
   harness starts in a folder. What keeps a chat from writing them is the sandbox. A chat with
   its prompts off and no sandbox, because the project has none or because it was started

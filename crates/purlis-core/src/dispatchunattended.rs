@@ -172,15 +172,16 @@ impl Missing {
                  this machine, under {SETTINGS}; then dispatch again."
             );
         }
+        // A person grants it in Settings (#1465): no dispatch from a chat they are at comes
+        // first, so the sentence names the one place.
         format!(
             "this chat runs with its harness's permission prompts off, so nobody is here to \
              answer for a dispatch, and no grant lets {asking} chats dispatch to {target}: \
              none for the person on this machine, and none for this project. A grant made \
-             for one chat does not count here. Only a person makes one: they dispatch to \
-             {target} once from a {asking} chat they are at and choose Allow for me on this \
-             machine or Allow for everyone in this project. {SETTINGS} lists the grants that \
-             stand. Until then, do this work without {target}, or say in what you leave \
-             behind that it is waiting."
+             for one chat does not count here. Only a person makes one: they grant it under \
+             {SETTINGS}, for themselves on this machine or for everyone in this project. \
+             Until then, do this work without {target}, or say in what you leave behind \
+             that it is waiting."
         )
     }
 }
