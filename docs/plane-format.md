@@ -1184,9 +1184,14 @@ key refuses.
   (`charter/render.py:154`), which is the case on purlis's own plane today.
 - **Git:** committed.
 - **Encoding details:** rows sorted by `(-dispatches, name)` (`charter/render.py:99`), a
-  12-cell unicode bar (`charter/render.py:68`), an optional mermaid pie when any dispatch is
-  recorded, and a `⚑` legend only when a flag appears. The counts come from the dispatch
-  tally and each persona's memory directory — the **personas area** owns those.
+  12-cell unicode bar (`charter/render.py:68`), and a `⚑` legend only when a flag appears.
+  The counts come from the committed dispatch log's tally and each persona's memory
+  directory — the **personas area** owns those. **purlis words it as what it is (#1460):**
+  the headline says how many dispatches to a persona the committed log holds, all from before
+  a persona ran as its own chat, and that `persona stats` counts the ones since from each
+  machine's own records, which this committed block never reads. The Python's mermaid pie of
+  dispatches to a persona against a generic agent is not drawn: a helper is no dispatch now,
+  and the log stopped receiving either row. `⚑` marks a persona the log holds no dispatch to.
 
 ---
 

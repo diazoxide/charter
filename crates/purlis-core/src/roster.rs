@@ -3,7 +3,8 @@
 //! `splice_personas`.
 //!
 //! **Every column comes from COMMITTED state** — the persona definitions, their memory
-//! files, the dispatch log. Vault health is deliberately absent: vaults are gitignored and
+//! files, the dispatch log. Not the dispatch records a machine keeps since a persona became a
+//! chat of its own (#1452, #1460): those are this machine's, and `persona stats` reads them. Vault health is deliberately absent: vaults are gitignored and
 //! per-engineer, so a column drawn from one would churn the README and conflict between
 //! checkouts.
 //!
@@ -131,47 +132,42 @@ pub fn bar(n: u64, peak: u64) -> String {
     )
 }
 
-/// The whole generated block, markers included. `render.personas_md`.
-pub fn block(plane: &Path, rows: &[Row], generic: u64, total: u64) -> String {
+/// The whole generated block, markers included. `render.personas_md`, reworded (#1460).
+///
+/// **The committed log is all it counts.** A persona's chats since it stopped being a
+/// sub-agent are counted from each machine's own dispatch records, which are never committed
+/// and kept 30 days ([`crate::dispatchrecord::tally`]); counting them here would make this
+/// committed block depend on which machine regenerated it last, and conflict between
+/// checkouts. So the headline says what the log holds and sends a reader to `persona stats`
+/// for the rest, and the share of "generic agents" the Python drew is gone: a helper is no
+/// dispatch now, and the log stopped receiving those rows too.
+pub fn block(plane: &Path, rows: &[Row]) -> String {
     let peak = rows.iter().map(|r| r.dispatches).max().unwrap_or(0);
+    let total: u64 = rows.iter().map(|r| r.dispatches).sum();
+    // The block is committed: it names the program as the plane spells it (D-RN11a-1).
+    let program = crate::names::BINARY.writes_for(plane);
     let mut out: Vec<String> = vec![
         crate::names::PERSONAS_BEGIN.writes_for(plane).to_string(),
         String::new(),
         "## Personas — roster & routing health".to_string(),
         String::new(),
     ];
-    // Integer division, as Python's `//` is: the headline never rounds a 49% share up. Asked
-    // as a CHECKED division, because "no dispatches at all" and "the share cannot be
-    // computed" are the same fact, and writing them as two conditions is how they drift.
-    match (100 * generic).checked_div(total) {
-        None => {
-            // Seeding the tally from past sessions is OB-13, #995.
-            out.push(
-                "_No dispatches recorded yet._ The tally fills as sub-agents are dispatched; \
-                 seeding it from past sessions is not in this version yet."
-                    .to_string(),
-            );
-            out.push(String::new());
-        }
-        Some(pct) => {
-            out.push(format!(
-                "**{} of {total} dispatches went to a persona**; {generic} went to a generic \
-                 agent (**{pct}%**). A rising generic share means work a persona owns is being \
-                 done without it.",
-                total - generic
-            ));
-            out.push(String::new());
-            out.push("```mermaid".to_string());
-            out.push("pie showData".to_string());
-            out.push(format!(
-                "    \"dispatched to a persona\" : {}",
-                total - generic
-            ));
-            out.push(format!("    \"dispatched to a generic agent\" : {generic}"));
-            out.push("```".to_string());
-            out.push(String::new());
-        }
+    let since = format!(
+        "Dispatches since are counted by `{program} persona stats`, from each machine's own \
+         records, which are never committed."
+    );
+    if total == 0 {
+        out.push(format!(
+            "_The committed dispatch log holds no dispatch to a persona._ {since}"
+        ));
+    } else {
+        let dispatches = if total == 1 { "dispatch" } else { "dispatches" };
+        out.push(format!(
+            "**The committed dispatch log holds {total} {dispatches} to a persona**, all from \
+             before a persona ran as its own chat. {since}"
+        ));
     }
+    out.push(String::new());
     out.push("| Persona | Dispatches | | Memory | Capability |".to_string());
     out.push("| --- | ---: | --- | ---: | --- |".to_string());
     let mut flagged = false;
@@ -202,15 +198,13 @@ pub fn block(plane: &Path, rows: &[Row], generic: u64, total: u64) -> String {
     out.push(String::new());
     if flagged {
         out.push(
-            "⚑ = **never dispatched**: the persona exists and lints green, but nothing has ever \
-             been routed to it. A persona earns its place by carrying a capability a generic \
-             sub-agent can't have — a credential/tool, or a domain narrow enough to name."
+            "⚑ = **not in the log**: the committed log holds no dispatch to it. A persona \
+             earns its place by carrying a capability a general-purpose chat can't have — a \
+             credential/tool, or a domain narrow enough to name."
                 .to_string(),
         );
         out.push(String::new());
     }
-    // The block is committed: it names the program as the plane spells it (D-RN11a-1).
-    let program = crate::names::BINARY.writes_for(plane);
     out.push(format!(
         "Regenerate with `{program} docs generate`. Detail: `{program} persona stats` · \
          `docs/personas.md`."
@@ -283,19 +277,27 @@ mod tests {
     }
 
     #[test]
-    fn the_headline_counts_personas_against_generics_and_truncates_the_share() {
-        let rows = [row("devops", 1), row("steward", 0)];
-        let block = block(Path::new("/nonexistent-plane"), &rows, 1, 3);
+    fn the_headline_says_what_the_committed_log_counts_and_where_the_rest_is_counted() {
+        // #1460: the log stopped moving when a persona stopped being a sub-agent, so the block
+        // says what it holds, and never a share of "generic agents" or "sub-agents".
+        let rows = [row("devops", 2), row("steward", 0)];
+        let block = block(Path::new("/nonexistent-plane"), &rows);
 
         assert!(
             block.contains(
-                "**2 of 3 dispatches went to a persona**; 1 went to a generic agent (**33%**)"
+                "**The committed dispatch log holds 2 dispatches to a persona**, all from before \
+                 a persona ran as its own chat."
             ),
             "{block}"
         );
-        assert!(block.contains("\"dispatched to a persona\" : 2"), "{block}");
+        assert!(block.contains("`charter persona stats`"), "{block}");
+        let one = super::block(Path::new("/nonexistent-plane"), &[row("devops", 1)]);
+        assert!(one.contains("holds 1 dispatch to a persona**"), "{one}");
         assert!(block.contains("| `steward` ⚑ | 0 |"), "{block}");
-        assert!(block.contains("⚑ = **never dispatched**"), "{block}");
+        assert!(block.contains("⚑ = **not in the log**"), "{block}");
+        for retired in ["generic", "sub-agent", "```mermaid"] {
+            assert!(!block.contains(retired), "{retired}: {block}");
+        }
     }
 
     #[test]
@@ -305,11 +307,12 @@ mod tests {
         let block = block(
             Path::new("/nonexistent-plane"),
             &[row("devops", 0), row("steward", 0)],
-            0,
-            0,
         );
 
-        assert!(block.contains("_No dispatches recorded yet._"), "{block}");
+        assert!(
+            block.contains("_The committed dispatch log holds no dispatch to a persona._"),
+            "{block}"
+        );
         assert!(!block.contains('⚑'), "{block}");
         assert!(!block.contains("```mermaid"), "{block}");
     }
@@ -323,8 +326,6 @@ mod tests {
         let block = block(
             Path::new("/nonexistent-plane"),
             &[with_tools, with_activity, row("c", 0)],
-            0,
-            0,
         );
 
         assert!(block.contains("| `Bash, Read` |"), "{block}");
@@ -355,7 +356,7 @@ mod tests {
         assert!(has_block(&spliced), "the purlis block is recognised");
         assert!(BEGIN.contains("`purlis docs`"), "{BEGIN}");
 
-        let unmigrated = super::block(Path::new("/nonexistent-plane"), &[], 0, 0);
+        let unmigrated = super::block(Path::new("/nonexistent-plane"), &[]);
         assert!(unmigrated.starts_with(old), "{unmigrated}");
     }
 

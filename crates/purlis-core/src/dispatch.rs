@@ -1,6 +1,5 @@
 //! The dispatch log: who work was actually routed to. A port of the part of
-//! `charter/dispatch.py` the README's persona roster reads — [`tally`] and
-//! [`generic_share`].
+//! `charter/dispatch.py` the README's persona roster reads — [`tally`].
 //!
 //! `personas/_dispatch/<month>.<device>.jsonl` is append-only, one JSON object a line, one
 //! file per month per device ([`log_name`], FD-25). It is **committed**, which is what makes the roster block a
@@ -22,12 +21,6 @@ use std::path::{Path, PathBuf};
 
 /// The directory under `personas/` the log lives in — `dispatch.DIR_NAME`.
 pub const DIR_NAME: &str = "_dispatch";
-
-/// The agent names that are NOT a persona. `dispatch.GENERIC`, in its order.
-///
-/// A dispatch to one of these is work a persona might have owned, done without it — which
-/// is the ratio the roster's headline is about.
-pub const GENERIC: [&str; 4] = ["general-purpose", "Explore", "claude", "Plan"];
 
 pub fn dir(root: &Path) -> PathBuf {
     root.join("personas").join(DIR_NAME)
@@ -106,16 +99,6 @@ pub fn tally(root: &Path) -> BTreeMap<String, u64> {
         }
     }
     counts
-}
-
-/// `(dispatches to generic agents, total dispatches)` — the roster's headline ratio.
-pub fn generic_share(counts: &BTreeMap<String, u64>) -> (u64, u64) {
-    let generic = counts
-        .iter()
-        .filter(|(name, _)| GENERIC.contains(&name.as_str()))
-        .map(|(_, n)| *n)
-        .sum();
-    (generic, counts.values().sum())
 }
 
 /// This machine's name as a filename part — `dispatch._host`: the first label of the host
@@ -295,7 +278,7 @@ mod tests {
 
         assert_eq!(counts.get("devops"), Some(&1));
         assert_eq!(counts.get("Explore"), Some(&1));
-        assert_eq!(generic_share(&counts), (1, 2));
+        assert_eq!(counts.len(), 2);
     }
 
     #[test]
@@ -319,7 +302,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         assert!(tally(dir.path()).is_empty());
-        assert_eq!(generic_share(&tally(dir.path())), (0, 0));
     }
 
     #[test]
