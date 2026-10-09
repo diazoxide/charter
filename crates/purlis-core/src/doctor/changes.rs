@@ -8,13 +8,14 @@
 //! **Read from what is on this disk; nothing is asked of a remote.** This runs from the
 //! SessionStart hook. The git it runs is local ref listings and reads, every argument a
 //! literal or the default branch charter already knows for the repo, so no value out of a
-//! record reaches an argv: branch names are compared here.
+//! record reaches an argv except a landing's checked commit id (below): branch names are
+//! compared here.
 //!
 //! **An unreadable record is FAIL, and it is kept apart from a divergence**: "charter cannot
 //! read this file" and "git disagrees with this file" send the reader to two different places.
 //!
-//! **Three divergences need charter's landing records** (#472), and all are FAIL, since charter
-//! can see them (ADR 0013 rule 2):
+//! **Four divergences need charter's landing records** (#472, #878), and all are FAIL, since
+//! charter can see them (ADR 0013 rule 2):
 //!
 //! - **landed out of order:** the log declares a member landed while a member it needs has no
 //!   landing. Charter refuses that landing and cannot stop a person merging in the browser;
@@ -27,6 +28,12 @@
 //!   it, so whatever head the branch has when a pipeline passes will merge. A branch never pushed is
 //!   not read as merged: a branch cut and not yet worked on is in the default branch too.
 //!   A squash merge leaves no trace on this disk, so this can under-report, never invent.
+//! - **a landing the default branch no longer holds:** the log names the commit charter's
+//!   landing made, git knows that commit, and neither the clone's pushed default branch nor
+//!   its local one holds it any more: the branch was rewritten (a force-push) after the
+//!   landing. The commit is the one value out of a record that reaches an argv, and only once
+//!   it reads as a commit id ([`land::sha_ok`]) and git resolves it to a commit starting with
+//!   it. A commit git does not know (not fetched here) is not read as lost.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -203,7 +210,21 @@ fn landing_divergences(
         }
         for m in &record.members {
             let any = land::evidence(&log, &pending, &m.repo, At::Any);
-            if matches!(any, land::Evidence::Logged(_)) {
+            if let land::Evidence::Logged(line) = any {
+                let lost = match crate::repos::clone_at(root, ws, &m.repo) {
+                    Some(clone) => landing_lost(root, &m.repo, &clone.path, &line.merge)?,
+                    None => None,
+                };
+                if let Some((default, commit)) = lost {
+                    out.push(format!(
+                        "{}: the landing of change '{}' as {commit} is no longer in {}: the \
+                         branch was rewritten after the landing, so this member's work is not \
+                         on it any more. A person has to put it back by hand.",
+                        shown::short(&m.repo),
+                        shown::short(&record.change),
+                        shown::short(&default)
+                    ));
+                }
                 continue;
             }
             let later = match any {
@@ -251,6 +272,46 @@ fn landing_divergences(
         }
     }
     Ok(out)
+}
+
+/// The default branch and the logged commit's short id, when `clone` knows the commit a
+/// landing logged and neither its pushed default branch nor its local one holds it: the
+/// branch was rewritten after the landing. `None` when it is held, when the commit is not a
+/// commit id or not known here (never fetched, or gone), or when git could not say. So this can
+/// under-report, never invent.
+fn landing_lost(
+    root: &std::path::Path,
+    repo: &str,
+    clone: &std::path::Path,
+    merge: &str,
+) -> Result<Option<(String, String)>, String> {
+    // The log is a local file anybody can edit: only a commit id reaches git, and only as a
+    // commit, so a branch or tag spelled like it is not read in its place.
+    if !land::sha_ok(merge) {
+        return Ok(None);
+    }
+    let Some(default) = crate::reposave::default_branch(root, repo, clone) else {
+        return Ok(None);
+    };
+    let peeled = format!("{merge}^{{commit}}");
+    let known = git_in(clone, &["rev-parse", "--verify", "--quiet", &peeled])?;
+    let commit = known.out.trim();
+    if !known.ok() || !commit.starts_with(merge) {
+        return Ok(None);
+    }
+    let mut asked = false;
+    for at in [
+        format!("refs/remotes/origin/{default}"),
+        format!("refs/heads/{default}"),
+    ] {
+        // 0: held. 1: not held. Anything else (no such ref): this one cannot say.
+        match git_in(clone, &["merge-base", "--is-ancestor", commit, &at])?.code {
+            Some(0) => return Ok(None),
+            Some(1) => asked = true,
+            _ => {}
+        }
+    }
+    Ok(asked.then(|| (default, commit.chars().take(7).collect())))
 }
 
 /// The default branch and the pushed branch's commit, when `clone`'s pushed `branch`

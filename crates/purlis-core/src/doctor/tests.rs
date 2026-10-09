@@ -2613,6 +2613,81 @@ fn a_pushed_member_branch_the_default_branch_holds_with_no_landing_is_a_fail() {
 }
 
 #[test]
+fn a_logged_landing_the_default_branch_no_longer_holds_is_a_fail_naming_change_and_member() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    let svc = root.join("workspaces/alpha/svc");
+    // The landing's merge commit, on main and on the pushed main.
+    git(&svc, &["commit", "-q", "--allow-empty", "-m", "land a"]);
+    git(
+        &svc,
+        &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+    );
+    let merge = crate::testgit::run(&svc, &["rev-parse", "HEAD"])
+        .out
+        .trim()
+        .to_string();
+    crate::change::landing::append(
+        &root,
+        "alpha",
+        "laptop",
+        &crate::change::landing::Landing::new(
+            "a",
+            "svc",
+            3,
+            "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            &merge,
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "held: {r:?}");
+
+    // main is force-pushed back past the landing: the commit is still known here, and neither
+    // the pushed main nor the local one holds it.
+    git(&svc, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(
+        &svc,
+        &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+    );
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(&format!(
+            "alpha: svc: the landing of change 'a' as {} is no longer in main: the branch was \
+             rewritten after the landing",
+            &merge[..7]
+        )),
+        "{}",
+        r.detail
+    );
+
+    // Only the pushed main dropped it, and the local one still holds it: landed, as the land
+    // gate reads it.
+    git(&svc, &["reset", "-q", "--hard", &merge]);
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
+fn a_logged_landing_this_clone_never_fetched_is_not_read_as_lost() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    let svc = root.join("workspaces/alpha/svc");
+    git(
+        &svc,
+        &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+    );
+    // `landed` logs a commit this clone has never seen: it can under-report, never invent.
+    landed(&root, "alpha", "a", "svc");
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
 fn a_request_left_set_to_merge_later_is_a_fail_that_says_how_it_clears() {
     let (_t, root) = plane("");
     clone_with(&root, "alpha", "svc", &["change/a"]);
