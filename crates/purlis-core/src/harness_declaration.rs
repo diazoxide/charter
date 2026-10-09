@@ -349,6 +349,14 @@ pub fn read(root: &Path) -> Declarations {
                     shown::short(&found.name)
                 ));
             }
+            if crate::guardcmd::HARNESSES.contains(&found.name.as_str()) {
+                return Err(format!(
+                    "{file} declares '{}', which is the name purlis gives a harness it ships — \
+                     a chat on it would be taken for that harness and armed as one. Give it a \
+                     name of its own.",
+                    shown::short(&found.name)
+                ));
+            }
             Ok(found)
         }) {
             Ok(found) => out.declared.push(found),
@@ -666,6 +674,11 @@ fn session(
     })
 }
 
+/// The bytes a declaration's `[terminal] newline` may be: the keys terminals read as a new
+/// line in a prompt's input (Enter, line feed, both, Alt+Enter, and a backslash before Enter).
+/// It is typed into the program's terminal, so it is never free text (#1119).
+const NEWLINES: [&str; 5] = ["\r", "\n", "\r\n", "\x1b\r", "\\\r"];
+
 fn terminal(raw: RawTerminal, at: &dyn Fn(&str) -> String) -> Result<Terminal, String> {
     let ready_to_type = match raw.ready_to_type.as_deref() {
         None | Some("never") => ReadyToType::Never,
@@ -680,11 +693,24 @@ fn terminal(raw: RawTerminal, at: &dyn Fn(&str) -> String) -> Result<Terminal, S
             ));
         }
     };
-    if raw.newline.as_deref() == Some("") {
-        return Err(format!(
-            "{} is empty. Remove the line, and the chat keeps the terminal's own Enter.",
-            at("[terminal] newline")
-        ));
+    match raw.newline.as_deref() {
+        None => {}
+        Some("") => {
+            return Err(format!(
+                "{} is empty. Remove the line, and the chat keeps the terminal's own Enter.",
+                at("[terminal] newline")
+            ));
+        }
+        Some(newline) if !NEWLINES.contains(&newline) => {
+            return Err(format!(
+                "{} is {}, and it is one of the keys a terminal reads as a new line: \"\\r\", \
+                 \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, or \
+                 remove the line and the chat keeps the terminal's own Enter.",
+                at("[terminal] newline"),
+                shown::short(&format!("{newline:?}"))
+            ));
+        }
+        Some(_) => {}
     }
     let paste_drawn_whole = match raw.paste_drawn_whole {
         None => None,
