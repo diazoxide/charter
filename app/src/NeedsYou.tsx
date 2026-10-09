@@ -410,6 +410,11 @@ export function NeedsYouMenu({
   const listedNow = new Set(away.map(awayKey));
   // With nothing left to answer, nothing is held: the chats that went leave, and the keyboard
   // goes back to the hand as it did before anything was held.
+  // Let go for good, not for as long as nothing is asked: a chat that asks while the list is
+  // still open (the faint hand keeps it up) would otherwise bring the dimmed rows back.
+  if (open && !asked && frozen !== null && frozen.items.length + frozen.asks.length > 0) {
+    setFrozen({ ...frozen, items: [], asks: [] });
+  }
   const heldChats = asked ? heldRows : null;
   const drawnItems = inPlace(heldChats?.items ?? items, items, itemKey);
   const drawnAsks = inPlace(heldChats?.asks ?? asks, asks, askKey);
