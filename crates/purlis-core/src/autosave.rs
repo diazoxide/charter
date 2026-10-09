@@ -3,6 +3,14 @@
 //! **A decision, not a loop.** [`Quiet::tick`] is told what the plane looks like now and what
 //! time it is, and answers whether to save. The loop that asks it, the clock and the save are
 //! the app's; everything that decides is here, where a test can drive it with a made-up clock.
+//!
+//! **An auto-save is the app's commit, and carries no provenance trailers** (#1011, V67). After
+//! the quiet period, at a session's end and at quit alike, the app commits whatever the tree
+//! holds: several chats can have written one repo, and the person too, and nothing records which
+//! of them wrote which change. Naming the chat that just ended, or any one chat, would put a
+//! guess into history, which is permanent; a trailer is written only where an agent run made
+//! the commit. An agent's own work is stamped where it commits it, through `commit-msg` and a
+//! chat's `purlis save` ([`crate::provenance`]).
 
 use std::time::{Duration, Instant};
 

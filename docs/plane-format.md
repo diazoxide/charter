@@ -2372,6 +2372,11 @@ beside a purlis one is removed when the record is published (V93i).
     (`purlis_core::planegit`).
 - **Never written** on a commit the operator makes by hand: their terminal is not armed, a
   save from the window's button or from auto-save is the app's, and a shell tab is no harness.
+  **An auto-save stays the app's** (#1011): after the quiet period, at a session's end and at
+  quit, it commits whatever the tree holds, which several chats and the person may have written,
+  and nothing records who wrote which change. A session-end save is not attributed to the chat
+  that ended either: that would write a guess into history, which cannot be taken back. An
+  agent's work is stamped where the agent commits it.
 - **Spelled per repo:** `[plane].assisted_by` and `[repos.<name>].assisted_by`, `"full"` (the
   default) or `"llm"` in any case, in `charter.toml` (see the table above). A `[repos.<name>]`
   that does not set it follows `[plane].assisted_by`. A repository the project does not hold gets
