@@ -6,6 +6,7 @@ import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
 import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { Choice, SettingActions, SettingRow } from "./settings/components";
+import { channelMoved, useUpdateChannel } from "./updateChannel";
 
 /**
  * **"An update is available", and the pin that drifts** — the two version facts charter ADR
@@ -100,7 +101,8 @@ function stopListening(stop: () => void) {
  */
 export function useUpdates(): Updates {
   const [state, setState] = useState<UpdateState>({ kind: "quiet" });
-  const [channel, setChannel] = useState<string>();
+  // One value with Settings › You › This machine (#1240), read when the window first asks.
+  const channel = useUpdateChannel();
   const asked = useRef(false);
 
   useEffect(() => {
@@ -139,12 +141,6 @@ export function useUpdates(): Updates {
       // `Check now` — rather than taking the status line down. Seen on CI: a test whose mock
       // core throws for every command it does not name made `listen` reject, unhandled.
     });
-    void commands
-      .updateChannel()
-      .then((now) => {
-        if (!gone && typeof now === "string") setChannel(now);
-      })
-      .catch(() => {});
     return () => {
       gone = true;
       for (const stop of stops) stopListening(stop);
@@ -168,7 +164,7 @@ export function useUpdates(): Updates {
         setState({ kind: "failed", why: done.error });
         return;
       }
-      setChannel(next);
+      channelMoved(next);
       // An offer from the other channel's manifest is not an offer on this one.
       setState({ kind: "quiet" });
       asked.current = true;

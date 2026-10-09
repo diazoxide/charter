@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act as inReact, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
@@ -408,5 +408,58 @@ describe("You › This machine", () => {
 
     await waitFor(() => expect(screen.getByRole("radio", { name: "dev" })).toBeChecked());
     expect(sent).toEqual([{ cmd: "set_update_channel", args: { channel: "dev" } }]);
+  });
+});
+
+describe("one update channel for the window (#1240)", () => {
+  /** The title bar's updater, by what it says while nothing new is known. */
+  const updater = (channel: string) =>
+    screen.findByRole("button", { name: `Updates — ${channel} channel, nothing new known` });
+
+  it("the title bar's updater says the channel picked in Settings at once", async () => {
+    await thisMachine();
+    await updater("stable");
+
+    await userEvent.click(await screen.findByRole("radio", { name: "dev" }));
+
+    expect(await updater("dev")).toBeInTheDocument();
+    expect(sent.map((one) => one.cmd)).toEqual(["set_update_channel"]);
+  });
+
+  it("Settings shows the channel the title bar's updater moved this machine to", async () => {
+    await thisMachine();
+    const region = await screen.findByRole("region", { name: "This machine" });
+    await waitFor(() =>
+      expect(within(region).getByRole("radio", { name: "stable" })).toBeChecked(),
+    );
+
+    await userEvent.click(await updater("stable"));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("radio", { name: /dev/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this channel" }));
+    await within(dialog).findByText("This machine is on the dev channel now.");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await waitFor(() => expect(within(region).getByRole("radio", { name: "dev" })).toBeChecked());
+  });
+});
+
+describe("This machine follows the store when it changes elsewhere (#1240)", () => {
+  it.each([
+    ["the window takes the focus back", () => window.dispatchEvent(new Event("focus"))],
+    ["the window is shown again", () => document.dispatchEvent(new Event("visibilitychange"))],
+  ])("reads the store again when %s", async (_, back) => {
+    await thisMachine();
+    await waitFor(() => expect(entries("Pins")).toHaveLength(4));
+    // Pinned on the project strip, or by another window, while the group is on screen.
+    store[1].pinned = true;
+    channel = "dev";
+
+    inReact(back);
+
+    await waitFor(() => expect(entries("Pins")).toHaveLength(5));
+    expect(entries("Pins")).toContain("old/mnt/usb/oldgoneUnpin");
+    await waitFor(() => expect(screen.getByRole("radio", { name: "dev" })).toBeChecked());
   });
 });
