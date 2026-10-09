@@ -221,6 +221,9 @@ pub struct SandboxPreset {
     /// The hosts it lets a chat in this project reach: its own, and for code hosting the
     /// project's forges' too.
     pub hosts: Vec<String>,
+    /// Whether a chat may write the project's own package caches while it is on
+    /// (`sandbox::Preset::widens_caches`, #1422): the window keeps no copy of which one does.
+    pub widens_caches: bool,
 }
 
 /// The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`).
@@ -239,6 +242,7 @@ fn presets_of(plane: &sandbox::Plane, locks: &sandbox::policy::Locks) -> Vec<San
             word: preset.word().to_owned(),
             title: preset.title().to_owned(),
             hosts: sandbox::hosts(&[preset], plane, locks),
+            widens_caches: preset.widens_caches(),
         })
         .collect()
 }
@@ -1647,6 +1651,14 @@ mod tests {
         }
         assert!(shown[1].hosts.contains(&"git.example.org".to_owned()));
         assert!(!shown[0].hosts.contains(&"git.example.org".to_owned()));
+        // #1422: the core says which preset widens the package caches.
+        assert_eq!(
+            shown
+                .iter()
+                .map(|one| one.widens_caches)
+                .collect::<Vec<_>>(),
+            [false, false, true]
+        );
     }
 
     /// #1340, #1362: a persona's own hosts, as the core read them.

@@ -95,7 +95,7 @@ fn on_linux_a_codex_chat_is_refused_until_charter_can_wrap_it_there() {
     assert!(
         refused
             .to_string()
-            .contains("purlis runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040)"),
+            .contains("purlis runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux, so it was not started"),
         "{refused}"
     );
     assert_eq!(

@@ -52,6 +52,12 @@ impl Preset {
         }
     }
 
+    /// Whether a chat may write the project's own package caches while it is on (D-1337-6):
+    /// what [`Widened::of`] grants, and what Settings › Sandbox says, from this one answer.
+    pub fn widens_caches(self) -> bool {
+        matches!(self, Self::Toolchains)
+    }
+
     /// The hosts it lists itself, before a project's own forges ([`hosts`]): the one place a
     /// preset's hosts are written.
     pub fn own_hosts(self) -> &'static [&'static str] {
@@ -1338,7 +1344,8 @@ impl Widened {
         Self {
             caches: policy
                 .egress
-                .contains(&Preset::Toolchains)
+                .iter()
+                .any(|preset| preset.widens_caches())
                 .then(|| caches::home_of(machine, root, denied))
                 .flatten(),
             trust: policy.certificate_checks,
@@ -1838,13 +1845,17 @@ pub fn compiler(harness: Harness) -> Option<Compiler> {
 /// can, as far as the harness and the system decide; a project can still refuse it for its own
 /// reasons, such as a keyring vault. What a harness's card says about the sandbox.
 pub fn never_on(harness: Harness, os: Os) -> Option<String> {
-    let Some(compile) = compiler(harness) else {
+    never_with(compiler(harness), harness.adapter().sandbox_held_back(), os)
+}
+
+/// [`never_on`] for a harness with `compile` as its compiler, held back for the issue
+/// `held_back` names. The sentence is the window's, so it never carries the issue (#1422).
+fn never_with(compile: Option<Compiler>, held_back: Option<u32>, os: Os) -> Option<String> {
+    let Some(compile) = compile else {
         return Some("purlis has no sandbox compiler for it yet".to_owned());
     };
-    if let Some(issue) = harness.adapter().sandbox_held_back() {
-        return Some(format!(
-            "purlis cannot keep its chats inside the sandbox yet (#{issue})"
-        ));
+    if held_back.is_some() {
+        return Some("purlis cannot keep its chats inside the sandbox yet".to_owned());
     }
     let nothing = Compiled {
         denied: Denied::default(),
@@ -2409,8 +2420,9 @@ impl NotStarted {
                  given, so it was not started sandboxed.",
                 harness.title()
             ),
-            Self::HeldBack(harness, issue) => format!(
-                "purlis cannot keep {} {} chat inside its sandbox yet (#{issue}), so in this \
+            // The issue it is held back for is the adapter's to name, not the window's (#1422).
+            Self::HeldBack(harness, _) => format!(
+                "purlis cannot keep {} {} chat inside its sandbox yet, so in this \
                  project {}",
                 article(harness.title()),
                 harness.title(),
@@ -2494,14 +2506,14 @@ impl NotStarted {
                  started."
             ),
             Self::Uncompilable(it) => match it.unheld {
-                // The Linux wrap is #1040.
+                // The Linux wrap is #1040; the window's sentence names no issue (#1422).
                 Unheld::Wrap(os) => format!(
                     "{lead}, and purlis runs {} inside a sandbox of its own, which it can apply \
                      on macOS but not yet on {}, so it was not started. Start this chat on a {} \
                      profile.",
                     it.harness.title(),
                     match os {
-                        Os::Linux => "Linux (#1040)",
+                        Os::Linux => "Linux",
                         Os::Windows => "Windows",
                         Os::MacOs | Os::Other => "this system",
                     },

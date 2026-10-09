@@ -5752,6 +5752,11 @@ export type SandboxPreset = {
 	 *  project's forges' too.
 	 */
 	hosts: string[],
+	/**
+	 *  Whether a chat may write the project's own package caches while it is on
+	 *  (`sandbox::Preset::widens_caches`, #1422): the window keeps no copy of which one does.
+	 */
+	widens_caches: boolean,
 };
 
 /**  What the project view says about the sandbox. */
