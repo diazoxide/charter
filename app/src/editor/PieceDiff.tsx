@@ -14,6 +14,11 @@
  * watched set, which is the explorer's): it hears a branch the explorer watches, and a branch
  * nobody watches is compared again with *Compare again*.
  *
+ * **A change opens in the file tab at its line** (#984): each hunk's first line on the head's
+ * side is offered, and a press is the window's one jump to a file and line (`fileJump.ts`): the
+ * branch's file tab picks the file and lands on the line. The path goes through the core's read
+ * there, so one the branch does not offer is refused as the viewer refuses it.
+ *
  * **Each sentence is a status** (#1189): the reading, the refusal and the change with no line in
  * it are said to a screen reader as they come, and the merge view is named after the file and
  * what it is compared against.
@@ -26,6 +31,7 @@ import { listen } from "../here";
 import type { Place } from "../pieceViews";
 import { MergeViewer } from "./LightEditor";
 import { sized, ToYourEditor } from "./PieceFiles";
+import { jumpTo } from "../fileJump";
 
 /** The comparison, as the tab draws it: being read, refused with the core's sentence, or read. */
 type Read =
@@ -83,6 +89,7 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
           </button>
         </span>
       </header>
+      <ChangedLines plane={plane} cut={cut} path={path} read={now} />
       <Compared path={path} read={now} />
     </div>
   );
@@ -122,6 +129,51 @@ function useBranchMoved(plane: PlaneId, cut: Place, heard: () => void) {
       stop?.();
     };
   }, [plane, workspace, repo, piece]);
+}
+
+/** How many changes are offered a line of their own: past it, the rest are counted. */
+const LINES_OFFERED = 20;
+
+/**
+ * Each change's first line on the head's side, to open in the file tab (#984). None for a file
+ * the branch deleted: the head has no line of it to land on.
+ */
+function ChangedLines({
+  plane,
+  cut,
+  path,
+  read,
+}: {
+  plane: PlaneId;
+  cut: Place;
+  path: string;
+  read: Read;
+}) {
+  if (read.kind !== "read" || read.shown.mark === "deleted" || read.shown.diff.kind !== "text")
+    return null;
+  const lines = [...new Set(read.shown.diff.hunks.map((hunk) => Math.max(1, hunk.newStart)))];
+  if (lines.length === 0) return null;
+  const offered = lines.slice(0, LINES_OFFERED);
+  const count = lines.length === 1 ? "1 change" : `${lines.length} changes`;
+  return (
+    <nav className="piece-files-head" aria-label={`Changes in ${path}`}>
+      <span>
+        {offered.length < lines.length ? `${count}, the first ${offered.length} here` : count}
+      </span>
+      <span className="piece-files-actions">
+        {offered.map((line) => (
+          <button
+            key={line}
+            type="button"
+            tabIndex={0}
+            onClick={() => jumpTo({ plane, place: cut, path, line })}
+          >
+            {`Open at line ${line}`}
+          </button>
+        ))}
+      </span>
+    </nav>
+  );
 }
 
 /** The first line the change touches on the head's side, else the top: where *Open in your

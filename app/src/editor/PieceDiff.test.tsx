@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { BranchChanged, PlaneId, WhatChanged } from "../bindings";
 import { PieceDiffTab } from "./PieceDiff";
+import { settleJump, useJumpAsks, type Pending } from "../fileJump";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
@@ -279,5 +280,88 @@ describe("what changed, read again when the branch moves (#1189)", () => {
       await new Promise((done) => setTimeout(done, 20));
     });
     expect(core.asks()).toBe(2);
+  });
+});
+
+describe("a changed line opened in the file tab (#984)", () => {
+  /** The jumps the window heard, as `App` hears them. */
+  function Window({ heard }: { heard: Pending[] }) {
+    useJumpAsks((jump) => {
+      heard.push(jump);
+    });
+    return null;
+  }
+  const heard: Pending[] = [];
+  afterEach(() => {
+    for (const jump of heard.splice(0)) settleJump(jump.at);
+  });
+
+  const twoHunks = changed({
+    kind: "text",
+    base: "a\nb\nc\nd\ne\nf\ng\nh\n",
+    head: "a\nB\nc\nd\ne\nf\nG\nh\nI\n",
+    hunks: [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 },
+      { oldStart: 7, oldLines: 1, newStart: 7, newLines: 3 },
+    ],
+  });
+
+  it("offers each change's first line on the head's side, and jumps there", async () => {
+    core(twoHunks);
+    render(
+      <>
+        <Window heard={heard} />
+        <PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />
+      </>,
+    );
+
+    const changes = await screen.findByRole("navigation", { name: "Changes in src/lib.rs" });
+    expect([...changes.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Open at line 2",
+      "Open at line 7",
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Open at line 7" }));
+
+    expect(heard.map(({ plane, place, path, line }) => ({ plane, place, path, line }))).toEqual([
+      { plane: PLANE, place: CUT, path: "src/lib.rs", line: 7 },
+    ]);
+  });
+
+  it("offers the first twenty changes and counts the rest", async () => {
+    const head = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n");
+    core(
+      changed({
+        kind: "text",
+        base: head,
+        head,
+        hunks: Array.from({ length: 25 }, (_, i) => ({
+          oldStart: i * 4 + 1,
+          oldLines: 1,
+          newStart: i * 4 + 1,
+          newLines: 1,
+        })),
+      }),
+    );
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="big.rs" />);
+
+    const changes = await screen.findByRole("navigation", { name: "Changes in big.rs" });
+    expect(changes).toHaveTextContent("25 changes, the first 20 here");
+    expect(changes.querySelectorAll("button")).toHaveLength(20);
+  });
+
+  it("offers no line of a deleted file, which the branch no longer has", async () => {
+    core({
+      ...changed({
+        kind: "text",
+        base: "gone\n",
+        head: "",
+        hunks: [{ oldStart: 1, oldLines: 1, newStart: 0, newLines: 0 }],
+      }),
+      mark: "deleted",
+    });
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/old.rs" />);
+
+    await screen.findByTestId("merge-viewer");
+    expect(screen.queryByRole("navigation")).toBeNull();
   });
 });
