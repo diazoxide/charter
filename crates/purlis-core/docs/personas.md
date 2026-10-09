@@ -129,8 +129,8 @@ persona that does not exist still wins, and the session has **no** persona — t
 default does not stand in for it, because that would hand the chat a persona, with its
 tools, that nobody chose. The session briefing says so when it happens.
 
-`purlis persona current` prints the name the ladder resolved, and `purlis persona list`
-prints it with the rung that decided, above the roster.
+`purlis persona current` prints the name the ladder resolved on stdout and the rung that
+decided on stderr (`• via session`), and `purlis persona list` prints both above the roster.
 
 `purlis persona use <name>` selects a persona: it writes the session pointer and, where
 the terminal reports a pane id, the terminal pointer — so a pane keeps its persona across
