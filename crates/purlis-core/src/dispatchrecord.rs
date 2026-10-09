@@ -253,8 +253,9 @@ pub struct Said {
     pub at: String,
     pub kind: crate::dispatchtalk::Kind,
     /// What it said, as [`crate::dispatchtalk::text`] passed it, held to a cap ([`cut`]).
-    /// Empty once its dispatch ended [`TALK_KEPT_FOR`] ago ([`expire_talk`]): a message is
-    /// never taken empty, so an empty one is one whose words were kept and are gone.
+    /// Empty once its dispatch ended [`TALK_KEPT_FOR`] ago ([`expire_talk`]), or once its row
+    /// was cleared ([`clear_forgetting`]): a message is never taken empty but where it was
+    /// [`Said::left_out`], so an empty one is otherwise one whose words were kept and are gone.
     pub text: String,
     /// **Who said it, where that is not the chat its kind names** (#1496): [`By::Person`] on
     /// an answer the person gave in the purlis window, in the asking chat's place. Absent on
@@ -1018,7 +1019,8 @@ pub fn kept_open(root: &Path, id: &str) -> io::Result<bool> {
 }
 
 /// Takes the finished task `id`'s row off its asking chat's list. **The row and nothing
-/// else**: the record stays as it is but for the mark. `false` for a record that is not there,
+/// else**: the record stays as it is but for the mark. What the person's Clear finished runs is
+/// [`clear_forgetting`]. `false` for a record that is not there,
 /// is not a finished task's, or is cleared already.
 pub fn clear(root: &Path, id: &str) -> io::Result<bool> {
     change(root, id, |record| {
@@ -1030,15 +1032,36 @@ pub fn clear(root: &Path, id: &str) -> io::Result<bool> {
     })
 }
 
-/// The chat `asker` closed: the rows of the finished tasks it asked for go with it (V100-10).
-/// How many were cleared. Their records stay.
+/// **Clear finished** (#1485): [`clear`], and **what the two chats said is forgotten** in the
+/// same write (#1520). Every message's text in `talk` is emptied, as [`expire_talk`] empties
+/// it, and its time and kind stay; the brief and the report stay with the record. What the
+/// person clears, and what goes as its asking chat closes ([`clear_for`]), is not kept on for
+/// the rest of its 30 days. `false` where [`clear`] would be.
+///
+/// Not for a Reopen, which takes the row because the task goes on as a chat: [`clear`] alone.
+pub fn clear_forgetting(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.cleared || Finished::of(record).is_none() {
+            return false;
+        }
+        record.cleared = true;
+        for said in &mut record.talk {
+            said.text.clear();
+        }
+        true
+    })
+}
+
+/// The chat `asker` closed: the rows of the finished tasks it asked for go with it (V100-10),
+/// and what each said is forgotten ([`clear_forgetting`], #1520). How many were cleared. Their
+/// records stay.
 pub fn clear_for(root: &Path, asker: &ChatRef) -> usize {
     list(root)
         .into_iter()
         .filter(|record| {
             !record.cleared && Finished::of(record).is_some() && asked_by(record, asker)
         })
-        .filter(|record| clear(root, &record.id).unwrap_or(false))
+        .filter(|record| clear_forgetting(root, &record.id).unwrap_or(false))
         .count()
 }
 

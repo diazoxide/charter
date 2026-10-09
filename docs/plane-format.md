@@ -5301,7 +5301,14 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   and `kind` stay, as do the brief and the report. It is counted from `ended`, not from the
   record's last write, and it does not wait for either chat to go: a record is kept for as
   long as one of its chats is brought back at launch, and what was said in it is not. A
-  message is never taken empty, so an empty `text` means its words were kept and are gone.
+  message is never taken empty (but one `left_out`), so an empty `text` means its words were
+  kept and are gone. **Clear finished forgets them sooner** (#1520): the window's Clear
+  finished, and the asking chat's close, which clears that chat's finished rows, empty every
+  `text` in `talk` in the write that sets `cleared` (`dispatchrecord::clear_forgetting`);
+  the brief and the report stay. A task that ends after its asking chat closed (in the one
+  short turn a close gives it, say) is cleared and forgotten the same way as it ends, since
+  nobody is left to clear its row; not while the app quits, when every chat is kept. A Reopen,
+  which also sets `cleared`, forgets nothing.
   The app does this when it opens a project and before it reads a timeline. A dispatch that
   has not ended keeps its words; **one whose `ended` does not read as a time, or stands more
   than five minutes after the app's clock, has them emptied at once** (#1520), since its 30

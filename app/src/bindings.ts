@@ -1059,8 +1059,8 @@ export const commands = {
 	finishedTasks: (plane: PlaneId) => typedError<FinishedTask[], string>(__TAURI_INVOKE("finished_tasks", { plane })),
 	/**
 	 *  **Clear finished** (#1485): takes the rows of the finished tasks `ids` off their chat's
-	 *  list, and answers how many. Nothing else changes: each task's dispatch record stays, with
-	 *  its report.
+	 *  list, forgets what each task and that chat said to each other (#1520), and answers how
+	 *  many. Each task's dispatch record stays, with its brief and its report.
 	 */
 	clearFinishedTasks: (plane: PlaneId, ids: string[]) => typedError<number, string>(__TAURI_INVOKE("clear_finished_tasks", { plane, ids })),
 	/**

@@ -283,8 +283,9 @@ pub(crate) fn listed_for(held: &Held, asker: u32) -> Vec<purlis_core::dispatched
 }
 
 /// Chat `session` is closing: the rows of the finished tasks it asked for go with it
-/// (V100-10), unless a chat started again in its place carries it on. Asked while the app
-/// still knows the chat. Their records stay.
+/// (V100-10), and what those tasks and it said to each other is forgotten (#1520), unless a
+/// chat started again in its place carries it on. Asked while the app still knows the chat.
+/// Their records stay, with each brief and report.
 ///
 /// **Nothing is written here.** This is called under the lock every dispatch and report waits
 /// on, and marking the rows reads the whole store and rewrites a file a row. The rows are
@@ -373,8 +374,9 @@ pub(crate) fn reopened_from(held: &Held, chat: u32) -> Option<String> {
         .map(|record| name_of(&record))
 }
 
-/// Clears the rows of the finished tasks `ids`, and answers how many it cleared. The rows and
-/// nothing else: each record stays (`dispatchrecord::clear`).
+/// Clears the rows of the finished tasks `ids`, and answers how many it cleared. **What each
+/// task and its asking chat said to each other is forgotten** with the row (#1520); each
+/// record stays, with its brief and its report (`dispatchrecord::clear_forgetting`).
 ///
 /// **A cleared row takes its needs-you item with it** (#1491): a task that failed is an item
 /// on the chat that asked until the person looks at it or clears its row, and this is the
@@ -384,7 +386,7 @@ pub(crate) fn clear(held: &Held, ids: &[String]) -> u32 {
     let rows = listed(held);
     let cleared: Vec<&String> = ids
         .iter()
-        .filter(|id| dispatchrecord::clear(held.root(), id).unwrap_or(false))
+        .filter(|id| dispatchrecord::clear_forgetting(held.root(), id).unwrap_or(false))
         .collect();
     for row in rows.iter().filter(|row| cleared.contains(&&row.id)) {
         held.task_failure_cleared(row.asker, &row.id);
@@ -575,8 +577,8 @@ pub(crate) async fn finished_tasks(
 }
 
 /// **Clear finished** (#1485): takes the rows of the finished tasks `ids` off their chat's
-/// list, and answers how many. Nothing else changes: each task's dispatch record stays, with
-/// its report.
+/// list, forgets what each task and that chat said to each other (#1520), and answers how
+/// many. Each task's dispatch record stays, with its brief and its report.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn clear_finished_tasks(

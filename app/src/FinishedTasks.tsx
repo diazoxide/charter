@@ -47,7 +47,7 @@ export const FinishedTasks = memo(function FinishedTasks({
   /** The level its tasks are drawn at: one below its own. */
   level: number;
   tasks: readonly FinishedTask[];
-  /** Takes these rows away. The rows and nothing else: their records stay. */
+  /** Takes these rows away, and forgets what their tasks said (#1520): their records stay. */
   onClear: (ids: string[]) => void;
   /** Reopens one as an ordinary chat; answers why not, where it could not. */
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
@@ -88,7 +88,7 @@ export const FinishedTasks = memo(function FinishedTasks({
               type="button"
               className="finished-clear"
               tabIndex={0}
-              title="Takes these rows away. Their dispatch records stay."
+              title="Takes these rows away, and forgets what these tasks and this chat said to each other. Each brief and report stays on its dispatch record."
               onClick={() => onClear(folded.map((task) => task.id))}
             >
               Clear finished
@@ -298,7 +298,7 @@ function FinishedRow({
             className="finished-clear"
             tabIndex={0}
             aria-label={`Clear ${task.name}`}
-            title="Takes this row away. Its dispatch record stays."
+            title="Takes this row away, and forgets what this task and its chat said to each other. Its brief and report stay on its dispatch record."
             onClick={() => onClear([task.id])}
           >
             Clear

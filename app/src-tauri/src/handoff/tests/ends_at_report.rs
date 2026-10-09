@@ -310,6 +310,46 @@ fn the_rows_go_when_the_chat_that_asked_closes_and_the_records_stay() {
 }
 
 #[test]
+fn a_task_that_ends_after_its_asking_chat_closed_forgets_what_the_two_said() {
+    // #1520: the person closes the asking chat while its task is in its last turn; the task
+    // ends after. Nobody is left to clear its row, so its words go as it ends.
+    let (_plane, _host, _planes, _id, held, steward, task) = a_steward_and_its_task();
+    let record = record_of(&held, task);
+    dispatchrecord::said(
+        held.root(),
+        &record.id,
+        purlis_core::dispatchtalk::Kind::Note,
+        "Still up.",
+        chrono::Utc::now(),
+    )
+    .expect("kept");
+
+    closes(&held, steward).expect("the asking chat closed");
+    if held
+        .chats()
+        .open_now()
+        .iter()
+        .any(|open| open.session == task)
+    {
+        closes(&held, task).expect("the task ended");
+    }
+
+    let began = Instant::now();
+    let gone = |held: &Held| {
+        let record = record_of(held, task);
+        record.ended.is_some() && record.talk.iter().all(|said| said.text.is_empty())
+    };
+    while !gone(&held) && began.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let record = record_of(&held, task);
+    assert!(record.ended.is_some(), "the task ended");
+    assert_eq!(record.messages, 1);
+    assert_eq!(record.talk[0].text, "", "its words are forgotten");
+    assert!(record.cleared);
+}
+
+#[test]
 fn what_the_asking_chat_asks_of_a_finished_task_is_answered_in_plain_words() {
     let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
     reports_and_ends(&held, &id, task);

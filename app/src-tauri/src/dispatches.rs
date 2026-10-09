@@ -490,9 +490,30 @@ fn close(
     }
     match dispatchrecord::close_as(held.root(), &record.id, ending, by, way, chrono::Utc::now()) {
         // An open Activity tab hears of the report it ended with (#1495).
-        Ok(true) => crate::activity::ended(held, &record.id),
+        Ok(true) => {
+            crate::activity::ended(held, &record.id);
+            forget_where_its_asker_is_gone(held, record);
+        }
         Ok(false) => {}
         Err(why) => tracing::warn!("purlis: a dispatch's record was not closed ({why})"),
+    }
+}
+
+/// **A task that ends after the chat that asked for it has closed** (#1520): its row is
+/// cleared and what the two said to each other is forgotten now, as they would have been had
+/// it ended before that chat closed (`finished::asker_closed`). Nobody is left to see its row,
+/// so nothing would clear it. A chat started again in the asking chat's place is the same chat
+/// and still open, so it keeps its row. Not while the app is quitting, when every chat is
+/// kept for the next launch.
+fn forget_where_its_asker_is_gone(held: &Held, record: &Record) {
+    if record.mode != dispatchrecord::Mode::Task
+        || held.chats().ending()
+        || crate::activity::session_of(&record.asker.chat, &open_chats(held)).is_some()
+    {
+        return;
+    }
+    if let Err(why) = dispatchrecord::clear_forgetting(held.root(), &record.id) {
+        tracing::warn!("purlis: a task whose asking chat closed was not forgotten ({why})");
     }
 }
 
