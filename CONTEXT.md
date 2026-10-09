@@ -594,6 +594,14 @@ allows nothing on a machine until the person there accepts it, and their yes hol
 a commit takes the grant out.
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
+**Refused while you were away**:
+A dispatch a chat nobody was at was refused for lack of a standing grant, kept so the person
+reads of it in the needs-you list afterwards and can allow the pair from then on, for work in
+the workspace the refused task would have worked in. One item a pair and workspace, attached to
+no chat; it is not a question and holds no dispatch. Dismissed, it stays put away while the
+chat asks on.
+_Avoid_: pending dispatch, queued dispatch (nothing is waiting to start)
+
 **Headless chat**:
 A chat with no tab yet. It is listed, never hidden: its asks reach needs you, Stop and the kill
 switch reach it, like any chat's, and it gets a tab when the person opens it. Never a level-1

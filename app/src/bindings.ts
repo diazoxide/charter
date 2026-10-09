@@ -569,6 +569,32 @@ export const commands = {
 	 */
 	dispatchGoneTold: (plane: PlaneId, shown: string[]) => typedError<DispatchArrival, string>(__TAURI_INVOKE("dispatch_gone_told", { plane, shown })),
 	/**
+	 *  What was refused in this project while nobody was there, for the needs-you list: in the
+	 *  order pairs were first refused, which no later refusal moves.
+	 */
+	dispatchAway: (plane: PlaneId) => typedError<AwayRefusal[], string>(__TAURI_INVOKE("dispatch_away", { plane })),
+	/**
+	 *  **Allow from now on** on a needs-you item: chats running as `asking` may dispatch to
+	 *  `target`, for you on this machine, for work in `workspace`, the one the refused task would
+	 *  have worked in (null, the project's root: in any workspace). One named pair the list
+	 *  holds for that workspace, audited as yours before it is kept; it starts nothing. Answers
+	 *  the sentence to say and the list as it is now.
+	 */
+	allowDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAnswered, string>(__TAURI_INVOKE("allow_dispatch_away", { plane, asking, target, workspace })),
+	/**
+	 *  **Dismiss** on a needs-you item: it is put away and nothing is granted. Further refusals
+	 *  for it are counted and not listed, until one comes a week or more later. Answers the list
+	 *  as it is now.
+	 */
+	dismissDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayRefusal[], string>(__TAURI_INVOKE("dismiss_dispatch_away", { plane, asking, target, workspace })),
+	/**
+	 *  **Never for this pair** on a needs-you item: no chat running as `asking` is asked or
+	 *  allowed to dispatch to `target` on this machine until you lift it in Settings, and nothing
+	 *  more is listed for the pair. Audited as yours before it is kept. Answers the sentence to
+	 *  say and the list as it is now.
+	 */
+	neverDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAnswered, string>(__TAURI_INVOKE("never_dispatch_away", { plane, asking, target, workspace })),
+	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
 	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
@@ -2603,6 +2629,37 @@ export type AtRisk = {
 	what: string,
 	/**  charter's own sentence about it, name included: `svc: 2 unpushed commit(s)`. */
 	said: string,
+};
+
+/**
+ *  What **Allow from now on** and **Never for this pair** answered: the sentence the window
+ *  says, and the list as it is.
+ */
+export type AwayAnswered = {
+	said: string,
+	refused: AwayRefusal[],
+};
+
+/**
+ *  One pair refused while nobody was there, as the needs-you list draws it. **Every field is
+ *  the app's own**: nothing here is a chat's text.
+ */
+export type AwayRefusal = {
+	/**  The persona the asking chat ran with. */
+	asking: string,
+	/**  The persona it asked for. */
+	target: string,
+	/**
+	 *  The workspace the refused task would have worked in; null for the project's root.
+	 *  **Allow from now on** is limited to it, and holds in any workspace where it is null.
+	 */
+	workspace: string | null,
+	/**  When it was last refused, in seconds since 1970. */
+	latest: number,
+	/**  How many times it was refused. */
+	times: number,
+	/**  Exactly what **Allow from now on** allows, for whom, and what it makes reachable. */
+	allows: string,
 };
 
 /**  What a block's Notice offers (#1342). */

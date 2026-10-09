@@ -123,6 +123,11 @@ pub struct Server {
 /// (#1496). What it sends reaches a chat marked as the person's own words, so it is held to
 /// what `answer_ask` is: the window's own IPC, and no link until the session protocol has a
 /// scoped message for it.
+///
+/// The four commands of a dispatch refused while nobody was there (#1507) are the window's
+/// alone too: reading that list, and its three answers, one of which is a standing grant in
+/// one press. They are offered on a refused chat's word, so nothing but the person's own
+/// window reads or answers them.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -164,6 +169,11 @@ pub const WINDOW_ONLY: &[&str] = &[
     "task_question",
     // Answers as the person.
     "answer_task_question",
+    // A dispatch refused while nobody was there.
+    "dispatch_away",
+    "allow_dispatch_away",
+    "dismiss_dispatch_away",
+    "never_dispatch_away",
 ];
 
 /// The commands that take a vault's sign-in from the person and use it (#1527, ADR 0052 as

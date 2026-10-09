@@ -2242,6 +2242,37 @@ export type AtRisk = {
 	said: string,
 };
 
+/**
+ *  What **Allow from now on** and **Never for this pair** answered: the sentence the window
+ *  says, and the list as it is.
+ */
+export type AwayAnswered = {
+	said: string,
+	refused: AwayRefusal[],
+};
+
+/**
+ *  One pair refused while nobody was there, as the needs-you list draws it. **Every field is
+ *  the app's own**: nothing here is a chat's text.
+ */
+export type AwayRefusal = {
+	/**  The persona the asking chat ran with. */
+	asking: string,
+	/**  The persona it asked for. */
+	target: string,
+	/**
+	 *  The workspace the refused task would have worked in; null for the project's root.
+	 *  **Allow from now on** is limited to it, and holds in any workspace where it is null.
+	 */
+	workspace: string | null,
+	/**  When it was last refused, in seconds since 1970. */
+	latest: number,
+	/**  How many times it was refused. */
+	times: number,
+	/**  Exactly what **Allow from now on** allows, for whom, and what it makes reachable. */
+	allows: string,
+};
+
 /**  What a block's Notice offers (#1342). */
 export type BlockOffer = 
 /**  Allow a host. */
