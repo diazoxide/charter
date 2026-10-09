@@ -317,19 +317,32 @@ pub(crate) fn memory_body(
     )
 }
 
-/// `title` on one line: every control character, a newline or a carriage return among them,
-/// as a space. What a title is written as wherever it is written, in a heading or an index
-/// line, whoever gave it (#1333).
+/// `title` on one line: every character that [`breaks_a_line`], as a space. What a title is
+/// written as wherever it is written, in a heading or an index line, whoever gave it (#1333).
 pub fn one_line(title: &str) -> std::borrow::Cow<'_, str> {
-    if title.chars().any(char::is_control) {
+    if title.chars().any(breaks_a_line) {
         title
             .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
+            .map(|c| if breaks_a_line(c) { ' ' } else { c })
             .collect::<String>()
             .into()
     } else {
         title.into()
     }
+}
+
+/// Whether `c` breaks a line or hides how it reads, so a title holding it is not one line
+/// (#1408): a control character (a newline, a carriage return, U+0085 among them), the line
+/// and paragraph separators U+2028 and U+2029, which `char::is_control` does not cover and
+/// some Markdown readers break a line at, and the bidirectional embeddings, overrides and
+/// isolates (U+202A–U+202E, U+2066–U+2069), which turn the rest of a line around. The
+/// zero-width characters stay: a joiner is part of how an emoji is written.
+pub fn breaks_a_line(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// Is `path` in the plane's state directory, `.charter/` or `.purlis/` — charter's own, and
@@ -2148,6 +2161,41 @@ mod tests {
             assert!(
                 crate::contain::mintable(&name).is_ok(),
                 "a memory titled {title:?} is filed as {name:?}, which does not travel"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod one_line_tests {
+    use super::*;
+
+    #[test]
+    fn every_character_that_breaks_or_hides_a_line_is_folded_to_a_space() {
+        for (title, folded) in [
+            ("Two\nlines", "Two lines"),
+            ("Line\u{2028}separator", "Line separator"),
+            ("Paragraph\u{2029}separator", "Paragraph separator"),
+            ("Next\u{85}line", "Next line"),
+            ("Turned\u{202E}around", "Turned around"),
+            ("Isolated\u{2066}text\u{2069}", "Isolated text "),
+        ] {
+            assert_eq!(one_line(title), folded, "{title:?}");
+            assert_eq!(
+                index_line(title, "a.md"),
+                format!("- [{folded}](a.md)"),
+                "{title:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_that_is_one_line_is_kept_as_it_is() {
+        // A zero-width joiner is how a family emoji is written.
+        for title in ["Plain", "Fam\u{1F468}\u{200D}\u{1F469}ily", "Caf\u{e9}"] {
+            assert!(
+                matches!(one_line(title), std::borrow::Cow::Borrowed(_)),
+                "{title:?}"
             );
         }
     }
