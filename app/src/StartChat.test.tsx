@@ -949,15 +949,15 @@ describe("a program the sandbox will not bind (V87g)", () => {
   it.each([
     [
       "a program where the chat can write",
-      "this project runs every chat sandboxed, and the program lives where this chat can write: /work/acme/bin/claude, so it was not started sandboxed. Keep the program outside the plane and outside what a chat may write.",
+      "this project runs every chat sandboxed, and the program lives where this chat can write: /work/acme/bin/claude, so it was not started sandboxed. Keep the program outside the project and outside what a chat may write.",
     ],
     [
       "a command naming a file where the chat can write",
-      "this project runs every chat sandboxed, and this profile's command names /tmp/run.sh, which lies where this chat can write, so it was not started sandboxed. Keep every file the command names outside the plane and outside what a chat may write.",
+      "this project runs every chat sandboxed, and this profile's command names /tmp/run.sh, which lies where this chat can write, so it was not started sandboxed. Keep every file the command names outside the project and outside what a chat may write.",
     ],
     [
       "a command word too long to check",
-      "this project runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which purlis does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
+      "this project runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which purlis does not check, so it was not started sandboxed. Keep what it says in a file outside the project and name that file instead.",
     ],
     [
       "a program named by a relative path",

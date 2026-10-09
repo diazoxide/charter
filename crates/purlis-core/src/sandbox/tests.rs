@@ -1943,7 +1943,7 @@ fn a_charter_toml_that_cannot_be_read_starts_no_chat_rather_than_one_unsandboxed
         assert_eq!(refused, NotStarted::PlaneUnreadable, "{harness:?}");
         assert_eq!(
             refused.to_string(),
-            "charter.toml in this plane cannot be read as TOML, so purlis cannot tell whether \
+            "charter.toml in this project cannot be read as TOML, so purlis cannot tell whether \
              it runs chats sandboxed, and nothing was started. Fix charter.toml and start the \
              chat again."
         );

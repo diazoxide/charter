@@ -373,7 +373,7 @@ impl fmt::Display for Refusal {
             ),
             Self::ModeUnknown => write!(
                 f,
-                "{TABLE}.mode in {FILE} is not \"on\" — the one value a plane may give it; {on}"
+                "{TABLE}.mode in {FILE} is not \"on\" — the one value a project may give it; {on}"
             ),
             Self::EgressNotAList => write!(
                 f,
@@ -2447,7 +2447,7 @@ impl NotStarted {
             ),
             Self::ProgramWritable(path) => format!(
                 "{lead}, and the program lives where this chat can write: {}, so it was not \
-                 started sandboxed. Keep the program outside the plane and outside what a chat \
+                 started sandboxed. Keep the program outside the project and outside what a chat \
                  may write.",
                 path.display()
             ),
@@ -2459,12 +2459,12 @@ impl NotStarted {
             Self::WordTooLong => format!(
                 "{lead}, and a word of this profile's command is longer than 4 KiB, which purlis \
                  does not check, so it was not started sandboxed. Keep what it says in a file \
-                 outside the plane and name that file instead."
+                 outside the project and name that file instead."
             ),
             Self::WordWritable(word) => format!(
                 "{lead}, and this profile's command names {word}, which lies where this chat \
                  can write, so it was not started sandboxed. Keep every file the command names \
-                 outside the plane and outside what a chat may write."
+                 outside the project and outside what a chat may write."
             ),
             Self::ProbeTimedOut(harness) => format!(
                 "{lead}, and this profile's program did not answer whether it is {} within {} \
@@ -2491,7 +2491,7 @@ impl NotStarted {
                 }
             ),
             Self::PlaneUnreadable => format!(
-                "{FILE} in this plane cannot be read as TOML, so purlis cannot tell whether it \
+                "{FILE} in this project cannot be read as TOML, so purlis cannot tell whether it \
                  runs chats sandboxed, and nothing was started. Fix {FILE} and start the chat \
                  again."
             ),
