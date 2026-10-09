@@ -12,7 +12,9 @@
 //! 1 ms the window can spare. That is the worktree verbs (list, which piece a chat is in,
 //! remove, done, merge, and New branch, which already was), and a workspace's create, its
 //! at-risk reading and its remove. Create and remove also read the sidebar's model again under
-//! its lock, which the watcher holds while it applies a change.
+//! its lock, which the watcher holds while it applies a change. Settings' two lists of grants
+//! name who committed each of the project's grants, which asks git, so the dispatch grants'
+//! read and revoke and the sandbox grants' read and revoke answer off it as well (#1543).
 //!
 //! `chat_usage` stays synchronous too: it reads one file of sixteen rows, about 30 µs, and walks
 //! nothing. So does `workspace_focused`, which checks a name and hands the extensions' report
@@ -450,6 +452,52 @@ mod tests {
             json!({ "plane": plane, "id": 7 }),
         );
         assert_eq!(kept.answered_on, asking);
+    }
+
+    #[test]
+    fn settings_reads_of_the_sandbox_grants_ask_git_off_the_thread_that_asked() {
+        // #1543: the Granted list names who committed each of the project's hosts, which asks
+        // git, and a revoke answers the same list. Here there is no grant, and the revoke
+        // refuses an id that names none: where each answers is the point.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let planes = Planes::telling(std::sync::Arc::new(|_| {}), crate::Shipped::default(), None);
+        let plane = planes.open(dir.path());
+        let app = mock_builder()
+            .manage(planes)
+            .invoke_handler(tauri::generate_handler![
+                crate::sandboxing::sandbox_grants,
+                crate::sandboxing::revoke_sandbox_grant,
+            ])
+            .build(tauri_context!(test = true))
+            .expect("the app builds");
+        tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::default())
+            .build()
+            .expect("the main window");
+        let asking = std::thread::current().id();
+        let asked = [
+            ("sandbox_grants", json!({ "plane": plane })),
+            (
+                "revoke_sandbox_grant",
+                json!({ "plane": plane, "id": "no such grant" }),
+            ),
+        ];
+        assert_eq!(
+            asked
+                .iter()
+                .map(|(command, _)| *command)
+                .collect::<Vec<_>>(),
+            crate::sandboxing::READS_HISTORY
+        );
+        let on_the_asking_thread: Vec<&str> = asked
+            .into_iter()
+            .filter(|(command, args)| ask(&app, command, args.clone()).answered_on == asking)
+            .map(|(command, _)| command)
+            .collect();
+        assert!(
+            on_the_asking_thread.is_empty(),
+            "answered on the thread that asked, which in the app is the window's: \
+             {on_the_asking_thread:?}"
+        );
     }
 
     /// A project with no workspace in it, as the window holds it, with the commands that run
