@@ -319,8 +319,10 @@ function scopeLabel(scope: MemoryScope): string {
  * comes back to the minute. Persona and shared memory are published with the project, which
  * the help line says: a move out of a LOCAL journal publishes it with the next save.
  *
- * **The pick is held, and only the button moves** (`docs/ui-primitives.md`: a choice that writes
- * something with no Undo holds the pick and writes on a button). A move a store refuses — one
+ * **The pick is held, and only the button moves** (`docs/ui-primitives.md`'s held pick). A move
+ * has an Undo now (`useMemoryEdits`, #1190), but only for a few seconds, and a move out of a
+ * LOCAL journal publishes the memory with the next save, so it is still never made by a pick
+ * passed through on the way to another. A move a store refuses — one
  * already holding a memory of that name, one charter may not write — says why, and nothing moved.
  */
 function MoveMemory({
