@@ -188,6 +188,8 @@ export type FileSetting = Named & {
   /** The core's sentence about this key as the file stands — a value that names nothing — said
    *  beside the setting until it is replaced. */
   standing?: string;
+  /** What the row's reset is called, where "Reset" alone would hide what it does (#1197). */
+  resets?: string;
 };
 
 /**

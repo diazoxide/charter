@@ -58,6 +58,8 @@ export type Control = {
   /** A `choice` over one of the project's own collections (ST-1): its choices are what the
    *  project has, read when the level is, and it offers New… beside them. */
   names?: Entry;
+  /** What the row's reset is called, where "Reset" alone would hide what it does (#1197). */
+  resets?: string;
 };
 
 /**
