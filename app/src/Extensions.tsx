@@ -9,7 +9,7 @@ import {
 } from "./bindings";
 import { extensionsChanged } from "./extensionsOn";
 import { Choice } from "./settings/components";
-import { projectThemeChanged } from "./projectTheme";
+import { iconThemeComplaints, offeredIconThemes, projectThemeChanged } from "./projectTheme";
 import {
   BUILT_IN,
   DEFAULT_THEME,
@@ -56,6 +56,19 @@ export function Extensions({ onClose }: { onClose: () => void }) {
   const [listed, setListed] = useState<InstalledExtensions | null>(null);
   const [asking, setAsking] = useState<ExtensionAsk | null>(null);
   const [went, setWent] = useState<string | null>(null);
+  const [iconTrouble, setIconTrouble] = useState<ReadonlyMap<string, IconTrouble[]>>(new Map());
+
+  // What each approved extension's icon theme got wrong (#1145), read again with the list: an
+  // approval or a removal changes which icon themes there are.
+  useEffect(() => {
+    let gone = false;
+    void offeredIconThemes().then((offered) => {
+      if (!gone) setIconTrouble(iconTroubleOf(offered));
+    });
+    return () => {
+      gone = true;
+    };
+  }, [listed]);
 
   const reread = useCallback(async () => {
     const answered = await commands.installedExtensions();
@@ -191,6 +204,11 @@ export function Extensions({ onClose }: { onClose: () => void }) {
                 {row.themes_in_force.length > 0 && (
                   <span className="in-force">Drawing: {row.themes_in_force.join(", ")}</span>
                 )}
+                {(iconTrouble.get(row.id) ?? []).map((trouble) => (
+                  <span key={trouble.name} className="came-back icon-trouble">
+                    {troubleSaid(trouble)}
+                  </span>
+                ))}
                 {row.ask && (
                   <button type="button" tabIndex={0} onClick={() => setAsking(row.ask)}>
                     Review
@@ -243,6 +261,34 @@ export function Extensions({ onClose }: { onClose: () => void }) {
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/** One contributed icon theme that got something wrong, and what. */
+type IconTrouble = { name: string; complaints: readonly string[] };
+
+/** The most complaints said about one icon theme, and the longest one said whole: a theme
+ *  that is wrong everywhere is said to be in a line, not a page. */
+const MOST_COMPLAINTS = 3;
+const LONGEST_COMPLAINT = 160;
+
+/** Each extension's icon themes that got something wrong, by the extension's id. */
+function iconTroubleOf(offered: readonly ExtensionTheme[]): Map<string, IconTrouble[]> {
+  const by = new Map<string, IconTrouble[]>();
+  for (const one of offered) {
+    const complaints = iconThemeComplaints(one.text);
+    if (complaints.length === 0) continue;
+    by.set(one.extension, [...(by.get(one.extension) ?? []), { name: one.name, complaints }]);
+  }
+  return by;
+}
+
+/** One icon theme's complaints as a sentence, bounded: its text is the extension's. */
+export function troubleSaid({ name, complaints }: IconTrouble): string {
+  const cut = (text: string) =>
+    text.length > LONGEST_COMPLAINT ? `${text.slice(0, LONGEST_COMPLAINT - 1)}…` : text;
+  const said = complaints.slice(0, MOST_COMPLAINTS).map(cut).join("; ");
+  const more = complaints.length - MOST_COMPLAINTS;
+  return `Icon theme “${cut(name)}”, drawn as purlis’s own where it is wrong: ${said}${more > 0 ? `; and ${more} more` : ""}.`;
 }
 
 /** What a standing says, in the words to put in front of the operator. */

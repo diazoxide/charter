@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { drawThemeFor, Extensions } from "./Extensions";
+import { drawThemeFor, Extensions, troubleSaid } from "./Extensions";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
 import { GLOBAL } from "./windowprefs";
+import { forgetProjectThemes } from "./projectTheme";
 
 /**
  * A colour for a theme an extension contributes, taken out of charter's own light theme
@@ -24,6 +25,7 @@ afterEach(() => {
   cleanup();
   clearMocks();
   drawIn(DEFAULT_THEME);
+  forgetProjectThemes();
 });
 
 /** The question charter asks, as the core builds it. The two sentences are the core's own. */
@@ -75,6 +77,7 @@ function core({
   unreadable = null as string | null,
   dropped = [] as string[],
   picks = null as string | null,
+  iconThemes = [] as { extension: string; name: string; text: string }[],
 }) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
@@ -87,6 +90,7 @@ function core({
         dropped,
       };
     if (cmd === "extension_themes") return themes;
+    if (cmd === "extension_icon_themes") return iconThemes;
     if (cmd === "pick_extension") return picks;
     if (cmd === "install_extension") return ASK;
     if (cmd === "approve_extension") return null;
@@ -123,6 +127,67 @@ const builtInRow: Row = {
   refused: null,
   ask: null,
 };
+
+describe("what a contributed icon theme got wrong (#1145)", () => {
+  const approved = { ...newRow, standing: "approved", ask: null };
+  /** An icon theme whose `file` names no symbol and whose one symbol is coloured with a literal. */
+  const WRONG = JSON.stringify({
+    symbols: {
+      leaf: { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0z", tone: "red" }] },
+    },
+    file: "nothing",
+  });
+
+  it("says each complaint on the row of the extension that contributes it", async () => {
+    core({
+      rows: [approved, builtInRow],
+      iconThemes: [{ extension: "solarized", name: "Leaves", text: WRONG }],
+    });
+    render(<Extensions onClose={() => undefined} />);
+
+    const row = (await screen.findByText("Solarized")).closest("li") as HTMLElement;
+    const said = await within(row).findByText(/^Icon theme “Leaves”/);
+    expect(said).toHaveTextContent(
+      /drawn as purlis’s own where it is wrong: a path of leaf is coloured "red", which is not one of icon\./,
+    );
+    expect(said).toHaveTextContent(/file names "nothing", which is no symbol\.$/);
+    const other = screen.getByText("Persona statistics").closest("li") as HTMLElement;
+    expect(within(other).queryByText(/^Icon theme/)).toBeNull();
+  });
+
+  it("says nothing of an icon theme that is right", async () => {
+    core({
+      rows: [approved],
+      iconThemes: [{ extension: "solarized", name: "Plain", text: "{}" }],
+    });
+    render(<Extensions onClose={() => undefined} />);
+
+    await screen.findByText("Solarized");
+    await waitFor(() => expect(screen.queryByText(/^Icon theme/)).toBeNull());
+  });
+
+  it("says one that is not JSON at all", async () => {
+    core({
+      rows: [approved],
+      iconThemes: [{ extension: "solarized", name: "Broken", text: "{" }],
+    });
+    render(<Extensions onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        "Icon theme “Broken”, drawn as purlis’s own where it is wrong: an icon theme is JSON, and this is not.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("bounds what it says: three complaints, each cut short, and how many more", () => {
+    const long = "x".repeat(400);
+    const said = troubleSaid({ name: "Many", complaints: [long, "b", "c", "d", "e"] });
+    expect(said).toContain(`${"x".repeat(159)}…; b; c; and 2 more.`);
+    expect(said).not.toContain("d;");
+    expect(said.length).toBeLessThan(300);
+  });
+});
 
 describe("the extension registry", () => {
   it("marks a built-in extension built-in, with no Remove and no question to ask", async () => {
