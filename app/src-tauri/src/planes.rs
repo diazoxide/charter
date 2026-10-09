@@ -899,6 +899,11 @@ impl Held {
             .and_then(|from| Some((from.chat, self.chats.shown_name(session)?)));
         // And how a dispatch record names it, as the chat that asked (#1513).
         let as_asker = crate::dispatches::chat_ref(self, session);
+        // And the chat it resumed, whose reports it was handed (#1546).
+        let resumed_from = self
+            .chats
+            .recorded_chat(session)
+            .and_then(|chat| chat.identity.resumed_from);
         let closed = self.chats.close(session);
         let ended = id.filter(|id| !self.chats.id_is_open(id));
         self.dispatch_grants.chat_closed(session, ended.as_deref());
@@ -925,7 +930,13 @@ impl Held {
         let moved = purlis_core::handback::orphan_kept(&self.root, session);
         // A task's report this chat never read is still owed to it, should the person reopen
         // it (#1513).
-        crate::restored::unread_at_close(self, session, as_asker.as_ref(), &moved);
+        crate::restored::unread_at_close(
+            self,
+            session,
+            as_asker.as_ref(),
+            resumed_from.as_deref(),
+            &moved,
+        );
         let orphaned: Vec<_> = moved.into_iter().map(|(report, _)| report).collect();
         (self.tell)(gone);
         // **A report that was still waiting for this chat now has nowhere to go** (#1448). It

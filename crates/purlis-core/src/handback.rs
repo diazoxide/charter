@@ -366,6 +366,16 @@ pub fn a_kept_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Whether the report kept for a place under `name` ([`kept_name`]) still waits there, as a
+/// plain file reached through no link. A name that is not a kept report's is never kept.
+pub fn still_kept(root: &Path, name: &str) -> bool {
+    if !a_kept_name(name) {
+        return false;
+    }
+    let file = dir(root).join(name);
+    std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_file())
+}
+
 /// Takes back the report kept for a place under `name` ([`kept_name`]), where it still waits
 /// there: answers whether it did. One a chat that started in that place has read is gone, and
 /// that is `false`. A name that is not a kept report's takes nothing.

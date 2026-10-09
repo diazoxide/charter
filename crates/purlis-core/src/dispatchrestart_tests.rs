@@ -874,7 +874,7 @@ fn a_report_its_asker_closed_without_reading_is_kept_for_it_should_it_be_reopene
 
     // The steward chat closes before its next turn: the report moves to its workspace.
     let moved = handback::orphan_kept(&root, STEWARD);
-    assert_eq!(unread_at_close(&root, &the_steward_ref(), &moved), 1);
+    assert_eq!(unread_at_close(&root, &the_steward_ref(), None, &moved), 1);
 
     let kept = dispatchrecord::read(&root, &record.id)
         .unwrap()
@@ -887,6 +887,36 @@ fn a_report_its_asker_closed_without_reading_is_kept_for_it_should_it_be_reopene
     assert_eq!(owing.len(), 1);
     assert_eq!(owing[0].report, report);
     assert!(handback::take(&root, For::Place(&alpha())).is_empty());
+}
+
+#[test]
+fn a_chat_that_resumed_the_asker_and_closes_unread_keeps_the_report_owed_to_it() {
+    // Review of #1546, F5: a Resume or a Reopen that ends at once, before its next turn read
+    // what it was handed. The records name the chat it resumed.
+    let (_d, root) = project();
+    let (record, report) = reported_and_left_for_the_steward(&root);
+    let moved_to = 12;
+    handback::take(&root, For::Chat(STEWARD));
+    handback::leave(&root, For::Chat(moved_to), &report).unwrap();
+    let resumed = ChatRef {
+        chat: moved_to,
+        id: Some(OTHER_ID.to_owned()),
+        ..the_steward_ref()
+    };
+
+    let moved = handback::orphan_kept(&root, moved_to);
+    assert_eq!(unread_at_close(&root, &resumed, None, &moved), 0);
+    assert_eq!(
+        unread_at_close(&root, &resumed, Some(STEWARD_ID), &moved),
+        1
+    );
+
+    assert!(
+        dispatchrecord::read(&root, &record.id)
+            .unwrap()
+            .undelivered
+            .is_some()
+    );
 }
 
 #[test]
@@ -908,7 +938,7 @@ fn a_report_that_is_no_task_s_marks_nothing_at_close() {
     handback::leave(&root, For::Chat(STEWARD), &handoffs).unwrap();
 
     let moved = handback::orphan_kept(&root, STEWARD);
-    assert_eq!(unread_at_close(&root, &the_steward_ref(), &moved), 0);
+    assert_eq!(unread_at_close(&root, &the_steward_ref(), None, &moved), 0);
     // And another chat's close marks nothing of the steward chat's tasks.
     handback::leave(&root, For::Chat(5), &report_of(&record).unwrap()).unwrap();
     let moved = handback::orphan_kept(&root, 5);
@@ -917,7 +947,7 @@ fn a_report_that_is_no_task_s_marks_nothing_at_close() {
         id: Some(OTHER_ID.to_owned()),
         ..the_steward_ref()
     };
-    assert_eq!(unread_at_close(&root, &other, &moved), 0);
+    assert_eq!(unread_at_close(&root, &other, None, &moved), 0);
     assert_eq!(
         dispatchrecord::read(&root, &record.id).unwrap().undelivered,
         None
@@ -1105,6 +1135,31 @@ fn a_start_that_never_finished_leaves_the_report_owed_on_its_record_and_the_next
     assert_eq!(hand_to(&root, &owing, 12), 1);
     assert_eq!(handback::take(&root, For::Chat(12)), [report]);
     assert!(take_back(&root, by_the_steward).is_empty());
+}
+
+#[test]
+fn a_start_died_in_then_a_refused_start_keeps_the_report_for_its_workspace_again() {
+    // Review of #1546, M1: the app dies while the chat that asked starts; at the next launch
+    // that chat's start is refused, and the person lets it go. The workspace is still where
+    // the report waits, as it was before the chat was reopened.
+    let (_d, root) = project();
+    let (record, report) = reported_to_nobody(&root);
+    let _died_in = take_back(&root, by_the_steward);
+    assert!(handback::take(&root, For::Place(&alpha())).is_empty());
+
+    // The next launch takes it for the chat, whose start is refused.
+    let refused = take_back(&root, by_the_steward);
+    give_back(&root, &refused);
+
+    // Forgotten from here, the chat never comes back: the report waits for the workspace,
+    // under the name its record gives.
+    let kept = dispatchrecord::read(&root, &record.id)
+        .unwrap()
+        .undelivered
+        .and_then(|owed| owed.kept)
+        .expect("kept for the workspace again");
+    assert!(handback::still_kept(&root, &kept), "{kept}");
+    assert_eq!(handback::take(&root, For::Place(&alpha())), [report]);
 }
 
 #[test]

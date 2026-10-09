@@ -584,6 +584,8 @@ impl Talk {
     /// `task` has reported: a question it had open is closed, answered or not.
     pub fn close(&mut self, task: u32) {
         self.questions.remove(&task);
+        // It will ask nothing again: an answer is not told it may be asked again.
+        self.restored.remove(&task);
         // An answer of the person's it had not been handed would reach no turn of the work.
         // That it was never read is kept, for its record as it ends (the report is delivered
         // before the record is closed).
@@ -665,9 +667,9 @@ pub fn no_question(name: &str, task: u32) -> String {
 pub fn asked_before_the_restart(name: &str, task: u32) -> String {
     format!(
         "'{name}' (chat {task}) has asked this chat no question since purlis was restarted, so \
-         this answer was not sent. A question it asked before the restart was not kept across \
-         it: '{name}' was told to ask again if its work waits on the answer, and this chat can \
-         answer it then."
+         this answer was not sent. Any question it asked before the restart was not kept \
+         across it: '{name}' was told to ask again if its work waits on the answer, and this \
+         chat can answer it then."
     )
 }
 
@@ -1360,6 +1362,14 @@ mod tests {
         assert_eq!(
             talk.answer(TASK, ASKER, "check the queue", an_answer()),
             Err(no_question("check the queue", TASK))
+        );
+
+        // A task brought back that has reported will ask nothing again, and is not said to.
+        talk.restored(TASK);
+        talk.close(TASK);
+        assert_eq!(
+            talk.nothing_to_answer("check the queue", TASK),
+            no_question("check the queue", TASK)
         );
     }
 

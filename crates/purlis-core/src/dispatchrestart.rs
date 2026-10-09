@@ -507,9 +507,14 @@ pub fn settle_after_launch(
 /// A report is matched to the newest ended task `asker` asked for, called what the report
 /// says it is from, whose record does not say so already: by its words for a report, by
 /// purlis's mark for one purlis wrote. One that matches no record is left as it is.
+///
+/// `resumed_from` is the id of the chat `asker` resumed, where it resumed one (a Resume, or a
+/// Reopen of a finished task's row): the reports it was handed were asked for by that chat,
+/// and their records name it (#1546).
 pub fn unread_at_close(
     root: &Path,
     asker: &ChatRef,
+    resumed_from: Option<&str>,
     moved: &[(Handback, Option<PathBuf>)],
 ) -> usize {
     if asker.id.is_none() {
@@ -522,7 +527,8 @@ pub fn unread_at_close(
                 && !record.running()
                 && record.undelivered.is_none()
                 && !record.asker.by_person
-                && dispatchrecord::asked_by(record, asker)
+                && (dispatchrecord::asked_by(record, asker)
+                    || resumed_from.is_some_and(|was| record.asker.chat.id.as_deref() == Some(was)))
         })
         .collect();
     let mut marked = 0;
@@ -580,8 +586,6 @@ pub struct Owing {
     pub asker: ChatRef,
     /// The report, as the chat that asked is told it.
     pub report: Handback,
-    /// Whether it still waited for its workspace, and was taken from there.
-    was_kept: bool,
 }
 
 /// `record`'s report as the chat that asked is told it, rebuilt from the record: its own
@@ -681,13 +685,13 @@ pub fn take_back(root: &Path, asked: impl Fn(&dispatchrecord::Record) -> bool) -
         .into_iter()
         .filter_map(|record| {
             let report = report_of(&record)?;
-            let kept = record.undelivered.as_ref()?.kept.clone();
-            let was_kept = kept.is_some_and(|name| handback::withdraw(root, &name));
+            if let Some(name) = record.undelivered.as_ref()?.kept.as_deref() {
+                handback::withdraw(root, name);
+            }
             Some(Owing {
                 id: record.id,
                 asker: record.asker.chat,
                 report,
-                was_kept,
             })
         })
         .collect()
@@ -696,42 +700,54 @@ pub fn take_back(root: &Path, asked: impl Fn(&dispatchrecord::Record) -> bool) -
 /// **Hands the reports [`take_back`] took to chat `chat`**, the chat that asked, reopened and
 /// started: each is left for its own next turn. Answers how many were left.
 ///
-/// Each record is claimed as it is handed over ([`dispatchrecord::delivered_late`]), under the
-/// store's lock: two reopens of one chat hand a report over once between them, and a copy
-/// kept for the workspace again meanwhile goes with the claim. **A report that cannot be
-/// written for the chat is given back** as a start that did not happen gives it back
-/// ([`give_back`]): owed on its record, and kept for its workspace again where it was.
+/// **Left first, then claimed** ([`dispatchrecord::delivered_late`], under the store's lock):
+/// the app dying between the two leaves the report with the chat and still owed on its
+/// record, never with nobody. Two reopens of one chat hand a report over once between them:
+/// the one whose claim comes second takes back what it left. A copy kept for the workspace
+/// again meanwhile goes with the claim. **A report that cannot be written for the chat is
+/// given back** as a start that did not happen gives it back ([`give_back`]).
 pub fn hand_to(root: &Path, owing: &[Owing], chat: u32) -> usize {
     let mut handed = 0;
     for one in owing {
-        let Ok(Some(claimed)) = dispatchrecord::delivered_late(root, &one.id) else {
-            continue;
-        };
-        let withdrew = claimed
-            .kept
-            .as_deref()
-            .is_some_and(|name| handback::withdraw(root, name));
-        if handback::leave(root, For::Chat(chat), &one.report).is_ok() {
-            handed += 1;
+        let owed =
+            dispatchrecord::read(root, &one.id).is_some_and(|record| record.undelivered.is_some());
+        if !owed {
             continue;
         }
-        let kept = (one.was_kept || withdrew)
-            .then(|| kept_for_its_workspace(root, one))
-            .flatten();
-        let _ = dispatchrecord::kept_undelivered(root, &one.id, kept.as_deref());
+        let Ok(file) = handback::leave_at(root, For::Chat(chat), &one.report) else {
+            give_back(root, std::slice::from_ref(one));
+            continue;
+        };
+        match dispatchrecord::delivered_late(root, &one.id) {
+            Ok(Some(claimed)) => {
+                if let Some(name) = claimed.kept.as_deref() {
+                    handback::withdraw(root, name);
+                }
+                handed += 1;
+            }
+            // Handed over by another reopen meanwhile: this copy is not the chat's to read.
+            _ => handback::took(root, &file),
+        }
     }
     handed
 }
 
 /// The chat that asked did not start after all: what [`take_back`] took is as it was. Each
-/// record still says its report is owed, and one taken from its workspace is kept there again.
-/// A record another reopen handed over meanwhile is left as it is, and nothing is kept again
-/// for it.
+/// record still says its report is owed, and **one whose kept copy is gone is kept for its
+/// workspace again**: taken by this start, or by a start the app died in before it. A record
+/// another reopen handed over meanwhile, and one whose copy is still there, are left as they
+/// are.
 pub fn give_back(root: &Path, owing: &[Owing]) {
-    for one in owing.iter().filter(|one| one.was_kept) {
-        let still_owed =
-            dispatchrecord::read(root, &one.id).is_some_and(|record| record.undelivered.is_some());
-        if !still_owed {
+    for one in owing {
+        let Some(owed) = dispatchrecord::read(root, &one.id).and_then(|record| record.undelivered)
+        else {
+            continue;
+        };
+        let gone = owed
+            .kept
+            .as_deref()
+            .is_some_and(|name| !handback::still_kept(root, name));
+        if !gone {
             continue;
         }
         let kept = kept_for_its_workspace(root, one);

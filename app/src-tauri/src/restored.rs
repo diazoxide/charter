@@ -72,11 +72,15 @@ pub(crate) fn put_back(
     let opened = held
         .chats()
         .put_back_telling(&launch.back, size, &|chat| launch.told(chat));
-    for chat in &launch.back.chats {
-        if launch.told(chat).is_some()
-            && let Some(number) = chat.number
-        {
-            questions_were_not_kept(held, number);
+    // Only the chats that started: one waiting to start is marked if it starts (`retrying`).
+    for open in &opened {
+        let told = launch
+            .back
+            .chats
+            .iter()
+            .any(|chat| chat.number == Some(open.session) && launch.told(chat).is_some());
+        if told {
+            questions_were_not_kept(held, open.session);
         }
     }
     after_put_back(held, &launch, coming, settles);
@@ -329,11 +333,13 @@ pub(crate) fn to_a_resumed_asker(held: &Held, chat: u32) {
 /// **Chat `session` is closing** (#1513): `asker` is it, as a record names it, read while it
 /// was open. The task reports that waited for its next turn were moved to its workspace
 /// (`moved`), and their records say so. A chat started again in its place carries them on, so
-/// nothing is marked for it.
+/// nothing is marked for it. `resumed_from` is the chat it resumed, read while it was open:
+/// what it was handed was asked for by that chat (#1546).
 pub(crate) fn unread_at_close(
     held: &Held,
     session: u32,
     asker: Option<&ChatRef>,
+    resumed_from: Option<&str>,
     moved: &[(purlis_core::handback::Handback, Option<std::path::PathBuf>)],
 ) {
     let Some(asker) = asker else {
@@ -342,7 +348,7 @@ pub(crate) fn unread_at_close(
     if moved.is_empty() || crate::dispatches::carried_on(held, session, asker) {
         return;
     }
-    dispatchrestart::unread_at_close(held.root(), asker, moved);
+    dispatchrestart::unread_at_close(held.root(), asker, resumed_from, moved);
 }
 
 /// **Resume from the session record at `path`** (#1513, V100-64): `chat` is the chat that

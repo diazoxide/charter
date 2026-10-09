@@ -5280,7 +5280,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
     the chat starts and left for its next turn once it has. The key stays until then: it is
     removed in the same write that claims the report as it is left, so one report reaches it
     once, and a start that never finishes, or a report that cannot be left, leaves it owed (and
-    kept in a file again where it was). A
+    kept in a file again, where its file is gone and the chat does not start after all). A
     chat a Resume started knows the chat it resumed (`identity.resumed_from` in
     `app/reopen.json`), so **a report that lands after the Resume** goes to it as its record
     ends. Written by the app, as the report is kept, and by the settle that ends a dispatch
