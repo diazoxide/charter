@@ -3154,7 +3154,7 @@ mod tests {
         let root = a_project("[dispatch]\ndepth = 8\n");
         recorded(root.path(), (STEWARD_ID, "steward"), (DEVOPS_ID, "devops"));
         recorded(root.path(), (DEVOPS_ID, "devops"), (QA_ID, "qa"));
-        let mut three = dispatched(2, 2, Mode::Task, Owed::Due, Some("qa"));
+        let mut three = under(STEWARD_ID, 2, 2, Some("qa"));
         three.identity.id = Some(QA_ID.to_owned());
         let open = [(3, &three)];
         let grants = grant(&[("qa", "steward"), ("qa", "devops"), ("qa", "ops")]);
@@ -3198,7 +3198,7 @@ mod tests {
         // own record says two. Never read as the shorter chain; refused, with the same words.
         let root = a_project("[dispatch]\ndepth = 8\n");
         recorded(root.path(), (DEVOPS_ID, "devops"), (QA_ID, "qa"));
-        let mut three = dispatched(2, 2, Mode::Task, Owed::Due, Some("qa"));
+        let mut three = under(STEWARD_ID, 2, 2, Some("qa"));
         three.identity.id = Some(QA_ID.to_owned());
         let open = [(3, &three)];
         let grants = grant(&[("qa", "ops")]);
@@ -3211,6 +3211,30 @@ mod tests {
         );
         assert!(refusal(&said).starts_with("this chat's chain began under an older version"));
         assert_eq!(said.above, None);
+    }
+
+    #[test]
+    fn a_task_under_a_handoff_from_before_the_keys_is_still_refused_when_its_chats_closed() {
+        // The person's steward chat handed off to devops before depths and roots were kept;
+        // after the update devops dispatched qa, which reads as one down and names no root.
+        // steward and devops have closed. The records show devops above qa and stop there:
+        // steward, above devops, is in no record. Refused, never read as the shorter chain.
+        let root = a_project("[dispatch]\ndepth = 8\n");
+        recorded(root.path(), (DEVOPS_ID, "devops"), (QA_ID, "qa"));
+        let mut three = dispatched(2, 1, Mode::Task, Owed::Due, Some("qa"));
+        three.identity.id = Some(QA_ID.to_owned());
+        let open = [(3, &three)];
+        let grants = grant(&[("qa", "steward"), ("qa", "ops")]);
+        for to in ["steward", "ops"] {
+            let said = asked_at(root.path(), 3, &open, Some(to), &grants);
+            assert_eq!(
+                said.decision,
+                Decision::Refused(Refused::Limit(dispatchlimits::Refused::ChainUnread(
+                    to.to_owned()
+                )))
+            );
+            assert_eq!(said.above, None);
+        }
     }
 
     #[test]

@@ -22,11 +22,16 @@
 //!
 //! The chain is recovered only where it is whole:
 //!
-//! - it reaches a chat whose record names no asking chat (the person's own), or one whose
-//!   record keeps its own chain; or
-//! - where the records stop, it is at least as long as the asking chat's own record says it
-//!   is deep. A record written before depths were kept says nothing of that, so records that
-//!   just stop recover nothing for it.
+//! - it reaches a chat whose record keeps its own chain; or
+//! - it reaches an open chat whose record names no asking chat (the person's own), which,
+//!   where the asking chat's record names the lineage's first chat (`root`), is that chat; or
+//! - where the records stop at a chat that has closed, that chat is the lineage's first, **by
+//!   the id the asking chat's record keeps for it**, and the chain is at least as long as that
+//!   record says it is deep.
+//!
+//! A depth alone is never enough: a chat dispatched below one from before the depth key was
+//! given a depth that is short, and names no root. So a chain whose records stop anywhere but
+//! at the lineage's first chat, or whose asking chat names none, recovers nothing.
 //!
 //! Records that disagree on who asked a chat, a record purlis would not have written, and a
 //! loop no dispatch made each recover nothing: the chain stays unread, and refused as before.
@@ -59,6 +64,9 @@ pub fn recovered(
     let persona = |named: Option<&String>| named.cloned().or_else(|| default.map(str::to_owned));
     let asked = by_number(asking)?;
     let depth = asked.from.as_ref().map_or(0, |from| from.depth);
+    // The chat the person started, by its id, as the asking chat's record keeps it: copied
+    // down each dispatch, and absent where a chat above predates the key.
+    let first = asked.from.as_ref().and_then(|from| from.root.as_deref());
     let mut chain = Vec::new();
     // Every chat walked, by its number among the open and by its id, so a loop ends.
     let mut numbers = vec![asking];
@@ -70,8 +78,10 @@ pub fn recovered(
             At::Open(chat) => {
                 let Some(from) = chat.from.as_ref() else {
                     // The chat the person started, or a finished task reopened as an ordinary
-                    // chat: nothing is above it.
-                    return Some(chain);
+                    // chat: nothing is above it. Where the asking chat's record names the
+                    // lineage's first chat, it must be this one.
+                    let top = first.is_none_or(|first| chat.identity.id.as_deref() == Some(first));
+                    return top.then_some(chain);
                 };
                 if let Some(kept) = from.above.as_ref() {
                     chain.extend(kept.iter().cloned());
@@ -119,16 +129,18 @@ pub fn recovered(
                 }),
                 None => None,
             },
-            (None, At::Gone(_)) => None,
-        };
-        match next {
-            Some(next) => at = next,
-            // Where what is known stops: whole only as deep as the chat's own record says.
-            None => {
+            // No record names it: whole only if it is the chat the person started, as the
+            // asking chat's record names it, and the chain is as deep as that record says.
+            // A depth alone is never enough: one written below a chat from before the key
+            // is short.
+            (None, At::Gone(gone)) => {
                 let long = u32::try_from(chain.len()).unwrap_or(u32::MAX);
-                return (depth > 0 && long >= depth).then_some(chain);
+                let top = first == Some(gone.as_str());
+                return (top && depth > 0 && long >= depth).then_some(chain);
             }
-        }
+        };
+        // Where what is known stops short of the chat the person started: not whole.
+        at = next?;
     }
     None
 }
@@ -140,16 +152,10 @@ pub fn recovered(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Above {
     /// The personas above it, nearest first, `None` for a chat on no persona. Empty for the
-    /// chat the person started, which is also the default.
+    /// chat the person started. There is no default: a caller says which it means.
     Known(Vec<Option<String>>),
     /// A record written before the chain was kept: any persona may be above it.
     Unread,
-}
-
-impl Default for Above {
-    fn default() -> Self {
-        Self::Known(Vec::new())
-    }
 }
 
 impl Above {
@@ -157,7 +163,7 @@ impl Above {
     /// dispatched chat keeps, and [`Above::Unread`] for one that keeps none.
     pub fn of(chat: &Chat) -> Self {
         match chat.from.as_ref() {
-            None => Self::default(),
+            None => Self::Known(Vec::new()),
             Some(from) => from.above.clone().map_or(Self::Unread, Self::Known),
         }
     }

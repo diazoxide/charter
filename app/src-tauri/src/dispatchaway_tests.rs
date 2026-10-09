@@ -160,7 +160,7 @@ fn chat(persona: Option<&str>) -> Asking {
         name: "steward 3".to_owned(),
         persona: persona.map(str::to_owned),
         held: false,
-        above: Default::default(),
+        above: purlis_core::dispatchchain::Above::Known(Vec::new()),
     }
 }
 

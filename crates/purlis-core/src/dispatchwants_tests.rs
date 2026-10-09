@@ -390,7 +390,7 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
             "devops",
             grants,
             locks,
-            &Above::default(),
+            &Above::Known(Vec::new()),
         )
     };
     // The asked pair is the question itself, never a box under it.
@@ -432,7 +432,7 @@ fn a_question_offers_each_wanted_persona_not_asked_for_granted_or_refused() {
             "devops",
             &InForce::default(),
             &Locks::none(),
-            &Above::default()
+            &Above::Known(Vec::new())
         ),
         [] as [&str; 0]
     );
@@ -464,7 +464,7 @@ fn a_question_leaves_out_a_persona_the_person_said_never_to_for_a_chat_above() {
         )
     };
     // The person's own chat: nothing above it, both are offered.
-    assert_eq!(offered(&Above::default()), ["ops", "qa"]);
+    assert_eq!(offered(&Above::Known(Vec::new())), ["ops", "qa"]);
     // A task of a lead chat: ops is refused for it, and is no box.
     let below_lead = Above::Known(vec![Some("lead".to_owned()), None]);
     assert_eq!(offered(&below_lead), ["qa"]);
@@ -472,7 +472,7 @@ fn a_question_leaves_out_a_persona_the_person_said_never_to_for_a_chat_above() {
     assert_eq!(offered(&Above::Unread), ["qa"]);
     // What the chat's own record keeps is what is above it.
     let mut task = crate::reopen::Chat::default();
-    assert_eq!(Above::of(&task), Above::default());
+    assert_eq!(Above::of(&task), Above::Known(Vec::new()));
     task.from = Some(crate::reopen::HandedFrom {
         chat: 1,
         name: "lead 1".to_owned(),
