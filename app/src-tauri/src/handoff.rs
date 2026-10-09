@@ -4731,7 +4731,9 @@ mod tests {
             told.picture.parent,
             Some(Parent {
                 name: "claude 1".to_owned(),
-                open: true
+                open: true,
+                mode: Some(purlis_core::awareness::Mode::Handoff),
+                owed: false,
             })
         );
         assert_eq!(names(&told.picture.siblings), ["lint"]);

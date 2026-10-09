@@ -46,6 +46,12 @@ pub struct Known {
     pub state: State,
     /// When it started, in seconds since 1970, where the app knows.
     pub started: Option<i64>,
+    /// **The lineage it is in**, by the stable id of the chat the person started: its record's
+    /// root for a chat another chat asked for, and its own id for one nobody did
+    /// (`dispatchdecision::root_of`). `None` where the app has no id for it. What a parent and
+    /// a sibling are keyed by beside the number ([`picture`]), so a chat under a number dealt
+    /// again is never read as one of them.
+    pub lineage: Option<String>,
     /// The chat that asked for it, where one did.
     pub from: Option<Asker>,
 }
@@ -59,6 +65,30 @@ pub struct Asker {
     pub name: String,
     /// Whether this chat has sent the report it owed.
     pub reported: bool,
+    /// How it asked: for a task, or by handing its work off (#1436).
+    pub mode: Mode,
+    /// Whether this chat still owes it a report.
+    pub owes: bool,
+}
+
+/// How the chat that asked for a chat started it, as the chat is told it (#1455): the
+/// lineage record's mode, in its own words on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// It asked for a task, whose report it waits on.
+    Task,
+    /// It handed its work off: the work moved here.
+    Handoff,
+}
+
+impl From<crate::reopen::Mode> for Mode {
+    fn from(mode: crate::reopen::Mode) -> Self {
+        match mode {
+            crate::reopen::Mode::Task => Self::Task,
+            crate::reopen::Mode::Handoff => Self::Handoff,
+        }
+    }
 }
 
 /// What a chat is doing, as another chat is told it.
@@ -142,6 +172,12 @@ pub struct Parent {
     pub name: String,
     /// Whether it is still open.
     pub open: bool,
+    /// How it asked (#1455). `None` from an app that did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Mode>,
+    /// Whether this chat still owes it a report.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owed: bool,
 }
 
 /// Where one chat is working: itself, the chat that asked for it, that chat's other tasks,
@@ -262,17 +298,40 @@ impl Stage {
     }
 }
 
+/// Whether two chats can be of one lineage: each names the lineage it is in, and they agree,
+/// or one of them names none (a record written before a lineage was kept).
+fn one_lineage(one: &Known, other: &Known) -> bool {
+    match (&one.lineage, &other.lineage) {
+        (Some(one), Some(other)) => one == other,
+        _ => true,
+    }
+}
+
+/// The chat that asked for `me`, where it is still open: the one the app knows by the number
+/// its record names, **and in the lineage `me` is in** (#1455). A chat that is under that
+/// number and in another lineage is not it: the one that asked has closed.
+fn parent_of<'a>(known: &'a [Known], me: &Known) -> Option<&'a Known> {
+    let from = me.from.as_ref()?;
+    known
+        .iter()
+        .find(|one| one.chat == from.chat && one.chat != me.chat && one_lineage(one, me))
+}
+
 /// The chats in `chat`'s picture, by the app's number, in the order they are told.
 fn related(known: &[Known], chat: u32) -> Option<(&Known, Vec<(Kin, &Known)>)> {
     let me = known.iter().find(|one| one.chat == chat)?;
     let parent = me.from.as_ref().map(|from| from.chat);
+    let parent_open = parent_of(known, me).map(|open| open.chat);
     let mut others: Vec<&Known> = known.iter().filter(|one| one.chat != chat).collect();
     others.sort_by_key(|one| one.chat);
     let related = others
         .into_iter()
-        .filter(|one| Some(one.chat) != parent)
+        .filter(|one| Some(one.chat) != parent_open)
         .filter_map(|one| {
-            if parent.is_some() && one.from.as_ref().map(|from| from.chat) == parent {
+            if parent.is_some()
+                && one.from.as_ref().map(|from| from.chat) == parent
+                && one_lineage(one, me)
+            {
                 Some((Kin::Sibling, one))
             } else if me.persona.is_some() && one.persona == me.persona && Doing::of(one).live() {
                 Some((Kin::SamePersona, one))
@@ -290,10 +349,12 @@ pub fn picture(known: &[Known], chat: u32) -> Option<Picture> {
     let (me, related) = related(known, chat)?;
     let parent = me.from.as_ref().map(|from| {
         // By the name it has now where it is still open, else the one recorded when it asked.
-        let open = known.iter().find(|one| one.chat == from.chat);
+        let open = parent_of(known, me);
         Parent {
             name: open.map_or_else(|| from.name.clone(), |open| open.name.clone()),
             open: open.is_some(),
+            mode: Some(from.mode),
+            owed: from.owes,
         }
     });
     let rows = |kin: Kin| -> Vec<Row> {
@@ -458,6 +519,23 @@ fn parent(parent: &Parent) -> String {
     }
 }
 
+/// How the chat that asked did, and whether it waits on this chat (#1455): `, as a task, and
+/// waits on its report`. Nothing where the app did not say. A chat that has closed waits on
+/// nothing: its report is kept for its workspace.
+fn how_asked(parent: &Parent) -> String {
+    let mode = match parent.mode {
+        Some(Mode::Task) => ", as a task",
+        Some(Mode::Handoff) => ", as a handoff",
+        None => "",
+    };
+    let waits = if parent.owed && parent.open {
+        ", and waits on its report"
+    } else {
+        ""
+    };
+    format!("{mode}{waits}")
+}
+
 /// What a chat's start briefing says of `picture`, or `None` where there is nothing to say:
 /// nobody asked for it and its persona works nowhere else.
 pub fn briefing(picture: &Picture, now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
@@ -466,7 +544,11 @@ pub fn briefing(picture: &Picture, now: chrono::DateTime<chrono::FixedOffset>) -
     }
     let mut lines = vec![format!("⬢ **Where you are working** ({AS_DATA}):")];
     if let Some(from) = &picture.parent {
-        lines.push(format!("- {} asked for this chat.", parent(from)));
+        lines.push(format!(
+            "- {} asked for this chat{}.",
+            parent(from),
+            how_asked(from)
+        ));
     }
     if !picture.siblings.is_empty() {
         let tasks: Vec<String> = picture
@@ -544,7 +626,7 @@ pub fn listing(picture: &Picture, now: chrono::DateTime<chrono::FixedOffset>) ->
         state_and_start(me, now)
     )];
     match &picture.parent {
-        Some(from) => lines.push(format!("Asked for by: {}", parent(from))),
+        Some(from) => lines.push(format!("Asked for by: {}{}", parent(from), how_asked(from))),
         None => lines.push("Asked for by: no chat (a person started it)".to_owned()),
     }
     if picture.siblings.is_empty() {
