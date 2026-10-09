@@ -195,6 +195,15 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                      checkout's .git/info/exclude, and a machine-local file it cannot hide \
                      would be committable there."
                 ))),
+                // #1583: the record names it, the project's own note of what it offered does
+                // not. Its own sentence, never `foreign`'s: it may be purlis's older copy. Not
+                // a repair `reinit` can make — the same gate stands here — so the row names
+                // what does: the file moved aside, this command writes the current text.
+                Did::Unconfirmed => say(Say::Warn(format!(
+                    "'{name}': purlis has newer text for {rel} but cannot confirm it wrote the \
+                     file there now, so it is left as is. If it is purlis's own older copy, move \
+                     it aside and run `purlis workspace reinit {name}` to write the current one."
+                ))),
                 // charter#1072: every worktree of that clone went unchecked, and "nothing to
                 // do" printed over them. Not a repair either, and not one `reinit` can make.
                 Did::Unlisted => {
@@ -561,6 +570,35 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), "MINE\n");
         // And it is NOT "nothing to do": a row that says the plane's rules are out of force
         // there must not sit under a line saying the plane is current.
+        assert!(!lines.iter().any(|l| l.contains("nothing to do")));
+    }
+
+    #[test]
+    fn a_settings_file_purlis_cannot_confirm_it_wrote_is_named_and_left_as_is() {
+        // A record in the workspace folder naming the operator's own settings, with their
+        // digest, while the plane has other text: the record alone is not enough (#1583).
+        let dir = plane();
+        made(dir.path(), "gamma");
+        let ws = dir.path().join("workspaces/gamma");
+        let settings = ws.join(".claude/settings.json");
+        std::fs::write(&settings, "MINE\n").unwrap();
+        std::fs::write(
+            ws.join(crate::layer::MARKER),
+            serde_json::json!({".claude/settings.json": crate::layer::digest("MINE\n")})
+                .to_string(),
+        )
+        .unwrap();
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+        assert_eq!(
+            lines,
+            [
+                "! 'gamma': purlis has newer text for .claude/settings.json but cannot confirm \
+                 it wrote the file there now, so it is left as is. If it is purlis's own older \
+                 copy, move it aside and run `purlis workspace reinit gamma` to write the \
+                 current one."
+            ]
+        );
+        assert_eq!(std::fs::read(&settings).unwrap(), b"MINE\n");
         assert!(!lines.iter().any(|l| l.contains("nothing to do")));
     }
 
