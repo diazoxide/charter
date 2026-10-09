@@ -555,8 +555,15 @@ pub(crate) fn reopen(
         Some(record) if record.cleared => Err(
             "That task was reopened or cleared already, so there is no row to reopen.".to_owned(),
         ),
-        _ => reopening(held, id)
-            .and_then(|(chat, ready)| held.chats().start_ready(&chat, &ready, size)),
+        _ => reopening(held, id).and_then(|(chat, ready)| {
+            // The reports of the tasks it asked for, kept because it had gone (#1546).
+            match chat.identity.resumed_from.clone() {
+                Some(was) => crate::restored::reopening(held, &was, || {
+                    held.chats().start_ready(&chat, &ready, size)
+                }),
+                None => held.chats().start_ready(&chat, &ready, size),
+            }
+        }),
     };
     match started {
         Ok(session) => {

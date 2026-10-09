@@ -31,9 +31,10 @@
 //! A task's report kept for its workspace because the chat that asked had gone, or left for
 //! that chat and unread when it closed, is marked on the task's dispatch record
 //! ([`kept_for_its_asker`], [`unread_at_close`]). When that chat comes back (a launch, Retry
-//! now on a chat that did not start, Resume from one of its session records), every such
-//! report is taken back from the workspace before the chat starts and handed to it once it
-//! has. **A report that lands after the chat came back** goes to it at once: the chat that
+//! now on a chat that did not start, Resume from one of its session records, Reopen on its
+//! finished row where it was a task), every such report is taken back from the workspace
+//! before the chat starts and handed to it once it has: **its record says it is owed until
+//! then**, so a start the app dies in leaves it owed and not lost. **A report that lands after the chat came back** goes to it at once: the chat that
 //! resumed one of its session records knows whose they were
 //! (`purlis_core::reopen::Identity::resumed_from`).
 //!
@@ -389,6 +390,18 @@ pub(crate) fn retrying(
     if ended {
         held.chats().tell_nothing(id);
     }
+    coming_back_as(held, id, start)
+}
+
+/// **Reopen on a finished task's row** (#1546): the task chat with id `id` comes back as a chat
+/// of its own, and is handed the reports of the tasks it had asked for that were kept because
+/// it had gone, as [`resuming`] hands them. One that lands later reaches it through
+/// `Identity::resumed_from` ([`to_a_resumed_asker`]).
+pub(crate) fn reopening(
+    held: &Held,
+    id: &str,
+    start: impl FnOnce() -> Result<u32, String>,
+) -> Result<u32, String> {
     coming_back_as(held, id, start)
 }
 

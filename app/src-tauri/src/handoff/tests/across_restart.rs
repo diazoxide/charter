@@ -676,3 +676,26 @@ fn try_to_start_again_on_a_task_whose_dispatch_ended_meanwhile_tells_it_nothing(
         "a dispatch no longer running is not carried on"
     );
 }
+
+#[test]
+fn reopen_of_a_finished_task_that_had_asked_tasks_is_handed_what_was_kept_for_it() {
+    let (_plane, _host, _planes, id, held, _steward, task) = a_steward_and_a_working_task();
+    let below = a_task_of(&held, &id, task, "check the queue");
+    works(&held, below);
+    // The task reports, and its chat is closed while the one it asked works on.
+    reports(&held, &id, task);
+    closes(&held, task).expect("closed");
+    let finished = record_of(&held, task);
+    // The one below reports with nobody to tell: kept for the workspace.
+    reports(&held, &id, below);
+    assert!(record_of(&held, below).undelivered.is_some());
+
+    let reopened = crate::finished::reopen(&held, &finished.id, A_SIZE).expect("reopened");
+
+    assert_eq!(
+        waiting(&held, For::Chat(reopened)),
+        vec![("check the queue".to_owned(), false, false)]
+    );
+    assert!(waiting(&held, For::Place(&Place::Workspace("alpha".to_owned()))).is_empty());
+    assert!(record_of(&held, below).undelivered.is_none());
+}
