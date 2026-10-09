@@ -2192,10 +2192,18 @@ impl Chats {
                     .id
                     .as_deref()
                     .and_then(purlis_core::awareness::started_of),
+                // The lineage it is in, as a dispatch counts it (#1455).
+                lineage: one
+                    .chat
+                    .from
+                    .as_ref()
+                    .map_or_else(|| one.chat.identity.id.clone(), |from| from.root.clone()),
                 from: one.chat.from.as_ref().map(|from| Asker {
                     chat: from.chat,
                     name: from.name.clone(),
                     reported: from.report == purlis_core::reopen::Owed::Sent,
+                    mode: from.mode.into(),
+                    owes: from.report == purlis_core::reopen::Owed::Due,
                 }),
             })
             .collect();
