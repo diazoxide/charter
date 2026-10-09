@@ -173,7 +173,7 @@ fn a_word_that_is_neither_charters_nor_an_installed_extensions_is_clap_s_error_a
         "{}",
         ran.stderr
     );
-    // …and one line saying where else charter looked, and where it cannot look yet.
+    // …and one line saying where else purlis looked: a test binary is in no bundle (#1366).
     assert!(
         ran.stderr
             .contains("No extension installed on this machine is called 'stauts' either")

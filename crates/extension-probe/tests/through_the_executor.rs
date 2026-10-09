@@ -631,6 +631,7 @@ fn the_footer_draws_the_probes_badge_from_the_same_reader() {
             cwd: &probe.plane(),
             now: now(),
             config: Some(&config),
+            built_in: purlis_core::extension::BuiltIn::none(),
         },
     );
     assert!(drawn.contains("asked"), "{drawn}");

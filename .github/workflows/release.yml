@@ -753,8 +753,10 @@ jobs:
             fi
           else
             listing=$(dpkg -c dist/*.deb)
-            grep -q 'extensions/persona-statistics/charter-extension.json' <<<"$listing"
-            grep -qE '^-rwx.*extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
+            # Under `usr/lib/purlis` exactly: the `purlis` binary in `usr/bin` finds its built-ins
+            # there and nowhere else (`extension::bundle`, #1366).
+            grep -q 'usr/lib/purlis/extensions/persona-statistics/charter-extension.json' <<<"$listing"
+            grep -qE '^-rwx.*usr/lib/purlis/extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
               || { echo "FAIL: persona-statistics is not in the .deb, or is not executable"; exit 1; }
             # The AppImage, when this run made one: what the Linux updater replaces, and what
             # its signature is over. Unpacked by its own runtime, which starts nothing of charter.
@@ -762,7 +764,7 @@ jobs:
               [ -e "$img" ] || continue
               unpacked=$(mktemp -d)
               (cd "$unpacked" && "$OLDPWD/$img" --appimage-extract >/dev/null)
-              test -x "$unpacked"/squashfs-root/usr/lib/*/extensions/persona-statistics/bin/persona-statistics \
+              test -x "$unpacked"/squashfs-root/usr/lib/purlis/extensions/persona-statistics/bin/persona-statistics \
                 || { echo "FAIL: $img lacks a runnable persona-statistics"; exit 1; }
               rm -rf "$unpacked"
             done

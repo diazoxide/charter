@@ -151,6 +151,7 @@ fn every_automatic_read(f: &support::Fixture) {
             cwd: &f.plane,
             now: chrono::Utc::now(),
             config: None,
+            built_in: purlis_core::extension::BuiltIn::none(),
         },
     );
     assert!(footer.contains("dirty"), "{footer}");

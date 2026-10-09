@@ -155,7 +155,9 @@ pub fn extension_command<S: AsRef<str>>(args: &[S]) -> Option<(&str, &str)> {
 /// when the command starts, so a manifest edited to call a writing command a reading one is
 /// refused there rather than run.
 pub fn only_reads(config_root: &std::path::Path, id: &str, command: &str) -> bool {
-    let loaded = super::read(config_root, &super::BuiltIn::none());
+    // The built-ins of the bundle this program shipped in, as the command line reaches them
+    // (#1366); none outside a bundle, where a built-in's command is not reached at all.
+    let loaded = super::read(config_root, &super::BuiltIn::of_this_program());
     let Some(entry) = loaded.entry(id) else {
         return false;
     };

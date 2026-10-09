@@ -181,6 +181,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub mod acting;
 pub mod briefing;
+pub mod bundle;
 pub mod capability;
 pub mod cli;
 pub mod events;
@@ -769,14 +770,15 @@ impl Source {
 
 /// The running app's built-in extensions: the directory inside its bundle that holds one
 /// directory per extension — `Contents/Resources/extensions` on macOS,
-/// `/usr/lib/charter/extensions` in a `.deb` and an AppImage.
+/// `/usr/lib/purlis/extensions` in a `.deb` and the same below an AppImage's own `usr`.
 ///
 /// **The app builds this from its own resource path and from nothing else**: never from the
 /// record, a plane, a setting or an environment variable. That is the whole of what makes a
 /// built-in trusted. An extension is the app's only when it is *here*, and a file that says an
-/// extension is the app's says nothing ([`Loaded::standing`]). The `charter` CLI, and every test
-/// that is not about built-ins, pass [`BuiltIn::none`]. Forgetting to pass the app's costs a
-/// built-in that is missing, never one that is trusted somewhere else.
+/// extension is the app's says nothing ([`Loaded::standing`]). The `purlis` CLI finds the same
+/// directory from its own executable's real path ([`BuiltIn::of_this_program`], #1366), and every
+/// test that is not about built-ins passes [`BuiltIn::none`]. Forgetting to pass the bundle's
+/// costs a built-in that is missing, never one that is trusted somewhere else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuiltIn {
     root: Option<PathBuf>,
