@@ -143,15 +143,28 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
 /// them, so a raw edit cannot write what `clone`, `restore` and the repo list would read past
 /// or drop. In the readers' `<key> in <file> …` shape, so the window can name the key. Empty for
 /// text that is not a JSON object, which is refused on its own.
-pub fn manifest_refusals(text: &str, workspace: &str) -> Vec<String> {
+///
+/// **What `held` (the file on disk) already held is let through by its VALUE**, never by the
+/// sentence: the same odd `name`, the same `repos` that is no list, an odd entry equal to one
+/// the file held. A sentence names an entry by its place, so matching sentences would let a raw
+/// edit put a new odd entry where an old one stood.
+pub fn manifest_refusals(text: &str, workspace: &str, held: Option<&str>) -> Vec<String> {
     let file = named(workspace);
     let Ok(Json::Object(doc)) = serde_json::from_str::<Json>(text) else {
         return Vec::new();
     };
+    let before = held
+        .and_then(|held| serde_json::from_str::<Json>(held).ok())
+        .and_then(|held| match held {
+            Json::Object(held) => Some(held),
+            _ => None,
+        })
+        .unwrap_or_default();
     let mut out = Vec::new();
     match doc.get("name") {
         None => {}
         Some(Json::String(name)) if name == workspace => {}
+        Some(name) if before.get("name") == Some(name) => {}
         Some(_) => out.push(format!(
             "name in {file} is not \"{workspace}\" — a workspace is named by its folder, so its \
              manifest's name is the folder's; rename the workspace to change it"
@@ -162,6 +175,10 @@ pub fn manifest_refusals(text: &str, workspace: &str) -> Vec<String> {
     match doc.get("repos") {
         None => {}
         Some(Json::Array(rows)) => {
+            let held_rows = match before.get("repos") {
+                Some(Json::Array(held)) => held.as_slice(),
+                _ => &[],
+            };
             for (at, row) in rows.iter().enumerate() {
                 let ok = row.as_object().is_some_and(|row| {
                     row.get("name")
@@ -171,7 +188,7 @@ pub fn manifest_refusals(text: &str, workspace: &str) -> Vec<String> {
                             .get("branch")
                             .is_none_or(|branch| branch.is_string() || branch.is_null())
                 });
-                if !ok {
+                if !ok && !held_rows.contains(row) {
                     out.push(format!(
                         "repos in {file} has an entry ({}) that is not a repo's record — {shape}",
                         at + 1
@@ -179,6 +196,7 @@ pub fn manifest_refusals(text: &str, workspace: &str) -> Vec<String> {
                 }
             }
         }
+        Some(repos) if before.get("repos") == Some(repos) => {}
         Some(_) => out.push(format!("repos in {file} is not a list — {shape}")),
     }
     out
@@ -385,15 +403,11 @@ pub fn save_text(
     let standing: Vec<String> = now
         .as_deref()
         .filter(|now| serde_json::from_str::<Json>(now).is_ok_and(|doc| doc.is_object()))
-        .map_or_else(Vec::new, |now| {
-            let mut out = refusals(now, workspace);
-            out.extend(manifest_refusals(now, workspace));
-            out
-        });
+        .map_or_else(Vec::new, |now| refusals(now, workspace));
     let mut refused: Vec<String> = refusals(text, workspace)
         .into_iter()
-        .chain(manifest_refusals(text, workspace))
         .filter(|why| !standing.contains(why))
+        .chain(manifest_refusals(text, workspace, now.as_deref()))
         .collect();
     // As typed, and as charter reads it: a string can spell a character as an escape, and the
     // document — which is also what charter's own writer puts on disk — holds the character.
