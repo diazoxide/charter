@@ -84,7 +84,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 
 | Area · method | Who calls it | GitHub | GitLab | Discipline | Parity |
 |---|---|---|---|---|---|
-| `Repos::owned` | `purlis discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false`, then `users/{owner}/projects?archived=false` on a 404 | strict | **gap 2** (#804) |
+| `Repos::owned` | `purlis discover` | `GET orgs/{owner}/repos`, then `users/{owner}/repos` on a 404 | `GET groups/{owner}/projects?include_subgroups=true&archived=false&with_shared=false`, then `users/{owner}/projects?archived=false` on a 404 | strict | same |
 | `Repos::reachable` | the repo picker (ADR 0055) | `GET user/repos?affiliation=owner,collaborator,organization_member` | `GET projects?membership=true&archived=false` | strict | same |
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Repos::about` | `purlis ws todo promote` (ADR 0088 §5), before it sends; `purlis doctor`'s `project remote` row (SQ-8) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
@@ -274,12 +274,14 @@ away from what the Python charter answered, on purpose (ADR 0046):
   `users/{owner}/projects` (`doc/api/projects.md`) on that answer, as GitHub falls back from the
   org endpoint to the user one; any other refusal still fails. Python asked only the group, so
   a user namespace that failed there is now discovered (`gitlab_user_namespace`).
+- **GitLab listed repos shared into the group** (gap 2, #804). `groups/:id/projects` defaults
+  `with_shared` to `true` (`doc/api/groups.md`), so a repo another namespace shared with the
+  group was discovered as if it were the group's. purlis now asks with `with_shared=false`,
+  which matches GitHub's organisation listing; Python did not, and the pinned argv test moved
+  with it (`gitlab_shared_projects`).
 
 Open, each filed:
 
-2. **GitLab lists repos shared into the group** (#804). `groups/:id/projects` defaults
-   `with_shared` to `true` (`doc/api/groups.md`), so a repo another namespace shares with the
-   group is discovered as if it were the group's. `with_shared=false` would match GitHub.
 3. **GitLab's auto-merge parameter is deprecated** (#805, after FG-2, #802).
    `merge_when_pipeline_succeeds` was deprecated in GitLab 17.11 in favour of `auto_merge`, and
    19.4 still accepts it. purlis keeps it on purpose: a GitLab older than `auto_merge` ignores an

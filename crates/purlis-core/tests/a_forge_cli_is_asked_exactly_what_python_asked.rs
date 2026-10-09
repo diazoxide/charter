@@ -597,7 +597,7 @@ mod child {
             .map(|i| json!({"path": format!("p{i}"), "name": format!("Name {i}")}))
             .collect();
         scene.glab_api(
-            "groups/grp%2Fsub/projects?per_page=100&page=1&include_subgroups=true&archived=false",
+            "groups/grp%2Fsub/projects?per_page=100&page=1&include_subgroups=true&archived=false&with_shared=false",
             0,
             &Value::Array(first).to_string(),
             "",
@@ -608,7 +608,7 @@ mod child {
              "ssh_url_to_repo": "git@gl:grp/sub/named.git", "topics": ["x"]},
         ]);
         scene.glab_api(
-            "groups/grp%2Fsub/projects?per_page=100&page=2&include_subgroups=true&archived=false",
+            "groups/grp%2Fsub/projects?per_page=100&page=2&include_subgroups=true&archived=false&with_shared=false",
             0,
             &last.to_string(),
             "",
@@ -651,7 +651,7 @@ mod child {
         }
         let scene = Scene::new("gl-fail.test");
         scene.glab_api(
-            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false",
+            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false&with_shared=false",
             1,
             "",
             "403 Forbidden",
@@ -663,8 +663,8 @@ mod child {
                 .owned(&Caller::command(), &Owner::new("g")),
             Err(ForgeError::new(
                 "listing repos for GitLab group 'g' failed: GitLab API call failed \
-                 (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false): \
-                 403 Forbidden"
+                 (groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false\
+                 &with_shared=false): 403 Forbidden"
                     .into()
             )),
             "only a group that is not found is asked of the user endpoint"
@@ -673,7 +673,7 @@ mod child {
         // No group by that name: the user endpoint is asked (#803), and its refusal raises.
         let neither = Scene::new("gl-neither.test");
         neither.glab_api(
-            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false",
+            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false&with_shared=false",
             1,
             "",
             "404 Group Not Found",
@@ -699,13 +699,13 @@ mod child {
 
         let full = Scene::new("gl-full.test");
         full.glab_api(
-            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false",
+            "groups/g/projects?per_page=100&page=1&include_subgroups=true&archived=false&with_shared=false",
             0,
             &page(100, "path"),
             "",
         );
         full.glab_api(
-            "groups/g/projects?per_page=100&page=2&include_subgroups=true&archived=false",
+            "groups/g/projects?per_page=100&page=2&include_subgroups=true&archived=false&with_shared=false",
             0,
             "",
             "",

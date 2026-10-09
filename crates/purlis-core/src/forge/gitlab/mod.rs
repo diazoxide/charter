@@ -142,9 +142,12 @@ impl Repos for GitLab {
         let owner = owner.as_str();
         let enc = quote(owner);
         let group = format!("GitLab group '{owner}'");
+        // `with_shared=false`: a project another namespace shared into the group is not the
+        // group's, and GitLab lists it unless asked not to (`doc/api/groups.md`).
         let listed = self.paged(caller, &group, no_such_group, |page| {
             format!(
-                "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
+                "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true\
+                 &archived=false&with_shared=false"
             )
         })?;
         let raw = match listed {
