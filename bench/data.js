@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791556451409,
+  "lastUpdate": 1791559190142,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5124,6 +5124,48 @@ window.BENCHMARK_DATA = {
             "value": 104.561722,
             "unit": "ms",
             "extra": "median of 5 runs: 103.258, 104.248, 104.562, 105.022, 105.259 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "6820c7455d156996a9c9d73396c546b8e1223176",
+          "message": "Record the offered-settings note in the rows that wire a workspace\n\nA workspace wire now notes the settings it offers in the project's app\nstate, so 45 recorded rows leave one more file behind:\n.charter/app/mirrors-offered.json (and the folders it makes). Nothing\nelse in those rows moves; each digest is the one the row's own record\nnames for the generated settings.\n\nThe row that withdraws a file the plane no longer declares now starts\nfrom a plane whose app state noted that offer, as any plane wired by\nthis build has. Without the note the file is kept, which is the\nfail-closed upgrade case the unit tests pin.\n\nWritten by hand because this sandbox cannot bless (socket bind and\n.claude/settings.json writes are refused); the 45 rows pass\ntools/recorded-bless-check.mjs with --tree limited to the store's paths.\n\nRefs #1583\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T19:10:39+04:00",
+          "tree_id": "5e3726b512ca8f7302551e67ef4a654365430d7b",
+          "url": "https://github.com/purlis/purlis/commit/6820c7455d156996a9c9d73396c546b8e1223176"
+        },
+        "date": 1791559189531,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4184015,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.407, 0.415, 0.418, 0.425, 0.442 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.656422,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.238, 16.438, 16.656, 16.671, 16.820 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.7412955,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.221, 101.442, 101.741, 102.086, 102.300 ms"
           }
         ]
       }
