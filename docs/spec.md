@@ -424,7 +424,8 @@ how it is cited and nothing here is renumbered.
     to `archive/` with an Undo**; a hard delete stays `forget`, on the command line only. The
     command line has each operation too: `purlis workspace edit|archive|unarchive` and
     `purlis persona edit-memory|archive-memory|unarchive-memory [--shared]`. **A memory moves
-    between scopes** (KN-3): a memory's tab has a Move to choice and a Move button, and the
+    between scopes** (KN-3): a memory's tab has a Move to choice and a Move button, whose
+    move has an Undo for the same few seconds as Delete's (it moves the memory back), and the
     command line has `purlis workspace move-memory` and `purlis persona move-memory`, each
     with `--to-workspace`, `--to-persona` or `--to-shared`. The file is renamed whole, its title
     and stamp kept (a journal name moved away and back comes back to the minute); a target that

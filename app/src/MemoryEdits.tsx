@@ -4,10 +4,14 @@ import type { Doing, Ran } from "./actions";
 import { commands, type MemoryScope, type MemoryView, type PlaneId } from "./bindings";
 import { settled } from "./PlaneEdits";
 import {
+  DRAFT,
   DRAFT_TITLE,
   draftView,
   memoryKey,
+  memoryOf,
+  memoryRefOf,
   memoryView,
+  scopeKey,
   setDraft,
   wantEdit,
   type MemoryRef,
@@ -28,12 +32,19 @@ export type MemoryEditing = Pick<
   "openMemory" | "editMemory" | "archiveMemory" | "newMemory" | "keepTab"
 >;
 
-/** How long a Delete's Undo is offered (ADR 0065 Q8: "a few seconds"). */
+/** What the Undo line can take back: a Delete (from the archive, under its own slug) or a Move
+ *  (from the store it went to, back to the one it came from). */
+type Undoable = { title: string; trouble?: string } & (
+  | { kind: "deleted"; ref: MemoryRef; archived: string }
+  | { kind: "moved"; from: MemoryRef; at: MemoryRef }
+);
+
+/** How long a Delete's or a Move's Undo is offered (ADR 0065 Q8: "a few seconds"). */
 export const UNDO_MS = 8_000;
 
 /**
  * **A plane's memories, from the window** (SI-9b, ADR 0065): opening one in the strip's preview
- * tab or a kept one, starting an edit, making one, and Delete with its Undo.
+ * tab or a kept one, starting an edit, making one, and Delete and Move, each with its Undo.
  *
  * A hook of its own, as `PlaneEdits` is, because none of it is the window's arrangement. What it
  * needs from the window is how to put a tab on the strip in front (`present`), how to change
@@ -66,16 +77,11 @@ export function useMemoryEdits({
   /** Bumped on every memory write, so the memory lists and tabs read again. */
   changed: number;
   onSaved: (from: ViewRef, memory: MemoryView) => void;
-  /** The Undo line, while a Delete can still be undone. */
+  /** The Undo line, while a Delete or a Move can still be undone. */
   undo: ReactNode;
 } {
   const [changed, setChanged] = useState(0);
-  const [undoing, setUndoing] = useState<{
-    ref: MemoryRef;
-    title: string;
-    archived: string;
-    trouble?: string;
-  }>();
+  const [undoing, setUndoing] = useState<Undoable>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const wrote = useCallback(() => {
@@ -84,6 +90,13 @@ export function useMemoryEdits({
   }, [reread]);
 
   useEffect(() => () => clearTimeout(timer.current), []);
+
+  /** Offers `what`'s Undo for {@link UNDO_MS}, in place of any Undo offered before it. */
+  const offerUndo = useCallback((what: Undoable) => {
+    clearTimeout(timer.current);
+    setUndoing(what);
+    timer.current = setTimeout(() => setUndoing(undefined), UNDO_MS);
+  }, []);
 
   const openMemory = useCallback(
     (ref: MemoryRef, title: string, keep: boolean) => {
@@ -131,41 +144,66 @@ export function useMemoryEdits({
       setDraft(plane, memoryKey(ref), undefined);
       closeView(memoryView(ref));
       wrote();
-      clearTimeout(timer.current);
-      setUndoing({ ref, title, archived: answer.data.archived });
-      timer.current = setTimeout(() => setUndoing(undefined), UNDO_MS);
+      offerUndo({ kind: "deleted", ref, title, archived: answer.data.archived });
       return { ok: true };
     },
-    [closeView, plane, wrote],
+    [closeView, offerUndo, plane, wrote],
+  );
+
+  /** A memory's tab now shows `to`, under its title. */
+  const follow = useCallback(
+    (from: ViewRef, to: MemoryView) =>
+      update((tabs) =>
+        showInstead(tabs, from, memoryView({ scope: to.scope, slug: to.slug }), to.title),
+      ),
+    [update],
   );
 
   const undo = useCallback(async () => {
     if (undoing === undefined) return;
     clearTimeout(timer.current);
-    const { ref, archived } = undoing;
-    // Back under its own slug, which archiving may have had to number (`restore_as`).
-    const answer = await settled(commands.memoryUnarchive(plane, ref.scope, archived, ref.slug));
-    if (answer.status === "error") {
-      setUndoing((now) => (now ? { ...now, trouble: answer.error } : now));
-      return;
+    if (undoing.kind === "deleted") {
+      const { ref, archived } = undoing;
+      // Back under its own slug, which archiving may have had to number (`restore_as`).
+      const answer = await settled(commands.memoryUnarchive(plane, ref.scope, archived, ref.slug));
+      if (answer.status === "error") {
+        setUndoing((now) => (now ? { ...now, trouble: answer.error } : now));
+        return;
+      }
+    } else {
+      // Moved back the way it came, whole, by the same core move: a memory written under its
+      // name in the old store since is refused there, and said here.
+      const { from, at } = undoing;
+      const answer = await settled(commands.memoryMove(plane, at.scope, at.slug, from.scope));
+      if (answer.status === "error") {
+        setUndoing((now) => (now ? { ...now, trouble: answer.error } : now));
+        return;
+      }
+      follow(memoryView(at), answer.data);
     }
     setUndoing(undefined);
     wrote();
-  }, [plane, undoing, wrote]);
+  }, [follow, plane, undoing, wrote]);
 
+  /**
+   * A memory's tab wrote it: a save, a create or a Move. **A Move is the one that changed its
+   * store** — a save keeps the memory where it is, and a create comes from a draft — so that is
+   * how it is told apart, and it alone offers Undo (#1190), as Delete does.
+   */
   const onSaved = useCallback(
     (from: ViewRef, memory: MemoryView) => {
-      update((tabs) =>
-        showInstead(
-          tabs,
-          from,
-          memoryView({ scope: memory.scope, slug: memory.slug }),
-          memory.title,
-        ),
-      );
+      follow(from, memory);
       wrote();
+      const was = memoryRefOf(from.key);
+      if (was !== undefined && was.slug !== DRAFT && scopeKey(was.scope) !== scopeKey(memory.scope))
+        offerUndo({
+          kind: "moved",
+          from: was,
+          at: { scope: memory.scope, slug: memory.slug },
+          title: memory.title,
+        });
     },
-    [update, wrote],
+    [follow, offerUndo, wrote],
   );
 
   const doing = useMemo<MemoryEditing>(
@@ -176,12 +214,14 @@ export function useMemoryEdits({
   const line =
     undoing === undefined ? null : (
       <Notice
-        cause="memory-deleted"
+        cause={undoing.kind === "deleted" ? "memory-deleted" : "memory-moved"}
         tone={undoing.trouble === undefined ? "news" : "trouble"}
         fixes={[{ label: "Undo", onPress: () => void undo() }]}
       >
         {undoing.trouble ??
-          `Deleted “${undoing.title}” — it is in the archive now, out of every list.`}
+          (undoing.kind === "deleted"
+            ? `Deleted “${undoing.title}” — it is in the archive now, out of every list.`
+            : `Moved “${undoing.title}” to ${memoryOf(undoing.at.scope)}.`)}
       </Notice>
     );
 
