@@ -520,6 +520,27 @@ fn the_refusals() -> Vec<(&'static str, String)> {
             })
             .say(),
         ),
+        // A profile the project does not list for the persona (#1509), whoever chose it.
+        (
+            "dispatch-on-a-profile-the-project-does-not-list-for-the-persona-is-refused",
+            dispatchdecision::Refused::Profile(personaprofile::Refused::NotListed {
+                profile: "codex".to_owned(),
+                by: personaprofile::Who::Asker,
+                persona: "steward".to_owned(),
+                listed: vec!["work".to_owned()],
+            })
+            .say(),
+        ),
+        (
+            "dispatch-from-a-chat-on-a-profile-the-project-does-not-list-for-the-persona-is-refused",
+            dispatchdecision::Refused::Profile(personaprofile::Refused::NotListed {
+                profile: "codex".to_owned(),
+                by: personaprofile::Who::AskingChat,
+                persona: "steward".to_owned(),
+                listed: vec!["work".to_owned()],
+            })
+            .say(),
+        ),
         (
             "dispatch-on-a-profile-nobody-approved-is-refused",
             dispatchdecision::Refused::Profile(personaprofile::Refused::NotApproved {

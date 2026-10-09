@@ -40,6 +40,7 @@ pub mod dispatchguard;
 pub mod dispatchlimits;
 pub mod dispatchnever;
 pub mod dispatchplace;
+pub mod dispatchprofiles;
 pub mod dispatchrecord;
 pub mod dispatchtalk;
 pub mod dispatchunattended;

@@ -647,6 +647,59 @@ fn a_reopen_is_refused_where_the_profile_now_runs_another_harness() {
 }
 
 #[test]
+fn a_reopen_is_refused_where_the_project_no_longer_lists_the_task_s_profile_for_its_persona() {
+    // Where #1509 meets #1485's Reopen: a finished task is started again on the profile its
+    // dispatch chose, so it is held to the project's list as it reads now.
+    let (plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
+    reports_and_ends(&held, &id, task);
+    let record = record_of(&held, task);
+    let (persona, profile) = (
+        record.persona.clone().expect("it ran as a persona"),
+        record.worker.profile.clone().expect("on a profile"),
+    );
+    let manifest = plane.root.join(purlis_core::plane::MANIFEST);
+    let before = std::fs::read_to_string(&manifest).expect("the manifest");
+    let listing = |profiles: &str| {
+        std::fs::write(
+            &manifest,
+            format!("{before}\n[dispatch.profiles]\n{persona} = [{profiles}]\n"),
+        )
+        .expect("the manifest");
+    };
+    let chats_before = open_chats(&held).len();
+
+    // The project came to list only another profile for that persona.
+    listing("\"other\"");
+    let refused = crate::finished::reopen(&held, &record.id, A_SIZE).unwrap_err();
+    assert_eq!(
+        Some(refused.clone()),
+        purlis_core::dispatchprofiles::task_reopen_refusal(held.root(), Some(&persona), &profile),
+        "the core's own sentence"
+    );
+    assert!(
+        refused.starts_with(&format!(
+            "This task ran as persona '{persona}' on profile '{profile}', and the project now \
+             lists only 'other' for that persona, so it was not reopened."
+        )),
+        "{refused}"
+    );
+    assert!(
+        refused.ends_with("Its report is still here to read."),
+        "{refused}"
+    );
+    // Nothing started, and the row is still there to try again.
+    assert_eq!(open_chats(&held).len(), chats_before);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+    assert!(!record_of(&held, task).cleared);
+
+    // Listed again, the same row reopens.
+    listing(&format!("\"other\", \"{profile}\""));
+    let reopened = crate::finished::reopen(&held, &record.id, A_SIZE).expect("reopened");
+    assert_eq!(open_chats(&held).len(), chats_before + 1);
+    assert_eq!(held.chats().handed_from(reopened), None);
+}
+
+#[test]
 fn a_task_that_had_reported_when_the_app_quit_is_a_finished_row_at_the_next_launch() {
     // M2. It reported, and the app quit before purlis had ended it: in its moment to settle.
     let (plane, host, quit, id, held, steward, task) = a_steward_and_its_task();

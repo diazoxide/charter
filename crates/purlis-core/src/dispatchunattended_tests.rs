@@ -386,7 +386,7 @@ fn a_profile_that_switches_the_prompts_off_is_not_passed_on_to_the_persona_chat(
         ),
         (
             words(&["claude", "--permission-mode", "bypassPermissions"]),
-            "--permission-mode",
+            "--permission-mode bypassPermissions",
         ),
         (
             words(&["claude", "--permission-mode=bypassPermissions"]),
@@ -398,7 +398,7 @@ fn a_profile_that_switches_the_prompts_off_is_not_passed_on_to_the_persona_chat(
         ),
         (words(&["codex", "--yolo"]), "--yolo"),
     ] {
-        assert_eq!(bypass_in(&command), Some(flag), "{command:?}");
+        assert_eq!(bypass_in(&command).as_deref(), Some(flag), "{command:?}");
         assert_eq!(
             start_of_a_persona_chat(
                 the_asking_chats_own(),
@@ -440,21 +440,48 @@ fn a_profile_that_asks_is_passed_on_whatever_else_its_command_says() {
 fn codex_s_own_ways_of_asking_nobody_are_recognised_and_its_asking_ones_are_not() {
     for (command, flag) in [
         (words(&["codex", "--full-auto"]), Some("--full-auto")),
-        (words(&["codex", "-a", "never"]), Some("-a")),
+        (words(&["codex", "-a", "never"]), Some("-a never")),
+        // A short flag with its value attached, as the command line itself reads one.
+        (words(&["codex", "-anever"]), Some("-anever")),
+        (
+            words(&["codex", "-capproval_policy=never"]),
+            Some("-capproval_policy=never"),
+        ),
         (
             words(&["codex", "--ask-for-approval", "never"]),
-            Some("--ask-for-approval"),
+            Some("--ask-for-approval never"),
         ),
         (
             words(&["codex", "--ask-for-approval=never"]),
             Some("--ask-for-approval=never"),
         ),
+        // The same policy, set as a configuration override, quoted or not (#1509).
+        (
+            words(&["codex", "-c", "approval_policy=never"]),
+            Some("-c approval_policy=never"),
+        ),
+        (
+            words(&["codex", "--config", "approval_policy=\"never\""]),
+            Some("--config approval_policy=\"never\""),
+        ),
+        (
+            words(&["codex", "--config=approval_policy='never'"]),
+            Some("--config=approval_policy='never'"),
+        ),
+        (
+            words(&["codex", "-c", "approval_policy = \"never\""]),
+            Some("-c approval_policy = \"never\""),
+        ),
+        // A first message that only talks about a flag is not one.
+        (words(&["codex", "run it with -a never please"]), None),
+        (words(&["codex", "-c", "approval_policy=on-request"]), None),
+        (words(&["codex", "-c", "model=never"]), None),
         (words(&["codex", "-a", "on-request"]), None),
         (words(&["codex", "--ask-for-approval", "untrusted"]), None),
         // A value is the word after its flag, and nothing further along.
         (words(&["codex", "-a", "on-failure", "never"]), None),
     ] {
-        assert_eq!(bypass_in(&command), flag, "{command:?}");
+        assert_eq!(bypass_in(&command).as_deref(), flag, "{command:?}");
     }
 }
 

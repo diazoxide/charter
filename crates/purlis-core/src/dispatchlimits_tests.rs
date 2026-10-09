@@ -959,6 +959,40 @@ fn what_is_not_a_limit_is_refused_with_a_sentence_and_the_rest_is_read() {
 }
 
 #[test]
+fn the_profiles_listed_for_personas_are_not_a_limit_and_what_they_hold_wrong_is_said() {
+    // `[dispatch.profiles]` (#1509) is read by `dispatchprofiles`: here it is no limit, no
+    // level, and nothing to refuse where it is written well.
+    let well = read(
+        Some("[dispatch]\ndepth = 2\n[dispatch.profiles]\ndevops = [\"work\"]\n"),
+        FILE,
+    );
+    assert_eq!(well.refused, Vec::<String>::new());
+    assert_eq!(well.table.project.get(Limit::Depth), Some(2));
+    assert!(well.table.personas.is_empty());
+    // What it holds that lists nothing is said with the rest.
+    let wrong = read(Some("[dispatch.profiles]\ndevops = \"work\"\n"), FILE);
+    assert_eq!(
+        wrong.refused,
+        vec![
+            "dispatch.profiles.devops is not a list of profiles, so no profile is listed for \
+             that persona and no chat is dispatched to it until it is fixed"
+                .to_owned()
+        ]
+    );
+    // This machine's own file lists none: the project's committed file does.
+    let mine = read(
+        Some("[dispatch.profiles]\ndevops = [\"work\"]\n"),
+        crate::profiles::LOCAL_FILE,
+    );
+    assert_eq!(mine.refused.len(), 1);
+    assert!(
+        mine.refused[0].contains("is not read: the profiles a persona's dispatched chats"),
+        "{}",
+        mine.refused[0]
+    );
+}
+
+#[test]
 fn a_file_with_no_dispatch_table_or_no_file_sets_nothing() {
     for text in [None, Some(""), Some("schema = 1\n"), Some("not toml [")] {
         assert_eq!(read(text, FILE), Read::default(), "{text:?}");

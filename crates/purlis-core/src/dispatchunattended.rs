@@ -262,15 +262,21 @@ const BYPASS_FLAGS: [&str; 4] = [
 ];
 
 /// The flags that name how a harness asks, and the value of each that means "ask nobody":
-/// Claude Code's permission mode, and Codex's approval policy by both its spellings.
-const MODE_FLAGS: [(&str, &str); 3] = [
+/// Claude Code's permission mode, and Codex's approval policy by both its spellings and as a
+/// configuration override.
+const MODE_FLAGS: [(&str, &str); 5] = [
     ("--permission-mode", crate::floorguard::UNATTENDED_MODE),
     ("--ask-for-approval", "never"),
     ("-a", "never"),
+    // Codex's approval policy again, set as a configuration override (#1509).
+    ("--config", "approval_policy=never"),
+    ("-c", "approval_policy=never"),
 ];
 
-/// **The word of `command` that starts a harness with its permission prompts off**, if one
-/// does. `command` is a profile's own, as this machine declares it.
+/// **The words of `command` that start a harness with its permission prompts off**, if any
+/// do, as they are shown to a person: the flag, with its value where the value is what
+/// switches them off (`-c approval_policy=never`). `command` is a profile's own, as this
+/// machine declares it.
 ///
 /// A recognition of the flags purlis knows, never a reading of what a wrapper script does with
 /// its words: a profile whose command is a script that adds one is not seen, and neither is a
@@ -278,20 +284,31 @@ const MODE_FLAGS: [(&str, &str); 3] = [
 /// person before it runs. **A chat's dispatch may name one of them** (`--profile`), and a
 /// persona's definition may, so this is asked of whichever profile a dispatch would start on,
 /// whoever named it ([`bypass_refusal`]).
-pub fn bypass_in(command: &[String]) -> Option<&str> {
+///
+/// Each word is read as a command line reads it ([`crate::sandbox::codex::split`]): a value
+/// may be attached to its flag (`--ask-for-approval=never`, `-anever`,
+/// `-capproval_policy=never`) or be the next word.
+pub fn bypass_in(command: &[String]) -> Option<String> {
+    use crate::sandbox::codex::{is_flag, split};
     command.iter().enumerate().find_map(|(at, word)| {
-        let off = MODE_FLAGS.iter().any(|(flag, never)| {
-            let value = word
-                .strip_prefix(flag)
-                .and_then(|rest| rest.strip_prefix('='))
-                .or_else(|| {
-                    (word == flag)
-                        .then(|| command.get(at + 1).map(String::as_str))
-                        .flatten()
-                });
-            value == Some(*never)
-        });
-        (BYPASS_FLAGS.contains(&word.as_str()) || off).then_some(word.as_str())
+        if BYPASS_FLAGS.contains(&word.as_str()) {
+            return Some(word.clone());
+        }
+        if !is_flag(word) {
+            return None;
+        }
+        let (flag, attached) = split(word);
+        let next = || command.get(at + 1).map(String::as_str);
+        let value = attached.or_else(next)?;
+        // A value may be written quoted and spaced (`approval_policy = "never"`).
+        let plain = value.replace(['"', '\'', ' '], "");
+        MODE_FLAGS
+            .iter()
+            .any(|(known, never)| flag == *known && plain == *never)
+            .then(|| match attached {
+                Some(_) => word.clone(),
+                None => format!("{flag} {value}"),
+            })
     })
 }
 
@@ -321,7 +338,7 @@ pub enum NamedBy<'a> {
 /// the asking chat's own profile, not on one its dispatch names, and not on one the persona's
 /// definition names, which a chat can write. A handoff is held to it as a task is.
 pub fn bypass_refusal(profile: &str, command: &[String], by: NamedBy<'_>) -> Option<String> {
-    let flag = crate::shown::short(bypass_in(command)?);
+    let flag = crate::shown::short(&bypass_in(command)?);
     let profile = crate::shown::short(profile);
     Some(match by {
         NamedBy::TheAskingChat => format!(

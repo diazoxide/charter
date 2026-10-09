@@ -465,7 +465,8 @@ enum Command {
     /// person is asked on this chat's tab, and the task starts when they allow it.
     ///
     /// It starts on the persona's own harness profile where its definition names one, else on
-    /// this chat's; --profile names another of the project's profiles.
+    /// this chat's; --profile names another of the project's profiles. Where the project
+    /// lists profiles for the persona, it starts on one of those or not at all.
     ///
     /// --in says where else it works: `--in workspace:<name>` starts it in another workspace
     /// of the project, and `--in worktree` gives it a new worktree of the repo this chat works
