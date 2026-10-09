@@ -124,14 +124,18 @@ export function Opener({
     return () => onGoneListed?.("unread");
   }, [listed, onGoneListed]);
 
+  // Why the folder dialog could not open (#1291): said where a refused open is, until the next
+  // try. A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
+  const [pickTrouble, setPickTrouble] = useState<string>();
   const pick = useCallback(() => {
+    setPickTrouble(undefined);
     void commands
       .pickProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
       .then((answer) => {
-        // A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
-        if (answer.status === "ok" && answer.data) onOpen(answer.data);
-      })
-      .catch(() => undefined);
+        if (answer.status === "error") setPickTrouble(answer.error);
+        else if (answer.data) onOpen(answer.data);
+      });
   }, [onOpen]);
 
   // The first run is for a launch with nothing to go on, on a machine that remembers nothing.
@@ -204,6 +208,7 @@ export function Opener({
         className="by-path"
         onSubmit={(event) => {
           event.preventDefault();
+          setPickTrouble(undefined);
           if (typed.trim()) onOpen(typed.trim());
         }}
       >
@@ -220,9 +225,9 @@ export function Opener({
         </button>
       </form>
 
-      {trouble && (
+      {(pickTrouble ?? trouble) && (
         <p className="trouble" role="alert">
-          {trouble}
+          {pickTrouble ?? trouble}
         </p>
       )}
 

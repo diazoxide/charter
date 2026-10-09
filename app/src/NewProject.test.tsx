@@ -44,7 +44,13 @@ const NOT_INTO_A_REPO = [
 
 /** The core, with a plane open and a `create_project` that answers as charter's does. */
 function core(
-  over: { answer?: unknown; refuses?: string; repoRefuses?: string; asksForge?: boolean } = {},
+  over: {
+    answer?: unknown;
+    refuses?: string;
+    repoRefuses?: string;
+    asksForge?: boolean;
+    pickFails?: string;
+  } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
@@ -57,6 +63,10 @@ function core(
     if (cmd === "chat_states") return [];
     if (cmd === "plane_sidebar")
       return { root: PLANE, personas: [], persona: null, unfiled: [], workspaces: [] };
+    if (cmd === "pick_project") {
+      if (over.pickFails !== undefined) throw over.pickFails;
+      return null;
+    }
     if (cmd === "open_repo") {
       if (over.repoRefuses !== undefined) throw over.repoRefuses;
       return {
@@ -355,5 +365,29 @@ describe("making a project", () => {
     const dialog = await askForOne();
 
     expect(within(dialog).getByRole("button", { name: "Create project" })).toBeDisabled();
+  });
+
+  it("says a folder dialog that could not open in the dialog, which a cancel does not (#1291)", async () => {
+    core({ pickFails: "the folder dialog could not be opened" });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Browse for the repo" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "the folder dialog could not be opened",
+    );
+    expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
+  });
+
+  it("says nothing when the folder dialog is cancelled", async () => {
+    const { calls } = core();
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Browse for the repo" }));
+
+    await vi.waitFor(() => expect(calls("pick_project")).toHaveLength(1));
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 });

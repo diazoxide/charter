@@ -63,6 +63,7 @@ import { Opener } from "./Opener";
 import { SettingsTab } from "./settings/SettingsTab";
 import { levelOf, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import { enterSettings } from "./settings/entering";
+import { whenRecentSettled } from "./settings/thisMachine";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
 import { drawTint } from "./theme/theme";
@@ -295,6 +296,16 @@ function App() {
   const goneSettled = useCallback(
     (path: string) => setGoneAtLaunch((was) => was.filter((one) => one.path !== path)),
     [],
+  );
+  // Forgotten or located from Settings › You › This machine settles this window's line about it
+  // too, and an opener drawing it reads again (#1291).
+  useEffect(
+    () =>
+      whenRecentSettled((path) => {
+        goneSettled(path);
+        setGoneChanged((n) => n + 1);
+      }),
+    [goneSettled],
   );
   /** Whether the cold-launch restore is still going. Until it is done the window has not
    *  finished saying which projects it holds, so neither the quit nor the arrangement it

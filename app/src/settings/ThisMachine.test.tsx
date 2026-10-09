@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
-import type { MachineProject, ThisMachine } from "../bindings";
+import type { GoneProject, MachineProject, ThisMachine } from "../bindings";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
 
@@ -33,6 +33,10 @@ let refuse: string | undefined;
 let gate: Promise<void>;
 /** The folder the next Locate…'s dialog answers with; null is a cancelled dialog. */
 let picked: string | null;
+/** Why the next Locate…'s dialog could not open, if it cannot: a failure, not a cancel. */
+let pickFails: string | undefined;
+/** The projects the last quit had open that have gone: the window's "project gone" lines. */
+let goneAtLaunch: GoneProject[];
 
 function machine(): ThisMachine {
   return { projects: structuredClone(store), dropped: [], forgetful: null };
@@ -101,14 +105,18 @@ beforeEach(() => {
   refuse = undefined;
   gate = Promise.resolve();
   picked = "/mnt/disk/old";
+  pickFails = undefined;
+  goneAtLaunch = [];
   mockIPC(
     (cmd, args) => {
       if (cmd === "plane_at_launch") return { plane: null, from: null, why: "no plane here" };
       if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
+      if (cmd === "planes_to_restore") return { windows: [], dropped: [], gone: goneAtLaunch };
       if (cmd === "this_machine") return gate.then(machine);
       if (cmd === "update_channel") return channel;
       if (cmd === "pick_project") {
         sent.push({ cmd, args: {} });
+        if (pickFails !== undefined) throw pickFails;
         return picked;
       }
       if (
@@ -229,6 +237,53 @@ describe("You › This machine", () => {
     await waitFor(() => expect(sent.map(({ cmd }) => cmd)).toContain("pick_project"));
     expect(sent.map(({ cmd }) => cmd)).toEqual(["pin_on_this_machine", "pick_project"]);
     expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+  });
+
+  it("says a Locate… dialog that could not open in the recents row, unlike a cancel (#1291)", async () => {
+    await thisMachine();
+    pickFails = "the folder dialog could not be opened";
+
+    await userEvent.click(await screen.findByRole("button", { name: "Locate old" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "the folder dialog could not be opened",
+    );
+    expect(sent).toEqual([{ cmd: "pick_project", args: {} }]);
+    expect(entries("Recent projects")).toEqual([
+      `plane${PLANE}Forget`,
+      "old/mnt/usb/oldgoneLocate…Forget",
+    ]);
+  });
+
+  it.each([
+    ["Forget old", "forget_project"],
+    ["Locate old", "locate_project"],
+  ])(
+    "settles the window's line about a gone project once %s is done here (#1291)",
+    async (button, cmd) => {
+      const said = "/mnt/usb/old is no longer there";
+      goneAtLaunch = [{ path: "/mnt/usb/old", said }];
+      await thisMachine();
+      expect(await screen.findByText(said, { exact: false })).toBeInTheDocument();
+
+      await userEvent.click(await screen.findByRole("button", { name: button }));
+
+      await waitFor(() => expect(sent.map((one) => one.cmd)).toContain(cmd));
+      await waitFor(() => expect(screen.queryByText(said, { exact: false })).toBeNull());
+    },
+  );
+
+  it("leaves the window's line about a gone project when Settings could not settle it", async () => {
+    const said = "/mnt/usb/old is no longer there";
+    goneAtLaunch = [{ path: "/mnt/usb/old", said }];
+    await thisMachine();
+    expect(await screen.findByText(said, { exact: false })).toBeInTheDocument();
+    refuse = "the store could not be written";
+
+    await userEvent.click(await screen.findByRole("button", { name: "Forget old" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("the store could not be written");
+    expect(screen.getByText(said, { exact: false })).toBeInTheDocument();
   });
 
   it("says why a picked folder was refused in the recents row, and keeps the entry", async () => {

@@ -491,4 +491,28 @@ describe("the opener", () => {
       }),
     );
   });
+
+  it("says a folder dialog that could not open, and stays quiet on a cancel (#1291)", async () => {
+    let fails: string | undefined = "the folder dialog could not be opened";
+    core((cmd) => {
+      if (cmd === "pick_project") {
+        if (fails !== undefined) throw fails;
+        return null;
+      }
+      return undefined;
+    });
+    render(<App />);
+    const person = userEvent.setup();
+
+    await person.click(await screen.findByRole("button", { name: "Open project…" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "the folder dialog could not be opened",
+    );
+
+    // A cancel after it says nothing, and leaves no old failure on screen.
+    fails = undefined;
+    await person.click(screen.getByRole("button", { name: "Open project…" }));
+    await vi.waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
 });
