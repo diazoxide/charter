@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { DispatchLimits, DispatchLimitRow } from "../bindings";
 import { DISPATCH, DispatchLimitsTable, dispatchGroup, workspaceDispatchGroup } from "./dispatch";
 import type { LiveSetting } from "./groups";
+import { SETTINGS_ACTION, type SettingsActionAsk } from "./links";
 
 /**
  * **Settings › Project › Dispatch** (#1439, #1440): the limits table (the project's row, a row
@@ -691,6 +692,48 @@ describe("a workspace's settings", () => {
     );
     await waitFor(() => expect(saves).toHaveLength(2));
     expect(saves[1].change).toEqual(edit(["dispatch", "workspaces", "alpha"], null));
+  });
+});
+
+/**
+ * **A persona's row links to the persona's tab** (#1388): a persona stays in its own tab, and
+ * Settings links to it where it names one. A workspace's row, the project's, a name that is no
+ * persona of the project now, and the persona view's own table do not.
+ */
+describe("a persona's row", () => {
+  it("links to the persona's tab, and only a persona the project has", async () => {
+    const heard: SettingsActionAsk[] = [];
+    const on = (event: Event) => heard.push((event as CustomEvent<SettingsActionAsk>).detail);
+    window.addEventListener(SETTINGS_ACTION, on);
+    onTestFinished(() => window.removeEventListener(SETTINGS_ACTION, on));
+    core(
+      page({
+        rows: [
+          row("project", ""),
+          row("workspace", "alpha", [12]),
+          row("persona", "devops", [null, null, 1]),
+          row("persona", "gone", [null, null, 1]),
+        ],
+      }),
+    );
+    render(<Page />);
+
+    const table = await screen.findByRole("table", { name: "Dispatch limits" });
+    const devops = await within(table).findByRole("button", { name: "Show devops" });
+    await userEvent.click(devops);
+
+    expect(heard).toEqual([{ plane: PLANE, action: "persona.show:devops" }]);
+    expect(within(table).getAllByRole("button", { name: /^Show / })).toHaveLength(1);
+    // The row's name is still the row's own.
+    expect(screen.getByRole("rowheader", { name: "Persona devops" })).toBeInTheDocument();
+  });
+
+  it("does not link on the persona view, which is that persona's tab", async () => {
+    core(page({ rows: [row("project", ""), row("persona", "devops", [null, null, 1])] }));
+    render(<DispatchLimitsTable plane={PLANE} scope={{ kind: "persona", name: "devops" }} />);
+
+    const table = await screen.findByRole("table", { name: "Dispatch limits" });
+    expect(within(table).queryByRole("button", { name: /^Show / })).toBeNull();
   });
 });
 

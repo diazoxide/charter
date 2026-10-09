@@ -13,6 +13,8 @@ import {
 import { Notice } from "../Notice";
 import type { RowIds } from "./components";
 import { DispatchGrantsList, useDispatchLocks } from "./DispatchGrants";
+import { showPersona } from "./links";
+import { OutLink } from "./OutLink";
 import type { LiveSetting, SettingsGroup } from "./groups";
 
 /**
@@ -390,6 +392,21 @@ function useDispatchTable(
                     </td>
                   ))}
                   <td>
+                    {!held &&
+                      one.scope === "persona" &&
+                      offers.some(
+                        (offer) => offer.kind === "persona" && offer.name === one.name,
+                      ) && (
+                        // A persona stays in its own tab, and its row links to it (#1388). Not
+                        // on the persona view, which is that tab.
+                        <OutLink
+                          plane={plane}
+                          action={showPersona(one.name)}
+                          label={one.which === "shared" ? undefined : `Show ${one.name}: ${whose}`}
+                        >
+                          {`Show ${one.name}`}
+                        </OutLink>
+                      )}
                     {removable && (
                       <button
                         type="button"
