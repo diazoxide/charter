@@ -49,6 +49,9 @@ mod work;
 /// sections through the same `(cfg.get(name) or {})` idiom.
 pub(crate) use config::findings as config_findings;
 pub(crate) use config::truthy as config_truthy;
+/// Who can read what a push to a project's remote publishes, for the going-LIVE confirmation
+/// (#1369): the `project remote` row's own forge read.
+pub use remote::{Readers, readers};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

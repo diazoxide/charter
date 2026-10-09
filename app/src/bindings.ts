@@ -1303,6 +1303,14 @@ export const commands = {
 	 */
 	workspaceLive: (plane: PlaneId, name: string, live: boolean) => typedError<LiveSwitched, string>(__TAURI_INVOKE("workspace_live", { plane, name, live })),
 	/**
+	 *  **Who can read what the project's saves push**, for the going-LIVE confirmation (ADR 0051,
+	 *  #1369): its `origin`'s visibility, as the forge answers it.
+	 * 
+	 *  Asked apart from [`workspace_live_preview`] because it asks the network: the confirmation
+	 *  shows what it publishes and where at once, and says who reads it when the forge answers.
+	 */
+	planeRemoteReaders: (plane: PlaneId) => typedError<RemoteReaders, string>(__TAURI_INVOKE("plane_remote_readers", { plane })),
+	/**
 	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
 	 *  pressed.
 	 * 
@@ -6272,6 +6280,22 @@ export type RelaunchQuestion = {
 	 */
 	after_update: boolean,
 };
+
+/**  Who can read what a push to the project's `origin` publishes. */
+export type RemoteReaders = 
+/**  No one else: the project has no `origin`, or it is a path on this machine. */
+{ kind: "nobody" } | 
+/**  Everyone. */
+{ kind: "public" } | 
+/**  Everyone signed in to `host`: GitLab's `internal`, GitHub Enterprise's. */
+{ kind: "internal"; host: string } | 
+/**  Only those given access to the repository. */
+{ kind: "private" } | 
+/**
+ *  Not known, and why on one line: a host no forge purlis knows, or a forge that did not
+ *  answer. Never read as private.
+ */
+{ kind: "unknown"; why: string };
 
 /**
  *  What opening a repo on the first run came to: opened, or a question about the forge.
