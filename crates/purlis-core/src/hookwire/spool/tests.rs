@@ -1620,7 +1620,7 @@ fn a_hook_that_took_a_number_a_drain_had_already_handed_on_lets_it_go_and_takes_
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     private(&spool).expect("the spool");
-    let (folder, _) = Folder::of_a_hook(&spool, 4).expect("the chat's folder");
+    let folder = Folder::of_a_hook(&spool, 4).expect("the chat's folder");
     let key = "0123456789abcdef";
     let asked = std::cell::Cell::new(0);
     // Seven lines were drained under the key, and their files are gone.
@@ -1721,4 +1721,171 @@ fn a_drain_the_spools_lock_kept_out_reads_nothing_and_the_next_one_drains_it_all
     drop(holder);
 
     assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}
+
+/// #1419: the drain waits for one chat's spool only so long. That chat is left as it is, every
+/// key it has kept, and the other chats are drained; once it is let go of, the next drain hands
+/// on its lines, the ones under the key it was issued first too.
+#[test]
+fn a_chats_spool_another_process_holds_is_left_with_its_keys_and_the_rest_are_drained() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let first = issued(&spool, 4);
+    append(&spool, 4, &first, &call(4, "first-start")).expect("spooled");
+    let again = issued(&spool, 4);
+    append(&spool, 4, &again, &call(4, "second-start")).expect("spooled");
+    let other = issued(&spool, 5);
+    append(&spool, 5, &other, &call(5, "other")).expect("spooled");
+    let holder = File::open(folder_for(&spool, 4)).expect("the folder opens");
+    holder.lock().expect("the holder takes the lock");
+
+    let mut items = Vec::new();
+    let started = std::time::Instant::now();
+    drain_at_open(&spool, &[], &mut |item| {
+        items.push(item);
+        Ok(())
+    })
+    .expect("the drain goes on past the held chat");
+    let waited = started.elapsed();
+
+    assert_eq!(tools(&items), [(5, 1, "other".to_owned())], "{items:?}");
+    assert!(
+        waited >= THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST
+            && waited < THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST + Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+    assert_eq!(names(&spool, 4).len(), 2, "chat 4's lines are left");
+    assert_eq!(
+        keys_of(&spool)["keys"]
+            .as_array()
+            .expect("keys")
+            .iter()
+            .filter(|held| held["chat"] == 4)
+            .count(),
+        2,
+        "chat 4 keeps both its keys"
+    );
+    drop(holder);
+
+    assert_eq!(
+        tools(&drained(&spool)),
+        [
+            (4, 1, "first-start".to_owned()),
+            (4, 1, "second-start".to_owned())
+        ]
+    );
+}
+
+/// #1419: a chat's end waits for its spool only so long, and then keeps its keys, as an end
+/// whose lines could not be recorded does.
+#[test]
+fn a_chat_whose_spool_is_held_as_it_ends_keeps_its_keys_for_the_next_drain() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let holder = File::open(folder_for(&spool, 4)).expect("the folder opens");
+    holder.lock().expect("the holder takes the lock");
+
+    let refused = end_chat(&spool, 4, &mut |_| Ok(())).expect_err("its spool is held");
+
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    drop(holder);
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}
+
+/// #1419: the file a build before #983 wrote is drained under its lock, which that build's
+/// hooks hold across their sync: waited for only so long, and the chat left as it is.
+#[test]
+fn an_older_builds_spool_file_another_process_holds_is_left_unread() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    as_a_build_before_wrote_its_keys(&spool);
+    let old = file_for(&spool, 4);
+    std::fs::write(&old, a_spool_line(4, &token, 1, "old")).expect("the old spool");
+    let holder = File::open(&old).expect("the file opens");
+    holder.lock().expect("the holder takes the lock");
+
+    assert_eq!(drained(&spool), []);
+    assert_eq!(
+        std::fs::read_to_string(&old).expect("still there"),
+        a_spool_line(4, &token, 1, "old"),
+        "left as it was"
+    );
+    drop(holder);
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "old".to_owned())]);
+}
+
+/// #1419: the drain reads no more of an older build's file than that build could have written.
+/// One past it is `unreadable`, left as it is, and none of its lines is handed on.
+#[test]
+fn an_older_builds_spool_file_past_what_it_could_hold_is_unreadable_and_left() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    as_a_build_before_wrote_its_keys(&spool);
+    let old = file_for(&spool, 4);
+    let line = a_spool_line(4, &token, 1, "old");
+    std::fs::write(&old, &line).expect("the old spool");
+    let past = AN_OLDER_BUILDS_FILE_IS_READ_UP_TO + 1;
+    File::options()
+        .write(true)
+        .open(&old)
+        .and_then(|file| file.set_len(past))
+        .expect("the file grows past the cap");
+
+    let items = drained(&spool);
+
+    assert_eq!(
+        items,
+        [Drained::Rejected {
+            chat: 4,
+            seq: None,
+            why: why::UNREADABLE
+        }]
+    );
+    assert_eq!(
+        std::fs::metadata(&old).expect("still there").len(),
+        past,
+        "left as it was"
+    );
+}
+
+/// The spool directories a test's hooks made durable, by the seam below.
+static SYNCED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// #1419: a spool directory whose sync a hook did not finish is synced by the next line, though
+/// that hook made no folder.
+#[test]
+fn a_spool_whose_sync_a_hook_did_not_finish_is_synced_by_the_next_line() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    let a_sync_that_fails = Bounds {
+        the_spool_reaches_the_disk: |_| Err(io::Error::other("the disk did not answer")),
+        ..Bounds::A_HOOKS
+    };
+    append_within(&spool, 4, &token, &call(4, "a"), a_sync_that_fails)
+        .expect_err("the hook that made the folder did not sync it");
+    let recorded = Bounds {
+        the_spool_reaches_the_disk: |dir| {
+            SYNCED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(dir.to_path_buf());
+            sync_dir(dir)
+        },
+        ..Bounds::A_HOOKS
+    };
+
+    append_within(&spool, 4, &token, &call(4, "b"), recorded).expect("spooled");
+
+    assert!(
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&spool),
+        "the next line synced the spool directory"
+    );
 }
