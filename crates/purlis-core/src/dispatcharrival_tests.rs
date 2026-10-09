@@ -598,7 +598,7 @@ fn a_settling_asked_for_while_one_runs_waits_for_it_and_takes_its_answer() {
         std::thread::spawn(move || settle_with(&root, &*slow))
     };
     has_entered
-        .recv()
+        .recv_timeout(Duration::from_secs(30))
         .expect("the first is reading the history");
     let second = {
         let (root, slow) = (root.clone(), Arc::clone(&slow));
@@ -1091,4 +1091,153 @@ fn a_project_in_no_repository_has_no_history_and_its_acceptance_stands() {
 
     assert_eq!(bound(root).at, None);
     assert_eq!(settled_in_force(root), [pair("steward", "devops")]);
+}
+
+// ---- a grant limited to one workspace is bound as a pair is (#1505 meets #1506) -----------------
+
+const LIMITED: &str =
+    "schema = 1\n\n[dispatch.grants]\nsteward = [{ to = \"devops\", in = \"runners\" }]\n";
+const IN_RUNNERS: &str = "steward -> devops in runners";
+
+fn limited_one() -> crate::dispatchwithin::Limited {
+    crate::dispatchwithin::Limited::new("steward", "devops", "runners").expect("a limited grant")
+}
+
+/// The project's grants limited to one workspace in force, by the last settling.
+fn limited_in_force(root: &Path) -> Vec<crate::dispatchwithin::Limited> {
+    InForce::read(root, Vec::new())
+        .limited
+        .into_iter()
+        .filter(|(level, _)| *level == crate::sandbox::grant::Level::Project)
+        .map(|(_, one)| one)
+        .collect()
+}
+
+/// A project holding the limited grant, with the workspace, accepted here at commit [`A`].
+fn limited_accepted_at_a() -> tempfile::TempDir {
+    let dir = project(LIMITED);
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("workspaces").join("runners")).expect("the workspace");
+    crate::dispatchwithin::accept(root, &limited_one()).expect("accepted");
+    assert_eq!(
+        settle_with(root, &Told::at(A, Between::Unanswered)),
+        Verdict { read: true }
+    );
+    assert_eq!(bound(root).at.as_deref(), Some(A));
+    assert_eq!(bound(root).seen_in, [IN_RUNNERS]);
+    assert_eq!(limited_in_force(root), [limited_one()]);
+    dir
+}
+
+#[test]
+fn a_limited_grant_is_one_of_the_grants_a_version_of_the_project_s_file_holds() {
+    assert_eq!(grants_in(Some(LIMITED)), [IN_RUNNERS]);
+}
+
+#[test]
+fn a_limited_grant_taken_out_and_put_back_between_two_reads_waits_for_a_new_yes() {
+    let dir = limited_accepted_at_a();
+    let root = dir.path();
+
+    // One pull: a commit takes it out, a later one puts it back. The file reads as it did.
+    assert_eq!(
+        settle_with(root, &Told::at(B, took_out(&[IN_RUNNERS]))),
+        Verdict { read: true }
+    );
+
+    assert_eq!(limited_in_force(root), []);
+    assert_eq!(bound(root).seen_in, Vec::<String>::new());
+    assert_eq!(crate::dispatchwithin::unaccepted(root), [limited_one()]);
+}
+
+#[test]
+fn a_limited_grant_is_not_in_force_where_the_history_cannot_be_read() {
+    // Cannot be read: dropped, as a pair is.
+    let dir = limited_accepted_at_a();
+    let root = dir.path();
+    assert_eq!(
+        settle_with(root, &Told::at(B, Between::Unreadable)),
+        Verdict { read: true }
+    );
+    assert_eq!(limited_in_force(root), []);
+    assert_eq!(bound(root).seen_in, Vec::<String>::new());
+
+    // Cannot be asked at all: nothing stored changes, and it is in force for nobody until a
+    // settling answers. The arrival Notice says so.
+    let dir = limited_accepted_at_a();
+    let root = dir.path();
+    let before = bound(root);
+    let told = arrival_with(root, &Told::of(Head::Unanswered, Between::Unanswered));
+    assert!(told.unread);
+    assert_eq!(limited_in_force(root), [], "not in force for that read");
+    assert_eq!(bound(root), before, "and nothing stored changed");
+    assert_eq!(
+        settle_with(root, &Told::at(B, took_out(&[]))),
+        Verdict { read: true }
+    );
+    assert_eq!(limited_in_force(root), [limited_one()]);
+}
+
+#[test]
+fn a_limited_grant_absent_from_the_file_on_disk_is_not_in_force_and_nothing_is_dropped() {
+    let dir = limited_accepted_at_a();
+    let root = dir.path();
+    // A branch without it, and reads.
+    write(root, NONE);
+    assert_eq!(limited_in_force(root), []);
+    assert_eq!(limited_in_force(root), []);
+    assert_eq!(bound(root).seen_in, [IN_RUNNERS], "nothing dropped");
+    // Back: in force with no new yes.
+    write(root, LIMITED);
+    assert_eq!(limited_in_force(root), [limited_one()]);
+}
+
+#[test]
+fn what_was_set_aside_for_a_name_is_bound_to_the_history_too() {
+    // Accepted, then set aside with the name's grants; a commit took it out meanwhile.
+    for between in [took_out(&[PAIR]), Between::Unreadable] {
+        let dir = project(ONE);
+        let root = dir.path();
+        std::fs::create_dir_all(local::path(root).parent().expect("a folder")).expect("made");
+        std::fs::write(
+            local::path(root),
+            format!(
+                "{{\"dispatch_accepted_aside\": [{{\"said\": \"{PAIR}\", \"was\": \"devops\"}}], \
+                 \"dispatch_seen_at\": \"{A}\"}}"
+            ),
+        )
+        .expect("the record");
+        assert_eq!(bound(root).aside, [PAIR]);
+
+        assert_eq!(
+            settle_with(root, &Told::at(B, between)),
+            Verdict { read: true }
+        );
+
+        assert_eq!(bound(root).aside, Vec::<String>::new());
+        assert_eq!(local::accepted_aside_dispatch(root), []);
+    }
+}
+
+#[test]
+fn a_first_read_runs_no_git_on_its_thread_and_counts_nothing_accepted_until_a_settling_lands() {
+    let dir = project(ONE);
+    let root = dir.path();
+    // Accepted by an earlier run of the app: nothing settled in this process yet.
+    local::accept_dispatch(root, PAIR, &|| true).expect("accepted");
+
+    // Not in force for this read: a settling was started off this thread.
+    assert_eq!(for_read(root), Verdict { read: false });
+    assert_eq!(in_force(root), []);
+
+    // Once it lands, by the verdict it came to.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while for_read(root) == (Verdict { read: false }) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(for_read(root), Verdict { read: true });
+
+    // A project that keeps nothing reads as settled at once.
+    let empty = project(ONE);
+    assert_eq!(for_read(empty.path()), Verdict { read: true });
 }

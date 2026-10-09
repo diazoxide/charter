@@ -203,6 +203,17 @@ pub fn started_again_refusal(
     refusal_on(Again::Started, persona, profile, command, listed)
 }
 
+/// [`started_again_refusal`], for a persona chat the person started with Ask from a tab: the
+/// same two rules, and a sentence that does not say another chat dispatched it.
+pub fn asked_again_refusal(
+    persona: Option<&str>,
+    profile: &str,
+    command: Option<&[String]>,
+    listed: Option<&[String]>,
+) -> Option<String> {
+    refusal_on(Again::Asked, persona, profile, command, listed)
+}
+
 /// Which way a chat a dispatch started is being started once more: what its refusal calls it
 /// and tells its reader to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +223,8 @@ enum Again {
     /// Its task finished and its row is being reopened: there is no chat to close, and its
     /// report is still there.
     Reopened,
+    /// A persona chat the person started with Ask from a tab, started again.
+    Asked,
 }
 
 /// [`started_again_refusal`], said for `how` it is being started.
@@ -249,6 +262,12 @@ fn refusal_on(
                  for {persona} under [dispatch.profiles] in the project's file and reopen it, \
                  or dispatch the work again. Its report is still here to read."
             ),
+            Again::Asked => format!(
+                "You started this chat with Ask as persona '{persona}' on profile '{shown}', \
+                 and the project now lists {lists} for that persona, so it was not started \
+                 again. List '{shown}' for {persona} under [dispatch.profiles] in the \
+                 project's file and start it again, or close it and ask again."
+            ),
         });
     }
     let flag = crate::dispatchunattended::bypass_in(command?)?;
@@ -267,6 +286,13 @@ fn refusal_on(
              never runs with, so it was not reopened. Take that out of the profile's command \
              in Settings › Harness and reopen it, or dispatch the work again on a profile \
              that asks. Its report is still here to read."
+        ),
+        Again::Asked => format!(
+            "You started this chat with Ask, and its profile '{shown}' now starts its harness \
+             with the permission prompts off ({flag}), which a persona chat started that way \
+             never runs with, so it was not started again. Take that out of the profile's \
+             command in Settings › Harness and start it again, or close it and ask again on a \
+             profile that asks."
         ),
     })
 }
@@ -312,10 +338,16 @@ fn task_refusal_on(
 /// dispatch started (its record has `from`), a task or a handoff, on a profile, is asked
 /// [`task_profile_refusal`]. A chat the person started is theirs to run as they declared it.
 pub fn may_start_again(root: &Path, chat: &crate::reopen::Chat) -> Result<(), String> {
-    let (Some(_), Some(profile)) = (&chat.from, chat.profile.as_deref()) else {
+    let (Some(from), Some(profile)) = (&chat.from, chat.profile.as_deref()) else {
         return Ok(());
     };
-    match task_profile_refusal(root, chat.persona.as_deref(), profile) {
+    // A chat the person asked for from a tab is told so, never that another chat sent it.
+    let how = if from.by_person {
+        Again::Asked
+    } else {
+        Again::Started
+    };
+    match task_refusal_on(how, root, chat.persona.as_deref(), profile) {
         Some(refused) => Err(refused),
         None => Ok(()),
     }
@@ -591,6 +623,21 @@ mod tests {
             {
                 assert!(!said.contains("start it again") && !said.contains("close it"));
             }
+        }
+    }
+
+    #[test]
+    fn a_chat_the_person_asked_for_is_never_told_another_chat_dispatched_it() {
+        let other = names(&["other"]).unwrap();
+        let yolo = words(&["claude", "--dangerously-skip-permissions"]);
+        for (command, listed) in [(None, Some(&other)), (Some(&yolo), None)] {
+            let (command, listed) = (command.map(Vec::as_slice), listed.map(Vec::as_slice));
+            let said = asked_again_refusal(Some("devops"), "work", command, listed)
+                .expect("refused as a dispatched chat is");
+            assert!(said.starts_with("You started this chat with Ask"), "{said}");
+            assert!(!said.contains("dispatched by another chat"), "{said}");
+            assert!(!said.contains("This chat was dispatched"), "{said}");
+            assert!(started_again_refusal(Some("devops"), "work", command, listed).is_some());
         }
     }
 

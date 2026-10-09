@@ -317,7 +317,9 @@ pub enum Hosts {
 /// standing grants in force for it, on this machine and in the project's file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Onward {
-    /// The targets of its named grants, sorted; none where it holds none.
+    /// The targets of its named grants, sorted; none where it holds none. **A grant that
+    /// holds in one workspace only (#1505) is said with that workspace**: `qa in runners`, and
+    /// `any persona in runners` for "any persona" limited to one.
     Named(Vec<String>),
     /// It holds "any persona".
     Any,
@@ -348,6 +350,31 @@ impl Onward {
             .filter(|pair| pair.asking == persona && covered(&pair.target))
             .map(|pair| pair.target.clone())
             .collect();
+        // What it may dispatch to for work in one workspace only (#1505): reach all the same,
+        // so it is said, with where. Each as a dispatch for a task there would be judged, so
+        // a never, a lock and an unread record take these away as they take the others.
+        let there = |workspace: &str| grants.clone().for_task_in(Some(workspace));
+        for (_, one) in grants
+            .limited
+            .iter()
+            .filter(|(_, one)| one.asking == persona)
+        {
+            let workspace = crate::shown::short(&one.workspace);
+            if one.any() {
+                if !grants.never_unread && !locks.forbids_dispatch() {
+                    named.push(format!("any persona in {workspace}"));
+                }
+            } else if crate::dispatchgrant::covers(
+                Some(persona),
+                &one.target,
+                &there(&one.workspace),
+                locks,
+            ) == Covers::Covered
+                && !covered(&one.target)
+            {
+                named.push(format!("{} in {workspace}", one.target));
+            }
+        }
         named.sort();
         named.dedup();
         Self::Named(named)

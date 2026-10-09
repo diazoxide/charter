@@ -280,6 +280,8 @@ mod tests {
                 crate::dispatchgrants::accept_project_dispatch,
                 crate::dispatchgrants::allow_dispatch_to_any,
                 crate::dispatchgrants::set_dispatch_workspace,
+                crate::dispatchgrants::accept_project_dispatch_in,
+                crate::dispatchgrants::give_back_dispatch,
                 crate::dispatchgrants::keep_dispatch_blocked,
             ])
             .build(tauri_context!(test = true))
@@ -314,6 +316,17 @@ mod tests {
                     "plane": plane, "asking": "steward", "target": "devops",
                     "level": "project", "from": null, "to": "runners",
                 }),
+            ),
+            (
+                "accept_project_dispatch_in",
+                json!({
+                    "plane": plane, "asking": "steward", "target": "devops",
+                    "workspace": "runners",
+                }),
+            ),
+            (
+                "give_back_dispatch",
+                json!({ "plane": plane, "name": "devops" }),
             ),
         ];
         // The list the grant store keeps of them is the one asked here.

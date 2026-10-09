@@ -124,10 +124,18 @@ pub struct Server {
 /// what `answer_ask` is: the window's own IPC, and no link until the session protocol has a
 /// scoped message for it.
 ///
-/// The four commands of a dispatch refused while nobody was there (#1507) are the window's
-/// alone too: reading that list, and its three answers, one of which is a standing grant in
-/// one press. They are offered on a refused chat's word, so nothing but the person's own
-/// window reads or answers them.
+/// **Every command that makes, widens, narrows, accepts, declines or takes back a standing
+/// dispatch grant is the window's alone too** (spec #1483, train 64; [`STANDING_DISPATCH`]),
+/// and so is every answer to a dispatch's question: Keep blocked keeps nothing past the chat,
+/// and it is still the person's answer, which nothing on a link gives for them. **And so are
+/// the reads of what stands and what waits**: they list the person's refusals, every chat's
+/// grants, and what other chats asked for with what their targets work with, and a link
+/// reads none of it.
+/// A dispatch grant is the person's consent to what one persona's chats may ask of another,
+/// given by a press in their own window; the link carries no second way to give or withdraw
+/// it, whatever scope the link holds. With them, the commands of the two lists a person
+/// answers from: the Notice that says a teammate's grant arrived (#1506), and the dispatches
+/// refused while nobody was there (#1507), which are offered on a refused chat's word.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -169,7 +177,63 @@ pub const WINDOW_ONLY: &[&str] = &[
     "task_question",
     // Answers as the person.
     "answer_task_question",
-    // A dispatch refused while nobody was there.
+    // What stands and what waits: the person's and every chat's, so never a link's to read.
+    "dispatch_grants_needed",
+    "dispatch_standing",
+    "dispatch_grants",
+    // The person's answers on a dispatch's Notice: every one of them, the no included.
+    "allow_dispatch",
+    "allow_dispatch_anywhere",
+    "keep_dispatch_blocked",
+    "never_dispatch",
+    // Settings' table: every change of what stands.
+    "lift_dispatch_never",
+    "allow_dispatch_to_any",
+    "revoke_dispatch_to_any",
+    "revoke_dispatch_grant",
+    "accept_project_dispatch",
+    "decline_project_dispatch",
+    "accept_project_dispatch_in",
+    "decline_project_dispatch_in",
+    "set_dispatch_workspace",
+    "give_back_dispatch",
+    "remove_dormant_dispatch",
+    // A teammate's grant arriving: its list and its answers.
+    "dispatch_arrival",
+    "answer_dispatch_arrival",
+    "dispatch_gone_told",
+    // A dispatch refused while nobody was there: its list and its answers.
+    "dispatch_away",
+    "allow_dispatch_away",
+    "dismiss_dispatch_away",
+    "never_dispatch_away",
+];
+
+/// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on
+/// [`WINDOW_ONLY`] (a test holds that), and the list stands on its own, so a window-only
+/// command of another kind added to [`WINDOW_ONLY`] is never counted as one of these.
+pub const STANDING_DISPATCH: &[&str] = &[
+    "dispatch_grants_needed",
+    "dispatch_standing",
+    "dispatch_grants",
+    "allow_dispatch",
+    "allow_dispatch_anywhere",
+    "keep_dispatch_blocked",
+    "never_dispatch",
+    "lift_dispatch_never",
+    "allow_dispatch_to_any",
+    "revoke_dispatch_to_any",
+    "revoke_dispatch_grant",
+    "accept_project_dispatch",
+    "decline_project_dispatch",
+    "accept_project_dispatch_in",
+    "decline_project_dispatch_in",
+    "set_dispatch_workspace",
+    "give_back_dispatch",
+    "remove_dormant_dispatch",
+    "dispatch_arrival",
+    "answer_dispatch_arrival",
+    "dispatch_gone_told",
     "dispatch_away",
     "allow_dispatch_away",
     "dismiss_dispatch_away",
@@ -421,5 +485,22 @@ mod credential_tests {
         }
         assert!(window_only("answer_ask"));
         assert!(!window_only("rename_chat"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_command_of_who_may_dispatch_to_whom_is_on_the_window_only_list() {
+        for command in STANDING_DISPATCH {
+            assert!(WINDOW_ONLY.contains(command), "{command}");
+        }
+        // Named once each.
+        let mut sorted = STANDING_DISPATCH.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), STANDING_DISPATCH.len());
     }
 }

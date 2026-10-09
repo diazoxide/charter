@@ -11,7 +11,8 @@
 //!
 //! **Your own change is no news to you, and is in force at once**: a pair granted here is
 //! acknowledged on this machine as it is written, and one revoked here is taken off what was
-//! acknowledged, so the one-time Notice is a teammate's ([`crate::dispatchgrant::changed`]).
+//! acknowledged, so the Notice that says a grant arrived is a teammate's
+//! ([`crate::dispatcharrival`]).
 //! A teammate's pair covers nothing here until it is allowed here (D-1437-R1).
 
 use std::path::Path;

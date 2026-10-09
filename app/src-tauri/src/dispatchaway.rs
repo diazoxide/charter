@@ -75,7 +75,8 @@
 //!
 //! # Reading it, and tidying it
 //!
-//! [`shown`] reads and writes nothing. [`listed`] is [`shown`] and then takes out of the
+//! [`shown`] reads, and writes no more than a look at the grants writes (a workspace's
+//! count of times seen gone). [`listed`] is [`shown`] and then takes out of the
 //! record what is settled; it is what the window's commands answer with, **and is never
 //! called while a dispatch is being decided**. [`refused`] runs under the lock a decision is
 //! made under: it writes the one refusal, and the window is told from a thread of its own.
@@ -118,6 +119,46 @@ pub struct AwayRefusal {
     pub times: u32,
     /// Exactly what **Allow from now on** allows, for whom, and what it makes reachable.
     pub allows: String,
+    /// Where the workspace the refused task would have worked in is not one of the project's
+    /// now: the sentence saying so. Allow from now on keeps nothing for such an item.
+    pub nowhere: Option<String>,
+    /// **What the item said, as a digest**: the pair, the level, the workspace, whether it is
+    /// there, and what the target works with. Allow from now on sends it back, and one sent
+    /// for an item that reads differently now grants nothing ([`CHANGED_AWAY`]).
+    pub shown: String,
+}
+
+/// What Allow from now on is answered where the item no longer reads as it was shown.
+pub const CHANGED_AWAY: &str = "What this item says changed since it was shown, so nothing \
+     was allowed. Read it again, then answer.";
+
+/// The digest an item of `asking` to `target` in `workspace` is drawn with, where `nowhere`
+/// says whether its workspace is gone and `access` is what the target works with.
+fn shown_of(
+    asking: &str,
+    target: &str,
+    workspace: Option<&str>,
+    nowhere: Option<&str>,
+    access: &Access,
+) -> String {
+    let reach = purlis_core::dispatchwants::Offer {
+        target: access.clone(),
+        also: Vec::new(),
+    }
+    .stamp();
+    format!(
+        "{asking}\u{1f}{target}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{reach}",
+        Level::You.word(),
+        workspace.unwrap_or_default(),
+        nowhere.unwrap_or_default()
+    )
+}
+
+/// Where the workspace of an item is not one of the project at `root` now: why.
+fn nowhere_of(root: &Path, workspace: Option<&str>) -> Option<String> {
+    workspace
+        .filter(|name| !dispatchwithin::Seen::read(root).is_there(name))
+        .map(dispatchwithin::not_there_said)
 }
 
 /// A project's whole list, as the window is told it: in the order pairs were first refused.
@@ -264,7 +305,7 @@ pub fn shown(on: &On<'_>) -> Shown {
     }
     let mut shown = Shown::default();
     // What each target works with, read once a target.
-    let mut works_with: Vec<(String, String)> = Vec::new();
+    let mut works_with: Vec<(String, Access)> = Vec::new();
     for entry in away::kept(on.root, on.at) {
         // Judged as the refusal was: for a task in the entry's workspace (#1505), so a grant
         // limited to another workspace settles nothing here.
@@ -279,31 +320,48 @@ pub fn shown(on: &On<'_>) -> Shown {
                 shown.settled.push(one);
             }
         } else if entry.dismissed.is_none() {
-            let said = match works_with
+            let access = match works_with
                 .iter()
                 .find(|(target, _)| *target == entry.target)
             {
-                Some((_, said)) => said.clone(),
+                Some((_, access)) => access.clone(),
                 None => {
-                    let said = Access::at(on.root, on.locks, &entry.target).said();
-                    works_with.push((entry.target.clone(), said.clone()));
-                    said
+                    let access = Access::at(on.root, on.locks, &entry.target);
+                    works_with.push((entry.target.clone(), access.clone()));
+                    access
                 }
             };
-            shown.listed.push(drawn(entry, &said));
+            let nowhere = nowhere_of(on.root, entry.workspace.as_deref());
+            shown.listed.push(drawn(entry, &access, nowhere));
         }
     }
     shown
 }
 
-fn drawn(entry: Refused, works_with: &str) -> AwayRefusal {
+fn drawn(entry: Refused, access: &Access, nowhere: Option<String>) -> AwayRefusal {
     AwayRefusal {
-        allows: allows_said(
+        shown: shown_of(
             &entry.asking,
             &entry.target,
             entry.workspace.as_deref(),
-            works_with,
+            nowhere.as_deref(),
+            access,
         ),
+        // Said before the press, where it is so: Allow keeps nothing for a workspace that is
+        // not there, and the item says why rather than what a grant would reach.
+        allows: match &nowhere {
+            Some(why) => format!(
+                "{why} So Allow from now on keeps nothing for this item; put it away with \
+                 Dismiss."
+            ),
+            None => allows_said(
+                &entry.asking,
+                &entry.target,
+                entry.workspace.as_deref(),
+                &access.said(),
+            ),
+        },
+        nowhere,
         asking: entry.asking,
         target: entry.target,
         workspace: entry.workspace,
@@ -345,11 +403,17 @@ fn is_listed(on: &On<'_>, asking: &str, target: &str, workspace: Option<&str>) -
 /// to whatever is made under that name next. Said before anything is audited
 /// ([`dispatchwithin::not_there_said`]); nothing is kept, and the item stays for the person
 /// to put away.
+///
+/// **Held to what the item said** (`shown`, [`AwayRefusal::shown`]): where the item reads
+/// differently now (what the target works with changed, or its workspace went), nothing is
+/// audited or kept and the answer is [`CHANGED_AWAY`]; the window reads the list again.
+/// `None` asks nothing of it: a caller inside the app that showed nothing.
 pub fn allow(
     on: &On<'_>,
     asking: &str,
     target: &str,
     workspace: Option<&str>,
+    shown: Option<&str>,
 ) -> Result<String, String> {
     if !is_listed(on, asking, target, workspace) {
         return Err(
@@ -357,6 +421,19 @@ pub fn allow(
              chat you are at."
                 .to_owned(),
         );
+    }
+    if let Some(shown) = shown {
+        let nowhere = nowhere_of(on.root, workspace);
+        let now = shown_of(
+            asking,
+            target,
+            workspace,
+            nowhere.as_deref(),
+            &Access::at(on.root, on.locks, target),
+        );
+        if now != shown {
+            return Err(CHANGED_AWAY.to_owned());
+        }
     }
     // Two different personas' names: a wildcard is not one, so none can be granted here.
     let pair = Pair::new(asking, target)?;
@@ -597,10 +674,48 @@ pub fn refused(
     if !keep(root, refusal.as_ref(), &said, workspace, now_secs()) {
         return said;
     }
+    // Off the lock the decision is made under: a chat asking in a loop costs the other
+    // dispatches one write each, and the reading is done on a thread of its own.
+    tell_the_window(held);
+    away::told(&said)
+}
+
+/// **A chat nobody is at was refused a crossing into `workspace`** (D-1453-16, #1505): to start
+/// a chat as `target` there it needs a grant that names the pair and covers that workspace,
+/// and none stands. Kept like a refusal for lack of a grant ([`refused`]), for the item's Allow
+/// mends it: a grant for work in that workspace is what the crossing rule asks for. Only a
+/// sandboxed chat's, on its own grants, between two personas. Answers the sentence the chat
+/// is told.
+pub fn refused_crossing(
+    held: &crate::planes::Held,
+    asking: &Asking,
+    target: Option<&str>,
+    said: String,
+    workspace: &str,
+) -> String {
+    let (Some(persona), Some(target)) = (asking.persona.as_deref(), target) else {
+        return said;
+    };
+    if asking.held || held.chats().confines_of(asking.session).is_none() {
+        return said;
+    }
+    match away::keep(held.root(), persona, target, Some(workspace), now_secs()) {
+        Ok(kept) if kept.listed() => {
+            tell_the_window(held);
+            away::told(&said)
+        }
+        Ok(_) => said,
+        Err(why) => {
+            tracing::warn!("purlis: a crossing refused with nobody there was not kept ({why})");
+            said
+        }
+    }
+}
+
+/// Tells the window `held`'s list, from a thread of its own and a read that decides nothing.
+fn tell_the_window(held: &crate::planes::Held) {
     if let Some(tell) = TELL.get().cloned() {
-        let (root, plane) = (root.to_path_buf(), held.plane_id().clone());
-        // Off the lock the decision is made under: a chat asking in a loop costs the other
-        // dispatches one write each, and the reading is done here.
+        let (root, plane) = (held.root().to_path_buf(), held.plane_id().clone());
         let told = std::thread::Builder::new()
             .name("purlis-away-told".to_owned())
             .spawn(move || {
@@ -611,7 +726,6 @@ pub fn refused(
             tracing::warn!("purlis: the window was not told of a refusal that was kept ({why})");
         }
     }
-    away::told(&said)
 }
 
 fn now_secs() -> u64 {
@@ -674,8 +788,9 @@ pub fn dispatch_away(
 /// **Allow from now on** on a needs-you item: chats running as `asking` may dispatch to
 /// `target`, for you on this machine, for work in `workspace`, the one the refused task would
 /// have worked in (null, the project's root: in any workspace). One named pair the list
-/// holds for that workspace, audited as yours before it is kept; it starts nothing. Answers
-/// the sentence to say and the list as it is now.
+/// holds for that workspace, audited as yours before it is kept; it starts nothing. `shown`
+/// is the item's digest as the window drew it: an item that reads differently now grants
+/// nothing. Answers the sentence to say and the list as it is now.
 #[tauri::command]
 #[specta::specta]
 pub fn allow_dispatch_away(
@@ -684,10 +799,11 @@ pub fn allow_dispatch_away(
     asking: String,
     target: String,
     workspace: Option<String>,
+    shown: String,
 ) -> Result<AwayAnswered, String> {
     let held = planes.held(&plane)?;
     with_ground(&held, |on| {
-        let said = allow(on, &asking, &target, workspace.as_deref())?;
+        let said = allow(on, &asking, &target, workspace.as_deref(), Some(&shown))?;
         Ok(AwayAnswered {
             said,
             refused: listed(on),
