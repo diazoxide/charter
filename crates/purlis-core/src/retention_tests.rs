@@ -173,7 +173,7 @@ fn the_hook_spool_and_the_rest_of_the_state_directory_are_never_touched() {
         "eventlog/0001.jsonl",
         "terminals/-9.workspace",
         "save-journal.jsonl",
-        "persona-state/ephemeral/s1/devops/scratch.md",
+        "chat-turns/3",
     ];
     for other in others {
         aged(&state.join(other), OLD);
@@ -237,6 +237,10 @@ fn a_reopen_record_that_cannot_be_read_leaves_every_session_file_alone() {
             reports: 1,
             dispatches: 0,
             spend: 0,
+            gates: 0,
+            nudges: 0,
+            saved: 0,
+            ephemeral: 0,
         }
     );
     assert!(sessions.join("3.workspace").exists());
@@ -1036,4 +1040,261 @@ fn a_terminal_store_reached_through_a_link_is_not_swept() {
 
     assert_eq!(on_select(&root, SystemTime::now()), 0);
     assert!(elsewhere.join("pane.workspace").exists());
+}
+
+#[test]
+fn a_commit_gate_cooldown_untouched_for_thirty_days_is_collected_unless_its_session_is_live() {
+    let (_d, root) = plane();
+    let gate = root.join(".charter/commit-gate");
+    aged(&gate.join("ended-uuid"), OLD);
+    aged(&gate.join("9f1c-uuid"), OLD);
+    aged(&gate.join("recent-uuid"), YOUNG);
+    // Not a name the gate makes.
+    aged(&gate.join(".hidden"), OLD);
+    std::fs::create_dir_all(gate.join("dir-uuid")).unwrap();
+
+    let swept = sweep(&root, SystemTime::now(), &["9f1c-uuid".into()]);
+
+    assert_eq!(swept.gates, 1);
+    assert!(!gate.join("ended-uuid").exists());
+    for kept in ["9f1c-uuid", "recent-uuid", ".hidden", "dir-uuid"] {
+        assert!(gate.join(kept).exists(), "{kept} was removed");
+    }
+}
+
+#[test]
+fn a_nudge_marker_untouched_for_thirty_days_is_collected_unless_its_session_is_live() {
+    let (_d, root) = plane();
+    let nudges = root.join(".charter/ws-edit-nudge");
+    aged(&nudges.join("ended-uuid-alpha"), OLD);
+    aged(&nudges.join("9f1c-uuid-alpha"), OLD);
+    aged(&nudges.join("9f1c-uuid-beta"), OLD);
+    aged(&nudges.join("recent-uuid-alpha"), YOUNG);
+    // Session 9f1c is not session 9f1cd.
+    aged(&nudges.join("9f1cd-alpha"), OLD);
+
+    let swept = sweep(&root, SystemTime::now(), &["9f1c-uuid".into()]);
+
+    assert_eq!(swept.nudges, 2);
+    assert!(!nudges.join("ended-uuid-alpha").exists());
+    assert!(!nudges.join("9f1cd-alpha").exists());
+    for kept in ["9f1c-uuid-alpha", "9f1c-uuid-beta", "recent-uuid-alpha"] {
+        assert!(nudges.join(kept).exists(), "{kept} was removed");
+    }
+}
+
+#[test]
+fn a_workspace_s_saved_line_untouched_for_thirty_days_is_collected_unless_its_chat_is_live() {
+    let (_d, root) = plane();
+    let alpha = root.join("workspaces/alpha/.charter/sessions");
+    let beta = root.join("workspaces/beta/.charter/sessions");
+    aged(&alpha.join("2.saved"), OLD);
+    aged(&alpha.join("3.saved"), OLD);
+    aged(&beta.join("4.saved"), YOUNG);
+    aged(&beta.join("5.saved"), OLD);
+    // Only the saved lines: the rest of a workspace's sessions folder is not this sweep's.
+    aged(&alpha.join("2.workspace"), OLD);
+    aged(&alpha.join("x.saved"), OLD);
+
+    let swept = sweep(&root, SystemTime::now(), &["3".into()]);
+
+    assert_eq!(swept.saved, 2);
+    assert!(!alpha.join("2.saved").exists());
+    assert!(!beta.join("5.saved").exists());
+    assert!(alpha.join("3.saved").exists());
+    assert!(beta.join("4.saved").exists());
+    assert!(alpha.join("2.workspace").exists());
+    assert!(alpha.join("x.saved").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_reached_through_a_link_has_nothing_swept() {
+    let (_d, root) = plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join(".charter/sessions/2.saved");
+    aged(&theirs, OLD);
+    std::fs::create_dir_all(root.join("workspaces")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), root.join("workspaces/alpha")).unwrap();
+
+    assert_eq!(sweep(&root, SystemTime::now(), &[]).saved, 0);
+
+    assert!(theirs.exists());
+}
+
+/// A file of `session`'s ephemeral memory for `persona`, last written `age` ago, with its
+/// folders as old.
+fn ephemeral(root: &Path, session: &str, persona: &str, file: &str, age: Duration) -> PathBuf {
+    let path = crate::recall::ephemeral_dir(root, session, persona).join(file);
+    aged(&path, age);
+    let store = root.join(".charter/persona-state/ephemeral");
+    for dir in path.ancestors().skip(1).take_while(|dir| *dir != store) {
+        std::fs::File::open(dir)
+            .unwrap()
+            .set_modified(SystemTime::now() - age)
+            .unwrap();
+    }
+    path
+}
+
+#[test]
+fn a_session_s_ephemeral_memory_untouched_for_thirty_days_is_collected_whole() {
+    let (_d, root) = plane();
+    let store = root.join(".charter/persona-state/ephemeral");
+    ephemeral(&root, "ended", "devops", "scratch.md", OLD);
+    ephemeral(&root, "ended", "devops", "MEMORY.md", OLD);
+    ephemeral(&root, "ended", "_shared", "note.md", OLD);
+    ephemeral(&root, "recent", "devops", "scratch.md", YOUNG);
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.ephemeral, 1);
+    assert!(!store.join("ended").exists());
+    assert!(store.join("recent/devops/scratch.md").exists());
+}
+
+#[test]
+fn a_live_session_keeps_its_ephemeral_memory_however_old() {
+    let (_d, root) = plane();
+    let kept = ephemeral(&root, "3", "devops", "scratch.md", OLD);
+
+    let swept = sweep(&root, SystemTime::now(), &["3".into()]);
+
+    assert_eq!(swept.ephemeral, 0);
+    assert!(kept.exists());
+}
+
+#[test]
+fn one_fresh_file_keeps_a_session_s_whole_ephemeral_memory() {
+    let (_d, root) = plane();
+    let old = ephemeral(&root, "ended", "devops", "old.md", OLD);
+    ephemeral(&root, "ended", "ops", "old.md", OLD);
+    // Written yesterday, in a folder whose own time says a month: the file's time decides.
+    let fresh = old.with_file_name("fresh.md");
+    aged(&fresh, Duration::from_secs(24 * 60 * 60));
+    std::fs::File::open(fresh.parent().unwrap())
+        .unwrap()
+        .set_modified(SystemTime::now() - OLD)
+        .unwrap();
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.ephemeral, 0);
+    assert!(old.exists());
+    assert!(fresh.exists());
+}
+
+#[test]
+fn an_ephemeral_session_holding_what_charter_never_writes_there_is_kept_whole() {
+    let (_d, root) = plane();
+    // A folder below a persona's: not the shape `ephemeral_dir` makes.
+    let deep = ephemeral(&root, "ended", "devops", "nested/deep.md", OLD);
+    // A file directly in a session's folder.
+    let stray = root.join(".charter/persona-state/ephemeral/stray/loose.md");
+    aged(&stray, OLD);
+    std::fs::File::open(stray.parent().unwrap())
+        .unwrap()
+        .set_modified(SystemTime::now() - OLD)
+        .unwrap();
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.ephemeral, 0);
+    assert!(deep.exists());
+    assert!(stray.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ephemeral_session_holding_a_link_is_kept_and_the_link_not_followed() {
+    let (_d, root) = plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs.md");
+    aged(&theirs, OLD);
+    let ours = ephemeral(&root, "ended", "devops", "scratch.md", OLD);
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        ours.parent().unwrap().parent().unwrap().join("ops"),
+    )
+    .unwrap();
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.ephemeral, 0);
+    assert!(ours.exists());
+    assert!(theirs.exists());
+}
+
+#[test]
+fn opening_a_project_keeps_the_per_session_stores_of_every_chat_it_brings_back() {
+    let (_d, root) = plane();
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(3),
+            resume: Some(crate::harness::SessionId::new("9f1c-uuid").unwrap()),
+            ..Default::default()
+        }],
+        dealt: 3,
+        ..Default::default()
+    };
+    crate::reopen::write(&root, &record).unwrap();
+    let state = root.join(".charter");
+    let kept = [
+        state.join("commit-gate/9f1c-uuid"),
+        state.join("ws-edit-nudge/9f1c-uuid-alpha"),
+        root.join("workspaces/alpha/.charter/sessions/3.saved"),
+    ];
+    for file in &kept {
+        aged(file, OLD);
+    }
+    let scratch = ephemeral(&root, "3", "devops", "scratch.md", OLD);
+    let gone = [
+        state.join("commit-gate/ended-uuid"),
+        state.join("ws-edit-nudge/ended-uuid-alpha"),
+        root.join("workspaces/alpha/.charter/sessions/2.saved"),
+    ];
+    for file in &gone {
+        aged(file, OLD);
+    }
+    ephemeral(&root, "2", "devops", "scratch.md", OLD);
+
+    let swept = on_open(&root, SystemTime::now());
+
+    assert_eq!(
+        (swept.gates, swept.nudges, swept.saved, swept.ephemeral),
+        (1, 1, 1, 1)
+    );
+    for file in kept.iter().chain([&scratch]) {
+        assert!(file.exists(), "{} was removed", file.display());
+    }
+    for file in &gone {
+        assert!(!file.exists(), "{} was kept", file.display());
+    }
+}
+
+#[test]
+fn a_reopen_record_that_cannot_be_read_leaves_every_per_session_store_alone() {
+    let (_d, root) = plane();
+    a_record_saying(&root, "{not json");
+    let state = root.join(".charter");
+    let files = [
+        state.join("commit-gate/3"),
+        state.join("ws-edit-nudge/3-alpha"),
+        root.join("workspaces/alpha/.charter/sessions/3.saved"),
+        ephemeral(&root, "3", "devops", "scratch.md", OLD),
+    ];
+    for file in &files[..3] {
+        aged(file, OLD);
+    }
+
+    let swept = on_open(&root, SystemTime::now());
+
+    assert_eq!(
+        (swept.gates, swept.nudges, swept.saved, swept.ephemeral),
+        (0, 0, 0, 0)
+    );
+    for file in &files {
+        assert!(file.exists(), "{} was removed", file.display());
+    }
 }
