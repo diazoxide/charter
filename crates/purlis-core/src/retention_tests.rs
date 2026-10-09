@@ -907,3 +907,61 @@ fn a_link_swapped_in_while_the_file_is_read_is_kept_and_not_followed() {
     assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
     assert!(elsewhere.is_file());
 }
+
+/// #1027 line 3: the trace scan reads in pieces, and a hand-out cut by any piece's edge is
+/// still found. Every split of every event, at piece sizes down to one byte.
+#[test]
+fn a_hand_out_cut_by_the_edge_of_a_piece_is_still_found() {
+    for event in crate::secrets::cmd::HANDED_OUT {
+        let text =
+            format!("{{\"event\":\"persona-use\"}}\n{{\"event\":\"{event}\",\"names\":[]}}\n");
+        for chunk in 1..=text.len() {
+            assert!(
+                scan_for_hand_outs(text.as_bytes(), chunk),
+                "{event} at pieces of {chunk}"
+            );
+        }
+    }
+    let plain = "{\"event\":\"persona-use\"}\n".repeat(50);
+    for chunk in [1, 2, 7, 64, 4096] {
+        assert!(!scan_for_hand_outs(plain.as_bytes(), chunk), "{chunk}");
+    }
+}
+
+/// #1027 line 3: a character cut by a piece's edge is still text, and every fail-safe of the
+/// whole read holds piece by piece: bytes that are not UTF-8 anywhere, a sequence left open at
+/// the end, and a read that fails all keep the trace.
+#[test]
+fn a_streamed_scan_keeps_every_fail_safe_of_the_whole_read() {
+    let text = "{\"note\":\"caf\u{e9} \u{1f512} \u{4e2d}\"}\n".repeat(20);
+    for chunk in 1..=17 {
+        assert!(!scan_for_hand_outs(text.as_bytes(), chunk), "{chunk}");
+    }
+    let mut bad = text.clone().into_bytes();
+    bad.splice(40..40, [0xff_u8, 0xfe]);
+    let mut open = text.into_bytes();
+    open.extend_from_slice(&[0xf0, 0x9f]);
+    for chunk in [1, 3, 64, 4096] {
+        assert!(scan_for_hand_outs(bad.as_slice(), chunk), "{chunk}");
+        assert!(scan_for_hand_outs(open.as_slice(), chunk), "{chunk}");
+    }
+
+    struct Fails;
+    impl std::io::Read for Fails {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("refused"))
+        }
+    }
+    assert!(scan_for_hand_outs(Fails, 64));
+}
+
+/// #1027 line 3: a trace that grows past the largest read while it is scanned is kept, as
+/// one that was past it when it was opened is.
+#[test]
+fn a_trace_read_past_the_largest_read_is_kept() {
+    use std::io::Read as _;
+    let past = std::io::repeat(b'x').take(MOST_TRACE_BYTES + 1);
+    assert!(scan_for_hand_outs(past, SCAN_CHUNK));
+    let at = std::io::repeat(b'x').take(MOST_TRACE_BYTES);
+    assert!(!scan_for_hand_outs(at, SCAN_CHUNK));
+}

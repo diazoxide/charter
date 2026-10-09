@@ -189,17 +189,75 @@ fn sweep_reports(plane: &Path, now: SystemTime) -> usize {
 /// Whether a trace records a secret handed out: one of [`crate::secrets::cmd::HANDED_OUT`] as
 /// a JSON string anywhere in it. Over-keeps a trace that merely quotes one; a trace that cannot
 /// be read whole as text, or is larger than [`MOST_TRACE_BYTES`], counts as one.
+///
+/// **Read in bounded pieces** ([`SCAN_CHUNK`]), never whole (#1027): a trace near the cap held
+/// 64 MiB in memory for the length of its scan. Each piece is searched together with the tail
+/// of the one before, as long as the longest needle less one byte, so a needle cut by a piece's
+/// edge is still found.
 fn hands_out_a_secret(file: &mut std::fs::File) -> bool {
-    use std::io::Read;
-    let mut text = String::new();
-    let read = file
-        .take(MOST_TRACE_BYTES + 1)
-        .read_to_string(&mut text)
-        .is_ok_and(|n| n as u64 <= MOST_TRACE_BYTES);
-    !read
-        || crate::secrets::cmd::HANDED_OUT
+    // Past the cap by its own size: kept without a byte read. One that grows past it while it
+    // is read is caught by the count below.
+    if file
+        .metadata()
+        .is_ok_and(|found| found.len() > MOST_TRACE_BYTES)
+    {
+        return true;
+    }
+    scan_for_hand_outs(file, SCAN_CHUNK)
+}
+
+/// How much of a trace [`hands_out_a_secret`] holds at once.
+const SCAN_CHUNK: usize = 64 * 1024;
+
+/// [`hands_out_a_secret`] over any reader, `chunk` bytes at a time.
+///
+/// Every fail-safe of the whole read is kept: a read error, a byte sequence that is not UTF-8
+/// (a sequence cut by a piece's edge is completed by the next piece first, and one still open
+/// at the end is not text), and more than [`MOST_TRACE_BYTES`] all answer "kept".
+fn scan_for_hand_outs(mut from: impl std::io::Read, chunk: usize) -> bool {
+    let needles: Vec<Vec<u8>> = crate::secrets::cmd::HANDED_OUT
+        .iter()
+        .map(|event| format!("\"{event}\"").into_bytes())
+        .collect();
+    let overlap = needles.iter().map(Vec::len).max().unwrap_or(1) - 1;
+    let mut piece = vec![0_u8; chunk.max(1)];
+    // The tail of what was searched last, carried so a needle across the edge is whole.
+    let mut window: Vec<u8> = Vec::with_capacity(overlap + piece.len());
+    // A UTF-8 sequence the last piece ended inside, at most three bytes.
+    let mut open: Vec<u8> = Vec::new();
+    let mut total: u64 = 0;
+    loop {
+        let n = match from.read(&mut piece) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return true,
+        };
+        total += n as u64;
+        if total > MOST_TRACE_BYTES {
+            return true;
+        }
+        let read = &piece[..n];
+        open.extend_from_slice(read);
+        match std::str::from_utf8(&open) {
+            Ok(_) => open.clear(),
+            Err(e) if e.error_len().is_none() => {
+                open.drain(..e.valid_up_to());
+            }
+            Err(_) => return true,
+        }
+        window.extend_from_slice(read);
+        if needles
             .iter()
-            .any(|event| text.contains(&format!("\"{event}\"")))
+            .any(|needle| memchr::memmem::find(&window, needle).is_some())
+        {
+            return true;
+        }
+        let keep = window.len().min(overlap);
+        window.drain(..window.len() - keep);
+    }
+    // A sequence still open at the end is not text.
+    !open.is_empty()
 }
 
 /// A report draft the Python charter wrote: `<id>.json`, the id 16 lowercase hex digits
