@@ -6,7 +6,7 @@
 
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use purlis_core::hookwire::{CHAT_ENV, Conversation, Listener, Report, SOCKET_ENV, TOKEN_ENV};
 use purlis_core::state::{Detail, Event};
@@ -1097,10 +1097,34 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
     // Held open, never written to, never closed until the child is gone.
     let held = child.stdin.take().expect("stdin");
 
-    let report = rx.recv_timeout(Duration::from_secs(10));
+    // **What is measured is that it leaves while its stdin is still open** (#1287): a hook
+    // that waited for the payload to end could not exit at all. No wall-clock margin on how
+    // long a loaded machine takes to start it; the bound only keeps a hang from hanging the
+    // suite, and is far past the hook's own deadline (two seconds) and the harness's.
+    let hang = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("charter is asked") {
+            break Some(status);
+        }
+        if Instant::now() >= hang {
+            let _ = child.kill();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let exited_with_stdin_open = status.is_some();
     drop(held);
-    let code = child.wait().expect("charter finishes").code();
+    let code = match status {
+        Some(status) => status.code(),
+        None => child.wait().expect("charter finishes").code(),
+    };
+    // It sent its line before it exited: a bounded wait for the app to have heard it.
+    let report = rx.recv_timeout(Duration::from_secs(30));
 
+    assert!(
+        exited_with_stdin_open,
+        "the hook waited on a payload that never ends"
+    );
     assert_eq!(
         report.map(|report| report.event),
         Ok(Event::Stop),
