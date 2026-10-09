@@ -27,6 +27,16 @@
 //! ([`crate::secrets::cmd::HANDED_OUT`]) are the only record of which credential went where
 //! until AU-5 writes them into the audit chain; once it does, they follow the 30-day rule too.
 //!
+//! **The rest of the per-session stores** (#1004) are collected by the same month and the same
+//! live rule, a returning chat's number or conversation keeping its own: the commit gate's
+//! cooldowns (`commit-gate/<sid>`), the first-edit-in-a-clone markers
+//! (`ws-edit-nudge/<sid>-<ws>`), the saved-record lines a workspace's chat left for a `Stop`
+//! that never ran (`workspaces/<ws>/<state>/sessions/<chat>.saved`; the plane root's are in
+//! `sessions/`), and a session's ephemeral memory (`persona-state/ephemeral/<session>/`),
+//! removed whole only once every file and folder in it is a month old. Losing a cooldown or a
+//! nudge marker costs a returning session one more question or one more reminder, never its
+//! work. `chat-turns/` needs no rule: nothing writes it any more, and nothing reads it.
+//!
 //! **Only what this names, and only this plane's.** Plain files directly in those
 //! directories, whose names are ones charter writes there. The directories are
 //! `<plane>/.charter/…` — never `$CHARTER_HOME`, which can be one directory several planes
@@ -61,6 +71,15 @@ pub struct Swept {
     pub dispatches: usize,
     /// What a chat's harness said its session cost ([`crate::usage::spend_dir`], #1457).
     pub spend: usize,
+    /// The commit gate's per-session cooldowns, `commit-gate/<sid>` (#1004).
+    pub gates: usize,
+    /// The first-edit-in-a-clone markers, `ws-edit-nudge/<sid>-<ws>` (#1004).
+    pub nudges: usize,
+    /// Saved-record lines no `Stop` passed on, `workspaces/<ws>/<state>/sessions/<chat>.saved`
+    /// (#1004). The plane root's own are in `sessions/` and counted there.
+    pub saved: usize,
+    /// Sessions' ephemeral memory, one `persona-state/ephemeral/<session>/` each (#1004).
+    pub ephemeral: usize,
 }
 
 /// Remove the per-session files of `plane` older than [`KEEP_FOR`] at `now`, except those of
@@ -127,7 +146,146 @@ pub fn sweep_keeping(
             },
             |_, written| Some(written),
         ),
+        // A cooldown is one session's, named by its id: kept while that session comes back.
+        gates: collect(
+            plane,
+            &[crate::names::state_name(plane), "commit-gate"],
+            now,
+            |name| a_session_key(name) && !live.iter().any(|sid| sid == name),
+            |_, written| Some(written),
+        ),
+        // `<sid>-<ws>`: kept for any live session the name can begin with.
+        nudges: collect(
+            plane,
+            &[crate::names::state_name(plane), "ws-edit-nudge"],
+            now,
+            |name| {
+                a_session_key(name)
+                    && !live.iter().any(|sid| {
+                        name.strip_prefix(sid.as_str())
+                            .is_some_and(|rest| rest.starts_with('-'))
+                    })
+            },
+            |_, written| Some(written),
+        ),
+        saved: sweep_saved(plane, now, live),
+        ephemeral: sweep_ephemeral(plane, now, live),
     }
+}
+
+/// A name a per-session store's writer makes from a session id: non-empty, every character one
+/// [`crate::hookstate::safe`] keeps, and neither a dotfile nor `.`/`..`.
+fn a_session_key(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && crate::hookstate::safe(name) == name
+}
+
+/// The month-old saved-record lines in each workspace's own `sessions/`
+/// ([`crate::sessionrecord::relay::marker`]), but a live chat's. A line is passed on only
+/// within minutes of being left, so an aged one is never sent; the live rule is kept anyway,
+/// so the number a returning chat keeps keeps its files, as it does in the plane's `sessions/`.
+fn sweep_saved(plane: &Path, now: SystemTime, live: &[String]) -> usize {
+    let Some(workspaces) = held::Dir::open(plane, &["workspaces"]) else {
+        return 0;
+    };
+    workspaces
+        .names()
+        .into_iter()
+        .filter(|ws| crate::contain::workspace_name_ok(ws))
+        .map(|ws| {
+            let state = crate::names::state_name(&plane.join("workspaces").join(&ws));
+            collect(
+                plane,
+                &["workspaces", ws.as_str(), state, "sessions"],
+                now,
+                |name| {
+                    name.strip_suffix(".saved").is_some_and(|chat| {
+                        !chat.is_empty() && chat.bytes().all(|b| b.is_ascii_digit())
+                    }) && !of_a_live_session(name, live)
+                },
+                |_, written| Some(written),
+            )
+        })
+        .sum()
+}
+
+/// The ephemeral memory of every session that is not live and whose every file and folder was
+/// last written a month or more ago, removed whole; how many sessions went.
+///
+/// **Only the shape charter writes** ([`crate::recall::ephemeral_dir`]):
+/// `<session>/<persona>/<file>`. A session folder holding anything else — a link, a folder
+/// deeper down, a name charter never makes, something that cannot be read — is kept whole.
+/// A file is removed only while it is the one judged, and a folder only once it is empty, so
+/// a write landing during the sweep keeps what it wrote.
+fn sweep_ephemeral(plane: &Path, now: SystemTime, live: &[String]) -> usize {
+    let Some(store) = held::Dir::open(
+        plane,
+        &[
+            crate::names::state_name(plane),
+            "persona-state",
+            "ephemeral",
+        ],
+    ) else {
+        return 0;
+    };
+    let mut gone = 0;
+    for session in store.names() {
+        if !a_session_key(&session) || live.contains(&session) {
+            continue;
+        }
+        let Some(dir) = store.dir(&session) else {
+            continue;
+        };
+        let Some(held) = ephemeral_of(&dir, now) else {
+            continue;
+        };
+        let mut whole = true;
+        for (_, persona, files) in &held {
+            for (name, found) in files {
+                whole &= unchanged(persona, name, found) && persona.remove(name);
+            }
+        }
+        for (name, _, _) in &held {
+            whole &= dir.remove_dir(name);
+        }
+        if whole && store.remove_dir(&session) {
+            gone += 1;
+        }
+    }
+    gone
+}
+
+/// One persona's ephemeral folder in a session: its name, the folder held, and each file in it
+/// with what it was found as.
+type Held = (String, held::Dir, Vec<(String, std::fs::Metadata)>);
+
+/// A session's ephemeral folders and their files, when every one is charter's shape and
+/// month-old; `None` when anything says to keep it.
+fn ephemeral_of(session: &held::Dir, now: SystemTime) -> Option<Vec<Held>> {
+    let month_old = |found: &std::fs::Metadata| found.modified().is_ok_and(|at| aged(at, now));
+    if !session.metadata().is_some_and(|found| month_old(&found)) {
+        return None;
+    }
+    let mut held = Vec::new();
+    for persona in session.names() {
+        if !a_session_key(&persona) {
+            return None;
+        }
+        let dir = session.dir(&persona)?;
+        if !dir.metadata().is_some_and(|found| month_old(&found)) {
+            return None;
+        }
+        let mut files = Vec::new();
+        for name in dir.names() {
+            let found = dir
+                .file(&name)?
+                .metadata()
+                .ok()
+                .filter(|found| found.is_file() && month_old(found))?;
+            files.push((name, found));
+        }
+        held.push((persona, dir, files));
+    }
+    Some(held)
 }
 
 /// [`sweep`] as the app runs it when it opens a plane: `live` is every chat the plane's
@@ -481,6 +639,29 @@ mod held {
         pub(super) fn remove(&self, name: &str) -> bool {
             rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::empty()).is_ok()
         }
+
+        /// The directory `name` in this one, held the same way: `None` when it is missing, not
+        /// a directory, or a link.
+        pub(super) fn dir(&self, name: &str) -> Option<Self> {
+            use rustix::fs::{Mode, OFlags};
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+            let fd = rustix::fs::openat(&self.fd, name, flags, Mode::empty()).ok()?;
+            Some(Self {
+                fd,
+                path: self.path.join(name),
+            })
+        }
+
+        /// What this directory is now, read through its descriptor.
+        pub(super) fn metadata(&self) -> Option<std::fs::Metadata> {
+            let fd = self.fd.try_clone().ok()?;
+            std::fs::File::from(fd).metadata().ok()
+        }
+
+        /// Remove the empty directory `name` from this one; whether it went.
+        pub(super) fn remove_dir(&self, name: &str) -> bool {
+            rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::REMOVEDIR).is_ok()
+        }
     }
 
     /// Elsewhere, the path, checked for a link on the way from the plane before each act.
@@ -515,6 +696,26 @@ mod held {
             let path = self.path.join(name);
             crate::contain::no_link_on_the_way(&self.plane, &path).is_ok()
                 && std::fs::remove_file(path).is_ok()
+        }
+
+        pub(super) fn dir(&self, name: &str) -> Option<Self> {
+            let path = self.path.join(name);
+            crate::contain::no_link_on_the_way(&self.plane, &path).ok()?;
+            path.is_dir().then(|| Self {
+                plane: self.plane.clone(),
+                path,
+            })
+        }
+
+        pub(super) fn metadata(&self) -> Option<std::fs::Metadata> {
+            crate::contain::no_link_on_the_way(&self.plane, &self.path).ok()?;
+            std::fs::symlink_metadata(&self.path).ok()
+        }
+
+        pub(super) fn remove_dir(&self, name: &str) -> bool {
+            let path = self.path.join(name);
+            crate::contain::no_link_on_the_way(&self.plane, &path).is_ok()
+                && std::fs::remove_dir(path).is_ok()
         }
     }
 
