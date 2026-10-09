@@ -668,6 +668,9 @@ impl Workspace {
         now: chrono::DateTime<chrono::Utc>,
         author: &str,
     ) -> io::Result<()> {
+        // The look and the write under one lock: a clone recording its first repo in between
+        // would otherwise be written over by a manifest that does not name it.
+        let _held = self.manifest_lock();
         if self.manifest().1 != manifest::Ownership::Absent {
             return Ok(());
         }
@@ -1087,6 +1090,44 @@ mod unknown_field_tests {
         .unwrap();
         assert_eq!(written["name"], "renamed");
         assert_eq!(written["a-future-key"]["kept"], true, "{written}");
+    }
+}
+
+/// #1292: the scaffold's look-then-write is one step under the manifest's lock.
+#[cfg(test)]
+mod manifest_lock_tests {
+    use super::*;
+
+    #[test]
+    fn a_scaffold_waiting_on_the_lock_never_writes_over_a_manifest_made_meanwhile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/demo")).unwrap();
+        let ws = Plane::open(&root).workspace("demo").unwrap();
+        let held = ws.manifest_lock();
+        let scaffolding = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                Plane::open(&root)
+                    .workspace("demo")
+                    .unwrap()
+                    .scaffold_manifest(chrono::Utc::now(), "t")
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !root.join("workspaces/demo/workspace.json").exists(),
+            "the scaffold wrote while another writer held the lock"
+        );
+        // A clone records its repo while it holds the lock.
+        ws.write_manifest(&serde_json::json!({"name": "demo", "repos": [{"name": "widget"}]}))
+            .unwrap();
+        drop(held);
+        scaffolding.join().unwrap().unwrap();
+        assert_eq!(
+            ws.manifest().0.unwrap()["repos"],
+            serde_json::json!([{"name": "widget"}])
+        );
     }
 }
 

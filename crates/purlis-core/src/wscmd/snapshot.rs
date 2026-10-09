@@ -86,17 +86,6 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
         return 2;
     }
 
-    // The manifest on disk is the starting document, so a `description` and any key an
-    // operator added keep their place: Python assigns into the dict it read, and a key that
-    // is already there keeps the position it had.
-    let (doc, _owner) = workspace.manifest();
-    let mut doc = match doc {
-        Some(Value::Object(map)) => Value::Object(map),
-        // Whatever else is in the file — a list, a number, nothing at all — is not a
-        // manifest, and `snapshot` is the DELIBERATE writer: an operator who typed this is
-        // asking for the file to be rewritten.
-        _ => Value::Object(serde_json::Map::new()),
-    };
     let rows: Vec<Value> = found
         .repos
         .iter()
@@ -110,6 +99,22 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
             serde_json::json!({"name": repo.name, "branch": branch})
         })
         .collect();
+    // Asked of git before the lock, so nothing else waits on it.
+    let author = wscmd::git_user(root);
+
+    // Read and written under one lock (#1292): a clone recording its repo in between would
+    // otherwise be written over. The manifest on disk is the starting document, so a
+    // `description` and any key an operator added keep their place: Python assigns into the
+    // dict it read, and a key that is already there keeps the position it had.
+    let held = workspace.manifest_lock();
+    let (doc, _owner) = workspace.manifest();
+    let mut doc = match doc {
+        Some(Value::Object(map)) => Value::Object(map),
+        // Whatever else is in the file — a list, a number, nothing at all — is not a
+        // manifest, and `snapshot` is the DELIBERATE writer: an operator who typed this is
+        // asking for the file to be rewritten.
+        _ => Value::Object(serde_json::Map::new()),
+    };
     let map = doc.as_object_mut().expect("just built as an object");
     map.insert("name".into(), Value::String(ws.to_string()));
     if let Some(text) = description {
@@ -124,9 +129,11 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
         "updated_at".into(),
         Value::String(now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()),
     );
-    map.insert("updated_by".into(), Value::String(wscmd::git_user(root)));
+    map.insert("updated_by".into(), Value::String(author));
 
-    if let Err(why) = workspace.write_manifest(&doc) {
+    let written = workspace.write_manifest(&doc);
+    drop(held);
+    if let Err(why) = written {
         say(Say::Fail(format!(
             "could not write workspaces/{ws}/workspace.json ({why}) — nothing was recorded."
         )));
