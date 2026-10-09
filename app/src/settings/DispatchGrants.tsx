@@ -192,6 +192,11 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  *   the one that left, its grants wait for **Give back**, one press for the name, and what was
  *   set aside is listed with **Remove**.
  *
+ * - **Add a grant** (#1465, V100-24) makes a standing grant with no dispatch waiting: the asking
+ *   persona, the one it may dispatch to, for me or for the project, and in which workspace
+ *   (V100-27). It is what a chat nobody is at needs, since no Notice is raised for one. The
+ *   core holds it to every rule an Allow is held to and says why where it refuses.
+ *
  * Every press asks first, in a line under its row, and says what it will and will not do:
  * taking a grant back stops new dispatches only, and a task already running is left as it is.
  * Every write goes through the core, which reads its record again and audits before it writes;
@@ -222,6 +227,14 @@ export function DispatchGrantsList({
   const [done, setDone] = useState<string>();
   const [asking, setAsking] = useState<Ask>();
   const [busy, setBusy] = useState(false);
+  /** What the form that adds a grant reads: the two personas, the level and the workspace
+   *  (none: any). Persona names are the core's list; nothing is sent until it is confirmed. */
+  const [adding, setAdding] = useState<{
+    from: string;
+    to: string;
+    level: "you" | "project";
+    where: string;
+  }>({ from: "", to: "", level: "you", where: "" });
   const whole = useRef<HTMLDivElement>(null);
   const yes = useRef<HTMLButtonElement>(null);
   /** Where the focus goes once a question is put away: the button that asked (Cancel), or
@@ -951,48 +964,183 @@ export function DispatchGrantsList({
     </div>
   );
 
+  /** The confirmation of the question asked: what it will do, and the two buttons. */
+  const confirmation = (ask: Ask) => (
+    <div
+      className="dispatch-confirm"
+      role="group"
+      aria-label="Confirm"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          cancel();
+        }
+      }}
+    >
+      <p id={`${ids.id}-confirm`}>{ask.says}</p>
+      <button
+        type="button"
+        className="ui-setting-reset"
+        ref={yes}
+        tabIndex={0}
+        disabled={busy}
+        aria-describedby={`${ids.id}-confirm`}
+        onClick={() => void confirm()}
+      >
+        {ask.yes}
+      </button>
+      <button
+        type="button"
+        className="ui-setting-reset"
+        tabIndex={0}
+        disabled={busy}
+        onClick={cancel}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+
   /** The question of `line`, where it is the one asked: a row of its own, the table's whole
    *  width, under the row it is about. It never widens a column or re-flows the rows above. */
   const question = (line: string) =>
     asking?.line === line && (
       <tr className="dispatch-confirm-row">
-        <td colSpan={4}>
-          <div
-            className="dispatch-confirm"
-            role="group"
-            aria-label="Confirm"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.stopPropagation();
-                cancel();
-              }
-            }}
-          >
-            <p id={`${ids.id}-confirm`}>{asking.says}</p>
-            <button
-              type="button"
-              className="ui-setting-reset"
-              ref={yes}
-              tabIndex={0}
-              disabled={busy}
-              aria-describedby={`${ids.id}-confirm`}
-              onClick={() => void confirm()}
-            >
-              {asking.yes}
-            </button>
-            <button
-              type="button"
-              className="ui-setting-reset"
-              tabIndex={0}
-              disabled={busy}
-              onClick={cancel}
-            >
-              Cancel
-            </button>
-          </div>
-        </td>
+        <td colSpan={4}>{confirmation(asking)}</td>
       </tr>
     );
+
+  /** The form's word for "any workspace": no workspace's name can be it. */
+  const ANYWHERE = "\u001fany";
+  /** The line the form that adds a grant asks its question on. */
+  const ADD = "add";
+  /** **Add a grant** (#1465): the form's choices, each defaulting to the first that fits. */
+  const addForm = () => {
+    const names = personas ?? [];
+    if (names.length < 2) return null;
+    const from = names.includes(adding.from) ? adding.from : (names[0] ?? "");
+    const targets = names.filter((name) => name !== from);
+    const to = targets.includes(adding.to) ? adding.to : (targets[0] ?? "");
+    // Narrower is the default (ruling 2): where the project has workspaces, nothing is chosen
+    // until the person picks one, or picks any workspace on purpose.
+    const where =
+      standing.workspaces.length === 0
+        ? ANYWHERE
+        : adding.where === ANYWHERE || standing.workspaces.includes(adding.where)
+          ? adding.where
+          : "";
+    const inAny = where === ANYWHERE;
+    const level = adding.level;
+    const set = (over: Partial<typeof adding>) => {
+      setDone(undefined);
+      setAdding({ from, to, level, where, ...over });
+    };
+    const within = inAny ? "in any workspace" : `for work in ${where}`;
+    const offer: Offer = {
+      yes: "Add grant",
+      about: `${from} may dispatch to ${to}, ${level === "you" ? "for me on this machine" : "for everyone in this project"}, ${inAny ? "in any workspace" : where === "" ? "choose where it holds" : `in ${where}`}`,
+      says:
+        level === "you"
+          ? `Let ${from} chats dispatch to ${to} ${within}, for you on this machine? They will not ask you first, and a chat nobody is at may use it too. ${to} chats work with their own access.`
+          : `Let ${from} chats dispatch to ${to} ${within}, for everyone in this project? This changes ${file}, the project's committed file: your teammates get it when they pull it, and each accepts it on their own machine. Here it counts at once, a chat nobody is at included. ${to} chats work with their own access.`,
+      done: `Allowed ${level === "you" ? "for you on this machine" : "for everyone in this project"}, ${inAny ? "in any workspace" : where === "" ? "choose where it holds" : `in ${where}`}: ${from} chats dispatch to ${to} without asking you.${yetToCount(from, to)}`,
+      run: async () =>
+        ran(await commands.addDispatchGrant(plane, from, to, level, inAny ? null : where)),
+    };
+    const key = `${ADD}\u001e${offer.yes}`;
+    return (
+      <div className="dispatch-add" role="group" aria-labelledby={`${ids.id}-add`}>
+        <p id={`${ids.id}-add`}>
+          <strong>Add a grant</strong>{" "}
+          <span className="granted-note">
+            A chat nobody is at dispatches only under a grant that already stands: make one here.
+          </span>
+        </p>
+        <label>
+          Chats running as{" "}
+          <select
+            aria-label="Chats running as"
+            value={from}
+            disabled={busy}
+            onChange={(event) => set({ from: event.target.value })}
+          >
+            {names.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>{" "}
+        <label>
+          may dispatch to{" "}
+          <select
+            aria-label="May dispatch to"
+            value={to}
+            disabled={busy}
+            onChange={(event) => set({ to: event.target.value })}
+          >
+            {targets.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>{" "}
+        <label>
+          for{" "}
+          <select
+            aria-label="For whom"
+            value={level}
+            disabled={busy}
+            onChange={(event) =>
+              set({ level: event.target.value === "project" ? "project" : "you" })
+            }
+          >
+            <option value="you">me on this machine</option>
+            <option value="project">everyone in this project</option>
+          </select>
+        </label>{" "}
+        {standing.workspaces.length > 0 && (
+          <label>
+            in{" "}
+            <select
+              aria-label="In which workspace"
+              value={where}
+              disabled={busy}
+              onChange={(event) => set({ where: event.target.value })}
+            >
+              <option value="" disabled>
+                choose where it holds
+              </option>
+              <option value={ANYWHERE}>any workspace</option>
+              {standing.workspaces.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}{" "}
+        <button
+          type="button"
+          className="ui-setting-reset"
+          tabIndex={0}
+          disabled={busy || where === ""}
+          data-ask={key}
+          data-line={ADD}
+          aria-label={named(offer)}
+          aria-expanded={asking?.key === key}
+          onClick={() => {
+            setDone(undefined);
+            setAsking({ ...offer, key, line: ADD });
+          }}
+        >
+          {offer.yes}
+        </button>
+        {asking?.line === ADD && confirmation(asking)}
+      </div>
+    );
+  };
 
   /** One target's rows: its name once, down the side, and a row for each line about it. */
   const rows = (name: ReactNode, lines: readonly Line[]) => {
@@ -1182,6 +1330,7 @@ export function DispatchGrantsList({
               )}
             </table>
           )}
+          {addForm()}
           {locks && held.locked_pairs.length > 0 && (
             <>
               <ul className="granted-list" aria-label="Locked by policy">

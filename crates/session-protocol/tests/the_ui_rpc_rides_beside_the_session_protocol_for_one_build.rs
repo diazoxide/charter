@@ -184,7 +184,7 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     // three reads of what chats said or were sent (#1494, #1495, #1496), the person's answer
     // to a task (#1496), the dispatch commands (spec #1483) and the person's "Got it" on the
     // presets Notice (#1385) and the hosts Notice (#1550): nothing else is kept from a link by it.
-    assert_eq!(ui::STANDING_DISPATCH.len(), 25);
+    assert_eq!(ui::STANDING_DISPATCH.len(), 26);
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
     // And the person's acts named beside them: a task's merge and discard (#1511), the answer
     // to a chat's sandbox block and to several tasks' (#1538, #1508), and the Allow of a
@@ -200,7 +200,7 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_hosts"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 2 + 2 + 3 + 1 + 2);
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 26 + 2 + 2 + 3 + 1 + 2);
 }
 
 #[tokio::test]
@@ -211,7 +211,7 @@ async fn no_standing_dispatch_grant_is_made_changed_or_taken_back_on_any_link() 
     // person answers from, are the window's over
     // Tauri's IPC alone, even when a host is built with every command. Named here one by one,
     // so taking one off the list fails this test and not only a generated file's diff.
-    const STANDING: [&str; 25] = [
+    const STANDING: [&str; 26] = [
         "dispatch_grants_needed",
         "dispatch_standing",
         "dispatch_grants",
@@ -221,6 +221,7 @@ async fn no_standing_dispatch_grant_is_made_changed_or_taken_back_on_any_link() 
         "never_dispatch",
         "lift_dispatch_never",
         "allow_dispatch_to_any",
+        "add_dispatch_grant",
         "revoke_dispatch_to_any",
         "revoke_dispatch_grant",
         "accept_project_dispatch",

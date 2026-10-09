@@ -1092,17 +1092,20 @@ describe("with the keyboard, and to a screen reader", () => {
     render(<Table />);
     await table();
     const user = userEvent.setup();
+    // Every button, and the choices of the form that adds a grant (#1465), in the order drawn.
+    const controls = [...document.querySelectorAll<HTMLElement>("button, select")];
     const buttons = screen.getAllByRole("button");
 
     const reached: (string | null)[] = [];
-    for (let at = 0; at < buttons.length; at += 1) {
+    for (let at = 0; at < controls.length; at += 1) {
       await user.tab();
       reached.push(document.activeElement?.getAttribute("aria-label") ?? null);
     }
 
-    expect(reached).toEqual(buttons.map((one) => one.getAttribute("aria-label")));
+    expect(reached).toEqual(controls.map((one) => one.getAttribute("aria-label")));
     expect(new Set(reached).size).toBe(reached.length);
-    for (const name of reached) expect(name).toMatch(/steward|qa|devops/);
+    for (const button of buttons)
+      expect(button.getAttribute("aria-label")).toMatch(/steward|qa|devops/);
   });
 });
 
@@ -1509,5 +1512,137 @@ describe("Settings' Granted page", () => {
     // The Settings tab of this project is taken to its Dispatch page.
     expect(screen.getByRole("status")).toHaveTextContent("project.dispatch");
     expect(fake.asked).toEqual([]);
+  });
+});
+
+describe("adding a grant (#1465)", () => {
+  it("makes a grant for me in any workspace, asking first, and sends the choice and nothing else", async () => {
+    const fake = core({});
+    fake.on("add_dispatch_grant", () => {
+      fake.held.grants = [MINE];
+    });
+    render(<Table />);
+    await table();
+    const form = screen.getByRole("group", { name: /Add a grant/ });
+    expect(form).toHaveTextContent(
+      "A chat nobody is at dispatches only under a grant that already stands: make one here.",
+    );
+    const user = userEvent.setup();
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "Chats running as" }),
+      "steward",
+    );
+    // The persona itself is not offered as a target: its own dispatch needs no grant.
+    const to = within(form).getByRole("combobox", { name: "May dispatch to" });
+    expect(within(to).queryByRole("option", { name: "steward" })).toBeNull();
+    await user.selectOptions(to, "devops");
+
+    const said = await press(
+      "Add grant: steward may dispatch to devops, for me on this machine, in any workspace",
+      "Add grant",
+    );
+
+    expect(said).toContain(
+      "Let steward chats dispatch to devops in any workspace, for you on this machine? They will not ask you first, and a chat nobody is at may use it too.",
+    );
+    await waitFor(() =>
+      expect(fake.sent("add_dispatch_grant")).toEqual([
+        { plane: PLANE, asking: "steward", target: "devops", level: "you", workspace: null },
+      ]),
+    );
+    expect(
+      await screen.findByText(
+        "Allowed for you on this machine, in any workspace: steward chats dispatch to devops without asking you.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("makes one for everyone in one workspace, saying it changes the committed file", async () => {
+    const fake = core({ standing: { workspaces: ["runners", "web"] } });
+    fake.on("add_dispatch_grant", () => {});
+    render(<Table />);
+    await table();
+    const form = screen.getByRole("group", { name: /Add a grant/ });
+    const user = userEvent.setup();
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "Chats running as" }),
+      "qa",
+    );
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "May dispatch to" }),
+      "devops",
+    );
+    await user.selectOptions(within(form).getByRole("combobox", { name: "For whom" }), "project");
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "In which workspace" }),
+      "runners",
+    );
+
+    const said = await press(
+      "Add grant: qa may dispatch to devops, for everyone in this project, in runners",
+      "Add grant",
+    );
+
+    expect(said).toContain("for work in runners, for everyone in this project?");
+    expect(said).toContain("This changes purlis.toml, the project's committed file");
+    await waitFor(() =>
+      expect(fake.sent("add_dispatch_grant")).toEqual([
+        { plane: PLANE, asking: "qa", target: "devops", level: "project", workspace: "runners" },
+      ]),
+    );
+  });
+
+  it("starts with no workspace chosen where the project has some: any workspace is picked on purpose", async () => {
+    // Ruling 2: narrower is the default. Nothing is offered to press until a choice is made.
+    const fake = core({ standing: { workspaces: ["runners"] } });
+    fake.on("add_dispatch_grant", () => {});
+    render(<Table />);
+    await table();
+    const form = screen.getByRole("group", { name: /Add a grant/ });
+    const where = within(form).getByRole("combobox", { name: "In which workspace" });
+    expect(where).toHaveValue("");
+    const add = within(form).getByRole("button", { name: /^Add grant: / });
+    expect(add).toBeDisabled();
+
+    const user = userEvent.setup();
+    await user.selectOptions(where, "any workspace");
+    expect(add).toBeEnabled();
+    const said = await press(/^Add grant: .* in any workspace$/, "Add grant");
+    expect(said).toContain("in any workspace, for you on this machine?");
+    await waitFor(() =>
+      expect(fake.sent("add_dispatch_grant")).toEqual([
+        { plane: PLANE, asking: "devops", target: "qa", level: "you", workspace: null },
+      ]),
+    );
+  });
+
+  it("says the core's refusal and sends nothing on Cancel", async () => {
+    const fake = core({});
+    fake.on("add_dispatch_grant", () => {
+      throw "You said never to steward chats dispatching to devops on this machine, so nothing was granted. Lift it in the table first.";
+    });
+    render(<Table />);
+    await table();
+    const user = userEvent.setup();
+    const name = /^Add grant: /;
+    await user.click(await screen.findByRole("button", { name }));
+    await user.click(
+      within(screen.getByRole("group", { name: "Confirm" })).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    expect(fake.sent("add_dispatch_grant")).toEqual([]);
+
+    await press(name, "Add grant");
+    expect(
+      await screen.findByText(/so nothing was granted\. Lift it in the table first\./),
+    ).toBeInTheDocument();
+  });
+
+  it("is not offered where the project has fewer than two personas", async () => {
+    core({ standing: { personas: ["steward"] } });
+    render(<Table />);
+    await screen.findByText(/No persona's chats may dispatch|Who may dispatch to whom/);
+    expect(screen.queryByRole("group", { name: /Add a grant/ })).toBeNull();
   });
 });

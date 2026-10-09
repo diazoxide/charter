@@ -282,6 +282,7 @@ mod tests {
                 crate::dispatchgrants::set_dispatch_workspace,
                 crate::dispatchgrants::accept_project_dispatch_in,
                 crate::dispatchgrants::give_back_dispatch,
+                crate::dispatchgrants::add_dispatch_grant,
                 crate::dispatchgrants::keep_dispatch_blocked,
             ])
             .build(tauri_context!(test = true))
@@ -327,6 +328,14 @@ mod tests {
             (
                 "give_back_dispatch",
                 json!({ "plane": plane, "name": "devops" }),
+            ),
+            // #1465: a grant made in Settings, for everyone, settles too.
+            (
+                "add_dispatch_grant",
+                json!({
+                    "plane": plane, "asking": "steward", "target": "devops",
+                    "level": "project", "workspace": null,
+                }),
             ),
         ];
         // The list the grant store keeps of them is the one asked here.

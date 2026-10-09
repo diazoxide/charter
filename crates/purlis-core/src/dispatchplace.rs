@@ -157,9 +157,9 @@ impl Refused {
                     "this chat runs with its harness's permission prompts off, so nobody is \
                      here to answer for it, and such a chat starts a chat in another workspace \
                      ('{workspace}') only under a grant that already stands: {pair}. Only a \
-                     person makes one, for themselves on this machine or for this project; {} \
-                     lists the grants that stand. Until then, leave out `--in` and the new \
-                     chat works in this chat's folder.",
+                     person makes one, under {}: for themselves on this machine or for this \
+                     project, in that workspace or in any. Until then, leave out `--in` and \
+                     the new chat works in this chat's folder.",
                     crate::dispatchunattended::SETTINGS
                 )
             }

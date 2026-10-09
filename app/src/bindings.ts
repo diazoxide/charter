@@ -510,6 +510,14 @@ export const commands = {
 	 */
 	allowDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("allow_dispatch_to_any", { plane, asking, level })),
 	/**
+	 *  **Add** on Settings' table (#1465): a standing grant for chats running as `asking` to
+	 *  dispatch to `target`, at `level` (`you` or `project`), in `workspace` alone or, null, in any
+	 *  workspace. Checked, audited as the person's and kept as an Allow is ([`add_grant`]); a
+	 *  project grant writes the committed file. The window's alone. Answers the table as it is
+	 *  now.
+	 */
+	addDispatchGrant: (plane: PlaneId, asking: string, target: string, level: GrantLevel, workspace: string | null) => typedError<DispatchGrants, string>(__TAURI_INVOKE("add_dispatch_grant", { plane, asking, target, level, workspace })),
+	/**
 	 *  **Revoke** on Settings' list of any-persona grants: audited, then taken out. Answers what
 	 *  stands now.
 	 */

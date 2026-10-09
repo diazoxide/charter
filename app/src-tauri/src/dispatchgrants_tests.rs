@@ -2314,3 +2314,8 @@ mod wants_within;
 
 #[path = "dispatchgrants_arrival_tests.rs"]
 mod arrival;
+
+// ---- a standing grant made in Settings (#1465) ---------------------------------------------------
+
+#[path = "dispatchgrants_added_tests.rs"]
+mod added;

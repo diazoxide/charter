@@ -174,10 +174,9 @@ fn the_refusal_names_the_missing_pair_and_where_a_person_grants_it() {
         "this chat runs with its harness's permission prompts off, so nobody is here to answer \
          for a dispatch, and no grant lets steward chats dispatch to devops: none for the \
          person on this machine, and none for this project. A grant made for one chat does not \
-         count here. Only a person makes one: they dispatch to devops once from a steward chat \
-         they are at and choose Allow for me on this machine or Allow for everyone in this \
-         project. Settings › Project › Dispatch lists the grants that stand. Until then, do \
-         this work without devops, or say in what you leave behind that it is waiting."
+         count here. Only a person makes one: they grant it under Settings › Project › \
+         Dispatch, for themselves on this machine or for everyone in this project. Until then, \
+         do this work without devops, or say in what you leave behind that it is waiting."
     );
 }
 

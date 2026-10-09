@@ -8240,6 +8240,21 @@ h2.sidebar-title .node-icon {
   color: var(--text-primary);
 }
 
+/* Add a grant (#1465): the choices wrap on a narrow pane, and the question is under them. */
+.dispatch-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.dispatch-add > p,
+.dispatch-add > .dispatch-confirm {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .dispatch-grants:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
