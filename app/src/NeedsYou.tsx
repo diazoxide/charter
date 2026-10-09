@@ -224,6 +224,8 @@ type Opened = {
   items: readonly Needing[];
   asks: readonly PermissionAsk[];
   away: readonly AwayItem[];
+  /** The chats the person ignored from the list since it opened: they leave, never dimmed. */
+  ignored: readonly string[];
 };
 
 const itemKey = (item: Needing) => `${item.plane}#${item.session}`;
@@ -383,7 +385,7 @@ export function NeedsYouMenu({
    */
   const [frozen, setFrozen] = useState<Opened | null>(null);
   const show = (up: boolean) => {
-    setFrozen(up ? { items, asks, away } : null);
+    setFrozen(up ? { items, asks, away, ignored: [] } : null);
     onLook?.();
     setOpen(up);
   };
@@ -395,7 +397,7 @@ export function NeedsYouMenu({
   if (openAsked !== openedFor) {
     setOpenedFor(openAsked);
     if (!none) {
-      setFrozen({ items, asks, away });
+      setFrozen({ items, asks, away, ignored: [] });
       setOpen(true);
     }
   }
@@ -416,8 +418,21 @@ export function NeedsYouMenu({
     setFrozen({ ...frozen, items: [], asks: [] });
   }
   const heldChats = asked ? heldRows : null;
-  const drawnItems = inPlace(heldChats?.items ?? items, items, itemKey);
+  const drawnItems = inPlace(heldChats?.items ?? items, items, itemKey).filter(
+    ({ row, gone }) => !(gone && heldChats?.ignored.includes(itemKey(row))),
+  );
   const drawnAsks = inPlace(heldChats?.asks ?? asks, asks, askKey);
+  /**
+   * **A row the person put away here is not held** (ruling on #1146): only a row that goes for
+   * another reason — answered elsewhere, ended, moved on — stays in its place, dimmed. Ignore is
+   * the one act that leaves the list open; its row leaves as it always did, when the core's
+   * answer takes it off the list, and is not drawn dimmed in the meantime or after.
+   */
+  const ignore = (item: Needing, offer: Offer) => {
+    const key = itemKey(item);
+    setFrozen((held) => (held === null ? held : { ...held, ignored: [...held.ignored, key] }));
+    onPress(item.plane, offer);
+  };
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
     <span
@@ -472,6 +487,7 @@ export function NeedsYouMenu({
             >
               {drawnItems.map(({ row: item, gone }) => {
                 const press = (offer: Offer) => onPress(item.plane, offer);
+                const ignored = (offer: Offer) => ignore(item, offer);
                 const go = gone ? undefined : item.go;
                 const back =
                   item.needed ?? backSaid(item.reported ?? [], item.stoppedBelow) ?? item.why;
@@ -499,7 +515,7 @@ export function NeedsYouMenu({
                         press(go);
                       }}
                       onKeyDown={(event) =>
-                        ignoreOnDelete(event, gone ? undefined : item.ignore, press)
+                        ignoreOnDelete(event, gone ? undefined : item.ignore, ignored)
                       }
                     >
                       {item.persona != null && (
@@ -511,7 +527,7 @@ export function NeedsYouMenu({
                       </span>
                       <span className="needs-you-word">Go</span>
                     </Menu.Item>
-                    <Ignore offer={gone ? undefined : item.ignore} onPress={press} />
+                    <Ignore offer={gone ? undefined : item.ignore} onPress={ignored} />
                   </Menu.Group>
                 );
               })}
