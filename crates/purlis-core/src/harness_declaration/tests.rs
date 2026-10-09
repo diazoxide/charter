@@ -867,7 +867,7 @@ fn a_terminals_newline_is_one_of_the_keys_a_terminal_reads_as_enter() {
         assert!(
             why.starts_with("harnesses/gemini.toml's [terminal] newline is ")
                 && why.ends_with(
-                    "and it is one of the keys a terminal reads as a new line: \"\\r\", \
+                    "which is not one of the keys a terminal reads as a new line: \"\\r\", \
                      \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, \
                      or remove the line and the chat keeps the terminal's own Enter."
                 ),
