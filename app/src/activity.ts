@@ -182,6 +182,9 @@ export type Also = { file: string; others: readonly string[] };
  * - **Only tasks that worked in the same place** (`ActivityLine.place`: the same workspace and
  *   folder). A task given a branch of its own works in a folder of its own, so it marks nothing
  *   and is marked by nothing; neither is a task in another workspace.
+ * - **Only tasks that ran at the same time** (#1520): from its dispatch to its report, each
+ *   taken from its lines. A task that ended before the other started could not have clashed with
+ *   it, so a long-lived session's common files are not marked on every task it ever ran.
  *
  * It is read from what each report **says**: the paths its words name. There are no file locks,
  * and nothing here knows what a task really changed.
@@ -197,11 +200,17 @@ export function namedByOthers(lines: readonly Drawn[]): ReadonlyMap<string, read
       named.set(spot(line, file), tasks);
     }
   }
+  const ran = spans(lines);
+  const together = (a: string, b: string) => {
+    const one = ran.get(a);
+    const other = ran.get(b);
+    return one !== undefined && other !== undefined && one[0] <= other[1] && other[0] <= one[1];
+  };
   const also = new Map<string, Also[]>();
   for (const { line } of lines) {
     for (const file of line.files) {
       const others = [...(named.get(spot(line, file)) ?? [])]
-        .filter(([dispatch]) => dispatch !== line.dispatch)
+        .filter(([dispatch]) => dispatch !== line.dispatch && together(dispatch, line.dispatch))
         .map(([, task]) => task);
       if (others.length === 0) continue;
       const mine = also.get(line.dispatch) ?? [];
@@ -210,6 +219,25 @@ export function namedByOthers(lines: readonly Drawn[]): ReadonlyMap<string, read
     }
   }
   return also;
+}
+
+/**
+ * When each task on `lines` ran, by dispatch, in milliseconds: from its first line (its dispatch)
+ * to the line that ends it, or on without end while it has none. A time that does not read as
+ * one stretches the task's span, so such a task is never left out of a mark.
+ */
+function spans(lines: readonly Drawn[]): Map<string, [number, number]> {
+  const ran = new Map<string, [number, number]>();
+  for (const { line } of lines) {
+    const read = Date.parse(line.at);
+    const unread = Number.isNaN(read);
+    const [from, to] = ran.get(line.dispatch) ?? [Infinity, Infinity];
+    ran.set(line.dispatch, [
+      Math.min(from, unread ? -Infinity : read),
+      ENDS_A_TASK.includes(line.kind) ? (unread ? Infinity : read) : to,
+    ]);
+  }
+  return ran;
 }
 
 /** What the mark on a report says: a claim about another report's words, and no more. */
@@ -243,6 +271,15 @@ export function unkeptSaid(line: ActivityLine): string {
   return `${many} of ${line.task} ${are} not listed: ${why}`;
 }
 
+/** What a message whose text read like a credential says in its place (#1520). */
+export const LEFT_OUT_SAID =
+  "Its text was left out: it reads like a credential, and purlis keeps none.";
+
+/** What a question whose text was left out says of why it has no Answer here (#1520). */
+export function leftOutAsked(line: ActivityLine): string {
+  return `${line.to} has this question: purlis did not keep its text, so it is answered there and not here.`;
+}
+
 /** What a message whose words are no longer kept says in their place. */
 export const EXPIRED_SAID =
   "Its words are no longer kept: purlis keeps what a task said for 30 days after the task ended.";
@@ -260,12 +297,3 @@ export function clipped(text: string): { shown: string; more: boolean } {
   if (chars.length > CLIP_CHARS) shown = chars.slice(0, CLIP_CHARS).join("");
   return shown === text ? { shown, more: false } : { shown: `${shown}…`, more: true };
 }
-/** What a message whose text read like a credential says in its place (#1520). */
-export const LEFT_OUT_SAID =
-  "Its text was left out: it reads like a credential, and purlis keeps none.";
-
-/** What a question whose text was left out says of why it has no Answer here (#1520). */
-export function leftOutAsked(line: ActivityLine): string {
-  return `${line.to} has this question: purlis did not keep its text, so it is answered there and not here.`;
-}
-

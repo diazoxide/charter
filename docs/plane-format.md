@@ -5354,7 +5354,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `report.changed.said` that reads as a file (its last part has an extension), so that a file
   another task's report also names is marked. Two tasks mark each other only where they
   worked in the same place (`place.workspace` and `place.folder`), so a task on a branch of
-  its own marks nothing. That is a reading of a chat's claim for a mark the person sees, and
+  its own marks nothing, and only where they ran at the same time, from `started` to `ended`
+  (#1520), so a long-lived chat's common files are not marked on every task it ever ran. That is a reading of a chat's claim for a mark the person sees, and
   decides nothing (`purlis_core::activity::paths_named`). Nothing else is stored for the tab.
   **What the tab does not list:** a record that does not pass the check is counted on the
   timeline of the chat that asked for it and shown on none; a file that does not parse as a
