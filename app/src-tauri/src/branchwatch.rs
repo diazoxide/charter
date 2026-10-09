@@ -787,19 +787,36 @@ pub async fn branch_watch(
 }
 
 /// Each branch's folder and how it is listened to; a branch that does not resolve is left out.
+///
+/// Each branch is asked on its own (#1130), so one whose read hangs until its deadline does not
+/// hold back watching the window's others. [`BRANCHES`] bounds the threads, and the reader's own
+/// app-wide gate how many children run at once.
 fn resolve(
     reader: &Reader,
     asked: Vec<(PathBuf, WatchedBranch)>,
 ) -> Vec<(WatchedBranch, Root, How)> {
-    asked
-        .into_iter()
-        .filter_map(|(plane, branch)| {
-            let named = crate::piecefiles::branch(&branch.workspace, &branch.repo, &branch.piece);
-            let root = purlis_core::files::root(reader, &plane, named).ok()?;
-            let how = how(&root, reader);
-            Some((branch, root, how))
-        })
-        .collect()
+    each_apart(asked, |(plane, branch)| {
+        let named = crate::piecefiles::branch(&branch.workspace, &branch.repo, &branch.piece);
+        let root = purlis_core::files::root(reader, &plane, named).ok()?;
+        let how = how(&root, reader);
+        Some((branch, root, how))
+    })
+}
+
+/// `each` of `asked`, every one on a thread of its own, answered in `asked`'s order; one that
+/// answers nothing, or whose thread panicked, is left out.
+fn each_apart<T: Send, R: Send>(asked: Vec<T>, each: impl Fn(T) -> Option<R> + Sync) -> Vec<R> {
+    let each = &each;
+    std::thread::scope(|scope| {
+        let running: Vec<_> = asked
+            .into_iter()
+            .map(|one| scope.spawn(move || each(one)))
+            .collect();
+        running
+            .into_iter()
+            .filter_map(|thread| thread.join().ok().flatten())
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -809,6 +826,20 @@ mod tests {
     use std::sync::mpsc;
 
     const PATIENCE: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn branches_are_resolved_apart_and_answered_in_their_order() {
+        let started = Instant::now();
+        let answered = each_apart(vec![300u64, 0, 300, 7, 300], |ms| {
+            std::thread::sleep(Duration::from_millis(ms));
+            // One that does not resolve is left out.
+            (ms != 7).then_some(ms)
+        });
+        assert_eq!(answered, [300, 0, 300, 300]);
+        // In turn they would take 900 ms; apart, about one wait.
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(800), "{took:?}");
+    }
 
     #[cfg(target_os = "macos")]
     type Source = notify::PollWatcher;
