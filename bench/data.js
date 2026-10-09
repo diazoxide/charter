@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791559190142,
+  "lastUpdate": 1791560910490,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5166,6 +5166,48 @@ window.BENCHMARK_DATA = {
             "value": 101.7412955,
             "unit": "ms",
             "extra": "median of 5 runs: 101.221, 101.442, 101.741, 102.086, 102.300 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "b9a263c18dbdfa72a7ea01d7a46fe2f18d0299e2",
+          "message": "Age a never-started cut's reflog too in the app's unclaimed-row test\n\nA cut is now dated by its branch's reflog, with the tree's .git file only as\nthe fallback, so ageing the file alone left the cut a moment old and the row\nsaid nothing. The test ages both, as a cut three days old has them.\n\nRefs #835\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T19:45:47+04:00",
+          "tree_id": "c577bc4e509798ad988009ec9be85d3e182a6354",
+          "url": "https://github.com/purlis/purlis/commit/b9a263c18dbdfa72a7ea01d7a46fe2f18d0299e2"
+        },
+        "date": 1791560909010,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5167055,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.501, 0.502, 0.517, 0.533, 0.546 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.055352499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.195, 16.334, 17.055, 17.214, 17.221 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.73948899999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.202, 102.325, 103.739, 103.746, 103.860 ms"
           }
         ]
       }
