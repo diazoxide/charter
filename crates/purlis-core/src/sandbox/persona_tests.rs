@@ -518,3 +518,50 @@ fn a_resume_as_a_persona_wider_than_the_default_holds_the_default_s_grants() {
         None
     );
 }
+
+/// #1407: a grant under `[sandbox.personas.<name>]` for a persona the project does not define
+/// is refused with a sentence, and grants nothing; one it defines is taken as before.
+#[test]
+fn a_grant_for_a_persona_the_project_does_not_define_is_refused() {
+    let known = ["devops".to_owned()];
+    let table: toml::Table =
+        "[qa]\nhosts = [\"10.0.0.9:443\"]\n\n[devops]\nhosts = [\"10.0.0.5:6443\"]\n"
+            .parse()
+            .expect("TOML");
+    let value = toml::Value::Table(table);
+    let (grants, refused) = super::persona::read(Some(&value), "charter.toml", Some(&known));
+    assert_eq!(grants.keys().collect::<Vec<_>>(), ["devops"]);
+    assert_eq!(
+        refused,
+        [
+            "sandbox.personas.qa in charter.toml names no persona of this project, so it grants \
+          nothing — make the persona first, or take its table out"
+        ]
+    );
+    // Where the personas are not known, nothing is refused for it.
+    let (grants, refused) = super::persona::read(Some(&value), "charter.toml", None);
+    assert_eq!(grants.len(), 2);
+    assert!(refused.is_empty(), "{refused:?}");
+}
+
+/// #1407: a Settings save is refused the grant, in the reader's words, and is let through once
+/// the persona is made, at the next read.
+#[test]
+fn a_settings_save_refuses_a_grant_for_a_persona_that_is_not_there_until_it_is() {
+    let project = tempfile::tempdir().expect("a project");
+    let text = "[sandbox]\nmode = \"on\"\n\n[sandbox.personas.qa]\nhosts = [\"10.0.0.9:443\"]\n";
+    let refused = super::refusals_at(project.path(), text, "charter.toml");
+    assert!(
+        refused
+            .iter()
+            .any(|why| why.starts_with("sandbox.personas.qa in charter.toml names no persona")),
+        "{refused:?}"
+    );
+    let qa = project.path().join("personas/qa");
+    std::fs::create_dir_all(&qa).expect("a persona folder");
+    std::fs::write(qa.join("persona.md"), "---\nrole: qa\n---\n\n# qa\n").expect("persona.md");
+    assert_eq!(
+        super::refusals_at(project.path(), text, "charter.toml"),
+        Vec::<String>::new()
+    );
+}
