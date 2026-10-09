@@ -887,7 +887,7 @@ mod tests {
             .map(|fact| (fact.label.as_str(), fact.value.as_str()))
             .collect();
         assert!(
-            facts.contains(&("Delegate to it for", "routing")),
+            facts.contains(&("Dispatch to it for", "routing")),
             "{facts:?}"
         );
         assert!(

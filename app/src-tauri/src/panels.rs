@@ -1091,7 +1091,7 @@ pub(crate) fn persona_view(
             };
             let mut facts = vec![
                 fact(
-                    "Delegate to it for",
+                    "Dispatch to it for",
                     match shown.delegate_when {
                         Some(when) if !when.trim().is_empty() => when,
                         // `delegate-when` is what makes a persona findable — it becomes the
