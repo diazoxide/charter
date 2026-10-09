@@ -56,6 +56,46 @@ pub fn recorded_base(clone: &Path, branch: &str) -> Option<String> {
     }
 }
 
+/// The branches in `repo`'s clone that purlis cut: every branch with a base recorded under it,
+/// detached bases included (#835).
+///
+/// The record is how a branch purlis cut is told from one made with plain git, without a
+/// second registry (ADR 0027): `add` writes it into the clone's config, and nothing else does.
+/// One git call for the whole clone, so a listing pays it once rather than once per branch.
+/// A config git will not read answers empty, as no records: this only decides what a row
+/// may additionally say, never what exists.
+pub fn cut_branches(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+) -> Result<std::collections::BTreeSet<String>, Refusal> {
+    let clone = clone_dir(plane, ws, repo)?;
+    // git prints the variable name lowercased and the branch, which is a subsection, as it is;
+    // `--null` ends each record with a NUL and puts a newline between the name and the value.
+    let asked = git::run(
+        &clone,
+        &[
+            "config",
+            "--null",
+            "--get-regexp",
+            r"^branch\..*\.charterbase$",
+        ],
+        git::READ,
+    )?;
+    if !asked.ok() {
+        return Ok(std::collections::BTreeSet::new());
+    }
+    Ok(asked
+        .out
+        .split('\0')
+        .filter_map(|record| {
+            let key = record.split('\n').next()?;
+            let branch = key.strip_prefix("branch.")?.strip_suffix(".charterbase")?;
+            (!branch.is_empty()).then(|| branch.to_string())
+        })
+        .collect())
+}
+
 /// What charter refused, with the sentence the operator sees.
 #[derive(Debug, thiserror::Error)]
 pub enum Refusal {

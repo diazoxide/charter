@@ -198,6 +198,22 @@ describe("the explorer", () => {
     );
   });
 
+  it("says a branch cut for a chat that never started is unclaimed, and for how long", () => {
+    // #835: shown, never swept. Removing it stays the row's own action.
+    draw({
+      state: state({
+        pieces: { svc: [piece("one", { unclaimed: "3d" }), piece("two")], tool: [] },
+      }),
+    });
+
+    const mark = screen.getByTestId("piece-svc-one").querySelector("[data-testid=piece-unclaimed]");
+    expect(mark).toHaveTextContent("unclaimed 3d");
+    expect(mark).toHaveAttribute("title", expect.stringContaining("never started"));
+    expect(screen.getByTestId("piece-svc-two").querySelector("[data-testid=piece-unclaimed]")).toBe(
+      null,
+    );
+  });
+
   it("says a registration whose directory is gone is stale", () => {
     draw({ state: state({ pieces: { svc: [piece("one", { stale: true })], tool: [] } }) });
 

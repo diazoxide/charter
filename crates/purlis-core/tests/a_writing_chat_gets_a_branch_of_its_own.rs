@@ -320,3 +320,96 @@ fn chats_started_together_in_one_repo_each_get_a_branch() {
 
     assert_eq!(got, ["chat-1", "chat-2", "chat-3", "chat-4"]);
 }
+
+// ---- a branch whose chat never started is shown, never swept (#835) ----
+
+/// Say the tree at `path` was cut `ago` before now, as a crash that long ago would leave it.
+fn cut_ago(path: &std::path::Path, ago: chrono::Duration) {
+    let when = std::time::SystemTime::now() - ago.to_std().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(path.join(".git"))
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+fn unclaimed(f: &support::Fixture) -> std::collections::BTreeMap<String, String> {
+    let listed = worktree::list(&f.plane, &f.ws, &f.repo).unwrap();
+    purlis_core::pieces::unclaimed(&f.plane, &f.ws, &f.repo, &listed, chrono::Utc::now())
+}
+
+#[test]
+fn a_branch_cut_for_a_chat_that_never_started_is_shown_unclaimed_with_its_age() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    // The cut is kept, as a crash before the start keeps it: no `Drop`, no claim.
+    let cut = Held::new(
+        &f.plane,
+        chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap(),
+    )
+    .keep();
+    cut_ago(&cut.path, chrono::Duration::days(3));
+
+    assert_eq!(unclaimed(&f).get("chat-1").map(String::as_str), Some("3d"));
+    // Showing it removed nothing.
+    assert!(cut.path.is_dir());
+    assert!(has_branch(&f, "chat-1"));
+}
+
+#[test]
+fn a_branch_whose_chat_started_is_not_unclaimed() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
+    cut_ago(&cut.path, chrono::Duration::days(3));
+    let who = purlis_core::pieces::Who {
+        session: None,
+        persona: None,
+        host: "here".into(),
+        log: "here".into(),
+    };
+    assert!(chatpiece::claim(&f.plane, &cut, &who, chrono::Utc::now()).is_some());
+
+    assert!(unclaimed(&f).is_empty());
+}
+
+#[test]
+fn a_branch_made_with_plain_git_is_never_called_unclaimed() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let by_hand = worktree::root_of(&f.plane, &f.ws)
+        .join(&f.repo)
+        .join("mine");
+    std::fs::create_dir_all(by_hand.parent().unwrap()).unwrap();
+    support::git(
+        &f.clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "mine",
+            &by_hand.display().to_string(),
+        ],
+    );
+    cut_ago(&by_hand, chrono::Duration::days(3));
+
+    assert!(
+        worktree::list(&f.plane, &f.ws, &f.repo)
+            .unwrap()
+            .iter()
+            .any(|p| p.piece == "mine"),
+        "listed, as every worktree git has is"
+    );
+    assert!(unclaimed(&f).is_empty());
+}
+
+#[test]
+fn a_branch_cut_a_moment_ago_is_its_chat_still_starting() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let _cut = chatpiece::cut(&f.plane, &f.ws, &f.repo, &Naming::After(None)).unwrap();
+
+    assert!(unclaimed(&f).is_empty());
+}
