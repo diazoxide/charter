@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
 import { sandboxCommandReturned } from "../sandboxAsked";
@@ -75,25 +75,38 @@ function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
 function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
   const [grants, setGrants] = useState<readonly SandboxGrant[]>();
   const [said, setSaid] = useState<string>();
+  /** The newest list asked for. Both commands answer off the window's thread (#1543), so an
+   *  older answer can land after a newer one, and only the newest is drawn. */
+  const asking = useRef(0);
+  const ask = () => {
+    const mine = ++asking.current;
+    return () => mine === asking.current;
+  };
 
   const read = useCallback(() => {
+    const newest = ask();
     void commands
       .sandboxGrants(plane)
       .then((done) => {
+        if (!newest()) return;
         if (done.status === "error") setSaid(done.error);
         else setGrants(done.data);
       })
-      .catch((err: unknown) => setSaid(`purlis could not list what was granted: ${String(err)}`));
+      .catch(
+        (err: unknown) =>
+          newest() && setSaid(`purlis could not list what was granted: ${String(err)}`),
+      );
   }, [plane]);
   useEffect(read, [read]);
 
   const revoke = (one: SandboxGrant) => {
     setSaid(undefined);
+    const newest = ask();
     void commands
       .revokeSandboxGrant(plane, one.id)
       .then((done) => {
         if (done.status === "error") setSaid(done.error);
-        else setGrants(done.data);
+        else if (newest()) setGrants(done.data);
       })
       .catch((err: unknown) => setSaid(`purlis could not revoke it: ${String(err)}`))
       // What chats may write moved, or did not: the Notice for chats left behind asks again.
