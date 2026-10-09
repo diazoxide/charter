@@ -349,9 +349,13 @@ pub fn set_vision(root: &Path, place: &Place, who: &str, text: &str) -> Result<W
                 .to_owned(),
         );
     }
+    hides_nothing_after_it(text, "a vision")?;
     let ws = workspace_at(root, place, who, "a vision")?;
     let path = ws.dir().join("workspace.md");
     guard(root, &path, None)?;
+    within_the_budget(root, &path, |now| {
+        crate::mdsection::replace(now, "Vision", text).len()
+    })?;
     ws.set_vision(text).map_err(|e| e.to_string())?;
     Ok(Written {
         to: ws.name().to_owned(),
@@ -374,15 +378,138 @@ pub fn add_to_section(
             section.header()
         ));
     }
+    hides_nothing_after_it(text, &format!("an entry for ## {}", section.header()))?;
     let ws = workspace_at(root, place, who, "a workspace.md")?;
     let path = ws.dir().join("workspace.md");
     guard(root, &path, None)?;
+    // At least the entry's own bytes: it is added whole, as one list item.
+    within_the_budget(root, &path, |now| now.len() + text.len())?;
     ws.add_to_section(section.header(), text)
         .map_err(|e| e.to_string())?;
     Ok(Written {
         to: ws.name().to_owned(),
         path: shown(root, &path),
     })
+}
+
+/// The most a chat's write grows a workspace's `workspace.md` to (#1598, D-1598-2). Every
+/// later chat in the workspace reads the file whole, so it holds what each must act on, not
+/// all a workspace learned: that is its memory. Well under the bound on any one project file
+/// (`memstore::MAX_BYTES`). A file already past it, by a person's hand, is not refused for
+/// that: only a write that would grow it is.
+pub const WORKSPACE_MD_GROWS_TO_AT_MOST: usize = 64 * 1024;
+
+/// Refuses a write that would take the `workspace.md` at `path` past
+/// [`WORKSPACE_MD_GROWS_TO_AT_MOST`] and grow it: `next` is how long the file would be after
+/// the write, from the text it holds now. A file not there yet holds none, and so does one
+/// that is not read without following a link: the write itself refuses that one.
+fn within_the_budget(
+    root: &Path,
+    path: &Path,
+    next: impl FnOnce(&str) -> usize,
+) -> Result<(), String> {
+    let now = crate::contain::read_text_no_link(root, path).unwrap_or_default();
+    let next = next(&now);
+    if next <= WORKSPACE_MD_GROWS_TO_AT_MOST || next <= now.len() {
+        return Ok(());
+    }
+    Err(format!(
+        "workspace.md would be {next} bytes, past the {} KiB a chat may grow it to, since every \
+         later chat here reads it whole: nothing was written. Keep it to what each later chat \
+         must act on: record the rest as a workspace memory (purlis workspace remember), and \
+         ask the person to fold older entries down",
+        WORKSPACE_MD_GROWS_TO_AT_MOST / 1024
+    ))
+}
+
+/// Refuses `text`, a vision or a section entry (`what`), where it opens an HTML comment or a
+/// code fence and does not close it (#1598): a Markdown renderer would hide every section of
+/// `workspace.md` after it. A `<!--` inside a code fence or a code span is code, not a comment.
+fn hides_nothing_after_it(text: &str, what: &str) -> Result<(), String> {
+    let hidden = |by: &str| {
+        Err(format!(
+            "{what} opens {by} and does not close it, which would hide every section of \
+             workspace.md after it: nothing was written. Close it, or leave it out"
+        ))
+    };
+    // The fence a line opens: its character, how many, and what follows them.
+    fn fence_of(line: &str) -> Option<(char, usize, &str)> {
+        let line = line.trim_start();
+        let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+        let many = line.chars().take_while(|c| *c == mark).count();
+        (many >= 3).then(|| (mark, many, &line[many..]))
+    }
+    let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
+    for line in crate::mdsection::split_lines(text) {
+        if !in_comment {
+            if let Some((mark, many)) = fence {
+                if fence_of(line).is_some_and(|(closing, more, rest)| {
+                    closing == mark && more >= many && rest.trim().is_empty()
+                }) {
+                    fence = None;
+                }
+                continue;
+            }
+            if let Some((mark, many, _)) = fence_of(line) {
+                fence = Some((mark, many));
+                continue;
+            }
+        }
+        let read = without_code_spans(line);
+        let mut rest = read.as_str();
+        loop {
+            let (looked_for, found) = if in_comment {
+                ("-->", rest.find("-->"))
+            } else {
+                ("<!--", rest.find("<!--"))
+            };
+            let Some(at) = found else { break };
+            rest = &rest[at + looked_for.len()..];
+            in_comment = !in_comment;
+        }
+    }
+    if fence.is_some() {
+        return hidden("a code fence (``` or ~~~)");
+    }
+    if in_comment {
+        return hidden("an HTML comment (<!--)");
+    }
+    Ok(())
+}
+
+/// `line` with its code spans taken out: a run of backticks, what follows it, and the next run
+/// of as many. A run with no match is kept, as Markdown keeps it.
+fn without_code_spans(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find('`') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        let many = after.chars().take_while(|c| *c == '`').count();
+        let (run, inside) = after.split_at(many);
+        // The next run of exactly `many` backticks closes the span.
+        let mut closes = None;
+        let mut from = 0;
+        while let Some(found) = inside[from..].find(run) {
+            let start = from + found;
+            let length = inside[start..].chars().take_while(|c| *c == '`').count();
+            if length == many {
+                closes = Some(start + many);
+                break;
+            }
+            from = start + length;
+        }
+        match closes {
+            Some(end) => rest = &inside[end..],
+            None => {
+                out.push_str(run);
+                rest = inside;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The workspace at `place`, which must be there: a brokered write never makes one. `who` and
