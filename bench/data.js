@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791548485997,
+  "lastUpdate": 1791549571179,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4872,6 +4872,48 @@ window.BENCHMARK_DATA = {
             "value": 104.2836615,
             "unit": "ms",
             "extra": "median of 5 runs: 103.315, 103.467, 104.284, 104.861, 106.051 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "0d94480d8bd59632dd2a4dae27b1e052a26664c7",
+          "message": "Needs-you list: rewrap the change note to the fragment width\n\nRefs #1146\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T16:30:32+04:00",
+          "tree_id": "908e4721b938e75f68bdc474b4ec0168a3bcd42b",
+          "url": "https://github.com/purlis/purlis/commit/0d94480d8bd59632dd2a4dae27b1e052a26664c7"
+        },
+        "date": 1791549570335,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5442940000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.516, 0.524, 0.544, 0.558, 0.579 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.736877,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.350, 16.584, 16.737, 16.937, 17.265 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.47363949999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.477, 103.287, 103.474, 106.076, 107.049 ms"
           }
         ]
       }
