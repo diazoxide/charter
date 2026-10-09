@@ -518,6 +518,8 @@ fn report_under(
         below: held.stopping().ended_below(chat),
         // purlis's stop at a limit the person set, where it was that (#1512).
         limit: held.stopping().limit_of(chat),
+        // Named by the report's own part.
+        branch: None,
     });
     let delivered = deliver(held, chat, &from, summary.clone(), task, the_stop_s)?;
     held.chats().owes(chat, Owed::Sent);
@@ -853,6 +855,8 @@ pub(crate) fn operator_stopped(
                 .and_then(|path| handback::record_path(&path)),
             below: if task { below } else { Vec::new() },
             limit: held.stopping().limit_of(chat).filter(|_| task),
+            // Where the stopped task's work is, by the app's record of what it cut (#1472).
+            branch: crate::dispatches::branch_of(held, chat).filter(|_| task),
         };
         if let Err(why) = deliver(held, chat, &from, String::new(), None, Some(stopped)) {
             // Still owed where it was: the chat's close tries once more.

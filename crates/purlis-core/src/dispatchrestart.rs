@@ -635,6 +635,8 @@ pub fn report_of(record: &dispatchrecord::Record) -> Option<Handback> {
                 below: Vec::new(),
                 // A stop at a limit the person set is said as one (#1512).
                 limit: record.limit,
+                // Where its work is, by the record (#1472).
+                branch: branch_of(record),
             }),
         ));
     }
