@@ -497,6 +497,23 @@ describe("Move's Undo, when it does not simply land", () => {
     expect(screen.queryByTestId("view-gone")).toBeNull();
   });
 
+  it("sends one move back for two presses while the first is on its way", async () => {
+    let land = () => {};
+    const { asked } = core({ back: new Promise<void>((resolve) => (land = resolve)) });
+    const line = await moved();
+
+    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+    await act(async () => {
+      land();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-cause="memory-moved"]')).toBeNull());
+    // The move out, and one move back: a second would be refused by the core and ignored.
+    expect(asked.filter((one) => one.cmd === "memory_move")).toHaveLength(2);
+  });
+
   it("leaves a newer act's Undo line alone when an earlier Undo lands after it", async () => {
     let land = () => {};
     core({ back: new Promise<void>((resolve) => (land = resolve)) });
