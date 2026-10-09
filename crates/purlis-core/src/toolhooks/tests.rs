@@ -215,8 +215,8 @@ fn a_sub_agent_calling_purlis_s_dispatch_tool_is_refused_and_the_chat_itself_is_
 
     assert_eq!(
         denied(&call(Some("sub-1"))),
-        "a dispatch is refused from inside a sub-agent. A persona chat belongs to a chat the \
-         person can see, open and stop, and a sub-agent is not one. Return what you found to \
+        "a dispatch is refused from inside a helper. A task belongs to a chat the person can \
+         see, open and stop, and a helper is not one. Return what you found to \
          your chat, and let that chat dispatch."
     );
     assert_eq!(call(None), Answer::Nothing);
@@ -235,8 +235,8 @@ fn a_sub_agent_call_named_for_a_persona_is_refused_with_the_dispatch_route() {
     p.persona("devops", "role: Ops");
     assert_eq!(
         denied(&p.ask(dispatch_of("devops"), pretooluse_dispatch)),
-        "`devops` is a persona, and a persona runs as its own chat, never as a sub-agent of \
-         this one: a sub-agent works with this chat's vault and hosts, not `devops`'s. \
+        "`devops` is a persona, and a persona runs as its own chat, never as a helper of \
+         this one: a helper works with this chat's vault and hosts, not `devops`'s. \
          Dispatch to it instead: `purlis dispatch --to devops`. A helper that is not named \
          for a persona still runs, as this chat's persona."
     );

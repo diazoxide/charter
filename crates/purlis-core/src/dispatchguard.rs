@@ -307,8 +307,8 @@ mod tests {
         assert_eq!(reason, REASON_SUBAGENT);
         assert_eq!(
             said,
-            "a dispatch is refused from inside a sub-agent. A persona chat belongs to a chat \
-             the person can see, open and stop, and a sub-agent is not one. Return what you \
+            "a dispatch is refused from inside a helper. A task belongs to a chat the person \
+             can see, open and stop, and a helper is not one. Return what you \
              found to your chat, and let that chat dispatch."
         );
     }

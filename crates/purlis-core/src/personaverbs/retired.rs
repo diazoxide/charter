@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 
 /// What `purlis persona sync-agents` answers now: one sentence, and what replaced it.
 pub const SYNC_AGENTS: &str = "`purlis persona sync-agents` is retired: a persona runs as its \
-     own chat and purlis generates no sub-agent for it. Give a persona work with `purlis \
-     dispatch --to <persona>`, and remove the sub-agent files purlis wrote with `purlis doctor \
+     own chat and purlis generates no helper for it. Give a persona work with `purlis \
+     dispatch --to <persona>`, and remove the helper files purlis wrote with `purlis doctor \
      --fix persona-agents`.";
 
 /// What a sub-agent call named for the persona `name` is refused with.
@@ -42,16 +42,16 @@ pub fn subagent_refusal(name: &str, draft: bool) -> String {
     let name = crate::shown::short(name);
     if draft {
         return format!(
-            "`{name}` is a persona, and a persona runs as its own chat, never as a sub-agent \
-             of this one. It is also still a draft, and a draft persona runs no chat: its \
+            "`{name}` is a persona, and a persona runs as its own chat, never as a helper of \
+             this one. It is also still a draft, and a draft persona runs no chat: its \
              definition has to be finished and its `draft: true` line dropped before work can \
              be dispatched to it. Do the work in this chat, or dispatch to another persona. A \
              helper that is not named for a persona still runs, as this chat's persona."
         );
     }
     format!(
-        "`{name}` is a persona, and a persona runs as its own chat, never as a sub-agent of \
-         this one: a sub-agent works with this chat's vault and hosts, not `{name}`'s. \
+        "`{name}` is a persona, and a persona runs as its own chat, never as a helper of \
+         this one: a helper works with this chat's vault and hosts, not `{name}`'s. \
          Dispatch to it instead: `purlis dispatch --to {name}`. A helper that is not named \
          for a persona still runs, as this chat's persona."
     )

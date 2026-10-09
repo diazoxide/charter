@@ -8395,8 +8395,8 @@ mod tests {
         );
         assert_eq!(
             told[0].summary,
-            "it did not start: this chat already has 1 persona chat running, and it may have 1 \
-             at once. Wait for one to report, then dispatch again."
+            "it did not start: this chat already has 1 task running, and it may have 1 at once. \
+             Wait for one to report, then dispatch again."
         );
         assert_eq!(held.chats().open_now().len(), before, "nothing started");
         // And it is a failed row under the chat that asked, read from its record.
@@ -8456,7 +8456,7 @@ mod tests {
         assert_eq!(
             third,
             Answer::No {
-                why: "this chat already has 2 persona chats running, and it may have 2 at \
+                why: "this chat already has 2 tasks running, and it may have 2 at \
                       once. Wait for one to report, then dispatch again."
                     .to_owned()
             }
@@ -8884,7 +8884,7 @@ mod tests {
             assert!(
                 why.starts_with(
                     "profile 'yolo' starts its harness with the permission prompts off \
-                     (--dangerously-skip-permissions), and a persona chat never takes that \
+                     (--dangerously-skip-permissions), and a task never takes that \
                      from the chat that dispatched it."
                 ),
                 "{to:?}: {why}"
