@@ -10,6 +10,6 @@
   never committed, and are let go of 30 days after they were last written. A sandboxed chat
   can neither read nor write them. In a project with no sandbox, or a chat started without
   it, only the file's own permissions protect them: every such chat can read and change
-  them. **Cost (reported)** is what the chat's harness reported, which a chat can alter; it
-  is shown and never enforced, and reads *not reported* for a harness that reports none
+  them. **Cost (reported)** is what the chat's harness reported; it is shown and never
+  enforced, and reads *not reported* for a harness that reports none
   (#1452).

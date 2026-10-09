@@ -242,7 +242,7 @@ pub fn run(
     if let Some(plane) = plane {
         usage::record(plane, &payload);
         // And what the harness says the whole session has cost, which a dispatch's record
-        // reads when it ends (#1452) and a session's token limit is held to (#1512): kept
+        // reads when it ends (#1452) and a session's token limit is shown against (#1512): kept
         // under the chat the app started this harness as, where no sandboxed chat can write
         // (#1457). Absent for a payload that says nothing of it, and for a harness the app did
         // not start.

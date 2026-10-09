@@ -7,5 +7,5 @@
   what it had); a task past it is asked for its report and ended with its own tasks, never while
   you are answering or typing in it, and the chat that asked is told it was its time limit.
   *Tokens per session* is not enforced yet: a session's row shows its figure against the limit,
-  and nothing is refused or stopped by it, because a chat can alter the figure it counts. A
-  harness that reports no tokens is not counted, and Settings says so (#1512).
+  and nothing is refused or stopped by it. A harness that reports no tokens is not counted, and
+  Settings says so (#1512).

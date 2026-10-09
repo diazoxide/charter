@@ -496,8 +496,9 @@ fn every_harness_denies_a_chat_reading_or_writing_the_dispatch_records() {
     }
 }
 
-/// #1457, D-1452-12: what a chat's harness said its session cost is the figure purlis decides
-/// a session's token limit by, so no sandboxed chat may write it, its own or another's. It is
+/// #1457, D-1452-12: what a chat's harness said its session cost is the figure purlis shows a
+/// dispatch's cost and a session's tokens from, so no sandboxed chat may write it, its own or
+/// another's. It is
 /// kept in the app's own folder of the state ([`crate::usage::spend_dir`]), which every harness
 /// is compiled to deny a chat writing, under both names of the state folder, on both systems.
 #[test]

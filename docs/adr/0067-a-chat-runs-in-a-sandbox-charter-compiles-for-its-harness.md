@@ -334,7 +334,8 @@ Where the project's sandbox is off, nothing here holds, as for every class.
 
 *Amended 2026-10-09 (#1457, D-1452-12; class 2 as written):* **what a chat's harness says its
 session has cost is kept in the app's folder.** `<state>/app/spend/<chat>.json`, one file per
-chat by the chat's own id, is the figure a session's token limit is held to. It sits under
+chat by the chat's own id, is the figure a dispatch's cost and a session's tokens are shown
+from (a session's token limit is shown against it, not enforced). It sits under
 `<state>/app/`, which class 2 already denies a sandboxed chat writing in what every harness is
 compiled, so no new denial is added. Its one writer is the harness's status line, which Claude
 Code runs outside the sandbox its tools run in; a harness held whole inside the wrap cannot
