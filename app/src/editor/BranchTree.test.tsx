@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { BranchTree } from "./BranchTree";
+import { ASK_AGAIN_MS, BranchTree } from "./BranchTree";
 import { ReferenceChats, type ChatsForReferences } from "../references";
 import type {
   ChatTouching,
@@ -24,6 +24,7 @@ import type { Place } from "../pieceViews";
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.restoreAllMocks();
 });
 
 const PLANE = "/plane" as unknown as PlaneId;
@@ -55,8 +56,10 @@ const entry = (name: string, kind: FolderEntry["kind"] = "file"): FolderEntry =>
   refused: null,
 });
 
-/** The core as the tab asks it; returns what it was asked, by command. */
-function core(open: OpenChat[]) {
+/** The core as the tab asks it; returns what it was asked, by command. `open` is read at each
+ *  ask, so a test can add a chat to it later; the first `folderFails` folder lookups fail. */
+function core(open: OpenChat[], folderFails = 0) {
+  let lookups = 0;
   const asked: string[] = [];
   mockIPC(
     (cmd, args) => {
@@ -70,8 +73,12 @@ function core(open: OpenChat[]) {
       if (cmd === "project_icons_drawn") return null;
       if (cmd === "extension_icon_themes") return [];
       asked.push(cmd);
-      if (cmd === "opened_chats") return open;
-      if (cmd === "worktree_list") return [ONE];
+      if (cmd === "opened_chats") return [...open];
+      if (cmd === "worktree_list") {
+        lookups += 1;
+        if (lookups <= folderFails) throw new Error("the listing is busy");
+        return [ONE];
+      }
       if (cmd === "workspace_panels") return PANELS;
       throw new Error(`unexpected ${cmd}`);
     },
@@ -153,5 +160,75 @@ describe("the file tab's live marker", () => {
 
     expect(asked.sort()).toEqual(["opened_chats", "worktree_list"]);
     expect(document.querySelector(".touch-mark")).toBeNull();
+  });
+
+  /** The clock the window reads, moved by hand. */
+  const clock = () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    return (ms: number) => {
+      now += ms;
+    };
+  };
+
+  /** Lets the asks answer. */
+  const settle = () =>
+    act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+
+  it("asks again, on a later touch, for a chat the open chats did not list yet (#1605)", async () => {
+    const pass = clock();
+    const open: OpenChat[] = [];
+    const asked = core(open);
+    render(<BranchTree plane={PLANE} place={CUT} onPick={() => {}} />);
+    await screen.findByRole("treeitem", { name: /^README\.md/ });
+
+    // The chat touches a file before the list has it.
+    await touch(3, "README.md");
+    await settle();
+    expect(asked.filter((cmd) => cmd === "opened_chats")).toHaveLength(1);
+    expect(document.querySelector(".touch-mark")).toBeNull();
+
+    // The list has it now. A touch right away does not ask again…
+    open.push(chat(3, "fix login", ONE.path));
+    await touch(3, "src/lib.rs");
+    await settle();
+    expect(asked.filter((cmd) => cmd === "opened_chats")).toHaveLength(1);
+
+    // …and one a pause later does, and marks it.
+    pass(ASK_AGAIN_MS);
+    await touch(3, "README.md");
+
+    await screen.findAllByRole("img", { name: "fix login is working here now" });
+    expect(asked.filter((cmd) => cmd === "opened_chats")).toHaveLength(2);
+  });
+
+  it("asks again, on a later touch, for a folder it could not find (#1605)", async () => {
+    const pass = clock();
+    const asked = core([chat(3, "fix login", ONE.path)], 1);
+    render(<BranchTree plane={PLANE} place={CUT} onPick={() => {}} />);
+    await screen.findByRole("treeitem", { name: /^README\.md/ });
+
+    await touch(3, "README.md");
+    await settle();
+    expect(asked.filter((cmd) => cmd === "worktree_list")).toHaveLength(1);
+    expect(document.querySelector(".touch-mark")).toBeNull();
+
+    // Not on every touch: only one a pause after the lookup that failed.
+    await touch(3, "src/lib.rs");
+    await settle();
+    expect(asked.filter((cmd) => cmd === "worktree_list")).toHaveLength(1);
+
+    pass(ASK_AGAIN_MS);
+    await touch(3, "README.md");
+
+    await screen.findAllByRole("img", { name: "fix login is working here now" });
+    expect(asked.filter((cmd) => cmd === "worktree_list")).toHaveLength(2);
+    // A folder found is kept: later touches ask nothing more.
+    pass(ASK_AGAIN_MS);
+    await touch(3, "src/lib.rs");
+    await settle();
+    expect(asked.filter((cmd) => cmd === "worktree_list")).toHaveLength(2);
   });
 });
