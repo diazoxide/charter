@@ -434,6 +434,10 @@ pub struct Chats {
     /// memory only**: never a file a chat could write, and a chat started again is briefed
     /// afresh.
     told: Mutex<HashMap<u32, purlis_core::awareness::Told>>,
+    /// The folders a discard is taking away now, and the folders chats are starting in
+    /// (#1472): no chat starts in a folder that is going, and none goes while one starts there.
+    /// **In memory only.**
+    going: crate::goingaway::Going,
     /// What decides the sandbox of a chat on no profile in a test, in place of
     /// [`Self::sandbox_off_profile`]: that asks this machine and checks the real program, and a
     /// test's stand-in harness lives where a chat can write, so it could never start sandboxed.
@@ -688,6 +692,7 @@ impl Chats {
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
             told: Mutex::new(HashMap::new()),
+            going: crate::goingaway::Going::default(),
             #[cfg(test)]
             deciding: None,
         }
@@ -1650,6 +1655,10 @@ impl Chats {
         operator_shell: bool,
         why: Why,
     ) -> Result<u32, String> {
+        // Said before anything runs, and until the chat is listed as open below: a discard of
+        // its folder in the meantime is refused, and a folder that is going is no place to
+        // start one (#1472).
+        let _starting = self.going.starting_in(chat.cwd.as_deref())?;
         // Who the chat is, and the run this start begins (ADR 0066). **The id is minted once**
         // per clone and device (V43: a copy's was minted again before `put_back` got it),
         // when no record holds one, on this device, and a chat put back or started again keeps
@@ -2660,6 +2669,16 @@ impl Chats {
         lock(&self.open)
             .get(&session)
             .and_then(|running| running.confines.clone())
+    }
+
+    /// Marks `folder` as going while a discard takes it away (#1472), until what this answers
+    /// is dropped: no chat starts in it or below it until then. Refused while a chat is starting
+    /// there; a chat that is already open there is the caller's to ask about, after this.
+    pub(crate) fn taking_away(
+        &self,
+        folder: &std::path::Path,
+    ) -> Result<crate::goingaway::GoingAway<'_>, String> {
+        self.going.taking_away(folder)
     }
 
     /// What is open, in the strip's order.

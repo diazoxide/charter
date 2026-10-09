@@ -232,7 +232,13 @@ function core(
         id: given.id,
         task: "fix the queue",
         running: false,
-        own: { repo: "api", branch: "fix-the-queue-b5rc0def", standing: "kept", acts: true },
+        own: {
+          repo: "api",
+          branch: "fix-the-queue-b5rc0def",
+          standing: "kept",
+          acts: true,
+          left: null,
+        },
         places: [],
         elsewhere: [],
         more: false,
@@ -634,6 +640,19 @@ describe("a dispatch's own branch", () => {
     }),
     dispatch({ id: "01K6P", task: "plain task" }),
   ];
+  /** A task whose branch stayed after its folder was discarded (#1472). */
+  const LEFT: DispatchRow = dispatch({
+    id: "01K6D",
+    task: "left behind",
+    mode: "task",
+    place: "alpha · left-behind-00000000",
+    worktree: {
+      repo: "api",
+      branch: "left-behind-00000000",
+      standing: "discarded",
+      discard: false,
+    },
+  });
   const LOSS: WorktreeLoss = {
     task: "fix the queue",
     repo: "api",
@@ -641,6 +660,8 @@ describe("a dispatch's own branch", () => {
     on: BRANCH,
     changes: ["?? scratch.txt", " M README.md"],
     ignored: ["target/"],
+    nested: [],
+    seal: "a1b2",
     unmerged: 1,
     lost: [],
   };
@@ -678,6 +699,24 @@ describe("a dispatch's own branch", () => {
       expect(asked.find((one) => one.cmd === "task_changes")?.args).toEqual({
         plane: PLANE,
         id: "01K6W",
+      }),
+    );
+  });
+
+  it("reaches what is left of a branch whose folder was discarded, and offers no Discard (#1472)", async () => {
+    const { asked } = core({ rows: [...WITH_BRANCHES, LEFT] });
+    render(<App />);
+    await opened();
+
+    expect(within(row("01K6D")).queryByRole("button", { name: /Discard/ })).toBeNull();
+    await userEvent.click(
+      within(row("01K6D")).getByRole("button", { name: "Review changes of left behind" }),
+    );
+
+    await waitFor(() =>
+      expect(asked.find((one) => one.cmd === "task_changes")?.args).toEqual({
+        plane: PLANE,
+        id: "01K6D",
       }),
     );
   });

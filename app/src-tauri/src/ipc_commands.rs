@@ -173,6 +173,7 @@ macro_rules! app_commands {
                 taskchanges::task_changes,
                 taskchanges::task_branch_merge_question,
                 taskchanges::task_branch_merge,
+                taskchanges::task_branch_delete,
                 taskchanges::tasks_sharing_a_folder,
                 taskchanges::task_folder_shared,
                 finished::finished_tasks,

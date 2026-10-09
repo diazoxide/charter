@@ -56,6 +56,26 @@ export function ownSaid(own: OwnBranch): string {
   }
 }
 
+/**
+ * What the tab says of a task's own branch **whose folder is gone and which is still in the
+ * repo** (#1472), or nothing where that is not so: whether the branch the repo is on holds it
+ * (then it can be deleted), or how many of its commits it does not (then it stays: deleting a
+ * branch that holds work is never purlis's act).
+ */
+export function leftSaid(own: OwnBranch): string | undefined {
+  const left = own.left;
+  if (left === null) return undefined;
+  const branch = own.branch ?? "Its own branch";
+  if (left.merged)
+    return `The branch ${branch} is still in ${own.repo}, and the branch ${own.repo} is on holds every commit of it, so deleting it loses nothing.`;
+  return `The branch ${branch} is still in ${own.repo}, holding ${commits(left.ahead)} the branch ${own.repo} is on does not have. It stays: merge it, or delete it with git, yourself.`;
+}
+
+/** What the question says before a task's merged branch, whose folder is gone, is deleted. */
+export function deleteSays(own: OwnBranch): string {
+  return `This deletes the branch ${own.branch ?? ""} in ${own.repo}. The branch ${own.repo} is on holds every commit of it, so no commit is lost; git deletes it only if it still finds it merged.`;
+}
+
 /** What the tab says above a task's files, where it worked in a folder other chats work in. */
 export const SHARED_SAID =
   "It worked in a folder other chats work in. Listed are the files its own edit tools wrote that are still uncommitted there. Not listed: edits made by a shell command, changes it already committed, and anything from before the app was last started. A file another chat's edit tools also wrote is marked with that chat's name. One the person or a shell command changed since is listed whole, with no mark.";

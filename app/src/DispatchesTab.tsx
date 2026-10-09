@@ -18,6 +18,7 @@ import {
   EVERY_DISPATCH,
   losesNothing,
   lostSaid,
+  nestedSaid,
   NO_PERSONA,
   NO_PERSONA_SAID,
   personasOf,
@@ -56,7 +57,9 @@ const WHILE_RUNNING_MS = 5000;
  * answer, and the core removes nothing where the folder holds other paths by then. A refusal (a chat is still open in it) stands as a Notice.
  * **Review changes** beside it opens the task's Changes tab (#1534), with what its branch
  * changed and the person's Merge: the same tab its finished row in the chats list opens, so a
- * row cleared there still reaches it here.
+ * row cleared there still reaches it here. A branch whose folder is gone (discarded, removed by
+ * other hands, merged while git kept it) is reached the same way, where the tab says what is
+ * left of it and offers Delete branch where git finds it merged (#1472).
  *
  * The window says this of a branch and its folder, never of a worktree (ADR 0072 §4).
  */
@@ -281,13 +284,17 @@ export function DispatchesTab({
                     {row.worktree !== null && (
                       <span className="dispatch-worktree" data-standing={row.worktree.standing}>
                         {worktreeSaid(row.worktree)}
-                        {row.worktree.standing === "kept" && onChanges !== undefined && (
+                        {row.worktree.standing !== "merged" && onChanges !== undefined && (
                           <button
                             type="button"
                             className="dispatch-changes"
                             tabIndex={0}
                             aria-label={`Review changes of ${row.task}`}
-                            title="Opens what its own branch changed, with Merge and Discard."
+                            title={
+                              row.worktree.standing === "kept"
+                                ? "Opens what its own branch changed, with Merge and Discard."
+                                : "Opens what is left of its own branch, with Delete branch where it is merged."
+                            }
                             onClick={() => onChanges(row.id, row.task)}
                           >
                             Review changes
@@ -391,6 +398,7 @@ export function DispatchesTab({
  *  loses for good), then what becomes of the branch. */
 export function Loss({ loss }: { loss: WorktreeLoss }) {
   const lost = lostSaid(loss);
+  const nested = nestedSaid(loss);
   return (
     <div className="dispatch-loss" data-testid="discard-loses">
       {losesNothing(loss) && (
@@ -404,6 +412,14 @@ export function Loss({ loss }: { loss: WorktreeLoss }) {
             {`${counted(loss.changes.length, "uncommitted file", "uncommitted files")} would be lost:`}
           </p>
           <pre>{loss.changes.join("\n")}</pre>
+        </>
+      )}
+      {nested !== undefined && (
+        <>
+          <p className="honest" data-testid="discard-loses-repositories">
+            {nested}
+          </p>
+          <pre>{loss.nested.join("\n")}</pre>
         </>
       )}
       {loss.ignored.length > 0 && (

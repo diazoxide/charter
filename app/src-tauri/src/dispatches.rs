@@ -822,10 +822,11 @@ pub(crate) async fn dispatches(
 /// shows it before it asks (#1453), and as the window hands it back with the answer: **the
 /// paths discarded are the ones the person was shown, or nothing is.**
 ///
-/// A comparison of paths, and it says so: every uncommitted file is listed by its own path,
-/// so a new one is seen. A listed file changed again, or a file added inside a folder git
-/// ignores whole, is the same list and passes. The moment between the last read and git's
-/// removal is not covered either.
+/// Compared whole, with a fingerprint of everything in the folder beside the paths
+/// ([`WorktreeLoss::seal`]), so a listed file written again, a file added inside a folder git
+/// ignores whole and a commit made in a nested repository are each a change (#1472). The last
+/// comparison is made in the same call as the removal, just before git runs it; git's own time
+/// to remove the folder is the moment it does not cover.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub(crate) struct WorktreeLoss {
     /// The task, by the name its row has.
@@ -844,6 +845,12 @@ pub(crate) struct WorktreeLoss {
     /// Every path git ignores there, a folder as one entry (`target/`): build output, local
     /// settings, and what purlis keeps hidden in a chat's folder. Deleted with the folder.
     pub ignored: Vec<String>,
+    /// The uncommitted folders of `changes` that are repositories of their own (`?? vendor/lib/`):
+    /// git lists each as one line, and all its files and its history go with the folder.
+    pub nested: Vec<String>,
+    /// A fingerprint of everything the folder holds, read as the question was asked
+    /// (`purlis_core::dispatchplace::sealed`): what tells a file written again from the same list.
+    pub seal: String,
     /// How many commits the folder holds that exist on no other branch and no remote. **Where
     /// the folder is on a branch they are not lost**: that branch stays. Where it is on none,
     /// nothing keeps them and they go with the folder.
@@ -927,11 +934,28 @@ pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
         purlis_core::dispatchplace::at_risk(held.root(), &tree, &crate::gitbroker::isolation())
             .map_err(|not_done| not_done.in_window(&tree.repo))?
             .ok_or_else(|| ALREADY_GONE.to_owned())?;
-    let unread = || {
-        "purlis could not read what that branch's folder holds, so it will not discard it: it \
-         could not tell you what would be lost. Look in the folder by hand."
-            .to_owned()
-    };
+    let seal = tree
+        .folder(held.root())
+        .and_then(|folder| purlis_core::dispatchplace::sealed(&folder))
+        .ok_or_else(unread)?;
+    loss_from(&record, &tree, risk, seal)
+}
+
+/// What is said where purlis cannot read what a branch's folder holds.
+fn unread() -> String {
+    "purlis could not read what that branch's folder holds, so it will not discard it: it \
+     could not tell you what would be lost. Look in the folder by hand."
+        .to_owned()
+}
+
+/// The question a discard asks of `record`'s folder, from what git and the fingerprint read.
+fn loss_from(
+    record: &Record,
+    tree: &purlis_core::dispatchplace::Tree,
+    risk: purlis_core::worktree::standing::AtRisk,
+    seal: String,
+) -> Result<WorktreeLoss, String> {
+    let changes = risk.changes.ok_or_else(unread)?;
     Ok(WorktreeLoss {
         task: record
             .task
@@ -941,7 +965,8 @@ pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
         // The record's branch, never whatever the folder is on now: it is the only branch a
         // discard touches.
         branch: tree.branch.clone(),
-        changes: risk.changes.ok_or_else(unread)?,
+        nested: purlis_core::dispatchplace::nested_repositories(&changes),
+        changes,
         ignored: risk.ignored.ok_or_else(unread)?,
         unmerged: risk.unmerged.ok_or_else(unread)?,
         // On no branch, nothing keeps the folder's own commits: they are named, as lost.
@@ -951,6 +976,7 @@ pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
             Vec::new()
         },
         on: risk.branch,
+        seal,
     })
 }
 
@@ -961,19 +987,34 @@ pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
 /// Read again at this moment and compared: a file written or a commit made since the question
 /// was asked is something the person did not agree to, so nothing is removed and they are
 /// asked again. And refused, as the question was, while any chat stands in the folder.
+///
+/// **The folder is marked as going first** (#1472): from then until it is gone, no chat starts
+/// in it or below it ([`crate::chats::Chats::taking_away`]), and only then is it asked whether
+/// a chat stands there. The last comparison is made in the same call as the removal
+/// (`purlis_core::dispatchplace::discard_as_shown`), so a write by any chat, one standing above
+/// the folder too, refuses it up to the moment git runs.
 pub(crate) fn discard(held: &Held, id: &str, seen: &WorktreeLoss) -> Result<(), String> {
     let now = loss_of(held, id)?;
     if now != *seen {
-        return Err(
-            "What that branch's folder holds has changed since you were asked, so nothing was \
-             removed. Press Discard again to see what would be lost now."
-                .to_owned(),
-        );
+        return Err(purlis_core::dispatchplace::CHANGED_SINCE_ASKED.to_owned());
     }
-    // Asked once more, last: a chat started there while git was read stands in the way too.
+    let folder = discardable(held, id)?
+        .1
+        .folder(held.root())
+        .ok_or_else(|| ALREADY_GONE.to_owned())?;
+    let _going = held.chats().taking_away(&folder)?;
+    // Asked once more, with the folder marked: a chat started there while git was read stands
+    // in the way too, and none can start there now.
     let (record, tree) = discardable(held, id)?;
-    purlis_core::dispatchplace::discard(held.root(), &tree, &crate::gitbroker::isolation())
-        .map_err(|not_done| not_done.in_window(&tree.repo))?;
+    purlis_core::dispatchplace::discard_as_shown(
+        held.root(),
+        &tree,
+        &crate::gitbroker::isolation(),
+        |risk, seal| {
+            loss_from(&record, &tree, risk.clone(), seal.to_owned()).is_ok_and(|now| now == *seen)
+        },
+    )
+    .map_err(|not_done| not_done.in_window(&tree.repo))?;
     if let Err(why) = dispatchrecord::worktree_removed(
         held.root(),
         &record.id,

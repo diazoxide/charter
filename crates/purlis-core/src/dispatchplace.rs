@@ -801,7 +801,14 @@ pub enum NotDone {
     Repo(String),
     /// git ran and refused, in the window's words.
     Git(String),
+    /// What the folder holds is not what the person was shown, read again in the same call
+    /// as the removal and just before it ([`discard_as_shown`]). Nothing was removed.
+    Changed,
 }
+
+/// What the person is told where a discard found the folder changed since they were asked.
+pub const CHANGED_SINCE_ASKED: &str = "What that branch's folder holds has changed since you \
+     were asked, so nothing was removed. Press Discard again to see what would be lost now.";
 
 impl From<crate::gitbroker::NotRun> for NotDone {
     fn from(not_run: crate::gitbroker::NotRun) -> Self {
@@ -824,6 +831,7 @@ impl NotDone {
                  its branch's row in the explorer instead, or take that setting out of the repo."
             ),
             Self::Git(why) => why.clone(),
+            Self::Changed => CHANGED_SINCE_ASKED.to_owned(),
         }
     }
 }
@@ -860,6 +868,89 @@ pub fn at_risk(
     .map_err(|refusal| NotDone::Git(refusal.in_window()))
 }
 
+/// The most entries of a folder [`sealed`] reads. Past them, what else the folder holds is not
+/// compared: a build tree of that size is one path of the list the person is shown anyway.
+pub const MOST_SEALED: usize = 100_000;
+
+/// **What the folder at `folder` holds now, as one fingerprint** (#1472): every entry below it,
+/// by its path, its kind, its size and the time it was last written, read without following a
+/// link, and a link by what it points at. The folder's own `.git` pointer is not read: it is
+/// git's, and names the clone.
+///
+/// What a discard compares besides the paths git lists, so that **a listed file written again,
+/// a file added inside a folder git ignores whole, and anything done inside a nested
+/// repository** each read as a change. Contents are not hashed: a write that kept a file's size
+/// and its time to the nanosecond is not seen. At most [`MOST_SEALED`] entries are read, in
+/// the order of their names. `None` where the folder, or anything in it, cannot be read: a
+/// discard that cannot compare is not asked for.
+pub fn sealed(folder: &Path) -> Option<String> {
+    use sha2::Digest;
+    let top = folder.symlink_metadata().ok()?;
+    if !top.is_dir() {
+        return None;
+    }
+    let mut digest = sha2::Sha256::new();
+    let mut read = 0usize;
+    let mut stack = vec![PathBuf::new()];
+    while let Some(below) = stack.pop() {
+        let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder.join(&below))
+            .ok()?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<_, _>>()
+            .ok()?;
+        names.sort();
+        // Read in name order; folders are opened after this one's entries, last name first
+        // off the stack, so the walk's order is fixed by the names alone.
+        let mut folders = Vec::new();
+        for name in names {
+            if below.as_os_str().is_empty() && name == ".git" {
+                continue;
+            }
+            if read == MOST_SEALED {
+                digest.update(b"\0more");
+                return Some(crate::extension::hex(&digest.finalize()));
+            }
+            read += 1;
+            let path = below.join(&name);
+            let meta = folder.join(&path).symlink_metadata().ok()?;
+            digest.update(path.as_os_str().as_encoded_bytes());
+            digest.update(b"\0");
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                let to = std::fs::read_link(folder.join(&path)).ok()?;
+                digest.update(b"l");
+                digest.update(to.as_os_str().as_encoded_bytes());
+            } else if kind.is_dir() {
+                digest.update(b"d");
+                folders.push(path);
+            } else {
+                let written = meta
+                    .modified()
+                    .ok()
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |since| since.as_nanos());
+                digest.update(format!("f{}:{written}", meta.len()).as_bytes());
+            }
+            digest.update(b"\0");
+        }
+        stack.extend(folders.into_iter().rev());
+    }
+    Some(crate::extension::hex(&digest.finalize()))
+}
+
+/// The uncommitted paths of `changes`, as `git status --porcelain` prints them, that are
+/// **repositories of their own** made inside the folder: git lists every other new file by its
+/// own path, and a nested repository as one folder (`?? vendor/lib/`), whose files and history
+/// all go with it (#1472).
+pub fn nested_repositories(changes: &[String]) -> Vec<String> {
+    changes
+        .iter()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .filter(|path| path.trim_end_matches('"').ends_with('/'))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// What a discard did to the branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Discarded {
@@ -878,20 +969,220 @@ pub enum Discarded {
 /// branch of the repo. Commits made in the folder on no branch at all are the one thing a
 /// discard does lose, and [`at_risk`] names them.
 pub fn discard(root: &Path, tree: &Tree, isolation: &git::Isolated) -> Result<Discarded, NotDone> {
+    discard_as_shown(root, tree, isolation, |_, _| true)
+}
+
+/// [`discard`], **where the folder still holds what the person was shown**: what would go is
+/// read again, with its fingerprint ([`sealed`]), inside the same brokered call as the removal
+/// and just before git runs it, and `as_shown` is asked whether it is what they agreed to. Where
+/// it is not, or cannot be read, nothing is removed ([`NotDone::Changed`]).
+///
+/// What is left between that read and git's removal is git's own time to remove the folder:
+/// a write landing in it then is not seen (#1472).
+pub fn discard_as_shown(
+    root: &Path,
+    tree: &Tree,
+    isolation: &git::Isolated,
+    as_shown: impl FnOnce(&standing::AtRisk, &str) -> bool,
+) -> Result<Discarded, NotDone> {
     let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
     crate::gitbroker::in_a_checked_folder(root, ws, repo, piece, isolation, || {
-        worktree::remove(root, &tree.workspace, &tree.repo, &tree.piece, true, false).map(|_| {
-            let gone = tree.branch.as_deref().is_some_and(|branch| {
-                standing::drop_if_merged(root, &tree.workspace, &tree.repo, branch)
-            });
-            if gone {
-                Discarded::BranchGone
-            } else {
-                Discarded::BranchKept
-            }
-        })
+        let folder = tree.folder(root).ok_or(NotDone::Changed)?;
+        let risk = standing::at_risk(root, ws, repo, piece)
+            .map_err(|refusal| NotDone::Git(refusal.in_window()))?
+            .map(|risk| without_purlis_own(&folder, risk))
+            .ok_or(NotDone::Changed)?;
+        let seal = sealed(&folder).ok_or(NotDone::Changed)?;
+        if !as_shown(&risk, &seal) {
+            return Err(NotDone::Changed);
+        }
+        worktree::remove(root, &tree.workspace, &tree.repo, &tree.piece, true, false)
+            .map_err(|refusal| NotDone::Git(refusal.in_window()))
+            .map(|_| {
+                let gone = tree.branch.as_deref().is_some_and(|branch| {
+                    standing::drop_if_merged(root, &tree.workspace, &tree.repo, branch)
+                });
+                if gone {
+                    Discarded::BranchGone
+                } else {
+                    Discarded::BranchKept
+                }
+            })
     })?
-    .map_err(|refusal| NotDone::Git(refusal.in_window()))
+}
+
+// ---------------------------------------------------------------------------------------
+// a branch whose folder is gone
+// ---------------------------------------------------------------------------------------
+
+/// **A task's own branch whose folder is gone**, as its repo has it now (#1472): discarded,
+/// removed from the explorer or by hand, or taken away merged while git kept the branch. The
+/// branch stays an ordinary branch of the repo, and this is what is said of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchLeft {
+    /// The commit it is at, by its full id.
+    pub tip: String,
+    /// Whether the branch the clone is on holds every commit of it: the one case git's own
+    /// `branch -d` deletes it, and so the one case purlis offers to.
+    pub merged: bool,
+    /// How many of its commits the branch the clone is on does not hold.
+    pub ahead: u32,
+}
+
+/// Why a task's branch was not deleted. Nothing was changed by any of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotDeleted {
+    /// Git was not run in the repo, or would not answer ([`NotDone`]).
+    Route(NotDone),
+    /// Its folder is there again: Discard is how it goes.
+    FolderThere,
+    /// The branch is not there any more.
+    Gone,
+    /// The branch is not at the commit the person was shown.
+    Moved,
+    /// git does not find it merged.
+    NotMerged,
+}
+
+impl NotDeleted {
+    /// The sentence the person reads in the window, of the task's `branch` in `repo`.
+    pub fn in_window(&self, repo: &str, branch: &str) -> String {
+        let branch = crate::shown::short(branch);
+        match self {
+            Self::Route(NotDone::Repo(_)) => format!(
+                "purlis will not run git in {repo} for this: the repo's own git settings name a \
+                 program, which git would run outside any sandbox. Delete '{branch}' in your own \
+                 terminal if you mean to. Nothing was deleted."
+            ),
+            Self::Route(not_done) => not_done.in_window(repo),
+            Self::FolderThere => format!(
+                "The folder of '{branch}' is there, so purlis does not delete its branch: \
+                 Discard the folder from the task's Changes tab instead. Nothing was deleted."
+            ),
+            Self::Gone => {
+                format!("'{branch}' is no longer in {repo}, so there is nothing to delete.")
+            }
+            Self::Moved => format!(
+                "'{branch}' has a commit you were not shown. Look at it again before you delete \
+                 it. Nothing was deleted."
+            ),
+            Self::NotMerged => format!(
+                "git does not find '{branch}' merged into the branch {repo} is on, so purlis \
+                 keeps it: deleting a branch that holds work is never purlis's act. Nothing was \
+                 deleted."
+            ),
+        }
+    }
+}
+
+/// What a git call that must answer answered, its first line, or `None`.
+fn answered(dir: &Path, args: &[&str]) -> Option<String> {
+    git::run(dir, args, git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map(|run| run.line().trim().to_owned())
+}
+
+/// How `branch` stands in the clone at `clone`, read with the brokered route's pins in force:
+/// `Ok(None)` where it is not there.
+fn left_in(clone: &Path, branch: &str) -> Result<Option<BranchLeft>, NotDone> {
+    let unread = || NotDone::Git(format!("purlis could not read the branch '{branch}'."));
+    let named = name::as_ref(branch);
+    let Some(tip) = answered(
+        clone,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{named}^{{commit}}"),
+        ],
+    )
+    .filter(|tip| !tip.is_empty()) else {
+        return Ok(None);
+    };
+    let merged = match git::run(
+        clone,
+        &["merge-base", "--is-ancestor", &named, "HEAD"],
+        git::READ,
+    ) {
+        Ok(seen) if seen.ok() => true,
+        Ok(seen) if seen.code == Some(1) => false,
+        _ => return Err(unread()),
+    };
+    let ahead = answered(clone, &["rev-list", "--count", &format!("HEAD..{named}")])
+        .and_then(|count| count.parse().ok())
+        .ok_or_else(unread)?;
+    Ok(Some(BranchLeft { tip, merged, ahead }))
+}
+
+/// **What is left of `tree`'s branch where its folder is gone**, read under the brokered
+/// route's rules and nothing changed: `Ok(None)` where its folder is there (Discard is the
+/// act for that), it names no branch, or the branch is gone too.
+pub fn branch_left(
+    root: &Path,
+    tree: &Tree,
+    isolation: &git::Isolated,
+) -> Result<Option<BranchLeft>, NotDone> {
+    let Some(branch) = tree.branch.as_deref() else {
+        return Ok(None);
+    };
+    if tree.there(root) || name::branch_name_ok(branch).is_err() {
+        return Ok(None);
+    }
+    let clone = root
+        .join("workspaces")
+        .join(&tree.workspace)
+        .join(&tree.repo);
+    crate::gitbroker::in_a_checked_clone(root, &tree.workspace, &tree.repo, isolation, || {
+        left_in(&clone, branch)
+    })
+    .map_err(NotDone::Repo)?
+}
+
+/// **Deletes `tree`'s branch, whose folder is gone, where git finds it merged and it is still
+/// at `seen`**, the commit the person was shown. The person's own act, from the window, and
+/// nothing else in purlis calls it. By git's own `branch -d` and nothing stronger: a branch
+/// that holds work stays (ADR 0072 §4), whatever the window asked.
+///
+/// git's record of the gone folder is cleared first, as the explorer's Remove of a gone folder
+/// clears it: git keeps a branch that a registered folder is on.
+pub fn delete_left_branch(
+    root: &Path,
+    tree: &Tree,
+    seen: &str,
+    isolation: &git::Isolated,
+) -> Result<(), NotDeleted> {
+    let branch = tree.branch.as_deref().ok_or(NotDeleted::Gone)?;
+    if tree.there(root) {
+        return Err(NotDeleted::FolderThere);
+    }
+    if name::branch_name_ok(branch).is_err() {
+        return Err(NotDeleted::Gone);
+    }
+    let clone = root
+        .join("workspaces")
+        .join(&tree.workspace)
+        .join(&tree.repo);
+    let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
+    crate::gitbroker::in_a_checked_clone(root, ws, repo, isolation, || {
+        let left = left_in(&clone, branch)
+            .map_err(NotDeleted::Route)?
+            .ok_or(NotDeleted::Gone)?;
+        if left.tip != seen {
+            return Err(NotDeleted::Moved);
+        }
+        if !left.merged {
+            return Err(NotDeleted::NotMerged);
+        }
+        // A folder gone by other hands may still be registered. Nothing is there to lose.
+        let _ = worktree::remove(root, ws, repo, piece, false, false);
+        if standing::drop_if_merged(root, ws, repo, branch) {
+            Ok(())
+        } else {
+            Err(NotDeleted::NotMerged)
+        }
+    })
+    .map_err(|why| NotDeleted::Route(NotDone::Repo(why)))?
 }
 
 // ---------------------------------------------------------------------------------------

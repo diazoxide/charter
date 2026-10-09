@@ -237,6 +237,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     // What a task left on a branch of its own: the person's merge or discard (#1511).
     "task_branch_merge",
     "dispatch_worktree_discard",
+    // ...and the delete of a merged branch whose folder is gone (#1472).
+    "task_branch_delete",
     // The explorer's remove and merge of any branch folder (#1534).
     "worktree_remove",
     "worktree_merge",

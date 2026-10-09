@@ -43,6 +43,7 @@ mod finished;
 mod firstrun;
 mod firsttask;
 mod gitbroker;
+mod goingaway;
 mod handoff;
 mod harness_plugins;
 mod heard;
