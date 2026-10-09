@@ -298,6 +298,21 @@ export function VaultTab({
     </p>
   );
 
+  /** Read the vault again, beside a refusal or a health line that may pass (NO-8's follow-up,
+   *  #1296): a provider signed in or unlocked meanwhile is read without reopening the tab. */
+  const readAgain = (
+    <p>
+      <button
+        type="button"
+        className="panel-view"
+        tabIndex={0}
+        onClick={() => setAgain((was) => was + 1)}
+      >
+        Read again
+      </button>
+    </p>
+  );
+
   return (
     <section
       className="view-pane vault-tab"
@@ -331,6 +346,8 @@ export function VaultTab({
             <p className="trouble" role="alert">
               {contents === undefined ? said.trouble : contents.refused?.why}
             </p>
+            {/* Not opened at all: no box below to read again from (#1296). */}
+            {contents === undefined && readAgain}
             {/* Not read, and read through a token (#1526): under why, the box that stores the
                 token, which is the way out. No table, no search and no Add: none of them has
                 a vault to act on. */}
@@ -354,9 +371,12 @@ export function VaultTab({
         ) : (
           <>
             {!contents.health.ok && (
-              <p className="trouble" role="alert">
-                {contents.health.detail}
-              </p>
+              <>
+                <p className="trouble" role="alert">
+                  {contents.health.detail}
+                </p>
+                {readAgain}
+              </>
             )}
             <IdentityPanel
               identity={contents.identity}

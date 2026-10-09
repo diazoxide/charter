@@ -172,10 +172,7 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
   "FirstTaskTab.tsx": {
     count: 1,
-    why:
-      ACTION +
-      ". Also its read of the start options, read once when it opens: Read again is NO-8's " +
-      "follow-up (#1296)",
+    why: ACTION + ". Its read of the start options is a Notice with Read again (#1296)",
   },
   "HarnessSetupTab.tsx": {
     count: 1,

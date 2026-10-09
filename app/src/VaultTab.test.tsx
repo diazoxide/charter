@@ -133,6 +133,35 @@ describe("a vault's tab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("op not on PATH");
   });
 
+  it("reads again from the refusal, and from the health line, on Read again (#1296)", async () => {
+    // Refused, then unhealthy, then read: each answer is the next `vault_open`'s.
+    const answers: (VaultContents | Error)[] = [
+      new Error("vault 'ops' could not be opened"),
+      contents([], { provider: "1password", health: { ok: false, detail: "op not on PATH" } }),
+      contents([secret("API_TOKEN")]),
+    ];
+    let opened = 0;
+    mockIPC((cmd) => {
+      if (cmd !== "vault_open") return null;
+      const answer = answers[Math.min(opened++, answers.length - 1)];
+      if (answer instanceof Error) throw answer.message;
+      return answer;
+    });
+    draw();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("vault 'ops' could not be opened");
+    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("op not on PATH");
+    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
+
+    await waitFor(() =>
+      expect(rows()).toEqual([["API_TOKEN", "16–31 bytes", "2026-09-24 11:32 UTC", ""]]),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Read again" })).not.toBeInTheDocument();
+    expect(opened).toBe(3);
+  });
+
   it("narrows the table to the secrets whose names hold what is searched for", async () => {
     core(contents([secret("API_TOKEN"), secret("DB_URL"), secret("DEPLOY_TOKEN")]));
     draw();
