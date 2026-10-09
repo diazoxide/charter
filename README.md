@@ -29,10 +29,10 @@ Intel macOS build, no `.rpm`, and no Windows until the port lands.
 | Platform | Floor | CI label | What CI proves |
 |---|---|---|---|
 | macOS 27 | Apple silicon | `xcode-27` | Evidence: builds the app, compiled from scratch on that image. The image is a preview |
-| macOS 26 | Apple silicon | `macos-latest` | Builds the app, and starts and drives it through every scenario test. Release builds are made on this label (`release.yml`) |
+| macOS 26 | Apple silicon | `macos-latest` | Builds the app, and starts and drives it through every scenario test. Evidence: runs the core and app tests, failing when one leaves a process running. Release builds are made on this label (`release.yml`) |
 | Ubuntu 26.04 LTS | x86_64 | `ubuntu-26.04` | Evidence: builds the app from scratch on that image and holds its cold start to the 2 s limit |
 | Ubuntu 24.04 LTS | x86_64 | `ubuntu-24.04` | Every Rust and web test, the app build, the cold start, and every scenario test. Release builds are made on this label (`release.yml`) |
-| Fedora 44 (the current release) | x86_64 | `fedora:44` | Evidence: builds the app against Fedora's own libraries, runs the core and CLI tests as a normal user, and starts the app |
+| Fedora 44 (the current release) | x86_64 | `fedora:44` | Evidence: builds the app against Fedora's own libraries, runs the core and CLI tests as a normal user, failing when one leaves a process running, and starts the app |
 | Windows 11 | not supported yet | `windows-latest` | Nothing yet. The job is evidence for the port and allowed to fail. Windows 11 joins this list when the Windows port lands |
 | iOS 16.4 or later | no iOS app yet | — | Nothing. The floor any iOS client will be held to |
 | Desktop browsers, the current Chrome, Edge, Firefox and Safari | no browser client yet | — | Nothing. The floor any browser client will be held to |

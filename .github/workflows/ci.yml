@@ -12,8 +12,8 @@ on:
     - cron: "41 2 * * *"
 
 # **Evidence-only jobs run nightly, never on a pull request and never on a push (V70, amended
-# 2026-10-09).** `windows`, `fedora` and `app-evidence` (the preview images) report and never
-# gate: none is a required check, and each has `continue-on-error`. Each carries
+# 2026-10-09).** `windows`, `fedora`, `macos-tests` and `app-evidence` (the preview images)
+# report and never gate: none is a required check, and each has `continue-on-error`. Each carries
 #
 #     if: github.event_name == 'schedule'
 #
@@ -465,15 +465,56 @@ jobs:
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
             cargo fetch --locked
+      # Under `tools/no-orphans.sh`, as the `rust` job runs its tests (#923, #965), inside
+      # `runuser` so the check counts the `ci` user's processes, the ones the tests start.
+      # `--reap` is safe here: the container is the job's own.
       - name: The core's and the CLI's tests, as a normal user
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
+            tools/no-orphans.sh --reap -- \
             cargo test --locked -p purlis-core -p purlis-cli --no-fail-fast
       - name: The app starts and draws a window
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
             APP=/home/ci/target/debug/charter-app LIMIT_MS=20000 CEILING_MS=30000 \
             dbus-run-session -- tools/coldstart-linux.sh bare
+
+  # The core's and the app's tests on macOS, under the orphan check (#965). The leaks #923
+  # fixed were seen on macOS, where processes run on another schedule (first-run program checks
+  # under load, another `/bin/sh`), and no other job runs these crates' tests there: `app` only
+  # builds, and `scenario` drives the built app.
+  #
+  # Evidence, like `fedora`: reported, never a gate, and nightly only (V70). Measured cost, from
+  # `main`'s runs of 2026-10-09: the gating macOS `app` job is 3-5 minutes and `rust`, the
+  # longest gate, 16; the same tests took 13 minutes in `fedora` with no build cache. Run on
+  # every pull request they would add some 10 macOS minutes to each run, on the runners CI
+  # is already short of, for tests the Linux `rust` job runs already. Nightly, a leak that is
+  # macOS's own is reported the next morning. The CLI's tests can join once the nights are
+  # green.
+  #
+  # nextest, as the `rust` job runs them: each test in a process of its own, so a leak is the
+  # test's, not a neighbour's. `--reap` is safe here because the runner is the job's own.
+  macos-tests:
+    name: macos (core and app tests, no orphans, evidence only)
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # tauri::generate_context! reads the built frontend, as in the `rust` job.
+      - run: mkdir -p app/dist
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Build the tests
+        run: cargo nextest run --locked -p purlis-core -p purlis-app --no-run
+      - name: Run the tests
+        run: tools/no-orphans.sh --reap -- cargo nextest run --locked -p purlis-core -p purlis-app --profile ci
 
   # What the Python charter answered, frozen: every scenario the old differential ran, and the
   # generated cases of the shell reader and the plane-root guards, replayed against this build
