@@ -38,6 +38,9 @@ export type ListedChat = {
   mode: "handoff" | "task" | null;
   /** That chat's name as the person saw it then: what is said once it has closed. */
   from: string | null;
+  /** That chat is not open because a launch could not start it, and it waits to: it has not
+   *  closed (#1513). */
+  askerWaiting?: boolean;
   /** Whether it has a tab. A task has none until its row is clicked. */
   tab: boolean;
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
@@ -86,6 +89,16 @@ export function typedInto(harness: string | null): boolean {
   return harness === "claude" || harness === "codex";
 }
 
+/**
+ * What a row at the top says of the chat it came from, which is not open: a task was asked by
+ * it (V100-64, #1513), and the work a handoff moved came from it. "(closed)" only where it has
+ * closed: one a launch could not start waits to, and is "(not open)".
+ */
+export function cameFromSaid(from: string, task: boolean, waiting = false): string {
+  if (!task) return `from ${from}`;
+  return waiting ? `asked by ${from} (not open)` : `asked by ${from} (closed)`;
+}
+
 /** A listed chat at its place in the tree. */
 export type ChatRow = ListedChat & {
   /** 1 at the top. */
@@ -120,6 +133,7 @@ export function listedChat(
     parent: chat.from?.chat ?? null,
     mode: chat.from ? (chat.from.task ? "task" : "handoff") : null,
     from: chat.from?.name ?? null,
+    askerWaiting: chat.from?.asker_waiting === true,
     tab,
     branch: ownBranch(chat),
     tasksLimit: chat.tasks_limit ?? null,
@@ -213,8 +227,9 @@ export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
         level,
         posinset: at + 1,
         setsize: fresh.length,
-        orphaned:
-          orphans && chat.parent !== null && (chat.mode === "task" || !open.has(chat.parent)),
+        // Only where its parent is not open (#1492, #1513): a handoff whose chat is open stands
+        // at the top unmarked, and a loop in the lineage marks nothing.
+        orphaned: orphans && chat.parent !== null && !open.has(chat.parent),
       });
       walk(level + 1, children.get(chat.session) ?? [], false);
     });

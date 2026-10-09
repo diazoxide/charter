@@ -658,6 +658,10 @@ impl Held {
     /// launch about chats the operator already declined.
     pub(crate) fn reopen(&self, size: Size, record: Read, choice: Choice) {
         self.records.allow();
+        // Whether the record was read: only then, or where the person chose to start fresh,
+        // does a dispatch nothing brings back end (#1513). A record that could not be read
+        // says nothing about which chats are gone.
+        let read = record.is_ok();
         // A record another clone or device wrote is a copy's or a move's (V43): a copy's chats
         // get ids of their own before any of them starts, and are written with them once
         // they are back, so no two clones ever hold one chat's id.
@@ -698,7 +702,11 @@ impl Held {
         // row from its dispatch record (#1485). Before anything is put back.
         let record = crate::finished::put_back_without_the_finished(&self.root, &record);
         let wanted = record.chats.len();
-        let back = self.chats.put_back(&record, size).len();
+        // A task that had not reported comes back on its conversation, told to carry on, and
+        // one that cannot has ended by itself (#1513). **It reads the dispatch records as they
+        // are now**: a conversion of those records (#1519) runs when the project is opened
+        // (`Planes::open`), before this, and must stay there.
+        let back = crate::restored::put_back(self, &record, size, read).len();
         if wanted > 0 {
             tracing::info!(
                 "purlis: plane {}, {back} of {wanted} chats back",
@@ -889,6 +897,8 @@ impl Held {
             .handed_from(session)
             .filter(|from| from.mode == purlis_core::reopen::Mode::Task)
             .and_then(|from| Some((from.chat, self.chats.shown_name(session)?)));
+        // And how a dispatch record names it, as the chat that asked (#1513).
+        let as_asker = crate::dispatches::chat_ref(self, session);
         let closed = self.chats.close(session);
         let ended = id.filter(|id| !self.chats.id_is_open(id));
         self.dispatch_grants.chat_closed(session, ended.as_deref());
@@ -912,7 +922,11 @@ impl Held {
         self.hooks.chat_ended(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
-        let orphaned = purlis_core::handback::orphan(&self.root, session);
+        let moved = purlis_core::handback::orphan_kept(&self.root, session);
+        // A task's report this chat never read is still owed to it, should the person reopen
+        // it (#1513).
+        crate::restored::unread_at_close(self, session, as_asker.as_ref(), &moved);
+        let orphaned: Vec<_> = moved.into_iter().map(|(report, _)| report).collect();
         (self.tell)(gone);
         // **A report that was still waiting for this chat now has nowhere to go** (#1448). It
         // is kept for the workspace, and the chat that wrote it, where it is still open, is a

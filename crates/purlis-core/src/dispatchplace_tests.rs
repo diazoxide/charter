@@ -473,6 +473,8 @@ fn a_record(worktree: Option<dispatchrecord::Worktree>, workspace: Option<&str>)
         attempts: 0,
         worked: 0,
         limit: None,
+        undelivered: None,
+        asker_last_record: None,
     }
 }
 

@@ -70,6 +70,7 @@ mod planewatch;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod portal;
 mod references;
+mod restored;
 mod sandboxing;
 mod saving;
 mod searchfiles;
@@ -678,6 +679,11 @@ pub struct HandedFromNote {
     /// was started, never a word a chat said.
     #[specta(optional)]
     pub by_person: Option<bool>,
+    /// Whether the chat it came from is one a launch could not start, which waits in the list
+    /// of chats that did not start (#1513): it has not closed, and its row says so. Absent for
+    /// a chat whose asker is open, or closed.
+    #[specta(optional)]
+    pub asker_waiting: Option<bool>,
 }
 
 impl HandedFromNote {
@@ -699,6 +705,7 @@ impl HandedFromNote {
             asking: None,
             by_person: (from.mode == purlis_core::reopen::Mode::Task && from.by_person)
                 .then_some(true),
+            asker_waiting: None,
         }
     }
 }
@@ -716,6 +723,10 @@ fn with_task_standing(
     mut drawn: OpenChat,
 ) -> OpenChat {
     let session = drawn.session;
+    // Its asker waits to start, and has not closed (#1513).
+    if let Some(from) = drawn.from.as_mut() {
+        from.asker_waiting = held.chats().waits_to_start(from.chat).then_some(true);
+    }
     if let Some(from) = drawn.from.as_mut().filter(|from| from.task) {
         if from.reported || from.unreported {
             from.outcome = outcomes.of_task(session).map(str::to_owned);
@@ -978,7 +989,12 @@ fn resume_session(
             held.followed(instead_of, started);
             started
         }
-        None => held.chats().start_ready(&chat, &resumed.ready, size)?,
+        // The reports of the tasks the chat this record is of asked for, kept because it had
+        // closed, are handed to the chat that resumes it (#1513, V100-64). Not on a start
+        // again after a failed resume: that chat was handed them already.
+        None => restored::resuming(&held, &path, chat, |chat| {
+            held.chats().start_ready(chat, &resumed.ready, size)
+        })?,
     };
     let open = held
         .chats()
@@ -1730,7 +1746,11 @@ async fn retry_chat_that_did_not_start(
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = held.chats().retry(&id, Size { columns, rows });
+        // Reports kept for it while it was not open are handed to it once it starts, and a
+        // task is told to carry on (#1513).
+        let session = restored::retrying(&held, &id, || {
+            held.chats().retry(&id, Size { columns, rows })
+        });
         // A task drawn under the chat that asked reads from the same list (#1497): its row
         // goes where it started, and says the new reason where it did not.
         held.rows_changed();
@@ -1749,7 +1769,10 @@ fn forget_chat_that_did_not_start(
     plane: PlaneId,
     id: String,
 ) -> Result<(), String> {
-    planes.held(&plane)?.chats().forget(&id)
+    let held = planes.held(&plane)?;
+    // A task still owing its report has ended by itself once it is let go, and the chat that
+    // asked is told (#1513).
+    restored::forgetting(&held, &id, || held.chats().forget(&id))
 }
 
 /// Start fresh (NO-3): chat `session` started again on the plane's instructions as they are

@@ -45,6 +45,7 @@ import {
 import { useChatsListPrefs } from "./chatsListPrefs";
 import {
   ASKED_BY_YOU,
+  cameFromSaid,
   handedOff,
   handedOffSaid,
   needing,
@@ -753,6 +754,7 @@ export function ChatsSection({
                       handedToName={handed?.[0].name ?? null}
                       handedMore={handed === undefined ? 0 : handed.length - 1}
                       handedAll={wentTo.get(row.session) ?? NOT_HANDED_OFF}
+                      askerWaiting={row.askerWaiting === true}
                       tab={row.tab}
                       current={row.session === front}
                       open={open ?? null}
@@ -869,6 +871,7 @@ const Row = memo(function Row({
   handedToName,
   handedMore,
   handedAll,
+  askerWaiting,
   tab,
   current,
   open,
@@ -922,6 +925,8 @@ const Row = memo(function Row({
   handedMore: number;
   /** Every open chat it handed off to, the newest first: its menu has a row to go to each. */
   handedAll: readonly number[];
+  /** That chat waits to start after a launch, and has not closed (#1513). */
+  askerWaiting: boolean;
   tab: boolean;
   current: boolean;
   /** Whether its rows are drawn under it, for a row that has some; nothing for a leaf. */
@@ -972,7 +977,7 @@ const Row = memo(function Row({
   // Asked once, as the row is drawn: whether its chat's state changed while it was not.
   const [changed] = useState(() => clock.missed(session));
   const ownBranch = branch === null ? null : `own branch ${branch}`;
-  const cameFrom = from === null ? null : `from ${from}`;
+  const cameFrom = from === null ? null : cameFromSaid(from, task, askerWaiting);
   const wentTo = handedToName === null ? null : handedOffSaid(handedToName, handedMore);
   /** What the second line says that does not change by itself: one line's tooltip. */
   const second = [

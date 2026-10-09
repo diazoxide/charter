@@ -3,6 +3,7 @@ import type { OpenChat } from "./bindings";
 import {
   below,
   belowCount,
+  cameFromSaid,
   chatsTree,
   handedOff,
   handedOffSaid,
@@ -67,6 +68,17 @@ describe("the project's chats as a tree", () => {
       "1:8:true",
       "2:9:false",
     ]);
+  });
+
+  it("marks no chat of a loop as having a closed parent: its parent is open", () => {
+    const rows = chatsTree([listed(1), listed(2, 3), listed(3, 2)]);
+    expect(rows.every((row) => !row.orphaned)).toBe(true);
+  });
+
+  it("says a closed asker closed, and one waiting to start is not open", () => {
+    expect(cameFromSaid("steward 7", true)).toBe("asked by steward 7 (closed)");
+    expect(cameFromSaid("steward 7", true, true)).toBe("asked by steward 7 (not open)");
+    expect(cameFromSaid("steward 7", false)).toBe("from steward 7");
   });
 
   it("draws every chat once when the lineage loops back on itself", () => {
