@@ -49,7 +49,8 @@ export const ChatDoingLine = memo(function ChatDoingLine({
  * place a row keeps for it, filled by {@link ChatDoingLine}.
  */
 export const ChatRowActivity = memo(function ChatRowActivity({ session }: { session: number }) {
-  // The id `chatDoingId` names, written out: that is the row's own call, made as the row is
-  // drawn, and this line is drawn without it.
+  // The id `chatDoingId` names, written out: that call is the row's own, made as the row is
+  // drawn, and `ChatDoing.window.test.tsx` counts it as the row's draw (SC-3). This line is
+  // drawn far more often than its row and must not call it.
   return <ChatDoingLine session={session} id={`${DOING_ID}${session}`} />;
 });

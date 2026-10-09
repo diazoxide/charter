@@ -39,7 +39,9 @@ vi.mock("./chatDoing", async (original) => {
       drawn.lines.push(session);
       return real.useDoingSaid(session);
     },
-    // And a row asks this each time it is drawn.
+    // And a row asks this each time it is drawn. **Only the row may call it**: that is what
+    // makes a call a row's draw. The line inside the row (`ChatRowActivity`) spells the same id
+    // out for that reason (#1551); a line that called this would read here as a row redrawn.
     chatDoingId: (session: number) => {
       drawn.rows.push(session);
       return real.chatDoingId(session);

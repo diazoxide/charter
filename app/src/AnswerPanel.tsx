@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useRef, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnswerQuestion } from "./AnswerQuestion";
 import { useKeyboardBack } from "./Brief";
@@ -69,6 +69,7 @@ export function AnswerPanel({
   onClose: () => void;
 }) {
   const handBack = useKeyboardBack();
+  const content = useRef<HTMLDivElement>(null);
   return (
     <Dialog.Root
       open
@@ -79,10 +80,16 @@ export function AnswerPanel({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning answer-panel"
           aria-describedby={undefined}
-          // The form puts the keyboard in its box once the question is read.
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          // **The keyboard is in the dialog from its first frame**, in every state: on the
+          // dialog itself while the question is read, or where there is none to answer (then
+          // Tab reaches Close and nothing behind it), and in the box once the form has it.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            content.current?.focus();
+          }}
           onPointerDownOutside={(event) => event.preventDefault()}
           onCloseAutoFocus={handBack}
         >

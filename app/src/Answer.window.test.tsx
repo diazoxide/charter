@@ -85,8 +85,14 @@ const QUESTION = "Which pods?\nOnly the ones in staging?";
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
-/** The core: the steward's chat and its task in workspace alpha. */
-function core(asking = true) {
+/** What the core says the task's question is gone for, refusing a stale answer. */
+const MOVED_ON =
+  "read the logs has asked another question since this one was shown, so this answer was not sent.";
+
+/** The core: the steward's chat and its task in workspace alpha. `question` is what
+ *  `task_question` reads (`none`: no question, as when the asking chat answered first), and
+ *  `refuse` has `answer_task_question` refuse, as for a question the task has moved on from. */
+function core(asking = true, { question = true, refuse = false } = {}) {
   const asked: Asked[] = [];
   const chats = [STEWARD, task(asking)];
   mockIPC(
@@ -108,8 +114,9 @@ function core(asking = true) {
       if (cmd === "running_sessions") return [];
       if (cmd === "stopping_chats") return [];
       if (cmd === "finished_tasks") return [];
+      if (cmd === "answer_task_question" && refuse) throw MOVED_ON;
       if (cmd === "task_question")
-        return chats[1].from?.asking === true && a.session === 9
+        return question && chats[1].from?.asking === true && a.session === 9
           ? { task: "read the logs", asked: "steward 4", number: 3, question: QUESTION }
           : null;
       return null;
@@ -203,6 +210,55 @@ describe("Answer, from a task's row menu in the Chats list (#1551)", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(said.sent()).toEqual([]);
+  });
+
+  it("holds the keyboard inside itself where there is no question to answer", async () => {
+    core(true, { question: false });
+    render(<App />);
+    const { dialog } = await opened();
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "read the logs has no question waiting for an answer now.",
+    );
+    // In the dialog from its first frame, and Tab stays in it.
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await userEvent.tab();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus();
+    await userEvent.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("says the core's refusal of a stale answer, keeps the text, and stays open", async () => {
+    const said = core(true, { refuse: true });
+    render(<App />);
+    const { dialog } = await opened();
+    const box = await within(dialog).findByRole("textbox", { name: "Your answer" });
+
+    await userEvent.type(box, "Staging only.{Enter}");
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(MOVED_ON);
+    expect(box).toHaveValue("Staging only.");
+    expect(screen.getByRole("dialog", { name: ANSWER })).toBeInTheDocument();
+    expect(said.sent()).toHaveLength(1);
+  });
+
+  it("hands the keyboard back to the task's row on Cancel, for a menu opened from the keyboard", async () => {
+    core();
+    render(<App />);
+    const tree = await section();
+    row(tree, "read the logs").focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    (await screen.findByRole("menuitem", { name: ANSWER })).focus();
+    await userEvent.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: ANSWER });
+    await waitFor(() =>
+      expect(within(dialog).getByRole("textbox", { name: "Your answer" })).toHaveFocus(),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(row(tree, "read the logs")).toHaveFocus());
   });
 
   it("says where the question closed while it was open, and keeps what was typed", async () => {

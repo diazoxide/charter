@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AwayRefusal, FinishedTask } from "./bindings";
-import { nothingKnown, type ChatStates } from "./chatState";
+import { nothingKnown, taskFailedSaid, type ChatStates } from "./chatState";
 import {
   awayPartsSaid,
   awaySaid,
@@ -185,50 +185,53 @@ describe("what a summary counts (#1514)", () => {
 
 describe("which chats came to need the person while away (#1514, #1551)", () => {
   const states = (more: Partial<ChatStates>): ChatStates => ({ ...nothingKnown, ...more });
+  const none = new Set<number>();
 
   it("counts a chat that came into the queue, and none that left it", () => {
-    const was = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 3 } });
+    const was = states({ needsYou: [1] });
+    const now = states({ needsYou: [2] });
+    expect(cameToNeedOf(was, now, none)).toEqual([2]);
+  });
+
+  it("counts a chat already in the queue that came into waiting while away", () => {
+    // 1 waited on a failure's look and has since ended a turn waiting on the person; 2 waited,
+    // went on, and waits again; 3 only went on waiting.
+    const was = states({ needsYou: [1, 2, 3], needs: { 1: ["check staging failed"] } });
+    const now = states({ needsYou: [1, 2, 3], needs: { 1: ["check staging failed"] } });
+    expect(cameToNeedOf(was, now, new Set([1, 2]))).toEqual([1, 2]);
+  });
+
+  it("counts a chat already in the queue whose item gives a new reason", () => {
+    const was = states({ needsYou: [2, 3], needs: { 3: ["Its report has nowhere to go"] } });
     const now = states({
-      needsYou: [2],
-      bySession: { 1: "running", 2: "waiting" },
-      movedAt: { 1: 5, 2: 6 },
+      needsYou: [2, 3],
+      needs: { 2: ["Its report has nowhere to go"], 3: ["Its report has nowhere to go"] },
     });
-    expect(cameToNeedOf(was, now)).toEqual([2]);
+    expect(cameToNeedOf(was, now, none)).toEqual([2]);
   });
 
-  it("counts a chat already in the queue that has something new for the person", () => {
-    // 1 was waiting on a failure's look, and has since asked a question of its own; 2 was
-    // waiting on its turn and its tasks' report has since come with nowhere to go; 3 is as
-    // it was.
-    const was = states({
-      needsYou: [1, 2, 3],
-      bySession: { 1: "running", 2: "waiting", 3: "waiting" },
-      movedAt: { 1: 1, 2: 2, 3: 3 },
-      needs: { 1: ["check staging failed"], 3: ["Its report has nowhere to go"] },
-    });
+  it("does not count a waiting chat whose task failed while away: that is a failure", () => {
+    const failure = taskFailedSaid({ task: "check staging", how: "failed", why: "" });
+    const was = states({ needsYou: [1] });
     const now = states({
-      needsYou: [1, 2, 3],
-      bySession: { 1: "waiting", 2: "waiting", 3: "waiting" },
-      movedAt: { 1: 9, 2: 2, 3: 3 },
-      needs: {
-        1: ["check staging failed"],
-        2: ["Its report has nowhere to go"],
-        3: ["Its report has nowhere to go"],
-      },
+      needsYou: [1],
+      needs: { 1: [`${failure}: The cluster refused the login.`] },
+      failedTasks: { 1: [{ id: "F", task: "check staging", chat: null }] },
     });
-    expect(cameToNeedOf(was, now)).toEqual([1, 2]);
+    expect(cameToNeedOf(was, now, none)).toEqual([]);
   });
 
-  it("counts a chat that answered and asked again while away, though it waits as it did", () => {
+  it("does not count a waiting chat that was only touched: a sub-agent of it ended", () => {
+    // The board stamps the chat for its child; it did not come into waiting again.
     const was = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 3 } });
-    const now = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 8 } });
-    expect(cameToNeedOf(was, now)).toEqual([1]);
+    const now = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 9 } });
+    expect(cameToNeedOf(was, now, none)).toEqual([]);
   });
 
-  it("counts a second item of the same words as new", () => {
+  it("counts a second reason of the same words as new", () => {
     const was = states({ needsYou: [1], refusals: { 1: ["a commit"] } });
     const now = states({ needsYou: [1], refusals: { 1: ["a commit", "a commit"] } });
-    expect(cameToNeedOf(was, now)).toEqual([1]);
+    expect(cameToNeedOf(was, now, none)).toEqual([1]);
   });
 });
 

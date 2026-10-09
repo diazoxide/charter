@@ -160,18 +160,20 @@ function onlyForFailures(states: AwayRead, session: number): boolean {
 /** The shares of what the chats are doing that tell what each chat in the queue waits on. */
 export type Queued = Pick<
   ChatStates,
-  "needsYou" | "bySession" | "movedAt" | "needs" | "reports" | "refusals" | "stoppedBelow"
+  "needsYou" | "needs" | "reports" | "refusals" | "stoppedBelow" | "failedTasks"
 >;
 
 /**
- * What chat `session` waits on the person for, one entry each: its own wait (a turn that ended
- * waiting on them, by when it began), and each reason its needs-you item says. Two reasons in
- * the same words are two entries.
+ * The reasons chat `session`'s needs-you item gives, one entry each, **leaving out the
+ * failures of its tasks**: those are counted as failed, by their finished rows, and never again
+ * as waiting. Two reasons in the same words are two entries.
  */
-function waitsOf(states: Queued, session: number): string[] {
+function reasonsOf(states: Queued, session: number): string[] {
+  const failed = states.failedTasks[session] ?? [];
   return [
-    ...(states.bySession[session] === "waiting" ? [`waits:${states.movedAt[session] ?? ""}`] : []),
-    ...(states.needs[session] ?? []).map((one) => `need:${one}`),
+    ...(states.needs[session] ?? [])
+      .filter((one) => !failed.some((task) => saysFailureOf(one, task.task)))
+      .map((one) => `need:${one}`),
     ...(states.reports[session] ?? []).map((one) => `report:${one}`),
     ...(states.refusals[session] ?? []).map((one) => `refused:${one}`),
     ...(states.stoppedBelow[session] ?? []).map((one) => `stopped:${one}`),
@@ -181,14 +183,24 @@ function waitsOf(states: Queued, session: number): string[] {
 /**
  * **The chats that came to need the person between `was` and `now`**, oldest in the queue
  * first: each in the queue now that was not in it then, and each that was and **has something
- * new** (#1551), by item and not by chat: a wait that began since, or a reason its item says
- * that it did not say then. One that only kept what it had, or lost some of it, is not new.
+ * new for them** (#1551), by item and not by chat:
+ *
+ * - a wait that began since: the chat came into `waiting` while the person was away
+ *   (`cameIntoWaiting`, as the window saw its state change), whatever it waited on before;
+ * - a reason its item gives that it did not give then, other than a task's failure.
+ *
+ * What only touches the chat (a task of it failed, a sub-agent of it ended, a report came back)
+ * is not a new wait, and one that only kept what it had, or lost some of it, is not new.
  */
-export function cameToNeedOf(was: Queued, now: Queued): number[] {
+export function cameToNeedOf(
+  was: Queued,
+  now: Queued,
+  cameIntoWaiting: ReadonlySet<number>,
+): number[] {
   return now.needsYou.filter((session) => {
-    if (!was.needsYou.includes(session)) return true;
-    const before = waitsOf(was, session);
-    return waitsOf(now, session).some((one) => {
+    if (!was.needsYou.includes(session) || cameIntoWaiting.has(session)) return true;
+    const before = reasonsOf(was, session);
+    return reasonsOf(now, session).some((one) => {
       const at = before.indexOf(one);
       if (at < 0) return true;
       before.splice(at, 1);
