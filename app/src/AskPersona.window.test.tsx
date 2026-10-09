@@ -118,6 +118,9 @@ const HELD: DispatchPending = {
   works_in: null,
   works_in_missing: false,
   allowed_in: [],
+  works_with: "devops works with its own access: no vault; no hosts beyond the project's.",
+  also: [],
+  shown: "s0",
 };
 
 function core(now: Core) {

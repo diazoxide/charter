@@ -87,6 +87,31 @@
 //! taken back by purlis, and gets them back only by the person's Give back, once for the
 //! name. **Reading the table moves nothing** ([`standing_read`]).
 //!
+//! # What a persona wants, and several pairs in one answer (#1502)
+//!
+//! A persona's definition may say which personas it usually works with
+//! ([`purlis_core::dispatchwants`]). **That line grants nothing**: [`Store::request`] does not
+//! read it, so a persona that wants another is asked exactly as one that does not. It is read
+//! for the question alone: under its answers the Notice offers a box for each wanted persona
+//! that nothing answers for yet, unticked, and says what each persona works with.
+//!
+//! **An Allow keeps the asked pair and every ticked one at the level chosen**
+//! ([`Store::allow_with`]), each audited as its own grant. Keep blocked and Never are about
+//! the asked pair only.
+//!
+//! **A chat can write persona definitions** (its own persona's, and at the project's root any
+//! persona's), so what the question offers is something a chat can move. What holds:
+//!
+//! - the boxes and the sentences are built by the app, from the project's files as it reads
+//!   them ([`Store::offer`]); a request carries a target and a brief and nothing else;
+//! - what a persona works with is read from records no chat writes: the vault registry, your
+//!   own vault grants, and the project's file;
+//! - a box is unticked until the person ticks it, and only a name the question offers **at
+//!   the moment it is answered** is granted: the definition is read again then;
+//! - the window sends back a digest of what it showed ([`DispatchPending::shown`]), and an
+//!   answer to a question that reads differently now grants nothing. The person is shown it
+//!   again.
+//!
 //! **A "this chat" grant ends with the chat** ([`Store::chat_closed`]), as its sandbox grants
 //! do, and stays through a restart, which starts the new run before the old one ends
 //! (D-1437-R3).
@@ -118,6 +143,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use purlis_core::dispatchgrant::{self, ChatPair, Covers, Dispatched, InForce, Pair};
+use purlis_core::dispatchwants::{self, Access, Offer};
 use purlis_core::dispatchwithin;
 use purlis_core::sandbox;
 use purlis_core::sandbox::grant::Level;
@@ -353,6 +379,29 @@ pub struct Ground<'a> {
     pub at: u64,
 }
 
+/// What the person ticked under an Allow, and what the question read as when they did.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ticked<'a> {
+    /// The wanted personas whose boxes were ticked.
+    pub also: &'a [String],
+    /// [`DispatchPending::shown`] as the window was told it. `None` asks nothing of it: an
+    /// answer with no question shown, which only a caller inside the app makes.
+    pub shown: Option<&'a str>,
+}
+
+/// What an Allow is answered where the question no longer reads as it was shown.
+pub const CHANGED: &str = "What this question says changed since it was shown, so nothing was \
+                           allowed. Read it again, then answer.";
+
+/// `names` as a sentence lists them: `qa`, `qa and docs`, `qa, docs and ops`.
+fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [most @ .., last] => format!("{} and {last}", most.join(", ")),
+    }
+}
+
 impl Store {
     /// Hands every answer to `answers` from now on: the dispatch core's to register.
     pub fn answers_with(&self, answers: Answers) {
@@ -552,6 +601,80 @@ impl Store {
         });
     }
 
+    /// **What the question for `held` says beyond who asks and the brief** (#1502): what the
+    /// persona asked about works with, and each persona the asking one wants that the question
+    /// offers beside it. Read from the project at `root` as it is now, and never from the
+    /// request.
+    ///
+    /// A wanted persona is not offered where a grant covers it **for a task in the workspace
+    /// this one works in** (#1505: a ticked pair is kept with the answer's own workspace
+    /// condition, so a box is offered where that grant would be new), the person said never to
+    /// it, policy locks it, the person kept it blocked on this chat's tab (they are not asked
+    /// twice in one chat, by a box either), or a dispatch to it from a chat of the same
+    /// persona is waiting on the person: that one has its own question, which shows its own
+    /// brief.
+    ///
+    /// **No box at all where the task's workspace is not there yet**: an Allow then starts the
+    /// one dispatch and keeps no grant, so there is nothing a tick could be kept as.
+    pub fn offer(&self, root: &Path, locks: &sandbox::policy::Locks, held: &Pending) -> Offer {
+        let asking = held.asking.persona.as_deref();
+        let missing = held
+            .works_in
+            .as_deref()
+            .is_some_and(|workspace| !dispatchwithin::Seen::read(root).is_there(workspace));
+        let wanted = if held.locked.is_some() || missing {
+            Vec::new()
+        } else {
+            let grants = self.in_force_for(root, &held.asking, held.works_in.as_deref());
+            dispatchwants::also(root, asking, &held.target, &grants, locks)
+        };
+        let waiting = lock(&self.pending).clone();
+        Offer {
+            target: Access::at(root, locks, &held.target),
+            also: wanted
+                .iter()
+                .filter(|wanted| !self.is_kept_blocked(&held.asking, wanted))
+                .filter(|wanted| {
+                    !waiting.iter().any(|one| {
+                        one.asking.persona.as_deref() == asking && one.target == **wanted
+                    })
+                })
+                .map(|wanted| Access::at(root, locks, wanted))
+                .collect(),
+        }
+    }
+
+    /// `held` as the window is told it, in project `plane` at `root`: [`told`], with what this
+    /// store alone knows. The other workspaces the asking chat's own grants allow this pair
+    /// in, so a chat allowed for one workspace that sends the persona to another is asked with
+    /// the reason said (#1505); and what the question offers ([`Store::offer`], #1502).
+    pub fn told(
+        &self,
+        plane: &PlaneId,
+        root: &Path,
+        locks: &sandbox::policy::Locks,
+        held: &Pending,
+    ) -> DispatchPending {
+        let mut shown = told(plane, root, held);
+        if held.locked.is_none() {
+            shown.allowed_in.extend(self.chat_allowed_elsewhere(held));
+            shown.allowed_in.sort();
+            shown.allowed_in.dedup();
+        }
+        let offer = self.offer(root, locks, held);
+        shown.works_with = offer.target.said();
+        shown.shown = offer.stamp();
+        shown.also = offer
+            .also
+            .iter()
+            .map(|one| DispatchAlso {
+                persona: one.persona.clone(),
+                works_with: one.brief(),
+            })
+            .collect();
+        shown
+    }
+
     /// Holds a dispatch for the person, or answers the one already held for that chat,
     /// target and workspace, and whether it is new. **One question a workspace**: an answer
     /// that allows the pair in one workspace must not start a task waiting to run in another.
@@ -619,27 +742,65 @@ impl Store {
         }
     }
 
-    /// **Allow, at `level`, on the Notice of held dispatch `id`**: judged again under policy,
-    /// audited, then kept where that level keeps it. The held dispatch, and every other one
-    /// the grant now covers, is handed on to start.
-    ///
-    /// **The grant is the narrower one** (#1505): for the person or the project it holds in
-    /// the workspace the held task works in, and nowhere else. [`Store::allow_anywhere`] is
-    /// the wider answer, and a press of its own. A task at the project's root works in no
-    /// workspace, so there the grant holds in any, as it always did.
+    /// **Allow, at `level`, on the Notice of held dispatch `id`**, with no box ticked and no
+    /// word of what was shown: [`Self::allow_with`], as the tests of everything else answer.
+    /// The window's own Allow always says what it showed.
+    #[cfg(test)]
     pub fn allow(&self, ground: &Ground<'_>, id: u32, level: Level) -> Result<String, String> {
-        self.allow_within(ground, id, level, false)
+        self.allow_with(ground, id, level, &Ticked::default())
     }
 
-    /// **Allow, at `level`, in any workspace**: the Notice's explicit wider choice. For one
-    /// chat it is [`Store::allow`]: a grant for one chat is for the task it was asked about.
+    /// **Allow, at `level`, in any workspace**, with no box ticked and no word of what was
+    /// shown: [`Self::allow_anywhere_with`], as the tests of the workspace condition answer.
+    #[cfg(test)]
     pub fn allow_anywhere(
         &self,
         ground: &Ground<'_>,
         id: u32,
         level: Level,
     ) -> Result<String, String> {
-        self.allow_within(ground, id, level, true)
+        self.allow_anywhere_with(ground, id, level, &Ticked::default())
+    }
+
+    /// **Allow, at `level`, on the Notice of held dispatch `id`, with `ticked`** (#1502):
+    /// judged again under policy, audited, then kept where that level keeps it. The asked pair
+    /// and every ticked one are kept at that level, **each audited as its own grant**. The
+    /// held dispatch, and every other one a grant now covers, is handed on to start.
+    ///
+    /// **The grant is the narrower one** (#1505): for the person or the project it holds in
+    /// the workspace the held task works in, and nowhere else. [`Store::allow_anywhere_with`]
+    /// is the wider answer, and a press of its own. A task at the project's root works in no
+    /// workspace, so there the grant holds in any, as it always did. **Every ticked pair is
+    /// kept with the same condition as the asked one**: one answer, one place it holds.
+    ///
+    /// **Only what the question offers now is granted.** The asking persona's definition is
+    /// read again here: a ticked name it no longer offers is not granted, and the answer says
+    /// so. Where the window says what it showed ([`Ticked::shown`]) and the question reads
+    /// differently now, nothing at all is granted or audited ([`CHANGED`]).
+    ///
+    /// The asked pair comes first: if it cannot be kept, nothing else is tried. A ticked pair
+    /// that then fails to be written is recorded as taken back and said, and the rest stand.
+    pub fn allow_with(
+        &self,
+        ground: &Ground<'_>,
+        id: u32,
+        level: Level,
+        ticked: &Ticked<'_>,
+    ) -> Result<String, String> {
+        self.allow_within(ground, id, level, false, ticked)
+    }
+
+    /// **Allow, at `level`, in any workspace, with `ticked`**: the Notice's explicit wider
+    /// choice, for the asked pair and for every ticked one alike. For one chat it is
+    /// [`Store::allow_with`]: a grant for one chat is for the task it was asked about.
+    pub fn allow_anywhere_with(
+        &self,
+        ground: &Ground<'_>,
+        id: u32,
+        level: Level,
+        ticked: &Ticked<'_>,
+    ) -> Result<String, String> {
+        self.allow_within(ground, id, level, true, ticked)
     }
 
     /// Both Allows.
@@ -649,6 +810,7 @@ impl Store {
         id: u32,
         level: Level,
         anywhere: bool,
+        ticked: &Ticked<'_>,
     ) -> Result<String, String> {
         use purlis_core::dispatchwithin::{Limited, Within};
         let gone = || {
@@ -689,33 +851,84 @@ impl Store {
                 dispatchgrant::SETTINGS
             ));
         }
+        // The question as it reads now, from the files as they are now: what the person saw
+        // is held to it, and so is every box.
+        let offer = self.offer(ground.root, ground.locks, &held);
+        if ticked.shown.is_some_and(|shown| shown != offer.stamp()) {
+            return Err(CHANGED.to_owned());
+        }
+        let mut wanted: Vec<&str> = Vec::new();
+        let mut not_offered: Vec<String> = Vec::new();
+        for name in ticked.also {
+            if offer.also.iter().any(|one| one.persona == *name) {
+                if !wanted.contains(&name.as_str()) {
+                    wanted.push(name);
+                }
+            } else {
+                let name = purlis_core::shown::short(name);
+                if !not_offered.contains(&name) {
+                    not_offered.push(name);
+                }
+            }
+        }
         // What is kept, checked before anything is audited.
         enum Kept {
-            Chat(String),
+            Chat(String, ChatPair),
             Pair(Pair),
         }
-        let kept = match (level, asking, held.asking.id.as_deref()) {
-            (Level::Chat, _, Some(chat)) => Kept::Chat(chat.to_owned()),
+        let kept_for = |target: &str| match (level, asking, held.asking.id.as_deref()) {
+            (Level::Chat, _, Some(chat)) => Ok(Kept::Chat(
+                chat.to_owned(),
+                ChatPair {
+                    asking: held.asking.persona.clone(),
+                    target: target.to_owned(),
+                },
+            )),
             (Level::Chat, _, None) => {
-                return Err(
-                    "That chat has no id yet, so purlis can allow nothing for it alone.".to_owned(),
-                );
+                Err("That chat has no id yet, so purlis can allow nothing for it alone.".to_owned())
             }
             (Level::You | Level::Project, Some(asking), _) => {
-                Kept::Pair(Pair::new(asking, &held.target)?)
+                Pair::new(asking, target).map(Kept::Pair)
             }
-            (Level::You | Level::Project, None, _) => {
-                return Err(
-                    "This chat runs as no persona, so there is no pair to allow beyond this \
-                     chat. Allow it for this chat."
-                        .to_owned(),
-                );
+            (Level::You | Level::Project, None, _) => Err(
+                "This chat runs as no persona, so there is no pair to allow beyond this chat. \
+                 Allow it for this chat."
+                    .to_owned(),
+            ),
+        };
+        let asked = kept_for(&held.target)?;
+        let also: Vec<(&str, Kept)> = wanted
+            .iter()
+            .map(|target| kept_for(target).map(|kept| (*target, kept)))
+            .collect::<Result<_, _>>()?;
+        // What the answer says of the boxes, after what it says of the asked pair: `held_in`
+        // is where the ticked pairs hold, as the asked one does.
+        let of_the_boxes = |kept_too: &[String], unkept: &[String], held_in: &str| {
+            let mut said = String::new();
+            if !kept_too.is_empty() {
+                said.push_str(&format!(
+                    " Also allowed {}{held_in}: {} to {}.",
+                    level.said(),
+                    asking.unwrap_or("this chat"),
+                    listed(kept_too)
+                ));
             }
+            if !not_offered.is_empty() {
+                said.push_str(&format!(
+                    " Not allowed, since the question no longer offers it: {}.",
+                    listed(&not_offered)
+                ));
+            }
+            if !unkept.is_empty() {
+                said.push_str(&format!(" Not kept: {}.", unkept.join("; ")));
+            }
+            said
         };
         // **The workspace the task is to work in is not there yet** (a handoff that makes it):
         // no grant is kept, at any level, for a name that is no workspace, since it would
         // belong to whatever was made under that name next. The person read this dispatch
-        // and allowed it: it starts, once, recorded as that, and the next one asks.
+        // and allowed it: it starts, once, recorded as that, and the next one asks. No box is
+        // offered there ([`Store::offer`]), so no ticked pair is kept either.
         if let Some(workspace) = held.works_in.as_deref()
             && !dispatchwithin::Seen::read(ground.root).is_there(workspace)
         {
@@ -734,130 +947,151 @@ impl Store {
             }
             return Ok(format!(
                 "{} is not a workspace of this project yet, so this starts this one dispatch \
-                 and keeps no grant. The next one asks you.",
-                purlis_core::shown::short(workspace)
+                 and keeps no grant. The next one asks you.{}",
+                purlis_core::shown::short(workspace),
+                of_the_boxes(&[], &[], "")
             ));
         }
-        // **Where it holds.** For the person and the project: the workspace the held task
-        // works in, unless they chose any workspace. For one chat: that task's place, always.
-        let within = match (&kept, held.works_in.as_deref()) {
+        // **Where it holds**, for the asked pair and every ticked one alike. For the person
+        // and the project: the workspace the held task works in, unless they chose any
+        // workspace. For one chat: that task's place, always.
+        let within = match (&asked, held.works_in.as_deref()) {
             (Kept::Pair(_), Some(workspace)) if !anywhere => {
                 Within::Workspace(workspace.to_owned())
             }
             _ => Within::Any,
         };
-        let limited = match (&kept, &within) {
-            (Kept::Pair(pair), Within::Workspace(workspace)) => Some(Limited::of(pair, workspace)?),
-            _ => None,
+        let limited_of = |kept: &Kept| match (kept, &within) {
+            (Kept::Pair(pair), Within::Workspace(workspace)) => {
+                Limited::of(pair, workspace).map(Some)
+            }
+            _ => Ok(None),
         };
-        // Whether it can be written is asked before it is recorded, so the log holds no grant
-        // that was refused.
-        if let (Level::Project, Kept::Pair(pair)) = (level, &kept) {
-            match &limited {
-                Some(one) => purlis_core::settings::dispatch::can_grant_in(ground.root, one)?,
-                None => purlis_core::settings::dispatch::can_grant(ground.root, pair)?,
+        // Whether each can be written is asked before any is recorded, so the log holds no
+        // grant that was refused.
+        for kept in std::iter::once(&asked).chain(also.iter().map(|(_, kept)| kept)) {
+            if let (Level::Project, Kept::Pair(pair)) = (level, kept) {
+                match limited_of(kept)? {
+                    Some(one) => purlis_core::settings::dispatch::can_grant_in(ground.root, &one)?,
+                    None => purlis_core::settings::dispatch::can_grant(ground.root, pair)?,
+                }
             }
         }
-        let audited = dispatchgrant::Audited {
-            act: dispatchgrant::Act::Grant,
-            asking,
-            target: &held.target,
-            level,
-            workspace: match &kept {
-                Kept::Chat(_) => held.works_in.as_deref(),
-                Kept::Pair(_) => within.workspace(),
-            },
-        };
-        (ground.audit)(Some(held.asking.session), &audited)?;
-        // A write that fails all the same is recorded as taken back, so the log never ends on
-        // a grant that is not there.
-        let not_kept = |why: String| {
-            if let Err(unsaid) = (ground.audit)(
-                Some(held.asking.session),
-                &dispatchgrant::Audited {
-                    act: dispatchgrant::Act::Revoke,
-                    ..audited
+        // One pair: audited as its own grant, with where it holds, then kept.
+        let keep = |target: &str, kept: &Kept| -> Result<(), String> {
+            let limited = limited_of(kept)?;
+            let audited = dispatchgrant::Audited {
+                act: dispatchgrant::Act::Grant,
+                asking,
+                target,
+                level,
+                workspace: match kept {
+                    Kept::Chat(..) => held.works_in.as_deref(),
+                    Kept::Pair(_) => within.workspace(),
                 },
-            ) {
-                tracing::warn!(
-                    "purlis: a dispatch grant that was not kept is still recorded as made \
-                     ({unsaid})"
-                );
-            }
-            why
-        };
-        match &kept {
-            Kept::Chat(chat) => {
-                let pair = ChatPair {
-                    asking: held.asking.persona.clone(),
-                    target: held.target.clone(),
-                };
-                let mut made = lock(&self.chat);
-                let mine = made.entry(chat.clone()).or_default();
-                if !mine
-                    .iter()
-                    .any(|one| one.pair == pair && one.works_in == held.works_in)
-                {
-                    mine.push(ChatMade {
-                        pair,
-                        works_in: held.works_in.clone(),
-                        at: ground.at,
-                        chat: held.asking.name.clone(),
-                    });
-                }
-            }
-            Kept::Pair(pair) => {
-                match (level, &limited) {
-                    (Level::Project, Some(one)) => {
-                        purlis_core::settings::dispatch::write_in(ground.root, one)
-                            .map_err(not_kept)?;
-                        // The file holds it now. Where this machine cannot record its own
-                        // acceptance, that is said, and nothing is recorded as taken back:
-                        // the grant is in the file, for the team.
-                        dispatchwithin::accept(ground.root, one).map_err(|why| {
-                            purlis_core::settings::dispatch::written_not_accepted(&why)
-                        })?;
-                    }
-                    (Level::Project, None) => {
-                        purlis_core::settings::dispatch::grant(ground.root, pair)
-                            .map_err(not_kept)?;
-                    }
-                    _ => {
-                        dispatchwithin::grant_yours(ground.root, pair, &within).map_err(|why| {
-                            not_kept(format!("purlis could not keep the grant: {why}"))
-                        })?
-                    }
-                }
-                if let Err(why) = sandbox::local::record_made(
-                    ground.root,
-                    sandbox::local::Made {
-                        what: WHAT.to_owned(),
-                        target: limited
-                            .as_ref()
-                            .map_or_else(|| pair.to_string(), ToString::to_string),
-                        level: level.word().to_owned(),
-                        at: ground.at,
-                        chat: Some(held.asking.name.clone()),
+            };
+            (ground.audit)(Some(held.asking.session), &audited)?;
+            // A write that fails all the same is recorded as taken back, so the log never ends
+            // on a grant that is not there.
+            let not_kept = |why: String| {
+                if let Err(unsaid) = (ground.audit)(
+                    Some(held.asking.session),
+                    &dispatchgrant::Audited {
+                        act: dispatchgrant::Act::Revoke,
+                        ..audited
                     },
                 ) {
-                    // The grant stands, and is audited; only the list's "when" is lost.
                     tracing::warn!(
-                        "purlis: a dispatch grant was kept without when it was made ({why})"
+                        "purlis: a dispatch grant that was not kept is still recorded as made \
+                         ({unsaid})"
                     );
                 }
+                why
+            };
+            match kept {
+                Kept::Chat(chat, pair) => {
+                    let mut made = lock(&self.chat);
+                    let mine = made.entry(chat.clone()).or_default();
+                    if !mine
+                        .iter()
+                        .any(|one| one.pair == *pair && one.works_in == held.works_in)
+                    {
+                        mine.push(ChatMade {
+                            pair: pair.clone(),
+                            works_in: held.works_in.clone(),
+                            at: ground.at,
+                            chat: held.asking.name.clone(),
+                        });
+                    }
+                }
+                Kept::Pair(pair) => {
+                    match (level, &limited) {
+                        (Level::Project, Some(one)) => {
+                            purlis_core::settings::dispatch::write_in(ground.root, one)
+                                .map_err(not_kept)?;
+                            // The file holds it now. Where this machine cannot record its own
+                            // acceptance, that is said, and nothing is recorded as taken back:
+                            // the grant is in the file, for the team.
+                            dispatchwithin::accept(ground.root, one).map_err(|why| {
+                                purlis_core::settings::dispatch::written_not_accepted(&why)
+                            })?;
+                        }
+                        (Level::Project, None) => {
+                            purlis_core::settings::dispatch::grant(ground.root, pair)
+                                .map_err(not_kept)?;
+                        }
+                        _ => dispatchwithin::grant_yours(ground.root, pair, &within).map_err(
+                            |why| not_kept(format!("purlis could not keep the grant: {why}")),
+                        )?,
+                    }
+                    if let Err(why) = sandbox::local::record_made(
+                        ground.root,
+                        sandbox::local::Made {
+                            what: WHAT.to_owned(),
+                            target: limited
+                                .as_ref()
+                                .map_or_else(|| pair.to_string(), ToString::to_string),
+                            level: level.word().to_owned(),
+                            at: ground.at,
+                            chat: Some(held.asking.name.clone()),
+                        },
+                    ) {
+                        // The grant stands, and is audited; only the list's "when" is lost.
+                        tracing::warn!(
+                            "purlis: a dispatch grant was kept without when it was made ({why})"
+                        );
+                    }
+                }
+            }
+            Ok(())
+        };
+        keep(&held.target, &asked)?;
+        let mut kept_too: Vec<String> = Vec::new();
+        let mut unkept: Vec<String> = Vec::new();
+        for (target, kept) in &also {
+            match keep(target, kept) {
+                Ok(()) => kept_too.push((*target).to_owned()),
+                Err(why) => unkept.push(format!("{target} ({why})")),
             }
         }
+        // Where the ticked pairs hold, said as the asked one's is.
+        let held_in = match &asked {
+            Kept::Pair(_) => format!(", {}", within.said()),
+            Kept::Chat(..) => String::new(),
+        };
+        let boxes = of_the_boxes(&kept_too, &unkept, &held_in);
         self.start_what_is_covered(ground);
         // The record of nevers does not read, so the grant just kept covers nothing yet. The
         // person read that on the Notice and allowed this dispatch: it starts, once, and the
-        // next one asks again until the record reads.
+        // next one asks again until the record reads. No box is offered then
+        // ([`Store::offer`]), so nothing else was kept.
         if self.in_force(ground.root, &held.asking).never_unread {
             if let Some(pending) = self.take(id) {
                 self.start_once(pending);
             }
             return Ok(format!(
                 "Allowed {}. This dispatch starts now. The next one asks again until the list \
-                 of pairs you said never to reads.",
+                 of pairs you said never to reads.{boxes}",
                 level.said()
             ));
         }
@@ -867,7 +1101,8 @@ impl Store {
         if lock(&self.pending).iter().any(|one| one.id == id) {
             return Err(format!(
                 "The grant is kept, and it does not cover this dispatch just now, so nothing \
-                 was started and it still waits. Answer it again, or look at the grant in {}.",
+                 was started and it still waits. Answer it again, or look at the grant in {}.\
+                 {boxes}",
                 dispatchgrant::SETTINGS
             ));
         }
@@ -875,7 +1110,7 @@ impl Store {
             Some(workspace) => format!("works in {}", purlis_core::shown::short(workspace)),
             None => "works at the project's root".to_owned(),
         };
-        Ok(match (&kept, &within) {
+        let said = match (&asked, &within) {
             (Kept::Pair(_), Within::Workspace(workspace)) => format!(
                 "Allowed {}, in {workspace}. The dispatch starts now, and the next one that \
                  works in {workspace} starts without asking.",
@@ -888,12 +1123,13 @@ impl Store {
                  starts without asking.",
                 level.said()
             ),
-            (Kept::Chat(_), _) => format!(
+            (Kept::Chat(..), _) => format!(
                 "Allowed {}. The dispatch starts now, and the next one from this chat that \
                  {from_this_chat} starts without asking.",
                 level.said()
             ),
-        })
+        };
+        Ok(format!("{said}{boxes}"))
     }
 
     /// Starts `pending`, which the person allowed and no grant can cover just now: one start
@@ -1284,9 +1520,23 @@ pub struct DispatchPending {
     /// chat, the person's, or the project's. Where there are any, the Notice says why the
     /// person is asked again: the grant they made holds there, and this task works elsewhere.
     pub allowed_in: Vec<String>,
+    /// **What the target persona works with**, in purlis's words (#1502): its vaults' names,
+    /// the hosts the project declares for it and the personas it may itself dispatch to, each
+    /// clipped to a few; or that no list holds it, where the project's sandbox is off. Never a
+    /// secret's name or value, and nothing a chat wrote.
+    pub works_with: String,
+    /// The personas the asking persona's definition wants that nothing answers for yet: one
+    /// box each under the answers, unticked. Read from the definition by the app as it tells
+    /// this, never from the request. Empty where policy locks the dispatch.
+    pub also: Vec<DispatchAlso>,
+    /// A digest of `works_with` and `also`, the part a long list clips included: an Allow
+    /// sends it back, and one for a question that reads differently now grants nothing.
+    pub shown: String,
 }
 
-/// `held` as the window is told it, in project `plane`.
+/// `held` as the window is told it, in project `plane`, **less what the store says of it**:
+/// what the question offers and what the target works with are [`Store::told`]'s to fill, and
+/// are empty here.
 fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
     let mut levels = Vec::new();
     if held.locked.is_none() {
@@ -1344,20 +1594,25 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
         works_in: held.works_in.clone(),
         works_in_missing: missing,
         allowed_in,
+        works_with: String::new(),
+        also: Vec::new(),
+        shown: String::new(),
     }
 }
 
-/// [`told`], with what `store` alone knows: the other workspaces the asking chat's own grants
-/// allow this pair in, so a chat allowed for one workspace that sends the persona to another
-/// is asked with the reason said.
+/// One persona a dispatch's Notice offers beside the one asked about (#1502).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchAlso {
+    pub persona: String,
+    /// What it works with, as `works_with` says it of the target, without the persona's name.
+    pub works_with: String,
+}
+
+/// [`Store::told`], under this machine's policy as it is now: what the tests of the workspace
+/// condition read.
+#[cfg(test)]
 fn told_by(store: &Store, plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
-    let mut shown = told(plane, root, held);
-    if held.locked.is_none() {
-        shown.allowed_in.extend(store.chat_allowed_elsewhere(held));
-        shown.allowed_in.sort();
-        shown.allowed_in.dedup();
-    }
-    shown
+    store.told(plane, root, &sandbox::policy::Locks::of(root), held)
 }
 
 /// Seconds since 1970, now.
@@ -1538,12 +1793,10 @@ fn requested(
         works_in,
     );
     if let (Some(raised), Some(tell)) = (raised, TELL.get()) {
-        tell(told_by(
-            held.dispatch_grants(),
-            held.plane_id(),
-            root,
-            &raised,
-        ));
+        tell(
+            held.dispatch_grants()
+                .told(held.plane_id(), root, &locks, &raised),
+        );
     }
     answer
 }
@@ -1557,11 +1810,13 @@ pub fn dispatch_grants_needed(
     session: u32,
 ) -> Result<Vec<DispatchPending>, String> {
     let held = planes.held(&plane)?;
-    Ok(held
-        .dispatch_grants()
+    let root = held.root();
+    let locks = sandbox::policy::Locks::of(root);
+    let store = held.dispatch_grants();
+    Ok(store
         .waiting(session)
         .iter()
-        .map(|one| told_by(held.dispatch_grants(), &plane, held.root(), one))
+        .map(|one| store.told(&plane, root, &locks, one))
         .collect())
 }
 
@@ -1574,6 +1829,12 @@ pub struct DispatchAllowed {
 /// **Allow** on a dispatch's Notice, at `level`: the pair is the app's record of the held
 /// dispatch `id`, never the window's word. Audited, then kept where that level keeps it, and
 /// the dispatch starts.
+///
+/// `also` is the wanted personas whose boxes the person ticked (#1502): each the question
+/// still offers is kept at the same level and with the same workspace condition as the asked
+/// pair (#1505), as its own audited grant. `shown` is the digest the
+/// Notice was told; where the question reads differently now, nothing is allowed and the
+/// Notice reads it again.
 #[tauri::command]
 #[specta::specta]
 pub fn allow_dispatch(
@@ -1581,12 +1842,14 @@ pub fn allow_dispatch(
     plane: PlaneId,
     id: u32,
     level: GrantLevel,
+    also: Vec<String>,
+    shown: String,
 ) -> Result<DispatchAllowed, String> {
     let held = planes.held(&plane)?;
     let root = held.root();
     let locks = sandbox::policy::Locks::of(root);
     held.dispatch_grants()
-        .allow(
+        .allow_with(
             &Ground {
                 root,
                 locks: &locks,
@@ -1597,6 +1860,10 @@ pub fn allow_dispatch(
             },
             id,
             level.into(),
+            &Ticked {
+                also: &also,
+                shown: Some(&shown),
+            },
         )
         .map(|said| DispatchAllowed { said })
 }
@@ -2271,6 +2538,9 @@ pub fn remove_dormant_dispatch(
 /// (#1505). [`allow_dispatch`] is the narrower one, which holds in the workspace the task
 /// works in. The pair and the workspace are the app's record of the held dispatch `id`, never
 /// the window's word. Audited, then kept, and the dispatch starts.
+///
+/// `also` and `shown` are [`allow_dispatch`]'s (#1502): each ticked persona the question still
+/// offers is kept at the same level **and in any workspace too**, as the asked pair is.
 #[tauri::command]
 #[specta::specta]
 pub fn allow_dispatch_anywhere(
@@ -2278,11 +2548,20 @@ pub fn allow_dispatch_anywhere(
     plane: PlaneId,
     id: u32,
     level: GrantLevel,
+    also: Vec<String>,
+    shown: String,
 ) -> Result<DispatchAllowed, String> {
     let held = planes.held(&plane)?;
     with_ground(&held, |ground| {
-        held.dispatch_grants()
-            .allow_anywhere(ground, id, level.into())
+        held.dispatch_grants().allow_anywhere_with(
+            ground,
+            id,
+            level.into(),
+            &Ticked {
+                also: &also,
+                shown: Some(&shown),
+            },
+        )
     })
     .map(|said| DispatchAllowed { said })
 }

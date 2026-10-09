@@ -77,6 +77,10 @@ shows who exists.
   helper.
 - **Only dispatch to personas that exist.** Never invent a name.
 
+**The first dispatch to another persona asks the person.** Nothing starts until they answer,
+and you cannot answer for them. If they say no, do the work without that persona or tell them
+it is waiting; do not look for another way to be allowed.
+
 **A persona is never a sub-agent.** Do not start one with your harness's agent tool: a
 sub-agent runs inside this chat, with this chat's vault and hosts, so it could not do that
 persona's work anyway. A sub-agent call named for a persona is refused and names the
@@ -141,11 +145,26 @@ it:
 2. Delete the `draft: true` line.
 3. Commit it. Personas are shared.
 
+A persona's author may list the personas it usually works with:
+
+```yaml
+wants: [devops, qa]
+```
+
+`wants` grants nothing. When a chat of that persona first asks to dispatch to another, it adds
+an unticked box for each listed persona under the question, so the person can allow several
+pairs in one answer. **`wants` is the person's and the project's to set. A chat does not edit
+it, in its own persona's file or any other, to be offered more**: leave the line as its author
+wrote it, and if you need to work with another persona, ask the person. Editing it allows
+nothing in any case: the grants are the person's, kept where no chat writes them. Names that
+are not finished personas of this project, the persona itself and `*` are ignored, and
+`purlis persona lint` says so.
+
 A persona earns its place by carrying something a general-purpose agent cannot have: a
 credential, a tool, or a domain narrow enough to name.
 
 ```bash
-purlis persona lint               # dangling uses:/extends:, missing role/vault/delegate-when, keys nothing reads
+purlis persona lint               # dangling uses:/extends:, missing role/vault/delegate-when, keys nothing reads, wants: names not offered
 purlis persona remove <name>      # refused while another persona extends or uses it
 ```
 

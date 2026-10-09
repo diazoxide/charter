@@ -51,6 +51,9 @@ const HELD: DispatchPending = {
   works_in: null,
   works_in_missing: false,
   allowed_in: [],
+  works_with: "devops works with its own access: no vault; no hosts beyond the project's.",
+  also: [],
+  shown: "s0",
 };
 
 /** A core holding `held` for chat 7, answering each press as the app does. `dispatches` are

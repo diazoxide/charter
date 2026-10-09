@@ -586,7 +586,10 @@ machine, which no grant covers until they lift it. A grant holds **in any worksp
 one workspace**: the workspace the dispatched task works in, never the one the asking chat is
 in. A never is not limited. It counts only while both personas exist. Where a
 persona was seen gone and another has its name, the grants for the name are **set aside**:
-they allow nothing until the person gives them back or removes them.
+they allow nothing until the person gives them back or removes them. What a persona **wants**
+(the `wants` line of its definition) is not a grant and makes none: it only puts unticked
+boxes under the question, so the person can allow several pairs in one answer, each with the
+workspace condition of that answer.
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
 **Headless chat**:
