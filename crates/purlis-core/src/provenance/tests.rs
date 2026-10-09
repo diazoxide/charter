@@ -515,3 +515,61 @@ fn an_empty_message_is_left_empty_for_git_to_refuse() {
         "\n# only a comment\n"
     );
 }
+
+#[test]
+fn a_crlf_message_gets_its_trailers_with_crlf_endings() {
+    assert_eq!(
+        append("fix: one bill\r\n", &lines(&OURS), None),
+        "fix: one bill\r\n\r\nAssisted-by: claude-code\r\n\
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\r\n"
+    );
+    assert_eq!(
+        append(
+            "fix\r\n\r\nbody\r\n\r\nCo-authored-by: x",
+            &lines(&OURS),
+            None
+        ),
+        "fix\r\n\r\nbody\r\n\r\nCo-authored-by: x\r\nAssisted-by: claude-code\r\n\
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\r\n",
+        "no line ending at the end: the message's own"
+    );
+    assert_eq!(
+        append(
+            "fix\r\n\r\n# Please enter the message.\r\n",
+            &lines(&OURS),
+            Some("#")
+        ),
+        "fix\r\n\r\nAssisted-by: claude-code\r\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\r\n\
+         \r\n# Please enter the message.\r\n"
+    );
+}
+
+#[test]
+fn a_message_no_editor_saw_keeps_its_hash_lines_as_text() {
+    let none = |name: &str| (name == "GIT_EDITOR").then(|| ":".to_owned());
+    assert_eq!(comment_for(Path::new("/nonexistent"), &none), None);
+    assert_eq!(
+        append("fix\n\n# not a comment under -m\n", &lines(&OURS), None),
+        "fix\n\n# not a comment under -m\n\nAssisted-by: claude-code\n\
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+    );
+}
+
+#[test]
+fn a_dash_m_message_ending_in_a_hash_line_gets_the_trailers_after_it() {
+    let commit = Commit::new("fix: one bill\n#123 is the ticket\n");
+    let env = commit.env();
+    let no_editor = |name: &str| match name {
+        "GIT_EDITOR" => Some(":".to_owned()),
+        other => env(other),
+    };
+    stamp(&commit.message, &commit.clone, &no_editor);
+    assert_eq!(
+        commit.stamped(),
+        "fix: one bill\n#123 is the ticket\n\n\
+         Assisted-by: claude-code\n\
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+         Purlis-Persona: steward\n\
+         Purlis-Change: billing-v2\n"
+    );
+}

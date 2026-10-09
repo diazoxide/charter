@@ -291,19 +291,26 @@ pub fn append(message: &str, trailers: &[String], comment: Option<&str>) -> Stri
         && paragraph
             .iter()
             .all(|l| trailer_line(l) || l.starts_with([' ', '\t']));
+    // The message's own line ending (#1021): a CRLF message keeps CRLF on the lines added to
+    // it, which shows under `--cleanup=verbatim`, where git strips no stray `\r`.
+    let eol = lines[..=last]
+        .iter()
+        .rev()
+        .find(|l| l.ends_with('\n'))
+        .map_or("\n", |l| if l.ends_with("\r\n") { "\r\n" } else { "\n" });
     let mut out = String::with_capacity(message.len() + 128);
     for line in &lines[..=last] {
         out.push_str(line);
     }
     if !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(eol);
     }
     if !block {
-        out.push('\n');
+        out.push_str(eol);
     }
     for line in added {
         out.push_str(line);
-        out.push('\n');
+        out.push_str(eol);
     }
     for line in &lines[last + 1..] {
         out.push_str(line);
@@ -362,7 +369,8 @@ pub fn trailers_for(plane: &Path, top: &Path, number: u32) -> Vec<String> {
 /// Best effort, and silent: outside a chat (`env` names no chat on a harness, or no project),
 /// or where the file cannot be read or written, the message is left exactly as it was written.
 /// A commit is never refused for its trailers. The lines are added by [`append`], with the
-/// repository's comment string, so a `--verbose` diff below the scissors stays below it.
+/// repository's comment string where an editor ran ([`comment_for`]), so a `--verbose` diff
+/// below the scissors stays below it.
 pub fn stamp(message: &Path, top: &Path, env: &dyn Fn(&str) -> Option<String>) {
     let Some(plane) = env(ROOT_ENV).filter(|p| !p.is_empty()).map(PathBuf::from) else {
         return;
@@ -378,10 +386,23 @@ pub fn stamp(message: &Path, top: &Path, env: &dyn Fn(&str) -> Option<String>) {
     let Ok(text) = std::fs::read_to_string(message) else {
         return;
     };
-    let stamped = append(&text, &trailers, Some(&comment_of(top)));
+    let stamped = append(&text, &trailers, comment_for(top, env).as_deref());
     if stamped != text {
         let _ = std::fs::write(message, stamped);
     }
+}
+
+/// What starts a comment line in the message `commit-msg` is handed, or `None` where git keeps
+/// such lines (#1021). git tells its hook that no editor ran by setting `GIT_EDITOR` to `:` in
+/// the hook's environment: a `-m` or `-F` message, whose default cleanup (`whitespace`) keeps a
+/// line starting with `#`. Read as text there, a last line starting with `#` gets the trailers
+/// after it, not before it. A `--cleanup=strip` beside `-m` strips that line afterwards, which
+/// leaves the trailers last all the same.
+fn comment_for(top: &Path, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if env("GIT_EDITOR").as_deref() == Some(":") {
+        return None;
+    }
+    Some(comment_of(top))
 }
 
 /// The string an edited message's comment lines start with in the repository at `top`:
