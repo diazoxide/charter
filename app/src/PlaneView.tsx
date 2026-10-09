@@ -379,7 +379,7 @@ import {
   type FailedBelow,
   type State,
 } from "./chatState";
-import { TabMarks } from "./ChatRows";
+import { showsStopping, TabMarks } from "./ChatRows";
 import { fitting, LEAST, LEAST_CHIP, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import { oneChatMidTurn, type Ending } from "./QuitWarning";
@@ -6838,6 +6838,8 @@ export const PlaneView = memo(function PlaneView({
                               panesOf(tabs, id).some((one) => wrapping.has(one.session)) ||
                               undefined
                             }
+                            // A chat being stopped wears the stop's look (#1459).
+                            data-stopping={showsStopping(tabs, id, stopping) || undefined}
                           >
                             {renaming === id ? (
                               // The name, open for editing in the tab's place (charter-app#254). Not
@@ -6941,6 +6943,7 @@ export const PlaneView = memo(function PlaneView({
                                     persona={personaOf(chatOf(tabs, id))}
                                     shells={shells}
                                     wrapping={wrapping}
+                                    stopping={stopping}
                                     task={taskNameOf(id)}
                                     taskOf={taskTabOf(id)}
                                     pin={
@@ -7022,6 +7025,7 @@ export const PlaneView = memo(function PlaneView({
                   updates={planeUpdates}
                   shells={shells}
                   wrapping={wrapping}
+                  stopping={stopping}
                   task={taskNameOf(id)}
                   taskOf={taskTabOf(id)}
                   needs={hiddenByTab.get(id)?.map((chat) => chat.name)}

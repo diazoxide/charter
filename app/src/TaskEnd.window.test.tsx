@@ -820,6 +820,31 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     expect(ends(asked)).toEqual([]);
     expect(within(group).getByRole("button", { name: CLOSE })).not.toHaveAttribute("aria-disabled");
   });
+
+  it("marks the tab that shows a stopping chat, as its row says it, and takes the mark off when the stop ends (#1459)", async () => {
+    const { tree, stopping, ended } = await drawn();
+    await userEvent.click(row(tree, "talk"));
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+    const tab = () => {
+      const found = within(screen.getByRole("tablist", { name: "Tabs" }))
+        .getAllByRole("tab")
+        .find((one) => one.querySelector(".tab-name")?.textContent === "steward 1");
+      if (found === undefined) throw new Error("no tab is called steward 1");
+      return found;
+    };
+    expect(within(tab()).queryByRole("img", { name: "stopping" })).toBeNull();
+
+    await stopping(4);
+
+    await waitFor(() =>
+      expect(within(tab()).getByRole("img", { name: "stopping" })).toBeInTheDocument(),
+    );
+    expect(tab().closest(".tab")).toHaveAttribute("data-stopping");
+
+    await ended(4);
+
+    await waitFor(() => expect(within(tab()).queryByRole("img", { name: "stopping" })).toBeNull());
+  });
 });
 
 describe("a tab chip's menu (#1487)", () => {

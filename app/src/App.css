@@ -4468,6 +4468,22 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
+/* **A chat being stopped** (#1459): a square, the stop's shape, beside the tab's name, told
+   from the wrap-up's diamond and from every state mark without colour. It breathes while the
+   last turn runs, as the diamond does, and the tab's underline is the same amber. */
+.stopping-mark {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-inline-start: 0.4rem;
+  background: var(--state-waiting);
+  vertical-align: middle;
+  flex: none;
+}
+.tabs .tab[data-stopping] {
+  box-shadow: inset 0 -2px 0 var(--state-waiting);
+}
+
 /* **A chat in the background** (SI-8f): its tab shrinks to a chip — the chat's icon and the
    breathing diamond — at the strip's left edge while the chat writes its record, so closing it
    feels like putting it away. It holds no name to share room with, so it is not a share: it is

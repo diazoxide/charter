@@ -71,6 +71,28 @@ export function WrappingUp({ held }: { held: boolean }) {
   );
 }
 
+/** What a stopping chat's tab says about it, as its tooltip (#1459): what its row says, in full. */
+export const STOPPING = "Stopping: it is writing what it did, then it ends. Its menu ends it now.";
+
+/**
+ * **A chat being stopped** (#1448, #1459): its tab's mark, as its row in the Chats list says
+ * "Stopping…". A square, the stop's own shape, so it is told from a state and from a wrap-up's
+ * diamond without colour; it breathes while the last turn runs and stands still under reduced
+ * motion. The word is its accessible name.
+ */
+export function StoppingMark({ held }: { held: boolean }) {
+  if (!held) return null;
+  return (
+    <span
+      className="stopping-mark breathing"
+      data-mark="stopping"
+      role="img"
+      aria-label="stopping"
+      title={STOPPING}
+    />
+  );
+}
+
 /**
  * **A needs-you item's Ignore** (charter-app#248): the catalogue's `needs.ignore:<session>` row
  * drawn as the `✕` a pointer wants, so its accessible name is the row's words — "Ignore ide.3
