@@ -1641,3 +1641,84 @@ fn a_hook_that_took_a_number_a_drain_had_already_handed_on_lets_it_go_and_takes_
     );
     assert_eq!(asked.get(), 2, "once per number it took, and never before");
 }
+
+/// The lock on the spool directory, as another process holding it would: a second open is a
+/// second holder to flock.
+fn holding_the_keys(spool: &Path) -> File {
+    let holder = File::open(spool).expect("the spool opens");
+    holder.lock().expect("the holder takes the lock");
+    holder
+}
+
+/// #1426: issuing a token waits for the spool's keys only so long. The token's key is then not
+/// recorded, and a line spooled under it is `no-key` at the drain: never handed on unchecked.
+#[test]
+fn a_key_the_spools_lock_kept_out_is_not_recorded_and_its_lines_are_never_handed_on() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let _first = issued(&spool, 3);
+    let token = ChatToken("a token whose key the lock kept out".to_owned());
+    let holder = holding_the_keys(&spool);
+
+    let started = std::time::Instant::now();
+    let refused = remember(&spool, 4, &token).expect_err("the holder keeps the keys");
+    let waited = started.elapsed();
+
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    assert!(
+        refused.to_string().contains("the hook spool's keys"),
+        "{refused}"
+    );
+    assert!(
+        waited >= THE_KEYS_ARE_WAITED_FOR_AT_MOST
+            && waited < THE_KEYS_ARE_WAITED_FOR_AT_MOST + Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+    drop(holder);
+    append(&spool, 4, &token, &call(4, "unchecked")).expect("the hook spools it");
+
+    let items = drained(&spool);
+
+    assert_eq!(tools(&items), [], "{items:?}");
+    assert!(
+        items.contains(&Drained::Rejected {
+            chat: 4,
+            seq: Some(1),
+            why: why::NO_KEY
+        }),
+        "{items:?}"
+    );
+}
+
+/// #1426: a drain, and a chat's end, wait for the spool's keys only so long, and then read no
+/// line and drop no key: the next drain hands on what is there.
+#[test]
+fn a_drain_the_spools_lock_kept_out_reads_nothing_and_the_next_one_drains_it_all() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let holder = holding_the_keys(&spool);
+
+    let mut seen = Vec::new();
+    let refused = drain(&spool, &mut |item| {
+        seen.push(item);
+        Ok(())
+    })
+    .expect_err("the holder keeps the keys");
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    let ended = end_chat(&spool, 4, &mut |item| {
+        seen.push(item);
+        Ok(())
+    })
+    .expect_err("the holder keeps the keys");
+    assert_eq!(ended.kind(), io::ErrorKind::TimedOut, "{ended}");
+    assert_eq!(
+        forget_all_but(&spool, &[]).map_err(|why| why.kind()),
+        Err(io::ErrorKind::TimedOut)
+    );
+    assert_eq!(seen, [], "nothing was read");
+    drop(holder);
+
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}

@@ -148,14 +148,32 @@ fn refused_unless_covered(dir: &Path) -> io::Result<()> {
     ))
 }
 
+/// How long issuing a token ([`remember`]), a drain, and a chat's end wait for the lock on the
+/// spool directory while another process holds it (#1426). A drain holds it for its whole run,
+/// which hands on a few lines a chat spooled while the host was busy: far less than this. Past
+/// it the caller is refused [`io::ErrorKind::TimedOut`] and reads and writes nothing, so a
+/// holder that never lets go never holds up a chat's start or the app's.
+const THE_KEYS_ARE_WAITED_FOR_AT_MOST: Duration = Duration::from_secs(2);
+
 /// Holds an exclusive lock on the spool directory itself while `keys.json` is read and
 /// rewritten, so two tokens issued at once never drop each other's key. A drain holds it from
 /// its start to its end, so there is one drain of a spool at a time and a token issued
 /// meanwhile waits for it. No hook takes it.
+///
+/// **The wait is bounded** ([`THE_KEYS_ARE_WAITED_FOR_AT_MOST`]), and `act` runs only once the
+/// lock is held: a wait that runs out fails closed. A token whose key was not recorded is
+/// issued all the same, and every line its chat spools is `no-key` at the drain, never handed
+/// on unchecked; a drain or a chat's end that gives up reads no line and drops no key, and the
+/// next one drains what is there. The directory is opened without blocking and only as a
+/// directory, so nothing planted at its path holds the caller either.
 fn keys_locked<T>(dir: &Path, act: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-    let held = File::open(dir)?;
-    held.lock()?;
-    let _held = crate::filelock::Held::locked(held);
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let held = File::from(rustix::fs::open(dir, flags, Mode::empty())?);
+    let _held = crate::filelock::lock_within(
+        held,
+        THE_KEYS_ARE_WAITED_FOR_AT_MOST,
+        "the hook spool's keys",
+    )?;
     act()
 }
 
@@ -1117,7 +1135,17 @@ pub mod why {
 /// have just been drained.
 ///
 /// **One drain at a time**: it holds the lock on `dir` from start to end ([`keys_locked`]),
-/// which a second drain and a token being issued wait for, and no hook does.
+/// which a second drain and a token being issued wait for, and no hook does. **That wait is
+/// bounded** ([`THE_KEYS_ARE_WAITED_FOR_AT_MOST`]): a drain that does not get the lock in it
+/// reads nothing and answers [`io::ErrorKind::TimedOut`], and every line waits, unread, for the
+/// next one.
+///
+/// **Its syncs are not bounded** (D-1426-2): the emptied file's, the folder's once its lines
+/// are removed, and `keys.json`'s as it is replaced. Each `each` before them waited on the same
+/// disk with no bound of its own, since a line handed on is made durable in the event log
+/// before `each` answers. A bound on the spool's syncs alone would move a disk that does not
+/// answer to the next step, not take it out of the drain. A hook's syncs are bounded because a
+/// harness waits on the hook for a decided verdict ([`append`]); no harness waits on a drain.
 ///
 /// **Run before this host issues any token**, as a host does at its start: the key a chat was
 /// issued last is then the last start that ran, and the ones before it are over.
