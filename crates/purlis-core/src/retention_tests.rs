@@ -764,3 +764,118 @@ fn a_chats_figure_untouched_for_thirty_days_is_collected_unless_the_chat_comes_b
     assert!(!spend.join(format!("{SEPTEMBERS_WORKER}.json")).exists());
     assert!(spend.join(format!("{OCTOBERS_CHAT}.json")).exists());
 }
+
+/// A month-old trace at `name` in the trace store, holding `bytes`.
+fn a_trace_holding(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+    let path = root.join(".charter/persona-state/trace").join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() - OLD)
+        .unwrap();
+    path
+}
+
+/// #1027 (V71): a trace the sweep cannot read whole as text might record a secret handed out,
+/// so it is kept, however old — one that is not UTF-8, one past the largest read, and one
+/// that cannot be opened.
+#[test]
+fn a_trace_that_cannot_be_read_whole_as_text_is_kept() {
+    let (_d, root) = plane();
+    let gone = a_trace_holding(&root, "plain.jsonl", b"{\"event\":\"persona-use\"}\n");
+    let not_text = a_trace_holding(&root, "bytes.jsonl", b"{\"event\":\"\xff\xfe\"}\n");
+    let large = a_trace_holding(&root, "large.jsonl", b"");
+    std::fs::File::options()
+        .write(true)
+        .open(&large)
+        .unwrap()
+        .set_len(MOST_TRACE_BYTES + 1)
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&large)
+        .unwrap()
+        .set_modified(SystemTime::now() - OLD)
+        .unwrap();
+    #[cfg(unix)]
+    let unreadable = {
+        use std::os::unix::fs::PermissionsExt;
+        let path = a_trace_holding(&root, "shut.jsonl", b"{\"event\":\"persona-use\"}\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        path
+    };
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert!(swept.traces >= 1);
+    assert!(!gone.exists(), "a readable trace with no hand-out goes");
+    assert!(not_text.exists(), "a trace that is not UTF-8 is kept");
+    assert!(large.exists(), "a trace past the largest read is kept");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Opening it as its owner is refused unless the test runs with the power to override
+        // that, and then it is read like any other.
+        let shut = std::fs::File::open(&unreadable).is_err();
+        if shut {
+            assert!(unreadable.exists(), "a trace that cannot be opened is kept");
+            assert_eq!(swept.traces, 1);
+        }
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+/// #1027: a file written to between the look that judged it stale and its removal is not the
+/// file that was judged, and is kept.
+#[test]
+fn a_file_written_to_while_it_is_read_is_kept() {
+    let (_d, root) = plane();
+    let path = root.join(".charter/sessions/3.workspace");
+    aged(&path, OLD);
+
+    let swept = collect(
+        &root,
+        &[".charter", "sessions"],
+        SystemTime::now(),
+        |_| true,
+        |_, written| {
+            // What another process does while the sweep reads: an append to the same file.
+            use std::io::Write;
+            let mut file = std::fs::File::options().append(true).open(&path).unwrap();
+            file.write_all(b"more\n").unwrap();
+            Some(written)
+        },
+    );
+
+    assert_eq!(swept, 0);
+    assert_eq!(std::fs::read(&path).unwrap(), b"x\nmore\n");
+}
+
+/// #1027: another file renamed over the name while the sweep read the old one is not removed
+/// in its place.
+#[test]
+fn a_file_renamed_over_the_name_while_it_is_read_is_kept() {
+    let (_d, root) = plane();
+    let path = root.join(".charter/sessions/3.workspace");
+    aged(&path, OLD);
+    let newer = root.join(".charter/sessions/elsewhere");
+    aged(&newer, OLD);
+
+    let swept = collect(
+        &root,
+        &[".charter", "sessions"],
+        SystemTime::now(),
+        |name| name == "3.workspace",
+        |_, written| {
+            // Same size and the same age: only which file it is tells them apart.
+            std::fs::rename(&newer, &path).unwrap();
+            Some(written)
+        },
+    );
+
+    assert_eq!(swept, 0);
+    assert!(path.exists(), "the file renamed over the name stands");
+}
