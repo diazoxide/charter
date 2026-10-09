@@ -44,7 +44,8 @@ pub struct Known {
     pub workspace: Place,
     /// Its state on the app's board.
     pub state: State,
-    /// When it started, in seconds since 1970, where the app knows.
+    /// When its current run began, in seconds since 1970, where the app knows
+    /// ([`run_started`]): this start of its program, not the chat's first.
     pub started: Option<i64>,
     /// **The lineage it is in**, by the stable id of the chat the person started: its record's
     /// root for a chat another chat asked for, and its own id for one nobody did
@@ -172,7 +173,7 @@ pub struct Row {
     pub persona: Option<String>,
     pub workspace: Place,
     pub state: Doing,
-    /// When it started, in seconds since 1970.
+    /// When its current run began, in seconds since 1970 ([`Known::started`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<i64>,
 }
@@ -519,6 +520,17 @@ fn changed(
 pub fn started_of(id: &str) -> Option<i64> {
     let id = ulid::Ulid::from_string(id).ok()?;
     i64::try_from(id.timestamp_ms() / 1000).ok()
+}
+
+/// When a chat's **current run** began (#1455): the instant the host minted the run it is in,
+/// at the start of its program or at a `/clear` (ADR 0066), in seconds since 1970. What a row
+/// says it "started", so a chat brought back today does not say it started the day it was
+/// first opened.
+///
+/// `None` where no run is recorded, rather than the chat's first start read as this one's: the
+/// app begins a run at every start, so an open chat always has one.
+pub fn run_started(identity: &crate::reopen::Identity) -> Option<i64> {
+    identity.run.as_deref().and_then(started_of)
 }
 
 /// The command that shows the picture again.
