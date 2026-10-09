@@ -529,3 +529,107 @@ describe("an ask the window cannot show whole (HP-6 review)", () => {
     expect(answered).toEqual([]);
   });
 });
+
+describe("the list holds still while it is open (#1146)", () => {
+  /** An ask from chat `session`, with Allow and Deny. */
+  function asking(session: number, ask: string, says: string): PermissionAsk {
+    return {
+      plane: "/a",
+      project: "charter",
+      session,
+      name: `ops.${session}`,
+      ask,
+      says,
+      options: [
+        { id: "allow", label: "Allow", allows: true },
+        { id: "deny", label: "Deny", allows: false },
+      ],
+    };
+  }
+  const labels = () =>
+    within(screen.getByRole("menu"))
+      .getAllByRole("menuitem")
+      .map((item) => item.getAttribute("aria-label"));
+
+  it("draws what it opened on, in its order, while asks arrive, and the new ones at the next opening", async () => {
+    const answered: string[] = [];
+    const first = asking(3, "A1", "Run npm test");
+    const props = {
+      quiet: [],
+      onPress: () => {},
+      onAnswer: (ask: PermissionAsk, option: string) => answered.push(`${ask.ask} ${option}`),
+    };
+    const { rerender } = render(
+      <NeedsYouMenu {...props} items={[needing("/a", 1, "ide", "steward")]} asks={[first]} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "2 chats need you" }));
+    await screen.findByRole("menu");
+    const opened = labels();
+
+    // A chat and an ask arrive, each ahead of what was there.
+    rerender(
+      <NeedsYouMenu
+        {...props}
+        items={[needing("/b", 2, "easydmarc", "devops"), needing("/a", 1, "ide", "steward")]}
+        asks={[asking(4, "A2", "Run rm -rf build"), first]}
+      />,
+    );
+
+    // The number counts them; the rows under the pointer stay where they were.
+    expect(screen.getByRole("button", { name: "4 chats need you" })).toBeInTheDocument();
+    expect(labels()).toEqual(opened);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Allow: ops.3, Run npm test" }));
+    expect(answered).toEqual(["A1 allow"]);
+
+    // Opened again, it is drawn as things are now.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "4 chats need you" }));
+    await screen.findByRole("menu");
+    expect(labels()).toEqual([
+      "Go to easydmarc.2 · easydmarc · devops",
+      "Go to ide.1 · ide · steward",
+      "Allow: ops.4, Run rm -rf build",
+      "Deny: ops.4, Run rm -rf build",
+      "Open ops.4 in its pane",
+      "Allow: ops.3, Run npm test",
+      "Deny: ops.3, Run npm test",
+      "Open ops.3 in its pane",
+    ]);
+  });
+
+  it("keeps a row that went in its place, with nothing on it to press", async () => {
+    const answered: string[] = [];
+    const pressed: string[] = [];
+    const props = {
+      quiet: [],
+      onPress: (plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`),
+      onAnswer: (ask: PermissionAsk, option: string) => answered.push(`${ask.ask} ${option}`),
+    };
+    const { rerender } = render(
+      <NeedsYouMenu
+        {...props}
+        items={[needing("/a", 1, "ide", "steward")]}
+        asks={[asking(3, "A1", "Run npm test")]}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "2 chats need you" }));
+    await screen.findByRole("menu");
+    const opened = labels();
+
+    // Both are answered elsewhere, and another chat asks.
+    rerender(<NeedsYouMenu {...props} items={[needing("/b", 9, "ops", "devops")]} asks={[]} />);
+
+    expect(labels()).toEqual(opened);
+    const go = screen.getByRole("menuitem", { name: "Go to ide.1 · ide · steward" });
+    expect(go).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "Ignore ide.1 until it asks again" })).toBeNull();
+    const allow = screen.getByRole("menuitem", { name: "Allow: ops.3, Run npm test" });
+    expect(allow).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(allow);
+    await userEvent.click(go);
+    expect(answered).toEqual([]);
+    expect(pressed).toEqual([]);
+    expect(screen.getByRole("group", { name: /ops\.3: Run npm test/ })).toHaveClass("gone");
+  });
+});
