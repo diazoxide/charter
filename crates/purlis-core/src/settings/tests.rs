@@ -257,6 +257,30 @@ fn a_harness_default_naming_nothing_is_refused_but_one_the_local_file_declares_s
     );
 }
 
+/// #1197: `[chat_env]` is this machine's and read from the Local file alone, so the Shared
+/// file refuses it in the reader's words rather than letting a save or a move write it unread.
+#[test]
+fn chat_env_in_the_shared_file_is_refused_as_not_read() {
+    // No git and no file on disk: the Shared file's refusals read the text alone.
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        refusals(
+            dir.path(),
+            Which::Shared,
+            "schema = 1\n[chat_env]\npass = [\"GOPATH\"]\n"
+        ),
+        [
+            "[chat_env] in charter.toml is not read — it names what this machine passes to a \
+             chat, so it is read from charter.local.toml alone. Put [chat_env] in \
+             charter.local.toml."
+        ]
+    );
+    assert_eq!(
+        refusals(dir.path(), Which::Shared, "schema = 1\n"),
+        Vec::<String>::new()
+    );
+}
+
 /// ST-1 (#1225): the default persona and workspace are pickers over what is here, and a value
 /// set by hand that names nothing is the core's to say, as `[harness] default`'s is.
 #[test]
