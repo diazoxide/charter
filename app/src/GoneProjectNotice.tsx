@@ -13,7 +13,8 @@ import { Notice } from "./Notice";
  *   through the trust gate like any open: the approval does not travel with the path.
  *
  * Neither is done without a press, because a disk that is unplugged may come back. A refusal
- * is said inside the Notice, which stays, so the operator can pick again.
+ * is said inside the Notice, which stays, so the operator can pick again; so is a folder picker
+ * that could not finish, which a cancel is not.
  */
 export function GoneProjectNotice({
   gone,
@@ -34,9 +35,16 @@ export function GoneProjectNotice({
   const [refused, setRefused] = useState<string>();
 
   const locate = async () => {
-    const picked = await commands.pickProject().catch(() => null);
+    const picked = await commands
+      .pickProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    // A picker that could not finish is said, like a refusal: otherwise it reads as a cancel.
+    if (picked.status === "error") {
+      setRefused(picked.error);
+      return;
+    }
     // A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
-    if (picked === null || picked.status !== "ok" || !picked.data) return;
+    if (!picked.data) return;
     const located = await commands
       .locateProject(gone.path, picked.data)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
