@@ -44,6 +44,7 @@ import {
   type Wrote,
 } from "./driver";
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
+import { EXTENSIONS_LINK } from "./links";
 import { settled } from "../PlaneEdits";
 import { GRANTED, grantedGroup } from "./GrantedList";
 import { dispatchGroup } from "./dispatch";
@@ -607,6 +608,9 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
       help: "Which of this machine's extensions are on in this project, and what each is set to.",
       settings: fromShared("project.extensions", extensions.controls),
       notes: extensions.notes,
+      // Installed and approved in the Extensions dialog, their one home (#1387).
+      links: [EXTENSIONS_LINK],
+      empty: "No extension is installed on this machine or named by this project.",
     },
     {
       id: "project.appearance",

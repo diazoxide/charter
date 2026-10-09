@@ -356,11 +356,25 @@ describe("the Workspace level", () => {
     expect(asked("project_extensions")).toContainEqual({ plane: PLANE, workspace: "alpha" });
   });
 
-  it("hides a group with nothing in it", async () => {
+  it("hides a group with nothing in it, but Extensions, which links to where one is installed", async () => {
     core(ALPHA, undefined, NO_THEME, null, { extensions: [], harnesses: [] });
     await at();
 
-    await waitFor(() => expect(groups()).toEqual(["Live", "Repos", "Dispatch", "Appearance"]));
+    // Extensions is offered for its link to the Extensions dialog (#1387), and says why it has
+    // nothing (#1198).
+    await waitFor(() =>
+      expect(groups()).toEqual(["Live", "Repos", "Dispatch", "Extensions", "Appearance"]),
+    );
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Groups" })).getByRole("button", {
+        name: "Extensions",
+      }),
+    );
+    const extensions = screen.getByRole("region", { name: "Extensions" });
+    expect(extensions).toHaveTextContent(
+      "No extension is installed on this machine or named by this workspace.",
+    );
+    expect(within(extensions).getByRole("button", { name: "Go to Extensions…" })).toBeVisible();
   });
 
   it("says where it sits between the project's two files, and that no secret goes in it", async () => {

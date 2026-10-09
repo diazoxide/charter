@@ -21,6 +21,7 @@ import {
   type SettingsGroup,
 } from "./groups";
 import {
+  askSettingsAction,
   chooseGroup,
   focusedSetting,
   levelOf,
@@ -176,6 +177,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
   return (
     <Shown
       level="project"
+      plane={plane}
       place={settingsPlace("project", plane)}
       {...switcher}
       about="This project, for everyone who opens it. Never put a secret in its files: keep it in a vault and name it as vault:<vault>/<key>."
@@ -279,6 +281,7 @@ function WorkspaceLevelTab({
   return (
     <Shown
       level="workspace"
+      plane={plane}
       place={settingsPlace("workspace", plane, workspace)}
       {...switcher}
       about={`The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`}
@@ -310,6 +313,7 @@ function WorkspaceLevelTab({
  */
 function Shown({
   level,
+  plane,
   place,
   levels,
   onLevelChange,
@@ -324,6 +328,8 @@ function Shown({
   children,
 }: Switcher & {
   level: Level;
+  /** The project the level is in, whose window runs a link out of Settings (#1387). */
+  plane?: PlaneId;
   /** Where the group shown is remembered (`links.settingsPlace`). */
   place: string;
   about: string;
@@ -361,8 +367,12 @@ function Shown({
   }
   const choose = (group: string) => chooseGroup(place, group);
   const groups = narrowed(
-    // A collection is offered while it has no entry: that is where one is added.
-    declared.filter((one) => one.settings.length > 0 || one.collection !== undefined),
+    // A collection is offered while it has no entry: that is where one is added. A group with
+    // a link out is offered too: the link is the way to a setting (#1387).
+    declared.filter(
+      (one) =>
+        one.settings.length > 0 || one.collection !== undefined || (one.links?.length ?? 0) > 0,
+    ),
     filter,
   );
   const group = groups.find((one) => one.id === shown?.group) ?? groups[0];
@@ -502,6 +512,9 @@ function Shown({
                 // referrer at another level draws no link until ST-4 can follow one (#1241).
                 reachable={(to) => levelOf(to) === level && declared.some((one) => one.id === to)}
                 onGo={(to) => linkToGroup(place, to)}
+                onAction={
+                  plane === undefined ? undefined : (action) => askSettingsAction(plane, action)
+                }
               />
             )
           )}
@@ -541,6 +554,7 @@ function ShownGroup({
   onGo,
   reachable,
   adding,
+  onAction,
 }: {
   group: SettingsGroup;
   driver?: Driven<unknown>;
@@ -551,6 +565,8 @@ function ShownGroup({
   onGo: (group: string) => void;
   /** Whether {@link onGo} can open `group`. */
   reachable: (group: string) => boolean;
+  /** Runs a link out of Settings (#1387): none where no project's window can. */
+  onAction?: (action: string) => void;
 }) {
   const row = (setting: Setting) =>
     inAFile(setting) ? (
@@ -565,6 +581,25 @@ function ShownGroup({
           {why}
         </p>
       ))}
+      {group.settings.length === 0 && group.collection === undefined && group.empty && (
+        <p className="ui-setting-help">{group.empty}</p>
+      )}
+      {onAction && (group.links?.length ?? 0) > 0 && (
+        <p className="ui-setting-links">
+          {group.links?.map((one) => (
+            <button
+              key={one.action}
+              type="button"
+              className="ui-setting-reset"
+              // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+              tabIndex={0}
+              onClick={() => onAction(one.action)}
+            >
+              {one.label}
+            </button>
+          ))}
+        </p>
+      )}
       {group.collection && driver ? (
         <CollectionView
           id={group.id}

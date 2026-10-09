@@ -37,7 +37,19 @@ export type SettingsGroup = {
   /** A page of the group before it in the nav (ST-4, V91e): one entry of that group's
    *  collection with many fields — a harness profile — drawn indented under it. */
   sub?: boolean;
+  /** Links out of Settings, to where what the group is about has its home (#1387): drawn under
+   *  its help and notes. A group with a link is offered even while it has no setting, since
+   *  the link is the way to one. */
+  links?: readonly GroupLink[];
+  /** What the group says while it has no setting (#1198): why, in a sentence. */
+  empty?: string;
 };
+
+/**
+ * **A link out of Settings** (#1387, #1388): its words, and the row of the window's catalogue it
+ * runs (`links.ts`, `askSettingsAction`), by the row's id.
+ */
+export type GroupLink = { label: string; action: string };
 
 /**
  * **A Settings collection** (ST-3, the spec on #1221, V91e): a list of entries in a settings file

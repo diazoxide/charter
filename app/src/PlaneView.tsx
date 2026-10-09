@@ -388,7 +388,9 @@ import { focusStands } from "./Cockpit";
 import {
   landing,
   linkToGroup,
+  SETTINGS_ACTION,
   SETTINGS_LINK,
+  type SettingsActionAsk,
   type SettingsLink,
   type SettingsLinkAsk,
 } from "./settings/links";
@@ -6132,6 +6134,18 @@ export const PlaneView = memo(function PlaneView({
     pressNow.current = press;
   }, [by, press]);
   const pressTaskEnd = useCallback((offer: Offer) => pressNow.current(offer), []);
+  /** A link out of Settings (#1387, #1388): the catalogue's row it names, run as the palette
+   *  runs it. One the catalogue does not hold now does nothing. */
+  useEffect(() => {
+    const asked = (event: Event) => {
+      const wanted = (event as CustomEvent<SettingsActionAsk>).detail;
+      if (wanted.plane !== plane) return;
+      const offer = byNow.current(wanted.action);
+      if (offer !== undefined) pressNow.current(offer);
+    };
+    window.addEventListener(SETTINGS_ACTION, asked);
+    return () => window.removeEventListener(SETTINGS_ACTION, asked);
+  }, [plane]);
   /** Stop all tasks of a session, for its tab chip's menu (#1498): the catalogue's row, read
    *  as the menu is drawn, and one function for the life of the view. */
   const stopAllOf = useCallback((session: number) => byNow.current(stopAllId(session)), []);

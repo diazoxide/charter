@@ -373,11 +373,12 @@ describe("the Project level", () => {
     expect(screen.getByText("charter.toml: [plane] mode is not one charter knows")).toBeVisible();
   });
 
-  it("hides a group with nothing in it", async () => {
+  it("hides a group with nothing in it, but Extensions, which links to where one is installed", async () => {
     core();
     await atProject();
 
-    expect(groups()).not.toContain("Extensions");
+    // Offered for its link to the Extensions dialog, saying why it has nothing (#1387, #1198).
+    expect(groups()).toContain("Extensions");
     expect(groups()).not.toContain("Plugins");
     expect(groups()).toContain("Forges");
   });
