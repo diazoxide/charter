@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
+import { SETTINGS_ACTION, type SettingsActionAsk } from "./links";
 import { projectThemeChanged } from "../projectTheme";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
@@ -152,6 +153,7 @@ function core({
   saving = NO_SAVING as SavingInForce | { trouble: string },
   sandbox = SANDBOX_OFF,
   refuse = undefined as string[] | undefined,
+  personas = [] as string[],
 } = {}) {
   const files: Record<SettingsWhich, SettingsFile> = { shared, local };
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
@@ -185,6 +187,8 @@ function core({
           return [];
         case "sandbox_state":
           return sandbox;
+        case "start_options":
+          return { profiles: [], refused: [], personas, persona: null };
         case "plane_doctor_fix":
           fixes.push(given.fix as string);
           return {
@@ -609,6 +613,63 @@ const SAVES_IN_FORCE: SavingInForce = {
   plane_left_out: null,
   repos_left_out: null,
 };
+
+/** The links out of Settings pressed while the test runs, as the project's window hears them. */
+function heardActions(): SettingsActionAsk[] {
+  const heard: SettingsActionAsk[] = [];
+  const on = (event: Event) => heard.push((event as CustomEvent<SettingsActionAsk>).detail);
+  window.addEventListener(SETTINGS_ACTION, on);
+  onTestFinished(() => window.removeEventListener(SETTINGS_ACTION, on));
+  return heard;
+}
+
+describe("links to a persona's tab and to the vaults (#1388)", () => {
+  it("offers Show beside the default persona the project lists, and none for one it does not", async () => {
+    const heard = heardActions();
+    core({
+      shared: {
+        ...SHARED,
+        fields: [
+          ...SHARED.fields,
+          field(["persona", "default"], { kind: "text", value: "steward" }),
+        ],
+      },
+      personas: ["steward", "devops"],
+    });
+    const general = await at("General");
+
+    await userEvent.click(await within(general).findByRole("button", { name: "Show steward" }));
+    expect(heard).toEqual([{ plane: PLANE, action: "persona.show:steward" }]);
+
+    await userEvent.selectOptions(within(general).getByLabelText("Default persona"), "devops");
+    expect(await within(general).findByRole("button", { name: "Show devops" })).toBeVisible();
+  });
+
+  it("draws no Show for a default persona the project does not list", async () => {
+    core({
+      shared: {
+        ...SHARED,
+        fields: [...SHARED.fields, field(["persona", "default"], { kind: "text", value: "ghost" })],
+      },
+      personas: ["steward"],
+    });
+    const general = await at("General");
+
+    await waitFor(() =>
+      expect(within(general).getByLabelText("Default persona")).toHaveValue("ghost"),
+    );
+    expect(within(general).queryByRole("button", { name: /^Show / })).toBeNull();
+  });
+
+  it("links the level's sentence about vaults to the vault picker", async () => {
+    const heard = heardActions();
+    core();
+    await at("General");
+
+    await userEvent.click(screen.getByRole("button", { name: "Open vault…" }));
+    expect(heard).toEqual([{ plane: PLANE, action: "vault.pick" }]);
+  });
+});
 
 describe("Saving's way to discover (#1390)", () => {
   it("says no repo is catalogued, and Discover runs the doctor's discover and reads again", async () => {
