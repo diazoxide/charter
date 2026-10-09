@@ -80,10 +80,12 @@ type Asked = { cmd: string; which: SettingsWhich; base: string | null; arg: stri
 
 function core({
   refuse,
+  check,
   local = [],
   unconfirmed = [],
 }: {
   refuse?: (host: string) => string | undefined;
+  check?: (host: string) => string | null | Promise<string | null>;
   local?: string[];
   unconfirmed?: string[];
 } = {}) {
@@ -91,6 +93,7 @@ function core({
   let waiting = [...unconfirmed];
   const local_ = () => fileOf("local", hosts.local, waiting);
   const asked: Asked[] = [];
+  const checked: string[] = [];
   mockIPC(
     (cmd, args) => {
       const given = (args ?? {}) as Record<string, unknown>;
@@ -121,6 +124,11 @@ function core({
             besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
             policy: null,
           };
+        case "check_sandbox_host": {
+          const host = given.host as string;
+          checked.push(host);
+          return check?.(host) ?? null;
+        }
         case "add_sandbox_host": {
           const host = given.host as string;
           asked.push({ cmd, which, base: given.base as string | null, arg: host });
@@ -164,7 +172,7 @@ function core({
     },
     { shouldMockEvents: true },
   );
-  return { asked, hosts };
+  return { asked, checked, hosts };
 }
 
 beforeEach(() => {
@@ -230,6 +238,48 @@ describe("Settings › Sandbox's hosts", () => {
 
     expect(await within(form).findByText(/That is a URL/)).toBeInTheDocument();
     expect(within(form).getByLabelText("Host")).toHaveValue("https://x.example/");
+  });
+
+  it("checks the host as it is typed, with the core's sentence, before Add is pressed", async () => {
+    const url =
+      "That is a URL. Type its host alone, such as x.example, without the scheme or a path.";
+    const { asked, checked } = core({ check: (host) => (host.includes("/") ? url : null) });
+    await at("Sandbox");
+    await userEvent.click(await screen.findByRole("button", { name: "Add host" }));
+    const form = screen.getByRole("form", { name: "New host" });
+    const field = within(form).getByLabelText("Host");
+
+    await userEvent.type(field, "https://x.example/");
+    expect(await within(form).findByText(url)).toBeInTheDocument();
+    expect(asked.map((one) => one.cmd)).not.toContain("add_sandbox_host");
+    expect(checked.at(-1)).toBe("https://x.example/");
+
+    await userEvent.clear(field);
+    await userEvent.type(field, "x.example");
+    await waitFor(() => expect(within(form).queryByText(url)).not.toBeInTheDocument());
+  });
+
+  it("drops a check's answer that comes back after the field was typed over", async () => {
+    const stale = "Leave out the path: a host ends before the first /, so type x.example.";
+    let answer: (why: string) => void = () => undefined;
+    const late = new Promise<string | null>((resolve) => {
+      answer = resolve;
+    });
+    const { checked } = core({ check: (host) => (host === "x.example/" ? late : null) });
+    await at("Sandbox");
+    await userEvent.click(await screen.findByRole("button", { name: "Add host" }));
+    const form = screen.getByRole("form", { name: "New host" });
+    const field = within(form).getByLabelText("Host");
+
+    await userEvent.type(field, "x.example/");
+    await userEvent.type(field, "{Backspace}");
+    await waitFor(() => expect(checked.at(-1)).toBe("x.example"));
+    // The answer for the text the field held before arrives last, and is not said.
+    answer(stale);
+    await late;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(within(form).queryByText(stale)).not.toBeInTheDocument();
+    expect(field).toHaveValue("x.example");
   });
 
   it("removes a project host by its identity", async () => {
