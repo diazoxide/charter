@@ -6,6 +6,7 @@ import { emit } from "@tauri-apps/api/event";
 import { AskPersonaOpener, type OpenAskPersona } from "./AskPersona";
 import { VaultRefusedNotice } from "./VaultRefusedNotice";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
+import { NoticeOf } from "./Notice";
 import type { DispatchPending, VaultRefused } from "./bindings";
 
 /**
@@ -118,7 +119,7 @@ describe("the refused vault Notice", () => {
       "Allow lets every chat opened as steward use vault devops in this project on this machine. This chat does not restart. You can revoke it in Settings › Sandbox › Granted.",
     );
     expect(screen.getByText(/The other way is to have devops do the work/)).toHaveTextContent(
-      "The other way is to have devops do the work. Dispatch to devops… asks it from this chat, in your words. purlis also told this chat how to dispatch to it.",
+      "The other way is to have devops do the work. Dispatch to devops… asks it from this chat, in your words. purlis also told this chat how to dispatch to devops.",
     );
     // Nothing is allowed or put away until a press, and no press opens a chat or types into one.
     expect(pressed()).toEqual([]);
@@ -162,7 +163,7 @@ describe("the refused vault Notice", () => {
     );
     expect(screen.queryByRole("button", { name: /^Dispatch to/ })).toBeNull();
     expect(screen.getByText(/is to have devops do the work/)).toHaveTextContent(
-      "The other way is to have devops do the work, and this chat has asked it to. Nothing starts until you answer that request.",
+      "The other way is to have devops do the work, and this chat has asked devops to. Nothing starts until you answer that request.",
     );
 
     // The press goes to the question, on its line and never on one of its answers: the next
@@ -293,7 +294,7 @@ describe("the refused vault Notice", () => {
     expect(screen.queryByText(/Allow lets every chat/)).not.toBeInTheDocument();
     // With Allow locked there is one way, so it is not called the other one.
     expect(screen.getByText(/is to have devops do the work/)).toHaveTextContent(
-      "The way forward is to have devops do the work. Dispatch to devops… asks it from this chat, in your words. purlis also told this chat how to dispatch to it.",
+      "The way forward is to have devops do the work. Dispatch to devops… asks it from this chat, in your words. purlis also told this chat how to dispatch to devops.",
     );
     expect(screen.queryByText(/The other way/)).not.toBeInTheDocument();
   });
@@ -388,5 +389,52 @@ describe("the refused vault Notice's persona mark", () => {
     const answered = await notice();
     await waitFor(() => expect(answered).toHaveTextContent(/^Allowed\./));
     expect(markOf(answered)).toBe("steward");
+  });
+});
+
+/**
+ * **Drawn for a chat that is not on screen** (#1538): on its session's tab the Notice starts
+ * with the chat's whole path (`NoticeOf`), so its own sentences say "it" and "that chat",
+ * never "this chat", which would read as the chat on screen.
+ */
+describe("the refused vault Notice, for a chat that is not on screen", () => {
+  const WHOSE = "deep (a task of “steward 3” › “talk”)";
+  const drawnOff = () =>
+    render(
+      <NoticeOf.Provider value={{ whose: WHOSE, onGo: () => {} }}>
+        <VaultRefusedNotice plane={PLANE} session={7} />
+      </NoticeOf.Provider>,
+    );
+  const offNotice = () => screen.findByRole("status", { name: `${WHOSE}: Vault` });
+
+  it("says the path, then it: never this chat", async () => {
+    core([DEVOPS]);
+    drawnOff();
+
+    const line = await offNotice();
+    expect(line).toHaveTextContent(
+      `${WHOSE}: It runs as steward, and vault devops is tagged for devops, so purlis did not open it.`,
+    );
+    expect(screen.getByText(/Allow lets every chat opened as steward use vault/)).toHaveTextContent(
+      "Allow lets every chat opened as steward use vault devops in this project on this machine. That chat does not restart. You can revoke it in Settings › Sandbox › Granted.",
+    );
+    expect(screen.getByText(/The other way is to have devops do the work/)).toHaveTextContent(
+      "The other way is to have devops do the work. Dispatch to devops… asks it from that chat, in your words. purlis also told that chat how to dispatch to devops.",
+    );
+    expect(document.body).not.toHaveTextContent(/this chat/i);
+    expect(markOf(line)).toBe("steward");
+  });
+
+  it("says it has asked, where its own dispatch is held", async () => {
+    core([DEVOPS], [HELD]);
+    drawnOff();
+
+    await screen.findByRole("button", { name: "Show the request" });
+    expect(await offNotice()).toHaveTextContent(
+      "so purlis did not open it. It has already asked devops: answer that above.",
+    );
+    expect(screen.getByText(/is to have devops do the work/)).toHaveTextContent(
+      "The other way is to have devops do the work, and it has asked devops to. Nothing starts until you answer that request.",
+    );
   });
 });
