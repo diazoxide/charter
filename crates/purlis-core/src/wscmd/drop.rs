@@ -176,7 +176,10 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
     };
     // The read and the write under one lock (#1249 U2): a clone recording its repo meanwhile
     // would otherwise lose its row to the manifest read before it.
-    let held = workspace.manifest_lock();
+    let held = match workspace.manifest_lock() {
+        Ok(held) => held,
+        Err(why) => return fail(format!("{why}, so '{repo}' was left in it.")),
+    };
     let (doc, owner) = workspace.manifest();
     let Some(mut doc) = doc else {
         return fail(match owner {
@@ -235,7 +238,13 @@ fn forget_in_manifest(root: &Path, ws: &str, repo: &str, say: Sink) {
     let Ok(workspace) = crate::workspaces::Plane::open(root).workspace(ws) else {
         return;
     };
-    let _held = workspace.manifest_lock();
+    let _held = match workspace.manifest_lock() {
+        Ok(held) => held,
+        Err(why) => {
+            say(Say::Warn(format!("{why}, so it may still name '{repo}'.")));
+            return;
+        }
+    };
     let (doc, owner) = workspace.manifest();
     if owner == Ownership::Operator {
         say(Say::Warn(format!(
@@ -450,7 +459,7 @@ mod membership {
                 "repos": [{"name": "gone"}, {"name": "kept"}],
             }))
             .unwrap();
-        let held = alpha(&root).manifest_lock();
+        let held = alpha(&root).manifest_lock().unwrap();
         let removing = {
             let root = root.clone();
             std::thread::spawn(move || run(&root, "alpha", "gone"))

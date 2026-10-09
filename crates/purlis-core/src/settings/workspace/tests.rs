@@ -736,7 +736,7 @@ fn a_save_waits_for_the_manifests_lock_and_keeps_what_was_written_while_it_waite
     let ws = crate::workspaces::Plane::open(&root)
         .workspace("alpha")
         .unwrap();
-    let held = ws.manifest_lock();
+    let held = ws.manifest_lock().unwrap();
     let saving = {
         let root = root.clone();
         let base = old();
@@ -758,6 +758,74 @@ fn a_save_waits_for_the_manifests_lock_and_keeps_what_was_written_while_it_waite
     let refused = saving.join().unwrap().unwrap_err();
     assert!(refused[0].contains("changed on disk"), "{refused:?}");
     assert_eq!(on_disk(&root), written);
+}
+
+/// #1292: a save that waited on the lock while the workspace was renamed refuses, and never
+/// makes `workspaces/<old>` again.
+#[test]
+fn a_save_that_waited_while_the_workspace_was_renamed_refuses_and_makes_no_old_folder() {
+    let dir = plane(Some(&old()));
+    let root = dir.path().to_path_buf();
+    let ws = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap();
+    let held = ws.manifest_lock().unwrap();
+    let saving = {
+        let root = root.clone();
+        let base = old();
+        std::thread::spawn(move || save_text(&root, "alpha", Some(&base), &old()))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    fs::rename(root.join("workspaces/alpha"), root.join("workspaces/beta")).unwrap();
+    drop(held);
+    let refused = saving.join().unwrap().unwrap_err();
+    assert!(
+        refused[0].contains("was renamed or removed while this waited"),
+        "{refused:?}"
+    );
+    assert!(!root.join("workspaces/alpha").exists());
+}
+
+/// #1292: a branch is held to what `git check-ref-format --branch` takes, unless the file
+/// already held that exact record.
+#[test]
+fn a_branch_git_would_not_take_is_refused_unless_the_file_held_it() {
+    let dir = plane(Some(&old()));
+    for branch in [
+        "-x",
+        "a..b",
+        "refs/heads/ok",
+        "",
+        "a b",
+        "x.lock",
+        "@",
+        "a~1",
+    ] {
+        let typed =
+            serde_json::json!({"name": "alpha", "repos": [{"name": "widget", "branch": branch}]})
+                .to_string();
+        let refused = save_text(dir.path(), "alpha", Some(&old()), &typed)
+            .expect_err(&format!("{branch:?} was written"));
+        assert_eq!(refused.len(), 1, "{branch:?}: {refused:?}");
+        assert!(
+            refused[0].starts_with("repos in workspaces/alpha/workspace.json has an entry (1)"),
+            "{branch:?}: {refused:?}"
+        );
+        assert_eq!(on_disk(dir.path()), old(), "{branch:?}");
+    }
+    for branch in ["feature/x", "main", "HEAD"] {
+        let typed =
+            serde_json::json!({"name": "alpha", "repos": [{"name": "widget", "branch": branch}]})
+                .to_string();
+        let base = on_disk(dir.path());
+        save_text(dir.path(), "alpha", Some(&base), &typed)
+            .unwrap_or_else(|why| panic!("{branch:?}: {why:?}"));
+    }
+    let held = r#"{"name": "alpha", "repos": [{"name": "widget", "branch": "-x"}]}"#;
+    let dir = plane(Some(held));
+    let mended =
+        r#"{"name": "alpha", "repos": [{"name": "widget", "branch": "-x"}], "description": "x"}"#;
+    save_text(dir.path(), "alpha", Some(held), mended).unwrap();
 }
 
 #[test]

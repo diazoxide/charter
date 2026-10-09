@@ -139,7 +139,7 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
 
 /// What the manifest's own readers would take leniently from the manifest whose text this is,
 /// one sentence each (#1292): a `name` that is not the workspace's folder, and `repos` that is
-/// not a list of `{"name": …}` records. Edit as JSON refuses them, unless the file already held
+/// not a list of `{"name": …}` records, each `branch` one git would take ([`a_branch_name`]). Edit as JSON refuses them, unless the file already held
 /// them, so a raw edit cannot write what `clone`, `restore` and the repo list would read past
 /// or drop. In the readers' `<key> in <file> …` shape, so the window can name the key. Empty for
 /// text that is not a JSON object, which is refused on its own.
@@ -171,7 +171,7 @@ pub fn manifest_refusals(text: &str, workspace: &str, held: Option<&str>) -> Vec
         )),
     }
     let shape = "a workspace's repos are a list of {\"name\": \"<repo>\"} records, each with an \
-                 optional \"branch\"";
+                 optional \"branch\" git would take as a branch's name";
     match doc.get("repos") {
         None => {}
         Some(Json::Array(rows)) => {
@@ -184,9 +184,10 @@ pub fn manifest_refusals(text: &str, workspace: &str, held: Option<&str>) -> Vec
                     row.get("name")
                         .and_then(Json::as_str)
                         .is_some_and(crate::contain::repo_name_ok)
-                        && row
-                            .get("branch")
-                            .is_none_or(|branch| branch.is_string() || branch.is_null())
+                        && row.get("branch").is_none_or(|branch| match branch {
+                            Json::String(branch) => a_branch_name(branch),
+                            other => other.is_null(),
+                        })
                 });
                 if !ok && !held_rows.contains(row) {
                     out.push(format!(
@@ -200,6 +201,23 @@ pub fn manifest_refusals(text: &str, workspace: &str, held: Option<&str>) -> Vec
         Some(_) => out.push(format!("repos in {file} is not a list — {shape}")),
     }
     out
+}
+
+/// Whether `branch` is a name a manifest's row may carry: what `git check-ref-format --branch`
+/// takes, checked in-process by gix's own reference rules (#1292). Not starting with `-`, which
+/// a git command line would read as an option; not a full `refs/…` name, which would be read
+/// as `refs/heads/refs/…`; not `@`, which git reads as `HEAD`; and `refs/heads/<branch>` a
+/// valid branch reference. `HEAD` is let through: it is what `snapshot` records for a repo
+/// with no branch checked out.
+fn a_branch_name(branch: &str) -> bool {
+    if branch == "HEAD" {
+        return true;
+    }
+    !branch.starts_with('-')
+        && branch != "@"
+        && !branch.starts_with("refs/")
+        && gix::validate::reference::branch_name(format!("refs/heads/{branch}").as_str().into())
+            .is_ok()
 }
 
 /// One workspace's manifest as the Workspace settings tab reads it.
@@ -292,7 +310,9 @@ pub fn save(
     let file = named(workspace);
     // From the base check to the write, one lock (#1292): a check alone leaves the window
     // between them open to a clone or a removal writing the same file.
-    let _held = ws.manifest_lock();
+    let _held = ws
+        .manifest_lock()
+        .map_err(|why| vec![format!("{why}, so nothing was saved.")])?;
     let now = on_disk(&ws).map_err(|why| vec![why])?;
     if now.as_deref() != base {
         return Err(vec![format!(
@@ -378,7 +398,9 @@ pub fn save_text(
     let file = named(workspace);
     // From the base check to the write, one lock (#1292): a check alone leaves the window
     // between them open to a clone or a removal writing the same file.
-    let _held = ws.manifest_lock();
+    let _held = ws
+        .manifest_lock()
+        .map_err(|why| vec![format!("{why}, so nothing was saved.")])?;
     let now = on_disk(&ws).map_err(|why| vec![why])?;
     if now.as_deref() != base {
         return Err(vec![format!(

@@ -106,7 +106,13 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
     // otherwise be written over. The manifest on disk is the starting document, so a
     // `description` and any key an operator added keep their place: Python assigns into the
     // dict it read, and a key that is already there keeps the position it had.
-    let held = workspace.manifest_lock();
+    let held = match workspace.manifest_lock() {
+        Ok(held) => held,
+        Err(why) => {
+            say(Say::Fail(format!("{why}, so nothing was recorded.")));
+            return 1;
+        }
+    };
     let (doc, _owner) = workspace.manifest();
     let mut doc = match doc {
         Some(Value::Object(map)) => Value::Object(map),
