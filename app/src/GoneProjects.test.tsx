@@ -54,7 +54,8 @@ function sidebarOf(root: string) {
  */
 function core(over: {
   where: "restore" | "recent" | "both";
-  picked?: string | null;
+  /** What the folder picker answers; `{ failed }` is a picker that could not finish. */
+  picked?: string | null | { failed: string };
   locate?: { ok: string } | { refused: string };
 }) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -77,7 +78,11 @@ function core(over: {
         gone: over.where !== "restore" && remembered ? [GONE] : [],
         forgetful: null,
       };
-    if (cmd === "pick_project") return over.picked === undefined ? FOUND : over.picked;
+    if (cmd === "pick_project") {
+      if (over.picked === undefined) return FOUND;
+      if (over.picked !== null && typeof over.picked === "object") throw over.picked.failed;
+      return over.picked;
+    }
     if (cmd === "locate_project") {
       const answer = over.locate ?? { ok: FOUND };
       if ("refused" in answer) throw answer.refused;
@@ -168,6 +173,18 @@ describe("a project the last quit had open that is gone", () => {
     await waitFor(() => expect(sent("pick_project")).toHaveLength(1));
     expect(sent("locate_project")).toEqual([]);
     expect(await gone()).toBeInTheDocument();
+  });
+
+  it("says so when the picker fails, unlike a cancel, and keeps the Notice", async () => {
+    const failed = "the folder picker did not finish: the dialog went away";
+    const { sent } = core({ where: "restore", picked: { failed } });
+    render(<App />);
+
+    await userEvent.click(within(await gone()).getByRole("button", { name: "Locate…" }));
+
+    expect(await screen.findByText(failed)).toBeInTheDocument();
+    expect(sent("locate_project")).toEqual([]);
+    expect(within(await gone()).getByRole("button", { name: "Locate…" })).toBeInTheDocument();
   });
 });
 
