@@ -1236,6 +1236,7 @@ function App() {
       beside: () => undefined,
       sendBack: () => undefined,
       showBrief: () => undefined,
+      answerQuestion: () => undefined,
       // The queue is a project's, and there is no project here to have one.
       ignoreNeedsYou: async () => nowhere(),
       cancelSmartClose: async () => nowhere(),

@@ -51,7 +51,7 @@ import {
   besideId,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows } from "./actions";
-import { BRIEF_SAYS, briefId, briefRows } from "./actions";
+import { ANSWER_SAYS, BRIEF_SAYS, answerId, answerRows, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
 import {
   noTabs,
@@ -141,6 +141,9 @@ function doing(): Doing & { calls: string[] } {
     }),
     endTask: vi.fn((session: number, way: string) => {
       calls.push(`endTask:${session}:${way}`);
+    }),
+    answerQuestion: vi.fn((session: number) => {
+      calls.push(`answerQuestion:${session}`);
     }),
     showBrief: vi.fn((session: number) => {
       calls.push(`showBrief:${session}`);
@@ -3225,6 +3228,48 @@ describe("the chats inside the tab in front (#1487)", () => {
       inside: true,
     });
     expect(by(offers, "tasks.own")?.does).toEqual({ verb: "showChat", session: 1 });
+  });
+});
+
+describe("Answer, for a task that asks its asking chat a question (#1551)", () => {
+  /** 1 is a chat a person opened; it asked for 2, which asks it something, and 3, which asks
+   *  nothing. */
+  const three = [listed(1), { ...listed(2, 1), asking: "chat 1" }, listed(3, 1, false)];
+
+  it("has a row only for a task paused on a question, named for it", () => {
+    const rows = answerRows(three);
+
+    expect(rows.map((row) => [row.id, row.title, row.available])).toEqual([
+      [answerId(2), "Answer chat 2's question", true],
+    ]);
+    expect(rows[0]?.note).toBe(ANSWER_SAYS);
+    expect(answerId(2)).toBe("chat.answer:2");
+    // In the catalogue, so the palette finds it too; gone once nothing is asked.
+    expect(
+      ids(catalogue(now({ listed: three }))).filter((id) => id.startsWith("chat.answer:")),
+    ).toEqual([answerId(2)]);
+    const answered = three.map((chat) => ({ ...chat, asking: null }));
+    expect(
+      ids(catalogue(now({ listed: answered }))).filter((id) => id.startsWith("chat.answer:")),
+    ).toEqual([]);
+  });
+
+  it("is an ordinary row of the task's row menu and of its own tab's menu, never under the line", () => {
+    const offers = catalogued(catalogue(now({ listed: three })));
+
+    const task = menuRows({ on: "listed", session: 2 }, offers);
+    expect(ids(task.above)).toContain(answerId(2));
+    expect(ids(task.below)).not.toContain(answerId(2));
+    expect(ids(menuRows({ on: "listed", session: 3 }, offers).above)).not.toContain(answerId(3));
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).above).toContain(answerId(2));
+  });
+
+  it("opens the form through the window's hands, and sends nothing itself", () => {
+    const hands = doing();
+
+    void run(catalogue(now({ listed: three })), answerId(2), hands);
+
+    expect(hands.calls).toEqual(["answerQuestion:2"]);
   });
 });
 

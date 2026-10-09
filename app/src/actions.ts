@@ -242,6 +242,9 @@ export type Does =
   /** Opens the Brief panel of a task (#1494): the brief it was sent, read back from its
    *  dispatch record. It reads, and changes nothing. */
   | { verb: "showBrief"; session: number }
+  /** Opens the form that answers the question task `session` put to its asking chat (#1496,
+   *  #1551). It sends nothing by itself: the person's Send in the form does. */
+  | { verb: "answerQuestion"; session: number }
   /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
    *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
   | { verb: "ignoreNeedsYou"; session: number }
@@ -729,6 +732,9 @@ export type Doing = {
   /** Opens the Brief panel of the task chat `session` (#1494). It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   showBrief: (session: number) => void;
+  /** Opens the Answer form of the task chat `session` (#1551). It sends nothing by itself, so
+   *  it answers no `Ran`. */
+  answerQuestion: (session: number) => void;
   /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
   ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
@@ -2145,6 +2151,7 @@ export function catalogue(now: Now): Offer[] {
   offers.push(...placeRows(now.tabs, now.listed ?? [], now.nameOf));
   offers.push(besideInFront(now.tabs, now.listed ?? [], now.nameOf));
   offers.push(...briefRows(now.listed ?? []));
+  offers.push(...answerRows(now.listed ?? []));
 
   const remove = "Remove the folder of this chat's branch";
   offers.push(
@@ -2385,6 +2392,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "showBrief":
       doing.showBrief(does.session);
+      return DID;
+    case "answerQuestion":
+      doing.answerQuestion(does.session);
       return DID;
     case "ignoreNeedsYou":
       return doing.ignoreNeedsYou(does.session);
@@ -2891,6 +2901,37 @@ export function briefRows(listed: readonly ListedChat[]): Offer[] {
       note: BRIEF_SAYS,
     }));
 }
+
+/**
+ * **Answer, for a task paused on a question to its asking chat** (#1496, #1551):
+ * `chat.answer:<session>`, which opens a form that answers it as the person. On the task's row
+ * menu in the Chats list, on its own tab's menu, and in the palette; a tab's menu offers it at
+ * the end of the task's line. **Only while the task is asking**: the row is gone once it is
+ * answered or has moved on, and a form opened just before says so itself. It sends nothing:
+ * the form's Send does, so it is among a menu's ordinary rows.
+ */
+export function answerRows(listed: readonly ListedChat[]): Offer[] {
+  return listed
+    .filter((chat) => chat.mode === "task" && chat.asking !== null)
+    .map((chat) => ({
+      ...can(
+        answerId(chat.session),
+        `Answer ${chat.name}'s question`,
+        { verb: "answerQuestion", session: chat.session },
+        chat.name,
+      ),
+      note: ANSWER_SAYS,
+    }));
+}
+
+/** The catalogue's id for a task's Answer row. */
+export function answerId(session: number): string {
+  return `chat.answer:${session}`;
+}
+
+/** What Answer says that its title cannot fit. */
+export const ANSWER_SAYS =
+  "Answer, as you, the question this task asked the chat that dispatched it. It carries on with your answer.";
 
 /** The catalogue's id for a task's Brief row. */
 export function briefId(session: number): string {
@@ -3550,6 +3591,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           ...(what.session === undefined ? [] : [besideId(what.session)]),
           // A task: its Brief (#1494). An id the catalogue lacks is not in the menu.
           ...(what.session === undefined ? [] : [briefId(what.session)]),
+          // A task asking its asking chat: the person may answer it (#1551).
+          ...(what.session === undefined ? [] : [answerId(what.session)]),
           activityId(what.tab),
         ],
         below: [
@@ -3573,6 +3616,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: [
           showId(what.session),
           briefId(what.session),
+          answerId(what.session),
           ...(what.handed ?? []).map((to) => handedOffId(what.session, to)),
           // Where a task is drawn (#1489): a tab of its own, beside its session, or back.
           ownTabId(what.session),

@@ -169,6 +169,13 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
     if (cmd === "dispatch_grants_needed") return [];
     // The Brief panel's read (#1494): this core holds no dispatch records.
     if (cmd === "task_brief") throw "This project holds no record of that task.";
+    // The question a task asking its asker is paused on (#1551).
+    if (cmd === "task_question") {
+      const one = open.find((chat) => chat.session === a.session);
+      return one?.from?.asking === true
+        ? { task: one.label, asked: one.from.name, number: 2, question: "Which branch?" }
+        : null;
+    }
     if (cmd === "vault_refusals") return [];
     if (cmd === "owed_restarts") return [];
     if (cmd === "finished_tasks") return [...finished];
@@ -717,6 +724,12 @@ describe("what the menu says of the work (#1493, #1494, #1495)", () => {
     // One line, and out of what a screen reader is told of the line: its name says it.
     expect(line("talk").querySelector(".chat-doing")?.getAttribute("aria-hidden")).toBe("true");
     expect(line("sweep").querySelector(".chat-doing")).toBeNull();
+    // The line is described by it (#1551), asked for, never announced, as a Chats-list row is;
+    // by an id of the menu's own, since the row's is the row's.
+    expect(line("talk")).toHaveAccessibleDescription("running cargo");
+    expect(line("sweep")).toHaveAccessibleDescription("");
+    const ids = [...document.querySelectorAll(".chat-doing[id]")].map((one) => one.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("opens a task's Brief from the end of its line, and the session's own has none", async () => {
@@ -732,6 +745,32 @@ describe("what the menu says of the work (#1493, #1494, #1495)", () => {
 
     expect(await screen.findByRole("dialog", { name: /Brief of talk/ })).toBeTruthy();
     expect(menu()).toBeNull();
+  });
+
+  it("answers an asking task's question from the end of its line, and offers it on no other", async () => {
+    const asking = withTasks().map((one) =>
+      one.session === 4 && one.from ? { ...one, from: { ...one.from, asking: true } } : one,
+    );
+    const { asked } = await drawn(asking);
+    press(theChip("steward 1"));
+
+    expect(line("sweep").querySelector('[data-says^="Answer"]')).toBeNull();
+    expect(line("steward 1").querySelector('[data-says^="Answer"]')).toBeNull();
+    const answer = line("talk").querySelector<HTMLElement>(`[data-says="Answer talk's question"]`);
+    expect(answer).not.toBeNull();
+    // The pointer's button names the keyboard's way to the same dialog.
+    expect(answer?.title).toBe("Answer talk's question (also in its row's menu in the Chats list)");
+    press(answer as HTMLElement);
+
+    const dialog = await screen.findByRole("dialog", { name: "Answer talk's question" });
+    expect(menu()).toBeNull();
+    const box = await within(dialog).findByRole("textbox", { name: "Your answer" });
+    await userEvent.type(box, "main{Enter}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(commandsOf(asked, "answer_task_question")).toEqual([
+      { plane: PLANE, session: 4, number: 2, question: "Which branch?", text: "main" },
+    ]);
   });
 
   it("opens the session's Activity in a tab of its own", async () => {

@@ -267,6 +267,7 @@ import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { BriefButton, BriefOpener, BriefPanel, type BriefAsk, type OpenBrief } from "./Brief";
+import { AnswerOpener, AnswerPanel, type AnswerAsk, type OpenAnswer } from "./AnswerPanel";
 import { activityTitle, activityView } from "./activity";
 import { PaneCrumbs } from "./PaneCrumbs";
 import { ChipExplained, type ChipToExplain } from "./ChipExplained";
@@ -4907,6 +4908,10 @@ export const PlaneView = memo(function PlaneView({
   /** Opens the Brief panel for a task: the one way in, for the catalogue's rows, a finished
    *  row and the breadcrumb's button ({@link OpenBrief}). It reads when it opens. */
   const openBrief: OpenBrief = setBriefOf;
+  /** The task whose question is being answered, while its dialog is open (#1551). */
+  const [answerOf, setAnswerOf] = useState<AnswerAsk>();
+  /** Opens the Answer dialog for a task: for the catalogue's rows and a tab menu's line. */
+  const openAnswer: OpenAnswer = setAnswerOf;
   /**
    * Opens **Ask {persona}** for chat `session`: the one way in, for the catalogue's rows and
    * for a Notice that names the persona to ask ({@link OpenAskPersona}). Nothing starts here.
@@ -5025,6 +5030,8 @@ export const PlaneView = memo(function PlaneView({
       showTabTasks,
       showBrief: (session: number) =>
         openBrief({ chat: session, name: nameOfNow.current(session) }),
+      answerQuestion: (session: number) =>
+        openAnswer({ chat: session, name: nameOfNow.current(session) }),
       ignoreNeedsYou,
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
@@ -5108,6 +5115,7 @@ export const PlaneView = memo(function PlaneView({
       newShell,
       pickVault,
       newTabIn,
+      openAnswer,
       openBrief,
       openWorkspaceSettings,
       pickSpot,
@@ -6534,6 +6542,7 @@ export const PlaneView = memo(function PlaneView({
       personas={personaMarks}
       askPersona={openAskPersona}
       brief={openBrief}
+      answer={openAnswer}
     >
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
@@ -7574,6 +7583,17 @@ export const PlaneView = memo(function PlaneView({
         />
       )}
 
+      {answerOf && (
+        <AnswerPanel
+          // Another task's question is another dialog: it reads again, from nothing.
+          key={answerOf.chat}
+          plane={plane}
+          of={answerOf}
+          asking={chatsByNumber.get(answerOf.chat)?.from?.asking === true}
+          onClose={() => setAnswerOf(undefined)}
+        />
+      )}
+
       {askingPersona && (
         <AskPersona
           // A new question is a new dialog: its boxes start from its own prefill.
@@ -7858,6 +7878,7 @@ function Lent({
   personas,
   askPersona,
   brief,
+  answer,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
@@ -7871,6 +7892,8 @@ function Lent({
   askPersona: OpenAskPersona;
   /** Opens the Brief panel for a task (`useOpenBrief`, #1494). */
   brief: OpenBrief;
+  /** Opens the Answer dialog for a task's question (`useOpenAnswer`, #1551). */
+  answer: OpenAnswer;
   children: ReactNode;
 }) {
   return (
@@ -7881,7 +7904,9 @@ function Lent({
             <PersonaMarks.Provider value={personas.marks}>
               <ReloadPersonaMarks.Provider value={personas.reload}>
                 <AskPersonaOpener value={askPersona}>
-                  <BriefOpener value={brief}>{children}</BriefOpener>
+                  <BriefOpener value={brief}>
+                    <AnswerOpener value={answer}>{children}</AnswerOpener>
+                  </BriefOpener>
                 </AskPersonaOpener>
               </ReloadPersonaMarks.Provider>
             </PersonaMarks.Provider>
