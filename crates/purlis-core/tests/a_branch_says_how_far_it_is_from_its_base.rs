@@ -120,7 +120,9 @@ fn a_branch_with_no_recorded_base_says_it_has_none_rather_than_a_count() {
 
 /// The repo's own folder on `main`, following `<remote>/main` (#1130): the upstream holds one
 /// commit `main` lacks (`theirs`), and `main` one the upstream lacks (`local`). No network: the
-/// remote-tracking ref is written where a fetch would have left it.
+/// remote-tracking ref is written where a fetch would have left it, and the remote is declared
+/// with the fetch refspec a clone writes, which git's own `@{upstream}` needs to map
+/// `refs/heads/main` to `refs/remotes/<remote>/main`. Nothing is ever fetched from it.
 fn following_an_upstream(f: &support::Fixture, remote: &str) {
     f.commit(&f.clone, "pushed");
     support::git(&f.clone, &["checkout", "-q", "-b", "elsewhere"]);
@@ -132,6 +134,16 @@ fn following_an_upstream(f: &support::Fixture, remote: &str) {
     support::git(&f.clone, &["checkout", "-q", "main"]);
     support::git(&f.clone, &["branch", "-q", "-D", "elsewhere"]);
     f.commit(&f.clone, "local");
+    let url = f.clone.display().to_string();
+    support::git(&f.clone, &["config", &format!("remote.{remote}.url"), &url]);
+    support::git(
+        &f.clone,
+        &[
+            "config",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ],
+    );
     support::git(&f.clone, &["config", "branch.main.remote", remote]);
     support::git(
         &f.clone,
