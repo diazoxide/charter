@@ -75,7 +75,9 @@ fn a_vault_file_inside_the_plane_that_git_would_commit_is_named() {
     std::fs::write(root.join(".gitignore"), "/.charter/\n").unwrap();
     let ctx = Ctx::new(root, Env::of(&[]));
     assert_eq!(
-        vaultcmd::unignored_plaintext(&ctx, "secrets/prod.json").as_deref(),
+        vaultcmd::unignored_plaintext(&ctx, "secrets/prod.json")
+            .map(|found| found.path)
+            .as_deref(),
         Some("secrets/prod.json")
     );
     assert_eq!(

@@ -827,38 +827,56 @@ fn write_record(file: &Path, lines: &[String]) -> io::Result<()> {
 }
 
 /// The repository's `info/exclude` for the project at `plane`, and the project's path inside
-/// that repository (`sub/` for a project below the top, empty at the top). `None` when the
-/// project is in no git repository, which carries nothing.
-fn exclude_of(plane: &Path) -> Option<(PathBuf, String)> {
-    let ask = |args: &[&str]| -> Option<String> {
-        let mut git = std::process::Command::new("git");
-        git.arg("-C")
-            .arg(plane)
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE");
-        let out = crate::forklock::output(&mut git).ok()?;
-        out.status.success().then(|| {
-            String::from_utf8_lossy(&out.stdout)
-                .trim_end_matches('\n')
-                .to_owned()
-        })
+/// that repository (`sub/` for a project below the top, empty at the top). `Ok(None)` when the
+/// project is in no git repository, which carries nothing, or no git can be started here.
+/// `Err` with the reason when git could not be asked (#1476): a folder whose `.git` link names
+/// what purlis will not follow, or a git that did not answer in time. The caller says so rather
+/// than going on as if nothing needed ignoring.
+///
+/// Asked through the hardened runner ([`crate::worktree::git`]): a constructed environment, no
+/// program a config names, and the folder's `.git` link checked before git follows it.
+fn exclude_of(plane: &Path) -> Result<Option<(PathBuf, String)>, String> {
+    use crate::worktree::git;
+    let ask = |args: &[&str]| -> Result<Option<String>, String> {
+        let Ok(out) = git::run(plane, args, git::READ) else {
+            return Ok(None);
+        };
+        match out.code {
+            Some(0) => Ok(Some(out.line().to_owned())),
+            None => Err(format!(
+                "git did not answer within {} seconds",
+                git::READ.as_secs()
+            )),
+            Some(_) if out.err.contains("not a git repository") => Ok(None),
+            Some(_) => Err(out
+                .err
+                .trim()
+                .trim_start_matches("fatal: ")
+                .lines()
+                .next()
+                .unwrap_or("git failed without saying why")
+                .to_owned()),
+        }
     };
-    let exclude = PathBuf::from(ask(&["rev-parse", "--git-path", "info/exclude"])?);
-    let prefix = ask(&["rev-parse", "--show-prefix"])?;
+    let Some(exclude) = ask(&["rev-parse", "--git-path", "info/exclude"])? else {
+        return Ok(None);
+    };
+    let Some(prefix) = ask(&["rev-parse", "--show-prefix"])? else {
+        return Ok(None);
+    };
+    let exclude = PathBuf::from(exclude);
     let exclude = if exclude.is_absolute() {
         exclude
     } else {
         plane.join(exclude)
     };
-    Some((exclude, prefix))
+    Ok(Some((exclude, prefix)))
 }
 
 /// Make git ignore each of `names` at the top of `plane`, through the repository's own
 /// `info/exclude`: appended, journalled first, and only the lines it lacks.
 fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
-    let Some((exclude, prefix)) = exclude_of(plane) else {
+    let Some((exclude, prefix)) = exclude_of(plane).map_err(io::Error::other)? else {
         return Ok(());
     };
     let before = match std::fs::read(&exclude) {
@@ -1042,7 +1060,9 @@ fn only_our_moves(local: &Local, planes: &[PathBuf], pending: &[&Entry]) -> Resu
         ] {
             pairs.push((plane.join(old), plane.join(new)));
         }
-        if let Some((file, prefix)) = exclude_of(plane) {
+        // What was journalled is matched against the excludes git names now; a folder git
+        // cannot be asked about now has none of its appends counted as ours.
+        if let Ok(Some((file, prefix))) = exclude_of(plane) {
             made.extend(file.parent().map(Path::to_path_buf));
             let lines = vec![
                 format!("/{prefix}{}/", STATE_DIR.write),
@@ -1297,3 +1317,7 @@ pub fn logs_at_launch_with(local: &Local, seams: &Seams) -> Option<Moved> {
     }
     Some(moved)
 }
+
+#[cfg(test)]
+#[path = "renamelocal/git_tests.rs"]
+mod git_tests;
