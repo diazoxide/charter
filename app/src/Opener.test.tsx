@@ -515,4 +515,24 @@ describe("the opener", () => {
     await person.click(screen.getByRole("button", { name: "Open project…" }));
     await vi.waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
+
+  it("gives a failed dialog's line to a newer refusal from a recent row (#1291)", async () => {
+    // A recent row opens without the picker or the form. Its refusal is newer than the dialog's
+    // failure, so it is the one said: never the old line in its place.
+    core((cmd) => {
+      if (cmd === "pick_project") throw "the folder dialog could not be opened";
+      if (cmd === "open_plane")
+        throw new Error("/home/dev/elsewhere is not a plane: purlis found no charter.toml");
+      return undefined;
+    });
+    render(<App />);
+    const person = userEvent.setup();
+
+    await person.click(await screen.findByRole("button", { name: "Open project…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be opened");
+
+    await person.click(screen.getByRole("button", { name: /elsewhere/ }));
+    await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("is not a plane"));
+    expect(screen.getByRole("alert")).not.toHaveTextContent("could not be opened");
+  });
 });

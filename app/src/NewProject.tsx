@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { commands } from "./bindings";
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
+import { useNewerTrouble } from "./pickTrouble";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
@@ -104,18 +105,22 @@ export function NewProject({
   // a cancelled pick stops answering null.
   //
   // A cancelled dialog is null and is not a failure: nothing is said and nothing moves. A dialog
-  // that could not open is said where the core's refusal is (#1291), until the next try or send.
-  const [pickTrouble, setPickTrouble] = useState<string>();
-  const pick = useCallback((into: (chosen: string) => void) => {
-    setPickTrouble(undefined);
-    void commands
-      .pickProject()
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
-      .then((answer) => {
-        if (answer.status === "error") setPickTrouble(answer.error);
-        else if (answer.data) into(answer.data);
-      });
-  }, []);
+  // that could not open is said where the core's refusal is (#1291), until the next try or send,
+  // or until a newer refusal comes (a forge answer sends the form again on its own).
+  const { said, pickFailed, started } = useNewerTrouble(trouble);
+  const pick = useCallback(
+    (into: (chosen: string) => void) => {
+      started();
+      void commands
+        .pickProject()
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
+        .then((answer) => {
+          if (answer.status === "error") pickFailed(answer.error);
+          else if (answer.data) into(answer.data);
+        });
+    },
+    [pickFailed, started],
+  );
 
   return (
     <Dialog.Root
@@ -141,7 +146,7 @@ export function NewProject({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              setPickTrouble(undefined);
+              started();
               if (repo.trim() !== "" && !opening) onOpenRepo(repo.trim());
             }}
           >
@@ -169,9 +174,9 @@ export function NewProject({
               )}
             />
             {/* The core's refusal, all of it, for whichever form was sent last. */}
-            {(pickTrouble ?? trouble) && (
+            {said && (
               <p className="trouble said-in-full" role="alert">
-                {pickTrouble ?? trouble}
+                {said}
               </p>
             )}
             {/* Asked for whichever form was sent last, as the refusal is (#839). */}
@@ -197,7 +202,7 @@ export function NewProject({
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                setPickTrouble(undefined);
+                started();
                 // The box and the adopt field are two answers to one question — which
                 // repository this plane starts from — so a ticked box sends no repo, rather
                 // than sending both and letting the core rank them.

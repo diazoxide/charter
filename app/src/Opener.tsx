@@ -4,6 +4,7 @@ import type { ForgeAsk } from "./ForgeQuestion";
 import { FirstRun } from "./FirstRun";
 import { Notice } from "./Notice";
 import { GoneProjectNotice } from "./GoneProjectNotice";
+import { useNewerTrouble } from "./pickTrouble";
 
 /**
  * The screen a window with no project open draws.
@@ -124,19 +125,27 @@ export function Opener({
     return () => onGoneListed?.("unread");
   }, [listed, onGoneListed]);
 
-  // Why the folder dialog could not open (#1291): said where a refused open is, until the next
-  // try. A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
-  const [pickTrouble, setPickTrouble] = useState<string>();
+  // Why the folder dialog could not open (#1291): said where a refused open is, until any open
+  // starts or a newer refusal comes. A cancelled dialog is null and is not a failure: nothing is
+  // said and nothing moves.
+  const { said, pickFailed, started } = useNewerTrouble(trouble);
+  const open = useCallback(
+    (path: string) => {
+      started();
+      onOpen(path);
+    },
+    [onOpen, started],
+  );
   const pick = useCallback(() => {
-    setPickTrouble(undefined);
+    started();
     void commands
       .pickProject()
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
       .then((answer) => {
-        if (answer.status === "error") setPickTrouble(answer.error);
-        else if (answer.data) onOpen(answer.data);
+        if (answer.status === "error") pickFailed(answer.error);
+        else if (answer.data) open(answer.data);
       });
-  }, [onOpen]);
+  }, [open, pickFailed, started]);
 
   // The first run is for a launch with nothing to go on, on a machine that remembers nothing.
   // Until the list has answered, a launch like that draws nothing rather than the wrong screen.
@@ -208,8 +217,7 @@ export function Opener({
         className="by-path"
         onSubmit={(event) => {
           event.preventDefault();
-          setPickTrouble(undefined);
-          if (typed.trim()) onOpen(typed.trim());
+          if (typed.trim()) open(typed.trim());
         }}
       >
         <label htmlFor="open-by-path">Or type a path</label>
@@ -225,9 +233,9 @@ export function Opener({
         </button>
       </form>
 
-      {(pickTrouble ?? trouble) && (
+      {said && (
         <p className="trouble" role="alert">
-          {pickTrouble ?? trouble}
+          {said}
         </p>
       )}
 
@@ -240,7 +248,7 @@ export function Opener({
           <ul className="recents">
             {recents?.planes?.map((plane) => (
               <li key={plane.path}>
-                <button type="button" tabIndex={0} onClick={() => onOpen(plane.path)}>
+                <button type="button" tabIndex={0} onClick={() => open(plane.path)}>
                   <span className="tab-name">{plane.name}</span>
                   <code className="where">{plane.path}</code>
                 </button>
@@ -279,7 +287,7 @@ export function Opener({
             onLocated={(found) => {
               onGoneSettled?.(gone.path);
               setChanged((n) => n + 1);
-              onOpen(found);
+              open(found);
             }}
             onForgotten={() => {
               onGoneSettled?.(gone.path);
