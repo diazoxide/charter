@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791535408659,
+  "lastUpdate": 1791537973136,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4662,6 +4662,48 @@ window.BENCHMARK_DATA = {
             "value": 104.7126835,
             "unit": "ms",
             "extra": "median of 5 runs: 102.991, 103.983, 104.713, 106.146, 106.590 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a50dbf81bd323ff00ad65b53de5a692c862e60b4",
+          "message": "Dispatch text guard: read a body a shell runs, give A6's remedy, and say what a listed row holds\n\nReview fold-ins for the dispatch core's loose ends.\n\n- A7e now reads a heredoc body a shell runs (`bash <<'EOF'`) as the shell reads it, with the\n  plan A7 and the leak guard share: a text subcommand in such a body beside a live\n  substitution is refused. A body a reader takes (`cat > notes.md <<'EOF'`) stays data.\n- The refusal gives A6's measured remedy: backslash-escape each backtick, or single-quote the\n  whole text when it holds no apostrophe. For a report it also names the `dispatch_report`\n  tool, whose text no shell reads.\n- ADR 0064's amendment says what a row of the list carries: chat number, name, persona,\n  workspace, state, age, and the branch purlis cut with how it stands; still only the asking\n  chat's own tasks.\n- The spec paragraph is rewrapped.\n\nRefs #1456\nRefs #1463\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T13:15:52+04:00",
+          "tree_id": "1bdb5d8eeb6c4df49d245525479e8739767cadd6",
+          "url": "https://github.com/purlis/purlis/commit/a50dbf81bd323ff00ad65b53de5a692c862e60b4"
+        },
+        "date": 1791537972522,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.41004450000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.396, 0.409, 0.410, 0.415, 0.429 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.5315395,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.521, 16.526, 16.532, 16.641, 16.715 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.660968,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.091, 102.191, 102.661, 103.068, 103.137 ms"
           }
         ]
       }
