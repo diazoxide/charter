@@ -552,6 +552,11 @@ The rules an icon has to meet here:
 - **A contrast floor applies to an icon's colour as it does to text** — 3:1 for a graphic. A
   state colour that is too weak for words (`needs-you.base` measures 3.64:1 on `surface.base` in
   charter-dark) may colour the mark beside the words and never the words.
+- **An icon is Lucide's or the icon theme's, never a glyph.** A ✓, a ▸ or a ✗ typed as text is
+  the font's: its weight, its size and its baseline, which change with the font and match no
+  icon beside it. `app/src/lib/strayIcons.test.ts` fails on a glyph drawn alone as an icon, on an
+  `<svg>` drawn by hand outside the files it names, and on any other icon package (DS-4, #627).
+  A glyph inside words is prose, and is left alone.
 
 **Files and folders are the one exception: they are drawn from an icon theme** (FM-3, #1106), a
 data file beside the colour theme (`app/src/theme/icons.ts`). It maps a file's whole name, then
