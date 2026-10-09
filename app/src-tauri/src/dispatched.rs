@@ -906,10 +906,11 @@ pub(crate) async fn answer_task_question(
 /// next says a turn began or ended: they may have opened a picker of the harness's own, which
 /// no hook reports.
 ///
-/// **And in a task still working, their words are them stepping in** (`dispatched::steps_in`):
-/// its report will say so. The fact is kept, and nothing of the bytes. `line` is how many
-/// bytes they have typed since their last Enter, where that could be followed.
-pub fn person_typed(held: &Held, chat: u32, bytes: &[u8], line: Option<usize>) {
+/// **And in a task still working, a prompt they send is them stepping in**
+/// (`dispatched::steps_in`): its report will say so. The fact is kept, and nothing of the
+/// bytes. `submitted` is the line an Enter in `bytes` sent, by how many bytes they had typed on
+/// it where that could be followed, and `None` where they sent nothing (#1463).
+pub fn person_typed(held: &Held, chat: u32, bytes: &[u8], submitted: Option<Option<usize>>) {
     if !crate::smartclose::typed_by_the_operator(bytes) {
         return;
     }
@@ -929,7 +930,7 @@ pub fn person_typed(held: &Held, chat: u32, bytes: &[u8], line: Option<usize>) {
         .chats()
         .handed_from(chat)
         .is_some_and(|from| from.mode == Mode::Task && from.report == Owed::Due);
-    if owes && dispatched::steps_in(held.board().glance(chat).asking, line, bytes) {
+    if owes && dispatched::steps_in(held.board().glance(chat).asking, submitted) {
         held.tasks().ledger().person_typed(chat);
     }
 }

@@ -598,14 +598,15 @@ impl Held {
         // smart-close pass is issued on** (#1332): the line read from their own keys, never
         // what the chat reports (#1361). Marked before the bytes are sent, so it is there
         // before the hook the prompt fires can be.
-        self.closing
-            .person_typed(session, bytes, std::time::Instant::now(), || {
-                let glance = self.board().glance(session);
-                glance.state == purlis_core::state::State::Waiting && !glance.asking
-            });
-        // And the person typing in a dispatched task is what its report says of them: that
-        // they stepped in, and nothing of what they typed (#1442).
-        crate::dispatched::person_typed(self, session, bytes, self.closing.line_len(session));
+        let submitted =
+            self.closing
+                .person_typed(session, bytes, std::time::Instant::now(), || {
+                    let glance = self.board().glance(session);
+                    glance.state == purlis_core::state::State::Waiting && !glance.asking
+                });
+        // And a prompt the person sends a dispatched task is what its report says of them: that
+        // they stepped in, and nothing of what they typed (#1442, #1463).
+        crate::dispatched::person_typed(self, session, bytes, submitted);
         self.chats.sessions().input(session, bytes)
     }
 
@@ -6807,6 +6808,40 @@ mod tests {
             !told.contains("staging"),
             "what was typed is in the report: {told}"
         );
+        held.close_chat(task).unwrap();
+        held.close_chat(asker).unwrap();
+    }
+
+    /// #1463: stepping in is a prompt the person sends the task, never a key that sent it
+    /// nothing: a stray key, an arrow, a half-typed line, an Enter on an empty line.
+    #[cfg(unix)]
+    #[test]
+    fn keys_that_send_a_task_nothing_are_not_stepping_in_and_a_prompt_sent_is() {
+        use purlis_core::state::Event::{SessionStart, Stop, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (asker, _) = a_claude_stand_in(&held, dir.path(), "asker", None);
+        let (task, _) = a_claude_stand_in(&held, dir.path(), "task", Some(asker));
+        reported(&held, task, &[SessionStart, UserPromptSubmit, Stop]);
+
+        for keys in [&b"x"[..], b"\x1b[A", b"half a line", b"\x7f\x7f\x7f\x7f"] {
+            held.operator_input(task, keys).expect("sent");
+            assert!(
+                !crate::dispatched::stepped_in(&held, task),
+                "{keys:?} sent nothing"
+            );
+        }
+        held.operator_input(task, b"\x03").expect("sent");
+        held.operator_input(task, b"\r").expect("sent");
+        assert!(
+            !crate::dispatched::stepped_in(&held, task),
+            "an empty line sends nothing"
+        );
+
+        held.operator_input(task, b"use staging\r").expect("sent");
+        assert!(crate::dispatched::stepped_in(&held, task));
         held.close_chat(task).unwrap();
         held.close_chat(asker).unwrap();
     }

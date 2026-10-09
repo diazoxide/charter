@@ -1614,34 +1614,26 @@ impl Ledger {
 }
 
 /// **Whether the person's keys in a task's pane are them stepping in** (#1442), as opposed to
-/// answering a prompt the task put to them.
+/// answering a prompt the task put to them, or a key that sent nothing.
 ///
-/// Outside a turn that has shown them a prompt, any key is. Within one the board cannot say
-/// when the prompt was answered, so the keys are read: picking an option is a key or two and
-/// Enter, and an instruction is words. `line` is how many bytes they have typed since their
-/// last Enter, where purlis could follow them, and `bytes` what they sent now. Two bytes of
-/// text or more, typed or pasted, is stepping in.
-pub fn steps_in(asked_this_turn: bool, line: Option<usize>, bytes: &[u8]) -> bool {
-    if !asked_this_turn {
-        return true;
+/// **Only a prompt they sent counts** (#1463): `submitted` is the line an Enter in these keys
+/// submitted, by how many bytes the person typed on it where purlis could follow their keys
+/// (`Some(None)` where it could not: an arrow, a history key), and `None` where the keys
+/// submitted nothing. A stray key, an arrow or a half-typed line is no step: nothing reached
+/// the task.
+///
+/// Outside a turn that has shown them a prompt, any line they send with something on it is.
+/// Within one the board cannot say when the prompt was answered, so the line is read: picking
+/// an option is a key or two and Enter, or arrows and Enter, and an instruction is words. Two
+/// bytes of text or more, typed or pasted, is stepping in.
+pub fn steps_in(asked_this_turn: bool, submitted: Option<Option<usize>>) -> bool {
+    match submitted {
+        None => false,
+        Some(Some(typed)) if asked_this_turn => typed >= 2,
+        // Arrows and Enter in a prompt is an option picked.
+        Some(None) => !asked_this_turn,
+        Some(Some(typed)) => typed >= 1,
     }
-    let text = |bytes: &[u8]| {
-        bytes
-            .iter()
-            .filter(|byte| **byte >= 0x20 && **byte != 0x7f)
-            .count()
-    };
-    // A paste carries its text between markers, which are not the text.
-    let pasted = bytes
-        .strip_prefix(b"\x1b[200~")
-        .map(|rest| rest.strip_suffix(b"\x1b[201~").unwrap_or(rest));
-    let now = match pasted {
-        Some(pasted) => text(pasted),
-        // Any other escape sequence is a key (an arrow, a function key), not text.
-        None if bytes.first() == Some(&0x1b) => 0,
-        None => text(bytes),
-    };
-    now >= 2 || line.is_some_and(|line| line >= 2)
 }
 
 // ---- said to the chat -------------------------------------------------------------------------
@@ -2777,20 +2769,27 @@ mod tests {
 
     #[test]
     fn the_person_s_words_in_a_task_are_stepping_in_and_picking_an_option_is_not() {
-        // M4. Outside a turn that asked them something, any key.
-        assert!(steps_in(false, Some(0), b"x"));
-        assert!(steps_in(false, None, b"\x1b[A"));
-        // Within one: an option is a key or two and Enter.
-        for keys in [&b"y"[..], b"2", b"\r", b"\x1b[B", b"\x1b", b"\t"] {
-            assert!(!steps_in(true, Some(0), keys), "{keys:?}");
-        }
-        assert!(!steps_in(true, Some(1), b"\r"), "one key, then Enter");
-        assert!(!steps_in(true, None, b"\r"), "arrows, then Enter");
-        // An instruction is words: typed key by key, typed at once, or pasted.
-        assert!(steps_in(true, Some(2), b"o"));
-        assert!(steps_in(true, Some(0), b"no, use staging"));
-        assert!(steps_in(true, Some(0), b"\x1b[200~use staging\x1b[201~"));
-        assert!(steps_in(true, None, b"\x1b[200~use staging\x1b[201~"));
+        // M4. Outside a turn that asked them something, any line they send with something on it.
+        assert!(steps_in(false, Some(Some(1))));
+        assert!(steps_in(false, Some(Some(40))));
+        // A line recalled from history, or edited with arrows, and sent.
+        assert!(steps_in(false, Some(None)));
+        // Within one: an option is a key or two and Enter, or arrows and Enter.
+        assert!(!steps_in(true, Some(Some(0))), "Enter alone");
+        assert!(!steps_in(true, Some(Some(1))), "one key, then Enter");
+        assert!(!steps_in(true, Some(None)), "arrows, then Enter");
+        // An instruction is words, typed key by key, at once, or pasted, and then sent.
+        assert!(steps_in(true, Some(Some(2))));
+        assert!(steps_in(true, Some(Some(15))));
+    }
+
+    #[test]
+    fn keys_that_send_nothing_are_not_stepping_in() {
+        // #1463: a stray key, an arrow, a half-typed line. Nothing reached the task.
+        assert!(!steps_in(false, None));
+        assert!(!steps_in(true, None));
+        // And an Enter on an empty line sends it nothing either.
+        assert!(!steps_in(false, Some(Some(0))));
     }
 
     #[test]
