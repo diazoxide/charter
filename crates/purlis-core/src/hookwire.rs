@@ -1999,6 +1999,12 @@ pub type Answerer = Box<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 pub struct Listener {
     socket: std::os::unix::net::UnixListener,
     path: std::path::PathBuf,
+    /// Which file at `path` is this listener's: the one `bind` made.
+    file: BoundFile,
+    /// Two ends of a pair that wakes the reading thread without the path. The thread waits on
+    /// `woken` beside the socket; [`Reading`]'s drop writes to and closes `waking`.
+    woken: std::os::unix::net::UnixStream,
+    waking: std::os::unix::net::UnixStream,
     tokens: std::sync::Arc<ChatTokens>,
     /// The only uid a connection is read from: this process's own, as it binds (FD-6).
     owner: purlis_same_user::Uid,
@@ -2038,6 +2044,12 @@ impl Listener {
         // what makes it safe: there is no second live app whose socket this could be. On
         // Linux the app also holds a per-user lock (`instance.rs` in charter-app), because a
         // launch without a session bus has no single-instance name to hold.
+        // Held from the stale file's removal to the new file's identity being read, and by a
+        // stopping listener from its check to its removal: in this process a stop can never
+        // take a file bound between the two (`SOCKET_FILES`).
+        let files = SOCKET_FILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -2050,6 +2062,15 @@ impl Listener {
         // on the machine", and it is one call.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        // Which file is this listener's, read the moment after it was made: a listener that
+        // stops removes the file at its path only while it is still this one.
+        let file = BoundFile::of(&std::fs::symlink_metadata(path)?);
+        drop(files);
+        // The reading thread waits on the socket and on this pair at once, and is woken
+        // through the pair. Waking it by connecting to the path reached whatever listened
+        // there by then, which need not be this listener.
+        socket.set_nonblocking(true)?;
+        let (woken, waking) = std::os::unix::net::UnixStream::pair()?;
         // Each token's spool key is recorded beside the socket as it is issued (FD-30), so
         // whichever host drains a chat's spool can check its lines: only where the sandbox's
         // integrity denial covers the directory (V63). Anywhere else nothing spools.
@@ -2068,6 +2089,9 @@ impl Listener {
         Ok(Self {
             socket,
             path: path.to_path_buf(),
+            file,
+            woken,
+            waking,
             tokens: std::sync::Arc::new(tokens),
             owner: purlis_same_user::Uid::effective(),
         })
@@ -2164,14 +2188,22 @@ impl Listener {
     /// out dropped.
     pub fn hear(self, hearing: Hearing) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let path = self.path.clone();
+        let Self {
+            socket,
+            path,
+            file,
+            woken,
+            waking,
+            tokens,
+            owner,
+        } = self;
         let stopped = std::sync::Arc::clone(&stopping);
         let hearing = std::sync::Arc::new(hearing);
-        let tokens = std::sync::Arc::clone(&self.tokens);
         let turns = std::sync::Arc::new(InTurn::new());
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
-            for connection in self.socket.incoming() {
+            loop {
+                let woke = next_connection(&socket, &woken);
                 if stopped.load(std::sync::atomic::Ordering::SeqCst) {
                     return;
                 }
@@ -2181,7 +2213,11 @@ impl Listener {
                 // reachable ways in — a line that will not read, and one that will not parse
                 // — have a test; `accept` failing does not, because nothing a test can do
                 // makes it fail. It is written the same way for the same reason.
-                let Ok(connection) = connection else { continue };
+                let connection = match woke {
+                    Woke::Connection(connection) => connection,
+                    Woke::Nothing => continue,
+                    Woke::Stop => return,
+                };
                 // **Only this user's connections are read** (FD-6, ADR 0068 §5). The socket is
                 // `0600` in a `0700` directory, which keeps every other user out already; this
                 // still holds if either is ever wrong. A peer of another uid, or one the socket
@@ -2189,8 +2225,7 @@ impl Listener {
                 // Its pid too, which a line is checked against (D-1407-6).
                 let peer = purlis_same_user::peer_process_of(&connection);
                 let pid = peer.as_ref().ok().map(|(_, pid)| *pid);
-                if let Err(refused) =
-                    purlis_same_user::admit_peer(peer.map(|(uid, _)| uid), self.owner)
+                if let Err(refused) = purlis_same_user::admit_peer(peer.map(|(uid, _)| uid), owner)
                 {
                     if let Some(also) = PEER_REFUSALS.say() {
                         tracing::warn!(
@@ -2231,8 +2266,122 @@ impl Listener {
         Reading {
             stopping,
             path,
+            file,
+            waking: Some(waking),
             reading: Some(reading),
         }
+    }
+}
+
+/// What woke a listener's reading thread.
+#[cfg(unix)]
+enum Woke {
+    /// A connection, to read.
+    Connection(std::os::unix::net::UnixStream),
+    /// Its [`Reading`] was dropped.
+    Stop,
+    /// Neither: a connection that went before it was taken, or a wait that was interrupted.
+    Nothing,
+}
+
+/// Waits for a connection on `socket` or a word on `woken`, whichever comes first.
+///
+/// The socket is non-blocking (`Listener::bind` set it), so an `accept` after the wait never
+/// blocks: a connection that is gone by then is `Nothing`, and the wait begins again.
+#[cfg(unix)]
+fn next_connection(
+    socket: &std::os::unix::net::UnixListener,
+    woken: &std::os::unix::net::UnixStream,
+) -> Woke {
+    use rustix::event::{PollFd, PollFlags, poll};
+    let mut waits = [
+        PollFd::new(socket, PollFlags::IN),
+        PollFd::new(woken, PollFlags::IN),
+    ];
+    match poll(&mut waits, None) {
+        Ok(_) => {}
+        Err(rustix::io::Errno::INTR) => return Woke::Nothing,
+        // Nothing this thread passes makes `poll` fail, and memory short for a moment is not
+        // the end of the channel: wait a little, so a failure that lasts is not a busy loop.
+        Err(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            return Woke::Nothing;
+        }
+    }
+    // Any word on the pair is the stop: a byte, the other end closed, or an error on it.
+    if !waits[1].revents().is_empty() {
+        return Woke::Stop;
+    }
+    match socket.accept() {
+        // macOS hands an accepted socket its listener's `O_NONBLOCK`, and Linux does not. A
+        // connection is read blocking, as it always was, on both.
+        Ok((connection, _)) => match connection.set_nonblocking(false) {
+            Ok(()) => Woke::Connection(connection),
+            Err(_) => Woke::Nothing,
+        },
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Woke::Nothing,
+        // Out of descriptors, most likely: the socket stays readable and `poll` answers at
+        // once, so wait a little rather than spin, as for a failed `poll`.
+        Err(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            Woke::Nothing
+        }
+    }
+}
+
+/// Held across a bind's removal of the file at its path, the bind and the read of what it made,
+/// and across a stopping listener's check of its file and its removal. Without it, a project
+/// opened again on another thread could bind its file between a stop's check and its removal,
+/// and lose it. Another process is kept out by the single-instance lock, not by this.
+#[cfg(unix)]
+static SOCKET_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Which file a listener made: its device and inode, read just after `bind`.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BoundFile {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+impl BoundFile {
+    fn of(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
+    }
+}
+
+/// What is at a listener's path when it stops.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum AtItsPath {
+    /// The file it made: it is the listener's to remove.
+    Its,
+    /// Nothing: the file was removed while it listened.
+    Removed,
+    /// Another file: another listener was bound at the path since.
+    Another,
+    /// What is there could not be read, so it is left as it is.
+    Unread,
+}
+
+/// Is the file at `path` still the one `bound` names?
+///
+/// Read without following a link, so a link put at the path is `Another`. The caller holds
+/// [`SOCKET_FILES`] from this read to its removal, so no listener in this process binds the
+/// path in between. An inode is dealt again once its file is gone, so a file removed and made
+/// again by something else in the same instant could read as `Its`; nothing in purlis does.
+#[cfg(unix)]
+fn what_is_at(path: &std::path::Path, bound: BoundFile) -> AtItsPath {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if BoundFile::of(&metadata) == bound => AtItsPath::Its,
+        Ok(_) => AtItsPath::Another,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => AtItsPath::Removed,
+        Err(_) => AtItsPath::Unread,
     }
 }
 
@@ -2736,6 +2885,8 @@ const A_TURN_IS_WAITED_AT_MOST: std::time::Duration = std::time::Duration::from_
 pub struct Reading {
     stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
     path: std::path::PathBuf,
+    file: BoundFile,
+    waking: Option<std::os::unix::net::UnixStream>,
     reading: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -2748,34 +2899,56 @@ impl Drop for Reading {
     fn drop(&mut self) {
         self.stopping
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        // `accept` is blocked in the thread and nothing else will wake it, so the flag alone
-        // would leave it there for the life of the process. One connection of our own is
-        // what it is waiting for.
-        let _ = std::os::unix::net::UnixStream::connect(&self.path);
-        let Some(reading) = self.reading.take() else {
-            return;
-        };
-        // **The wait is bounded.** The connection above goes to whatever listens at the path
-        // now. Where another listener has since been bound there (a second one on the same
-        // project in one process; `bind` takes a path that is in use), it reached that one, or
-        // nothing at all once that one had gone and taken the file with it, and this thread
-        // is still in `accept` with nothing left that can wake it. Joining it then would hold
-        // whoever dropped this for the life of the process, with nothing said.
-        let began = std::time::Instant::now();
-        while !reading.is_finished() && began.elapsed() < A_READING_STOPS_WITHIN {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+        // The thread waits on its socket and on the other end of this pair. A byte, and the
+        // end closed, wake it whatever is at the path now: another listener bound there, or
+        // the file removed.
+        if let Some(waking) = self.waking.take() {
+            use std::io::Write;
+            let _ = (&waking).write_all(&[0]);
         }
-        if !reading.is_finished() {
-            tracing::warn!(
-                "purlis: the hook channel at {} did not stop when it was closed: another \
-                 listener was bound at its path. Its thread is left; nothing reaches it",
+        if let Some(reading) = self.reading.take() {
+            // **The wait is still bounded.** Nothing at the path can keep the thread now, so
+            // this is only so that nothing that closes a project can be held for good by it.
+            let began = std::time::Instant::now();
+            while !reading.is_finished() && began.elapsed() < A_READING_STOPS_WITHIN {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            if reading.is_finished() {
+                let _ = reading.join();
+            } else {
+                tracing::warn!(
+                    "purlis: the hook channel at {} did not stop within {} seconds of being \
+                     closed. Its thread is left",
+                    self.path.display(),
+                    A_READING_STOPS_WITHIN.as_secs()
+                );
+            }
+        }
+        // The file goes only while it is the one this listener made. Removing whatever is at
+        // the path took a newer listener's file, bound there in the same instant.
+        let _files = SOCKET_FILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match what_is_at(&self.path, self.file) {
+            AtItsPath::Its => {
+                let _ = std::fs::remove_file(&self.path);
+            }
+            AtItsPath::Removed => tracing::warn!(
+                "purlis: the hook channel at {} had been removed while the app listened on \
+                 it, so no hook reached the app after that",
                 self.path.display()
-            );
-            // And the file is not this listener's to remove any more.
-            return;
+            ),
+            AtItsPath::Another => tracing::warn!(
+                "purlis: the hook channel at {} was left in place when it closed: another \
+                 listener was bound at its path since",
+                self.path.display()
+            ),
+            AtItsPath::Unread => tracing::warn!(
+                "purlis: the hook channel at {} was left in place when it closed: what is \
+                 at its path could not be read",
+                self.path.display()
+            ),
         }
-        let _ = reading.join();
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -3681,10 +3854,11 @@ mod tests {
     }
 
     #[test]
-    fn a_listener_another_was_bound_over_is_dropped_without_waiting_for_good() {
-        // Two listeners at one path in one process: the second takes the path. Dropping the
-        // first cannot wake its own thread any more (its connection reaches the second), and
-        // it must come back all the same. A join there held a whole test run for an hour.
+    fn a_listener_another_was_bound_over_stops_at_once_and_leaves_the_others_file() {
+        // Two listeners at one path in one process: the second takes the path. The first is
+        // woken through its own pair, not the path, so it stops at once; and the file at the
+        // path is the second's, so the first leaves it. Once, a join here held a test run for
+        // an hour, and an ordinary stop took the newer listener's file.
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let first = Listener::bind(dir.path(), &path)
@@ -3697,16 +3871,15 @@ mod tests {
             let _ = tx.send(report);
         }));
 
-        let (dropped, came_back) = mpsc::channel();
-        std::thread::spawn(move || {
-            drop(first);
-            let _ = dropped.send(());
-        });
-        came_back
-            .recv_timeout(A_READING_STOPS_WITHIN + std::time::Duration::from_secs(10))
-            .expect("dropping a listener another was bound over never came back");
+        let began = std::time::Instant::now();
+        drop(first);
+        assert!(
+            began.elapsed() < A_READING_STOPS_WITHIN,
+            "the first listener's thread was not woken: it waited out its bound"
+        );
 
         // The second is untouched by it: its file is still there, and it still hears.
+        assert!(path.exists(), "the first listener took the second's file");
         let sent = Report {
             chat: 7,
             event: Event::Notification,
@@ -3723,6 +3896,53 @@ mod tests {
         drop(second);
         assert!(began.elapsed() < A_READING_STOPS_WITHIN);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_listener_whose_file_was_removed_still_stops_at_once() {
+        // `rm -rf .purlis`, or the project folder moved, under a live app: nothing is at the
+        // path to connect to, and the listener must stop all the same.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let reading = Listener::bind(dir.path(), &path)
+            .expect("a socket")
+            .each(Box::new(|_| {}));
+        std::fs::remove_file(&path).expect("the file removed under it");
+
+        let began = std::time::Instant::now();
+        drop(reading);
+
+        assert!(began.elapsed() < A_READING_STOPS_WITHIN);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_listeners_file_is_its_own_only_while_it_is_the_one_it_made() {
+        // The decision a stopping listener makes before it removes its file, read on plain
+        // files: the device and inode say which file it is, whatever its name.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        std::fs::write(&path, b"").expect("a file");
+        let bound = BoundFile::of(&std::fs::symlink_metadata(&path).expect("its metadata"));
+
+        assert_eq!(what_is_at(&path, bound), AtItsPath::Its);
+
+        // Another file put at the path, as `bind` does: removed, then made again. The new
+        // one is made before the old is gone, so it cannot be dealt the old one's inode.
+        let newer = dir.path().join("newer");
+        std::fs::write(&newer, b"").expect("another file");
+        std::fs::rename(&newer, &path).expect("put at the path");
+        assert_eq!(what_is_at(&path, bound), AtItsPath::Another);
+
+        std::fs::remove_file(&path).expect("removed");
+        assert_eq!(what_is_at(&path, bound), AtItsPath::Removed);
+
+        // A link at the path is another file too, wherever it points.
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"").expect("a target");
+        let target_is = BoundFile::of(&std::fs::symlink_metadata(&target).expect("metadata"));
+        std::os::unix::fs::symlink(&target, &path).expect("a link");
+        assert_eq!(what_is_at(&path, target_is), AtItsPath::Another);
     }
 
     #[test]
