@@ -664,6 +664,65 @@ describe("the explorer", () => {
     });
   });
 
+  /**
+   * **What a changed file changed, from the file tab** (FM-11, #1189), against the real core:
+   * `branch_status` marks the file changed, its preview offers *Show what changed*, and the
+   * comparison tab draws git's hunks in the merge view. The fixture branch was cut by plain git
+   * and records no base, so the file is compared with its last commit. Nothing is stubbed.
+   */
+  it("shows what a changed file changed, from the file tab, in the merge view", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
+    const readme = readFileSync(join(branch, "README.md"), "utf8");
+    const added = "a line the comparison shows";
+
+    try {
+      writeFileSync(join(branch, "README.md"), `${readme}${added}\n`);
+      await browseTheFiles();
+      const tree = await $('[data-testid="piece-files-tree"]');
+      await tree.waitForExist({ timeout: 20_000 });
+      const row = await tree.$('[data-row="file:svc/fix-login:README.md"]');
+      await row.waitForExist({ timeout: 20_000 });
+      await row.click();
+
+      // Offered once the branch's status has said the file changed.
+      const show = await $("button=Show what changed");
+      await show.waitForExist({
+        timeout: 60_000,
+        timeoutMsg: "the file tab never offered Show what changed for README.md",
+      });
+      await show.click();
+
+      await browser.waitUntil(
+        async () => (await tabInFront()) === "What changed · README.md · fix-login",
+        {
+          timeout: 20_000,
+          timeoutMsg: `the comparison never came forward; in front is ${await tabInFront()}`,
+        },
+      );
+      const merge = await $('[data-testid="merge-viewer"]');
+      await merge.waitForExist({ timeout: 20_000 });
+      expect(await merge.getAttribute("aria-label")).toContain("What changed in README.md against");
+      await browser.waitUntil(
+        async () =>
+          (await textOfEach('[data-testid="merge-viewer"] .cm-changedLine')).some((line) =>
+            line.includes(added),
+          ),
+        { timeout: 20_000, timeoutMsg: "the merge view never drew the added line as changed" },
+      );
+    } finally {
+      // One app process serves the whole run: the branch and the strip are left as found.
+      writeFileSync(join(branch, "README.md"), readme);
+      for (const name of ["What changed · README.md · fix-login", "Files · fix-login"]) {
+        const close = await $(
+          `[role="tablist"][aria-label="Tabs"] button[aria-label="Close ${name}"]`,
+        );
+        if (await close.isExisting()) await close.click();
+      }
+    }
+  });
+
   it("does not list every workspace, because the strip above already answers that", async () => {
     // ADR 0038, and the reason this region was rewritten: the old sidebar drew every
     // workspace with its vision text under the strip that had just been made the axis.
