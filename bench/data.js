@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791513712247,
+  "lastUpdate": 1791515511397,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4074,6 +4074,48 @@ window.BENCHMARK_DATA = {
             "value": 103.9661345,
             "unit": "ms",
             "extra": "median of 5 runs: 103.477, 103.691, 103.966, 104.117, 106.109 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "c51ca80f3c4cef5bf770a0585bae25e262a6bb91",
+          "message": "changes: what a chat's Activity no longer keeps, and what it says it leaves out\n\nRefs #1520\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T06:53:10+04:00",
+          "tree_id": "e958a4c705e7b8bec846195f38399a01c1a6b37b",
+          "url": "https://github.com/purlis/purlis/commit/c51ca80f3c4cef5bf770a0585bae25e262a6bb91"
+        },
+        "date": 1791515510135,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.46394250000000004,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.454, 0.462, 0.464, 0.467, 0.474 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8169075,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.778, 16.812, 16.817, 16.825, 16.853 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.73828,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.328, 101.684, 101.738, 101.895, 102.288 ms"
           }
         ]
       }
