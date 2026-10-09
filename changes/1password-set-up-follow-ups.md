@@ -15,3 +15,7 @@
   Records made since then already named the 1Password item a vault's secrets are kept in, so a
   commit that changed the item stopped the token being used. Older records named none; the next
   read through one now writes the item it was read with into it (#1542).
+
+- **`purlis vault add --token-stdin` is refused in a chat of any project this machine opened.**
+  It read only the open chats of the project the command named, so a chat of another project
+  that named this one was not recognised as a chat (#1542).

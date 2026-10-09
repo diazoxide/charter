@@ -1155,8 +1155,8 @@ pub enum Where {
 ///
 /// - **what the app sets in the environment of everything it starts**: the chat's number, its
 ///   session's number, and the mark of its sandbox;
-/// - **where this process runs**: the project's record of its open chats names each one's
-///   program, and a process that IS one, is in one's session (every chat's program leads its
+/// - **where this process runs**: the record of open chats of this project, and of every
+///   project this machine opened ([`projects_asked`]), names each one's program, and a process that IS one, is in one's session (every chat's program leads its
 ///   own, so a process it started stays in it after its parent has gone), or runs below one is
 ///   inside that chat whatever its environment says (`purlis_same_user::inside_a_chat`).
 ///
@@ -1203,23 +1203,39 @@ pub(crate) fn in_a_chat_with(
     {
         return Where::Inside;
     }
-    let record = match crate::reopen::read_strictly(&ctx.root) {
-        Ok(record) => record.unwrap_or_default(),
-        Err(e) => {
-            return Where::Unsure(format!(
-                "purlis could not read the project's record of its open chats ({})",
-                e.kind()
-            ));
-        }
+    let projects = match projects_asked(ctx) {
+        Ok(projects) => projects,
+        Err(why) => return Where::Unsure(why),
     };
-    // 0 and 1 are the kernel's and `init`'s, above every process: a record naming either
-    // vouches for nothing.
-    let programs: Vec<u32> = record
-        .chats
-        .iter()
-        .filter_map(|chat| chat.pid)
-        .filter(|pid| *pid > 1)
-        .collect();
+    let mut programs: Vec<u32> = Vec::new();
+    for project in &projects {
+        let record = match crate::reopen::read_strictly(project) {
+            Ok(record) => record.unwrap_or_default(),
+            Err(e) if *project == ctx.root => {
+                return Where::Unsure(format!(
+                    "purlis could not read the project's record of its open chats ({})",
+                    e.kind()
+                ));
+            }
+            Err(e) => {
+                return Where::Unsure(format!(
+                    "purlis could not read the record of open chats of {}, a project this \
+                     machine opened ({})",
+                    crate::personas::one_line(&project.display().to_string()),
+                    e.kind()
+                ));
+            }
+        };
+        // 0 and 1 are the kernel's and `init`'s, above every process: a record naming either
+        // vouches for nothing.
+        programs.extend(
+            record
+                .chats
+                .iter()
+                .filter_map(|chat| chat.pid)
+                .filter(|pid| *pid > 1),
+        );
+    }
     if programs.is_empty() {
         return Where::Outside;
     }
@@ -1239,6 +1255,54 @@ pub(crate) fn in_a_chat_with(
                 .to_owned(),
         ),
     }
+}
+
+/// The projects whose records of open chats [`in_a_chat`] reads: this one, and every project
+/// the machine store remembers opening or had open in a window (#1542), so a chat of another
+/// project that names this one is still found below its program. A store that cannot be read,
+/// or is not one this purlis knows, is a doubt and answers why; a machine with no store, or no
+/// home to find one in, remembers nothing. The store is found from `ctx`'s environment, as
+/// every reader of the config home finds it.
+fn projects_asked(ctx: &Ctx) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut projects = vec![ctx.root.clone()];
+    #[cfg(unix)]
+    if let Some(config) = crate::machine::rooted(
+        ctx.env.get(crate::machine::HOME_VAR).map(Into::into),
+        ctx.env.get("XDG_CONFIG_HOME").map(Into::into),
+        ctx.env
+            .get("HOME")
+            .filter(|h| !h.is_empty())
+            .map(std::path::PathBuf::from),
+    ) {
+        let loaded = crate::machine::read(&config);
+        let doubt = loaded.unreadable.clone().or_else(|| {
+            loaded.dropped.iter().find_map(|dropped| match dropped {
+                crate::machine::Dropped::TheStore(why) => Some(why.clone()),
+                _ => None,
+            })
+        });
+        if let Some(why) = doubt {
+            return Err(format!(
+                "purlis could not read which projects this machine opened: its machine store {}",
+                crate::personas::one_line(&why)
+            ));
+        }
+        projects.extend(
+            loaded
+                .store
+                .recents
+                .into_iter()
+                .map(|recent| recent.plane)
+                .chain(loaded.store.windows.into_iter().flat_map(|w| w.planes)),
+        );
+    }
+    // A remembered project that is no longer there holds no chats to ask about.
+    let mut seen = std::collections::BTreeSet::new();
+    projects.retain(|project| {
+        (*project == ctx.root || project.is_dir())
+            && seen.insert(std::fs::canonicalize(project).unwrap_or_else(|_| project.clone()))
+    });
+    Ok(projects)
 }
 
 /// The command that gives a 1Password vault this machine's registry half declares its token
