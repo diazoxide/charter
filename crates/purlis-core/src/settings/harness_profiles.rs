@@ -381,9 +381,15 @@ fn defaulted(root: &Path, text: &str, from: &str, to: &str) -> Result<String, Re
         .as_repr()
         .and_then(|repr| repr.as_raw().as_str())
         .unwrap_or_default();
-    // `to` passed the name rules (letters, digits, '_' and '-'), so quoting it is wrapping it.
-    let quote = if raw.starts_with('\'') { '\'' } else { '"' };
-    let mut now: toml_edit::Value = format!("{quote}{to}{quote}")
+    // Names are letters, digits, '_' and '-', none of them a quote: where the name is written
+    // as it reads, swapping it keeps every quote around it ('x', '''x''', """x"""), so the
+    // rename back gives the text it started from. One spelled through escapes is written plain.
+    let written = if raw.contains(from) {
+        raw.replacen(from, to, 1)
+    } else {
+        format!("\"{to}\"")
+    };
+    let mut now: toml_edit::Value = written
         .parse()
         .unwrap_or_else(|_| toml_edit::Value::from(to));
     *now.decor_mut() = was.decor().clone();

@@ -515,7 +515,7 @@ function RenameForm({
     >
       <SettingRow
         label="New name"
-        help={`What ${entry.label} is called from now on. What uses it is said before anything changes.`}
+        help={`What ${entry.label} is called from now on. Rename names what uses it before it changes anything.`}
         error={refusal?.fields.name}
         control={(ids) => <Field kind="text" ids={ids} value={to} onChange={setTo} />}
       />
