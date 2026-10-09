@@ -13,6 +13,7 @@ import { identityNowOf, sendIdentity, useFixForm, type Fixer } from "./Doctor";
 import { drawWhatIsInForce } from "./Extensions";
 import { Notice, type NoticeAction } from "./Notice";
 import { sayAboutThisMachine, usingTheBuiltIn, type MachineAlert } from "./windowprefs";
+import { landSettingsFocus } from "./settings/entering";
 
 /**
  * **The alerts drawer**: an overlay over the whole window, opened from the status line's
@@ -88,7 +89,8 @@ export function AlertsDrawer({
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            opener.current?.focus();
+            // A "Fix it in Settings" sent the keyboard into Settings, not back here (#1206).
+            if (!landSettingsFocus()) opener.current?.focus();
           }}
         >
           <header className="drawer-head">

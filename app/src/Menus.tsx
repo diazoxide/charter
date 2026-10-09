@@ -12,6 +12,7 @@ import {
   type Offer,
 } from "./actions";
 import { stateOf, useChatsHere, useChatsSelect } from "./chatState";
+import { landSettingsFocus } from "./settings/entering";
 
 /**
  * The window's context menus: right-click on a thing, and charter offers what it can do to it.
@@ -69,7 +70,14 @@ export function Menued({
         {children}
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="item-menu" collisionPadding={8}>
+        <ContextMenu.Content
+          className="item-menu"
+          collisionPadding={8}
+          onCloseAutoFocus={(event) => {
+            // A row that went into Settings sent the keyboard there, not back to the tab (#1206).
+            if (landSettingsFocus()) event.preventDefault();
+          }}
+        >
           {rows.above.map((offer) => (
             <Row key={offer.id} offer={offer} onPress={onPress} />
           ))}

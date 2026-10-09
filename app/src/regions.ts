@@ -10,6 +10,7 @@ import {
 } from "./chatsListPrefs";
 import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
 import { forgetGroups } from "./settings/links";
+import { forgetEntering } from "./settings/entering";
 import { forgetDismissals } from "./dismissals";
 import type { YourEditor } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
@@ -293,6 +294,7 @@ export function forgetThisLaunch(): void {
   forgetChatsListPrefs();
   forgetDismissals();
   forgetGroups();
+  forgetEntering();
   clearTimeout(textWrite);
 }
 

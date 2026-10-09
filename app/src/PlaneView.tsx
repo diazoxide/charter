@@ -398,6 +398,7 @@ import {
   type SettingsLink,
   type SettingsLinkAsk,
 } from "./settings/links";
+import { enterSettings, placeOfView } from "./settings/entering";
 
 /** Any C0 or C1 control character, or DEL: what a line typed and left unrun must not hold. */
 // eslint-disable-next-line no-control-regex
@@ -3150,9 +3151,14 @@ export const PlaneView = memo(function PlaneView({
     [change, filedIn, focused],
   );
   const showView = useCallback(
-    (view: ViewRef, title: string, on?: string) =>
-      present((tabs, strip) => openView(tabs, view, title, on ?? strip)),
-    [present],
+    (view: ViewRef, title: string, on?: string) => {
+      present((tabs, strip) => openView(tabs, view, title, on ?? strip));
+      // Opening Settings, or bringing it forward, is a way into it: the keyboard goes there too
+      // (#1206, `settings/entering.ts`).
+      const place = placeOfView(view, plane);
+      if (place !== undefined) enterSettings(place);
+    },
+    [plane, present],
   );
 
   /**
@@ -7503,8 +7509,12 @@ export const PlaneView = memo(function PlaneView({
                       changed: memoryEdits.changed,
                       onSaved: memoryEdits.onSaved,
                       onClose: closeView,
-                      showInstead: (from, to, title) =>
-                        change((tabs) => showInstead(tabs, from, to, title)),
+                      showInstead: (from, to, title) => {
+                        change((tabs) => showInstead(tabs, from, to, title));
+                        // The level switcher moving Settings is a way into it (#1206).
+                        const place = placeOfView(to, plane);
+                        if (place !== undefined) enterSettings(place);
+                      },
                     }}
                     firstTask={firstTaskDoes}
                     split={{

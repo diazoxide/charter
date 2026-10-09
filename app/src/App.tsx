@@ -62,6 +62,7 @@ import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { SettingsTab } from "./settings/SettingsTab";
 import { levelOf, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
+import { enterSettings } from "./settings/entering";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
 import { drawTint } from "./theme/theme";
@@ -826,12 +827,12 @@ function App() {
       },
       openSettingsTab: () => {
         const plane = inFrontNow.current;
-        if (plane === undefined) setSettingsAlone(true);
+        if (plane === undefined) showSettingsAlone(setSettingsAlone);
         else setSettingsTabAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
       openYourSettings: () => {
         const plane = inFrontNow.current;
-        if (plane === undefined) setSettingsAlone(true);
+        if (plane === undefined) showSettingsAlone(setSettingsAlone);
         else setYourSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
       quit: () => void commands.askToQuit().catch(() => undefined),
@@ -858,7 +859,7 @@ function App() {
     const plane = inFrontNow.current;
     if (plane === undefined) {
       linkToGroup(settingsPlace("you"), group);
-      setSettingsAlone(true);
+      showSettingsAlone(setSettingsAlone);
     } else setSettingsLinkAsk((was) => ({ plane, link: { group }, at: (was?.at ?? 0) + 1 }));
   }, []);
 
@@ -2184,6 +2185,15 @@ function App() {
 function calledOn(plane: string): string {
   const parts = plane.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? plane;
+}
+
+/**
+ * Settings drawn where the opener is, with no project open: a way into it, so the keyboard
+ * goes there too (#1206, `settings/entering.ts`).
+ */
+function showSettingsAlone(show: (alone: boolean) => void): void {
+  show(true);
+  enterSettings(settingsPlace("you"));
 }
 
 export default App;
