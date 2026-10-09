@@ -6,6 +6,7 @@ import { Palette } from "./Palette";
 import type { Offer, Ran } from "./actions";
 import type { FileScope, FilesFound, FoundFile, PlaneId } from "./bindings";
 import { scopeLadder } from "./fileFind";
+import { forgetProjectThemes } from "./projectTheme";
 
 /**
  * **⌘P's files in the palette** (FM-7): the render states the real-app scenario
@@ -17,6 +18,7 @@ import { scopeLadder } from "./fileFind";
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetProjectThemes();
 });
 
 const PLANE = "/projects/alpha" as unknown as PlaneId;
@@ -41,8 +43,12 @@ const file = (path: string, plane: PlaneId = PLANE, matched: number[] = []): Fou
   matched,
 });
 
-/** The core, answering `find_files` with `answer(scope, query)` and recording each ask. */
-function core(answer: (scope: FileScope, query: string) => FilesFound) {
+/** The core, answering `find_files` with `answer(scope, query)` and recording each ask; any
+ *  other command is answered by `rest`, or with `null`. */
+function core(
+  answer: (scope: FileScope, query: string) => FilesFound,
+  rest: (cmd: string, args: unknown) => unknown = () => null,
+) {
   const asked: { scope: FileScope; query: string }[] = [];
   mockIPC((cmd, args) => {
     if (cmd === "find_files") {
@@ -50,7 +56,7 @@ function core(answer: (scope: FileScope, query: string) => FilesFound) {
       asked.push({ scope, query });
       return answer(scope, query);
     }
-    return null;
+    return rest(cmd, args);
   });
   return asked;
 }
@@ -136,6 +142,52 @@ describe("⌘P's files", () => {
     expect(login.textContent).toBe("login.tssrc/a · fix-login · alpha");
     // Counted in characters, as the core counts them: `é` is one, though it is two bytes.
     expect(marks(menu)).toEqual(["m", "n"]);
+  });
+
+  it("draw each file's icon in the icon theme of the project it was found in (#1145)", async () => {
+    const square = { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0z", tone: "icon.pink" }] };
+    const seti = {
+      extension: "seti",
+      name: "Seti",
+      text: JSON.stringify({
+        name: "Seti",
+        symbols: { "seti-file": square, "seti-folder": square, "seti-md": square },
+        file: "seti-file",
+        folder: "seti-folder",
+        extensions: { md: "seti-md" },
+      }),
+    };
+    core(
+      () => ({
+        files: [file("docs/README.md"), file("README.md", OTHER), file("src/lib.rs", OTHER)],
+        branches: 2,
+        refused: [],
+        partial: [],
+      }),
+      (cmd, args) => {
+        // Only the first project picks the contributed theme, and only in its workspace.
+        if (cmd === "project_icons_drawn") {
+          const { plane, workspace } = args as { plane: string; workspace: string | null };
+          return plane === PLANE && workspace === BRANCH.workspace ? "seti/Seti" : null;
+        }
+        if (cmd === "extension_icon_themes") return [seti];
+        return null;
+      },
+    );
+    opened([switchTo(PLANE, false), switchTo(OTHER, true)]);
+
+    await userEvent.keyboard("r");
+
+    const files = await screen.findByRole("listbox", { name: "Files" });
+    const icons = () =>
+      within(files)
+        .getAllByRole("option")
+        .map((row) => row.querySelector("svg.file-icon")?.getAttribute("data-icon"));
+    await vi.waitFor(() => expect(icons()).toEqual(["seti-md", "readme", "rust"]));
+    // Decorative: the row is still named by its words alone.
+    expect(within(files).getAllByRole("option")[0].textContent).toBe(
+      "README.mddocs · fix-login · alpha",
+    );
   });
 
   it("show their scope, which Tab widens and Shift+Tab narrows", async () => {
