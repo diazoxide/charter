@@ -377,7 +377,7 @@ describe("a list is one Tab stop", () => {
       expect.stringMatching(/^treeitem steward three/),
       "treeitem svc1",
       "treeitem Files",
-      "treeitem one",
+      "treeitem one in svc",
       "treeitem Files",
     ]);
     expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual([
@@ -411,7 +411,7 @@ describe("a list is one Tab stop", () => {
   it("the explorer: a picked worktree is where the keyboard comes back in", async () => {
     await theWholeWindow();
     const piece = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
-      name: "one",
+      name: "one in svc",
     });
     await userEvent.click(piece);
     await waitFor(() => expect(piece).toHaveAttribute("tabindex", "0"));

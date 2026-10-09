@@ -15,10 +15,18 @@ import type { ChatWorktree } from "./bindings";
  *  - `stale` is a registration whose directory is gone. It is shown rather than cleared on
  *    sight, because clearing a git registration nobody asked charter to touch is not
  *    something to do quietly. */
-export function WorktreeMark({ worktree }: { worktree: ChatWorktree }) {
+export function WorktreeMark({
+  worktree,
+  withBranch = true,
+}: {
+  worktree: ChatWorktree;
+  /** `false` where the row beside the mark already reads the branch (the explorer's branch
+   *  rows, #1102), so it is said once. */
+  withBranch?: boolean;
+}) {
   return (
     <span className="worktree">
-      {worktree.branch && <code className="branch">{worktree.branch}</code>}
+      {withBranch && worktree.branch && <code className="branch">{worktree.branch}</code>}
       {worktree.stale && (
         <span
           className="label stale"

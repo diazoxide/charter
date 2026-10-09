@@ -23,7 +23,7 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import type { FinishedTask, FolderEntry, OpenChat, PlaneId } from "./bindings";
+import type { FinishedTask, FolderEntry, OpenChat, Piece, PlaneId } from "./bindings";
 import { FileIcon } from "./FileIcon";
 import { useFileIcons } from "./projectTheme";
 import { iconFor, type IconTheme } from "./theme/icons";
@@ -838,22 +838,24 @@ export function Explorer({
                                   className="spot"
                                   aria-current={isPicked ? "true" : undefined}
                                   {...treeitem(pieceRow(repo, piece.piece))}
-                                  // The whole path, because two clones in one workspace can hold a
-                                  // piece of the same name and the row has room for one word.
+                                  // The folder's whole path: ADR 0072 §4 shows it only where a
+                                  // path is wanted, and the row itself reads the branch.
                                   title={piece.path}
                                   onClick={() =>
                                     onPick({ repo, piece: piece.piece, path: piece.path })
                                   }
                                 >
                                   <GitBranch className="node-icon" />
-                                  <span className="spot-name">{piece.piece}</span>
+                                  <BranchLabel repo={repo} piece={piece} />
                                 </button>
                               </RovingFocusGroup.Item>
                             </Menued>
-                            {/* The branch, and the two states the operator has to see BEFORE they
-                          start a chat in a tree: `unwired` and `stale`. The same component
-                          the palette's worktree rows are written against. */}
+                            {/* The two states the operator has to see BEFORE they start a chat in
+                          a tree: `unwired` and `stale`. The same component the palette's
+                          worktree rows are written against, without the branch the row
+                          above already reads (#1102). */}
                             <WorktreeMark
+                              withBranch={false}
                               worktree={{
                                 workspace,
                                 repo,
@@ -1736,6 +1738,23 @@ function cockpitOf(
   };
 }
 
+/** What a branch's row is called: its branch, or the folder's name when the folder has none
+ *  checked out (a detached HEAD, or a branch git could not name). */
+function branchOf(piece: Piece): string {
+  return piece.branch || piece.piece;
+}
+
+/** A branch's row reads *`fix/login` in svc* (ADR 0072 §4, #1102): the branch, then the repo.
+ *  A folder with no branch to name reads as the folder, and the tooltip holds its path. */
+function BranchLabel({ repo, piece }: { repo: string; piece: Piece }) {
+  if (!piece.branch) return <span className="spot-name">{piece.piece}</span>;
+  return (
+    <>
+      <span className="spot-name">{piece.branch}</span> <span className="spot-in">in {repo}</span>
+    </>
+  );
+}
+
 /** The cockpit's rows (FM-5): the chats with a tab working in the branch, the line for the
  *  tasks there no row here counts, then its *Files* row and what it holds, each a top-level
  *  row of the cockpit's own tree. */
@@ -1821,7 +1840,8 @@ function treeOf(
       for (const chat of working) inAPiece.add(chat.session);
       return {
         id: pieceRow(repo, piece.piece),
-        name: piece.piece,
+        // What the row reads first, so a typed letter finds it by its branch (#1102).
+        name: branchOf(piece),
         kids: [
           folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files),
           ...chatNodes(working, of),
