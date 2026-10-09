@@ -228,6 +228,298 @@ pub fn revoke_any(root: &Path, asking: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ---- a grant limited to one workspace (#1505) ------------------------------------------------
+
+use crate::dispatchwithin::{IN, Limited, TO, Within};
+
+/// Whether `entry`, one item of an asking persona's list, is the limited grant to `target` in
+/// `workspace`: a table of exactly those two keys.
+fn is_limited(entry: &toml_edit::Value, target: &str, workspace: &str) -> bool {
+    entry.as_inline_table().is_some_and(|table| {
+        table.len() == 2
+            && table.get(TO).and_then(toml_edit::Value::as_str) == Some(target)
+            && table.get(IN).and_then(toml_edit::Value::as_str) == Some(workspace)
+    })
+}
+
+/// Whether `entry` is a limited grant to `target`, in whichever workspace: a table of
+/// exactly the two keys this build reads. **A table with a key more is not one**: it is a
+/// later build's, this build grants nothing by it, and no edit here takes it out.
+fn is_limited_to(entry: &toml_edit::Value, target: &str) -> bool {
+    entry.as_inline_table().is_some_and(|table| {
+        table.len() == 2
+            && table.get(TO).and_then(toml_edit::Value::as_str) == Some(target)
+            && table.get(IN).and_then(toml_edit::Value::as_str).is_some()
+    })
+}
+
+/// A limited grant as the file writes it: `{ to = "devops", in = "runners" }`.
+fn limited_entry(target: &str, workspace: &str) -> toml_edit::Value {
+    let mut table = toml_edit::InlineTable::new();
+    table.insert(TO, target.into());
+    table.insert(IN, workspace.into());
+    toml_edit::Value::InlineTable(table)
+}
+
+/// **`text` with the list of `asking` in `[dispatch.grants]` changed by `how`**, every other
+/// line kept: the tables and the list are made where there are none and `create` says so, and
+/// taken out again once they are empty. `how` answers whether it changed the list; the same
+/// text where it did not, or where there was no list to change.
+fn with_list(
+    text: &str,
+    asking: &str,
+    create: bool,
+    how: impl FnOnce(&mut toml_edit::Array) -> bool,
+) -> Result<String, String> {
+    let mut doc = document(text)?;
+    if !create
+        && doc
+            .get(TABLE)
+            .and_then(|dispatch| dispatch.get(KEY))
+            .and_then(|grants| grants.get(asking))
+            .is_none()
+    {
+        return Ok(text.to_owned());
+    }
+    let dispatch = doc.entry(TABLE).or_insert_with(|| {
+        let mut table = toml_edit::Table::new();
+        table.set_implicit(true);
+        toml_edit::Item::Table(table)
+    });
+    let dispatch = dispatch
+        .as_table_like_mut()
+        .ok_or_else(|| not_editable(TABLE))?;
+    let grants = dispatch
+        .entry(KEY)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    let grants = grants
+        .as_table_like_mut()
+        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}")))?;
+    let targets = grants
+        .entry(asking)
+        .or_insert(toml_edit::value(toml_edit::Array::new()));
+    let targets = targets
+        .as_array_mut()
+        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}.{asking}")))?;
+    if !how(targets) {
+        return Ok(text.to_owned());
+    }
+    targets.fmt();
+    if targets.is_empty() {
+        grants.remove(asking);
+    }
+    if grants.is_empty() {
+        dispatch.remove(KEY);
+    }
+    if dispatch.is_empty() {
+        doc.remove(TABLE);
+    }
+    Ok(doc.to_string())
+}
+
+/// **`text` with `one` granted**: `{ to = "<target>", in = "<workspace>" }` added last to the
+/// asking persona's list. The same text where it is granted already.
+pub fn with_in(text: &str, one: &Limited) -> Result<String, String> {
+    with_list(text, &one.asking, true, |targets| {
+        if targets
+            .iter()
+            .any(|entry| is_limited(entry, &one.target, &one.workspace))
+        {
+            return false;
+        }
+        targets.push_formatted(limited_entry(&one.target, &one.workspace));
+        true
+    })
+}
+
+/// **`text` without `one`**. The same text where it was not granted. A grant of the same pair
+/// that holds in any workspace, or in another, stays.
+pub fn without_in(text: &str, one: &Limited) -> Result<String, String> {
+    with_list(text, &one.asking, false, |targets| {
+        let before = targets.len();
+        targets.retain(|entry| !is_limited(entry, &one.target, &one.workspace));
+        targets.len() != before
+    })
+}
+
+/// **`text` with the grant of `asking` to `target` (`"*"`: any persona) moved from holding
+/// `from` to holding `to`**, in one edit. `Err` where the file does not hold it as `from`
+/// says. Widening to any workspace takes the pair's other limited entries with it: the one
+/// that holds everywhere covers them.
+pub fn with_within(
+    text: &str,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<String, String> {
+    let mut there = false;
+    let after = with_list(text, asking, false, |targets| {
+        let before = targets.len();
+        match from {
+            Within::Any => targets.retain(|entry| entry.as_str() != Some(target)),
+            Within::Workspace(workspace) => {
+                targets.retain(|entry| !is_limited(entry, target, workspace));
+            }
+        }
+        there = targets.len() != before;
+        if !there {
+            return false;
+        }
+        match to {
+            Within::Any => {
+                targets.retain(|entry| !is_limited_to(entry, target));
+                targets.push(target);
+            }
+            Within::Workspace(workspace) => {
+                if !targets
+                    .iter()
+                    .any(|entry| is_limited(entry, target, workspace))
+                {
+                    targets.push_formatted(limited_entry(target, workspace));
+                }
+            }
+        }
+        true
+    })?;
+    if there {
+        Ok(after)
+    } else {
+        Err("purlis changed nothing: the project no longer has that grant.".to_owned())
+    }
+}
+
+/// **Whether [`grant_in`] of `one` would be written**, asked before the grant is audited.
+pub fn can_grant_in(root: &Path, one: &Limited) -> Result<(), String> {
+    with_in(&on_disk(root)?, one).map(|_| ())
+}
+
+/// **Writes `one` into the project's file at `root`, and no more**: the committed half of
+/// [`grant_in`]. Refused, with nothing written, where its workspace is not one of the
+/// project's now. Where the file holds it already (a teammate's) nothing is written.
+pub fn write_in(root: &Path, one: &Limited) -> Result<(), String> {
+    if !crate::dispatchwithin::Seen::read(root).is_there(&one.workspace) {
+        return Err(crate::dispatchwithin::not_there_said(&one.workspace));
+    }
+    write(root, |text| with_in(text, one))
+}
+
+/// **Grants `one` for everyone in the project at `root`**: the grant Notice's Allow at the
+/// project level, for the workspace the task works in. Either way it is accepted on this
+/// machine, so it is in force here. A caller that must tell "not written" from "written, and
+/// not accepted here" calls [`write_in`] and [`crate::dispatchwithin::accept`] itself.
+pub fn grant_in(root: &Path, one: &Limited) -> Result<(), String> {
+    write_in(root, one)?;
+    crate::dispatchwithin::accept(root, one).map_err(|why| written_not_accepted(&why))
+}
+
+/// What is said where a grant is in the project's file and this machine could not record
+/// its own acceptance of it.
+pub fn written_not_accepted(why: &str) -> String {
+    format!(
+        "The grant is in {}, and it covers nothing on this machine yet. {why} Accept it in \
+         {}.",
+        Which::Shared.file(),
+        crate::dispatchgrant::SETTINGS
+    )
+}
+
+/// **Revokes the project's limited grant `one`**: Settings' Remove for everyone.
+pub fn revoke_in(root: &Path, one: &Limited) -> Result<(), String> {
+    write(root, |text| without_in(text, one))?;
+    // Best effort: an acceptance left behind covers nothing once the file lacks the grant.
+    let _ = crate::dispatchwithin::unaccept(root, one);
+    Ok(())
+}
+
+/// **Whether [`set_within`] would be written**, asked before it is audited.
+pub fn can_set_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    with_within(&on_disk(root)?, asking, target, from, to).map(|_| ())
+}
+
+/// **Writes the move of the project's grant of `asking` to `target` (`"*"`: any persona)
+/// from holding `from` to holding `to` into the project's file, and no more**: the committed
+/// half of [`set_within`]. Refused, with nothing written, where `to` is a workspace that is
+/// not one of the project's now.
+pub fn write_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    if let Within::Workspace(workspace) = to
+        && !crate::dispatchwithin::Seen::read(root).is_there(workspace)
+    {
+        return Err(crate::dispatchwithin::not_there_said(workspace));
+    }
+    write(root, |text| with_within(text, asking, target, from, to))
+}
+
+/// **Has this machine follow a project grant that [`write_within`] just moved**: what it
+/// accepted of the grant as it was is dropped, and the grant as it is now is accepted here,
+/// since the person at this machine just wrote it. `Err` where the acceptance could not be
+/// recorded: the file holds the change all the same.
+pub fn follow_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    let any = target == crate::dispatchgrant::ANY;
+    // Best effort, as a revoke's is: what is left accepted covers nothing the file lacks.
+    match from {
+        Within::Workspace(workspace) => {
+            if let Ok(one) = Limited::new(asking, target, workspace) {
+                let _ = crate::dispatchwithin::unaccept(root, &one);
+            }
+        }
+        Within::Any if any => {
+            let _ = crate::sandbox::local::forget_dispatch_any(root, asking);
+        }
+        Within::Any => {
+            if let Ok(pair) = Pair::new(asking, target) {
+                let _ = crate::dispatchgrant::forget_pair(root, &pair);
+            }
+        }
+    }
+    match to {
+        Within::Workspace(workspace) => {
+            let one = Limited::new(asking, target, workspace)?;
+            crate::dispatchwithin::accept(root, &one).map_err(|why| written_not_accepted(&why))
+        }
+        Within::Any if any => crate::sandbox::local::acknowledge_dispatch_any(root, asking)
+            .map_err(|why| written_not_accepted(&format!("({why})"))),
+        Within::Any => {
+            let pair = Pair::new(asking, target)?;
+            crate::dispatchgrant::acknowledge_pair(root, &pair)
+                .map_err(|why| written_not_accepted(&format!("({why})")))
+        }
+    }
+}
+
+/// **Moves the project's grant of `asking` to `target` (`"*"`: any persona) from holding
+/// `from` to holding `to`, for everyone**: Settings' change of a project grant's workspace,
+/// one edit of the committed file ([`write_within`]), which this machine then follows
+/// ([`follow_within`]).
+pub fn set_within(
+    root: &Path,
+    asking: &str,
+    target: &str,
+    from: &Within,
+    to: &Within,
+) -> Result<(), String> {
+    write_within(root, asking, target, from, to)?;
+    follow_within(root, asking, target, from, to)
+}
+
 #[cfg(test)]
 #[path = "dispatch_tests.rs"]
 mod tests;

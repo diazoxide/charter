@@ -372,13 +372,24 @@ fn set_aside_before_creating(root: &Path, name: &str, say: Sink) -> Result<(), S
             crate::dispatchgrant::SETTINGS
         )
     })?;
-    if !aside.is_empty() {
-        let held = aside.grants.len() + aside.accepted.len();
+    let held = aside.grants.len() + aside.accepted.len();
+    if held > 0 {
         say(Say::Info(format!(
             "Set aside {held} dispatch {} on this machine that named an earlier '{name}': in \
              force for no chat until you give them back to this one, or remove them, in {}.",
             if held == 1 { "grant" } else { "grants" },
             crate::dispatchgrant::SETTINGS
+        )));
+    }
+    // A grant limited to one workspace is not set aside: what is set aside keeps no
+    // workspace, and given back it would hold in all of them.
+    let ended = aside.ended.len();
+    if ended > 0 {
+        say(Say::Info(format!(
+            "Ended {ended} dispatch {} on this machine that named an earlier '{name}' and \
+             held in one workspace only. This one has none of them: its first dispatch \
+             there asks you.",
+            if ended == 1 { "grant" } else { "grants" },
         )));
     }
     say_nevers_hold(root, name, say);

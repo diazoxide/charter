@@ -55,6 +55,7 @@ fn an_unattended_dispatch_with_no_grant_is_refused_naming_the_pair_it_lacks() {
         &chat(3, Some("steward")),
         SANDBOXED,
         "devops",
+        None,
     );
 
     assert_eq!(asked, Requested::Refused(MISSING.to_owned()));
@@ -72,6 +73,7 @@ fn a_grant_the_person_made_for_this_machine_starts_an_unattended_dispatch() {
         &chat(3, Some("steward")),
         SANDBOXED,
         "devops",
+        None,
     );
 
     assert_eq!(
@@ -85,7 +87,8 @@ fn a_grant_the_person_made_for_this_machine_starts_an_unattended_dispatch() {
             &Locks::none(),
             &chat(4, Some("devops")),
             SANDBOXED,
-            "steward"
+            "steward",
+            None
         ),
         Requested::Refused(_)
     ));
@@ -106,6 +109,7 @@ fn a_grant_in_the_project_s_file_starts_an_unattended_dispatch() {
             &chat(3, Some("steward")),
             SANDBOXED,
             "devops",
+            None,
         )
     };
 
@@ -166,6 +170,7 @@ fn a_grant_made_for_this_chat_while_a_person_answered_it_does_not_count_once_nob
         &chat(3, Some("steward")),
         SANDBOXED,
         "devops",
+        None,
     );
 
     assert_eq!(asked, Requested::Refused(MISSING.to_owned()));
@@ -181,7 +186,8 @@ fn its_own_persona_starts_and_a_policy_lock_refuses_in_the_policy_s_words() {
             &Locks::none(),
             &chat(3, Some("devops")),
             SANDBOXED,
-            "devops"
+            "devops",
+            None
         ),
         Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("devops"))
     );
@@ -198,7 +204,8 @@ fn its_own_persona_starts_and_a_policy_lock_refuses_in_the_policy_s_words() {
             &locked,
             &chat(3, Some("steward")),
             SANDBOXED,
-            "devops"
+            "devops",
+            None
         ),
         Requested::Locked(
             "Policy forbids steward chats dispatching to devops. Locked by policy, set by IT in \
@@ -224,7 +231,8 @@ fn a_chat_still_holding_another_s_grants_dispatches_to_nobody_unattended() {
                     holds_anothers: true,
                     ..SANDBOXED
                 },
-                target
+                target,
+                None
             ),
             Requested::Refused(
                 "this chat still runs on the grants of the chat that opened it, and it runs \
@@ -253,7 +261,8 @@ fn an_unattended_chat_started_with_no_sandbox_dispatches_to_no_other_persona() {
             &Locks::none(),
             &chat(3, Some("steward")),
             unsandboxed,
-            "devops"
+            "devops",
+            None
         ),
         Requested::Refused(
             "this chat runs with its harness's permission prompts off and with no sandbox. A \
@@ -270,7 +279,8 @@ fn an_unattended_chat_started_with_no_sandbox_dispatches_to_no_other_persona() {
             &Locks::none(),
             &chat(3, Some("steward")),
             unsandboxed,
-            "steward"
+            "steward",
+            None
         ),
         Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("steward"))
     );
@@ -285,7 +295,8 @@ fn a_target_that_is_no_persona_s_name_is_refused_before_anything_is_read() {
             &Locks::none(),
             &chat(3, Some("steward")),
             SANDBOXED,
-            "../devops"
+            "../devops",
+            None
         ),
         Requested::Refused(
             "../devops is not a persona's name, so there is nothing to dispatch to.".to_owned()
@@ -355,6 +366,7 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
         Attendance::Unattended,
         "devops",
         "Check it.",
+        None,
     );
 
     assert_eq!(asked, Requested::Refused(NO_SANDBOX.to_owned()));
@@ -363,7 +375,14 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
         "nothing is held, so there is no Notice and nothing to allow for this chat"
     );
     // The same ask from a chat a person answers is the one that is held.
-    let attended = request_dispatch(&held, session, Attendance::Attended, "devops", "Check it.");
+    let attended = request_dispatch(
+        &held,
+        session,
+        Attendance::Attended,
+        "devops",
+        "Check it.",
+        None,
+    );
     let Requested::NeedsGrant { pending } = attended else {
         panic!("held: {attended:?}");
     };
@@ -384,7 +403,8 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
             session,
             Attendance::Unattended,
             "devops",
-            "Check it."
+            "Check it.",
+            None
         ),
         Requested::Refused(NO_SANDBOX.to_owned())
     );
@@ -395,7 +415,8 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
             session,
             Attendance::Unattended,
             "steward",
-            "Check it."
+            "Check it.",
+            None
         ),
         Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("steward"))
     );
@@ -406,7 +427,8 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
             session,
             Attendance::Unattended,
             "nobody",
-            "Check it."
+            "Check it.",
+            None
         ),
         Requested::Refused(
             "this project has no persona named nobody, so there is nothing to dispatch to."
@@ -419,7 +441,8 @@ fn an_unattended_chat_s_ask_raises_no_notice_and_its_sandbox_is_the_app_s_own_re
             session + 100,
             Attendance::Unattended,
             "devops",
-            "Check it."
+            "Check it.",
+            None
         ),
         Requested::Refused(format!(
             "chat {} is not one this app has open",

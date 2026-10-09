@@ -580,6 +580,73 @@ describe("a Notice in a pane's corner", () => {
     await expect(picker).not.toBeDisplayed();
     expect(await atTheNotice()).toBe("the Notice");
   });
+
+  it("keeps the dispatch question's workspace choice under its answers and inside a narrow pane", async () => {
+    // #1505. Where an Allow holds is chosen in the box under the line, above the brief. Drawn
+    // here by hand, as every Notice in this file is, with a workspace named far longer than
+    // the pane is wide. **This holds the stylesheet, not the component**: it keeps passing if
+    // `DispatchGrantNotice` stops drawing `.dispatch-within` as a radio group of a `p` and
+    // two `label`s. That markup, and its place under the answers and above the brief, is
+    // `DispatchGrantNotice.test.tsx`'s ("draws the choice under the answers and above the
+    // brief") and `Notice.pane.test.tsx`'s; change the three together.
+    await windowIs(1024, 768);
+    expect(await raise(0, { sentence: ASKS, ways: FIVE_WAYS, opened: BRIEF })).toBe(true);
+    const drawn = await browser.execute((workspace: string) => {
+      const under = document.querySelector('[data-raised="pane-notices.e2e"] .notice-under-pane');
+      if (!under) return false;
+      const choice = document.createElement("div");
+      choice.className = "dispatch-within";
+      choice.setAttribute("role", "radiogroup");
+      const says = document.createElement("p");
+      says.textContent = "Where an Allow for you or for the project holds";
+      choice.append(says);
+      for (const [index, text] of [`In ${workspace} only`, "In any workspace"].entries()) {
+        const label = document.createElement("label");
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "pane-notices-within";
+        radio.checked = index === 0;
+        label.append(radio, ` ${text}`);
+        choice.append(label);
+      }
+      under.prepend(choice);
+      return true;
+    }, "a_workspace_named_wider_than_a_pane_".repeat(6));
+    expect(drawn).toBe(true);
+
+    const seen = await measured(0);
+    const [notice] = seen.notices;
+    const frame = seen.frame as Box;
+    check("the pane is not a narrow one", frame.width, "below", 40 * seen.rem);
+    const parts = await browser.execute(() => {
+      const box = (el: Element | null | undefined) => {
+        if (!el) return null;
+        const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
+        return { left, right, top, bottom, width, height };
+      };
+      const choice = document.querySelector('[data-raised="pane-notices.e2e"] .dispatch-within');
+      return {
+        choice: box(choice),
+        says: box(choice?.querySelector("p")),
+        labels: [...(choice?.querySelectorAll("label") ?? [])].map((label) => box(label)),
+      };
+    });
+
+    // The Notice still fits its pane, and the choice is inside the box under the line.
+    inside(notice.box, frame, "the Notice in its pane");
+    inside(parts.choice, notice.under, "the workspace choice under the line");
+    inside(parts.says, parts.choice, "what the choice is about");
+    expect(parts.labels).toHaveLength(2);
+    for (const [index, label] of parts.labels.entries())
+      inside(label, parts.choice, `choice ${index + 1}`);
+    // The long name broke: the two choices are one under the other, never one over the other.
+    const [narrow, wide] = parts.labels as Box[];
+    check("the two choices overlap", overlap(narrow, wide), "is", false);
+    // Under every answer, and above the brief.
+    const [line, choice] = [notice.line as Box, parts.choice as Box];
+    check("the choice is beside the answers", choice.top, "atLeast", line.bottom - 1);
+    check("the brief is above the choice", (notice.pre as Box).top, "atLeast", choice.bottom - 1);
+  });
 });
 
 /**

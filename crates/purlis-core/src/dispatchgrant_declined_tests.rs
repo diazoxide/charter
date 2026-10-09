@@ -135,6 +135,7 @@ fn a_decline_is_audited_as_its_own_kind_at_the_project_s_level() {
         asking: Some("steward"),
         target: "devops",
         level: Level::Project,
+        workspace: None,
     };
     assert_eq!(audited.kind(), "trust.dispatch.decline");
     assert_eq!(audited.body()["level"], "project");
@@ -147,6 +148,7 @@ fn a_grant_purlis_set_aside_is_a_revoke_by_the_host_and_never_by_a_person() {
         asking: Some("steward"),
         target: "devops",
         level: Level::You,
+        workspace: None,
     };
     assert_eq!(aside.kind(), "trust.dispatch.revoke");
     assert_eq!(aside.body()["actor_kind"], "host");
@@ -161,6 +163,7 @@ fn a_grant_purlis_set_aside_is_a_revoke_by_the_host_and_never_by_a_person() {
         asking: Some("devops"),
         target: "devops",
         level: Level::You,
+        workspace: None,
     };
     assert_eq!(back.kind(), "trust.dispatch.give_back");
     assert_eq!(back.body()["actor_kind"], "human");

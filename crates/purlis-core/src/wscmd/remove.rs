@@ -146,9 +146,18 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
         )));
         return Removal::just(1);
     }
+    // The dispatch grants limited to this workspace cover nothing from here on, and none of
+    // them is for a workspace made under the name later (#1505).
+    let left = crate::dispatchwithin::naming(root, name);
+    crate::dispatchwithin::noticed(root);
     say(Say::Done(format!(
         "Removed workspace '{name}' and its clones."
     )));
+    if left > 0 {
+        say(Say::Info(crate::dispatchwithin::left_behind_said(
+            left, name, None,
+        )));
+    }
     Removal::just(0)
 }
 

@@ -542,6 +542,8 @@ describe("Settings › Project › Dispatch", () => {
           locked: null,
           waiting: false,
           declined: false,
+          workspace: null,
+          nowhere: null,
         },
       ],
       all_locked: null,
