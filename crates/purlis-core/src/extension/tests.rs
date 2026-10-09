@@ -3136,6 +3136,42 @@ fn an_icon_theme_is_contributed_as_data_and_in_force_only_once_approved() {
     assert_eq!(seen.installed[0].icon_themes_in_force().len(), 1);
 }
 
+/// #1145: a theme's `name` is drawn in the settings tabs' picks and the approval, so the core
+/// holds it to the rule a label is held to (`facts::drawable_label`), for both kinds of theme,
+/// and the refusal names the theme by its place.
+#[test]
+fn a_theme_name_purlis_would_not_draw_refuses_the_extension() {
+    for (key, noun) in [("themes", "theme"), ("icon_themes", "icon theme")] {
+        let longest = "L".repeat(40);
+        let made = Made::new();
+        made.file("t.json", r#"{"name":"T","symbols":{}}"#);
+        made.manifest(&format!(
+            r#"{{"version":1,"id":"x","contributes":{{"{key}":[{{"name":"{longest}","file":"t.json"}}]}}}}"#
+        ));
+        read_at(&made.at()).unwrap_or_else(|why| panic!("{noun}: {why}"));
+
+        for name in [
+            "L".repeat(41),
+            "Dark\\u202e".to_owned(),
+            "Dark\\u200b".to_owned(),
+            "Da\\u0007rk".to_owned(),
+        ] {
+            let made = Made::new();
+            made.file("t.json", r#"{"name":"T","symbols":{}}"#);
+            made.manifest(&format!(
+                r#"{{"version":1,"id":"x","contributes":{{"{key}":[{{"file":"t.json"}},{{"name":"{name}","file":"t.json"}}]}}}}"#
+            ));
+            let why = read_at(&made.at()).expect_err(&name);
+            assert!(
+                why.contains(&format!(
+                    "declares a {noun} at 1 with a name purlis will not draw"
+                )),
+                "{noun} {name:?}: {why}"
+            );
+        }
+    }
+}
+
 #[test]
 fn an_icon_theme_file_that_is_not_there_refuses_the_extension() {
     let made = Made::new();
