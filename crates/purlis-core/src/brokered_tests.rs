@@ -923,3 +923,32 @@ fn a_workspace_md_already_past_its_budget_is_refused_only_what_grows_it() {
     };
     perform(&root, &in_alpha_as(None), &shrinks, now()).expect("it shrinks the file");
 }
+
+// ---- a chat's commit and the app's write to the project file (#1586) ----------------------
+
+/// #1586: a chat stages the project file as it stands, and before it commits the app writes the
+/// file (an Allow, or an Add for everyone, puts a grant in `[dispatch]`). The staged file then
+/// holds other `[dispatch]` tables than the working one, so the chat's commit is refused, and
+/// the refusal tells it to stage the file again. That is the intended answer, pinned here.
+#[test]
+fn a_chats_commit_staged_before_the_app_wrote_the_project_file_is_refused_and_told_to_stage_it_again()
+ {
+    let staged = "schema = 1\nname = \"x\"\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+    let the_app_wrote =
+        "schema = 1\nname = \"x\"\n[dispatch.grants]\nsteward = [\"devops\", \"qa\"]\n";
+
+    assert!(runs_under_differs(Some(staged), Some(the_app_wrote)));
+    let refusal = crate::diffscan::RUNS_UNDER_REFUSAL;
+    assert!(
+        refusal.contains("differ from the file in the working tree"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("stage the file as it is"), "{refusal}");
+    assert!(refusal.contains("Do not use --no-verify"), "{refusal}");
+
+    // Staged again, as it now stands, the commit is not held.
+    assert!(!runs_under_differs(
+        Some(the_app_wrote),
+        Some(the_app_wrote)
+    ));
+}
