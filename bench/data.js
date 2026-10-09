@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791553844541,
+  "lastUpdate": 1791555636521,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5040,6 +5040,48 @@ window.BENCHMARK_DATA = {
             "value": 102.18795750000001,
             "unit": "ms",
             "extra": "median of 5 runs: 101.854, 102.066, 102.188, 102.599, 103.884 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "afee8939deb819e1d505b6362f2e45c3d4585fbb",
+          "message": "Count the renamed file src/ lost in the marks test\n\nThe roll-up now counts a renamed file in the folders above where it came\nfrom, as a file each of them lost (D-1130-1). In this test old.rs moves\nfrom src/ to lib/, so src/ holds three changes: the file committed in it,\nthe one deleted from it and the one renamed out of it. The test predated\nthe rule and still expected two. The branch's own folder is above both\nends and counts the rename once, so its five is unchanged.\n\nRefs #1130\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T18:03:17+04:00",
+          "tree_id": "a5299f5afeddce2d77c6dd6222610383271a03e9",
+          "url": "https://github.com/purlis/purlis/commit/afee8939deb819e1d505b6362f2e45c3d4585fbb"
+        },
+        "date": 1791555635799,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5622235,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.527, 0.529, 0.562, 0.564, 0.580 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1332115,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.547, 16.787, 17.133, 17.265, 17.299 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.247716,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.156, 104.680, 105.248, 105.734, 106.085 ms"
           }
         ]
       }
