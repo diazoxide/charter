@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791509918079,
+  "lastUpdate": 1791510780242,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3948,6 +3948,48 @@ window.BENCHMARK_DATA = {
             "value": 101.4872925,
             "unit": "ms",
             "extra": "median of 5 runs: 101.258, 101.427, 101.487, 101.504, 101.900 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "70a07de72d1aecb1d8c9971f62076cb6220732d3",
+          "message": "Limits review: the clock looks when chats are put back; the footer hides only what it says\n\nFix round for the review of the #1540 and #1545 follow-ups.\n\n- M1: the end of Held::reopen tells the clock, through a channel it\n  waits on with recv_timeout until its next 30-second round. A session\n  past its token limit says so as soon as a launch puts its chats back\n  (after the reopen answer), not up to 30 s later. The 2 s poll is\n  gone. Test: the row shows right after put-back (red without the hook).\n- M2: `own` is set only where tasks alone are counted, and the window\n  leaves the row's words off the footer only where the footer's own\n  numbers show that limit (same number, as many running). A chat nobody\n  is at, and a held chat or one on the default persona, see the limit\n  said. Rust and window tests for both.\n- F1: the store is read with the clock's lock let go.\n- F2: an ended record is kept as the six fields the clock reads.\n- F3: what the clock kept for a closed project is let go of each round.\n- F4: the store's names are a HashSet.\n\nRefs #1540\nRefs #1545\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T05:43:59+04:00",
+          "tree_id": "4f3cbb237925cfc016a69292e67d7db92cf6d831",
+          "url": "https://github.com/purlis/purlis/commit/70a07de72d1aecb1d8c9971f62076cb6220732d3"
+        },
+        "date": 1791510779470,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5210535000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.503, 0.520, 0.521, 0.523, 0.542 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.118962,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.522, 16.609, 17.119, 17.303, 17.560 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.6947505,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.694, 103.770, 104.695, 105.020, 106.108 ms"
           }
         ]
       }
