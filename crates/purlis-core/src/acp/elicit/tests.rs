@@ -168,6 +168,18 @@ fn what_the_agent_wrote_is_shown_as_plain_bounded_text() {
 }
 
 #[test]
+fn a_unicode_line_separator_never_starts_a_line_in_a_label() {
+    assert_eq!(
+        plain("Pass\u{2028}word\u{2029}x", MOST_LABEL_BYTES, false),
+        "Pass word x"
+    );
+    assert_eq!(
+        plain("one\u{2028}two\u{2029}three", MOST_MESSAGE_BYTES, true),
+        "one\ntwo\nthree"
+    );
+}
+
+#[test]
 fn an_elicitation_is_raised_as_an_ask_only_the_window_answers_with_no_deadline() {
     let ask = token_form().ask("s-1");
     assert!(ask.elicits_secret);
