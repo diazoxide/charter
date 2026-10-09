@@ -122,10 +122,10 @@ which stops a plain later monkey-patch and not a determined one. This is the lim
 charter's `foreign_plugins` named. It is the same class as a project `.claude/settings.json`
 that runs its own hook: a file a chat can write that runs code at the next start. purlis
 reports what else opencode loads rather than claiming a containment it does not have: the
-settings tab's harness-plugin list names every script in the global plugin directory and every
-npm plugin the global `opencode.json` names, and `purlis doctor`'s `superseded plugin` row names
-the Python shim. A project's own `.opencode/plugin/` is not listed yet. Guard rails, not
-guarantees.
+settings tab's harness-plugin list names every script in the global plugin directory, every
+npm plugin the global `opencode.json` names, and every script in the project's own
+`.opencode/plugin/` and `.opencode/plugins/` (#1371), and `purlis doctor`'s `superseded plugin`
+row names the Python shim. Guard rails, not guarantees.
 
 Also not covered, and said here so nobody reads the table above as complete:
 

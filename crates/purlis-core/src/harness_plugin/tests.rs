@@ -665,6 +665,84 @@ fn opencode_lists_its_config_plugins_and_its_plugin_files() {
     );
 }
 
+#[test]
+fn opencode_lists_a_projects_own_plugin_files_by_their_place_in_the_project() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path().join(".opencode");
+    std::fs::create_dir_all(dir.join("plugin")).unwrap();
+    std::fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::fs::write(dir.join("plugin/guard.ts"), "export default {}").unwrap();
+    std::fs::write(dir.join("plugins/notes.mjs"), "export default {}").unwrap();
+    std::fs::write(dir.join("plugins/README.md"), "not a plugin").unwrap();
+
+    let got: Vec<(String, String)> = OPENCODE
+        .in_project(project.path())
+        .into_iter()
+        .map(|it| (it.id, it.source))
+        .collect();
+
+    let source = "a file in this project's .opencode plugin directory".to_owned();
+    assert_eq!(
+        got,
+        [
+            (".opencode/plugin/guard.ts".to_owned(), source.clone()),
+            (".opencode/plugins/notes.mjs".to_owned(), source),
+        ]
+    );
+}
+
+#[test]
+fn a_harness_that_loads_nothing_from_a_project_lists_nothing_of_it() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".opencode/plugin")).unwrap();
+    std::fs::write(project.path().join(".opencode/plugin/a.ts"), "").unwrap();
+    assert!(CLAUDE_CODE.in_project(project.path()).is_empty());
+    assert!(CODEX.in_project(project.path()).is_empty());
+}
+
+/// ADR 0058's visibility: the settings tab's list names the project's own scripts beside the
+/// global ones (#1371).
+#[test]
+fn the_survey_of_a_project_lists_its_own_opencode_scripts_beside_the_global_ones() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("opencode/plugin")).unwrap();
+    std::fs::write(config.path().join("opencode/plugin/global.js"), "").unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".opencode/plugin")).unwrap();
+    std::fs::write(project.path().join(".opencode/plugin/local.ts"), "").unwrap();
+    let chat = env_of(&[("XDG_CONFIG_HOME", config.path())]);
+    let env = Env {
+        chat: &chat,
+        home: None,
+        process: false,
+    };
+
+    let groups = survey(&Choices::read(project.path()), &env);
+    let opencode = groups
+        .iter()
+        .find(|it| it.adapter.harness() == "opencode")
+        .expect("opencode is a group");
+    let listed: Vec<(&str, bool)> = opencode
+        .plugins
+        .iter()
+        .map(|it| (it.id.as_str(), it.installed))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (".opencode/plugin/local.ts", true),
+            ("plugin/global.js", true)
+        ]
+    );
+    // Choices made from text name no project, and list none of one.
+    let groups = survey(&Choices::default(), &env);
+    let opencode = groups
+        .iter()
+        .find(|it| it.adapter.harness() == "opencode")
+        .unwrap();
+    assert_eq!(opencode.plugins.len(), 1);
+}
+
 // -------------------------------------------------------------------------------------
 // What a file may not say
 // -------------------------------------------------------------------------------------
