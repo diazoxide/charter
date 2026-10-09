@@ -947,3 +947,124 @@ fn a_relative_path_in_a_mixed_stream_is_sorted_against_where_the_command_ran() {
         [Kind::ProjectFiles]
     );
 }
+
+/// #1416: the two per-user folders beside `T` and `C` that are no temporary folder, `0` and
+/// `X`, sort as per-user folders, not as the chat's own temp, so a write refused there is not
+/// dropped from standard error; and none of them is offered as a grant's target.
+#[test]
+fn the_per_user_folders_0_and_x_sort_as_per_user_folders_and_offer_no_grant() {
+    let at = "/var/folders/wl/hs3pdt2j0t9gyc_l73py38l80000gp";
+    for which in ["0", "X"] {
+        for spelled in [
+            format!("{at}/{which}/com.apple.x/y"),
+            format!("/private{at}/{which}/com.apple.x/y"),
+        ] {
+            assert_eq!(
+                kind_of(Path::new(&spelled), &place()),
+                Kind::SystemTemp,
+                "{spelled}"
+            );
+            let line = format!("touch: {spelled}: Operation not permitted");
+            assert_eq!(
+                detect_with_targets(&came_back("x", "", &line), &place()),
+                vec![(block(Operation::Write, Kind::SystemTemp, false), None)],
+                "{line}"
+            );
+        }
+    }
+    // A read there is macOS's privacy controls, as for `T` and `C`.
+    let read = format!("du: {at}/0/com.apple.x: Operation not permitted");
+    assert!(detect(&came_back("du", "", &read), &place()).is_empty());
+}
+
+/// #1416: the data volume's own spelling of a path, `/System/Volumes/Data/…`, sorts as the path
+/// it names, and so is never offered as a grant's target where that path would not be.
+#[test]
+fn a_path_spelled_through_the_data_volume_sorts_as_the_path_it_names() {
+    let data = "/System/Volumes/Data";
+    for (path, kind) in [
+        (format!("{data}{PER_USER_T}/tmp.x"), Kind::SystemTemp),
+        (
+            format!("{data}/private{PER_USER_T}/tmp.x"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!("{data}/private{PER_USER_C}/clang/ModuleCache/a.pcm"),
+            Kind::SystemCache,
+        ),
+        (format!("{data}{ROOT}/.purlis/app/x"), Kind::ProjectState),
+        (format!("{data}{CHAT}/src/a.rs"), Kind::ChatFolder),
+        (
+            format!("{data}{HOME}/.cargo/registry/x"),
+            Kind::ToolchainCache,
+        ),
+        (format!("{data}/private/tmp/x"), Kind::Temp),
+    ] {
+        assert_eq!(kind_of(Path::new(&path), &place()), kind, "{path}");
+    }
+    let line =
+        format!("xcrun(2) deny(1) file-write-create {data}/private{PER_USER_T}/xcrun_db-5UlOOWst");
+    assert_eq!(
+        detect_with_targets(&failed("x", &appended("Exit code 1", &[&line])), &place()),
+        vec![(block(Operation::Write, Kind::SystemTemp, false), None)]
+    );
+}
+
+/// #1416: swiftc's and xcrun's own words for a write the sandbox refused them, which name the
+/// per-user folder in quotes and the system's words after it.
+#[test]
+fn swiftc_and_xcrun_refusals_are_read_from_standard_error() {
+    let (t, c) = (PER_USER_T, PER_USER_C);
+    for (line, kind) in [
+        (
+            format!(
+                "<unknown>:0: error: unable to open output file \
+                 '{c}/clang/ModuleCache/1XGORMFR2JUL/SwiftShims-6PVXR3VD9JVP.pcm': \
+                 'Operation not permitted'"
+            ),
+            Kind::SystemCache,
+        ),
+        (
+            format!(
+                "error: unable to open output file '/private{c}/clang/ModuleCache/x.pcm': \
+                 'Operation not permitted'"
+            ),
+            Kind::SystemCache,
+        ),
+        (
+            format!(
+                "xcrun: error: couldn't create cache file '{t}/xcrun_db-5UlOOWst' \
+                 (errno=Operation not permitted)"
+            ),
+            Kind::SystemTemp,
+        ),
+    ] {
+        assert_eq!(
+            detect_with_targets(&came_back("swiftc a.swift", "", &line), &place()),
+            vec![(block(Operation::Write, kind, false), None)],
+            "{line}"
+        );
+    }
+    // The same words about a path the chat may write are not the sandbox's.
+    let own =
+        format!("error: unable to open output file '{CHAT}/build/x.o': 'Operation not permitted'");
+    assert!(detect(&came_back("x", "", &own), &place()).is_empty());
+    // Nor is a line that only quotes them in the middle.
+    let quoted = format!(
+        "note: saw \"couldn't create cache file '{t}/xcrun_db' (errno=Operation not \
+         permitted)\" earlier"
+    );
+    assert!(detect(&came_back("x", "", &quoted), &place()).is_empty());
+}
+
+/// The path between a line's last two quotes, past a word's apostrophe before them.
+#[test]
+fn the_last_quoted_path_is_read_past_an_apostrophe() {
+    assert_eq!(last_quoted("cannot copy 'a' to 'b'"), Some("b"));
+    assert_eq!(
+        last_quoted("couldn't create cache file '/x/y'"),
+        Some("/x/y")
+    );
+    assert_eq!(last_quoted("failed to create directory `/x`"), Some("/x"));
+    assert_eq!(last_quoted("can't open /x"), None);
+}
