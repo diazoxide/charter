@@ -137,6 +137,14 @@ describe("shown text reached through an expression", () => {
     ).toEqual(["New chat…", "New vault…", "No project is open."]);
   });
 
+  it("reads a call to a function named like an Object member as an ordinary call", () => {
+    expect(
+      uiStrings(`toString("Read it"); valueOf("x"); constructor("y");`).map(
+        ({ text, seen }) => `${seen}: ${text}`,
+      ),
+    ).toEqual(["source: Read it", "source: x", "source: y"]);
+  });
+
   it("reads a label property as shown", () => {
     expect(shown(`const row = { id: "x", label: "Open in its pane" };`)).toEqual([
       "Open in its pane",

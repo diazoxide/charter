@@ -137,7 +137,11 @@ export function uiStrings(source: string): UiString[] {
       return;
     }
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-      const shown = SHOWN_ARGUMENTS[node.expression.text];
+      // Own keys only: a function named `toString` or `valueOf` is an ordinary call.
+      const name = node.expression.text;
+      const shown = Object.prototype.hasOwnProperty.call(SHOWN_ARGUMENTS, name)
+        ? SHOWN_ARGUMENTS[name]
+        : undefined;
       if (shown !== undefined) {
         node.arguments.forEach((argument, at) =>
           shown.includes(at) ? shownValue(argument) : visit(argument),
