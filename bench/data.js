@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791533022048,
+  "lastUpdate": 1791535408659,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4620,6 +4620,48 @@ window.BENCHMARK_DATA = {
             "value": 103.364626,
             "unit": "ms",
             "extra": "median of 5 runs: 101.907, 102.216, 103.365, 105.534, 106.931 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "7cb5a293d68ebc8aea0ae4105e21c47393c3ada8",
+          "message": "Settings test mocks name purlis's own plugin purlis@inline\n\nHarnessPlugins.test.tsx and WorkspaceLevel.test.tsx mocked the core's\nrows for purlis's own plugin as charter@inline. The core names it\npurlis@inline (harness_plugin.rs), so the mocks now do too. The tests\ncheck the UI, not the id, and pass either way.\n\nOnly the TypeScript fixtures item of the RN-8 follow-ups; the other open\nitems stay.\n\nRefs #1305\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T12:32:36+04:00",
+          "tree_id": "96f782a114ff8fcd0da3cb7123a3e66fcf591850",
+          "url": "https://github.com/purlis/purlis/commit/7cb5a293d68ebc8aea0ae4105e21c47393c3ada8"
+        },
+        "date": 1791535407812,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5154655,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.497, 0.507, 0.515, 0.525, 0.537 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.192206499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.520, 17.084, 17.192, 17.262, 17.425 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.7126835,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.991, 103.983, 104.713, 106.146, 106.590 ms"
           }
         ]
       }
