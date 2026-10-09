@@ -736,7 +736,8 @@ fn a_time(text: &str) -> bool {
 }
 
 /// **Takes the text out of every message of a dispatch that ended [`TALK_KEPT_FOR`] ago or
-/// longer** (D-1495-12), at `now`. How many records changed.
+/// longer** (D-1495-12), at `now`. The ids of the records changed, so an open Activity tab
+/// can be told (#1556).
 ///
 /// The record stays, and so does each message's time and kind: only the words go, and a
 /// message with no words is what says they were kept and are not any more
@@ -745,18 +746,22 @@ fn a_time(text: &str) -> bool {
 /// comes back at launch ([`crate::retention`]), and what was said in it is not. The app runs
 /// this when it opens a project, once a day while the project is open (#1556), and before it
 /// reads a timeline.
-pub fn expire_talk(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
+pub fn expire_talk(root: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<String> {
     expire_in(root, &mut list(root), now)
 }
 
 /// [`expire_talk`], over `records`, which were read from the store at `root` already (#1520):
 /// what a timeline reads once is expired from that one read, and each record changed on the
-/// disk is changed in `records` too. How many changed.
-pub fn expire_in(root: &Path, records: &mut [Record], now: chrono::DateTime<chrono::Utc>) -> usize {
+/// disk is changed in `records` too. The ids of those changed.
+pub fn expire_in(
+    root: &Path,
+    records: &mut [Record],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
     let due = |record: &Record| {
         talk_is_due(record, now) && record.talk.iter().any(|said| !said.text.is_empty())
     };
-    let mut changed = 0;
+    let mut changed = Vec::new();
     for record in records.iter_mut().filter(|record| due(record)) {
         let emptied = change(root, &record.id, |record| {
             // Looked at again under the lock: only what is still due is changed.
@@ -773,7 +778,7 @@ pub fn expire_in(root: &Path, records: &mut [Record], now: chrono::DateTime<chro
             for said in &mut record.talk {
                 said.text.clear();
             }
-            changed += 1;
+            changed.push(record.id.clone());
         }
     }
     changed
@@ -1758,6 +1763,24 @@ pub fn settle(
     still_open: impl Fn(&ChatRef) -> bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> usize {
+    settle_asked(
+        root,
+        &still_open,
+        |record| still_open(&record.asker.chat),
+        now,
+    )
+}
+
+/// [`settle`], where `asker_back` answers whether a task's asking chat is back: that chat, or
+/// a chat that resumed it (`reopen::Identity::resumed_from`), which is handed the task's
+/// report as the asking chat would be (#1556). A task whose asking chat is back keeps its row
+/// and its words.
+pub fn settle_asked(
+    root: &Path,
+    still_open: impl Fn(&ChatRef) -> bool,
+    asker_back: impl Fn(&Record) -> bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
     list(root)
         .into_iter()
         .filter(|record| record.running() && !still_open(&record.worker.chat))
@@ -1768,7 +1791,7 @@ pub fn settle(
             if ended && record.mode == Mode::Task && record.report_owed && !record.asker.by_person {
                 let _ = kept_undelivered(root, &record.id, None);
             }
-            if ended && record.mode == Mode::Task && !still_open(&record.asker.chat) {
+            if ended && record.mode == Mode::Task && !asker_back(record) {
                 let _ = clear_forgetting(root, &record.id);
             }
             ended
@@ -1792,7 +1815,28 @@ pub fn settle_on_open(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize 
     };
     older_owing_handoffs_are_tasks(root, reopen.as_ref());
     let live = reopen.as_ref().map(Live::of).unwrap_or_default();
-    settle(root, |worker| live.iter().any(|chat| chat.is(worker)), now)
+    // The chats brought back that resumed another: a task that one asked for has its asking
+    // chat back (#1556).
+    let resumed: Vec<String> = reopen
+        .iter()
+        .flat_map(|reopen| &reopen.chats)
+        .filter_map(|chat| chat.identity.resumed_from.clone())
+        .collect();
+    let back = |chat: &ChatRef| live.iter().any(|one| one.is(chat));
+    settle_asked(
+        root,
+        back,
+        |record| {
+            back(&record.asker.chat)
+                || record
+                    .asker
+                    .chat
+                    .id
+                    .as_ref()
+                    .is_some_and(|asker| resumed.contains(asker))
+        },
+        now,
+    )
 }
 
 /// **Every running dispatch an older build opened as a handoff that asked for a report is a
@@ -1872,7 +1916,9 @@ pub fn ended_unreported(record: &Record, usage: Option<Usage>) -> Ending {
 /// (its row cleared, its words forgotten, its worktree looked at) does not keep it, with its
 /// brief and its report, for another 30 days. One still running, one whose end does not read
 /// as a time or stands in the future, and a file that does not read as a record of this
-/// version are aged from when the file was last written.
+/// version are aged from when the file was last written. **So is one that still owes its
+/// asking chat a report** ([`Record::undelivered`]): it became owed when it was marked, which
+/// is a write and can be long after its end.
 pub(crate) fn aged_from(
     file: &mut std::fs::File,
     written: std::time::SystemTime,
@@ -1896,6 +1942,12 @@ pub(crate) fn aged_from(
         .any(|recorded| live.iter().any(|chat| chat.is(recorded)))
     {
         return None;
+    }
+    // A record that still owes a report was marked so when the report reached no chat, which
+    // can be long after its end, and is kept 30 days from then (#1556): the asking chat is
+    // handed it if the person reopens it, and only the record says it is owed.
+    if record.undelivered.is_some() {
+        return Some(written);
     }
     let latest = chrono::DateTime::<chrono::Utc>::from(now) + END_SKEW;
     let ended = record

@@ -502,12 +502,14 @@ fn close(
 /// cleared and what the two said to each other is forgotten now, as they would have been had
 /// it ended before that chat closed (`finished::asker_closed`). Nobody is left to see its row,
 /// so nothing would clear it. A chat started again in the asking chat's place is the same chat
-/// and still open, so it keeps its row. Not while the app is quitting, when every chat is
+/// and still open, so it keeps its row; so does an open chat that resumed the asking chat,
+/// which is handed the report (#1556). Not while the app is quitting, when every chat is
 /// kept for the next launch.
 fn forget_where_its_asker_is_gone(held: &Held, record: &Record) {
     if record.mode != dispatchrecord::Mode::Task
         || held.chats().ending()
         || crate::activity::session_of(&record.asker.chat, &open_chats(held)).is_some()
+        || crate::restored::asked_by_an_open_chat(held, record)
     {
         return;
     }

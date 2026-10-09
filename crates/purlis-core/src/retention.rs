@@ -16,8 +16,9 @@
 //! **A dispatch record is session data too** (#1452). `.charter/app/dispatches/<id>.json` holds
 //! a brief and a report, and is collected a month after its dispatch ended, as the record says
 //! (#1556): a later write of it, such as forgetting what its two chats said, does not keep it
-//! longer. One that has not ended, or whose end cannot be read, is collected a month after it
-//! was last written. Either way not while the chat that asked or the chat that worked is one
+//! longer. One that has not ended, whose end cannot be read, or that still owes its asking
+//! chat a report (marked when the report reached no chat, which can be long after the end), is
+//! collected a month after it was last written. Either way not while the chat that asked or the chat that worked is one
 //! the reopen record brings back, by its id and not its number, which another launch deals
 //! again ([`crate::dispatchrecord::aged_from`]). A write of one that was cut short leaves its
 //! temporary file beside it, holding the same brief: it is collected by the same rule.

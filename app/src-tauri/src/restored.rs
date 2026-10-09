@@ -152,7 +152,20 @@ fn after_put_back(held: &Held, launch: &AtLaunch, coming: AskerComing, settles: 
                 .as_ref()
                 .is_some_and(|id| waiting.contains(id) || held.chats().id_is_open(id))
         };
-        dispatchrestart::settle_after_launch(root, live, now);
+        // A task's asking chat is back where it is, or where an open chat or one waiting to
+        // start resumed it: that chat is handed the report below (#1556).
+        let resumers: Vec<Known> = held
+            .chats()
+            .waiting_to_start()
+            .iter()
+            .map(|one| Known::of(&one.chat))
+            .collect();
+        let asker_back = |dispatch: &dispatchrecord::Record| {
+            live(&dispatch.asker.chat)
+                || asked_by_an_open_chat(held, dispatch)
+                || resumers.iter().any(|chat| chat.asked(dispatch))
+        };
+        dispatchrestart::settle_after_launch(root, live, asker_back, now);
     }
     // What was kept for a chat that is open now is handed to it: taken before the put-back,
     // and what a settle above kept for one.
@@ -165,7 +178,7 @@ fn after_put_back(held: &Held, launch: &AtLaunch, coming: AskerComing, settles: 
 }
 
 /// Whether an open chat asked for `dispatch`, or resumed the chat that did.
-fn asked_by_an_open_chat(held: &Held, dispatch: &dispatchrecord::Record) -> bool {
+pub(crate) fn asked_by_an_open_chat(held: &Held, dispatch: &dispatchrecord::Record) -> bool {
     held.chats()
         .open_now()
         .iter()

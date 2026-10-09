@@ -670,3 +670,75 @@ fn a_dispatch_record_is_collected_thirty_days_after_it_ended_however_lately_it_w
     assert!(running.exists());
     assert!(of_a_live_chat.exists());
 }
+
+#[test]
+fn a_record_that_still_owes_its_report_is_kept_thirty_days_from_when_it_became_owed() {
+    // #1556: the asking chat stayed open 35 days after the task ended, with the report unread,
+    // then closed; the record is marked as owing it then. The next open must not collect it,
+    // or the chat's reopen is never handed the report.
+    use crate::dispatchrecord::{Asker, ChatRef, Mode, Opening, Place, Worker};
+    let (_d, root) = plane();
+    let now = SystemTime::now();
+    let chat = |chat: u32, id: &str| ChatRef {
+        chat,
+        id: Some(id.to_owned()),
+        name: format!("chat {chat}"),
+        persona: None,
+    };
+    let record = crate::dispatchrecord::open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            asker: Asker {
+                chat: chat(3, OCTOBERS_CHAT),
+                ..Asker::default()
+            },
+            persona: None,
+            worker: Worker {
+                chat: chat(40, SEPTEMBERS_WORKER),
+                ..Worker::default()
+            },
+            task: Some("task".to_owned()),
+            place: Place::default(),
+            brief: "a brief".into(),
+            report_owed: true,
+        },
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let thirty_five_days = Duration::from_secs(35 * 24 * 60 * 60);
+    crate::dispatchrecord::close(
+        &root,
+        &record.id,
+        crate::dispatchrecord::Ending {
+            report: Some(crate::dispatchrecord::Report {
+                outcome: crate::dispatchrecord::Outcome::Done,
+                text: "Done.".to_owned(),
+                changed: crate::dispatchrecord::Changed::default(),
+            }),
+            usage: None,
+        },
+        chrono::DateTime::<chrono::Utc>::from(now - thirty_five_days),
+    )
+    .unwrap();
+    let path = crate::dispatchrecord::dir(&root).join(format!("{}.json", record.id));
+    // While the asking chat was open, its record was kept however old.
+    assert_eq!(
+        sweep_keeping(&root, now, &[], &[live(3, Some(OCTOBERS_CHAT))]).dispatches,
+        0
+    );
+    // It closed with the report unread: the record says the report is owed, from now.
+    assert!(crate::dispatchrecord::kept_undelivered(&root, &record.id, None).unwrap());
+
+    let swept = sweep_keeping(&root, now, &[], &[]);
+
+    assert_eq!(swept.dispatches, 0);
+    assert!(
+        path.exists(),
+        "the report is still owed to the chat that asked"
+    );
+    // And a month after it became owed, it goes.
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(now - OLD).unwrap();
+    assert_eq!(sweep_keeping(&root, now, &[], &[]).dispatches, 1);
+}
