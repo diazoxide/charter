@@ -496,6 +496,14 @@ fn a_task_whose_record_does_not_end_is_not_forgotten_and_nobody_is_told() {
     let waiting = held.chats().would_not_start();
     assert_eq!(waiting.len(), 1);
     assert_eq!(waiting[0].id, it.task_id);
+    // Put back as it was taken, the carry-on with it (#1513): a later Try to start again tells
+    // it what the launch would have.
+    let held_aside = held.chats().waiting_to_start();
+    assert_eq!(held_aside.len(), 1);
+    assert_eq!(
+        held_aside[0].told,
+        Some(purlis_core::dispatchrestart::CARRY_ON)
+    );
     let on_disk = purlis_core::reopen::read_or_refusal(held.root()).expect("the record");
     assert!(
         on_disk

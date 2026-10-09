@@ -369,7 +369,7 @@ impl Seen {
     /// it asked this turn and is waiting on it. A prompt answered in the window puts the chat
     /// back to running with `asking` kept until the turn ends (`state::Chat::answered`); one
     /// answered in its pane is a key of the person's, which stands the end down for good.
-    fn prompt_showing(self) -> bool {
+    pub fn prompt_showing(self) -> bool {
         !self.ended && (self.ask_open || (self.asking && self.waiting))
     }
 }
@@ -1393,7 +1393,8 @@ impl Ledger {
             State::Cancelling
         } else if self.talk.asks(task).is_some() {
             State::AsksYou
-        } else if seen.asking {
+        } else if seen.prompt_showing() {
+            // A window ask open counts, and a prompt answered there does not (#1525).
             State::NeedsThePerson
         } else if seen.waiting {
             State::Idle
@@ -2299,6 +2300,18 @@ mod tests {
         assert_eq!(ledger.state(TASK, &from, WAITING), State::Idle);
         assert_eq!(ledger.state(TASK, &from, ASKING), State::NeedsThePerson);
         assert_eq!(ledger.state(TASK, &from, ENDED), State::Ended);
+        // #1525: an ask open in the window is the person's to answer, though the harness said
+        // nothing; a prompt answered there is a turn going on, though the board keeps `asking`.
+        let ask_open = Seen {
+            ask_open: true,
+            ..RUNNING
+        };
+        assert_eq!(ledger.state(TASK, &from, ask_open), State::NeedsThePerson);
+        let answered = Seen {
+            asking: true,
+            ..RUNNING
+        };
+        assert_eq!(ledger.state(TASK, &from, answered), State::Running);
 
         let reported = HandedFrom {
             report: Owed::Sent,

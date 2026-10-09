@@ -701,13 +701,9 @@ describe("a session's Activity tab", () => {
     });
     render(<App />);
 
-    await screen.findAllByTestId("pane");
-
-    // On the strip again, behind the chat in front; pressed, it reads its chat's timeline.
-    await userEvent.click(
-      await within(strip()).findByRole("tab", { name: /Activity · steward 3/ }),
-    );
-
+    // On the strip again, and in front, as the person left it (#1525: a view tab left in
+    // front comes back in front); it reads its chat's timeline.
+    await screen.findByRole("tab", { name: /Activity · steward 3/ });
     const list = await screen.findByRole("list", { name: "Activity of steward 3" });
     expect(selected()).toContain("Activity · steward 3");
     expect(read(list)).toHaveLength(LINES.length);

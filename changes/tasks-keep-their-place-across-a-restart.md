@@ -4,9 +4,9 @@
   purlis comes back under the chat that asked, on its conversation, and is told to carry on;
   its report still reaches that chat. A task that cannot be brought back on its conversation
   has ended by itself: the chat that asked is told, once, and it is a failed row you can
-  Reopen. One whose start was refused (after Stop every agent, say) waits with the other chats
-  that did not start, and Retry now brings it back told to carry on. Nothing is dispatched
-  twice: a task is never sent its brief again, and a chat that asks for the same task again
+  Reopen. One whose start was refused (after Stop every agent, say) waits under the chat that
+  asked: Try to start again brings it back told to carry on, and End task ends it. Nothing is
+  dispatched twice: a task is never sent its brief again, and a chat that asks for the same task again
   after it was started again, while the first is still working, is told it is running (#1513).
 - **A task whose asking chat has closed keeps its report.** Its row reads "asked by <chat>
   (closed)". Its report is kept on its dispatch record and for the workspace, and when you

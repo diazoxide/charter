@@ -184,8 +184,13 @@ pub type Teller = Arc<dyn Fn(ChatStop) + Send + Sync + 'static>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Facts {
     pub state: State,
-    /// A permission or a question is open mid-turn (`Board::asking`).
+    /// A permission or a question is open mid-turn (`Board::asking`). The board keeps it set
+    /// until the turn ends, a prompt answered in the window included: what is read for "a
+    /// prompt in front of the person" is [`Facts::prompt_showing`].
     pub asking: bool,
+    /// A permission ask of its is open in the window's needs-you list (#1525), whether or not
+    /// its harness said it asked.
+    pub ask_open: bool,
     /// Prompts that started a turn, as this app heard them.
     pub turns: u32,
     /// A shell tab: no harness, no profile.
@@ -199,6 +204,25 @@ pub struct Facts {
     /// purlis may type into it: its harness is one purlis types a line into, and no key of
     /// the person's has gone to its pane since its harness last spoke. Asked of a task only.
     pub types: bool,
+}
+
+impl Facts {
+    /// **A prompt is in front of the person**, by the one rule the window's question and the
+    /// asking chat's cancel read (`dispatched::Seen::prompt_showing`, #1525): an ask open in
+    /// the window is one, and a prompt answered there is not. Nothing is typed into a chat
+    /// while it is.
+    pub fn prompt_showing(&self) -> bool {
+        dispatched::Seen {
+            ended: matches!(self.state, State::Done | State::Failed),
+            heard: self.state != State::Unknown,
+            running: self.state == State::Running,
+            waiting: self.state == State::Waiting,
+            asking: self.asking,
+            measured: self.types,
+            ask_open: self.ask_open,
+        }
+        .prompt_showing()
+    }
 }
 
 /// Which of the two ways the person ends a chat (#1488).
@@ -234,9 +258,11 @@ pub fn last_turn(facts: &Facts) -> LastTurn {
         return LastTurn::None;
     }
     match facts.state {
-        // Showing a prompt: nothing is typed into it.
-        State::Waiting if facts.asking => LastTurn::None,
+        // Showing a prompt: nothing is typed into it. A task's turn is not ended under one
+        // either: its window ask stays the person's to answer.
+        State::Waiting if facts.prompt_showing() => LastTurn::None,
         State::Waiting => LastTurn::Now,
+        State::Running if facts.task && facts.prompt_showing() => LastTurn::None,
         State::Running if facts.task => LastTurn::Interrupted,
         State::Running => LastTurn::AtTurnEnd,
         State::Unknown | State::Done | State::Failed => LastTurn::None,
@@ -487,7 +513,7 @@ impl Stops {
             return Vec::new();
         };
         let now = facts(session);
-        let ready = now.state == State::Waiting && !now.asking;
+        let ready = now.state == State::Waiting && !now.prompt_showing();
         match step {
             Step::Held => Vec::new(),
             Step::Queued if ready => {
@@ -746,7 +772,7 @@ impl Stops {
 /// harness reports an interrupted turn, so the board still says it is running
 /// (`dispatched::Ledger::cancel_step` sends a cancel's line by the same rule).
 fn interrupted_takes_a_line(facts: &Facts) -> bool {
-    facts.types && !facts.asking && matches!(facts.state, State::Running | State::Waiting)
+    facts.types && !facts.prompt_showing() && matches!(facts.state, State::Running | State::Waiting)
 }
 
 /// One plane's stops, behind the lock every step of one is decided under.
@@ -940,6 +966,7 @@ fn facts_of(held: &Held, session: u32) -> Facts {
             Facts {
                 state: board.state,
                 asking: board.asking,
+                ask_open: held.asks_open_for(session),
                 turns: board.turns,
                 shell: open.harness.is_none() && open.profile.is_none(),
                 dispatched: open.from.is_some() && !settled,
@@ -951,6 +978,7 @@ fn facts_of(held: &Held, session: u32) -> Facts {
         None => Facts {
             state: State::Done,
             asking: false,
+            ask_open: false,
             turns: board.turns,
             shell: false,
             dispatched: false,
@@ -1372,6 +1400,7 @@ fn end(held: &Held, session: u32, wrote: bool, tell: bool) {
     held.stopping().stops().forget(session, |_| Facts {
         state: State::Done,
         asking: false,
+        ask_open: false,
         turns: 0,
         shell: false,
         dispatched: false,
@@ -1823,6 +1852,7 @@ mod tests {
         Facts {
             state: State::Waiting,
             asking: false,
+            ask_open: false,
             turns: 2,
             shell: false,
             dispatched: true,
@@ -2459,6 +2489,117 @@ mod tests {
             }]
         );
         assert!(!stops.any());
+    }
+
+    #[test]
+    fn a_task_whose_prompt_was_answered_in_the_window_is_asked_for_its_report() {
+        // #1525: an answer in the window puts the task back to running, and the board keeps
+        // `asking` until the turn ends. That is no prompt in front of the person, so Stop and
+        // get its report interrupts the turn and asks, as the window's question said it would.
+        let answered = |_| Facts {
+            asking: true,
+            ..a_task(State::Running)
+        };
+        let mut stops = Stops::default();
+        let acts = stops.press(&[2], Way::Report, started, answered);
+        let number = stops.number(2).expect("stopping, not ended as it stands");
+        assert_eq!(
+            acts,
+            [
+                Act::Begun {
+                    session: 2,
+                    number,
+                    send: false
+                },
+                Act::Interrupt { session: 2, number },
+            ]
+        );
+        assert_eq!(
+            stops.settled(2, number, answered),
+            [Act::Send { session: 2 }],
+            "asked for its report, not ended without one"
+        );
+    }
+
+    #[test]
+    fn stop_all_tasks_and_a_stop_at_a_limit_read_the_same_prompt_rule() {
+        // #1498 and #1512 press the one stop, with every task below a session (or below the
+        // task past its time) deepest first. Each task is judged by its own facts: one with
+        // an ask open in the window is ended as it stands and nothing is typed into it, and
+        // one whose prompt was answered there is interrupted and asked for its report.
+        let ask_open = Facts {
+            ask_open: true,
+            ..a_task(State::Running)
+        };
+        let answered = Facts {
+            asking: true,
+            ..a_task(State::Running)
+        };
+        let facts = |session| match session {
+            2 => answered,
+            3 => ask_open,
+            _ => waiting(),
+        };
+        let mut stops = Stops::default();
+        let acts = stops.press(&[3, 2], Way::Report, started, facts);
+        assert!(
+            !acts.iter().any(|act| matches!(
+                act,
+                Act::Interrupt { session: 3, .. } | Act::Send { session: 3 }
+            )),
+            "{acts:?}"
+        );
+        assert!(ended(&acts).contains(&3), "{acts:?}");
+        let number = stops.number(2).expect("asked for its report");
+        assert!(
+            acts.contains(&Act::Interrupt { session: 2, number }),
+            "{acts:?}"
+        );
+        assert_eq!(stops.settled(2, number, facts), [Act::Send { session: 2 }]);
+    }
+
+    #[test]
+    fn a_task_with_an_ask_open_in_the_window_is_never_interrupted_or_typed_into() {
+        // #1525: a permission ask held for the window, with no Notification heard: the board
+        // says running and not asking. Nothing is sent into it, by its own stop or by a stop of
+        // the chat above it with what is below.
+        let ask_open = Facts {
+            ask_open: true,
+            ..a_task(State::Running)
+        };
+        let typed_into = |acts: &[Act], task: u32| {
+            acts.iter().any(|act| {
+                matches!(act, Act::Interrupt { session, .. } | Act::Send { session } if *session == task)
+            })
+        };
+
+        // Its own stop: ended as it stands.
+        let mut stops = Stops::default();
+        let acts = stops.press(&[2], Way::Report, started, |_| ask_open);
+        assert_eq!(
+            acts,
+            [Act::End {
+                session: 2,
+                wrote: false,
+                tell: true
+            }]
+        );
+
+        // Its asker's stop with what is below it, deepest first: the task is ended as it
+        // stands, and its asker goes on as it would.
+        let mut stops = Stops::default();
+        let facts = |session| if session == 2 { ask_open } else { waiting() };
+        let acts = stops.press(&[2, 1], Way::Report, started, facts);
+        assert!(!typed_into(&acts, 2), "{acts:?}");
+        assert!(ended(&acts).contains(&2), "{acts:?}");
+
+        // And one whose ask opens while its interrupted turn settles is not sent its line.
+        let mut stops = Stops::default();
+        stops.press(&[2], Way::Report, started, |_| a_task(State::Running));
+        let number = stops.number(2).unwrap();
+        let acts = stops.settled(2, number, |_| ask_open);
+        assert_eq!(ended(&acts), [2]);
+        assert!(!typed_into(&acts, 2), "{acts:?}");
     }
 
     #[test]

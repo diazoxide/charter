@@ -18,8 +18,10 @@
 //!   reported for, and its dispatch record ends ([`end_at_launch`]).
 //! - **One whose start is refused waits, as any chat does.** A refusal is not an end: the
 //!   switch that stopped every agent, a profile to approve again, a folder that moved. It stays
-//!   in the list of chats that did not start, and **Retry now** starts it told to carry on.
-//!   Only **Forget** ends it, and then its asking chat is told ([`NotBack::LetGo`]).
+//!   in the list of chats that did not start, drawn under the chat that asked, and **Try to
+//!   start again** on that row starts it told to carry on. Only **End task** on that row (or
+//!   Forget, for a chat listed across the window, [`NotBack::LetGo`]) ends it, and then its
+//!   asking chat is told.
 //! - **A brief is not dispatched a second time** ([`dispatched_before`]). A chat cut off in the
 //!   middle of `purlis dispatch` never read its answer, and asks again when it carries on:
 //!   the same brief, to the same persona, while the task that brief started before the chat's
