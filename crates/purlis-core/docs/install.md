@@ -287,6 +287,6 @@ init --plane-is-this-repo`. That default is ADR 0035's, and purlis spec decision
 GitLab, which nothing above installs and which must be authenticated.
 
 A chat runs a harness program, and purlis does not install those either: `claude` for
-Claude Code and `codex` for Codex. Starting opencode chats is not in this version yet.
+Claude Code, `codex` for Codex and `opencode` for opencode.
 `purlis harness list` shows the profiles this plane offers; [harnesses.md](harnesses.md) is
 the rest.

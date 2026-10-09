@@ -428,7 +428,10 @@ left out.
   check out each branch.
 - **`remove <name>`** — deletes the workspace and its clones, and refuses if that would
   lose work nothing else holds (`--force` to remove it anyway).
-- Renaming a workspace is not in this version yet.
+- **`rename <old> <new>`** (alias `mv`) — gives a workspace another name: its directory, its
+  clones' worktrees, and every record that names it. A Claude Code chat recorded in it starts
+  a fresh conversation under the new name, and the rename says which ones first. A rename
+  that was interrupted is finished by running it again.
 
 ## Knowing the neighbours
 

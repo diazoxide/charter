@@ -21,11 +21,10 @@
 //!
 //! # Where the status line hooks in (M6.4)
 //!
-//! Nothing in this file draws anything. M6.4's status line (`app/src/StatusLine.tsx`, #153)
-//! is the surface, and it landed while this was being written, so the wiring is a follow-up
-//! rather than part of this change. When it is added, the status line listens for [`CHECKED`]
-//! and shows the offer, calls [`install_update`] from it, and shows [`update_channel`] beside
-//! it with a control that calls [`set_update_channel`]. The skew a plane's pin reports is a
+//! Nothing in this file draws anything. M6.4's status line (#153) is the surface:
+//! `app/src/Updates.tsx` listens for [`CHECKED`] and shows the offer, calls [`install_update`]
+//! from it, and shows [`update_channel`] beside it with a control that calls
+//! [`set_update_channel`]. The skew a plane's pin reports is a
 //! different item and a different question: `charter version` answers it today (charter ADR
 //! 0030), and the status line's item for it asks `adopt::version_report`, never a comparison
 //! of its own. This module deliberately does not restate it.

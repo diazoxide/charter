@@ -180,7 +180,7 @@ made that mistake — 214 test files discoverable from one root, 142 of them dup
 `.gitignore` hides that from git and from nothing else; pytest, jest, nx, tsc and every IDE
 indexer read the working tree directly.
 
-Moving them somewhere else is not in this version yet. A plane whose `charter.toml` sets
+Moving them somewhere else is not in this version yet (#1381). A plane whose `charter.toml` sets
 `[plane].worktrees`, or a process with `$PURLIS_WORKTREES` set, is refused by name when a
 worktree would be cut, rather than having its worktrees put somewhere it did not ask for:
 unset it to keep worktrees in the plane.
@@ -325,24 +325,24 @@ Full detail, including exactly which collisions can and can't be qualified away:
 ## Memory posture: `[memory].share`
 
 Every persona and workspace can write **memory** — durable notes recorded with
-`purlis persona remember` / `purlis workspace remember`. How far those notes travel is
-one setting, `[memory].share`, with three values:
+`purlis persona remember` / `purlis workspace remember`. A memory is written to disk, and no
+command commits it on its own: the plane's save commits it with everything else, by hand
+(`purlis save`) or by auto-save, as far as `[plane].mode` says (ADR 0051).
 
-| Mode | What it asks for |
+**`[memory].share` is deprecated.** It is read only as `[plane].mode`'s old spelling:
+
+| `share` | Read as |
 | --- | --- |
-| `local` | The memory file is written to disk and nothing else. It never enters git, never leaves the machine. |
-| `commit` | The file is committed **locally** — part of your history, never pushed. |
-| `push` | Committed, then pushed to `origin`. |
+| `local` | no `[plane].mode`: the Saving view asks once before anything is pushed |
+| `commit` | `[plane].mode = "commit"`: committed locally, never pushed |
+| `push` | `[plane].mode = "push"`: committed, then pushed |
 
-**The default is `local`**, and that default is deliberate: a stranger who just ran
+`[plane].mode` wins when both are there, and `purlis doctor` names a `share` that is still
+set. The deprecated default stays `local`, and deliberately: a stranger who just ran
 `purlis init` has not decided yet whether this control plane's notes should be shared
 with a team, and the failure mode of guessing wrong runs only one direction — publishing
-an agent's working notes to a remote nobody reviewed.
-
-**This version writes every memory as `local`.** Committing memory is not in this version
-yet: a plane set to `commit` or `push` gets the file on disk, and the write says that nothing
-was committed, so you can commit and push `memory/` with git yourself. A value purlis does
-not recognise reads as `local` — a typo in this file fails *safe*, not loud.
+an agent's working notes to a remote nobody reviewed. A value purlis does not recognise
+reads as `local` — a typo in this file fails *safe*, not loud.
 
 ## `[workspace].default`
 
@@ -398,7 +398,7 @@ name, and keeps the file out of git; the app's new-chat picker, a chat reopened 
 starts again and a chat opened by a handoff all run the profile they name and record it. A
 profile this file declares runs once you have seen its command and said so — see *A new or
 changed command asks once*, below. Starting a chat on a profile from a terminal
-(`purlis <profile>`) is not in this version yet.
+(`purlis <profile>`) is not in this version yet (#1576).
 
 ### Profiles live in `charter.local.toml`, never in `charter.toml`
 
@@ -431,8 +431,7 @@ would change plane policy with no trace in git. And the file is read only while 
 carry it: if git tracks it or would commit it, purlis reads nothing in it, and
 `charter.toml` and the workspace decide instead (purlis#308).
 
-- `kind` — which harness program: `claude`, `codex` or `opencode` (read and listed, but
-  starting an opencode chat is not in this version yet).
+- `kind` — which harness program: `claude`, `codex` or `opencode`.
 - `command` — a list of arguments, never a shell string, because no shell runs it. A leading
   `~` in its first word is expanded, since no shell is there to do it.
 - `env` — optional: variables set on the harness, each value's leading `~` expanded.
@@ -683,7 +682,7 @@ command: inside a chat the app started it prints an empty line — so the harnes
 stays blank unless the chat was started with its footer on — and still records the turn's
 token usage. Run anywhere else, it draws the plane's identity row — the active workspace and
 how many workspaces there are — and says in its body which parts it does not draw yet: repos,
-personas and the session.
+personas and the session (#997).
 
 **`purlis init` does not wire it into Claude Code's footer.** A `statusLine` key in
 `.claude/settings.json` works if you write one; purlis neither adds it nor removes it, and a

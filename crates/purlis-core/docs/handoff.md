@@ -979,7 +979,7 @@ the two numbers are both on screen. Name long material by its path instead of pa
   dispatches, whichever kind each was, and the project's depth limit holds it (3 unless the
   project sets another).
 - A handed-off chat that comes back with no conversation is not shown its brief again; that is
-  not in this version yet. A Claude Code chat that resumes is already reading the brief in its
+  not in this version yet (#1576). A Claude Code chat that resumes is already reading the brief in its
   own transcript.
 
 ## Limits
@@ -1013,7 +1013,7 @@ three tests, find the workspace, write the brief from a template, show it **in f
 the command. The route above is said in the same words in that skill, in `purlis:persona`, in
 `purlis handoff --help`, in the result of a handoff that asked for a report, and in the
 briefing of a chat the app started. A per-prompt "where this could run" hint is not in
-this version yet.
+this version yet (#1576).
 
 ## A handoff is a dispatch: consent is the grant
 
@@ -1300,4 +1300,5 @@ security boundary around the program"
   a chat whose harness reports its prompts off as unattended, so such a chat hands off to its
   own persona, or to another under a grant that already stands, and is refused plainly
   otherwise. An interactive Codex session's `permission_mode` has not been measured.
-- **opencode** is not started by this app yet.
+- **opencode.** The app starts opencode chats ([harnesses.md](harnesses.md)). What an opencode
+  run reports about whether a person is at it has not been measured.
