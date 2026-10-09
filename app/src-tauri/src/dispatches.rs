@@ -511,8 +511,13 @@ fn forget_where_its_asker_is_gone(held: &Held, record: &Record) {
     {
         return;
     }
-    if let Err(why) = dispatchrecord::clear_forgetting(held.root(), &record.id) {
-        tracing::warn!("purlis: a task whose asking chat closed was not forgotten ({why})");
+    match dispatchrecord::clear_forgetting(held.root(), &record.id) {
+        // An open Activity tab stops showing what was forgotten (#1556).
+        Ok(true) => crate::activity::forgotten(held, &record.id),
+        Ok(false) => {}
+        Err(why) => {
+            tracing::warn!("purlis: a task whose asking chat closed was not forgotten ({why})");
+        }
     }
 }
 

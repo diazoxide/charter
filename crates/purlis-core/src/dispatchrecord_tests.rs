@@ -1265,9 +1265,9 @@ fn the_rows_of_a_chat_s_finished_tasks_go_when_it_closes_and_their_records_stay(
         2,
     );
 
-    assert_eq!(clear_for(&root, &steward()), 2);
+    assert_eq!(clear_for(&root, &steward()).len(), 2);
     assert!(finished_for(&root, &steward(), nobody_open).is_empty());
-    assert_eq!(clear_for(&root, &steward()), 0);
+    assert_eq!(clear_for(&root, &steward()).len(), 0);
     for id in [&done_one.id, &failed.id] {
         let kept = read(&root, id).expect("the record stays");
         assert!(kept.cleared);
@@ -1446,7 +1446,7 @@ fn a_finished_row_is_matched_to_its_asking_chat_by_id_and_never_by_number() {
         ..steward()
     };
     assert!(finished_for(&root, &no_id, nobody_open).is_empty());
-    assert_eq!(clear_for(&root, &no_id), 0);
+    assert_eq!(clear_for(&root, &no_id).len(), 0);
 }
 
 #[test]
@@ -1932,7 +1932,7 @@ fn a_chat_that_closes_forgets_what_its_finished_tasks_said() {
     let one = a_task_that_talked(&root, "check prod", 7, 1);
     let two = a_task_that_talked(&root, "check staging", 8, 2);
 
-    assert_eq!(clear_for(&root, &steward()), 2);
+    assert_eq!(clear_for(&root, &steward()).len(), 2);
 
     for id in [&one, &two] {
         let kept = read(&root, id).expect("the record stays");
