@@ -595,3 +595,70 @@ fn a_dash_m_message_ending_in_a_hash_line_gets_the_trailers_after_it() {
          Purlis-Change: billing-v2\n"
     );
 }
+
+// ----- reading them back (#1019) -----
+
+#[test]
+fn a_commit_with_one_value_per_key_claims_each() {
+    let claims = Claims::read(&format!(
+        "Co-authored-by: Someone <s@example.com>\nAssisted-by: claude-code:claude-opus-4-1\n\
+         Purlis-Chat: {CHAT}\nPurlis-Persona: steward\nPurlis-Change: billing-v2\n"
+    ));
+    assert_eq!(
+        claims.assisted_by.one(),
+        Some("claude-code:claude-opus-4-1")
+    );
+    assert_eq!(claims.chat.one(), Some(CHAT));
+    assert_eq!(claims.persona.one(), Some("steward"));
+    assert_eq!(claims.change.one(), Some("billing-v2"));
+    assert_eq!(Claims::read(""), Claims::default());
+}
+
+#[test]
+fn the_same_value_under_either_spelling_or_any_case_is_one_claim() {
+    let claims = Claims::read(&format!(
+        "Charter-Chat: {CHAT}\nPurlis-Chat: {CHAT}\npurlis-chat: {CHAT}\n"
+    ));
+    assert_eq!(claims.chat, Claim::One(CHAT.into()));
+}
+
+#[test]
+fn several_values_for_a_key_leave_that_key_unknown_whichever_comes_last() {
+    // A cherry-pick from another chat, then purlis's own line: neither is the commit's.
+    const OTHER: &str = "01J9ZQ3W5Y7X8V6T4R2P0N1M3M";
+    let picked = Claims::read(&format!(
+        "Charter-Chat: {OTHER}\nPurlis-Persona: steward\n\
+         Purlis-Chat: {CHAT}\nPurlis-Chat: {OTHER}\n"
+    ));
+    assert_eq!(picked.chat, Claim::Several(vec![OTHER.into(), CHAT.into()]));
+    assert_eq!(picked.chat.one(), None);
+    // Only the key with several is unknown.
+    assert_eq!(picked.persona.one(), Some("steward"));
+}
+
+#[test]
+fn a_value_that_could_not_be_written_claims_nothing() {
+    let claims = Claims::read(&format!(
+        "Purlis-Chat: two words\nPurlis-Chat:\nPurlis-Chat: {CHAT}\nNot a trailer\n"
+    ));
+    assert_eq!(claims.chat, Claim::One(CHAT.into()));
+}
+
+#[test]
+fn what_append_writes_reads_back_as_what_was_stamped() {
+    let message = append(
+        "Fix it\n\nBody.\n",
+        &everything().trailers(Form::Full),
+        None,
+    );
+    let block = message.split("\n\n").last().expect("a block");
+    let claims = Claims::read(block);
+    let p = everything();
+    assert_eq!(
+        claims.assisted_by.one(),
+        Some(format!("{}:{}", p.harness.unwrap(), p.model.unwrap()).as_str())
+    );
+    assert_eq!(claims.chat.one(), p.chat.as_deref());
+    assert_eq!(claims.persona.one(), p.persona.as_deref());
+    assert_eq!(claims.change.one(), p.change.as_deref());
+}
