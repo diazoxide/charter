@@ -70,13 +70,21 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * **Allowing a dispatch is not allowing a secret**, and the Notice says so: what a persona's
  * chat does with a vault is asked as it was before.
  *
+ * **It names the task and the profile** (#1456): the task's name is the chat's text, drawn
+ * above the brief and apart from purlis's words, like the brief; the profile the persona's
+ * chat would start on is the app's choice, said in the sentence. The target persona's mark
+ * leads the line (#1454).
+ *
  * **The brief is the chat's text, never purlis's.** It is drawn in its own block, under a line
  * that says so, as plain text: nothing in it is markup, a control or a sentence of the
  * Notice's. An Allow sends the held dispatch's number and the level, and nothing of the pair:
  * the core holds who asked, from its own record of the chat.
  *
- * **Policy has the last word**: a pair an administrator's policy locks was refused already.
- * The Notice says so, with the policy's sentence and who set it, and offers no Allow.
+ * **Policy has the last word**: a pair an administrator's policy locks is refused by the
+ * dispatch decision before any question is held, so the app's dispatch path raises no Notice
+ * for it; the chat is told the policy's sentence (#1456). Should a held question ever say it
+ * is locked (`locked`), the Notice says so, with the policy's sentence and who set it, and
+ * offers no Allow.
  *
  * **Where an Allow holds** (#1505), said on every question. At the project's root there is no
  * workspace to limit a grant to: the sentence says an Allow for the person or the project
@@ -134,6 +142,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
         at="pane"
         tone="news"
         label={`Dispatch to ${allowed.target}`}
+        persona={allowed.target}
         onDismiss={() => {
           setAllowed(undefined);
           read();
@@ -265,6 +274,16 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
 
   const brief = (
     <div className="block-report" id={id}>
+      {first.task !== null && (
+        // The task's name is the chat's text too (#1456): drawn apart from purlis's words.
+        <p>
+          The task, as the chat named it:{" "}
+          <span className="block-allow-target" aria-label="Task name from the chat">
+            {first.task}
+          </span>
+          {first.task_cut && " (cut: purlis shows the start of it)"}
+        </p>
+      )}
       <p>The brief, as the chat wrote it. purlis did not write it.</p>
       <section aria-label="Brief from the chat">
         <pre className="block-report-draft block-report-brief">{first.brief}</pre>
@@ -286,6 +305,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
         at="pane"
         tone="trouble"
         label={label}
+        persona={first.target}
         onDismiss={putAway}
         under={brief}
       >
@@ -385,6 +405,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       at="pane"
       tone="trouble"
       label={label}
+      persona={first.target}
       fixes={fixes}
       under={
         <>
@@ -402,6 +423,8 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       {first.asking === null ? `${self} runs` : "those chats run"} too: what one of them asks is
       asked as its chat.
       {holds}
+      {first.profile !== null &&
+        ` Its ${first.target} chat would start on profile ${first.profile}.`}
       {first.also.length > 0 &&
         " Under the answers are boxes for more personas: tick any you want before you press Allow."}
       {first.never_unread !== null &&

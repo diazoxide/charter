@@ -138,6 +138,9 @@ function held(session: number, id: number): DispatchPending {
     works_with: "devops works with its own access: no vault; no hosts beyond the project's.",
     also: [],
     shown: "s0",
+    task: null,
+    task_cut: false,
+    profile: null,
   };
 }
 

@@ -2172,9 +2172,17 @@ fn dispatch_noting(
                     held,
                     asking_as.clone(),
                     attended,
-                    to,
-                    &wanted.brief,
+                    (to, &wanted.brief),
                     works_in.as_deref(),
+                    // What the grant Notice names besides the pair (#1456): the task's name
+                    // as the chat gave it, and the profile chosen for it here.
+                    // The name is the one checked above, never the request's own.
+                    crate::dispatchgrants::Task {
+                        name: label.clone(),
+                        profile: Some(chosen.profile.clone()),
+                        asking_profile: asking.profile.clone(),
+                        named_profile: wanted.profile.clone(),
+                    },
                 ) {
                     Requested::Covered(its) => Some(its),
                     Requested::NeedsGrant { pending } => {
@@ -2771,6 +2779,21 @@ fn profile_for(
         declared,
         launch,
     }
+}
+
+/// **The profile a dispatch to `target` would start its chat on now** ([`profile_for`]), or
+/// none where none would be chosen: what an Allow holds the profile its Notice named to
+/// (#1456).
+pub(crate) fn profile_now(
+    root: &std::path::Path,
+    asking: Option<&str>,
+    target: &str,
+    named: Option<&str>,
+) -> Option<String> {
+    profile_for(root, asking, Some(target), named)
+        .chosen
+        .ok()
+        .map(|chosen| chosen.profile)
 }
 
 /// `ready` with `message` as the chat's first message, **by the route the harness it runs

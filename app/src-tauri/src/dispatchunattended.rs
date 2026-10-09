@@ -71,19 +71,22 @@ pub fn request_dispatch(
 /// [`request_dispatch`], for the asking chat as the caller read it (`asking`, its session
 /// included): what the caller decided before asking, and what this answers, go by one read
 /// of who the chat is and what persona it runs with (#1543).
+///
+/// `task` is what the task is called and the profile its chat would start on (#1456): a
+/// dispatch held for the person keeps them, and its Notice names both.
 pub fn request_dispatch_as(
     held: &crate::planes::Held,
     asking: Asking,
     attendance: Attendance,
-    target: &str,
-    brief: &str,
+    (target, brief): (&str, &str),
     works_in: Option<&str>,
+    task: crate::dispatchgrants::Task,
 ) -> Requested {
     let uncovered = match attendance {
         Attendance::Attended => crate::dispatchgrants::Uncovered::AskThePerson,
         Attendance::Unattended => crate::dispatchgrants::Uncovered::Refuse,
     };
-    crate::dispatchgrants::requested_as(held, asking, target, brief, uncovered, works_in)
+    crate::dispatchgrants::requested_as(held, asking, (target, brief), uncovered, works_in, task)
 }
 
 /// **Whether a person is at chat `session`** (#1501): not where its harness ever reported its

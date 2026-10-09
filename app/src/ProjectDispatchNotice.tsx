@@ -133,12 +133,19 @@ export function ProjectDispatchNotice({
   ) : undefined;
 
   const arrived = waiting.length > 0 && shown !== putAway;
+  /** The one persona whose chats every grant listed is about, whose mark leads the line
+   *  (#1454); none where they are several personas'. */
+  const oneAsking = (grants: readonly { asking: string }[]) => {
+    const askers = new Set(grants.map((one) => one.asking));
+    return askers.size === 1 ? [...askers][0] : null;
+  };
   return (
     <>
       {arrived && (
         <Notice
           cause="dispatch-grants"
           label="The project's dispatch grants changed"
+          persona={oneAsking(waiting)}
           fixes={fixes}
           link={{
             label: pairs.length > 0 ? "Decide each in Settings" : "Open Dispatch settings",
@@ -171,6 +178,7 @@ export function ProjectDispatchNotice({
         <Notice
           cause="dispatch-grants-gone"
           label="The project took dispatch grants away"
+          persona={oneAsking(gone)}
           onDismiss={() => told(gone)}
         >
           <p>

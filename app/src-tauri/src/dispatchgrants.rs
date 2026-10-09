@@ -9,8 +9,14 @@
 //! - [`request_dispatch_grant`]`(held, session, target, brief)`, for a chat a person is at.
 //!   Covered: start it, with what [`Requested::Covered`] carries. Needs a grant: nothing
 //!   starts, the Notice is raised on the asking chat's tab, and the dispatch is held here.
-//!   Locked: refused with the policy's sentence, and the Notice says the same. Refused: a
-//!   sentence for the chat.
+//!   Locked: refused with the policy's sentence. Refused: a sentence for the chat.
+//!
+//! **A locked dispatch never reaches the person from the app's dispatch path** (#1456): the
+//! dispatch decision (`purlis_core::dispatchdecision`) refuses a pair policy locks before this
+//! store is asked, with the policy's sentence, so the chat is told and no Notice is raised.
+//! The store's own answer to a locked pair (a Notice that only says so, and offers no Allow)
+//! stands for a caller that asks it without the decision first, which only the tests do; it
+//! is kept so such a caller still shows the person nothing they could allow.
 //! - [`request_dispatch_grant_or_refuse`], for **a chat nobody is at** (an unattended chat,
 //!   spec decision 20): the same, but an uncovered or locked dispatch is a plain refusal.
 //!   Nothing is held and no Notice is raised, so nobody can allow it later by accident.
@@ -259,6 +265,39 @@ pub enum Uncovered {
 pub const HELD_DISPATCHES_TO_NO_ONE: &str = "this chat runs on another chat's grants until the person allows its own on its tab, so it \
      dispatches to no one yet. Ask the person to press Allow on this chat's tab.";
 
+/// **What the task a held dispatch would start is** (#1456): what its Notice names besides
+/// the pair and the brief.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Task {
+    /// Its name, as the asking chat wrote it: a chat's text, shown inert
+    /// ([`DispatchPending::task`]). None where the chat gave none.
+    pub name: Option<String>,
+    /// The profile its chat would start on, as the app chose it from the project's profiles
+    /// for the target persona: never a word of the request's.
+    pub profile: Option<String>,
+    /// What it was chosen from, so an Allow chooses it again the same way: the profile the
+    /// asking chat runs on, as this app recorded it.
+    pub asking_profile: Option<String>,
+    /// And the profile the dispatch named, where it named one.
+    pub named_profile: Option<String>,
+}
+
+impl Task {
+    /// **The profile its chat would start on now**, for a dispatch to `target` in the project
+    /// at `root`: chosen again as the dispatch chose it ([`crate::handoff::profile_now`]).
+    fn profile_now(&self, root: &Path, target: &str) -> Option<String> {
+        crate::handoff::profile_now(
+            root,
+            self.asking_profile.as_deref(),
+            target,
+            self.named_profile.as_deref(),
+        )
+    }
+}
+
+/// The most characters of a task's name the Notice shows; a longer one is cut, and says so.
+pub const MOST_TASK_NAME_CHARS: usize = 120;
+
 /// A dispatch held until the person answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
@@ -276,6 +315,9 @@ pub struct Pending {
     /// [`purlis_core::dispatchwithin::works_in`]); none at the project's root. The app's own
     /// record of where the new chat will run, never a word of the request's.
     pub works_in: Option<String>,
+    /// The task it would start, as its Notice names it (#1456): the first ask's, as the brief
+    /// is.
+    pub task: Task,
 }
 
 /// One grant a person made for one chat, as Settings lists it.
@@ -501,6 +543,7 @@ impl Store {
     /// record, none for the project's root. A grant limited to one workspace covers the
     /// dispatch only where that is the one; a dispatch held for the person is held for that
     /// workspace, and its Notice offers a grant for it.
+    #[cfg(test)]
     pub fn request_in(
         &self,
         ground: &Ground<'_>,
@@ -509,6 +552,32 @@ impl Store {
         brief: &str,
         uncovered: Uncovered,
         works_in: Option<&str>,
+    ) -> (Requested, Option<Pending>) {
+        self.request_task(
+            ground,
+            asking,
+            target,
+            brief,
+            uncovered,
+            works_in,
+            Task::default(),
+        )
+    }
+
+    /// [`Store::request_in`], **for the task `task`** (#1456): a dispatch held for the person
+    /// keeps what its task is called and the profile it would start on, and its Notice names
+    /// both. A dispatch asked again while the first waits keeps the first's, as it keeps the
+    /// first brief.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_task(
+        &self,
+        ground: &Ground<'_>,
+        asking: Asking,
+        target: &str,
+        brief: &str,
+        uncovered: Uncovered,
+        works_in: Option<&str>,
+        task: Task,
     ) -> (Requested, Option<Pending>) {
         if uncovered == Uncovered::Refuse {
             // Nothing is held and nothing is raised: the answer is whole, here and now.
@@ -549,7 +618,14 @@ impl Store {
                 None,
             ),
             Covers::Locked(why) => {
-                let told = self.hold(ground, asking, target, brief, Some(why.clone()), works_in);
+                let told = self.hold(
+                    ground,
+                    asking,
+                    target,
+                    brief,
+                    Some(why.clone()),
+                    (works_in, task),
+                );
                 (Requested::Locked(why), told.ok().map(|(held, _)| held))
             }
             // The person's never: refused in a sentence, nothing held and nobody asked.
@@ -586,7 +662,7 @@ impl Store {
             // Nothing covers it, or nothing counts until the record of nevers reads: the
             // person is asked ([`DispatchPending::never_unread`] says which).
             Covers::NeedsGrant | Covers::Unread => {
-                match self.hold(ground, asking, target, brief, None, works_in) {
+                match self.hold(ground, asking, target, brief, None, (works_in, task)) {
                     Ok((held, new)) => (
                         Requested::NeedsGrant { pending: held.id },
                         new.then_some(held),
@@ -729,7 +805,7 @@ impl Store {
     ) -> DispatchPending {
         let facts = self.facts_of(root, held);
         let offer = self.offer(root, locks, held);
-        let stamp = stamp_of(&offer, &facts);
+        let stamp = stamp_of(&offer, &facts, &held.task);
         let mut shown = told_of(plane, held, facts);
         shown.works_with = offer.target.said();
         shown.shown = stamp;
@@ -754,7 +830,7 @@ impl Store {
         target: &str,
         brief: &str,
         locked: Option<String>,
-        works_in: Option<&str>,
+        (works_in, task): (Option<&str>, Task),
     ) -> Result<(Pending, bool), String> {
         let mut pending = lock(&self.pending);
         pending.retain(|one| (ground.is_open)(one.asking.session));
@@ -783,6 +859,7 @@ impl Store {
             locked,
             at: ground.at,
             works_in: works_in.map(str::to_owned),
+            task,
         };
         pending.push(held.clone());
         Ok((held, true))
@@ -926,9 +1003,20 @@ impl Store {
         // nevers reads, and whether the workspace is there.
         let offer = self.offer(ground.root, ground.locks, &held);
         let now = self.facts_of(ground.root, &held);
-        if ticked
-            .shown
-            .is_some_and(|shown| shown != stamp_of(&offer, &now))
+        // **The profile the Notice named is the one the chat starts on** (#1456): chosen
+        // again now, as the start will choose it. Where it reads differently, nothing is
+        // allowed and the question is shown again.
+        let task_now = match &held.task.profile {
+            Some(_) => Task {
+                profile: held.task.profile_now(ground.root, &held.target),
+                ..held.task.clone()
+            },
+            None => held.task.clone(),
+        };
+        if task_now.profile != held.task.profile
+            || ticked
+                .shown
+                .is_some_and(|shown| shown != stamp_of(&offer, &now, &task_now))
         {
             return Err(CHANGED.to_owned());
         }
@@ -1625,6 +1713,14 @@ pub struct DispatchPending {
     /// A digest of `works_with` and `also`, the part a long list clips included: an Allow
     /// sends it back, and one for a question that reads differently now grants nothing.
     pub shown: String,
+    /// **The task's name, as the chat wrote it** (#1456): a chat's text, inert as the brief is
+    /// and cut at [`MOST_TASK_NAME_CHARS`] (`task_cut` says so). Null where it gave none.
+    pub task: Option<String>,
+    /// Whether the task's name is longer than the Notice shows.
+    pub task_cut: bool,
+    /// **The profile the persona's chat would start on**, as the app chose it (#1456); null
+    /// where none was chosen when the dispatch was held.
+    pub profile: Option<String>,
 }
 
 /// What a dispatch's question draws its answers from, read from the project at `root`: the
@@ -1706,6 +1802,7 @@ fn facts(root: &Path, held: &Pending) -> Facts {
 
 /// `held` as the window is told it, from its [`Facts`].
 fn told_of(plane: &PlaneId, held: &Pending, facts: Facts) -> DispatchPending {
+    let task_shown = task_shown(held);
     DispatchPending {
         plane: plane.clone(),
         id: held.id,
@@ -1725,15 +1822,32 @@ fn told_of(plane: &PlaneId, held: &Pending, facts: Facts) -> DispatchPending {
         works_with: String::new(),
         also: Vec::new(),
         shown: String::new(),
+        task: task_shown.as_ref().map(|(name, _)| name.clone()),
+        task_cut: task_shown.is_some_and(|(_, cut)| cut),
+        profile: held.task.profile.clone(),
     }
+}
+
+/// The name of `held`'s task as its Notice shows it: inert, and cut at
+/// [`MOST_TASK_NAME_CHARS`], with whether it was. None where the chat gave none.
+fn task_shown(held: &Pending) -> Option<(String, bool)> {
+    let name = held.task.name.as_deref()?;
+    let cut = name.chars().count() > MOST_TASK_NAME_CHARS;
+    let kept: String = name.chars().take(MOST_TASK_NAME_CHARS).collect();
+    // One line: a name's breaks are shown as what they are, never as a second line.
+    let shown = dispatchgrant::inert(&kept)
+        .replace('\n', "\\n")
+        .replace('\t', " ");
+    Some((shown, cut))
 }
 
 /// **The digest of everything a dispatch's question says beyond who asks and the brief**: what
 /// the target and each box's persona work with ([`Offer::stamp`]), and the facts the Notice
 /// draws its answers from: the answers offered, whether the workspace is there yet, whether
 /// the list of nevers reads, and where the pair is already allowed. An Allow sends it back,
-/// and one for a question that reads differently now grants nothing.
-fn stamp_of(offer: &Offer, told: &Facts) -> String {
+/// and one for a question that reads differently now grants nothing. **And the task**: its name
+/// and the profile its chat would start on (#1456).
+fn stamp_of(offer: &Offer, told: &Facts, task: &Task) -> String {
     let levels: Vec<&str> = told
         .levels
         .iter()
@@ -1744,12 +1858,14 @@ fn stamp_of(offer: &Offer, told: &Facts) -> String {
         })
         .collect();
     format!(
-        "{}\u{1e}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1e}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1e}{}\u{1f}{}",
         offer.stamp(),
         levels.join(","),
         told.missing,
         told.never_unread.as_deref().unwrap_or_default(),
-        told.allowed_in.join(",")
+        told.allowed_in.join(","),
+        task.name.as_deref().unwrap_or_default(),
+        task.profile.as_deref().unwrap_or_default()
     )
 }
 
@@ -1904,7 +2020,14 @@ fn requested(
     let Some(asking) = asking_of(held.chats(), held.root(), session) else {
         return Requested::Refused(format!("chat {session} is not one this app has open"));
     };
-    requested_as(held, asking, target, brief, uncovered, works_in)
+    requested_as(
+        held,
+        asking,
+        (target, brief),
+        uncovered,
+        works_in,
+        Task::default(),
+    )
 }
 
 /// [`requested`], for the asking chat as the caller already read it: so what the caller
@@ -1912,10 +2035,10 @@ fn requested(
 pub fn requested_as(
     held: &crate::planes::Held,
     asking: Asking,
-    target: &str,
-    brief: &str,
+    (target, brief): (&str, &str),
     uncovered: Uncovered,
     works_in: Option<&str>,
+    task: Task,
 ) -> Requested {
     let root = held.root();
     let audit: Audit<'_> =
@@ -1946,7 +2069,7 @@ pub fn requested_as(
         ));
     }
     let locks = sandbox::policy::Locks::of(root);
-    let (answer, raised) = held.dispatch_grants().request_in(
+    let (answer, raised) = held.dispatch_grants().request_task(
         &Ground {
             root,
             locks: &locks,
@@ -1960,6 +2083,7 @@ pub fn requested_as(
         brief,
         uncovered,
         works_in,
+        task,
     );
     if let (Some(raised), Some(tell)) = (raised, TELL.get()) {
         tell(

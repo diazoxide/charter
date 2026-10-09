@@ -176,11 +176,144 @@ fn a_dispatch_to_another_persona_with_no_grant_starts_nothing_and_is_held_with_i
             locked: None,
             at: 100,
             works_in: None,
+            task: Task::default(),
         }]
     );
     assert!(answered.lock().unwrap().is_empty(), "nothing started");
     assert!(world.audited().is_empty(), "and nothing was granted");
     assert!(world.listed(&store).is_empty());
+}
+
+#[test]
+fn the_notice_names_the_task_and_the_profile_its_chat_would_start_on() {
+    // #1456: the task's name is the chat's text, shown inert and on one line; the profile is
+    // the app's choice. Asked again while the first waits, the first's are kept.
+    let world = World::new();
+    let (store, _) = store();
+    let task = |name: &str| Task {
+        name: Some(name.to_owned()),
+        profile: Some("claude-work".to_owned()),
+        ..Task::default()
+    };
+    let ask = |name: &str| {
+        world.on(|ground| {
+            store.request_task(
+                ground,
+                chat(3, Some("steward")),
+                "devops",
+                BRIEF,
+                Uncovered::AskThePerson,
+                None,
+                task(name),
+            )
+        })
+    };
+    let (asked, raised) = ask("fix\u{202e}the\ndeploy");
+    let id = pending_of(&asked);
+    let shown = told(
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &raised.expect("raised"),
+    );
+    assert_eq!(shown.task.as_deref(), Some("fix\\u202ethe\\ndeploy"));
+    assert!(!shown.task_cut);
+    assert_eq!(shown.profile.as_deref(), Some("claude-work"));
+
+    let (again, raised) = ask("another task");
+    assert_eq!(pending_of(&again), id);
+    assert!(raised.is_none());
+    assert_eq!(store.waiting(3)[0].task, task("fix\u{202e}the\ndeploy"));
+
+    // A name longer than the Notice shows is cut, and says so; none is none.
+    let long = "x".repeat(MOST_TASK_NAME_CHARS + 5);
+    let held = Pending {
+        task: Task {
+            name: Some(long),
+            ..Task::default()
+        },
+        ..store.waiting(3)[0].clone()
+    };
+    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    assert_eq!(
+        shown.task.map(|name| name.chars().count()),
+        Some(MOST_TASK_NAME_CHARS)
+    );
+    assert!(shown.task_cut);
+    assert_eq!(shown.profile, None);
+    let none = Pending {
+        task: Task::default(),
+        ..held
+    };
+    assert_eq!(
+        told(&PlaneId::for_tests(world.root()), world.root(), &none).task,
+        None
+    );
+}
+
+#[test]
+fn an_allow_is_held_to_the_profile_and_the_task_the_notice_named() {
+    // #1456 review: the Notice names a profile, so an Allow starts on that one or on none. The
+    // profile is chosen again at the press; where it reads differently, nothing is allowed.
+    // This project offers no profile, so "claude-work" is not what would be chosen now.
+    let world = World::new();
+    let (store, answered) = store();
+    let (asked, raised) = world.on(|ground| {
+        store.request_task(
+            ground,
+            chat(3, Some("steward")),
+            "devops",
+            BRIEF,
+            Uncovered::AskThePerson,
+            None,
+            Task {
+                name: Some("check the deploy".to_owned()),
+                profile: Some("claude-work".to_owned()),
+                ..Task::default()
+            },
+        )
+    });
+    let id = pending_of(&asked);
+    let shown = told_by(
+        &store,
+        &PlaneId::for_tests(world.root()),
+        world.root(),
+        &raised.expect("raised"),
+    );
+
+    let allowed = world.on(|ground| {
+        store.allow_with(
+            ground,
+            id,
+            Level::You,
+            &Ticked {
+                also: &[],
+                shown: Some(&shown.shown),
+            },
+        )
+    });
+
+    assert_eq!(allowed, Err(CHANGED.to_owned()));
+    assert!(world.audited().is_empty(), "nothing granted");
+    assert!(answered.lock().unwrap().is_empty(), "nothing started");
+    assert_eq!(store.waiting(3).len(), 1, "still asked");
+    // And the digest the window is sent carries the task's name and its profile.
+    let other = Pending {
+        task: Task {
+            name: Some("another task".to_owned()),
+            ..store.waiting(3)[0].task.clone()
+        },
+        ..store.waiting(3)[0].clone()
+    };
+    assert_ne!(
+        told_by(
+            &store,
+            &PlaneId::for_tests(world.root()),
+            world.root(),
+            &other
+        )
+        .shown,
+        shown.shown
+    );
 }
 
 #[test]
