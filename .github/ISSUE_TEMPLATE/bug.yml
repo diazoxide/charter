@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in charter is broken or does not do what it says.
+description: Something in purlis is broken or does not do what it says.
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,12 +7,12 @@ body:
       value: |
         Thank you for reporting it. Everything here is public: leave out tokens, passwords,
         vault contents and anything else you would not publish. A security vulnerability goes
-        to [SECURITY.md](https://github.com/diazoxide/charter/blob/main/SECURITY.md), not here.
+        to [SECURITY.md](https://github.com/purlis/purlis/blob/main/SECURITY.md), not here.
   - type: textarea
     id: what-happened
     attributes:
       label: What happened
-      description: What you did, what you expected, and what charter did instead.
+      description: What you did, what you expected, and what purlis did instead.
       placeholder: |
         1. I opened a project and started a Claude Code chat in a workspace.
         2. I expected …
@@ -22,8 +22,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: charter version
-      description: About Charter on the title bar shows it, and so does `charter version`.
+      label: purlis version
+      description: About purlis on the title bar shows it, and so does `purlis version`.
       placeholder: 0.4.2
     validations:
       required: true
@@ -52,8 +52,8 @@ body:
   - type: textarea
     id: doctor
     attributes:
-      label: charter doctor
-      description: The output of `charter doctor`, if the bug is about a project, a workspace or a repo.
+      label: purlis doctor
+      description: The output of `purlis doctor`, if the bug is about a project, a workspace or a repo.
       render: text
   - type: textarea
     id: more

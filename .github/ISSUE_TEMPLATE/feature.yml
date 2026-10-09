@@ -12,8 +12,8 @@ body:
   - type: textarea
     id: proposal
     attributes:
-      label: What you would like charter to do
-      description: The change, as you would see it in the app or the `charter` command.
+      label: What you would like purlis to do
+      description: The change, as you would see it in the app or the `purlis` command.
     validations:
       required: true
   - type: textarea

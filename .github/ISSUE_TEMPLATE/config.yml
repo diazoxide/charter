@@ -3,11 +3,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Ask a question
-    url: https://github.com/diazoxide/charter/discussions/categories/q-a
-    about: How do I…? Why did charter…? Ask in Discussions, where the answer helps the next person too.
+    url: https://github.com/purlis/purlis/discussions/categories/q-a
+    about: How do I…? Why did purlis…? Ask in Discussions, where the answer helps the next person too.
   - name: Suggest an idea
-    url: https://github.com/diazoxide/charter/discussions/categories/ideas
+    url: https://github.com/purlis/purlis/discussions/categories/ideas
     about: A feature or a change that is not settled yet starts as an idea in Discussions.
   - name: Report a security vulnerability
-    url: https://github.com/diazoxide/charter/security/advisories/new
+    url: https://github.com/purlis/purlis/security/advisories/new
     about: Never in a public issue. Report it privately, as SECURITY.md describes.

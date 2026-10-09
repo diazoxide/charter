@@ -219,9 +219,9 @@ describe("the issue chooser and the forms", () => {
     };
     expect(config.blank_issues_enabled).toBe(false);
     expect(config.contact_links.map((link) => link.url)).toEqual([
-      "https://github.com/diazoxide/charter/discussions/categories/q-a",
-      "https://github.com/diazoxide/charter/discussions/categories/ideas",
-      "https://github.com/diazoxide/charter/security/advisories/new",
+      "https://github.com/purlis/purlis/discussions/categories/q-a",
+      "https://github.com/purlis/purlis/discussions/categories/ideas",
+      "https://github.com/purlis/purlis/security/advisories/new",
     ]);
     for (const link of config.contact_links) {
       expect(link.name, link.url).toBeTruthy();
@@ -238,7 +238,7 @@ describe("the issue chooser and the forms", () => {
     expect(faults).toEqual([]);
   });
 
-  it("offer the systems charter runs on and no other", () => {
+  it("offer the systems purlis runs on and no other", () => {
     // SUPPORT.md asks for "macOS or Linux"; nothing has been ported to Windows (README).
     const bug = parse(read(`${ISSUE_FORMS}/bug.yml`)) as { body: Element[] };
     const system = bug.body.find((element) => element.id === "system");
