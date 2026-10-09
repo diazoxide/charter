@@ -1157,8 +1157,26 @@ impl Held {
     }
 
     /// Answers chat `session`'s ask `ask` with `option`, as the operator in the window (HP-6).
+    ///
+    /// The chat's turn goes on, and the board says so; and a reported task is looked at again:
+    /// a bound that passed while the ask was open is owed it from now (#1525).
     pub fn answer_ask(&self, session: u32, ask: &str, option: &str) -> Result<(), String> {
-        self.hooks.answer(session, ask, option)
+        self.hooks.answer(session, ask, option)?;
+        if let Some(moved) = self.board().answered(session) {
+            (self.tell)(moved);
+        }
+        crate::dispatched::end_look(self, session, purlis_core::dispatched::Looked::Moved);
+        Ok(())
+    }
+
+    /// Whether chat `session` has a permission ask open in the window's needs-you list.
+    pub fn asks_open_for(&self, session: u32) -> bool {
+        let chat = session.to_string();
+        self.hooks
+            .asks()
+            .pending(std::time::Instant::now())
+            .iter()
+            .any(|raised| raised.chat == chat)
     }
 
     /// Writes the record, ends every session, and stops listening — everything a plane holds
@@ -4034,12 +4052,24 @@ mod tests {
         let root = a_plane(&dir.path().join("plane"));
         let planes = planes();
         let first = planes.open(&root);
+        let began = std::time::Instant::now();
         planes.close(&first).expect("it closes");
+        // Its listener was woken without its path and went: a close waits on nothing.
+        assert!(began.elapsed() < std::time::Duration::from_secs(4));
 
         let again = planes.open(&root);
 
         assert_eq!(first, again);
-        assert!(socket_of(&planes, &again).is_some_and(|socket| socket.exists()));
+        let socket = socket_of(&planes, &again).expect("it listens");
+        assert!(socket.exists());
+        // And the socket at that path is the open plane's, which a hook reaches.
+        std::os::unix::net::UnixStream::connect(&socket).expect("the plane opened again listens");
+
+        // Closed and opened once more, the same: no close takes the next open's socket.
+        planes.close(&again).expect("it closes again");
+        let third = planes.open(&root);
+        let socket = socket_of(&planes, &third).expect("it listens");
+        std::os::unix::net::UnixStream::connect(&socket).expect("and listens a third time");
     }
 
     #[test]

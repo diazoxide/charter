@@ -797,18 +797,20 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   the report, or a Smart close of it, keeps the chat for good: it stays an open chat that has
   reported, and is a finished row when you close it. A task you have in front of you is not
   ended under you; it is ended when you move to another chat. A task reading the report of a
-  task of its own is ended when that turn is over, and the bounded wait ends only the turn
-  that reported. Never while a task of its own is still at work. **Three reports end
-  nothing**: one that came out blocked (the task is waiting on something), the report of a
-  persona chat you started yourself with Ask from a tab (it is your conversation), and one
-  whose asking chat has gone. A task that had reported when the app quit is not started again
-  at the next launch: it is a finished row. Its row stays under the chat
-  that asked as a finished entry, with how it ended and its report; done and cancelled fold
-  into one **Finished (n)** line with **Clear finished**, and every other end stays a row of
-  its own until cleared. The rows are read from the dispatch records, so they are there after
-  the app is restarted, and they go when the chat that asked closes. A wait on a finished
-  task still answers with its report; a cancel, a follow-up or an answer says it has
-  finished.
+  task of its own is ended when that turn is over, and the bounded wait ends only the turn that
+  reported: a turn its harness starts by itself after that one is over is waited for too. A
+  wait that runs out while the task has a permission ask open in your needs-you list starts
+  again when you answer it there, since the turn that reported goes on. Answering in the task's
+  own pane is a key of yours, and keeps the chat for good. Never while a task of its own is
+  still at work. **Three reports end nothing**: one that came out blocked (the task is waiting
+  on something), the report of a persona chat you started yourself with Ask from a tab (it is
+  your conversation), and one whose asking chat has gone. A task that had reported when the app
+  quit is not started again at the next launch: it is a finished row. Its row stays under the
+  chat that asked as a finished entry, with how it ended and its report; done and cancelled
+  fold into one **Finished (n)** line with **Clear finished**, and every other end stays a row
+  of its own until cleared. The rows are read from the dispatch records, so they are there
+  after the app is restarted, and they go when the chat that asked closes. A wait on a finished
+  task still answers with its report; a cancel, a follow-up or an answer says it has finished.
 - **Reopen makes a finished task an ordinary chat.** It resumes the task's conversation in a
   tab of its own. It is no longer a task: a report from it is refused in plain words, and the
   chat that asked is told nothing. One row is one chat: a second press while the first is

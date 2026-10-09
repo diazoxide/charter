@@ -261,6 +261,9 @@ pub trait ChatBoard: Send + Sync {
     /// The person looked at failure `id` of chat `session`, or cleared its row (#1491): that
     /// one item goes. Nothing when no reader would see a difference.
     fn failure_cleared(&self, session: u32, id: &str) -> Option<Moved>;
+    /// The person answered chat `session`'s prompt in the window (HP-6): its turn goes on
+    /// (`state::Chat::answered`). Nothing when no reader would see a difference.
+    fn answered(&self, session: u32) -> Option<Moved>;
 }
 
 /// A session host that runs nothing, for a test of what sits above the seam.

@@ -815,6 +815,20 @@ impl Chat {
         std::mem::replace(&mut self.needs_you, false) || had_reports
     }
 
+    /// The person answered, in the window, the prompt this chat showed in the middle of a turn
+    /// (HP-6). The turn goes on: it is running again and no longer waits on them, and `asking`
+    /// stays set until the turn ends, as it does for a prompt answered anywhere. Nothing for a
+    /// chat that was not asking mid-turn. Answers whether anything a reader can see changed.
+    pub fn answered(&mut self) -> bool {
+        if self.ended || !self.asking || self.state != State::Waiting {
+            return false;
+        }
+        let was = self.seen();
+        self.state = State::Running;
+        self.needs_you = false;
+        was != self.seen()
+    }
+
     /// The session's program exited. Answers whether anything a reader can see changed.
     ///
     /// No hook reports this and none can — the process is gone. An exit status is the
@@ -1231,6 +1245,16 @@ impl Board {
             .is_some_and(|tracked| tracked.chat.ignored())
     }
 
+    /// The person answered chat `number`'s prompt in the window ([`Chat::answered`]). Answers
+    /// whether anything a reader can see changed.
+    pub fn answered(&mut self, number: u32) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.answered());
+        self.stamp(number, changed)
+    }
+
     /// The chat's program exited. Answers whether anything a reader can see changed.
     pub fn exited(&mut self, number: u32, code: Option<i32>) -> bool {
         let changed = self
@@ -1445,6 +1469,29 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prompt_answered_in_the_window_puts_the_turn_back_to_running_and_still_asking() {
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Notification);
+        assert_eq!((chat.state(), chat.asking()), (State::Waiting, true));
+        assert!(chat.needs_you());
+
+        assert!(chat.answered());
+
+        assert_eq!((chat.state(), chat.asking()), (State::Running, true));
+        assert!(!chat.needs_you());
+        // Once is all: a second answer, or one to a chat asking nothing, moves nothing.
+        assert!(!chat.answered());
+        let mut idle = Chat::new();
+        idle.reported(Event::UserPromptSubmit);
+        idle.reported(Event::Stop);
+        assert!(!idle.answered());
+        // The turn's end clears it, as it does any prompt.
+        chat.reported(Event::Stop);
+        assert_eq!((chat.state(), chat.asking()), (State::Waiting, false));
+    }
 
     #[test]
     fn a_chat_nothing_has_reported_is_unknown_and_wants_nobody() {

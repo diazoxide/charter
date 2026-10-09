@@ -1689,6 +1689,8 @@ pub(crate) fn task_ending_of(held: &Held, session: u32) -> Result<TaskEnding, St
         waiting: board.state == State::Waiting,
         asking: board.asking,
         measured: dispatched::told_by_a_line(held.chats().harness(session)),
+        // An ask of its open in the window is a prompt in front of the person (#1525).
+        ask_open: held.asks_open_for(session),
     };
     let keyed = held.tasks().ledger().keyed(session);
     let settled = from.report != purlis_core::reopen::Owed::Due;

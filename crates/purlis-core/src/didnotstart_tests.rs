@@ -84,6 +84,7 @@ const WAITING: Seen = Seen {
     waiting: true,
     asking: false,
     measured: true,
+    ask_open: false,
 };
 
 /// **Every way a start is refused that the core's own functions say**, by the sentence each
