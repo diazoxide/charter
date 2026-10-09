@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791537973136,
+  "lastUpdate": 1791539280840,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4704,6 +4704,48 @@ window.BENCHMARK_DATA = {
             "value": 102.660968,
             "unit": "ms",
             "extra": "median of 5 runs: 102.091, 102.191, 102.661, 103.068, 103.137 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f69e92a4fdfd815ee47d089d65b9a894a69b3284",
+          "message": "Add a standing dispatch grant from Settings\n\nSettings › Project › Dispatch has Add a grant: the asking persona, the\ntarget, for me on this machine or for everyone in this project, in one\nworkspace or in any. It is the one way to make a grant with no dispatch\nwaiting, which is what a chat nobody is at needs.\n\nadd_dispatch_grant is window-only (WINDOW_ONLY, STANDING_DISPATCH) and\naudited as the person's under no chat before it counts. add_grant holds it\nto every rule an Allow is held to, refusing with nothing audited: two\npersonas of the project (a persona's own dispatch needs none), a policy\nlock, the person's never or a list of nevers that does not read, a grant\nfor everyone across a pair declined on this machine, a workspace that is\nnot there, one that stands already or is in the file\nalready, and a project file that is missing or not editable. A grant for\neveryone is written and acknowledged here, bound to the project's history\nas any acceptance is. The Allow and Add now keep a standing grant through\none function, keep_standing.\n\nWhere the project has workspaces, the form's workspace choice starts empty\nand must be picked, \"any workspace\" included (ruling 2: narrower is the\ndefault; the asking persona has no workspace of its own to start from).\n\nThe unattended refusal and the crossing refusal now say to grant it under\nSettings › Project › Dispatch, and their pinned rows move with them.\n\nRefs #1465\nRefs #1472\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T13:28:51+04:00",
+          "tree_id": "70b91ff836285cbcd4d5ffdbad0794b891b2d776",
+          "url": "https://github.com/purlis/purlis/commit/f69e92a4fdfd815ee47d089d65b9a894a69b3284"
+        },
+        "date": 1791539280217,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.286639,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.277, 0.279, 0.287, 0.287, 0.306 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.4872315,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.428, 16.437, 16.487, 16.513, 16.600 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.38734149999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 99.810, 100.967, 101.387, 101.642, 102.096 ms"
           }
         ]
       }
