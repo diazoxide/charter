@@ -122,7 +122,7 @@ pub fn drawn_view(
         };
     }
     for (record, seen) in changes {
-        let (merged, of) = seen.landed();
+        let (merged, of) = seen.merged();
         out.push(Block::Note {
             text: format!(
                 "{} · {merged} of {of} merged · {}",

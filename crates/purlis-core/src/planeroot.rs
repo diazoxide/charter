@@ -411,10 +411,10 @@ pub struct RootInvocation {
 
 /// What a named denial adds when a `cd` earlier on the line was not joined by `&&`: agents met
 /// that answer as "the guard ignores cd" (#1326).
-pub const LOOSE_CD_HINT: &str = "A `cd` joined to the next command by `;`, `||`, `&` or a \
-     newline leaves the shell where it was if it fails, so purlis still counts the directory \
-     the line started in: join it with `&&` (`cd <path> && git …`) and purlis reads where git \
-     runs. ";
+pub const LOOSE_CD_HINT: &str = "A `cd` joined to the next command by `;`, `||` or a newline \
+     leaves the shell where it was if it fails, and one sent to the background by `&` never \
+     moves the shell at all, so purlis still counts the directory the line started in: join it \
+     with `&&` (`cd <path> && git …`) and purlis reads where git runs. ";
 
 /// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
 ///
@@ -1840,11 +1840,17 @@ pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<Stri
                 ));
             }
             if end == AliasEnd::TooDeep {
+                // The same confusion as any named denial's (#1093): a loose `cd` before it.
+                let hint = if inv.after_loose_cd && !inv.unnamed {
+                    LOOSE_CD_HINT
+                } else {
+                    ""
+                };
                 return Some(format!(
                     "cannot tell what `git {}` does in the PLANE ROOT: it is an alias that leads \
                      to another alias more than {MAX_ALIAS_HOPS} times, past where purlis \
                      follows them, and the end of a chain it cannot see may move HEAD. Run the \
-                     command it stands for instead. {}",
+                     command it stands for instead. {hint}{}",
                     inv.sub,
                     root_tail(default_branch(&root).as_deref())
                 ));

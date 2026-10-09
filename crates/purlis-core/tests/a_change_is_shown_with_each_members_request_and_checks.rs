@@ -278,7 +278,7 @@ mod shown {
         let seen = look(&world);
         assert_eq!(seen.members[0].request, Ok(None));
         assert_eq!(seen.members[1].waiting_on, vec!["svc".to_string()]);
-        assert_eq!(seen.landed(), (0, 2));
+        assert_eq!(seen.merged(), (0, 2));
     }
 
     /// `repo`'s request, merged at [`HEAD`].
@@ -371,7 +371,7 @@ mod shown {
         );
         assert!(seen.members[1].waiting_on.is_empty());
         assert_eq!(seen.members[1].checks.clone().unwrap().ci, Ci::Running);
-        assert_eq!(seen.landed(), (1, 2));
+        assert_eq!(seen.merged(), (1, 2));
         let record = store::read(&world.plane, "alpha", "api-2").unwrap();
         let lines = cmd::observed_lines(&record, &seen);
         assert!(lines[0].contains("1 of 2 merged"), "{lines:?}");
@@ -404,7 +404,7 @@ mod shown {
             "{seen:?}"
         );
         assert_eq!(seen.members[1].waiting_on, vec!["svc".to_string()]);
-        assert_eq!(seen.landed(), (1, 2), "merged is still counted merged");
+        assert_eq!(seen.merged(), (1, 2), "merged is still counted merged");
         let record = store::read(&world.plane, "alpha", "api-2").unwrap();
         let lines = cmd::observed_lines(&record, &seen);
         assert!(
