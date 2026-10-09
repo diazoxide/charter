@@ -1757,3 +1757,311 @@ fn a_segment_the_filesystem_refuses_to_open_names_the_segment() {
 
     crate::rewrite::frozen::names(&refused, &segment);
 }
+
+/// The `run.ended` events in the log, as (run, parent run, state, cause).
+fn run_ends(dir: &Path) -> Vec<(String, Option<String>, String, String)> {
+    read(dir)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "run.ended")
+        .map(|e| {
+            (
+                e.run.unwrap_or_default(),
+                e.parent_run,
+                e.body["state"].as_str().unwrap_or_default().to_owned(),
+                e.body["cause"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A tool call from sub-agent `agent` of chat `chat`.
+fn by_agent(chat: u32, agent: &str) -> crate::hookwire::ToolCall {
+    crate::hookwire::ToolCall {
+        agent: Some(agent.to_owned()),
+        ..tool_call(chat, "pretooluse", crate::hookwire::Decision::None)
+    }
+}
+
+#[test]
+fn a_sub_agents_stop_ends_its_child_run_completed_and_child_ended_once() {
+    use crate::state::Event::{SubagentStop, UserPromptSubmit};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    let parent = host
+        .report(plane, &report(5, UserPromptSubmit), Followed::No)
+        .unwrap()
+        .run
+        .unwrap();
+    let child = host
+        .tool(plane, &by_agent(5, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let stop = crate::hookwire::Report {
+        agent: Some("agent-1".to_owned()),
+        ..report(5, SubagentStop)
+    };
+
+    host.report(plane, &stop, Followed::No).unwrap();
+    // A second stop of the same agent is the parent run's line, and ends nothing again.
+    host.report(plane, &stop, Followed::No).unwrap();
+
+    assert_eq!(
+        run_ends(dir.path()),
+        vec![(
+            child,
+            Some(parent),
+            "completed".to_owned(),
+            "child-ended".to_owned()
+        )]
+    );
+    let kinds: Vec<String> = read(dir.path())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    let stop_at = kinds.iter().position(|k| k == "hook.subagentstop").unwrap();
+    assert_eq!(
+        kinds[stop_at + 1],
+        "run.ended",
+        "the child ends after its stop is recorded: {kinds:?}"
+    );
+}
+
+#[test]
+fn a_parents_end_ends_each_live_child_in_the_parents_end_state_and_cause() {
+    use crate::state::Event::{SubagentStop, UserPromptSubmit};
+    use crate::state::run::{Cause, RunState, StopBy};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    let parent = host
+        .report(plane, &report(5, UserPromptSubmit), Followed::No)
+        .unwrap()
+        .run
+        .unwrap();
+    let one = host
+        .tool(plane, &by_agent(5, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let two = host
+        .tool(plane, &by_agent(5, "agent-2"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let done = host
+        .tool(plane, &by_agent(5, "agent-3"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let stop = crate::hookwire::Report {
+        agent: Some("agent-3".to_owned()),
+        ..report(5, SubagentStop)
+    };
+    host.report(plane, &stop, Followed::No).unwrap();
+    // Another chat's sub-agent is not this run's child.
+    let other = host
+        .tool(plane, &by_agent(6, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+
+    let ended = host
+        .end_children_with(plane, 5, RunState::Stopped, Cause::Stop(StopBy::Killed))
+        .unwrap();
+    // Told again, there is nothing left to end.
+    let again = host
+        .end_children_with(plane, 5, RunState::Stopped, Cause::Stop(StopBy::Killed))
+        .unwrap();
+
+    assert_eq!(ended.len(), 2);
+    assert!(again.is_empty());
+    let mut ends = run_ends(dir.path());
+    ends.sort();
+    let mut want = vec![
+        (
+            done,
+            Some(parent.clone()),
+            "completed".to_owned(),
+            "child-ended".to_owned(),
+        ),
+        (
+            one,
+            Some(parent.clone()),
+            "stopped".to_owned(),
+            "killed".to_owned(),
+        ),
+        (two, Some(parent), "stopped".to_owned(), "killed".to_owned()),
+    ];
+    want.sort();
+    assert_eq!(ends, want);
+    assert!(
+        !ends.iter().any(|(run, ..)| *run == other),
+        "another chat's child is left running"
+    );
+}
+
+#[test]
+fn a_parents_end_that_is_no_end_state_is_refused_and_ends_nothing() {
+    use crate::state::run::{Cause, RunState};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    host.tool(plane, &by_agent(5, "agent-1"), Instant::now())
+        .unwrap();
+
+    let refused = host.end_children_with(plane, 5, RunState::Working, Cause::Prompted);
+
+    assert_eq!(
+        refused.unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(run_ends(dir.path()).is_empty());
+}
+
+#[test]
+fn a_clear_ends_the_live_children_completed_and_superseded_before_the_next_run_starts() {
+    use crate::state::Event::{SessionStart, UserPromptSubmit};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    let parent = host
+        .report(plane, &report(5, UserPromptSubmit), Followed::No)
+        .unwrap()
+        .run
+        .unwrap();
+    let child = host
+        .tool(plane, &by_agent(5, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+
+    host.report(plane, &report(5, SessionStart), Followed::Moved)
+        .unwrap();
+
+    assert_eq!(
+        run_ends(dir.path()),
+        vec![(
+            child,
+            Some(parent),
+            "completed".to_owned(),
+            "superseded".to_owned()
+        )]
+    );
+    let kinds: Vec<String> = read(dir.path())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds[kinds.len() - 3..],
+        ["run.ended", "run.started", "hook.sessionstart"],
+        "the child ends before the run that supersedes its parent begins"
+    );
+}
+
+#[test]
+fn a_session_end_ends_the_children_superseded_at_a_clear_and_exited_for_good() {
+    use crate::state::Event::{SessionEnd, UserPromptSubmit};
+    use crate::state::{Detail, Ending};
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/p");
+    let mut host = recorder(dir.path());
+    host.report(plane, &report(5, UserPromptSubmit), Followed::No)
+        .unwrap();
+    host.report(plane, &report(6, UserPromptSubmit), Followed::No)
+        .unwrap();
+    let cleared = host
+        .tool(plane, &by_agent(5, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let for_good = host
+        .tool(plane, &by_agent(6, "agent-1"), Instant::now())
+        .unwrap()
+        .run
+        .unwrap();
+    let ending = |chat, ending| crate::hookwire::Report {
+        detail: Detail {
+            ending,
+            ..Detail::default()
+        },
+        ..report(chat, SessionEnd)
+    };
+
+    host.report(plane, &ending(5, Ending::Cleared), Followed::No)
+        .unwrap();
+    host.report(plane, &ending(6, Ending::ForGood), Followed::No)
+        .unwrap();
+
+    let ends: Vec<_> = run_ends(dir.path())
+        .into_iter()
+        .map(|(run, _, state, cause)| (run, state, cause))
+        .collect();
+    assert_eq!(
+        ends,
+        vec![
+            (cleared, "completed".to_owned(), "superseded".to_owned()),
+            (for_good, "completed".to_owned(), "exited".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_new_run_begun_over_a_live_child_ends_it_completed_and_superseded() {
+    use crate::state::Event::Stop;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: RUN,
+        },
+        Began::Start,
+    )
+    .unwrap();
+    let child = host
+        .report(
+            plane,
+            &crate::hookwire::Report {
+                agent: Some("a1".to_owned()),
+                ..report(3, Stop)
+            },
+            Followed::No,
+        )
+        .unwrap()
+        .run
+        .unwrap();
+
+    host.begin(
+        plane,
+        3,
+        RunOf {
+            chat: CHAT,
+            run: "01K6E8ZK6V4Q9T0N3M2B1C5D7K",
+        },
+        Began::Switch,
+    )
+    .unwrap();
+
+    assert_eq!(
+        run_ends(dir.path()),
+        vec![(
+            child,
+            Some(RUN.to_owned()),
+            "completed".to_owned(),
+            "superseded".to_owned()
+        )]
+    );
+}
