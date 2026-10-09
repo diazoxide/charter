@@ -42,6 +42,9 @@ const WAITING: DispatchPending = {
     "devops works with its own access: vault team; hosts 10.100.39.145:6443, *.internal.example.",
   also: [],
   shown: "s0",
+  task: null,
+  task_cut: false,
+  profile: null,
 };
 
 /** The same question where steward's definition wants qa and docs too. */
@@ -114,6 +117,29 @@ describe("the dispatch grant Notice", () => {
     );
     const brief = screen.getByRole("region", { name: "Brief from the chat" });
     expect(brief.textContent).toBe("Check why the prod deploy is red.\nReport what you find.");
+  });
+
+  it("names the task apart from its own words, the profile in its sentence, and leads with the target's mark", async () => {
+    // #1456, #1454.
+    core([{ ...WAITING, task: "fix the <b>deploy</b>", task_cut: true, profile: "claude-work" }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const name = await screen.findByLabelText("Task name from the chat");
+    expect(name).toHaveTextContent("fix the <b>deploy</b>");
+    expect(name.querySelector("b")).toBeNull();
+    expect(screen.getByText(/cut: purlis shows the start of it/)).toBeInTheDocument();
+    const line = screen.getByText(/wants to dispatch to devops/);
+    expect(line).toHaveTextContent("Its devops chat would start on profile claude-work.");
+    expect(line.closest(".notice-says")?.querySelector(".persona-mark")).not.toBeNull();
+  });
+
+  it("says no task name or profile where the core holds none", async () => {
+    core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await screen.findByText(/wants to dispatch to devops/);
+    expect(screen.queryByLabelText("Task name from the chat")).toBeNull();
+    expect(screen.queryByText(/would start on profile/)).toBeNull();
   });
 
   it("draws the brief as the chat's text, apart from its own words, and never as markup", async () => {

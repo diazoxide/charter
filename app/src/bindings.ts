@@ -3623,6 +3623,18 @@ export type DispatchPending = {
 	 *  sends it back, and one for a question that reads differently now grants nothing.
 	 */
 	shown: string,
+	/**
+	 *  **The task's name, as the chat wrote it** (#1456): a chat's text, inert as the brief is
+	 *  and cut at [`MOST_TASK_NAME_CHARS`] (`task_cut` says so). Null where it gave none.
+	 */
+	task: string | null,
+	/**  Whether the task's name is longer than the Notice shows. */
+	task_cut: boolean,
+	/**
+	 *  **The profile the persona's chat would start on**, as the app chose it (#1456); null
+	 *  where none was chosen when the dispatch was held.
+	 */
+	profile: string | null,
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */

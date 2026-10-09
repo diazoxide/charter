@@ -117,6 +117,20 @@ describe("the Notice that a teammate's dispatch grant arrived", () => {
     expect(within(notice).getByRole("button", { name: "Accept all 3" })).toBeInTheDocument();
   });
 
+  it("leads with the persona's mark where every grant listed is one persona's, and with none where several", async () => {
+    // #1454: a Notice that names a persona draws its mark.
+    core(waits(arrived("steward", "devops"), arrived("steward", "qa")));
+    const { unmount } = show();
+    const one = await screen.findByRole("status", { name: LABEL });
+    expect(one.querySelector(".persona-mark")).not.toBeNull();
+    unmount();
+
+    core(waits(arrived("steward", "devops"), arrived("qa", "devops")));
+    show();
+    const several = await screen.findByRole("status", { name: LABEL });
+    expect(several.querySelector(".persona-mark")).toBeNull();
+  });
+
   it("tells of any persona in its own sentence, and Accept counts and sends the pairs only", async () => {
     const asked = core(waits(arrived("steward", "*"), arrived("qa", "devops")));
     show();
