@@ -5,7 +5,9 @@
 //! tells the app, so the chat joins the needs-you queue. For `pre-push`, the same scan reads
 //! every commit the push would send that the remote does not have (SQ-7,
 //! [`purlis_core::diffscan::pushed`]), and refuses the same way, and refuses a push that would
-//! publish a change to the scan's allowlist. For `commit-msg`, the message is stamped with the
+//! publish a change to the scan's allowlist. A chat's `pre-commit` also refuses a staged
+//! project file whose `[sandbox]`, `[chat_env]` or `[dispatch]` differ from the file in the
+//! working tree (#1464). For `commit-msg`, the message is stamped with the
 //! chat's provenance trailers ([`purlis_core::provenance::stamp`]) and the hook always
 //! succeeds. Every other hook has no check and answers success. The repository's own hook of the
 //! same name is the shim's to run, after this ([`purlis_core::githooks`]).
@@ -51,6 +53,17 @@ pub fn run(name: &str, args: &[String]) -> ExitCode {
         eprint!("{}", diffscan::ALLOWLIST_REFUSAL);
         tell_the_app(format!(
             "commit refused in {}: it changes the scan's allowlist",
+            named(&repo)
+        ));
+        return ExitCode::FAILURE;
+    }
+    // A change to what chats run under staged without the file in the working tree (#1464):
+    // only a commit a chat makes itself is held to it, as for the allowlist.
+    if name == PRE_COMMIT && scan.stages_what_a_chat_runs_under {
+        eprint!("{}", diffscan::RUNS_UNDER_REFUSAL);
+        tell_the_app(format!(
+            "commit refused in {}: it stages a change to the project's [sandbox], [chat_env] \
+             or [dispatch] that the file in the working tree does not hold",
             named(&repo)
         ));
         return ExitCode::FAILURE;

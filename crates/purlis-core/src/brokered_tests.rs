@@ -574,3 +574,34 @@ fn a_chat_past_its_rate_is_refused_and_another_chat_is_not() {
     rate.forget(3);
     assert_eq!(rate.counted(), 0);
 }
+
+#[test]
+fn two_texts_differ_in_what_a_chat_runs_under_only_where_those_tables_do() {
+    // #1464: what a chat's commit is held to, as a brokered write is.
+    let base = "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+    // The same text, and a change outside the three tables, do not differ.
+    assert!(!runs_under_differs(Some(base), Some(base)));
+    assert!(!runs_under_differs(
+        Some(base),
+        Some("schema = 1\nname = \"x\"\n[dispatch.grants]\nsteward = [\"devops\"]\n")
+    ));
+    assert!(!runs_under_differs(None, None));
+    // A grant more, a sandbox table, an environment: each differs.
+    for other in [
+        "schema = 1\n[dispatch.grants]\nsteward = [\"devops\", \"*\"]\n",
+        "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n[sandbox]\nenabled = false\n",
+        "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n[chat_env]\nX = \"1\"\n",
+    ] {
+        assert!(runs_under_differs(Some(base), Some(other)), "{other}");
+        assert!(runs_under_differs(Some(other), Some(base)), "{other}");
+    }
+    // No file against one with a grant, and a text that is not TOML against any other.
+    assert!(runs_under_differs(None, Some(base)));
+    assert!(runs_under_differs(Some(base), None));
+    assert!(!runs_under_differs(None, Some("schema = 1\n")));
+    assert!(runs_under_differs(Some("[[not toml"), Some(base)));
+    assert!(runs_under_differs(
+        Some("[[not toml"),
+        Some("[[not toml either")
+    ));
+}
