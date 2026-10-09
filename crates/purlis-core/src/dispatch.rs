@@ -7,9 +7,9 @@
 //! fact every engineer sees the same way rather than a reading of one laptop.
 //!
 //! Three kinds of row are read here. Two were written by a hook while a persona could be sent
-//! out as a sub-agent: [`record`], when a `Task`/`Agent` call returned, and [`record_resume`],
-//! when a `SendMessage` resumed one. **No hook writes either now** (#1451): a persona is a role
-//! a chat runs as and never a sub-agent, so there is no such call to log, and what a log
+//! out as a sub-agent: a dispatch, when a `Task`/`Agent` call returned, and a [`RESUME`], when
+//! a `SendMessage` resumed one. **Nothing writes either now** (#1451, #1460): a persona is a
+//! role a chat runs as and never a sub-agent, so there is no such call to log, and what a log
 //! already holds is still counted. The third, [`record_handoff`], is written once the app has
 //! opened a handed-off chat. A dispatch's own record is the app's (#1452). Committing the log is not done
 //! here: under `share = "commit"` or `"push"` the Python hook commits each row as it lands, and
@@ -217,44 +217,9 @@ pub fn stamp(when: chrono::DateTime<chrono::Utc>) -> String {
     when.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
-/// Log one dispatch to `agent` — `dispatch.record`.
-pub fn record(
-    root: &Path,
-    agent: &str,
-    when: chrono::DateTime<chrono::Utc>,
-    host: &str,
-) -> Option<PathBuf> {
-    let agent = crate::memstore::py_strip(agent);
-    if agent.is_empty() {
-        return None;
-    }
-    append(
-        &path_for(root, when, host),
-        root,
-        &serde_json::json!({"agent": agent, "ts": stamp(when)}),
-    )
-}
-
-/// The `event` a resume row carries — `dispatch.RESUME`.
+/// The `event` a resume row carries — `dispatch.RESUME`. Written while a persona could be
+/// resumed as a sub-agent; a log that holds one still reads it ([`tally`] skips it).
 pub const RESUME: &str = "resume";
-
-/// Log that `agent` was resumed rather than dispatched afresh — `dispatch.record_resume`.
-pub fn record_resume(
-    root: &Path,
-    agent: &str,
-    when: chrono::DateTime<chrono::Utc>,
-    host: &str,
-) -> Option<PathBuf> {
-    let agent = crate::memstore::py_strip(agent);
-    if agent.is_empty() {
-        return None;
-    }
-    append(
-        &path_for(root, when, host),
-        root,
-        &serde_json::json!({"agent": agent, "event": RESUME, "ts": stamp(when)}),
-    )
-}
 
 /// The `event` a handoff row carries — `dispatch.HANDOFF`. A chat handed work to a new CHAT
 /// rather than to a sub-agent, so, like a resume, it is not a dispatch [`tally`] counts.
@@ -358,24 +323,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dispatch_and_a_resume_are_logged_as_charter_logs_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let p = record(dir.path(), " devops ", when, "box").unwrap();
-        record_resume(dir.path(), "devops", when, "box").unwrap();
-        assert_eq!(p, dir.path().join("personas/_dispatch/2026-05.box.jsonl"));
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            "{\"agent\": \"devops\", \"ts\": \"2026-05-04T11:32:17+00:00\"}\n\
-             {\"agent\": \"devops\", \"event\": \"resume\", \"ts\": \"2026-05-04T11:32:17+00:00\"}\n"
-        );
-        assert_eq!(tally(dir.path()).get("devops"), Some(&1));
-        assert_eq!(record(dir.path(), "  ", when, "box"), None);
-    }
-
-    #[test]
     fn a_handoff_is_logged_by_where_it_went_and_nothing_it_names() {
         let dir = tempfile::tempdir().unwrap();
         let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
@@ -383,6 +330,7 @@ mod tests {
             .with_timezone(&chrono::Utc);
         let p = record_handoff(dir.path(), Placement::Elsewhere, true, when, "box").unwrap();
         record_handoff(dir.path(), Placement::Here, false, when, "box").unwrap();
+        assert_eq!(p, dir.path().join("personas/_dispatch/2026-05.box.jsonl"));
         assert_eq!(
             std::fs::read_to_string(&p).unwrap(),
             "{\"created\": true, \"event\": \"handoff\", \"placement\": \"elsewhere\", \
@@ -427,7 +375,7 @@ mod tests {
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&victim, &log).unwrap();
 
-        assert_eq!(record(dir.path(), "devops", when, "box"), None);
+        assert!(record_handoff(dir.path(), Placement::Here, false, when, "box").is_err());
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "PRECIOUS\n");
         assert!(std::fs::symlink_metadata(&log).unwrap().is_symlink());
     }

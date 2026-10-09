@@ -64,7 +64,7 @@
 //!
 //! - **Claude Code:** before `Bash`, `Read`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`,
 //!   `Agent` and purlis's own dispatch tools; after `Bash`, `Write`, `Edit`, `MultiEdit`,
-//!   `Task`, `Agent`, `Skill` and `SendMessage`. Nothing for `WebFetch`, `WebSearch`, `Glob`
+//!   `Task`, `Agent` and `Skill`. Nothing for `WebFetch`, `WebSearch`, `Glob`, `SendMessage`
 //!   or another server's tool.
 //! - **opencode:** every tool before it runs, since purlis's plugin routes each to a hook
 //!   ([`crate::opencode::TOOLS`]) under Claude Code's name for it where it has one; after

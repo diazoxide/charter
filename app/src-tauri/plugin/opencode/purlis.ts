@@ -65,7 +65,7 @@ const ROUTES = {
   }
 }
 
-const TIMEOUTS = {"sessionstart":5,"userpromptsubmit":5,"pretooluse":10,"pretooluse-read":5,"pretooluse-edit":5,"pretooluse-dispatch":5,"posttooluse":5,"posttooluse-skill":5,"posttooluse-dispatch":5,"posttooluse-message":5,"posttooluse-blocked":5,"posttoolusefailure-blocked":5,"notification":5,"stop":5,"subagentstop":5,"sessionend":5}
+const TIMEOUTS = {"sessionstart":5,"userpromptsubmit":5,"pretooluse":10,"pretooluse-read":5,"pretooluse-edit":5,"pretooluse-dispatch":5,"posttooluse":5,"posttooluse-skill":5,"posttooluse-dispatch":5,"posttooluse-blocked":5,"posttoolusefailure-blocked":5,"notification":5,"stop":5,"subagentstop":5,"sessionend":5}
 
 const DEFAULT_PRE = "pretooluse"
 

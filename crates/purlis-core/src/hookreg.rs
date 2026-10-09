@@ -44,7 +44,7 @@ pub struct Handler {
 }
 
 /// Every hook the Rust `charter` answers, in the order a session meets them.
-pub const HANDLERS: [Handler; 16] = [
+pub const HANDLERS: [Handler; 15] = [
     Handler {
         name: "sessionstart",
         event: "SessionStart",
@@ -98,16 +98,12 @@ pub const HANDLERS: [Handler; 16] = [
         matcher: Some("Skill"),
         timeout: 5,
     },
+    // A helper came back. It answers the harness nothing since #1451; what the app hears of
+    // it is what ends "waiting on a helper" in a chat's line of what it is doing (`doing`).
     Handler {
         name: "posttooluse-dispatch",
         event: "PostToolUse",
         matcher: Some("Task|Agent"),
-        timeout: 5,
-    },
-    Handler {
-        name: "posttooluse-message",
-        event: "PostToolUse",
-        matcher: Some("SendMessage"),
         timeout: 5,
     },
     // A sandbox block in what a Bash command came back with (#1338): read in the hook, which
@@ -156,7 +152,11 @@ pub const HANDLERS: [Handler; 16] = [
 /// `posttooluse-bash` is the Python charter's tally of a Bash call that came back: the turn
 /// marker for the tmux frame's spinner, and the trace row for an ask that was approved. Neither
 /// is something charter-app keeps.
-pub const NO_OPS: [&str; 1] = ["posttooluse-bash"];
+///
+/// `posttooluse-message` logged a `SendMessage` to a persona's sub-agent as a resume of that
+/// persona (#1451). No persona is a sub-agent now, and nothing reads the call: no hook runs
+/// before a `SendMessage`, so its end says nothing in a chat's line either (#1460).
+pub const NO_OPS: [&str; 2] = ["posttooluse-bash", "posttooluse-message"];
 
 /// The handler for `name`, if this binary answers it.
 pub fn find(name: &str) -> Option<&'static Handler> {
