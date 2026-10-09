@@ -123,9 +123,15 @@ pub fn codex_permission_request(payload: &Value, hook_timeout: std::time::Durati
 /// other than the two approval requests this reads, whose decisions are other words (v1's
 /// `execCommandApproval`, for one). Its four decisions are the options, and it waits for its
 /// answer, so the ask has no deadline.
+///
+/// A file change with a `grantRoot` asks for writes anywhere under that root for the rest of
+/// the session, not for one file, and its summary says so.
 pub fn codex_app_server(method: &str, params: &Value) -> Option<Ask> {
+    let root = params["grantRoot"]
+        .as_str()
+        .filter(|_| method == "item/fileChange/requestApproval");
     let action = match method {
-        "item/fileChange/requestApproval" => match params["grantRoot"].as_str() {
+        "item/fileChange/requestApproval" => match root {
             Some(path) => Action::Edit {
                 path: path.to_owned(),
             },
@@ -155,13 +161,17 @@ pub fn codex_app_server(method: &str, params: &Value) -> Option<Ask> {
             ChoiceScope::Once,
         ),
     ];
+    let mut ask = asking(action, options);
+    if let Some(root) = root {
+        ask.summary = Summary::of(&format!("Allow writes anywhere under {root}"));
+    }
     Some(Ask {
         channel: Channel::CodexAppServer {
             thread: text(&params["threadId"]),
             turn: text(&params["turnId"]),
             item: text(&params["itemId"]),
         },
-        ..asking(action, options)
+        ..ask
     })
 }
 
@@ -186,7 +196,7 @@ pub fn opencode_permission(props: &Value) -> Ask {
         choice("once", "Allow once", ChoiceKind::Allow, ChoiceScope::Once),
         choice(
             "always",
-            "Always allow",
+            &always_label(&props["always"]),
             ChoiceKind::Allow,
             ChoiceScope::Session,
         ),
@@ -198,6 +208,19 @@ pub fn opencode_permission(props: &Value) -> Ask {
             request: text(&props["id"]),
         },
         ..asking(action, options)
+    }
+}
+
+/// The label of opencode's always option, naming the `always` patterns it approves for the
+/// rest of the session, which can be broader than the call asked about (`git push *` for
+/// `git push origin main`). Joined and cut like a [`Summary`], credential shapes masked. With no
+/// readable patterns it says only "Always allow", claiming no scope it cannot name.
+fn always_label(patterns: &Value) -> String {
+    match listed(patterns, |pattern| pattern.as_str().map(str::to_owned)) {
+        Some(patterns) => Summary::of(&format!("Always allow {patterns}"))
+            .as_str()
+            .to_owned(),
+        None => "Always allow".to_owned(),
     }
 }
 
@@ -499,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_app_server_file_change_approval_reads_as_an_edit() {
+    fn a_codex_app_server_grant_root_approval_reads_as_a_grant_of_the_whole_root() {
         let params =
             json!({ "threadId": "t1", "turnId": "u1", "itemId": "i2", "grantRoot": "/w/src" });
 
@@ -511,6 +534,17 @@ mod tests {
                 path: "/w/src".to_owned()
             }
         );
+        assert_eq!(ask.summary.as_str(), "Allow writes anywhere under /w/src");
+    }
+
+    #[test]
+    fn a_codex_app_server_file_change_without_a_root_reads_as_the_patch_it_applies() {
+        let params = json!({ "threadId": "t1", "turnId": "u1", "itemId": "i3",
+                             "reason": "fix the typo" });
+
+        let ask = codex_app_server("item/fileChange/requestApproval", &params).expect("an ask");
+
+        assert_eq!(ask.summary.as_str(), "Use apply_patch: \"fix the typo\"");
     }
     #[test]
     fn an_opencode_permission_request_reads_as_once_always_or_reject_on_its_own_server() {
@@ -534,7 +568,7 @@ mod tests {
                 choice("once", "Allow once", ChoiceKind::Allow, ChoiceScope::Once),
                 choice(
                     "always",
-                    "Always allow",
+                    "Always allow git push *",
                     ChoiceKind::Allow,
                     ChoiceScope::Session
                 ),
@@ -548,6 +582,33 @@ mod tests {
                 session: "ses_1".into(),
                 request: "per_1".into()
             }
+        );
+    }
+
+    #[test]
+    fn opencodes_always_option_names_every_pattern_it_approves_and_only_what_it_can_read() {
+        let label = |always: Value| {
+            let props = json!({ "id": "per_1", "sessionID": "ses_1", "permission": "bash",
+                                "patterns": ["git push origin main"], "always": always });
+            opencode_permission(&props).options[1].label.clone()
+        };
+
+        assert_eq!(
+            label(json!(["git push *", "git fetch *"])),
+            "Always allow git push * and git fetch *"
+        );
+        // Nothing readable to name: the option says no more than it knows.
+        assert_eq!(label(Value::Null), "Always allow");
+        assert_eq!(label(json!([])), "Always allow");
+        assert_eq!(label(json!(["git push *", 7])), "Always allow");
+        // As long as a summary, and no longer.
+        let long = label(json!([format!("echo {}", "a".repeat(400))]));
+        assert!(long.starts_with("Always allow echo a"), "{long}");
+        assert!(long.ends_with('…'), "{long}");
+        assert_eq!(
+            long.chars().count(),
+            crate::harness::model::SUMMARY_WIDTH,
+            "{long}"
         );
     }
 
