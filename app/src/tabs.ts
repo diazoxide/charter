@@ -592,13 +592,24 @@ export function stopWaiting(tabs: Tabs, pane: number): Tabs {
 /**
  * The tab's own chat: **the session in its first pane, and nothing when that pane is a view.**
  *
- * What a tab's state mark, its pin and the core's "chat in front" are about. A tab that opened
+ * What a tab's state mark and its pin are about. The core's "chat in front" is
+ * {@link chatInFrontOf}, which also names a chat beside a view. A tab that opened
  * on a view and was split to start a chat beside it is still the view's tab — its first pane
  * says what it is — so it draws no chat state and has no chat to pin.
  */
 export function chatOf(tabs: Tabs, id: number): number | undefined {
   const first = contentsOf(tabs, id)[0]?.content;
   return first?.kind === "session" ? first.session : undefined;
+}
+
+/**
+ * **The chat a tab puts in front of the person**: its own chat ({@link chatOf}), or, in a tab
+ * whose first pane is a view, the first chat beside it. What the core is told is in front, so
+ * that a task such a chat shows is one the person is taken to be looking at (#1486). Nothing
+ * for a tab of views only.
+ */
+export function chatInFrontOf(tabs: Tabs, id: number): number | undefined {
+  return chatOf(tabs, id) ?? panesOf(tabs, id)[0]?.session;
 }
 
 /**
