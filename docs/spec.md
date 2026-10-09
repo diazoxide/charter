@@ -455,8 +455,11 @@ how it is cited and nothing here is renumbered.
     Settings, at the You level, and kept in the layout file: VS Code, Zed and a JetBrains IDE are handed
     the file through their own `vscode://`, `zed://` and `idea://` links, and `$VISUAL`, else
     `$EDITOR`, is started as a program with `+line` and the file as arguments, never through a
-    shell. The core checks the path exactly as it checks a read, so a file the light editor
-    would refuse is never handed on. With no editor chosen, the button asks for one.
+    shell; the path is handed on as the system spells it, so a name that is not UTF-8 is not
+    rewritten. An editor that exits at once with an error, as a terminal editor with no
+    terminal does, is said in a sentence rather than dropped. The core checks the path exactly
+    as it checks a read, so a file the light editor would refuse is never handed on. With no
+    editor chosen, the button asks for one.
     **ADR 0081 §3.**
 
 ## Limits (acceptance)

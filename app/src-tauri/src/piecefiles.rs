@@ -428,6 +428,15 @@ impl From<YourEditor> for Editor {
     }
 }
 
+/// `$VISUAL`/`$EDITOR` started, on a blocking thread: [`youreditor::start`] waits up to
+/// [`youreditor::AT_ONCE`] to hear whether the editor exited at once (#1044), which the window's
+/// own thread must never wait for.
+async fn started(program: String, args: Vec<std::ffi::OsString>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || youreditor::start(&program, &args))
+        .await
+        .map_err(|err| format!("starting your editor did not finish: {err}"))?
+}
+
 /// One file of a branch, opened in your editor at a line (RC-20). Refused, in the core's
 /// sentence, for any path the light editor would refuse.
 // The path is checked by `purlis_core::files::in_your_editor` exactly as `piece_file`
@@ -437,7 +446,7 @@ impl From<YourEditor> for Editor {
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
-pub fn open_in_your_editor(
+pub async fn open_in_your_editor(
     app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
@@ -450,19 +459,20 @@ pub fn open_in_your_editor(
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
     let var = purlis_core::envvar::var;
-    match launch_of(
+    let launch = launch_of(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
         &path,
         line,
         editor,
         &var,
-    )? {
+    )?;
+    match launch {
         Launch::Url(url) => app
             .opener()
             .open_url(&url, None::<&str>)
             .map_err(|e| format!("the system did not open {url}: {e}")),
-        Launch::Program { program, args } => youreditor::start(&program, &args),
+        Launch::Program { program, args } => started(program, args).await,
     }
 }
 
@@ -475,7 +485,7 @@ pub fn open_in_your_editor(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
-pub fn open_their_agents_md(
+pub async fn open_their_agents_md(
     app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
@@ -486,17 +496,18 @@ pub fn open_their_agents_md(
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
     let var = |name: &str| std::env::var(name).ok();
-    match purlis_core::guest::their_agents_md_in_your_editor(
+    let launch = purlis_core::guest::their_agents_md_in_your_editor(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
         editor.into(),
         &var,
-    )? {
+    )?;
+    match launch {
         Launch::Url(url) => app
             .opener()
             .open_url(&url, None::<&str>)
             .map_err(|e| format!("the system did not open {url}: {e}")),
-        Launch::Program { program, args } => youreditor::start(&program, &args),
+        Launch::Program { program, args } => started(program, args).await,
     }
 }
 
