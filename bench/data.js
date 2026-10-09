@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791507460924,
+  "lastUpdate": 1791509918079,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3906,6 +3906,48 @@ window.BENCHMARK_DATA = {
             "value": 102.3495805,
             "unit": "ms",
             "extra": "median of 5 runs: 101.568, 102.200, 102.350, 102.574, 102.689 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "dc13fc2175c24d13ea72b08b5f8a2e8346e40402",
+          "message": "dispatch: the loop rule reads the chain from the dispatch record, not from the chats still open\n\nA task's record of open chats now keeps the personas above it\n(chats[].from.above), written by the app when it starts the task from its\nown record of the asking chat. The loop rule and the person's never for a\nchat above read it there, so a chain still holds when a chat in the middle\nof it has finished, closed or been cleared. Nothing a chat sends goes into\nit. A finished task reopened as an ordinary chat names no asking chat and\nstarts a new chain.\n\nA record written before the key is read from the chats still open, as\nbefore. Where that walk meets a chat that has closed (or a loop), the chain\nis unread and fails closed: any dispatch to another persona is refused,\nand one to its own where the person said never to any persona dispatching\nthere, with a sentence saying an older version kept no record of the\nchain. A kept chain whose length is not the depth, or that names what\ncannot be a persona, reads as not kept.\n\nDocs: plane-format (chats[].from.above), handoff refusal table, ADR 0090\namendment item 18. Changelog fragment.\n\nReview round 1: a chain is read under the decision's lock, and an older chain's refusal says where it began\n\nReview round for the loop rule reading the chain from the dispatch record.\n\n- The asking chat is read from the chats open under the lock the decision\n  is made under, and one that has closed or ended by then is refused\n  (`Refused::NotOpen`). `asked_by_a_chat` no longer takes an earlier read\n  of it, so a chain read short is never written into a new chat.\n- The refusal for a chain that cannot be read whole says the chat's chain\n  began under an older version, which is true for the chats this build\n  dispatched from such a chain too (core and app sentences).\n- A pretend-host test asserts the handoff road writes the chain.\n- ADR 0090's still-open line and the changes fragment point at the\n  follow-up checklist (#1548) and name any chat, not only a task.\n\nCloses #1521\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T05:34:49+04:00",
+          "tree_id": "3e5fb081925dc3eba0b5c82c4e198d7f874eccae",
+          "url": "https://github.com/purlis/purlis/commit/dc13fc2175c24d13ea72b08b5f8a2e8346e40402"
+        },
+        "date": 1791509917498,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4710215,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.454, 0.469, 0.471, 0.473, 0.480 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.2950275,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.166, 16.225, 16.295, 16.339, 16.608 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.4872925,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.258, 101.427, 101.487, 101.504, 101.900 ms"
           }
         ]
       }
