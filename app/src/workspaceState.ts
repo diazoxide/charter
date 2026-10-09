@@ -29,7 +29,9 @@ import {
  *   clone NAMES, which keep their identity for as long as the plane answers the same way, so
  *   focusing a workspace asks once and re-rendering asks not at all. That bound is pinned by
  *   a test rather than described — `workspaceState.test.ts`, "asks git for the pieces once
- *   per clone".
+ *   per clone". Inside that one ask, a clone with any piece on a branch also costs one
+ *   `git config --get-regexp` (which branches purlis cut) and a read of the workspace's piece
+ *   log, so a row can say a branch is unclaimed (#835); a clone with no such piece costs neither.
  *
  * **And once more each time the window says it changed the workspace** — `again` below
  * (charter-app#174). What moves it is a worktree row the operator ran, which is not a
