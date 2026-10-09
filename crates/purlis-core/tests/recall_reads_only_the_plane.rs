@@ -126,10 +126,11 @@ fn the_plane_itself_is_still_read_when_nothing_is_linked_out() {
 }
 
 #[test]
-fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
+fn a_link_in_a_personas_store_is_not_followed_even_into_the_plane() {
     purlis_core::unsteered!();
-    // charter follows a link in a persona's store that stays inside the plane's data; a search
-    // labels the hit by the base it resolves into, a listing by the base it was listed from.
+    // D-90c (#1194): a persona's store is read through the store held by descriptor, as a
+    // workspace's is (V74), so a link planted in it that lands inside the plane is not read as
+    // the persona's memory; the memory it points at is still found where it is.
     let (_dir, root) = plane();
     std::fs::write(
         root.join("personas/_shared/memory/shared-fact.md"),
@@ -153,19 +154,10 @@ fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
         })
         .collect();
 
-    assert_eq!(
-        labels,
-        // One score each, so the path decides the order: `personas/_shared/…` first.
-        vec![
-            ("shared", "shared-fact.md".to_string()),
-            ("shared", "inside.md".to_string())
-        ]
-    );
+    assert_eq!(labels, vec![("shared", "shared-fact.md".to_string())]);
     let listed = recall::recall(&root, &ask(None)).hits;
     assert!(
-        listed
-            .iter()
-            .any(|h| h.label == "persona:devops" && h.path.ends_with("inside.md")),
+        listed.iter().all(|h| !h.path.ends_with("inside.md")),
         "{listed:?}"
     );
 }

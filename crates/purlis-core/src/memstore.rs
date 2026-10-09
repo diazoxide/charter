@@ -2340,7 +2340,9 @@ mod gate_tests {
     fn plane() -> (tempfile::TempDir, std::path::PathBuf, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
-        let store = dir.path().join("personas/devops/memory");
+        // A store still reached by path: a persona's ephemeral memory. A persona's own memory
+        // is held by descriptor (D-90c), and its writer is tested with the held layer.
+        let store = crate::recall::ephemeral_dir(dir.path(), "gate", "devops");
         std::fs::create_dir_all(&store).unwrap();
         (dir, store, tempfile::tempdir().unwrap())
     }
@@ -2623,12 +2625,13 @@ mod gate_tests {
         );
     }
 
-    /// A persona's store, reached by path, with no `charter.toml` beside it: a refusal test
-    /// needs nothing the sandbox would not let it write.
+    /// A persona's ephemeral store, reached by path, with no `charter.toml` beside it: a
+    /// refusal test needs nothing the sandbox would not let it write. (A persona's own memory
+    /// is held by descriptor, D-90c.)
     #[cfg(target_os = "macos")]
     fn persona_store() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let store = dir.path().join("personas/devops/memory");
+        let store = crate::recall::ephemeral_dir(dir.path(), "gate", "devops");
         (dir, store)
     }
 
