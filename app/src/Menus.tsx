@@ -1,5 +1,6 @@
 import { useEffect, useId, type KeyboardEvent, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import { ChevronRight } from "lucide-react";
 import {
   askRows,
   curateRows,
@@ -131,7 +132,7 @@ function Curate({
       <ContextMenu.SubTrigger className="menu-row menu-sub">
         <span className="menu-title">Curate</span>
         <span className="menu-sub-mark" aria-hidden="true">
-          ▸
+          <ChevronRight />
         </span>
       </ContextMenu.SubTrigger>
       <ContextMenu.Portal>

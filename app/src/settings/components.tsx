@@ -2,7 +2,7 @@ import { useId, useRef, type ReactNode, type Ref } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { ListFilter } from "lucide-react";
+import { Check, ListFilter } from "lucide-react";
 import { useTabStop } from "../roving";
 
 /**
@@ -520,7 +520,9 @@ export function Choice(props: ChoiceProps) {
         aria-describedby={ids.describedBy}
         onCheckedChange={(to) => props.onCheckedChange(to === true)}
       >
-        <Checkbox.Indicator>✓</Checkbox.Indicator>
+        <Checkbox.Indicator>
+          <Check />
+        </Checkbox.Indicator>
       </Checkbox.Root>
     );
   if (props.kind === "checks")
@@ -546,7 +548,9 @@ export function Choice(props: ChoiceProps) {
               aria-describedby={one.says ? `${ids.id}-${at}-says` : undefined}
               onCheckedChange={(to) => props.onCheckedChange(one.value, to === true)}
             >
-              <Checkbox.Indicator>✓</Checkbox.Indicator>
+              <Checkbox.Indicator>
+                <Check />
+              </Checkbox.Indicator>
             </Checkbox.Root>
             <label htmlFor={`${ids.id}-${at}`}>{one.label}</label>
             {one.says && (
