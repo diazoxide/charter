@@ -258,8 +258,68 @@ fn only_a_failure_to_reach_the_host_reads_as_one_a_key_could_have_changed() {
         "fatal: could not create work tree dir 'widget': No space left on device",
         "remote: Repository not found.\nfatal: repository \
          'https://github.com/openssl/proxy-certificate.git/' not found",
+        // What the server says is never read, whatever words it picks.
+        "remote: proxy ssl certificate unable to access\nfatal: repository \
+         'https://git.example/acme/x.git/' not found",
+        // A quote in one line never turns the next line's quoted URL into words.
+        "remote: You don't have permission\nfatal: repository \
+         'https://git.example/openssl/proxy-certificate.git/' not found",
+        // Nor does a warning's own URL, which git does not quote.
+        "warning: redirecting to https://git.example/openssl/proxy-certificate.git/\nfatal: \
+         repository 'https://git.example/openssl/proxy-certificate.git/' not found",
+        // Most forges answer a missing repository with a 404.
+        "fatal: unable to access 'https://git.example/acme/nothing.git/': The requested URL \
+         returned error: 404",
         "",
     ] {
         assert!(!reads_as_a_route_failure(failed_there), "{failed_there}");
     }
+}
+
+/// #1550: a commit naming thousands of filters across its `.gitattributes` files costs the app a
+/// count, not a sentence each: at most [`FILTERS_NAMED_AT_MOST`] are named, LFS among them, and
+/// one sentence counts the rest.
+#[test]
+fn thousands_of_filters_are_named_up_to_a_bound_and_the_rest_counted() {
+    let dir = committed(|top| {
+        for folder in 0..8 {
+            let at = top.join(format!("f{folder}"));
+            std::fs::create_dir_all(&at).expect("a folder");
+            let mut text = String::new();
+            for one in 0..2000 {
+                text.push_str(&format!("x{one} filter=n{folder}x{one}\n"));
+            }
+            if folder == 7 {
+                text.push_str("*.psd filter=lfs\n");
+            }
+            std::fs::write(at.join(".gitattributes"), text).expect("attributes");
+        }
+    });
+    let started = std::time::Instant::now();
+    let said = filter_notes(dir.path(), "w", "w");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(said.len(), FILTERS_NAMED_AT_MOST + 1, "{said:?}");
+    assert!(said[0].contains("Git LFS"), "{said:?}");
+    let total = 8 * 2000 + 1;
+    let more = total - FILTERS_NAMED_AT_MOST;
+    assert!(
+        said[FILTERS_NAMED_AT_MOST].contains(&format!("names {more} more filters")),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn many_filters_in_one_text_are_each_named_once() {
+    let mut text = String::new();
+    for one in 0..20_000 {
+        text.push_str(&format!("x{one} filter=n{one} filter=n{one}\n"));
+    }
+    let started = std::time::Instant::now();
+    let named = filters_named(&text);
+    assert_eq!(named.len(), 20_000);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }

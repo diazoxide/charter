@@ -4333,18 +4333,21 @@ always does. Two differences show (#1413):
   place of the real content. The answer says so for each filter a `.gitattributes` names,
   the top one's and each folder's (at most 64 files), read as the checkout's `HEAD` commits
   it (a regular file of at most 64 KiB; the working tree, which the chat writes, is never
-  read). For LFS, run `git lfs pull` in the checkout, from the chat or your terminal, to
+  read). It names at most 8 filters, LFS first, and counts the rest in one sentence. For LFS, run `git lfs pull` in the checkout, from the chat or your terminal, to
   fetch the content.
 - **Network settings do not apply.** `http.proxy`, `http.sslCAInfo`, `http.sslCAPath`,
   `http.sslVerify`, `http.sslCert`, `http.sslKey`, `http.cookieFile`, `http.extraHeader` (each
   also as `http.<url>.*`) and `url.<base>.insteadOf`
   rewrites are not read, so a clone can fail where your terminal's succeeds. When a clone made
   for a chat fails to reach its host (a name that does not resolve, a connection, a proxy, a
-  certificate, or the host refusing the sign-in), purlis reads your global config files to
-  see whether one of these keys
-  would have changed the clone's route, and names the key, never its value. It reads them only
-  to tell you and never applies them. Clone it in your own terminal (`purlis clone <repo>`)
-  instead.
+  certificate, or the host refusing the sign-in, as git itself reports it), purlis reads your
+  global config files to see whether one of these keys would have changed the clone's route,
+  and names the key, never its value. It reads them only to tell you and never applies them.
+  Clone it in your own terminal (`purlis clone <repo>`) instead. A clone that fails for
+  another reason, such as a repository the forge says is not there (a 404), names no key.
+  This narrows who learns which keys you set; it does not stop it: a host that fails on
+  purpose, with a certificate or a dropped connection, still has the keys named, never their
+  values.
 
 ### 2d. Charter-private caches in this area
 
