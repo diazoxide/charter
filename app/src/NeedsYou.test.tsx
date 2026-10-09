@@ -371,6 +371,26 @@ describe("the muted hand: a chat that cannot say it is waiting (charter-app#52, 
     await waitFor(() => expect(screen.getByRole("button")).toHaveClass("muted"));
     await waitFor(() => expect(screen.getByRole("button")).toHaveFocus());
   });
+
+  it("does not bring back a chat it let go when another asks while it is still open", async () => {
+    const one = [needing("/a", 1, "ide", "steward")];
+    const { rerender } = render(<NeedsYouMenu items={one} quiet={quiet} onPress={() => {}} />);
+    await userEvent.click(screen.getByRole("button"));
+    await screen.findByRole("menu");
+
+    rerender(<NeedsYouMenu items={[]} quiet={quiet} onPress={() => {}} />);
+    expect(screen.queryByRole("menuitem", { name: /^Go to ide\.1/ })).toBeNull();
+    rerender(
+      <NeedsYouMenu
+        items={[needing("/b", 2, "easydmarc", "devops")]}
+        quiet={quiet}
+        onPress={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Go to ide\.1/ })).toBeNull();
+  });
 });
 
 /**
@@ -631,5 +651,42 @@ describe("the list holds still while it is open (#1146)", () => {
     expect(answered).toEqual([]);
     expect(pressed).toEqual([]);
     expect(screen.getByRole("group", { name: /ops\.3: Run npm test/ })).toHaveClass("gone");
+  });
+
+  it("lets the keyboard press nothing on a row that went, and skips its answers", async () => {
+    const answered: string[] = [];
+    const pressed: string[] = [];
+    const props = {
+      quiet: [],
+      onPress: (plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`),
+      onAnswer: (ask: PermissionAsk, option: string) => answered.push(`${ask.ask} ${option}`),
+    };
+    const staying = needing("/b", 2, "easydmarc", "devops");
+    const { rerender } = render(
+      <NeedsYouMenu
+        {...props}
+        items={[needing("/a", 1, "ide", "steward"), staying]}
+        asks={[asking(3, "A1", "Run npm test")]}
+      />,
+    );
+    screen.getByRole("button", { name: "3 chats need you" }).focus();
+    await userEvent.keyboard("{Enter}");
+    const gone = await screen.findByRole("menuitem", { name: /^Go to ide\.1/ });
+    await waitFor(() => expect(gone).toHaveFocus());
+
+    // The chat under the keyboard and the ask are answered elsewhere; the other chat stays.
+    rerender(<NeedsYouMenu {...props} items={[staying]} asks={[]} />);
+
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard("{Delete}");
+    expect(pressed).toEqual([]);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    // The arrows still move, and pass over the answers of the ask that went.
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: /^Go to easydmarc\.2/ })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement?.getAttribute("aria-label") ?? "").not.toMatch(/ops\.3/);
+    await userEvent.keyboard("{Enter}");
+    expect(answered).toEqual([]);
   });
 });
