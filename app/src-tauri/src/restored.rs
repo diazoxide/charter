@@ -72,8 +72,21 @@ pub(crate) fn put_back(
     let opened = held
         .chats()
         .put_back_telling(&launch.back, size, &|chat| launch.told(chat));
+    for chat in &launch.back.chats {
+        if launch.told(chat).is_some()
+            && let Some(number) = chat.number
+        {
+            questions_were_not_kept(held, number);
+        }
+    }
     after_put_back(held, &launch, coming, settles);
     opened
+}
+
+/// Task chat `task` was told to carry on (#1546): what it asked its asking chat before the
+/// restart was in the app's memory and is gone, and an answer to it is told so.
+fn questions_were_not_kept(held: &Held, task: u32) {
+    held.tasks().ledger().talk.restored(task);
 }
 
 /// The reports kept for chats `record` brings back, taken from their workspaces before any of
@@ -390,7 +403,16 @@ pub(crate) fn retrying(
     if ended {
         held.chats().tell_nothing(id);
     }
-    coming_back_as(held, id, start)
+    let told = held
+        .chats()
+        .waiting_to_start()
+        .into_iter()
+        .any(|one| one.chat.identity.id.as_deref() == Some(id) && one.told.is_some());
+    let started = coming_back_as(held, id, start);
+    if let (true, Ok(task)) = (told, &started) {
+        questions_were_not_kept(held, *task);
+    }
+    started
 }
 
 /// **Reopen on a finished task's row** (#1546): the task chat with id `id` comes back as a chat
