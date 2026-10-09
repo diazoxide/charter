@@ -69,6 +69,10 @@ empty state and error copy follow it.
   the first one here.*
 - **Never the storage underneath.** Leave out file layouts, store names and ADR numbers. *Todos
   are files in this workspace's store* told the reader nothing they could act on.
+- **A panel's way out is a catalogue row.** A panel written in Rust names it in
+  `panel::Empty::offer`, and the window draws it under the body as a button with the row's own
+  title, only while the catalogue offers it. A command in the body goes in backticks, and the
+  window draws it in code font.
 - **An empty state with no way out is fine.** When there is nothing the reader can do, say so
   and stop. Don't invent an action.
 - **Something that has gone says it has gone:** *This memory is not here any more*, *Nothing

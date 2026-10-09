@@ -346,6 +346,8 @@ function Contributed({
             label={panel.title}
             testid={`list-${named(panel)}`}
             open={open}
+            // The empty list's way out (#1156): the catalogue's row, as a row's is.
+            offerFor={lookUp}
             onOpen={(key) => onShowRow(key === undefined ? undefined : `${panel.key}/${key}`)}
             onRun={(id, kept) => {
               // **The catalogue's row or nothing.** A row cannot invent a verb, and an id the
