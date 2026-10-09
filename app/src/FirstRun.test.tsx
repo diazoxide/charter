@@ -520,6 +520,33 @@ describe("the first run", () => {
     expect(calls("open_local_project")[0].args).toEqual({ forge: "gitlab" });
   });
 
+  it("holds the budget when the forge is signed in to first, then a chat is started (#1078)", async () => {
+    // The longest way through a sign-in: a new machine, so the local project it opens is asked
+    // about first; then the operator leaves the sign-in's shell tab and starts the first chat.
+    const { calls } = core((cmd) => {
+      if (cmd === "open_local_project") return { plane: null, ask: ASK };
+      if (cmd === "approve_plane") return LOCAL;
+      if (cmd === "open_session") return 7;
+      return undefined;
+    });
+    render(<App />);
+
+    const person = userEvent.setup();
+    await person.click(await screen.findByRole("button", { name: "Sign in to GitHub" }));
+    const asking = await screen.findByRole("dialog", { name: "Open this project?" });
+    await person.click(within(asking).getByRole("button", { name: "Open project" }));
+    await vi.waitFor(() => expect(calls("send_input")).toHaveLength(1));
+    expect(calls("send_input")[0].args).toMatchObject({ plane: LOCAL, text: "gh auth login\n" });
+
+    await person.click(await screen.findByRole("button", { name: "New tab" }));
+    const picker = await screen.findByRole("dialog", { name: "Start a chat" });
+    await person.click(within(picker).getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(calls("start_chat")).toHaveLength(1));
+
+    // Two of the three: the sign-in itself asks nothing (W10's "detected and offered").
+    expect(interrupts.asked()).toEqual(["Open this project?", "Start a chat"]);
+  });
+
   it("asks which forge when the repo's remote does not say, and opens it with the answer", async () => {
     const { calls } = core((cmd, args) => {
       if (cmd === "open_repo" && args.forge === null)
