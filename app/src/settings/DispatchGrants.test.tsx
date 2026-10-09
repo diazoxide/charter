@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
@@ -6,7 +6,13 @@ import type { DispatchGrant, DispatchGrants, DispatchStanding } from "../binding
 import { DispatchGrantsList, dispatchSourceSaid, dispatchWorkspaceSaid } from "./DispatchGrants";
 import { grantedGroup } from "./GrantedList";
 import type { LiveSetting } from "./groups";
-import { forgetGroups, settingsPlace, useShownGroup } from "./links";
+import {
+  forgetGroups,
+  SETTINGS_ACTION,
+  settingsPlace,
+  useShownGroup,
+  type SettingsActionAsk,
+} from "./links";
 
 /**
  * **The one table of dispatch grants in Settings** (#1504): a row group per persona, each pair
@@ -178,7 +184,7 @@ describe("the table of who may dispatch to whom", () => {
     const groups = within(whole)
       .getAllByRole("rowheader")
       .filter((one) => one.getAttribute("scope") === "rowgroup")
-      .map((one) => one.textContent);
+      .map((one) => one.querySelector("span")?.textContent);
     expect(groups).toEqual(["devops", "qa", "steward"]);
 
     // steward to devops is covered twice: both sources are rows under the one target.
@@ -624,7 +630,12 @@ describe("the pairs said never to, and the ones kept blocked for a chat", () => 
       "For that chat only, until it closes. Other chats are still asked.",
     );
     expect(row).toHaveTextContent("Ends with the chat");
-    expect(within(row).queryByRole("button")).toBeNull();
+    // Nothing to press but the link to the persona's tab (#1388), which changes nothing.
+    expect(
+      within(row)
+        .queryAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Show qa"]);
   });
 });
 
@@ -1106,6 +1117,54 @@ describe("with the keyboard, and to a screen reader", () => {
     expect(new Set(reached).size).toBe(reached.length);
     for (const button of buttons)
       expect(button.getAttribute("aria-label")).toMatch(/steward|qa|devops/);
+  });
+});
+
+/**
+ * **A persona the table names links to its tab** (#1388): a persona stays in its own tab, and
+ * Settings links to it wherever it names one. "Any persona", chats on no persona and a name that
+ * is no persona now are not one, and link nowhere.
+ */
+describe("the personas the table names", () => {
+  it("each link to the persona's tab, by its row, and nothing else does", async () => {
+    const heard: SettingsActionAsk[] = [];
+    const on = (event: Event) => heard.push((event as CustomEvent<SettingsActionAsk>).detail);
+    window.addEventListener(SETTINGS_ACTION, on);
+    onTestFinished(() => window.removeEventListener(SETTINGS_ACTION, on));
+    core({
+      grants: [MINE, grant({ id: "you\u001fsteward\u001fgone", target: "gone" })],
+      standing: {
+        any: [{ asking: "qa", level: "you", waiting: false, declined: false, ...ANYWHERE }],
+      },
+    });
+    render(<Table />);
+    const whole = await table();
+
+    // The persona a row group is for, and each persona under it.
+    await userEvent.click(
+      within(whole).getByRole("button", { name: "Show steward: the persona steward" }),
+    );
+    const mine = rowOf(
+      screen.getByRole("button", { name: "Revoke: my grant for steward to devops" }),
+    );
+    await userEvent.click(
+      within(mine).getByRole("button", {
+        name: "Show devops: the persona steward may dispatch to",
+      }),
+    );
+    expect(heard).toEqual([
+      { plane: PLANE, action: "persona.show:steward" },
+      { plane: PLANE, action: "persona.show:devops" },
+    ]);
+
+    // "Any persona" and a name that is no persona now link nowhere.
+    const shows = within(whole)
+      .getAllByRole("button", { name: /^Show / })
+      .map((one) => one.textContent);
+    expect(shows).not.toContain("Show *");
+    expect(shows).not.toContain("Show any persona");
+    expect(shows).not.toContain("Show gone");
+    expect(new Set(shows)).toEqual(new Set(["Show devops", "Show qa", "Show steward"]));
   });
 });
 
