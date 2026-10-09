@@ -70,9 +70,16 @@ export function useAwayRefusals(planes: readonly string[]): {
       item: AwayRefusal,
       how: "allowDispatchAway" | "neverDispatchAway",
     ): Promise<AwayAnswer> => {
-      const answer = await commands[how](plane, item.asking, item.target, item.workspace).catch(
-        (err: unknown) => ({ status: "error" as const, error: String(err) }),
-      );
+      // Allow is held to what the item said: the core refuses it for an item that reads
+      // differently now, and the list is read again below.
+      const asked =
+        how === "allowDispatchAway"
+          ? commands.allowDispatchAway(plane, item.asking, item.target, item.workspace, item.shown)
+          : commands.neverDispatchAway(plane, item.asking, item.target, item.workspace);
+      const answer = await asked.catch((err: unknown) => ({
+        status: "error" as const,
+        error: String(err),
+      }));
       if (answer.status !== "ok") {
         // Refused: the pair is no longer one to answer. What is listed now is read again.
         readOne(plane);

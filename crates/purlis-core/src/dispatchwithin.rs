@@ -456,45 +456,16 @@ pub fn unaccepted(root: &Path) -> Vec<Limited> {
         .collect()
 }
 
-/// **Drops this machine's acceptance of each limited grant the project's file no longer
-/// holds**, so the grant is not in force unasked if the file comes to hold it again
-/// ([`crate::dispatchgrant::forget_any_the_file_dropped`] is the same for "any persona").
-/// Only against a project file that was read and parsed. Best effort: an acceptance that
-/// could not be dropped still covers nothing while the file lacks the grant.
-pub fn forget_what_the_file_dropped(root: &Path) {
-    let kept = local::dispatch_seen_in(root);
-    if kept.is_empty() {
-        return;
-    }
-    let Some(text) = crate::sandbox::read_plane_file(&crate::names::manifest(root))
-        .ok()
-        .flatten()
-    else {
-        return;
-    };
-    if text.parse::<toml::Table>().is_err() {
-        return;
-    }
-    let held = crate::dispatchgrant::committed(Some(&text)).limited;
-    for one in kept
-        .iter()
-        .filter(|kept| !held.iter().any(|held| held.is(kept)))
-    {
-        let _ = local::drop_dispatch_in(
-            root,
-            Record::Accepted,
-            &one.asking,
-            &one.target,
-            one.any,
-            &one.workspace,
-        );
-    }
-}
-
 /// **The limited grants in force in the project at `root`**: yours, and the project's that
 /// this machine accepted, each only while its workspace stands ([`Seen::stands`]).
+///
+/// **An acceptance of the project's is bound to its history, as a pair's is** (#1506,
+/// [`crate::dispatcharrival`]): it is dropped only where a commit took the grant out, or
+/// where the history cannot be read. A grant merely absent from the file on disk (a branch
+/// switched away) is not in force, since [`accepted`] needs the file to hold it, and nothing
+/// is dropped. Whether the last settling answered is the caller's to apply
+/// ([`crate::dispatchgrant::InForce::read`]).
 pub fn in_force(root: &Path) -> Vec<(Level, Limited)> {
-    forget_what_the_file_dropped(root);
     let seen = noticed(root);
     let counts = |(one, at): (Limited, u32)| seen.stands(&one.workspace, at).then_some(one);
     let mine = yours(root)
@@ -545,13 +516,22 @@ pub fn revoke_yours(root: &Path, one: &Limited) -> std::io::Result<bool> {
 /// with what this machine has seen of the workspace now, and never writes the committed file.
 /// Refused where the file does not hold the grant, and where its workspace is not one of the
 /// project's now.
+///
+/// **Bound to the project's history as a pair's acceptance is**: settled before (refused
+/// where the history cannot be asked) and after, so it is checked through the commit
+/// checked out now. Runs git: never on the thread that draws the window.
 pub fn accept(root: &Path, one: &Limited) -> Result<(), String> {
     if !committed_at(root).contains(one) {
         return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
     }
     let seen = there_now(root, &one.workspace)?;
+    if !crate::dispatcharrival::settle_afresh(root).read {
+        return Err(crate::dispatchgrant::HISTORY_UNREAD.to_owned());
+    }
     local::keep_dispatch_in(root, Record::Accepted, &one.on_disk(seen))
-        .map_err(|why| format!("purlis could not record it as allowed on this machine: {why}"))
+        .map_err(|why| format!("purlis could not record it as allowed on this machine: {why}"))?;
+    crate::dispatcharrival::settle_afresh(root);
+    Ok(())
 }
 
 /// Takes this machine's acceptance of the project's limited grant `one` away: "Not on my

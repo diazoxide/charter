@@ -213,9 +213,15 @@ impl InForce {
     /// **And only while the last settling of this machine's acceptances answered**
     /// ([`crate::dispatcharrival::for_read`]): where the project's history could not be
     /// asked, or the record could not be written, none of the project's grants is in force.
-    /// **This runs no git and writes nothing**: it goes by the verdict of the last settling,
-    /// which the app runs before a dispatch is decided, and it is safe under the lock a
-    /// decision is made under. Only the first read of a project in a process settles.
+    /// **A grant of the project's limited to one workspace goes by the same verdict** (#1505):
+    /// accepted here, it is in force only while the last settling answered.
+    ///
+    /// **This runs no git**: it goes by the verdict of the last settling, which the app runs
+    /// before a dispatch is decided, and it is safe under the lock a decision is made under.
+    /// Where nothing has been settled yet for the project, what was accepted of its grants is
+    /// not in force until a settling started off this thread lands. It writes only what a
+    /// look writes: the count of a workspace seen gone ([`crate::dispatchwithin::noticed`]),
+    /// and a record of nevers an earlier build kept is moved to its own file.
     pub fn read(root: &Path, chat: Vec<ChatPair>) -> Self {
         let settled = crate::dispatcharrival::for_read(root).read;
         let seen = crate::sandbox::local::dispatch_seen(root)
@@ -240,7 +246,10 @@ impl InForce {
             },
             never,
             never_unread,
-            limited: crate::dispatchwithin::in_force(root),
+            limited: crate::dispatchwithin::in_force(root)
+                .into_iter()
+                .filter(|(level, _)| settled || *level != Level::Project)
+                .collect(),
             works_in: None,
         }
     }

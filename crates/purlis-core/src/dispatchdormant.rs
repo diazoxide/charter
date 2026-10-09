@@ -277,6 +277,11 @@ pub fn can_give_back(root: &Path, name: &str) -> Result<(), String> {
 /// set aside whose other persona is no persona stays set aside. Answers what came back.
 pub fn give_back(root: &Path, name: &str) -> Result<SetAside, String> {
     can_give_back(root, name)?;
+    // What was accepted of the project's for the name is bound to its history while it is set
+    // aside (#1506): settled now, so nothing a commit took out meanwhile comes back. Runs git.
+    if !crate::dispatcharrival::settle_afresh(root).read {
+        return Err(crate::dispatchgrant::HISTORY_UNREAD.to_owned());
+    }
     let personas = personas_of(root).unwrap_or_default();
     let there = |one: &str| crate::personas::valid_name(one) && personas.iter().any(|p| p == one);
     let ok = |one: &Dormant| {

@@ -85,7 +85,9 @@ const MOST_OBJECT_BYTES: u64 = 16 << 20;
 pub const DEADLINE: Duration = crate::worktree::git::READ;
 
 /// A project grant as this machine's record spells it: a pair as
-/// [`dispatchgrant::Pair`] is displayed, or `<asking> -> *` for "any persona".
+/// [`dispatchgrant::Pair`] is displayed, `<asking> -> *` for "any persona", and a grant
+/// limited to one workspace as [`crate::dispatchwithin::Limited`] is displayed
+/// (`<asking> -> <target> in <workspace>`).
 fn any_said(asking: &str) -> String {
     format!("{asking} -> {ANY}")
 }
@@ -99,6 +101,8 @@ fn grants_in(text: Option<&str>) -> Vec<String> {
         .iter()
         .map(|asking| any_said(asking))
         .chain(committed.pairs.iter().map(ToString::to_string))
+        // Limited to one workspace (#1505): bound to the history as every other grant is.
+        .chain(committed.limited.iter().map(ToString::to_string))
         .collect()
 }
 
@@ -598,6 +602,8 @@ struct Slot {
     /// The last one's verdict. **The lock a reader of the grants in force takes**, for the
     /// length of a copy.
     last: Mutex<Option<Verdict>>,
+    /// Whether a first settling was started off the reader's thread ([`for_read`]).
+    begun: std::sync::atomic::AtomicBool,
 }
 
 static SLOTS: LazyLock<Mutex<HashMap<PathBuf, Arc<Slot>>>> = LazyLock::new(Default::default);
@@ -649,14 +655,54 @@ fn settle_in(root: &Path, history: &dyn History, reuse: bool) -> Verdict {
     verdict
 }
 
-/// **The verdict a read of the grants in force goes by: the last settling's, and no git.**
-/// Where this process has settled nothing for the project yet, the first read settles.
+/// Every acceptance `bound` keeps, as the record spells each.
+fn accepted_of(bound: &local::DispatchBound) -> Vec<String> {
+    bound
+        .any_seen
+        .iter()
+        .map(|asking| any_said(asking))
+        .chain(bound.seen.iter().cloned())
+        .chain(bound.seen_in.iter().cloned())
+        .chain(bound.aside.iter().cloned())
+        .collect()
+}
+
+/// Whether `bound` keeps nothing a settling would read the history for.
+fn kept_nothing(bound: &local::DispatchBound) -> bool {
+    accepted_of(bound).is_empty() && bound.declined.is_empty() && bound.at.is_none()
+}
+
+/// **The verdict a read of the grants in force goes by: the last settling's, and no git, on
+/// any thread.**
+///
+/// Where this process has settled nothing for the project yet: a project that keeps no
+/// acceptance has nothing to settle, and reads as settled. One that keeps some is settled on
+/// a thread of its own, started here once, and **until that settling lands no project grant
+/// accepted here is in force** (fail closed): a reader meanwhile, the window's included, sees
+/// them as not in force, never waits on git, and is told again when the window's next read
+/// comes. A dispatch is never decided on this answer alone: the app settles before it
+/// decides one.
 pub fn for_read(root: &Path) -> Verdict {
-    let last = *slot_of(root)
-        .last
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    last.unwrap_or_else(|| settle(root))
+    let slot = slot_of(root);
+    let last = *slot.last.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(last) = last {
+        return last;
+    }
+    if kept_nothing(&local::dispatch_bound(root)) {
+        return READ;
+    }
+    if !slot.begun.swap(true, Ordering::SeqCst) {
+        let root = root.to_path_buf();
+        let started = std::thread::Builder::new()
+            .name("purlis-dispatch-settle".to_owned())
+            .spawn(move || {
+                settle(&root);
+            });
+        if started.is_err() {
+            slot.begun.store(false, Ordering::SeqCst);
+        }
+    }
+    UNREAD
 }
 
 const READ: Verdict = Verdict { read: true };
@@ -664,13 +710,11 @@ const UNREAD: Verdict = Verdict { read: false };
 
 fn settle_once(root: &Path, history: &dyn History) -> Verdict {
     let bound = local::dispatch_bound(root);
-    let accepted: Vec<String> = bound
-        .any_seen
-        .iter()
-        .map(|asking| any_said(asking))
-        .chain(bound.seen.iter().cloned())
-        .collect();
-    if accepted.is_empty() && bound.declined.is_empty() && bound.at.is_none() {
+    // Every acceptance this machine keeps of the project's grants: pairs, "any persona",
+    // grants limited to one workspace, and what was set aside for a name that changed hands
+    // (given back by the person later, so it must not outlive a removal meanwhile).
+    let accepted = accepted_of(&bound);
+    if kept_nothing(&bound) {
         return READ;
     }
     let until = Instant::now() + DEADLINE;

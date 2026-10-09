@@ -240,6 +240,23 @@ describe("the pane Notice's rules", () => {
     expect(rule("\\.notice-under-pane > \\*")).toMatch(/max-width:\s*100%/);
   });
 
+  it("is never taller than its pane: what it opened gives way, the answers never do", () => {
+    // The dispatch question in a short pane (#1483's train): the box shrinks in the stack,
+    // its line and answers keep their height, and what is under them scrolls, the brief
+    // first.
+    const box = rule("\\.notice-pane-box");
+    expect(box).toMatch(/flex-direction:\s*column/);
+    expect(box).toMatch(/min-height:\s*0/);
+    expect(box).toMatch(/flex:\s*0 1 auto/);
+    expect(rule("\\.notice-pane")).toMatch(/flex:\s*none/);
+    const under = rule("\\.notice-under-pane");
+    expect(under).toMatch(/min-height:\s*0/);
+    expect(under).toMatch(/overflow-y:\s*auto/);
+    expect(rule("\\.notice-under-pane > \\.block-report")).toMatch(/min-height:\s*0/);
+    // The stack still scrolls as a whole when the Notices together are too tall.
+    expect(rule("\\.pane-notices")).toMatch(/overflow-y:\s*auto/);
+  });
+
   it("is opaque, and over all of the terminal", () => {
     expect(rule("\\.notice-pane-box")).toMatch(/background:\s*var\(--surface-raised\)/);
     expect(rule("\\.pane")).toMatch(/isolation:\s*isolate/);

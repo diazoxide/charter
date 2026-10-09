@@ -69,6 +69,7 @@ const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   kept_blocked: [],
   dormant: [],
   returned: [],
+  wants: [],
   back: [],
   workspaces: [],
   ...over,
@@ -133,6 +134,35 @@ async function press(name: string | RegExp, yes: string) {
 }
 
 describe("the table of who may dispatch to whom", () => {
+  it("says under a persona's name what its definition wants, and that it grants nothing", async () => {
+    // #1502's `wants`, at #1504's marked place: told by the core, drawn as a note and never
+    // as a row, since nothing is in force by it.
+    core({
+      grants: [],
+      standing: { wants: [{ persona: "steward", wants: ["devops", "qa"] }] },
+    });
+    render(<Table />);
+
+    const whole = await table();
+    const heading = (name: string) =>
+      within(whole)
+        .getAllByRole("rowheader")
+        .find(
+          (one) => one.getAttribute("scope") === "rowgroup" && one.textContent.startsWith(name),
+        );
+    expect(heading("steward")).toHaveTextContent(
+      "Its definition says it wants to dispatch to devops, qa. That grants nothing: it only offers those personas as boxes when one of its chats first asks you.",
+    );
+    expect(heading("qa")).not.toHaveTextContent("wants to dispatch");
+    // No row, no button and no grant comes of it.
+    expect(
+      within(whole).queryByRole("button", { name: /Revoke|Accept|Allow for steward/ }),
+    ).toBeNull();
+    expect(whole).toHaveTextContent(
+      "No grant names a persona. Its first dispatch to one asks you.",
+    );
+  });
+
   it("has a row group for every persona, and under it each pair with every grant that covers it", async () => {
     core({ grants: [CHAT, MINE, OURS, THEIRS] });
     render(<Table />);

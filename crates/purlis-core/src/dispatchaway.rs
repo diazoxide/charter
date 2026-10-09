@@ -347,7 +347,11 @@ pub fn keep(
     if !a_pair(asking, target) {
         return Ok(Kept::NotAPair);
     }
-    let workspace = workspace.filter(|name| drawn(name, MOST_WORKSPACE_CHARS));
+    // A name that cannot be kept keeps nothing: kept as no workspace it would read as the
+    // project's root, whose Allow holds in any workspace.
+    if workspace.is_some_and(|name| !drawn(name, MOST_WORKSPACE_CHARS)) {
+        return Ok(Kept::NotAPair);
+    }
     let mut kept = Kept::Full;
     change(root, at, |entries| {
         if let Some(there) = entries

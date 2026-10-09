@@ -75,7 +75,9 @@ export function awayWhere(item: AwayItem, now: number): string {
  * the workspace the refused task would have worked in. A refusal at the project's root has no
  * workspace to limit it to, so there it holds in any.
  */
-export function awayHolds(item: Pick<AwayItem, "workspace">): string {
+export function awayHolds(item: Pick<AwayItem, "workspace" | "nowhere">): string {
+  if (item.workspace != null && item.nowhere != null)
+    return `which keeps nothing: ${clipped(item.workspace)} is not a workspace of this project now`;
   return item.workspace != null
     ? `for work in ${clipped(item.workspace)} only`
     : "in any workspace";

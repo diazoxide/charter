@@ -1951,9 +1951,19 @@ fn dispatch_noting(
     // read here with no grant of one chat. Its own persona's rule does not carry it across:
     // with nobody to see it, a chat confined to one workspace is not let into another on that
     // rule alone. The person dispatching from its tab is at it.
-    if let (Attendance::Unattended, By::Chat, Ground::Workspace { name, .. }) =
-        (attended, wanted.by, &ground)
-        && workspace.as_deref() != Some(name.as_str())
+    //
+    // **A handoff that moves the work into another workspace as another persona crosses
+    // too**, under the same rule (ADR 0090 items 4 and 13): "any persona" carries a handoff no
+    // further than it carries a task. A handoff to the chat's own persona keeps its own rule
+    // (it goes into a workspace that exists). Refused, the crossing is kept for the person to
+    // read afterwards, as a refusal for lack of a grant is.
+    let crosses_into = match (&wanted.moved, &ground) {
+        (None, Ground::Workspace { name, .. }) => Some(name.as_str()),
+        (Some(_), _) if pair.to.is_some() && pair.to != pair.asking => moves_into.as_deref(),
+        _ => None,
+    };
+    if let (Attendance::Unattended, By::Chat, Some(name)) = (attended, wanted.by, crosses_into)
+        && workspace.as_deref() != Some(name)
     {
         let standing = dispatchgrant::InForce::read(root, Vec::new());
         if let Some(refused) = dispatchplace::nobody_to_ask(
@@ -1962,7 +1972,14 @@ fn dispatch_noting(
             &standing,
             name,
         ) {
-            return Err(refused.say().into());
+            return Err(crate::dispatchaway::refused_crossing(
+                held,
+                &asking_as,
+                pair.to.as_deref(),
+                refused.say(),
+                name,
+            )
+            .into());
         }
     }
 
@@ -3887,14 +3904,16 @@ mod tests {
             !waiting[0].brief.text.contains("handoff from"),
             "{waiting:?}"
         );
-        // A second handoff across the pair is not queued beside it, and is told which waits.
+        // A second handoff across the pair into the same workspace is not queued beside it,
+        // and is told which waits. (One question a workspace, #1505: a handoff into another
+        // workspace would be a question of its own.)
         let (second, _) = a_handoff(
             &held,
             &id,
             asking,
             Some("devops"),
             Some("again"),
-            INTO_ALPHA,
+            ("beta", Some("the cluster work")),
         );
         assert_eq!(
             second,
@@ -3953,9 +3972,32 @@ mod tests {
             told[0].answered,
             Some(purlis_core::handback::Answered::Started)
         );
-        // The next handoff across the pair starts without asking.
+        // **No grant was kept by that Allow** (#1505): the workspace the handoff moved into
+        // was not there when the person answered, and no grant names a workspace that is not
+        // there. It started the one handoff they read, so the next across the pair asks.
+        assert!(purlis_core::dispatchgrant::yours(held.root()).is_empty());
+        assert!(purlis_core::sandbox::local::dispatch_mine_in(held.root()).is_empty());
         let (again, _) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
-        assert!(matches!(again, Answer::Opened { .. }), "{again:?}");
+        assert!(matches!(again, Answer::NeedsGrant { .. }), "{again:?}");
+        // Allowed for work in a workspace that is there, the grant is kept for that
+        // workspace: the held handoff starts, and the next one into it starts without asking.
+        let waiting = held.dispatch_grants().waiting(asking);
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        on_the_ground(&held, |ground| {
+            held.dispatch_grants().allow(
+                ground,
+                waiting[0].id,
+                purlis_core::sandbox::grant::Level::You,
+            )
+        })
+        .expect("allowed");
+        assert_eq!(
+            eventually(|| (held.chats().open_now().len() == before + 2).then_some(())),
+            Some(()),
+            "the handoff into alpha starts"
+        );
+        let (third, _) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
+        assert!(matches!(third, Answer::Opened { .. }), "{third:?}");
     }
 
     /// #1501: the window asks this before it explains the chip on a chat's tab, and a chat
@@ -3989,15 +4031,26 @@ mod tests {
 
         let (said, told) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
 
-        // This project has no sandbox, so the chat has neither prompts nor a sandbox: it hands
-        // off to no other persona, whatever the grants say. The sentence is a dispatch's.
+        // It stands at the project's root and the handoff moves the work into alpha as
+        // another persona: a crossing, which a chat nobody is at makes only under a grant
+        // that names the pair (the train's review, M2). None does, and the chat runs with no
+        // sandbox, so nothing is kept for the person either.
         assert_eq!(
             said,
             Answer::No {
-                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
-                    .say()
+                why: purlis_core::dispatchplace::Refused::NobodyToAsk {
+                    workspace: "alpha".to_owned(),
+                    asking: Some("steward".to_owned()),
+                    target: Some("devops".to_owned()),
+                }
+                .say()
             }
         );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+        assert!(purlis_core::dispatchaway::list(held.root(), now + 5).is_empty());
         assert_eq!(told, None);
         assert_eq!(held.chats().open_now().len(), before);
         assert!(
@@ -9723,6 +9776,77 @@ mod tests {
         );
         assert!(matches!(&again, Answer::No { .. }), "{again:?}");
         assert_eq!(kept()[0], (Some("alpha".to_owned()), 2));
+        let (moved, _) = a_handoff(&held, &id, steward, Some("devops"), None, ("beta", None));
+        assert!(matches!(moved, Answer::Opened { .. }), "{moved:?}");
+        held.chats().end_all();
+    }
+
+    #[test]
+    fn a_handoff_with_nobody_there_crosses_into_another_workspace_only_under_a_named_grant() {
+        // The train's review, M2: "any persona" carries a handoff no further than a task. On
+        // the pretend host.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        std::fs::create_dir_all(held.root().join("workspaces").join("beta")).expect("beta");
+        held.chats().recorded_as_confined(steward);
+        held.unattended().heard(steward, true);
+        // Steward may dispatch to any persona, for the person on this machine.
+        purlis_core::sandbox::local::grant_dispatch_any(held.root(), "steward").expect("any");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+        let kept = || {
+            purlis_core::dispatchaway::list(held.root(), now + 5)
+                .into_iter()
+                .map(|one| (one.target, one.workspace, one.times))
+                .collect::<Vec<_>>()
+        };
+        let crossing = purlis_core::dispatchplace::Refused::NobodyToAsk {
+            workspace: "beta".to_owned(),
+            asking: Some("steward".to_owned()),
+            target: Some("devops".to_owned()),
+        }
+        .say();
+        let before = held.chats().open_now().len();
+
+        // A handoff into beta as devops: refused as a task into beta is, and kept.
+        let (moved, told) = a_handoff(&held, &id, steward, Some("devops"), None, ("beta", None));
+        assert_eq!(
+            moved,
+            Answer::No {
+                why: purlis_core::dispatchaway::told(&crossing)
+            }
+        );
+        assert_eq!(told, None);
+        assert_eq!(held.chats().open_now().len(), before);
+        assert_eq!(kept(), [("devops".to_owned(), Some("beta".to_owned()), 1)]);
+        // The same work as a task into beta: the same refusal, the same entry.
+        let (task, _) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            (Some("devops"), "check prod"),
+            "workspace:beta",
+        );
+        assert_eq!(
+            task,
+            Answer::No {
+                why: purlis_core::dispatchaway::told(&crossing)
+            }
+        );
+        assert_eq!(kept(), [("devops".to_owned(), Some("beta".to_owned()), 2)]);
+
+        // A grant that names the pair for work in beta is what carries it across.
+        purlis_core::dispatchwithin::grant_yours(
+            held.root(),
+            &purlis_core::dispatchgrant::Pair::new("steward", "devops").expect("a pair"),
+            &purlis_core::dispatchwithin::Within::of(Some("beta")),
+        )
+        .expect("a grant for beta");
         let (moved, _) = a_handoff(&held, &id, steward, Some("devops"), None, ("beta", None));
         assert!(matches!(moved, Answer::Opened { .. }), "{moved:?}");
         held.chats().end_all();

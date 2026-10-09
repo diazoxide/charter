@@ -435,9 +435,11 @@ The new chat works in the asking chat's folder unless the dispatch says one word
 no `--in`: its chat stands in that workspace from the start, and a persona's
 `dispatch-isolation: worktree` cuts nothing for it. It is decided as a dispatch is, and
 **the limits of both workspaces hold for it too**: the asking chat's, and then the one it
-moves into, where a limit set to 0 switches it off whatever a persona's own limits say. The
-standing grant a chat nobody is at needs to cross workspaces is a task's rule: such a chat
-still hands off to its own persona, into a workspace that exists.
+moves into, where a limit set to 0 switches it off whatever a persona's own limits say.
+**A chat nobody is at crosses into another workspace as another persona under a task's rule**:
+only under a grant that names the pair and covers the workspace it moves into; "any persona"
+does not count there, for a handoff as for a task. Refused, it is kept for the person to read
+afterwards. Such a chat still hands off to its own persona, into a workspace that exists.
 
 **Nothing is merged for a worktree task, ever.** Its report names the branch, in a line
 purlis writes from its own record of what it cut, whatever the chat says; merging is the
