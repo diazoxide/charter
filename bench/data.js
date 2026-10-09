@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791502418278,
+  "lastUpdate": 1791505727137,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3822,6 +3822,48 @@ window.BENCHMARK_DATA = {
             "value": 103.899193,
             "unit": "ms",
             "extra": "median of 5 runs: 102.403, 103.847, 103.899, 105.534, 106.429 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "92a311251dbd5037ea8c1c753eb6de686231a4e3",
+          "message": "Where the tickets of train 65 meet\n\nThe tab chip's menu, the breadcrumb line and the Chats list each meet\nmore than one ticket of this train. What is joined here:\n\n- J1. A working task's line in its tab's menu says what it is doing\n  (#1493's ChatDoingLine, one dim line cut short after how long; nothing\n  while it does not work, not even its gap). It reads its own chat, so no\n  line of the menu is drawn again for it.\n- J2. Brief from the tab's menu (#1494): a button at the end of a task's\n  line, beside the ways to move it, for an open task by its chat and for\n  an ended one by its dispatch record while it has a finished row. The\n  session's own chat has none. Opening it closes the menu.\n- J3. The session's Activity from the tab's menu (#1495): a line after\n  \"End a task\" opens the tab's own chat's Activity in a tab of its own,\n  as the catalogue's tab.activity row does.\n- J4. Fail closed for reads of what chats said: `activity` (a session's\n  timeline) and `task_question` (the question a task is paused on) join\n  `task_brief` on WINDOW_ONLY. Each reads words a chat wrote, about a\n  session the caller names, and no link can say which chat is asking.\n  Session-protocol and app tests pin both; the list is 35 names.\n\nTests: three window cases in TabChip.window.test.tsx for J1 to J3; the\nsession protocol refuses both reads on a link and the app's link client\nhas neither. The menu's line helper and the level test now leave out the\nActivity line, as they leave out \"End a task\".\n\nRefs #1493, #1494, #1495, #1496, #1483\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T04:25:01+04:00",
+          "tree_id": "f75888a20498c2e0b17fd4025eefc7dff547d6e4",
+          "url": "https://github.com/purlis/purlis/commit/92a311251dbd5037ea8c1c753eb6de686231a4e3"
+        },
+        "date": 1791505726312,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.460195,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.444, 0.456, 0.460, 0.467, 0.503 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.681836500000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.569, 16.659, 16.682, 16.782, 16.853 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.66681500000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.357, 103.438, 103.667, 103.675, 103.947 ms"
           }
         ]
       }
