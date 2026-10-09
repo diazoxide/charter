@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, LoaderCircle, Send, UserRound } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle, Send } from "lucide-react";
 import { ChatAsk } from "./ChatAsk";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
+import { PersonaMark } from "./PersonaMark";
 import {
   commands,
   type DispatchRow,
@@ -270,7 +271,7 @@ export function DispatchesTab({
                       NO_PERSONA_SAID
                     ) : (
                       <span className="dispatch-persona">
-                        <PersonaMark persona={row.persona} className="node-icon" />
+                        <PersonaMark persona={row.persona} />
                         {row.persona}
                       </span>
                     )}
@@ -474,19 +475,6 @@ function Task({
   return (
     <span className="dispatch-gone" title="Its chat is closed and wrote no session record">
       {row.task}
-    </span>
-  );
-}
-
-/**
- * A persona's mark, **standing in for the shared component** #1449 builds: the same props
- * (`persona`, `className`), so the swap is this function for that import. It draws the glyph a
- * persona's tab carries today.
- */
-function PersonaMark({ persona, className }: { persona: string; className?: string }) {
-  return (
-    <span className="persona-mark" data-persona={persona} title={persona} aria-hidden="true">
-      <UserRound className={className} />
     </span>
   );
 }
