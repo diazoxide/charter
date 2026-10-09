@@ -364,3 +364,29 @@ describe("the refused vault Notice", () => {
     );
   });
 });
+
+/** The mark drawn at the head of a Notice's sentence, or none. */
+const markOf = (line: HTMLElement) =>
+  line.querySelector<HTMLElement>(".notice-says .persona-mark")?.dataset.persona;
+
+/** Both its Notices name the persona the chat runs as, and lead with its mark (#1454). */
+describe("the refused vault Notice's persona mark", () => {
+  it("leads the refusal with the mark of the persona the chat runs as", async () => {
+    core([DEVOPS]);
+    show();
+
+    expect(markOf(await notice())).toBe("steward");
+  });
+
+  it("keeps the mark on what Allow answered, after the refusal is gone", async () => {
+    core([DEVOPS]);
+    show();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Allow steward to use this vault" }));
+
+    const answered = await notice();
+    await waitFor(() => expect(answered).toHaveTextContent(/^Allowed\./));
+    expect(markOf(answered)).toBe("steward");
+  });
+});

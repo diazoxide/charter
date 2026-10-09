@@ -39,6 +39,9 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  * Only a press does any of it. Where an administrator's policy forbids Allow, it is not
  * offered, and the Notice says what policy forbids and who set it.
  *
+ * The persona the chat runs as is drawn as the sentence's mark, on what Allow answered too
+ * (#1454).
+ *
  * The core holds what was refused; this reads it when the pane mounts and each time the core
  * says a chat was refused (`chat-vault-refused`), so a refusal that arrives while the pane is
  * away is on it when it comes back.
@@ -46,8 +49,8 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
 export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
   const { refused, heard, read } = useVaultRefusals(plane, session);
-  /** What the last press answered, said until it is put away. */
-  const [answered, setAnswered] = useState<string>();
+  /** What the last press answered, and the persona it was for, said until it is put away. */
+  const [answered, setAnswered] = useState<{ persona: string; said: string }>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
   const askPersona = useAskPersona();
@@ -69,9 +72,10 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
         at="pane"
         tone="news"
         label="Vault"
+        persona={answered.persona}
         onDismiss={() => setAnswered(undefined)}
       >
-        {answered}
+        {answered.said}
       </Notice>
     );
 
@@ -91,7 +95,7 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
       .then((done) => {
         if (done.status === "error") setSaid(done.error);
         else {
-          if (done.data !== null) setAnswered(done.data.said);
+          if (done.data !== null) setAnswered({ persona, said: done.data.said });
           read();
         }
       })
@@ -173,6 +177,7 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
       at="pane"
       tone="trouble"
       label="Vault"
+      persona={persona}
       fixes={fixes}
       under={under}
     >
