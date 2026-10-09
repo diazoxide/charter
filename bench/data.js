@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791567312408,
+  "lastUpdate": 1791568239110,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5376,6 +5376,48 @@ window.BENCHMARK_DATA = {
             "value": 101.119333,
             "unit": "ms",
             "extra": "median of 5 runs: 99.343, 101.067, 101.119, 103.219, 103.320 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "65e15f313d30cd4b4d2757e4bdd0ae3b5c1cec99",
+          "message": "Drop a chat's word that its dispatch waits on memory when the chat closes\n\nThe wait goes with the chat that asked (HeldDispatches::forget), so moving\nthe word to its workspace would tell the next chat there of a dispatch that\nnever starts and a later word that never comes. The row's hover says the\nchat is told when each starts or gives up, not only on giving up. The vault\nNotice's test fixtures and ADR 0064's quote take the neutral \"the chat\".\n\nRefs #1617\nRefs #1538\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T21:30:26+04:00",
+          "tree_id": "864142dcd4300d88090251223b9a1bec5df39ee2",
+          "url": "https://github.com/purlis/purlis/commit/65e15f313d30cd4b4d2757e4bdd0ae3b5c1cec99"
+        },
+        "date": 1791568238402,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.539209,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.516, 0.535, 0.539, 0.540, 0.548 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.939282499999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.554, 16.729, 16.939, 16.949, 16.981 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.028697,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.442, 103.780, 104.029, 104.421, 104.625 ms"
           }
         ]
       }
