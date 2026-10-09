@@ -345,12 +345,6 @@ export const commands = {
 	 *  the new issue's address, or why it was not filed with the link that files it in a browser.
 	 */
 	fileSandboxBlockReport: (operation: string, kind: string, harness: string | null, digest: string) => typedError<string, string>(__TAURI_INVOKE("file_sandbox_block_report", { operation, kind, harness, digest })),
-	/**
-	 *  **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
-	 *  (or the person typed). The window then restarts the chat once its turn has ended
-	 *  (`restart_chat`).
-	 */
-	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
 	/**  Every grant in force here, for Settings' Granted list (#1348). */
 	sandboxGrants: (plane: PlaneId) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("sandbox_grants", { plane })),
 	/**
@@ -2238,6 +2232,18 @@ export type BlockReport = {
 	body: string,
 	/**  What filing names, so only exactly this draft is filed. */
 	digest: string,
+};
+
+/**
+ *  **What one chat's own block Notice answers** (#1538): the block's operation and kind, by the
+ *  words the window was told, what it offers, and the host or folder Allow names: the one the
+ *  Notice showed whole, or the host the person typed where the block named none.
+ */
+export type BlockShown = {
+	operation: string,
+	kind: string,
+	what: GrantWhat,
+	target: string,
 };
 
 /**

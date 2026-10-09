@@ -175,12 +175,91 @@ fn the_app_holds_one_block_per_operation_and_kind_until_it_is_answered_or_the_ch
     assert!(blocks.holds(4, &other));
     blocks.answered(4, &other);
     assert!(!blocks.holds(4, &other));
-    blocks.heard(5, npm.clone());
-    blocks.answered_on_its_own(5, GrantWhat::Host, "REGISTRY.npmjs.org:443");
-    assert!(!blocks.holds(5, &npm), "answered on its own Notice");
     blocks.heard(6, npm.clone());
     blocks.ended(6);
     assert!(!blocks.holds(6, &npm));
+}
+
+/// What one chat's own Notice sends for its block (#1538): chat 4, its block's operation and
+/// kind, and what Allow names.
+fn one(
+    blocks: &Blocks,
+    chat: u32,
+    (operation, kind): (&str, &str),
+    target: &str,
+) -> Result<HeldBlock, String> {
+    shown_one(
+        blocks,
+        chat,
+        &shown(operation, kind, GrantWhat::Host, target),
+    )
+}
+
+fn shown(operation: &str, kind: &str, what: GrantWhat, target: &str) -> BlockShown {
+    BlockShown {
+        operation: operation.to_owned(),
+        kind: kind.to_owned(),
+        what,
+        target: target.to_owned(),
+    }
+}
+
+const CONNECT: (&str, &str) = ("connect", "host");
+
+#[test]
+fn one_chats_allow_is_refused_unless_it_is_held_on_the_block_its_notice_showed() {
+    let blocks = Blocks::default();
+    let npm = held(&seen(4, NPM));
+    // Never blocked: nothing to answer.
+    let never = one(&blocks, 4, CONNECT, NPM).expect_err("nothing held");
+    assert!(never.starts_with("Nothing was allowed"), "{never}");
+    blocks.heard(4, npm.clone());
+    // As a grant matches it, whatever spelling the Notice showed.
+    assert_eq!(
+        one(&blocks, 4, CONNECT, "REGISTRY.npmjs.org.:443"),
+        Ok(npm.clone())
+    );
+    // Another host, another chat, or another block of the same host is not what was shown.
+    assert!(one(&blocks, 4, CONNECT, "api.example.com").is_err());
+    assert!(one(&blocks, 5, CONNECT, NPM).is_err(), "another chat");
+    assert!(
+        one(&blocks, 4, ("connect", "proxy"), NPM).is_err(),
+        "another kind"
+    );
+    assert!(
+        shown_one(&blocks, 4, &shown("connect", "host", GrantWhat::Write, NPM)).is_err(),
+        "another offer"
+    );
+    // Answered, it is held no longer: a second Allow for it answers nothing.
+    blocks.answered(4, &npm);
+    assert!(one(&blocks, 4, CONNECT, NPM).is_err(), "answered once");
+}
+
+#[test]
+fn a_host_the_block_did_not_name_is_the_one_the_person_types_and_no_question_for_tasks_takes_it() {
+    let blocks = Blocks::default();
+    let unnamed = HeldBlock::unnamed_host("connect", "host");
+    blocks.heard(4, unnamed.clone());
+    // The person types the host on the chat's own Notice; the core judges it as any host.
+    assert_eq!(
+        one(&blocks, 4, CONNECT, "api.example.com"),
+        Ok(unnamed.clone())
+    );
+    assert!(
+        one(&blocks, 5, CONNECT, "api.example.com").is_err(),
+        "another chat"
+    );
+    // A question for several tasks names one host for each: none matches an unnamed block.
+    let reading = Reading {
+        asker_of: &asker_of,
+        holds: &|task, block| blocks.holds(task, block),
+    };
+    assert!(checked(1, &[seen(4, "api.example.com")], &reading).is_err());
+    assert!(checked(1, &[seen(4, "")], &reading).is_err());
+    // A block that names its host is never answered with another typed in its place.
+    let named = Blocks::default();
+    named.heard(4, held(&seen(4, NPM)));
+    assert!(one(&named, 4, CONNECT, "api.example.com").is_err());
 }
 
 #[test]

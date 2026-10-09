@@ -932,8 +932,9 @@ pub(crate) fn kept(
     Ok(())
 }
 
-/// **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
-/// (or the person typed). The window then restarts the chat once its turn has ended
+/// **Allow** on a block's Notice (#1342): `shown` is the block and the host or folder the
+/// Notice showed whole (or the host the person typed, where the block named none). Refused
+/// whole unless the chat is held on that block now (#1538, [`crate::taskblocks::shown_one`]). The window then restarts the chat once its turn has ended
 /// (`restart_chat`).
 #[tauri::command]
 #[specta::specta]
@@ -941,11 +942,12 @@ pub fn allow_sandbox_block(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     session: u32,
-    what: GrantWhat,
-    target: String,
+    shown: crate::taskblocks::BlockShown,
     level: GrantLevel,
 ) -> Result<Allowed, String> {
     let held = planes.held(&plane)?;
+    let block = crate::taskblocks::shown_one(held.chats().blocks(), session, &shown)?;
+    let (what, target) = (shown.what, shown.target);
     let root = held.root().to_path_buf();
     let allowed = allow(
         &root,
@@ -956,10 +958,8 @@ pub fn allow_sandbox_block(
         &|number, audited| held.hooks().record_grant(&root, number, audited),
         now_secs(),
     )?;
-    // Answered: no question for several tasks can answer it again (#1508).
-    held.chats()
-        .blocks()
-        .answered_on_its_own(session, what, &target);
+    // Answered: neither this Notice nor a question for several tasks answers it again.
+    held.chats().blocks().answered(session, &block);
     Ok(allowed)
 }
 

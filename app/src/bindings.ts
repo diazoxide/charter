@@ -391,11 +391,12 @@ export const commands = {
 	 */
 	fileSandboxBlockReport: (operation: string, kind: string, harness: string | null, digest: string) => typedError<string, string>(__TAURI_INVOKE("file_sandbox_block_report", { operation, kind, harness, digest })),
 	/**
-	 *  **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
-	 *  (or the person typed). The window then restarts the chat once its turn has ended
+	 *  **Allow** on a block's Notice (#1342): `shown` is the block and the host or folder the
+	 *  Notice showed whole (or the host the person typed, where the block named none). Refused
+	 *  whole unless the chat is held on that block now (#1538, [`crate::taskblocks::shown_one`]). The window then restarts the chat once its turn has ended
 	 *  (`restart_chat`).
 	 */
-	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
+	allowSandboxBlock: (plane: PlaneId, session: number, shown: BlockShown, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, shown, level })),
 	/**
 	 *  **Allow on the one question for several tasks of chat `session`** (#1508, V100-57): `seen`
 	 *  is each task with the block the question showed for it. The whole answer is refused unless
@@ -2825,6 +2826,18 @@ export type BlockReport = {
 	body: string,
 	/**  What filing names, so only exactly this draft is filed. */
 	digest: string,
+};
+
+/**
+ *  **What one chat's own block Notice answers** (#1538): the block's operation and kind, by the
+ *  words the window was told, what it offers, and the host or folder Allow names: the one the
+ *  Notice showed whole, or the host the person typed where the block named none.
+ */
+export type BlockShown = {
+	operation: string,
+	kind: string,
+	what: GrantWhat,
+	target: string,
 };
 
 /**

@@ -1864,7 +1864,12 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     await userEvent.click(within(own).getByRole("button", { name: "Allow for this chat" }));
     await waitFor(() =>
       expect(commandsOf(asked, "allow_sandbox_block")).toEqual([
-        { plane: PLANE, session: 1, what: "host", target: "registry.npmjs.org", level: "chat" },
+        {
+          plane: PLANE,
+          session: 1,
+          shown: { operation: "connect", kind: "host", what: "host", target: "registry.npmjs.org" },
+          level: "chat",
+        },
       ]),
     );
     // The tasks' question still stands: the session's answer did not reach them.

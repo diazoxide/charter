@@ -67,8 +67,22 @@ pub struct HeldBlock {
     pub operation: String,
     pub kind: String,
     pub what: GrantWhat,
-    /// [`normalised`].
+    /// [`normalised`]; empty for a host the block did not name, which the person types on the
+    /// chat's own Notice ([`HeldBlock::unnamed_host`]).
     pub target: String,
+}
+
+impl HeldBlock {
+    /// A block on a host its report did not name: only the chat's own Notice answers it, with
+    /// the host the person types (#1538). No question for several tasks matches it.
+    pub fn unnamed_host(operation: &str, kind: &str) -> Self {
+        Self {
+            operation: operation.to_owned(),
+            kind: kind.to_owned(),
+            what: GrantWhat::Host,
+            target: String::new(),
+        }
+    }
 }
 
 /// **The block each open chat is held on now**, as the app heard it: one per operation and
@@ -113,21 +127,6 @@ impl Blocks {
         }
     }
 
-    /// Whatever chat `session` is held on that names `target` as `what` was answered on its
-    /// own Notice: it is held no longer.
-    pub fn answered_on_its_own(&self, session: u32, what: GrantWhat, target: &str) {
-        let Some(target) = normalised(what, target) else {
-            return;
-        };
-        let mut held = self.held();
-        if let Some(mine) = held.get_mut(&session) {
-            mine.retain(|one| one.what != what || one.target != target);
-            if mine.is_empty() {
-                held.remove(&session);
-            }
-        }
-    }
-
     /// Chat `session` ended: nothing is held for it.
     pub fn ended(&self, session: u32) {
         self.held().remove(&session);
@@ -135,25 +134,73 @@ impl Blocks {
 }
 
 /// Holds the block the window is about to be told of, where an answer could name it: a host
-/// or a folder to write, named whole.
+/// or a folder to write, named whole, or a host the report did not name, which the person
+/// types on the chat's own Notice.
 pub fn heard(chats: &crate::chats::Chats, told: &crate::hooks::ChatBlocked) {
     let what = match told.offer {
         crate::hooks::BlockOffer::Host => GrantWhat::Host,
         crate::hooks::BlockOffer::Write => GrantWhat::Write,
         _ => return,
     };
-    let Some(target) = told.target.as_deref().and_then(|t| normalised(what, t)) else {
-        return;
+    let block = match told.target.as_deref() {
+        None if what == GrantWhat::Host => HeldBlock::unnamed_host(&told.operation, &told.kind),
+        None => return,
+        Some(target) => {
+            let Some(target) = normalised(what, target) else {
+                return;
+            };
+            HeldBlock {
+                operation: told.operation.clone(),
+                kind: told.kind.clone(),
+                what,
+                target,
+            }
+        }
     };
-    chats.blocks().heard(
-        told.session,
-        HeldBlock {
-            operation: told.operation.clone(),
-            kind: told.kind.clone(),
-            what,
-            target,
-        },
-    );
+    chats.blocks().heard(told.session, block);
+}
+
+/// **What one chat's own block Notice answers** (#1538): the block's operation and kind, by the
+/// words the window was told, what it offers, and the host or folder Allow names: the one the
+/// Notice showed whole, or the host the person typed where the block named none.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct BlockShown {
+    pub operation: String,
+    pub kind: String,
+    pub what: GrantWhat,
+    pub target: String,
+}
+
+/// **The block one chat's own Notice answers** (#1538, as D-1508-9 binds the question for
+/// several tasks): chat `session` held now on the block of that operation and kind, offering
+/// `what`, and naming `target` as a grant matches it, or naming no host where the person typed
+/// `target`. Anything else (a block never heard, answered already, replaced by a newer one, or
+/// of a chat that ended) refuses the Allow whole, before anything is judged or kept.
+pub fn shown_one(blocks: &Blocks, session: u32, shown: &BlockShown) -> Result<HeldBlock, String> {
+    let BlockShown {
+        operation,
+        kind,
+        what,
+        target,
+    } = shown;
+    let (what, target) = (*what, target.as_str());
+    let named = normalised(what, target).map(|target| HeldBlock {
+        operation: operation.to_owned(),
+        kind: kind.to_owned(),
+        what,
+        target,
+    });
+    let typed = (what == GrantWhat::Host).then(|| HeldBlock::unnamed_host(operation, kind));
+    named
+        .into_iter()
+        .chain(typed)
+        .find(|block| blocks.holds(session, block))
+        .ok_or_else(|| {
+            format!(
+                "Nothing was allowed: chat {session} is not blocked on what this Notice showed any \
+                 more. It was answered already, or the chat moved on or ended."
+            )
+        })
 }
 
 /// The chat that asked for chat `session` as a task, by the app's own record of it; none for a
