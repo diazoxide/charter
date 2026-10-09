@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791561749175,
+  "lastUpdate": 1791563457117,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5250,6 +5250,48 @@ window.BENCHMARK_DATA = {
             "value": 104.929596,
             "unit": "ms",
             "extra": "median of 5 runs: 103.652, 104.506, 104.930, 106.194, 106.396 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "6cc8dbb8bd384c00d568420a17b160d8351efef7",
+          "message": "Keep a session's ephemeral memory whole when a name in it cannot be read\n\nThe ephemeral sweep listed a session's folders through `names`, which\nskips a name that is not UTF-8. A session folder holding such a name was\njudged without it: its month-old files were removed, and only the final\nfolder removal failed. The shape check now lists through `every_name`,\nwhich answers nothing when the folder cannot be listed or any name is not\nUTF-8, so the session is kept whole, as for any shape charter never\nwrites.\n\nRefs #1004\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T20:26:25+04:00",
+          "tree_id": "8ff49a0877c9f4ac225693bd869001016a068650",
+          "url": "https://github.com/purlis/purlis/commit/6cc8dbb8bd384c00d568420a17b160d8351efef7"
+        },
+        "date": 1791563455911,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.505154,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.482, 0.487, 0.505, 0.530, 0.532 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9110725,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.300, 16.798, 16.911, 16.983, 17.022 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.0648585,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.496, 103.602, 104.065, 104.154, 104.745 ms"
           }
         ]
       }
