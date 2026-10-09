@@ -55,6 +55,8 @@ mod tests {
                 crate::todos::todo_forget,
                 crate::todos::todo_read,
                 crate::personas::persona_create,
+                crate::personas::persona_marks,
+                crate::personas::persona_mark_set,
                 crate::personas::persona_remove,
                 crate::resize_session,
                 crate::unwatch_session,
@@ -247,6 +249,18 @@ mod tests {
                 "plane": plane, "name": "scribe", "role": null,
                 "delegateWhen": "writing things down", "parent": null,
             }),
+        );
+        // A persona's mark reads every persona's folder and writes its definition (#1454).
+        check(
+            "persona_mark_set",
+            json!({ "plane": plane, "name": "scribe", "icon": "rocket", "colour": "teal" }),
+        );
+        let marks = check("persona_marks", json!({ "plane": plane }));
+        assert!(
+            marks
+                .as_array()
+                .is_some_and(|marks| marks.iter().any(|mark| mark["icon"] == "rocket")),
+            "{marks}"
         );
         check(
             "persona_remove",
