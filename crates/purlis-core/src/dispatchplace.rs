@@ -790,12 +790,17 @@ fn cut_before_the_piece(text: &str) -> bool {
     if serde_json::from_str::<serde_json::Value>(text).is_ok() {
         return false;
     }
-    let Some(at) = text.rfind("\"piece\"") else {
+    // The last `"piece"` that is a key: one a colon follows, or the end of the text. The same
+    // word as a value (a task named "piece") is not the key, and must not hide a missing one.
+    const KEY: &str = "\"piece\"";
+    let Some(rest) = text.rmatch_indices(KEY).find_map(|(at, _)| {
+        let rest = text[at + KEY.len()..].trim_start();
+        (rest.is_empty() || rest.starts_with(':')).then_some(rest)
+    }) else {
         return true;
     };
-    let rest = text[at + "\"piece\"".len()..].trim_start();
     let Some(rest) = rest.strip_prefix(':') else {
-        return rest.is_empty();
+        return true;
     };
     let Some(value) = rest.trim_start().strip_prefix('"') else {
         return rest.trim().is_empty();
