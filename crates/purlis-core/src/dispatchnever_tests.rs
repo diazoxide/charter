@@ -60,6 +60,66 @@ fn no_record_is_no_nevers_and_one_is_kept_in_a_file_of_its_own() {
 }
 
 #[test]
+fn a_never_keeps_when_it_was_said_and_on_which_chat_s_question() {
+    // #1464: Settings' table says when a never was said and from which chat, as the Granted
+    // list says of a grant. Neither is part of the never.
+    let project = tempfile::tempdir().expect("a project");
+    let root = project.path();
+    let said = Said {
+        at: Some(1_760_000_000),
+        chat: Some("steward 1".to_owned()),
+    };
+    add_said(root, "steward", "devops", said.clone()).expect("kept");
+    // Said again later: when it was first said stands.
+    add_said(
+        root,
+        "steward",
+        "devops",
+        Said {
+            at: Some(1_770_000_000),
+            chat: None,
+        },
+    )
+    .expect("kept once");
+    add(root, "qa", "prod").expect("kept with nothing of when");
+    assert_eq!(
+        entries(root),
+        vec![
+            Entry::new("steward", "devops", said),
+            Entry::new("qa", "prod", Said::default()),
+        ]
+    );
+    assert_eq!(
+        read(root),
+        Nevers::Read(vec![
+            ("steward".to_owned(), "devops".to_owned()),
+            ("qa".to_owned(), "prod".to_owned()),
+        ])
+    );
+    // Lifting the other keeps this one's when.
+    assert!(lift(root, "qa", "prod").expect("lifted"));
+    assert_eq!(entries(root)[0].said.at, Some(1_760_000_000));
+}
+
+#[test]
+fn a_when_that_is_not_a_number_or_a_chat_that_is_not_a_string_refuses_the_same() {
+    let project = tempfile::tempdir().expect("a project");
+    let root = project.path();
+    by_hand(
+        &path(root),
+        r#"{"never": [{"asking": "steward", "target": "devops", "at": "soon", "chat": 7}]}"#,
+    );
+    assert_eq!(read(root), Nevers::Read(one("steward", "devops")));
+    assert_eq!(entries(root)[0].said, Said::default());
+    // And a write keeps them as they are written, as it keeps any key of an entry.
+    add(root, "qa", "prod").expect("kept");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path(root)).expect("read")).expect("json");
+    assert_eq!(written["never"][0]["at"], "soon");
+    assert_eq!(written["never"][0]["chat"], 7);
+}
+
+#[test]
 fn a_key_this_build_does_not_know_is_kept_as_it_is() {
     let project = tempfile::tempdir().expect("a project");
     let root = project.path();

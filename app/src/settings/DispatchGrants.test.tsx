@@ -525,12 +525,34 @@ describe("any persona", () => {
 });
 
 describe("the pairs said never to, and the ones kept blocked for a chat", () => {
-  const NEVER = { asking: "steward", target: "devops" };
+  const NEVER = { asking: "steward", target: "devops", at: null, chat: null };
+
+  it("says when a never was said and on which chat's question, where that is known", async () => {
+    // #1464: as the Granted list says of a grant.
+    core({
+      grants: [MINE],
+      standing: {
+        nevers: [{ asking: "steward", target: "devops", at: 1_760_000_000, chat: "steward 3" }],
+      },
+    });
+    render(<Table />);
+
+    const lift = await screen.findByRole("button", {
+      name: "Lift: never for steward dispatching to devops",
+    });
+    const at = new Date(1_760_000_000 * 1000).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    expect(rowOf(lift)).toHaveTextContent(
+      `You said so on this machine, from steward 3, ${at}. No grant covers it`,
+    );
+  });
 
   it("draws each never as a row with Lift, and says it holds down a chain", async () => {
     const fake = core({
       grants: [MINE],
-      standing: { nevers: [NEVER, { asking: "qa", target: "devops" }] },
+      standing: { nevers: [NEVER, { asking: "qa", target: "devops", at: null, chat: null }] },
     });
     fake.on("lift_dispatch_never", ({ asking, target }) => {
       fake.held.standing = stands({
@@ -614,7 +636,10 @@ describe("where the list of nevers does not read", () => {
     const fake = core({
       grants: [MINE, OURS],
       // A core that answered a never anyway is not believed while the list does not read.
-      standing: { nevers_unread: unread, nevers: [{ asking: "steward", target: "qa" }] },
+      standing: {
+        nevers_unread: unread,
+        nevers: [{ asking: "steward", target: "qa", at: null, chat: null }],
+      },
     });
     render(<Table />);
 
@@ -640,7 +665,9 @@ describe("where the list of nevers does not read", () => {
       );
 
     // Once the person mended the file, Read again draws what it holds.
-    fake.held.standing = stands({ nevers: [{ asking: "steward", target: "qa" }] });
+    fake.held.standing = stands({
+      nevers: [{ asking: "steward", target: "qa", at: null, chat: null }],
+    });
     await userEvent.setup().click(within(alert).getByRole("button", { name: "Read again" }));
     expect(
       await screen.findByRole("button", { name: "Lift: never for steward dispatching to qa" }),
@@ -731,7 +758,7 @@ describe("a persona that is away, and another under its name", () => {
       standing: {
         personas: ["qa", "steward"],
         any: [{ asking: "devops", level: "you", waiting: false, declined: false, ...ANYWHERE }],
-        nevers: [{ asking: "steward", target: "devops" }],
+        nevers: [{ asking: "steward", target: "devops", at: null, chat: null }],
       },
     });
     render(<Table />);
@@ -787,7 +814,7 @@ describe("a persona that is away, and another under its name", () => {
       standing: {
         returned: ["devops"],
         back: ["devops"],
-        nevers: [{ asking: "steward", target: "devops" }],
+        nevers: [{ asking: "steward", target: "devops", at: null, chat: null }],
         dormant: [
           { asking: "steward", target: "devops", any: false, was: "devops" },
           { asking: "devops", target: "*", any: true, was: "devops" },
@@ -795,7 +822,9 @@ describe("a persona that is away, and another under its name", () => {
       },
     });
     fake.on("give_back_dispatch", () => {
-      fake.held.standing = stands({ nevers: [{ asking: "steward", target: "devops" }] });
+      fake.held.standing = stands({
+        nevers: [{ asking: "steward", target: "devops", at: null, chat: null }],
+      });
     });
     render(<Table />);
 
@@ -880,7 +909,7 @@ describe("what a press says once it is done", () => {
   it("does not say a grant counts while a never covers the pair or the list of nevers does not read", async () => {
     const fake = core({
       grants: [THEIRS],
-      standing: { nevers: [{ asking: "qa", target: "devops" }] },
+      standing: { nevers: [{ asking: "qa", target: "devops", at: null, chat: null }] },
     });
     fake.on("accept_project_dispatch", () => {});
     fake.on("allow_dispatch_to_any", () => {});
@@ -1025,7 +1054,7 @@ describe("with the keyboard, and to a screen reader", () => {
       grants: [MINE, OURS, THEIRS],
       standing: {
         any: [{ asking: "qa", level: "project", waiting: true, declined: false, ...ANYWHERE }],
-        nevers: [{ asking: "qa", target: "steward" }],
+        nevers: [{ asking: "qa", target: "steward", at: null, chat: null }],
         back: ["devops"],
         dormant: [{ asking: "qa", target: "devops", any: false, was: "devops" }],
       },
@@ -1056,7 +1085,10 @@ describe("with the keyboard, and to a screen reader", () => {
   });
 
   it("reaches every button by Tab, each with a name that says whose grant it is", async () => {
-    core({ grants: [MINE, OURS], standing: { nevers: [{ asking: "qa", target: "devops" }] } });
+    core({
+      grants: [MINE, OURS],
+      standing: { nevers: [{ asking: "qa", target: "devops", at: null, chat: null }] },
+    });
     render(<Table />);
     await table();
     const user = userEvent.setup();
@@ -1388,7 +1420,10 @@ describe("which workspace a grant holds in", () => {
 
   it("says a never holds in every workspace", async () => {
     core({
-      standing: { workspaces: WORKSPACES, nevers: [{ asking: "steward", target: "devops" }] },
+      standing: {
+        workspaces: WORKSPACES,
+        nevers: [{ asking: "steward", target: "devops", at: null, chat: null }],
+      },
     });
     render(<Table />);
 

@@ -652,6 +652,14 @@ fn never_for_this_pair_is_the_store_s_never_audited_as_the_person_s_and_ends_the
         dispatchgrant::nevers(world.root()),
         [("steward".to_owned(), "devops".to_owned())]
     );
+    // When it was said, on no chat's question (#1464).
+    assert_eq!(
+        dispatchgrant::nevers_said(world.root())[0].said,
+        purlis_core::dispatchnever::Said {
+            at: Some(NOW),
+            chat: None,
+        }
+    );
     assert!(dispatchgrant::yours(world.root()).is_empty());
     assert_eq!(world.pairs(), vec![one("steward", "qa", 1)]);
     // The chat asking on is refused for the never, which is not kept and adds no clause.

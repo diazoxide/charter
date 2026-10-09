@@ -1677,6 +1677,9 @@ fn a_never_is_lifted_in_settings_audited_and_the_pair_asks_again() {
         [DispatchNever {
             asking: "steward".to_owned(),
             target: "devops".to_owned(),
+            // #1464: when it was said, and on which chat's question.
+            at: Some(100),
+            chat: Some("steward 3".to_owned()),
         }]
     );
 

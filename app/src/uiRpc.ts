@@ -2938,6 +2938,13 @@ export type DispatchMade = {
 export type DispatchNever = {
 	asking: string,
 	target: string,
+	/**  When the person said it, in seconds since 1970; null where that is not known (#1464). */
+	at: number | null,
+	/**
+	 *  The asking chat's name, as its tab showed it, where it was said on a chat's question;
+	 *  null where it was said on none, or that is not known.
+	 */
+	chat: string | null,
 };
 
 /**  A dispatch that needs the person, as the Notice on the asking chat's tab shows it. */

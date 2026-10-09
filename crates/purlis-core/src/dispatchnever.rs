@@ -26,12 +26,17 @@
 //! # The shape
 //!
 //! ```json
-//! {"never": [{"asking": "steward", "target": "devops"}]}
+//! {"never": [{"asking": "steward", "target": "devops", "at": 1760000000, "chat": "steward 1"}]}
 //! ```
 //!
 //! Each entry is matched as it is spelled. An entry that is not two strings makes the whole
 //! file unread, since what it meant to refuse is unknown. A key this build does not know is
 //! kept as it is.
+//!
+//! **When it was said, and on which chat's question** (#1464): `at` (seconds since 1970) and
+//! `chat` (the asking chat's name as its tab showed it) are what Settings' table says of a
+//! never, as the Granted list says of a grant. Both are optional and refuse nothing: an entry
+//! without them, or with one that is not a number or a string, is the same never.
 //!
 //! # Where it is, and who writes it
 //!
@@ -69,22 +74,109 @@ pub enum Nevers {
     Unread,
 }
 
-/// One pair of an entry, or `None` for an entry that is not `{asking, target}` strings.
-fn pair_of(entry: &serde_json::Value) -> Option<(String, String)> {
+/// **When a never was said, and on which chat's question** (#1464): what Settings' table says
+/// of it. Neither is part of the never: a never with neither refuses the same.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Said {
+    /// When the person said it, in seconds since 1970.
+    pub at: Option<u64>,
+    /// The asking chat's name as its tab showed it then; none where it was said on no chat's
+    /// question (an item of the needs-you list).
+    pub chat: Option<String>,
+}
+
+/// One entry of the file: the pair, and what is known of when it was said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub asking: String,
+    pub target: String,
+    pub said: Said,
+    /// Every other key of the entry, kept as it is written.
+    rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Entry {
+    fn pair(&self) -> (String, String) {
+        (self.asking.clone(), self.target.clone())
+    }
+
+    fn is(&self, asking: &str, target: &str) -> bool {
+        self.asking == asking && self.target == target
+    }
+
+    /// A new entry for `asking` to `target`, said as `said`.
+    fn new(asking: &str, target: &str, said: Said) -> Self {
+        Self {
+            asking: asking.to_owned(),
+            target: target.to_owned(),
+            said,
+            rest: serde_json::Map::new(),
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        let mut entry = serde_json::json!({"asking": self.asking, "target": self.target});
+        if let Some(at) = self.said.at {
+            entry["at"] = at.into();
+        }
+        if let Some(chat) = &self.said.chat {
+            entry["chat"] = chat.as_str().into();
+        }
+        if let serde_json::Value::Object(keys) = &mut entry {
+            for (key, value) in &self.rest {
+                keys.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        entry
+    }
+}
+
+/// One entry, or `None` for an entry that is not `{asking, target}` strings. Its `at` and
+/// `chat` are read where they are a number and a string, and are none otherwise.
+fn entry_of(entry: &serde_json::Value) -> Option<Entry> {
     let entry = entry.as_object()?;
-    Some((
-        entry.get("asking")?.as_str()?.to_owned(),
-        entry.get("target")?.as_str()?.to_owned(),
-    ))
+    let mut rest = entry.clone();
+    for known in ["asking", "target"] {
+        rest.remove(known);
+    }
+    // A when or a chat this build cannot read is kept as it is written, as any key is.
+    for (key, readable) in [
+        ("at", entry.get("at").is_some_and(serde_json::Value::is_u64)),
+        (
+            "chat",
+            entry.get("chat").is_some_and(serde_json::Value::is_string),
+        ),
+    ] {
+        if readable {
+            rest.remove(key);
+        }
+    }
+    Some(Entry {
+        rest,
+        asking: entry.get("asking")?.as_str()?.to_owned(),
+        target: entry.get("target")?.as_str()?.to_owned(),
+        said: Said {
+            at: entry.get("at").and_then(serde_json::Value::as_u64),
+            chat: entry
+                .get("chat")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        },
+    })
+}
+
+/// A list of entries, or `None` where it is not a list or holds one that is no pair.
+fn entries_of(list: &serde_json::Value) -> Option<Vec<Entry>> {
+    list.as_array()?.iter().map(entry_of).collect()
 }
 
 /// A list of entries as pairs, or `None` where it is not a list or holds one that is no pair.
 pub(crate) fn pairs_of(list: &serde_json::Value) -> Option<Vec<(String, String)>> {
-    list.as_array()?.iter().map(pair_of).collect()
+    Some(entries_of(list)?.iter().map(Entry::pair).collect())
 }
 
-/// The pairs of the file, each as asking persona and target persona.
-type Pairs = Vec<(String, String)>;
+/// The entries of the file.
+type Pairs = Vec<Entry>;
 
 /// The file's whole object, with every key this build does not know.
 type Whole = serde_json::Map<String, serde_json::Value>;
@@ -96,23 +188,31 @@ fn parsed(text: &str) -> Option<(Whole, Pairs)> {
     };
     let pairs = match whole.get(KEY) {
         None => Vec::new(),
-        Some(list) => pairs_of(list)?,
+        Some(list) => entries_of(list)?,
     };
     Some((whole, pairs))
 }
 
-/// The file as it is on disk, with nothing moved into it.
-fn on_disk(root: &Path) -> Nevers {
+/// The file's entries as they are on disk, with nothing moved into it; `None` where it is
+/// there and does not read.
+fn entries_on_disk(root: &Path) -> Option<Vec<Entry>> {
     let path = path(root);
     match std::fs::symlink_metadata(&path) {
-        Err(none) if none.kind() == io::ErrorKind::NotFound => Nevers::Read(Vec::new()),
+        Err(none) if none.kind() == io::ErrorKind::NotFound => Some(Vec::new()),
         // Never through a link, and never a folder or a device.
         Ok(there) if there.is_file() => std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| parsed(&text))
-            .map_or(Nevers::Unread, |(_, pairs)| Nevers::Read(pairs)),
-        _ => Nevers::Unread,
+            .map(|(_, entries)| entries),
+        _ => None,
     }
+}
+
+/// The file as it is on disk, with nothing moved into it.
+fn on_disk(root: &Path) -> Nevers {
+    entries_on_disk(root).map_or(Nevers::Unread, |entries| {
+        Nevers::Read(entries.iter().map(Entry::pair).collect())
+    })
 }
 
 /// What a write is refused with on a record that does not read, and what the person is told.
@@ -132,7 +232,7 @@ pub fn unread_said(root: &Path) -> String {
 
 /// Reads the file, changes its pairs with `how` and writes it back, under purlis's lock on its
 /// directory. **Refuses a file that does not read**, and leaves it as it is.
-fn change(root: &Path, how: impl FnOnce(&mut Vec<(String, String)>)) -> io::Result<()> {
+fn change(root: &Path, how: impl FnOnce(&mut Vec<Entry>)) -> io::Result<()> {
     let unread = || io::Error::new(io::ErrorKind::InvalidData, unread_said(root));
     if on_disk(root) == Nevers::Unread {
         return Err(unread());
@@ -147,13 +247,7 @@ fn change(root: &Path, how: impl FnOnce(&mut Vec<(String, String)>)) -> io::Resu
             Some(text) => parsed(text).ok_or_else(unread)?,
         };
         how(&mut pairs);
-        whole.insert(
-            KEY.to_owned(),
-            pairs
-                .iter()
-                .map(|(asking, target)| serde_json::json!({"asking": asking, "target": target}))
-                .collect(),
-        );
+        whole.insert(KEY.to_owned(), pairs.iter().map(Entry::json).collect());
         serde_json::to_string_pretty(&whole)
             .map(|text| Some(format!("{text}\n")))
             .map_err(io::Error::other)
@@ -170,9 +264,9 @@ pub fn read(root: &Path) -> Nevers {
     };
     let moved = left.is_empty()
         || (change(root, |pairs| {
-            for one in &left {
-                if !pairs.contains(one) {
-                    pairs.push(one.clone());
+            for (asking, target) in &left {
+                if !pairs.iter().any(|one| one.is(asking, target)) {
+                    pairs.push(Entry::new(asking, target, Said::default()));
                 }
             }
         })
@@ -193,21 +287,36 @@ pub fn read(root: &Path) -> Nevers {
     }
 }
 
-/// Records the person's never for `asking` to `target`: the grant Notice's "Never for this
-/// pair", never a chat. Refused where the record does not read.
+/// Records the person's never for `asking` to `target`, with nothing said of when: [`add_said`].
 pub fn add(root: &Path, asking: &str, target: &str) -> io::Result<()> {
+    add_said(root, asking, target, Said::default())
+}
+
+/// Records the person's never for `asking` to `target`: the grant Notice's "Never for this
+/// pair", never a chat. `said` is when, and on which chat's question; a never said again keeps
+/// when it was first said. Refused where the record does not read.
+pub fn add_said(root: &Path, asking: &str, target: &str, said: Said) -> io::Result<()> {
     if read(root) == Nevers::Unread {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             unread_said(root),
         ));
     }
-    let pair = (asking.to_owned(), target.to_owned());
     change(root, |pairs| {
-        if !pairs.contains(&pair) {
-            pairs.push(pair);
+        if !pairs.iter().any(|one| one.is(asking, target)) {
+            pairs.push(Entry::new(asking, target, said));
         }
     })
+}
+
+/// **Every never with when it was said** (#1464), in the file's order: what Settings' table
+/// draws. Empty where the record does not read, which [`read`] says; read after [`read`], so
+/// what an earlier build left is moved first.
+pub fn entries(root: &Path) -> Vec<Entry> {
+    if read(root) == Nevers::Unread {
+        return Vec::new();
+    }
+    entries_on_disk(root).unwrap_or_default()
 }
 
 /// Lifts that never: Settings, never a chat. Answers whether there was one. Refused where the
@@ -223,7 +332,7 @@ pub fn lift(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
         return Ok(false);
     }
     change(root, |pairs| {
-        pairs.retain(|(from, to)| !(from == asking && to == target));
+        pairs.retain(|one| !one.is(asking, target));
     })?;
     Ok(true)
 }

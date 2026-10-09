@@ -1490,7 +1490,12 @@ impl Store {
             workspace: None,
         };
         (ground.audit)(Some(held.asking.session), &audited)?;
-        if let Err(why) = dispatchgrant::never(ground.root, &pair) {
+        // When, and on which chat's question (#1464): what Settings' table says of it.
+        let said = purlis_core::dispatchnever::Said {
+            at: Some(ground.at),
+            chat: Some(held.asking.name.clone()),
+        };
+        if let Err(why) = dispatchgrant::never_said_as(ground.root, &pair, said) {
             // Recorded as lifted, so the log never ends on a never that is not there.
             if let Err(unsaid) = (ground.audit)(
                 Some(held.asking.session),
@@ -2108,6 +2113,11 @@ fn with_ground<T>(held: &crate::planes::Held, with: impl FnOnce(&Ground<'_>) -> 
 pub struct DispatchNever {
     pub asking: String,
     pub target: String,
+    /// When the person said it, in seconds since 1970; null where that is not known (#1464).
+    pub at: Option<u32>,
+    /// The asking chat's name, as its tab showed it, where it was said on a chat's question;
+    /// null where it was said on none, or that is not known.
+    pub chat: Option<String>,
 }
 
 /// One persona whose chats may dispatch to any persona, as Settings lists it.
@@ -2308,9 +2318,14 @@ fn standing_of(root: &Path) -> DispatchStanding {
         .filter(|one| !one.wants.is_empty())
         .collect();
     DispatchStanding {
-        nevers: dispatchgrant::nevers(root)
+        nevers: dispatchgrant::nevers_said(root)
             .into_iter()
-            .map(|(asking, target)| DispatchNever { asking, target })
+            .map(|one| DispatchNever {
+                asking: one.asking,
+                target: one.target,
+                at: one.said.at.and_then(|at| u32::try_from(at).ok()),
+                chat: one.said.chat,
+            })
             .collect(),
         any,
         nevers_unread: dispatchgrant::nevers_unread(root),

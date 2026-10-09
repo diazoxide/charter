@@ -146,7 +146,10 @@ fn the_table_is_told_every_grant_with_its_source_and_what_stands_beside_them() {
         standing.nevers,
         [DispatchNever {
             asking: "devops".to_owned(),
-            target: "prod".to_owned()
+            target: "prod".to_owned(),
+            // Said by hand here, so when and from which chat are not known.
+            at: None,
+            chat: None,
         }]
     );
     assert_eq!(
