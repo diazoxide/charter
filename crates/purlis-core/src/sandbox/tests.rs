@@ -293,11 +293,41 @@ fn a_chat_never_writes_charters_integrity_state() {
         paths(&denied, Class::Integrity, Access::Write),
         [
             plane.path().join(".purlis/app"),
+            plane.path().join(".purlis/harness-profiles-launched.json"),
+            plane
+                .path()
+                .join(".purlis/harness-declarations-approved.json"),
+            plane.path().join(".purlis/mcp-approved.json"),
             plane.path().join(".charter/app"),
+            plane.path().join(".charter/harness-profiles-launched.json"),
+            plane
+                .path()
+                .join(".charter/harness-declarations-approved.json"),
+            plane.path().join(".charter/mcp-approved.json"),
             // Neither folder is there yet, so neither is the chat's to make (D-RN2a-7).
             plane.path().join(".purlis"),
             plane.path().join(".charter"),
         ]
+    );
+}
+
+/// #1458: the persona MCP approvals are read where `$PURLIS_HOME` puts the state folder, so
+/// they are held there too.
+#[test]
+fn the_persona_mcp_approvals_are_held_where_purlis_home_puts_them() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[("PURLIS_HOME", "/srv/purlis-state")]),
+        home: Some(std::path::PathBuf::from("/home/op")),
+        os: Os::Linux,
+    };
+    let denied = Denied::of(plane.path(), &machine);
+    assert!(
+        paths(&denied, Class::Integrity, Access::Write).contains(&std::path::PathBuf::from(
+            "/srv/purlis-state/mcp-approved.json"
+        )),
+        "{:?}",
+        denied.paths
     );
 }
 
@@ -594,6 +624,125 @@ fn an_opencode_chat_is_handed_the_dispatch_records_denied_for_reading() {
             wrap.denied
         );
     }
+}
+
+/// #1458: the person's approvals of a profile's command and of a project's harness declaration
+/// are what lets purlis start that program, so no sandboxed chat writes them, nor the folder
+/// the declarations are read from, even standing at the project root with a state folder of
+/// its own there. Denied for writing (both are read where a chat may read), in what every
+/// harness is compiled, under both names of the state folder.
+#[test]
+fn every_harness_denies_a_chat_writing_the_persons_harness_approvals_or_the_declarations() {
+    let plane = tempfile::tempdir().expect("a plane");
+    // A state folder that is there, so the folder itself is not what holds the records.
+    std::fs::create_dir(plane.path().join(".purlis")).expect("a state folder");
+    let records: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+        .iter()
+        .flat_map(|state| {
+            [
+                crate::profiletrust::RECORD,
+                crate::harness_declaration::APPROVED,
+                crate::personaverbs::mcp::APPROVED_FILE,
+            ]
+            .map(|record| plane.path().join(state).join(record))
+        })
+        .collect();
+    let declarations = plane.path().join(crate::harness_declaration::DIR);
+
+    // The classes: the records are purlis's own state; the declarations are what a program run
+    // later, outside any sandbox, is started from.
+    let denied = Denied::of(plane.path(), &machine(Os::MacOs));
+    let integrity = paths(&denied, Class::Integrity, Access::Write);
+    for record in &records {
+        assert!(
+            integrity.contains(record),
+            "{} not in {integrity:?}",
+            record.display()
+        );
+    }
+    assert!(
+        paths(&denied, Class::LaterCode, Access::Write).contains(&declarations),
+        "{} not held: {:?}",
+        declarations.display(),
+        denied.paths
+    );
+    // Read, never written: the start that checks them may run where the chat's reads are held.
+    for held in records.iter().chain([&declarations]) {
+        assert!(
+            !denied
+                .paths
+                .iter()
+                .any(|it| it.access == Access::ReadWrite && held.starts_with(&it.path)),
+            "{} is denied to reads",
+            held.display()
+        );
+    }
+
+    let held: Vec<&std::path::PathBuf> = records.iter().chain([&declarations]).collect();
+    let mut compiled_harnesses = 0;
+    for harness in Harness::ALL {
+        if compiler(harness).is_none() {
+            continue;
+        }
+        compiled_harnesses += 1;
+        let applied = applied_for(
+            harness,
+            &policy_of(&[], false),
+            &Plane::of(None),
+            plane.path(),
+            &machine(Os::MacOs),
+        )
+        .expect("compiles");
+        match applied.form() {
+            // Claude Code: its own sandbox's write denials, and its file tools'.
+            Form::ClaudeCode(settings) => {
+                let deny_write: Vec<&str> = settings.sandbox["filesystem"]["denyWrite"]
+                    .as_array()
+                    .expect("a list")
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect();
+                for path in &held {
+                    let named = super::real(path).display().to_string();
+                    assert!(deny_write.contains(&named.as_str()), "{named}");
+                    assert!(
+                        settings.deny.contains(&format!("Edit(/{named})")),
+                        "{named}: {:?}",
+                        settings.deny
+                    );
+                }
+            }
+            // Codex and opencode: purlis's own wrap, whose profile a chat at the root runs in.
+            Form::Codex(_) | Form::Opencode(_) => {
+                let wrapped = applied.form().denied().expect("a wrap");
+                for path in &held {
+                    assert!(
+                        wrapped
+                            .iter()
+                            .any(|it| it.path == **path && it.access == Access::Write),
+                        "{harness:?}: {} not denied",
+                        path.display()
+                    );
+                }
+                let profile = seatbelt::profile(
+                    wrapped,
+                    &seatbelt::Own::default(),
+                    plane.path(),
+                    std::path::Path::new("/private/tmp/chat"),
+                    4040,
+                    None,
+                )
+                .expect("a profile");
+                for path in &held {
+                    for named in both_firmlink_names(super::real(path)) {
+                        let rule = format!("(deny file-write* (subpath \"{}\"))", named.display());
+                        assert!(profile.contains(&rule), "{harness:?}: {rule} missing");
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(compiled_harnesses, 3, "Claude Code, Codex and opencode");
 }
 
 /// D-T59-19: what waits to be told to a chat on its next turn (a task's report, purlis's word

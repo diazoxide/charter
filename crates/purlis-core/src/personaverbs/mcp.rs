@@ -363,7 +363,16 @@ pub fn approved(state: &Path, persona: &str) -> BTreeSet<String> {
 
 /// `mcpseen.approve`: record `fingerprints` as `persona`'s approved set, REPLACING what was
 /// there, written as `json.dumps(doc, indent=2, ensure_ascii=False)` at 0600.
-pub fn approve(plane: &Path, state: &Path, persona: &str, fingerprints: &[String]) {
+///
+/// **A write that fails is an error, never a quiet no** (#1458, D-1458-4): the caller says
+/// "recorded" only on `Ok`. A sandboxed chat is denied this file, so that is where a chat that
+/// got past the command's own refusal ends up.
+pub fn approve(
+    plane: &Path,
+    state: &Path,
+    persona: &str,
+    fingerprints: &[String],
+) -> std::io::Result<()> {
     let mut doc = approvals(state);
     let set: BTreeSet<&String> = fingerprints.iter().filter(|f| !f.is_empty()).collect();
     doc.insert(
@@ -372,9 +381,11 @@ pub fn approve(plane: &Path, state: &Path, persona: &str, fingerprints: &[String
     );
     // `json.dumps(doc, indent=2, ensure_ascii=False) + "\n"`; the writer adds the newline.
     let text = crate::pyjson::dumps_indent2_unicode(&Value::Object(doc));
-    if crate::plane::private_dir(plane, state).is_ok() {
-        let _ = crate::plane::write_private(plane, &approvals_path(state), text.as_bytes());
-    }
+    // Contained where the state folder is trusted from: the project, or the folder
+    // `$PURLIS_HOME` names when it is outside it (#1458), as every other state reader is.
+    let trust = crate::hookstate::trust_root(plane, state);
+    crate::plane::private_dir(trust, state)?;
+    crate::plane::write_private(trust, &approvals_path(state), text.as_bytes())
 }
 
 /// `persona.mcp_render_entry`: one declared server as the generated agent carries it.
