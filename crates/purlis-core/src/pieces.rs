@@ -275,6 +275,101 @@ pub fn said(plane: &Path, ws: &str, repo: &str, piece: &str, now: DateTime<Utc>)
     }
 }
 
+/// How young a cut is still taken to be its chat starting, not a chat that never did.
+///
+/// A writing chat's branch is cut, then its chat starts, and only then is it logged
+/// `claimed`; a dispatch can wait on its persona's lock in between. A listing in that window
+/// would call a branch unclaimed that is a moment from being claimed.
+pub const UNCLAIMED_AFTER_SECS: i64 = 5 * 60;
+
+/// The branches purlis cut in `repo` that no chat has spoken for, each with how long ago it
+/// was cut, by piece name (#835).
+///
+/// A writing chat's branch is cut before its chat starts. A start that is refused takes it
+/// back, but a crash or a kill in between leaves the folder and the branch, and nothing sweeps
+/// them up (D-GL1a): deleting branches automatically risks the operator's work. This is the
+/// safe half, which only says so. **Nothing here removes anything**; the row's own actions
+/// stay the operator's.
+///
+/// A piece is unclaimed when all of these hold:
+/// - its branch carries the base record `add` writes ([`crate::worktree::cut_branches`]), so a
+///   branch or worktree made with plain git is never called unclaimed (ADR 0027);
+/// - its folder is there (a stale registration already says so on its row);
+/// - nothing in the piece log (`claimed`, `done`, `abandoned`) and no heartbeat is dated at or
+///   after the cut. One dated before it is about an earlier branch of the same name, which a
+///   chat reuses once the first is removed;
+/// - the cut is older than [`UNCLAIMED_AFTER_SECS`].
+///
+/// When it was cut is read from the tree's `.git` file, which `git worktree add` writes and
+/// nothing rewrites but git's own `repair` and `move`. Best-effort like the rest of this
+/// module: a clone git cannot read answers no branches, never a refusal.
+pub fn unclaimed(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    listed: &[crate::worktree::Piece],
+    now: DateTime<Utc>,
+) -> BTreeMap<String, String> {
+    let candidates: Vec<&crate::worktree::Piece> = listed
+        .iter()
+        .filter(|p| p.prunable.is_none() && p.branch.is_some())
+        .collect();
+    if candidates.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(cut) = crate::worktree::cut_branches(plane, ws, repo) else {
+        return BTreeMap::new();
+    };
+    let logged = events(plane, ws);
+    let mut out = BTreeMap::new();
+    for piece in candidates {
+        if !piece.branch.as_ref().is_some_and(|b| cut.contains(b)) {
+            continue;
+        }
+        let Some(cut_at) = cut_when(&piece.path) else {
+            continue;
+        };
+        let mark = last_seen(plane, ws, repo, &piece.piece);
+        let stamps: Vec<Option<&Value>> = logged
+            .iter()
+            .filter(|e| key_of(e).is_some_and(|(r, p)| r == repo && p == piece.piece))
+            .map(|e| e.get("ts"))
+            .chain(std::iter::once(mark.as_ref().and_then(|m| m.get("ts"))))
+            .collect();
+        if let Some(age) = unclaimed_age(cut_at, &stamps, now) {
+            out.insert(piece.piece.clone(), age);
+        }
+    }
+    out
+}
+
+/// When the tree at `path` was cut: the modification time of its `.git` file.
+fn cut_when(path: &Path) -> Option<DateTime<Utc>> {
+    let modified = path.join(".git").symlink_metadata().ok()?.modified().ok()?;
+    Some(DateTime::<Utc>::from(modified))
+}
+
+/// How long ago a cut made at `cut_at` was made, when none of `stamps` speaks for it and it is
+/// past [`UNCLAIMED_AFTER_SECS`]; `None` otherwise.
+///
+/// A stamp speaks for the cut when it is dated in the same second as it or later: the log
+/// writes whole seconds and a claim follows its cut. A stamp that cannot be read as an instant
+/// is no evidence either way and is passed over.
+pub fn unclaimed_age(
+    cut_at: DateTime<Utc>,
+    stamps: &[Option<&Value>],
+    now: DateTime<Utc>,
+) -> Option<String> {
+    if (now - cut_at).num_seconds() < UNCLAIMED_AFTER_SECS {
+        return None;
+    }
+    let from = DateTime::<Utc>::from_timestamp(cut_at.timestamp(), 0)?;
+    let spoken = stamps
+        .iter()
+        .any(|ts| matches!(parse(*ts), Stamp::At(at) if at >= from));
+    (!spoken).then(|| since(cut_at, now))
+}
+
 /// Where a tree's heartbeat lives.
 ///
 /// The clone's own record is a file *beside* the piece directory, never inside it: piece

@@ -144,6 +144,12 @@ When two choices conflict, the higher priority wins.
      started; the chat's pane then says *On branch `chat-1` in api*. A chat's name that git
      would refuse or read as its own (`HEAD`, `*_HEAD`, a sha) falls back to `chat-<n>`, so the
      name never costs the start. What the window says of it is said of a branch and its folder.
+   - A crash or a kill between the cut and the start leaves the folder and the branch, and
+     nothing sweeps them (D-GL1a). The explorer marks such a branch `unclaimed <age>` once it
+     is five minutes old (#835): one with purlis's base record (`branch.<branch>.charterBase`)
+     that nothing in the piece log and no heartbeat has spoken for since it was cut. A branch
+     made with plain git has no base record and is never marked. Removing it stays the row's
+     own action.
    - **New branch** on a repo's row and in the palette cuts a piece from the window, under the
      name typed or purlis's `chat-<n>`, and makes it where new chats start (`worktree_add`).
    - **Not shipped yet:** `publish`.

@@ -871,6 +871,18 @@ export function Explorer({
                                 {piece.said}
                               </span>
                             )}
+                            {/* A branch purlis cut for a chat that never started in it — a crash
+                          between the cut and the start leaves one (#835). Said, with its age,
+                          and never swept: its folder's removal stays the row's menu's. */}
+                            {piece.unclaimed && (
+                              <span
+                                className="label said"
+                                data-testid="piece-unclaimed"
+                                title={`purlis cut this branch ${piece.unclaimed} ago for a chat that never started in it. Nothing removes it on its own: start a chat in it, or remove its folder from its menu.`}
+                              >
+                                unclaimed {piece.unclaimed}
+                              </span>
+                            )}
                             {/* Its files (FM-1), first among its children. */}
                             <ul className="files" role="group">
                               <li role="none" data-testid={`files-${repo}-${piece.piece}`}>

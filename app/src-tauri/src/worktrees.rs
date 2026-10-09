@@ -80,6 +80,11 @@ pub struct Piece {
     /// What the piece has said: `done`, `abandoned: <reason>`, `silent <age>` for a piece
     /// charter cut that has declared nothing, or empty (charter#368). An age, never a verdict.
     pub said: String,
+    /// How long ago purlis cut this branch for a chat that never started in it (#835): a
+    /// coarse age, `3d`. `null` for every other branch, among them any made with plain git.
+    /// The window only says so; removing it stays the row's own action.
+    #[specta(optional)]
+    pub unclaimed: Option<String>,
 }
 
 /// Where a chat is working, when it is working in a piece.
@@ -144,10 +149,13 @@ fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, St
     let now = chrono::Utc::now();
     worktree::list(plane, workspace, repo)
         .map(|pieces| {
+            let mut unclaimed =
+                purlis_core::pieces::unclaimed(plane, workspace, repo, &pieces, now);
             pieces
                 .into_iter()
                 .map(|p| Piece {
                     said: purlis_core::pieces::said(plane, workspace, repo, &p.piece, now),
+                    unclaimed: unclaimed.remove(&p.piece),
                     piece: p.piece,
                     path: p.path.display().to_string(),
                     branch: p.branch,
@@ -407,7 +415,8 @@ fn cut_branch(
 /// the branch, and the refusal the operator reads is the start's own sentence, followed by what
 /// could not be taken back if anything. A branch is logged `claimed` only once its chat has
 /// started. A crash between the cut and the start is not covered: the release build aborts on
-/// a panic, so no cleanup runs and the branch and its folder stay (see `chatpiece::Held`).
+/// a panic, so no cleanup runs and the branch and its folder stay (see `chatpiece::Held`); the
+/// listing then says the branch is unclaimed, and how long it has been (#835).
 pub fn on_a_branch<T>(
     plane: &Path,
     config: Option<&Path>,
@@ -816,6 +825,40 @@ mod tests {
             "{refused}"
         );
         in_the_windows_words(&refused);
+    }
+
+    #[test]
+    fn a_branch_cut_for_a_chat_that_never_started_says_so_on_its_row_and_stays() {
+        let (_dir, root, clone) = plane();
+        // Cut and never claimed, as a crash between the cut and the start leaves it.
+        let added = worktree::add(&root, "alpha", "thing", "chat-1", None).unwrap();
+        let three_days_ago = |tree: &Path| {
+            std::fs::File::options()
+                .write(true)
+                .open(tree.join(".git"))
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86400),
+                )
+                .unwrap();
+        };
+        three_days_ago(&added.path);
+
+        let listed = pieces_of(&root, "alpha", "thing").unwrap();
+
+        assert_eq!(listed[0].unclaimed.as_deref(), Some("3d"));
+        let row = serde_json::to_value(&listed[0]).unwrap();
+        assert_eq!(row["unclaimed"], "3d", "{row}");
+        assert!(added.path.is_dir() && has_branch(&clone, "chat-1"));
+
+        // A chat started on a branch of its own is claimed, and its row carries no such word,
+        // however old the branch.
+        let (started, _) = on_a_branch(&root, None, Some(&clone), None, true, started_in).unwrap();
+        three_days_ago(&started.unwrap());
+        let claimed = pieces_of(&root, "alpha", "thing").unwrap();
+        let chat_2 = claimed.iter().find(|p| p.piece == "chat-2").unwrap();
+        assert_eq!(chat_2.unclaimed, None);
+        assert!(serde_json::to_value(chat_2).unwrap()["unclaimed"].is_null());
     }
 
     /// What a start was handed, for the tests that stand in for the harness.
