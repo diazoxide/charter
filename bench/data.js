@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791519082325,
+  "lastUpdate": 1791521012427,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4158,6 +4158,48 @@ window.BENCHMARK_DATA = {
             "value": 105.2423445,
             "unit": "ms",
             "extra": "median of 5 runs: 104.219, 104.625, 105.242, 105.274, 106.830 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "382f2d649f83856f63a08a1fca284ab850915efc",
+          "message": "review of #1551: a new wait is a chat coming into waiting; the Answer dialog holds the keyboard\n\nThe review's must-fix and five fold-ins (Refs #1551):\n\n- M1. \"Waiting on you\" no longer keys a new wait on the board's movedAt\n  stamp, which also moves for what only touches a chat (a task's failure,\n  a sub-agent ending, a report coming back). The window now notes, from\n  the chats store's own changes, each chat that comes into `waiting`, in\n  order, and a chat already in the queue counts only if it came into\n  waiting after the person left, or its item gives a new reason other than\n  one of its tasks' failures (those count as failed). Tests: a waiting\n  chat whose task fails while away (unit and window: \"1 task failed\"\n  alone), and a waiting chat whose sub-agent ends while away.\n- The Answer dialog focuses itself as it opens, so the keyboard is in it\n  in every state: while the question is read, and where there is none.\n- The refused-dispatches part is one link whatever its count, named with\n  the pairs it counts (a menu of identical destinations was a menu for\n  nothing, and could close the list it opened).\n- Opening the needs-you list from the summary reads it again, as a press\n  on the hand does.\n- Tests: the core refusing a stale answer (its sentence, the text kept,\n  the dialog open), the keyboard back on the task's row after Cancel, no\n  question to answer, two refused dispatches.\n- The SC-3 render counter says why only the row may call chatDoingId, and\n  the line says why it spells the id out.\n\nRefs #1551\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T08:39:42+04:00",
+          "tree_id": "53bd0549bfb506e4770696962e7bc52ece781834",
+          "url": "https://github.com/purlis/purlis/commit/382f2d649f83856f63a08a1fca284ab850915efc"
+        },
+        "date": 1791521011555,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.6146475,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.608, 0.610, 0.615, 0.616, 0.617 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.203035,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.085, 16.113, 16.203, 16.572, 16.641 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.372949,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.756, 101.089, 101.373, 101.772, 102.239 ms"
           }
         ]
       }
