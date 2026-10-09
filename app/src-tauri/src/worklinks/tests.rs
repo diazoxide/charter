@@ -22,13 +22,23 @@ fn at(second: u32) -> chrono::DateTime<chrono::Utc> {
         .unwrap()
 }
 
-/// A project with workspaces `alpha` and `beta`.
+/// A project with workspaces `alpha` and `beta`, and the todo [`TODO`] names open in `alpha`.
 fn project() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
     for ws in ["alpha", "beta"] {
         std::fs::create_dir_all(root.join("workspaces").join(ws)).unwrap();
     }
+    let written = purlis_core::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap()
+        .add_todo("Port the picker", at(0).naive_utc())
+        .unwrap();
+    assert_eq!(
+        TODO.strip_prefix("todo:alpha/"),
+        written.file_stem().and_then(|s| s.to_str()),
+        "the todo `TODO` names is the one written"
+    );
     (dir, root)
 }
 
@@ -145,6 +155,25 @@ fn a_chat_linked_to_a_todo_that_is_promoted_works_on_the_issue() {
 
     assert_eq!(item_of(&root, &chats, session), Ok(Some(ISSUE.to_owned())));
     assert_eq!(fold(&root).chats_on(&issue), vec![id]);
+}
+
+#[test]
+fn a_todo_key_that_names_no_todo_is_refused_with_the_cores_sentence() {
+    let (_dir, root) = project();
+    let chats = chats_on(Some(DEVICE));
+    let (session, _) = started_in(&chats, &root.join("workspaces/alpha"));
+
+    let refused = link(
+        &root,
+        &chats,
+        session,
+        "todo:alpha/20261002-080000-port-the-pickr",
+        at(1),
+    )
+    .unwrap_err();
+    assert!(refused.contains("names no todo"), "{refused}");
+    assert_eq!(item_of(&root, &chats, session), Ok(None));
+    assert!(!dir_for(&root, "alpha").exists(), "nothing was written");
 }
 
 #[test]

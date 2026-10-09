@@ -233,6 +233,10 @@ pub enum Place<'a> {
 /// - **A chat linked to another item gets one link line and no unlink**: a chat's link is its
 ///   last line (V3: zero or one), so the new line replaces the old link. It is dated after the
 ///   line it replaces ([`after_its_lines`]).
+/// - **A `todo:` key must name a todo** (#918): one the workspace it names holds open, or one
+///   a promote aliased to the item it now is. A typo, or a todo since closed, is refused before
+///   anything is written, since the Work list could never show the link. The key is never
+///   rewritten.
 /// - **The fold is read again after the line is written**, and a link it does not show is an
 ///   error, never a success. A line synced from another device while this one was written, or
 ///   one already in another log dated later, can end the link: the error says so, and a second
@@ -248,6 +252,7 @@ pub fn link_chat(
     let ws = in_a_workspace(place, Act::Link)?;
     let folded = fold(root);
     let wanted = folded.resolve(&item);
+    names_a_todo(root, &item, &wanted)?;
     if folded
         .chat_link_in(chat)
         .is_some_and(|(written_in, linked)| written_in == ws && linked == wanted)
@@ -257,6 +262,37 @@ pub fn link_chat(
     let ts = after_its_lines(&folded, chat, ts);
     append(root, ws, device, ts, &Op::link_chat(item, chat))?;
     linked_as_asked(&fold(root), chat, &wanted)
+}
+
+/// Refused when `wanted`, the item `item` resolves to through its aliases, is a todo key that
+/// names no open todo in the workspace it names. Any other tracker's key passes: whether its
+/// item exists is the tracker's to say.
+///
+/// A todo a promote aliased resolves to the issue it became, so it passes however its own file
+/// went. A store that cannot be read is that error, never a refusal of the key.
+fn names_a_todo(root: &Path, item: &TrackerKey, wanted: &TrackerKey) -> io::Result<()> {
+    let Some((ws, stem)) = wanted.todo_parts() else {
+        return Ok(());
+    };
+    let open = match crate::workspaces::Plane::open(root).workspace(ws) {
+        Ok(workspace) => workspace.todos()?,
+        Err(_) => Vec::new(),
+    };
+    if open.iter().any(|todo| todo.slug == stem) {
+        return Ok(());
+    }
+    let through = if wanted == item {
+        String::new()
+    } else {
+        format!(", which {item} is an alias of,")
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{wanted}{through} names no todo: workspace {ws} has no open todo {stem}. Pick the \
+             item from the workspace's Work list"
+        ),
+    ))
 }
 
 /// Whether chat `chat` works on `wanted` once its link line is written, or the refusal.
