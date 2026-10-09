@@ -168,7 +168,10 @@ pub enum Kind {
     /// macOS's per-user temporary folder (`/var/folders/<a>/<b>/T`, what
     /// `getconf DARWIN_USER_TEMP_DIR` answers), which some tools ask the system for in place of
     /// `TMPDIR` (#1120): `mktemp` without a path, Foundation's `NSTemporaryDirectory`, and
-    /// `xcrun`'s cache, which only warns. No sandboxed chat may write it (D-1342-11).
+    /// `xcrun`'s cache, which only warns. No sandboxed chat may write it (D-1342-11). The two
+    /// other per-user folders beside it that hold no cache, `…/0` (`DARWIN_USER_DIR`) and `…/X`,
+    /// are sorted here too (#1416): no new kind is stored for them, and like this one no grant
+    /// is offered for them.
     SystemTemp,
     /// macOS's per-user cache folder (`/var/folders/<a>/<b>/C`, `DARWIN_USER_CACHE_DIR`), where
     /// clang and Swift keep their module cache. A wrapped chat's module cache is its own temp
@@ -496,13 +499,14 @@ fn process_of(before: &str) -> Option<&str> {
     (!name.is_empty() && !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit())).then_some(name)
 }
 
-/// The text inside the last pair of quotes (`'`, `` ` `` or `"`) in `field`: a destination comes
-/// after its source (`cannot copy 'a' to 'b'`).
+/// The text between the last two quotes (`'`, `` ` `` or `"`) in `field`: a destination comes
+/// after its source (`cannot copy 'a' to 'b'`), and a word's apostrophe before them is not one
+/// of them (`couldn't create cache file '/x'`, #1416).
 fn last_quoted(field: &str) -> Option<&str> {
     for quote in ['\'', '`', '"'] {
         let parts: Vec<&str> = field.split(quote).collect();
         if parts.len() >= 3 {
-            return parts.iter().skip(1).step_by(2).copied().next_back();
+            return Some(parts[parts.len() - 2]);
         }
     }
     None
@@ -516,8 +520,17 @@ fn writes(program: &str, said: &str) -> bool {
     ]
     .contains(&program)
         || [
-            "lock", "creat", "writ", "renam", "remov", "delet", "copy", "mkdir", "mkstemp",
+            "lock",
+            "creat",
+            "writ",
+            "renam",
+            "remov",
+            "delet",
+            "copy",
+            "mkdir",
+            "mkstemp",
             "mkdtemp",
+            "output file",
         ]
         .iter()
         .any(|stem| said.contains(stem))
@@ -600,11 +613,15 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
     // A program's own, in any case: `touch: /opt/x: Operation not permitted`,
     // `mkdir: cannot create directory '/opt/x': Operation not permitted`,
     // `fatal: could not create work tree dir 'x': Operation not permitted`,
-    // `open /x/y: operation not permitted` (Go), `… `/x`: Operation not permitted (os error 1)`.
+    // `open /x/y: operation not permitted` (Go), `… `/x`: Operation not permitted (os error 1)`,
+    // swiftc's and clang's `error: unable to open output file '/x': 'Operation not permitted'`,
+    // and xcrun's `couldn't create cache file '/x' (errno=Operation not permitted)` (#1416).
     // The line has to END there, so a line quoting one (a test's source, a log) is not one.
     let cut = [
         ": operation not permitted (os error 1)",
         ": operation not permitted",
+        ": 'operation not permitted'",
+        " (errno=operation not permitted)",
     ]
     .iter()
     .find_map(|suffix| lower.strip_suffix(suffix).map(str::len))?;
@@ -759,10 +776,12 @@ pub fn kind_of(path: &Path, place: &Place<'_>) -> Kind {
     Kind::System
 }
 
-/// What `path` names below macOS's per-user temporary or cache folder,
-/// `/var/folders/<a>/<b>/T` or `…/C` (what `getconf DARWIN_USER_TEMP_DIR` and
-/// `DARWIN_USER_CACHE_DIR` answer), as its parts from that folder on: `["T", "tmp.x"]`. `None`
-/// anywhere else. Read from the path's shape alone, so the hook asks the system nothing.
+/// What `path` names below one of macOS's per-user folders, as its parts from that folder on:
+/// `["T", "tmp.x"]`. `None` anywhere else. Read from the path's shape alone, so the hook asks
+/// the system nothing. The four are `/var/folders/<a>/<b>/T` (`getconf DARWIN_USER_TEMP_DIR`),
+/// `…/C` (`DARWIN_USER_CACHE_DIR`), `…/0` (`DARWIN_USER_DIR`, where system services keep a
+/// user's state) and `…/X` (the system's per-user code-signing clones) (#1416): none of them
+/// is a temporary folder a chat may write, so none is sorted as one.
 fn per_user_folder(path: &Path) -> Option<Vec<&std::ffi::OsStr>> {
     let mut parts = path.components();
     if parts.next() != Some(Component::RootDir) {
@@ -776,7 +795,9 @@ fn per_user_folder(path: &Path) -> Option<Vec<&std::ffi::OsStr>> {
         .collect::<Option<_>>()?;
     match names.as_slice() {
         [var, folders, _, _, which, ..]
-            if *var == "var" && *folders == "folders" && (*which == "T" || *which == "C") =>
+            if *var == "var"
+                && *folders == "folders"
+                && ["T", "C", "0", "X"].iter().any(|one| *which == *one) =>
         {
             Some(names[4..].to_vec())
         }
@@ -829,8 +850,14 @@ fn lexical(path: &Path) -> PathBuf {
 }
 
 /// macOS's `/private/var/…` and `/var/…` are one folder: the sandbox reports one, a project
-/// may be named by the other.
+/// may be named by the other. So are `/System/Volumes/Data/…` and `/…`, the data volume's own
+/// spelling of what is firmlinked into the root (#1416): `/System/Volumes/Data/private/var/…`
+/// is `/var/…` too.
 fn unprivate(path: &Path) -> PathBuf {
+    let path = match path.strip_prefix("/System/Volumes/Data") {
+        Ok(rest) if rest.components().next().is_some() => Path::new("/").join(rest),
+        _ => path.to_path_buf(),
+    };
     match path.strip_prefix("/private") {
         Ok(rest)
             if ["var", "tmp", "etc"]
@@ -839,7 +866,7 @@ fn unprivate(path: &Path) -> PathBuf {
         {
             Path::new("/").join(rest)
         }
-        _ => path.to_path_buf(),
+        _ => path,
     }
 }
 
