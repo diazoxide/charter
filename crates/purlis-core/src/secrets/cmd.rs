@@ -426,7 +426,7 @@ pub fn plaintext_refusal(ctx: &Ctx, v: &Vault) -> Result<(), VaultError> {
         && let Some(unignored) = super::vaultcmd::unignored_plaintext(ctx, file)
     {
         return Err(VaultError::new(format!(
-            "refusing to write: '{unignored}' is inside the control plane and NOT gitignored — a \
+            "refusing to write: {unignored} — a \
              plain-file vault stores plaintext, so the next `purlis save` would commit it. Add \
              it to .gitignore, or re-register the vault with a --file under .charter/ or outside \
              the plane."
@@ -738,8 +738,7 @@ fn cp_unix(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut 
         super::vaultcmd::unignored_plaintext(ctx, &abspath(&dest).to_string_lossy())
     {
         io.say(Say::Err(format!(
-            "Refusing to write a secret: '{unignored}' is inside the control plane and NOT \
-             gitignored — the next `purlis save` would commit it."
+            "Refusing to write a secret: {unignored} — the next `purlis save` would commit it."
         )));
         io.say(Say::Info(
             "  Add it to .gitignore, write it under .charter/, or pick a path outside the plane."

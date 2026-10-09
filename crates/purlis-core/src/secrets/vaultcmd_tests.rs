@@ -31,17 +31,32 @@ fn git(root: &std::path::Path, args: &[&str]) {
 #[test]
 fn git_is_asked_whether_it_ignores_a_path_and_a_directory_that_is_no_repository_has_no_answer() {
     let plane = Plane::new(&[]);
-    assert_eq!(git_ignores(plane.root(), &plane.root().join("x")), None);
+    assert_eq!(
+        git_ignores(plane.root(), &plane.root().join("x")),
+        Ignores::NoRepository
+    );
     git(plane.root(), &["init", "-q"]);
     std::fs::write(plane.root().join(".gitignore"), "ignored\n").unwrap();
     assert_eq!(
         git_ignores(plane.root(), &plane.root().join("ignored")),
-        Some(true)
+        Ignores::Ignored
     );
     assert_eq!(
         git_ignores(plane.root(), &plane.root().join("kept")),
-        Some(false)
+        Ignores::Kept
     );
+    // A path git cannot be handed is not answered for, and warns (#1476).
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let odd = plane
+            .root()
+            .join(std::ffi::OsStr::from_bytes(b"vault-\xff.json"));
+        assert!(matches!(
+            git_ignores(plane.root(), &odd),
+            Ignores::Unasked(_)
+        ));
+    }
 }
 
 #[test]
@@ -751,5 +766,45 @@ fn a_vault_file_outside_the_project_or_gone_from_it_is_misplaced_and_one_inside_
     assert!(
         !format!("{found:?}").contains("never-printed-77c1"),
         "a path and a name, never a value"
+    );
+}
+
+#[test]
+fn the_ignore_question_goes_through_the_hardened_git_runner() {
+    // #1476: asked through `worktree::git`, so git starts with a constructed environment, no
+    // program a config names, and a folder's `.git` link checked before git follows it.
+    let plane = Plane::new(&[]);
+    assert_eq!(
+        git_ignores(plane.root(), &plane.root().join("x")),
+        Ignores::NoRepository
+    );
+    let asked = crate::worktree::git::tally::asked(plane.root());
+    assert!(
+        asked.iter().any(|args| args == &["rev-parse", "--git-dir"]),
+        "{asked:?}"
+    );
+}
+
+#[test]
+fn a_folder_whose_git_link_purlis_will_not_follow_warns_with_the_links_sentence() {
+    // #1476: the person's own git may still commit there (a worktree moved by hand), so a
+    // plaintext vault file there is warned of, with why purlis could not ask.
+    let plane = Plane::new(&[]);
+    std::fs::write(
+        plane.root().join(".git"),
+        format!("gitdir: {}\n", plane.root().join("gone").display()),
+    )
+    .unwrap();
+    assert_eq!(
+        git_ignores(plane.root(), &plane.root().join("v.json")),
+        Ignores::Unasked(crate::worktree::link::GONE.to_owned())
+    );
+    let unignored = unignored_plaintext(&plane.ctx, "v.json").expect("warned");
+    assert_eq!(unignored.path, "v.json");
+    assert!(
+        unignored
+            .to_string()
+            .contains("purlis could not ask git whether it ignores it"),
+        "{unignored}"
     );
 }
