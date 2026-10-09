@@ -692,7 +692,7 @@ fn what_was_said_is_taken_out_thirty_days_after_the_task_ended_and_the_record_st
 
     // A day short of thirty: nothing goes.
     assert_eq!(
-        dispatchrecord::expire_talk(&root, at("2026-09-30T09:05:00Z")),
+        dispatchrecord::expire_talk(&root, at("2026-09-30T09:05:00Z")).len(),
         0
     );
     assert_eq!(
@@ -749,7 +749,7 @@ fn what_was_said_is_taken_out_thirty_days_after_the_task_ended_and_the_record_st
     );
     // Done once: a second look changes nothing.
     assert_eq!(
-        dispatchrecord::expire_talk(&root, at("2026-10-02T09:05:00Z")),
+        dispatchrecord::expire_talk(&root, at("2026-10-02T09:05:00Z")).len(),
         0
     );
 }

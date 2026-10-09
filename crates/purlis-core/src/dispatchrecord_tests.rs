@@ -1804,7 +1804,11 @@ fn what_a_record_kept_is_taken_out_where_its_end_does_not_read_as_a_time() {
         }];
     });
 
-    assert_eq!(expire_talk(&root, at("2026-10-07T12:02:00Z")), 1);
+    assert_eq!(
+        expire_talk(&root, at("2026-10-07T12:02:00Z")),
+        std::slice::from_ref(&opened.id),
+        "the ids of what it changed, for an open tab to be told (#1556)"
+    );
 
     let kept = read(&root, &opened.id).expect("the record stays");
     assert_eq!(kept.messages, 1);
@@ -1850,7 +1854,7 @@ fn what_a_record_kept_is_taken_out_where_its_end_stands_in_the_future() {
     // A minute ahead of this clock is a clock a little ahead, and not yet due.
     let near = talked_and_ended_at(&root, "2026-10-07T12:03:00+00:00");
 
-    assert_eq!(expire_talk(&root, at("2026-10-07T12:02:00Z")), 1);
+    assert_eq!(expire_talk(&root, at("2026-10-07T12:02:00Z")).len(), 1);
 
     assert_eq!(read(&root, &far).unwrap().talk[0].text, "");
     assert_eq!(read(&root, &near).unwrap().talk[0].text, "Still up.");
@@ -2226,4 +2230,60 @@ fn a_task_settled_at_open_whose_asking_chat_does_not_come_back_is_cleared_and_fo
     let kept = read(&root, &kept.id).unwrap();
     assert!(!kept.cleared);
     assert_eq!(kept.talk[0].text, "The words.");
+}
+
+#[test]
+fn a_task_whose_asking_chat_comes_back_resumed_keeps_its_row_and_its_words() {
+    // #1556: a chat brought back that resumed the asking chat is handed the task's report, so
+    // the asking chat is not gone.
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            worker: Worker {
+                chat: ChatRef {
+                    chat: 7,
+                    id: Some(mint()),
+                    name: "task 7".to_owned(),
+                    persona: Some("devops".to_owned()),
+                },
+                ..a_handoff().worker
+            },
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    said(
+        &root,
+        &opened.id,
+        crate::dispatchtalk::Kind::Note,
+        "The words.",
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+    // The reopen record brings back chat 4, which resumed `steward 3`.
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(4),
+            identity: crate::reopen::Identity {
+                id: Some("01K6RESVMED000000000000000".to_owned()),
+                resumed_from: steward().id,
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        dealt: 4,
+        ..Default::default()
+    };
+    crate::reopen::write(&root, &record).unwrap();
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 1);
+
+    let settled = read(&root, &opened.id).unwrap();
+    assert!(!settled.running());
+    assert!(!settled.cleared);
+    assert_eq!(settled.talk[0].text, "The words.");
 }

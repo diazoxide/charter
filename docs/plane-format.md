@@ -107,10 +107,11 @@ open in it, `purlis_core::retention::on_open` removes, from that plane's own `.c
   before.
 - a dispatch record, `.charter/app/dispatches/<id>.json`, whose dispatch ended 30 days or more
   before, as the record says (#1556: a later write, such as forgetting what its chats said, does
-  not keep it longer), or, where it has not ended or its end does not read as a time, last
-  written 30 days or more before; unless the chat that asked or the chat that worked is one the
-  reopen record will bring back (#1452). The chat is matched by its id, never by its number where the record has an id: a
-  number is dealt again in another launch, and a chat that only shares one keeps nothing. It
+  not keep it longer), or, where it has not ended, its end does not read as a time, or it
+  still owes its asking chat a report (`undelivered`, marked when the report reached no chat,
+  which can be long after the end), last written 30 days or more before; unless the chat that
+  asked or the chat that worked is one the reopen record will bring back (#1452). The chat is
+  matched by its id, never by its number where the record has an id: a number is dealt again in another launch, and a chat that only shares one keeps nothing. It
   holds a brief, a report and what the two chats said to each other (#1495), so it is kept as
   session data is and no longer. **What the two chats said goes sooner than the record
   where the record lives on**: 30 days after the dispatch ended, whichever chat is still
@@ -5573,7 +5574,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **In the Dispatches tab:** a record that has not ended and whose persona chat this app does
   not have open (one the reopen record lists that was not brought back) is said to be `not
   open`, with no duration: it is not running, and runs again when its chat is opened.
-- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after its dispatch ended (one that has not ended, or whose end does not read as a time, 30 days after it was last written), unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`, `dispatchrecord::aged_from`). What the two chats said to each other is kept in it for 30 days after the dispatch ended, and for no longer where the record lives on (`dispatchrecord::expire_talk`). Deleting one costs its row in the Dispatches tab and its lines in the Activity tab of the chat that asked (the dispatch, what was said, the report), and nothing else: a task still running loses its record and reports to its asking chat as before.
+- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after its dispatch ended (one that has not ended, whose end does not read as a time, or that still owes its asking chat a report, 30 days after it was last written), unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`, `dispatchrecord::aged_from`). What the two chats said to each other is kept in it for 30 days after the dispatch ended, and for no longer where the record lives on (`dispatchrecord::expire_talk`). Deleting one costs its row in the Dispatches tab and its lines in the Activity tab of the chat that asked (the dispatch, what was said, the report), and nothing else: a task still running loses its record and reports to its asking chat as before.
 - **Git:** gitignored (under `/.charter/`).
 
 ### `app/dispatches/refused-while-away.json`

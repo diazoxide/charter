@@ -2615,7 +2615,7 @@ impl Planes {
 
         // What the chats of a dispatch said, expired once a day while the project is open
         // (#1556): the open and a timeline's read expire only what they read.
-        let talk_sweep = crate::activity::Daily::start(root.clone());
+        let talk_sweep = crate::activity::Daily::start(root.clone(), Arc::clone(&me));
         Held {
             id,
             root,

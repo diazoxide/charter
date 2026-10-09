@@ -422,16 +422,26 @@ pub(crate) const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_se
 /// an older record of a project held open for weeks would keep its words past their days.
 ///
 /// A thread that sleeps a day between sweeps, and ends when this is dropped, as the project is
-/// let go of: it holds the project's root and nothing of the project.
+/// let go of: it holds the project's root, and the project only weakly. **An open Activity tab
+/// is told the lines whose words a sweep took** ([`forgotten`]), as it is for Clear finished.
 pub(crate) struct Daily {
     _stop: std::sync::mpsc::Sender<()>,
 }
 
 impl Daily {
-    /// Starts the daily sweep of the project at `root`.
-    pub(crate) fn start(root: std::path::PathBuf) -> Self {
-        Self::every(root, SWEEP_EVERY, |root| {
-            dispatchrecord::expire_talk(root, chrono::Utc::now());
+    /// Starts the daily sweep of the project at `root`, which `project` is once it is held:
+    /// what an open tab is told through.
+    pub(crate) fn start(
+        root: std::path::PathBuf,
+        project: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
+    ) -> Self {
+        Self::every(root, SWEEP_EVERY, move |root| {
+            let expired = dispatchrecord::expire_talk(root, chrono::Utc::now());
+            if let Some(held) = project.get().and_then(std::sync::Weak::upgrade) {
+                for id in &expired {
+                    forgotten(&held, id);
+                }
+            }
         })
     }
 

@@ -490,12 +490,17 @@ pub fn not_again(name: &str, task: u32) -> String {
 /// Opening a project settles what the record of open chats does not bring back; this is what
 /// a launch then could not: a record that was not put back (the person chose to start fresh),
 /// and a chat it named that was never tried.
+///
+/// `asker_back` answers whether a task's asking chat is back, or a chat that resumed it: a
+/// task whose asking chat is not is cleared and forgotten as it ends
+/// ([`dispatchrecord::settle_asked`], #1556).
 pub fn settle_after_launch(
     root: &Path,
     live: impl Fn(&ChatRef) -> bool,
+    asker_back: impl Fn(&dispatchrecord::Record) -> bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> usize {
-    dispatchrecord::settle(root, live, now)
+    dispatchrecord::settle_asked(root, live, asker_back, now)
 }
 
 /// **Chat `asker` closed with reports still waiting for its next turn** (#1513): each was moved

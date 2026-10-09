@@ -813,7 +813,7 @@ fn a_dispatch_whose_chat_neither_came_back_nor_waits_ends_and_is_kept_for_its_as
 
     // The person chose to start fresh: nothing came back, and nothing waits.
     assert_eq!(
-        settle_after_launch(&root, |_| false, at("2026-10-09T09:00:00Z")),
+        settle_after_launch(&root, |_| false, |_| false, at("2026-10-09T09:00:00Z")),
         1
     );
 
@@ -840,7 +840,12 @@ fn a_dispatch_whose_chat_came_back_is_left_running() {
 
     let live = |worker: &ChatRef| worker.id.as_deref() == Some(TASK_ID);
     assert_eq!(
-        settle_after_launch(&root, live, at("2026-10-09T09:00:00Z")),
+        settle_after_launch(
+            &root,
+            live,
+            |record| live(&record.asker.chat),
+            at("2026-10-09T09:00:00Z"),
+        ),
         0
     );
 
