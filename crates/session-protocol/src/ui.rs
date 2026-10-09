@@ -130,6 +130,9 @@ pub const WINDOW_ONLY: &[&str] = &[
     "allow_dispatch_away",
     "dismiss_dispatch_away",
     "never_dispatch_away",
+    // The mark that a profile asks before it acts (#1522): what lets a chat start another chat
+    // on that profile, so the person's, in their own window.
+    "mark_profile_asks",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

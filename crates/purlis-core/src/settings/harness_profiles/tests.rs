@@ -433,3 +433,44 @@ fn a_quoted_name_keeps_its_spelling_on_a_rename_and_on_the_rename_back() {
     rename(dir.path(), Some(&now), &renamed, "alt").unwrap();
     assert_eq!(local(dir.path()), text);
 }
+
+// ----- the mark that a profile asks (#1522) -------------------------------------------------
+
+#[test]
+fn a_profile_is_marked_and_unmarked_in_harness_asks_and_every_other_line_is_kept() {
+    let text = "# mine\n[harness]\ndefault = \"work\"  # the usual\n\n[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n";
+
+    let marked = with_asks(text, "work", true).expect("marked");
+    assert_eq!(asks_of(&marked), Some(vec!["work".to_owned()]));
+    assert!(
+        marked.contains("default = \"work\"  # the usual"),
+        "{marked}"
+    );
+    assert!(marked.contains("# mine"), "{marked}");
+    let both = with_asks(&marked, "opencode", true).expect("marked");
+    assert_eq!(
+        asks_of(&both),
+        Some(vec!["work".to_owned(), "opencode".to_owned()])
+    );
+    // Twice is once; unmarking what is not marked changes nothing.
+    assert_eq!(with_asks(&both, "work", true).as_deref(), Ok(both.as_str()));
+    assert_eq!(with_asks(text, "work", false).as_deref(), Ok(text));
+    // Unmarked, the last name takes the key with it.
+    let one = with_asks(&both, "work", false).expect("unmarked");
+    assert_eq!(asks_of(&one), Some(vec!["opencode".to_owned()]));
+    let none = with_asks(&one, "opencode", false).expect("unmarked");
+    assert_eq!(asks_of(&none), Some(Vec::new()));
+    assert!(!none.contains("asks"), "{none}");
+    // What the loader then reads: the built-in opencode, marked, still there.
+    let read = profiles::derive_from(None, Ok(Some(both)));
+    assert_eq!(read.get("opencode").map(|p| p.asks), Some(true));
+    assert_eq!(read.get("work").map(|p| p.asks), Some(true));
+}
+
+#[test]
+fn an_empty_file_gets_a_harness_table_and_a_name_that_is_no_profile_s_is_refused() {
+    let marked = with_asks("", "opencode", true).expect("marked");
+    assert_eq!(marked, "[harness]\nasks = [\"opencode\"]\n");
+    assert!(with_asks("", "../x", true).is_err());
+    assert!(with_asks("[harness\n", "work", true).is_err());
+}

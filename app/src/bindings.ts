@@ -1943,6 +1943,16 @@ export const commands = {
 	 */
 	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
 	/**
+	 *  Mark the profile `name` as asking a person before its harness acts, or take the mark off
+	 *  (#1522): its name in `[harness] asks` of the local file, which a task, a handoff or the
+	 *  person's Ask from a tab needs before it starts on that profile. Every other line is kept.
+	 * 
+	 *  **The window's alone** (`WINDOW_ONLY`): the mark is what lets a chat start another chat on a
+	 *  profile, so no link marks one, whatever its scope. `base` is the text the window read
+	 *  (`null`: the file was not there), so a file changed on disk since is refused.
+	 */
+	markProfileAsks: (plane: PlaneId, base: string | null, name: string, asks: boolean) => typedError<SettingsSaved, string>(__TAURI_INVOKE("mark_profile_asks", { plane, base, name, asks })),
+	/**
 	 *  Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /
 	 *  Only on this machine" choice (SE-18). Both files are written or neither is
 	 *  (`purlis_core::settings::move_keys`).

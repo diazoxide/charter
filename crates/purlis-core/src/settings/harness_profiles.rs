@@ -530,5 +530,81 @@ fn referrers(root: &Path, name: &str, before: &str, after: &str) -> Vec<Referrer
     out
 }
 
+// ----- the mark that a profile asks before it acts (#1522) ---------------------------------
+
+/// **The profiles `text`'s `[harness] asks` names** ([`crate::profiles::ASKS`]), in file
+/// order: `None` where `text` is not TOML, and an empty list where it names none or the key is
+/// not a list of names. What a write is compared by, so only [`with_asks`] changes it.
+pub fn asks_of(text: &str) -> Option<Vec<String>> {
+    let cfg: toml::Table = text.parse().ok()?;
+    Some(
+        cfg.get(HARNESS)
+            .and_then(|harness| harness.get(crate::profiles::ASKS))
+            .and_then(toml::Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|one| one.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// **`text`, the local file, with the profile `name` marked as asking (`asks`) or not**: added
+/// last to `[harness] asks`, or taken out of it, with `[harness]` made where there is none and
+/// the key taken out once it names nothing. Every other line is kept. The same text where it is
+/// marked, or unmarked, already.
+pub fn with_asks(text: &str, name: &str, asks: bool) -> Result<String, String> {
+    if !profiles::name_ok(name) {
+        return Err(format!(
+            "{} is not a profile's name, so nothing was marked.",
+            crate::shown::short(name)
+        ));
+    }
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        format!(
+            "the local settings file is not valid TOML ({}), so nothing was marked. Fix it \
+             under Edit as TOML.",
+            crate::shown::short(e.message())
+        )
+    })?;
+    let not_editable = || {
+        format!(
+            "[harness] asks is not written in a form purlis edits, so nothing was marked. \
+             Change it under Edit as TOML: asks = [\"{name}\"]."
+        )
+    };
+    let harness = doc
+        .entry(HARNESS)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .ok_or_else(not_editable)?;
+    if harness.get(crate::profiles::ASKS).is_none() {
+        if !asks {
+            return Ok(text.to_owned());
+        }
+        harness.insert(
+            crate::profiles::ASKS,
+            toml_edit::value(toml_edit::Array::new()),
+        );
+    }
+    let names = harness
+        .get_mut(crate::profiles::ASKS)
+        .and_then(toml_edit::Item::as_array_mut)
+        .ok_or_else(not_editable)?;
+    let there = names.iter().any(|one| one.as_str() == Some(name));
+    match (asks, there) {
+        (true, false) => names.push(name),
+        (false, true) => names.retain(|one| one.as_str() != Some(name)),
+        _ => return Ok(text.to_owned()),
+    }
+    names.fmt();
+    if names.is_empty() {
+        harness.remove(crate::profiles::ASKS);
+    }
+    Ok(doc.to_string())
+}
+
 #[cfg(test)]
 mod tests;

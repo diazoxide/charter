@@ -291,6 +291,7 @@ macro_rules! app_commands {
                 doctor::plane_doctor_identity,
                 settings::project_settings,
                 settings::save_project_settings,
+                settings::mark_profile_asks,
                 settings::move_project_settings,
                 settings::add_project_forge,
                 settings::remove_project_forge,

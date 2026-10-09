@@ -191,9 +191,69 @@ pub(crate) fn save(
             }
         }
     };
+    // **The mark that a profile asks is changed by its own command alone** (#1522): a task
+    // starts only on a marked profile, and that command is the window's (`WINDOW_ONLY`), while
+    // this one is served to a link too. So a write here that would change which profiles
+    // `[harness] asks` names, by an edit or as raw text, is refused.
+    if which == SettingsWhich::Local {
+        use settings::harness_profiles::asks_of;
+        if let (Some(before), Some(after)) = (asks_of(base.unwrap_or_default()), asks_of(&text))
+            && before != after
+        {
+            return Ok(SettingsSaved::Refused {
+                reasons: vec![format!(
+                    "[harness] asks in {} is changed only by its boxes, under Settings › \
+                     Project › Harness & profiles › Profiles that ask before they act, so \
+                     nothing was saved.",
+                    file_of(root, which)?.file
+                )],
+            });
+        }
+    }
     match settings::save(root, which.into(), base, &text) {
         Ok(()) => Ok(SettingsSaved::Saved {
             file: file_of(root, which)?,
+        }),
+        Err(reasons) => Ok(SettingsSaved::Refused { reasons }),
+    }
+}
+
+/// Mark the profile `name` as asking a person before its harness acts, or take the mark off
+/// (#1522): its name in `[harness] asks` of the local file, which a task, a handoff or the
+/// person's Ask from a tab needs before it starts on that profile. Every other line is kept.
+///
+/// **The window's alone** (`WINDOW_ONLY`): the mark is what lets a chat start another chat on a
+/// profile, so no link marks one, whatever its scope. `base` is the text the window read
+/// (`null`: the file was not there), so a file changed on disk since is refused.
+#[tauri::command]
+#[specta::specta]
+pub async fn mark_profile_asks(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    name: String,
+    asks: bool,
+) -> Result<SettingsSaved, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || mark_asks(&root, base.as_deref(), &name, asks))
+        .await
+        .map_err(|err| format!("marking the profile did not finish: {err}"))?
+}
+
+/// [`mark_profile_asks`], without a runtime.
+pub(crate) fn mark_asks(
+    root: &std::path::Path,
+    base: Option<&str>,
+    name: &str,
+    asks: bool,
+) -> Result<SettingsSaved, String> {
+    let text = match settings::harness_profiles::with_asks(base.unwrap_or_default(), name, asks) {
+        Ok(text) => text,
+        Err(why) => return Ok(SettingsSaved::Refused { reasons: vec![why] }),
+    };
+    match settings::save(root, Which::Local, base, &text) {
+        Ok(()) => Ok(SettingsSaved::Saved {
+            file: file_of(root, SettingsWhich::Local)?,
         }),
         Err(reasons) => Ok(SettingsSaved::Refused { reasons }),
     }
@@ -1024,6 +1084,57 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("charter.toml"), shared).unwrap();
         dir
+    }
+
+    /// #1522: the mark that a profile asks is changed by its own window-only command, and the
+    /// save a link may call refuses a change to it, by an edit or as raw text, and lets every
+    /// other change through.
+    #[test]
+    fn the_settings_save_refuses_a_change_to_which_profiles_ask() {
+        let dir = plane("");
+        let base = "[harness]\nasks = [\"work\"]\n";
+        for change in [
+            SettingsChange::Raw {
+                text: "[harness]\nasks = [\"work\", \"yolo\"]\n".to_owned(),
+            },
+            SettingsChange::Edits {
+                edits: vec![SettingsEdit {
+                    path: vec![
+                        SettingsStep::Key("harness".into()),
+                        SettingsStep::Key("asks".into()),
+                    ],
+                    value: None,
+                }],
+            },
+        ] {
+            let SettingsSaved::Refused { reasons } =
+                save(dir.path(), SettingsWhich::Local, Some(base), change).unwrap()
+            else {
+                panic!("the mark is not changed by the settings save");
+            };
+            assert!(
+                reasons[0].starts_with("[harness] asks in charter.local.toml is changed only by"),
+                "{reasons:?}"
+            );
+        }
+        assert!(
+            !dir.path().join("charter.local.toml").exists(),
+            "nothing written"
+        );
+    }
+
+    #[test]
+    fn a_profile_is_marked_by_its_own_command() {
+        let dir = plane("");
+        let SettingsSaved::Saved { file } = mark_asks(dir.path(), None, "opencode", true).unwrap()
+        else {
+            panic!("marked");
+        };
+        assert_eq!(file.text, "[harness]\nasks = [\"opencode\"]\n");
+        let SettingsSaved::Refused { .. } = mark_asks(dir.path(), None, "../x", true).unwrap()
+        else {
+            panic!("a name that is no profile's is refused");
+        };
     }
 
     #[test]
