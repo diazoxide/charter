@@ -128,6 +128,10 @@ pub struct SandboxState {
     /// How the project's own hosts changed since this machine last told the person (#1341):
     /// the one-time Notice each teammate sees. `null` when nothing did.
     pub hosts_changed: Option<HostsChanged>,
+    /// How the project's Internet access presets changed since this machine last told the
+    /// person (#1385): the one-time Notice each teammate sees, so a preset that widens never
+    /// widens unseen. `null` when nothing did.
+    pub presets_changed: Option<PresetsChanged>,
     /// Every preset a project may turn on, in the core's order, each with the hosts it lets a
     /// chat reach here (#1340): Settings › Sandbox draws them, and lists no host of its own.
     pub presets: Vec<SandboxPreset>,
@@ -275,6 +279,18 @@ pub struct HostsChanged {
     pub now: Vec<String>,
 }
 
+/// The project's presets as they changed (`sandbox::local::PresetsChange`): each named as the
+/// window names it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PresetsChanged {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    /// One sentence for each preset turned on that widens what a chat may do past its hosts.
+    pub widens: Vec<String>,
+    /// The whole set now, by the committed file's words: what the Notice sends back once read.
+    pub now: Vec<String>,
+}
+
 fn state_of(root: &std::path::Path) -> SandboxState {
     state_on(root, sandbox::Os::this())
 }
@@ -293,6 +309,12 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
         hosts_changed: sandbox::local::hosts_changed(root).map(|change| HostsChanged {
             added: change.added,
             removed: change.removed,
+            now: change.now,
+        }),
+        presets_changed: sandbox::local::presets_changed(root).map(|change| PresetsChanged {
+            added: change.added,
+            removed: change.removed,
+            widens: change.widens,
             now: change.now,
         }),
         presets: presets_of(&plane, &locks),
@@ -415,6 +437,24 @@ pub fn acknowledge_project_hosts(
 ) -> Result<SandboxState, String> {
     let held = planes.held(&plane)?;
     acknowledge(held.root(), &shown)
+}
+
+/// The person read the Notice of the project's Internet access presets as it showed them,
+/// `shown` (#1385): it is not shown again until they change from that.
+#[tauri::command]
+#[specta::specta]
+pub fn acknowledge_project_presets(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    shown: Vec<String>,
+) -> Result<SandboxState, String> {
+    let held = planes.held(&plane)?;
+    acknowledge_presets(held.root(), &shown)
+}
+
+fn acknowledge_presets(root: &std::path::Path, shown: &[String]) -> Result<SandboxState, String> {
+    sandbox::local::acknowledge_presets(root, shown).map_err(|err| err.to_string())?;
+    Ok(state_of(root))
 }
 
 fn acknowledge(root: &std::path::Path, shown: &[String]) -> Result<SandboxState, String> {
@@ -1691,6 +1731,7 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets_changed: None,
                 presets: presets_of(
                     &sandbox::Plane::read(project.path()),
                     &sandbox::policy::Locks::none(),
@@ -1714,6 +1755,7 @@ mod tests {
                 ),
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets_changed: None,
                 presets: presets_of(
                     &sandbox::Plane::read(project.path()),
                     &sandbox::policy::Locks::none(),
@@ -1740,6 +1782,7 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets_changed: None,
                 presets: presets_of(
                     &sandbox::Plane::read(project.path()),
                     &sandbox::policy::Locks::none(),
@@ -1827,6 +1870,24 @@ mod tests {
         let after = acknowledge(project.path(), &told.now).expect("read");
 
         assert_eq!(after.hosts_changed, None);
+    }
+
+    /// #1385: a teammate is told once of a preset that widens, and not again once it was read.
+    #[test]
+    fn a_widening_preset_is_told_once_and_not_again_once_read() {
+        let project = tempfile::tempdir().expect("a project");
+        std::fs::write(
+            project.path().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\ncertificate-checks = true\n",
+        )
+        .expect("toml");
+        let told = state_of(project.path()).presets_changed.expect("told");
+        assert_eq!(told.added, ["Certificate checks"]);
+        assert_eq!(told.widens.len(), 1);
+
+        let after = acknowledge_presets(project.path(), &told.now).expect("read");
+
+        assert_eq!(after.presets_changed, None);
     }
 
     /// Fold-in (round 11): the offer never reads as covering a harness that is never sandboxed

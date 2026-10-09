@@ -37,6 +37,11 @@ struct OnDisk {
     /// [`super::hosts::Host`] spells it; absent before the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hosts_seen: Option<Vec<String>>,
+    /// The project's Internet access presets, and `certificate-checks` where it is on, as this
+    /// machine last showed them to the person (#1385), each by the word the committed file
+    /// names it by; absent before the first, which reads as the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    presets_seen: Option<Vec<String>>,
     /// Your own hosts for this project that you confirmed in Settings on this machine (#1341),
     /// each as [`super::hosts::Host`] spells it: the only ones of `charter.local.toml` that
     /// grant anything ([`super::hosts::personal`]).
@@ -481,6 +486,144 @@ pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
 /// a change after it was shown is told again ([`hosts_changed`]).
 pub fn acknowledge_hosts(root: &Path, shown: &[String]) -> io::Result<()> {
     change(root, |held| held.hosts_seen = Some(shown.to_vec()))
+}
+
+// ---- the project's Internet access presets, told once per change (#1385) ---------------------
+
+/// The project's Internet access presets as they changed since this machine last told the
+/// person: each named as the window names it, what each one turned on widens past its hosts,
+/// and the whole set now — what acknowledging it records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetsChange {
+    /// Turned on: each preset's title ([`super::Preset::title`]), and `Certificate checks`.
+    pub added: Vec<String>,
+    /// Turned off, named the same way.
+    pub removed: Vec<String>,
+    /// One sentence for each of `added` that widens what a chat may do past the hosts it
+    /// reaches (spec #1330's coupled widenings, #1337): the package caches, the certificate
+    /// check.
+    pub widens: Vec<String>,
+    /// The whole set now, each by the word the committed file names it by.
+    pub now: Vec<String>,
+}
+
+/// What the window calls the certificate check where it lists it beside the presets.
+const CERTIFICATE_CHECKS_TITLE: &str = "Certificate checks";
+
+/// **How the project's Internet access presets changed since this machine last told the
+/// person** — its `[sandbox] egress` presets and its `certificate-checks` (ADR 0067 §1 as
+/// amended, spec #1330: each teammate sees a one-time Notice naming what changed, so nothing
+/// widens unseen). `None` when nothing did, and where chats here are not sandboxed.
+///
+/// Told as [`hosts_changed`] tells the hosts, with one difference: a machine that has seen
+/// nothing yet has seen **the defaults** a project starts with ([`super::Preset::DEFAULT`],
+/// less any an administrator's policy turns off, certificate checks off), so a project on the defaults tells nothing on first sight, and one
+/// that differs is told once — a narrowed one too, so that turning a preset back on later is
+/// a change from what was seen.
+pub fn presets_changed(root: &Path) -> Option<PresetsChange> {
+    let locks = super::policy::Locks::of(root);
+    presets_change(
+        &Plane::read(root),
+        &locks,
+        read(root).presets_seen.as_deref(),
+    )
+}
+
+/// [`presets_changed`] of `plane` under `locks`, where this machine last showed `seen`.
+///
+/// **Only what a chat reaches** (#1423): a preset an administrator's policy turns off reaches
+/// no chat, so it is not named, as the hosts Notice names no host policy locks out.
+pub fn presets_change(
+    plane: &Plane,
+    locks: &super::policy::Locks,
+    seen: Option<&[String]>,
+) -> Option<PresetsChange> {
+    use super::Preset;
+    let policy = plane.in_force(locks)?;
+    let mut now: Vec<String> = locks
+        .presets(&policy.egress)
+        .into_iter()
+        .map(|preset| preset.word().to_owned())
+        .collect();
+    if policy.certificate_checks {
+        now.push(super::CERTIFICATE_CHECKS.to_owned());
+    }
+    // The defaults as they reach a chat here: a preset policy turns off was never on to see.
+    let defaults: Vec<String> = locks
+        .presets(&Preset::DEFAULT)
+        .into_iter()
+        .map(|preset| preset.word().to_owned())
+        .collect();
+    let seen = seen.unwrap_or(&defaults);
+    let title = |word: &str| {
+        Preset::ALL
+            .into_iter()
+            .find(|preset| preset.word() == word)
+            .map_or(CERTIFICATE_CHECKS_TITLE, Preset::title)
+            .to_owned()
+    };
+    let added: Vec<&String> = now.iter().filter(|one| !seen.contains(one)).collect();
+    let removed: Vec<String> = seen
+        .iter()
+        .filter(|one| !now.contains(one))
+        // A word no preset is any more was shown once; it is named as it was written.
+        .map(|one| {
+            if one == super::CERTIFICATE_CHECKS || Preset::ALL.iter().any(|p| p.word() == one) {
+                title(one)
+            } else {
+                one.clone()
+            }
+        })
+        .collect();
+    if added.is_empty() && removed.is_empty() {
+        return None;
+    }
+    let widens = added
+        .iter()
+        .filter_map(|word| widening(word))
+        .map(str::to_owned)
+        .collect();
+    Some(PresetsChange {
+        added: added.iter().map(|word| title(word)).collect(),
+        removed,
+        widens,
+        now,
+    })
+}
+
+/// What turning on the preset or setting called `word` widens past the hosts it lets a chat
+/// reach, in one sentence; `None` for one that widens nothing else.
+fn widening(word: &str) -> Option<&'static str> {
+    if word == super::Preset::Toolchains.word() {
+        Some("Package registries also lets chats write the project's own package caches.")
+    } else if word == super::CERTIFICATE_CHECKS {
+        Some(
+            "Certificate checks let programs such as gh verify a host's certificate through \
+             the system on macOS, which then fetches addresses a certificate names, outside \
+             the hosts chats may reach.",
+        )
+    } else {
+        None
+    }
+}
+
+/// Records that the person was told of `shown`, the project's presets as the Notice showed
+/// them: a change after it was shown is told again ([`presets_changed`]).
+pub fn acknowledge_presets(root: &Path, shown: &[String]) -> io::Result<()> {
+    change(root, |held| held.presets_seen = Some(shown.to_vec()))
+}
+
+/// A change to the presets made in this machine's own Settings is one this machine has seen —
+/// unless another was still waiting to be told (`pending`, [`presets_changed`] read before the
+/// write), which the Notice then tells with it. Best effort: a record that cannot be written
+/// leaves the Notice to say it once more.
+pub fn presets_seen_by_you(root: &Path, pending: bool) {
+    if pending {
+        return;
+    }
+    if let Some(change) = presets_changed(root) {
+        let _ = acknowledge_presets(root, &change.now);
+    }
 }
 
 // ---- your own hosts, as you confirmed them (#1341) -------------------------------------------

@@ -5187,6 +5187,19 @@ export type PlaneUpdated = {
 };
 
 /**
+ *  The project's presets as they changed (`sandbox::local::PresetsChange`): each named as the
+ *  window names it.
+ */
+export type PresetsChanged = {
+	added: string[],
+	removed: string[],
+	/**  One sentence for each preset turned on that widens what a chat may do past its hosts. */
+	widens: string[],
+	/**  The whole set now, by the committed file's words: what the Notice sends back once read. */
+	now: string[],
+};
+
+/**
  *  A harness profile as the Add form sends it, each field as typed: the command one argument
  *  per entry.
  */
@@ -5795,6 +5808,12 @@ export type SandboxState = {
 	 *  the one-time Notice each teammate sees. `null` when nothing did.
 	 */
 	hosts_changed: HostsChanged | null,
+	/**
+	 *  How the project's Internet access presets changed since this machine last told the
+	 *  person (#1385): the one-time Notice each teammate sees, so a preset that widens never
+	 *  widens unseen. `null` when nothing did.
+	 */
+	presets_changed: PresetsChanged | null,
 	/**
 	 *  Every preset a project may turn on, in the core's order, each with the hosts it lets a
 	 *  chat reach here (#1340): Settings › Sandbox draws them, and lists no host of its own.

@@ -182,10 +182,11 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     }
     // And the list is exactly that rule's, with Stop all tasks and its question (#1498), the
     // three reads of what chats said or were sent (#1494, #1495, #1496), the person's answer
-    // to a task (#1496) and the dispatch commands (spec #1483): nothing else is kept from a
-    // link by it.
+    // to a task (#1496), the dispatch commands (spec #1483) and the person's "Got it" on the
+    // presets Notice (#1385): nothing else is kept from a link by it.
     assert_eq!(ui::STANDING_DISPATCH.len(), 25);
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25);
+    assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 1);
 }
 
 #[tokio::test]
