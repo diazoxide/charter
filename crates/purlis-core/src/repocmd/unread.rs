@@ -16,6 +16,7 @@
 //! matched against the clone's URL by key name alone: the note names which keys would have
 //! changed the route, never a value (a proxy URL or a rewrite base can carry a credential).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::worktree::git;
@@ -23,6 +24,7 @@ use crate::worktree::git;
 /// The filters a `.gitattributes` text turns on (`filter=<name>`), each once, in the order
 /// first named. A comment, an unset (`-filter`) or a reset (`!filter`) turns none on.
 pub fn filters_named(attributes: &str) -> Vec<String> {
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for line in attributes.lines() {
         let line = line.trim();
@@ -32,7 +34,7 @@ pub fn filters_named(attributes: &str) -> Vec<String> {
         for word in line.split_whitespace().skip(1) {
             if let Some(name) = word.strip_prefix("filter=")
                 && !name.is_empty()
-                && !out.iter().any(|seen| seen == name)
+                && seen.insert(name)
             {
                 out.push(name.to_owned());
             }
@@ -41,23 +43,38 @@ pub fn filters_named(attributes: &str) -> Vec<String> {
     out
 }
 
+/// The most filters a checkout's note names one by one; the rest are counted in one sentence.
+/// Git LFS, the one people meet, is always among those named.
+pub const FILTERS_NAMED_AT_MOST: usize = 8;
+
 /// What a checkout at `top`, made by brokered git, says of the filters its `.gitattributes`
-/// files name: one sentence per filter, none where they name none. `name` is how the checkout
-/// is called in the answer, `at` where it is, as the person would `cd` to it.
+/// files name: one sentence per filter, up to [`FILTERS_NAMED_AT_MOST`] and then one that counts
+/// the rest, none where they name none. `name` is how the checkout is called in the answer, `at`
+/// where it is, as the person would `cd` to it.
 ///
 /// Every `.gitattributes` is read, the top one first and then each one in a folder (#1550): a
 /// repository can turn a filter on for one folder alone. Each is read as **committed**
-/// ([`committed_attributes`]), never from the working tree a chat writes.
+/// ([`committed_attributes`]), never from the working tree a chat writes. What they name is
+/// counted once each, in a set, so a commit that names thousands costs the app a count and not
+/// a sentence each.
 pub fn filter_notes(top: &Path, name: &str, at: &str) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
     let mut filters: Vec<String> = Vec::new();
     for text in committed_attributes(top) {
         for filter in filters_named(&text) {
-            if !filters.contains(&filter) {
+            if seen.insert(filter.clone()) && filters.len() < FILTERS_NAMED_AT_MOST {
                 filters.push(filter);
             }
         }
     }
-    filters
+    // LFS is told whenever it is there, first.
+    if seen.contains("lfs") {
+        filters.retain(|one| one != "lfs");
+        filters.insert(0, "lfs".to_owned());
+        filters.truncate(FILTERS_NAMED_AT_MOST);
+    }
+    let more = seen.len() - filters.len();
+    let mut said: Vec<String> = filters
         .into_iter()
         .map(|filter| {
             if filter == "lfs" {
@@ -77,7 +94,15 @@ pub fn filter_notes(top: &Path, name: &str, at: &str) -> Vec<String> {
                 )
             }
         })
-        .collect()
+        .collect();
+    if more > 0 {
+        said.push(format!(
+            "{name}'s .gitattributes names {more} more filter{}, which git run by the app for a \
+             chat does not run either.",
+            if more == 1 { "" } else { "s" }
+        ));
+    }
+    said
 }
 
 /// The most of one committed `.gitattributes` read: far past any real one.
@@ -115,15 +140,16 @@ pub fn committed_attributes(top: &Path) -> Vec<String> {
     ]) else {
         return Vec::new();
     };
-    let mut names: Vec<&str> = Vec::new();
-    for name in indexed.split('\0').filter(|one| !one.is_empty()) {
-        if !names.contains(&name) {
-            names.push(name);
-        }
-    }
-    // The top one first, whatever sorts before it.
-    names.sort_by_key(|name| *name != ".gitattributes");
-    names.truncate(ATTRIBUTES_FILES_AT_MOST);
+    // The index holds each path once. The top one first, then the first of the rest, taken
+    // before anything else is done with them.
+    let listed = || indexed.split('\0').filter(|one| !one.is_empty());
+    let names: Vec<&str> = listed()
+        .any(|one| one == ".gitattributes")
+        .then_some(".gitattributes")
+        .into_iter()
+        .chain(listed().filter(|one| *one != ".gitattributes"))
+        .take(ATTRIBUTES_FILES_AT_MOST)
+        .collect();
     if names.is_empty() {
         return Vec::new();
     }
@@ -308,26 +334,39 @@ pub fn global_entries() -> Vec<(String, String)> {
 /// Whether a failed clone's own words (`err`, git's standard error) read as a failure to reach
 /// the host: a name that did not resolve, a connection, a proxy, a certificate, or the host
 /// refusing who asked (curl's "unable to access", git's "Authentication failed"). Only such a
-/// failure is one a key of [`route_keys`] could have changed, so only then is it named
-/// ([`network_note`]): a clone that fails for another reason (a repository that is not there,
-/// a ref, a disk) names none, so a clone made to fail cannot ask which keys the person's config
-/// sets for a host (#1550).
+/// failure is one a key of [`route_keys`] could have changed, so only then is a key named
+/// ([`network_note`], #1550).
 ///
-/// What git quotes (`'…'`, a URL or a folder) is left out first: a repository called `openssl`
-/// that is not there does not read as a certificate failure.
+/// **A narrowing, not a stop.** A forge that answers a missing repository in its own words
+/// ("Repository not found", or a 404) no longer has the keys your config sets for its host
+/// named, nor does a clone that fails for a ref or a disk. A host that fails on purpose (a
+/// certificate it chose, a connection it drops, a stall) still reads as a route failure, and
+/// then which keys are set is named, never their values.
+///
+/// Read line by line, and only git's own `fatal:` and `error:` lines: what the server sends
+/// (`remote:`) and git's warnings are never read. In each line, what git quotes (`'…'`, a URL
+/// or a folder) is left out first, so a repository called `openssl` that is not there does not
+/// read as a certificate failure. An HTTP 404 is a repository that is not there, not a route.
 pub fn reads_as_a_route_failure(err: &str) -> bool {
-    let unquoted: String = err
-        .split('\'')
-        .step_by(2)
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase();
-    ROUTE_FAILURES.iter().any(|said| unquoted.contains(said))
+    err.lines().any(|line| {
+        let line = line.trim_start();
+        if !(line.starts_with("fatal:") || line.starts_with("error:")) {
+            return false;
+        }
+        let unquoted = line
+            .split('\'')
+            .step_by(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        !unquoted.contains("returned error: 404")
+            && ROUTE_FAILURES.iter().any(|said| unquoted.contains(said))
+    })
 }
 
 /// What git and curl say, lowercased, when a clone could not reach its host or was refused at
 /// it.
-const ROUTE_FAILURES: [&str; 9] = [
+const ROUTE_FAILURES: [&str; 12] = [
     "unable to access",
     "authentication failed",
     "could not resolve",
@@ -335,7 +374,10 @@ const ROUTE_FAILURES: [&str; 9] = [
     "connection timed out",
     "connection refused",
     "proxy",
-    "ssl",
+    "ssl certificate problem",
+    "ssl_connect",
+    "ssl connect error",
+    "server certificate verification failed",
     "certificate",
 ];
 
