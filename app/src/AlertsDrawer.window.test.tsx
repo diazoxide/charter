@@ -52,6 +52,12 @@ const REINIT: AlertRow = {
   detail: "1 workspace is behind the current layout: ide",
   way: { kind: "fix", id: "workspace-reinit" },
 };
+const IDENTITY: AlertRow = {
+  severity: "warn",
+  subject: "git identity",
+  detail: "not set: user.email",
+  way: { kind: "fix", id: "git-identity" },
+};
 const NESTED: AlertRow = {
   severity: "bad",
   subject: "nested plane",
@@ -117,6 +123,19 @@ beforeEach(() => {
         // Once it ran whole, the next reading has nothing left to say about it.
         if (fixAnswer.complete) rows = rows.filter((one) => one !== REINIT);
         return fixAnswer;
+      }
+      if (cmd === "plane_doctor_identity") return { name: "Bea Terminal", email: "" };
+      if (cmd === "plane_doctor_fix_identity") {
+        rows = rows.filter((one) => one !== IDENTITY);
+        return {
+          kind: "fixed",
+          fixed: {
+            fix: "git-identity",
+            refused: null,
+            said: ["✓ set user.email = bea@example.invalid (global git config)"],
+            complete: true,
+          },
+        };
       }
       if (cmd === "open_plane") return { plane: null, ask: null };
       if (cmd === "use_built_in_theme") return "/home/op/.config/charter/theme.aside.json";
@@ -222,6 +241,36 @@ describe("each row of the Alerts drawer", () => {
         "purlis could not reinit: this purlis may not write the project",
       ),
     );
+  });
+
+  it("opens a fix's form for a fix that takes input, rather than applying it bare (#1301)", async () => {
+    rows = [IDENTITY];
+    const open = await drawer();
+    const before = calls("alerts_everywhere").length;
+
+    const fix = within(row(open, "alert:git identity")).getByRole("button", { name: "Fix" });
+    await userEvent.click(fix);
+    const form = await within(open).findByRole("form", { name: "Git identity" });
+    // Pressing it applied nothing: the fix needs a name and an email first.
+    expect(calls("plane_doctor_fix")).toEqual([]);
+    expect(calls("plane_doctor_fix_identity")).toEqual([]);
+    expect(fix).toHaveAttribute("aria-expanded", "true");
+    expect(fix).toHaveAttribute("aria-controls", form.id);
+    await waitFor(() => expect(within(form).getByLabelText("Name")).toHaveValue("Bea Terminal"));
+
+    const email = within(form).getByLabelText("Email");
+    await waitFor(() => expect(email).toHaveFocus());
+    await userEvent.type(email, "bea@example.invalid", { skipClick: true });
+    await userEvent.click(within(form).getByRole("button", { name: "Set identity" }));
+
+    await waitFor(() =>
+      expect(calls("plane_doctor_fix_identity").map((one) => one.args)).toEqual([
+        { plane: PLANE, name: "", email: "bea@example.invalid" },
+      ]),
+    );
+    expect(calls("plane_doctor_fix")).toEqual([]);
+    await waitFor(() => expect(calls("alerts_everywhere").length).toBeGreaterThan(before));
+    await waitFor(() => expect(project(open)).toHaveTextContent("Nothing needs you here."));
   });
 
   it("opens the outer project through the window's one way in", async () => {

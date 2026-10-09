@@ -1,8 +1,15 @@
 import { useRef, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FolderOpen, LoaderCircle, Monitor, OctagonAlert, TriangleAlert, X } from "lucide-react";
-import { commands, type AlertRow, type PlaneAlerts, type PlaneId } from "./bindings";
+import {
+  commands,
+  type AlertRow,
+  type DoctorFixed,
+  type PlaneAlerts,
+  type PlaneId,
+} from "./bindings";
 import type { AlertsReading } from "./alerts";
+import { identityNowOf, sendIdentity, useFixForm, type Fixer } from "./Doctor";
 import { drawWhatIsInForce } from "./Extensions";
 import { Notice, type NoticeAction } from "./Notice";
 import { sayAboutThisMachine, usingTheBuiltIn, type MachineAlert } from "./windowprefs";
@@ -301,6 +308,7 @@ function ProjectRow({
   /** What the last fix answered, when it did not cure the row: its refusal, or what it said. */
   const [said, setSaid] = useState<string>();
   const fixing = useRef(false);
+  const [busy, setBusy] = useState(false);
   const leaving =
     (go: () => void): NoticeAction["onPress"] =>
     () => {
@@ -308,6 +316,54 @@ function ProjectRow({
       go();
     };
   const way = alert.way;
+  const label = way.kind === "fix" ? (FIX_LABELS[way.id] ?? "Fix") : "";
+  const could = (why: string) => `purlis could not ${label.toLowerCase()}: ${why}`;
+  /** What a fix came to, said on the row when it did not cure it; then every project is read
+   *  again, because a fix that half-ran changed something too. */
+  const landed = (fixed: DoctorFixed) => {
+    if (fixed.refused !== null) setSaid(could(fixed.refused));
+    else if (!fixed.complete) setSaid(fixed.said.join(" "));
+    does.reread();
+  };
+  // **A fix that takes input opens its form here too** (#1301): the drawer's fix goes through
+  // the doctor's own `useFixForm`, so a fix in `FIXES_WITH_A_FORM` is never applied bare (and
+  // refused for the input it lacks). Every row asks for it, as hooks must; only a fix row uses it.
+  const fixer: Fixer = {
+    apply: (id) => {
+      if (fixing.current) return;
+      fixing.current = true;
+      setBusy(true);
+      setSaid(undefined);
+      void commands
+        .planeDoctorFix(plane, id)
+        .then((answer) =>
+          landed(
+            answer.status === "ok"
+              ? answer.data
+              : { fix: id, refused: answer.error, said: [], complete: false },
+          ),
+        )
+        .catch((err: unknown) =>
+          landed({ fix: id, refused: String(err), said: [], complete: false }),
+        )
+        .finally(() => {
+          fixing.current = false;
+          setBusy(false);
+        });
+    },
+    busy,
+    identity: async (name, email) => {
+      setSaid(undefined);
+      setBusy(true);
+      const sent = await sendIdentity(plane, name, email);
+      setBusy(false);
+      if ("refused" in sent) return sent.refused;
+      landed(sent.fixed);
+      return undefined;
+    },
+    identityNow: () => identityNowOf(plane),
+  };
+  const fix = useFixForm(way.kind === "fix" ? way.id : "", fixer);
   let action: NoticeAction;
   switch (way.kind) {
     case "settings":
@@ -325,32 +381,9 @@ function ProjectRow({
     case "saving":
       action = { label: "Go to Saving", onPress: leaving(() => does.openSaving(plane)) };
       break;
-    case "fix": {
-      const label = FIX_LABELS[way.id] ?? "Fix";
-      action = {
-        label,
-        onPress: () => {
-          if (fixing.current) return;
-          fixing.current = true;
-          setSaid(undefined);
-          const could = (why: string) => `purlis could not ${label.toLowerCase()}: ${why}`;
-          void commands
-            .planeDoctorFix(plane, way.id)
-            .then((answer) => {
-              if (answer.status === "error") setSaid(could(answer.error));
-              else if (answer.data.refused !== null) setSaid(could(answer.data.refused));
-              else if (!answer.data.complete) setSaid(answer.data.said.join(" "));
-            })
-            .catch((err: unknown) => setSaid(could(String(err))))
-            .finally(() => {
-              fixing.current = false;
-              // Read again whatever came of it: a fix that half-ran changed something too.
-              does.reread();
-            });
-        },
-      };
+    case "fix":
+      action = { label, onPress: fix.press, opens: fix.opens };
       break;
-    }
   }
   const cause = `alert:${alert.subject}`;
   const tone = toneOf(alert.severity);
@@ -360,7 +393,7 @@ function ProjectRow({
   return (
     <li data-severity={alert.severity}>
       {way.kind === "fix" ? (
-        <Notice cause={cause} at="drawer" tone={tone} fixes={[action]}>
+        <Notice cause={cause} at="drawer" tone={tone} fixes={[action]} under={fix.form}>
           {words}
         </Notice>
       ) : (

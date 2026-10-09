@@ -207,44 +207,23 @@ export function useDoctor(plane: PlaneId): DoctorState {
   );
   const fixIdentity = useCallback(
     async (name: string, email: string): Promise<IdentityRefused | undefined> => {
-      const id = "git-identity";
       const mine = ++newestFix.current;
-      setLastFix({ plane, fixing: id });
-      const landed = (fixed: DoctorFixed) => {
-        if (mine !== newestFix.current) return;
-        setLastFix({ plane, fixed });
-        run(true);
-      };
-      try {
-        const answer = await commands.planeDoctorFixIdentity(plane, name, email);
-        if (answer.status !== "ok") {
-          landed({ fix: id, refused: answer.error, said: [], complete: false });
-          return undefined;
-        }
-        if (answer.data.kind === "fixed") {
-          landed(answer.data.fixed);
-          return undefined;
-        }
+      setLastFix({ plane, fixing: "git-identity" });
+      const sent = await sendIdentity(plane, name, email);
+      if ("refused" in sent) {
         // Refused field by field: nothing was written, and nothing is said over the rows.
         if (mine === newestFix.current) setLastFix(undefined);
-        return { name: answer.data.name, email: answer.data.email };
-      } catch (err: unknown) {
-        landed({ fix: id, refused: String(err), said: [], complete: false });
-        return undefined;
+        return sent.refused;
       }
+      if (mine === newestFix.current) {
+        setLastFix({ plane, fixed: sent.fixed });
+        run(true);
+      }
+      return undefined;
     },
     [plane, run],
   );
-  const identityNow = useCallback(async (): Promise<IdentityNow> => {
-    // Nothing read is nothing locked: the core reads it again before it writes anyway.
-    const none = { name: "", email: "" };
-    try {
-      const answer = await commands.planeDoctorIdentity(plane);
-      return answer.status === "ok" && answer.data ? answer.data : none;
-    } catch {
-      return none;
-    }
-  }, [plane]);
+  const identityNow = useCallback(() => identityNowOf(plane), [plane]);
   const forget = useCallback(() => {
     newestFix.current += 1;
     setLastFix(undefined);
@@ -263,6 +242,41 @@ export function useDoctor(plane: PlaneId): DoctorState {
     fixed: ours?.fixed,
     forget,
   };
+}
+
+/**
+ * **The git identity fix, sent with the form's name and email** (FX-3): what the core wrote, or
+ * each field's refusal when it wrote nothing. A failure to ask at all is a fix refused as a
+ * whole. Shared by the doctor's own form and the Alerts drawer's (#1301).
+ */
+export async function sendIdentity(
+  plane: PlaneId,
+  name: string,
+  email: string,
+): Promise<{ fixed: DoctorFixed } | { refused: IdentityRefused }> {
+  const whole = (why: string) => ({
+    fixed: { fix: "git-identity", refused: why, said: [], complete: false },
+  });
+  try {
+    const answer = await commands.planeDoctorFixIdentity(plane, name, email);
+    if (answer.status !== "ok") return whole(answer.error);
+    if (answer.data.kind === "fixed") return { fixed: answer.data.fixed };
+    return { refused: { name: answer.data.name, email: answer.data.email } };
+  } catch (err: unknown) {
+    return whole(String(err));
+  }
+}
+
+/** git's global identity as it stands, for the form to lock what is set. */
+export async function identityNowOf(plane: PlaneId): Promise<IdentityNow> {
+  // Nothing read is nothing locked: the core reads it again before it writes anyway.
+  const none = { name: "", email: "" };
+  try {
+    const answer = await commands.planeDoctorIdentity(plane);
+    return answer.status === "ok" && answer.data ? answer.data : none;
+  } catch {
+    return none;
+  }
 }
 
 /** Every row the verdict counts: the table's, and the app's own beside it. */
@@ -311,7 +325,7 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
 const GLYPH: Record<DoctorRow["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
 /** What a row's Fix button needs: the doctor's `fix`, and whether one may be pressed now. */
-type Fixer = {
+export type Fixer = {
   apply: (id: string) => void;
   busy: boolean;
   /** The git identity form's submit; absent where no form can be sent. */
@@ -322,12 +336,13 @@ type Fixer = {
 
 /**
  * **A fix's form, wherever its fix is pressed** (FX-3, #1250): the Doctor row's Fix and a
- * Notice carrying the same fix id open it alike. For a fix in {@link FIXES_WITH_A_FORM},
+ * Notice carrying the same fix id open it alike, and so does an Alerts-drawer row whose way out
+ * is that fix (#1301). For a fix in {@link FIXES_WITH_A_FORM},
  * `press` opens the form (once what is set has been read, which is what it locks) or closes
  * it; for any other, it applies the fix. `form` is the form while it is open, and it closes
  * itself once the fix was applied or refused as a whole.
  */
-function useFixForm(fix: string, fixer: Fixer) {
+export function useFixForm(fix: string, fixer: Fixer) {
   // The form is open once what is set has been read: `current` is what it locks.
   const [current, setCurrent] = useState<IdentityNow>();
   const id = useId();
