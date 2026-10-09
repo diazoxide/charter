@@ -1773,9 +1773,16 @@ impl Lock {
         let Ok(dir) = private_dir(config_root) else {
             return Self(None);
         };
+        Self::at(&dir.join(name))
+    }
+
+    /// Takes the lock whose file is `path`, in a directory the caller has made: for a
+    /// read-modify-write of a file in a folder of its own under this one (`forge-budget`,
+    /// #1164). The same best effort as [`Lock::named`].
+    pub(crate) fn at(path: &Path) -> Self {
         // `create` and not `create_new`: the lock file is the *name* two processes agree on,
         // it holds nothing, and one left behind by a previous run is the ordinary case.
-        let Ok(file) = std::fs::File::create(dir.join(name)) else {
+        let Ok(file) = std::fs::File::create(path) else {
             return Self(None);
         };
         #[cfg(unix)]

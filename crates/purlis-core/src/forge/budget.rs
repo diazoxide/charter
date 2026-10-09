@@ -283,8 +283,9 @@ impl Meter {
 
     /// A meter for `account` kept in the machine tier under `config_root`: it reads the hour
     /// its file holds before each change and writes it after, so every process sending as the
-    /// account shares one count. Two processes counting at the same instant can lose one of
-    /// the two counts; the budget is a guard, not a ledger.
+    /// account shares one count. A change takes a lock beside the file for its read and its
+    /// write (#1164), as the machine store's own update does, so two processes counting at the
+    /// same instant both count.
     pub fn kept_in(config_root: &Path, account: &Account, clock: Arc<dyn Clock>) -> Meter {
         let mut meter = Meter::new(account, clock);
         meter.file = Some(root(config_root).join(format!("{}.json", account.key())));
@@ -358,9 +359,28 @@ impl Meter {
         )
     }
 
+    /// The lock on this meter's kept file, beside it in a `0700` folder, or `None` for a meter
+    /// kept in memory. Best effort, as [`crate::machine::update`]'s: a lock that cannot be
+    /// taken loses at most the count it was there to keep.
+    fn lock(&self) -> Option<crate::machine::Lock> {
+        let file = self.file.as_ref()?;
+        let dir = file.parent()?;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir).ok()?;
+        let mut name = file.file_name()?.to_os_string();
+        name.push(".lock");
+        Some(crate::machine::Lock::at(&dir.join(name)))
+    }
+
     /// Apply `f` to the hour as of `now`, and keep the result when `write`.
     fn change<T>(&self, f: impl FnOnce(&mut Usage) -> T, now: u64, write: bool) -> T {
         let mut usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        // Held across the read AND the write: each rewrites the whole hour, so two changes
+        // interleaving would drop one. Only a change that writes takes it.
+        let _held = write.then(|| self.lock()).flatten();
         // A kept hour is read again first: every process that sends as the account, and the
         // window and a `charter` command among them, spends the one count (ADR 0070 §6).
         if let Some(kept) = self.read_kept(&usage.account) {
@@ -634,6 +654,40 @@ mod tests {
         window.record(Some(&reply(200, &[])));
         assert_eq!(window.usage().counted, 3);
         assert_eq!(command.usage().counted, 3);
+    }
+
+    #[test]
+    fn two_meters_counting_at_once_lose_no_count() {
+        // #1164: each count is a read-modify-write of one file, which without a lock drops a
+        // count whenever two interleave.
+        const EACH: u32 = 200;
+        let config = tempfile::tempdir().unwrap();
+        let clock = at(1_000);
+        let meters: Vec<_> = (0..2)
+            .map(|_| {
+                Arc::new(Meter::kept_in(
+                    config.path(),
+                    &account(Kind::GitLab),
+                    clock.clone(),
+                ))
+            })
+            .collect();
+        let threads: Vec<_> = meters
+            .iter()
+            .map(|meter| {
+                let meter = meter.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..EACH {
+                        meter.record(Some(&reply(200, &[])));
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(meters[0].usage().counted, 2 * EACH);
+        assert_eq!(kept(config.path(), 1_000)[0].counted, 2 * EACH);
     }
 
     #[test]
