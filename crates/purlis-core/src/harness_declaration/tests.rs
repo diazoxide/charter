@@ -816,3 +816,62 @@ fn a_no_s_reason_is_one_line_of_at_most_200_characters() {
         );
     }
 }
+
+#[test]
+fn a_project_never_takes_the_name_purlis_gives_a_harness_it_ships() {
+    // A chat's harness word (`PURLIS_HARNESS`, a profile's harness) is read as the built-in
+    // by that name, so a declaration under it would be armed as one.
+    let why = refused(
+        "claude-code",
+        "name = \"claude-code\"\nprogram = \"gemini\"\n",
+    );
+    assert_eq!(
+        why,
+        "harnesses/claude-code.toml declares 'claude-code', which is the name purlis gives a \
+         harness it ships — a chat on it would be taken for that harness and armed as one. \
+         Give it a name of its own."
+    );
+    for name in crate::guardcmd::HARNESSES {
+        let read = read(
+            project(&[(
+                &format!("{name}.toml"),
+                &format!("name = \"{name}\"\nprogram = \"gemini\"\n"),
+            )])
+            .path(),
+        );
+        assert_eq!(read.refused.len(), 1, "{name}: {:?}", read.refused);
+        assert!(
+            read.get(name)
+                .is_none_or(|found| found.origin == Origin::BuiltIn),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_terminals_newline_is_one_of_the_keys_a_terminal_reads_as_enter() {
+    for newline in ["\\r", "\\n", "\\r\\n", "\\u001b\\r", "\\\\\\r"] {
+        let dir = project(&[(
+            "gemini.toml",
+            &declaring(&format!("[terminal]\nnewline = \"{newline}\"")),
+        )]);
+        let read = read(dir.path());
+        assert!(read.refused.is_empty(), "{newline}: {:?}", read.refused);
+        assert!(read.get("gemini").unwrap().terminal.newline.is_some());
+    }
+    for newline in ["x", "\\r\\r", "\\u001b[2~", "rm -rf ~\\r", "\\u0003", "\\t"] {
+        let why = refused(
+            "gemini",
+            &declaring(&format!("[terminal]\nnewline = \"{newline}\"")),
+        );
+        assert!(
+            why.starts_with("harnesses/gemini.toml's [terminal] newline is ")
+                && why.ends_with(
+                    "and it is one of the keys a terminal reads as a new line: \"\\r\", \
+                     \"\\n\", \"\\r\\n\", \"\\u001b\\r\" or \"\\\\\\r\". Write one of them, \
+                     or remove the line and the chat keeps the terminal's own Enter."
+                ),
+            "{newline}: {why}"
+        );
+    }
+}
