@@ -1204,6 +1204,31 @@ fn an_ephemeral_session_holding_what_charter_never_writes_there_is_kept_whole() 
     assert!(stray.exists());
 }
 
+/// A name that is not UTF-8 is not one charter writes, so it keeps its session whole, the
+/// files beside it too. Linux only: APFS refuses such a name.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_ephemeral_session_holding_a_name_that_is_not_utf8_is_kept_whole() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let (_d, root) = plane();
+    let ours = ephemeral(&root, "ended", "devops", "scratch.md", OLD);
+    let odd = ours
+        .parent()
+        .unwrap()
+        .join(std::ffi::OsStr::from_bytes(b"odd-\xff.md"));
+    aged(&odd, OLD);
+    std::fs::File::open(ours.parent().unwrap())
+        .unwrap()
+        .set_modified(SystemTime::now() - OLD)
+        .unwrap();
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.ephemeral, 0);
+    assert!(ours.exists());
+    assert!(odd.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn an_ephemeral_session_holding_a_link_is_kept_and_the_link_not_followed() {
