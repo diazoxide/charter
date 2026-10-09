@@ -235,6 +235,52 @@ fn a_turn_reports_its_plan_usage_and_tool_calls_in_the_neutral_model_between_its
     );
 }
 
+/// A prompt too long to write is refused before it reaches the agent, and the chat goes on
+/// (#1117): measured as written, so a prompt of quotes, each escaped, is refused at half the
+/// length; a prompt just inside the bound is sent and answered whole.
+#[test]
+fn a_prompt_too_long_to_send_is_refused_and_the_chat_goes_on() {
+    let dir = tempfile::tempdir().expect("a worktree");
+    let record: PathBuf = dir.path().join("record.jsonl");
+    let (chat, events) = start(
+        dir.path(),
+        &["--acp-record", record.to_str().expect("UTF-8")],
+    );
+    let most = acp::MOST_UNWRITTEN_BYTES;
+    assert_eq!(turn(&chat, &"p".repeat(most)), Err(TurnFailed::TooLong));
+    assert_eq!(
+        turn(&chat, &"\"".repeat(most / 2)),
+        Err(TurnFailed::TooLong)
+    );
+
+    assert_eq!(turn(&chat, "hello"), Ok(Stop::EndTurn));
+    let seen = events_until(&events, |event| {
+        *event == Event::Said(Said::Turn(Turn::Ended))
+    });
+    let began = Event::Said(Said::Turn(Turn::Began));
+    assert_eq!(
+        seen.iter().filter(|event| **event == began).count(),
+        1,
+        "{seen:#?}"
+    );
+    assert_eq!(seen.iter().find_map(text), Some("you said: hello"));
+
+    let near = "p".repeat(most - 4096);
+    assert_eq!(turn(&chat, &near), Ok(Stop::EndTurn));
+    let lines = std::fs::read_to_string(&record).expect("the record");
+    let prompts: Vec<&str> = lines
+        .lines()
+        .filter(|line| line.contains("\"session/prompt\""))
+        .collect();
+    assert_eq!(
+        prompts.len(),
+        2,
+        "only the prompts that fit reached the agent"
+    );
+    assert!(prompts[0].contains("\"hello\""));
+    assert!(prompts[1].len() < most, "{}", prompts[1].len());
+}
+
 fn the_operator() -> Answerer {
     Answerer::admitted(Admitted::LocalUi).expect("the window answers")
 }
