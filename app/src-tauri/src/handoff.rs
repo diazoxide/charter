@@ -193,7 +193,7 @@ pub fn answer(
             // that still does is refused, its ticket spent, naming the one route for work that
             // reports back. Nothing opens a handoff that owes a report.
             if open.older_report {
-                return no(an_open_asking_a_report(&open.workspace));
+                return no(an_open_asking_a_report(&open));
             }
             // Decided as every dispatch is (#1444): started, held for the person, or refused.
             match dispatch_it(held, plane, &Wanted::moved(&open), STARTING) {
@@ -297,14 +297,32 @@ pub(crate) fn report_for(
 
 /// What an open that still asks for a report (an older command line's `--report`) is refused
 /// with (#1471): work that needs an answer is a task, and the command that sends one into the
-/// workspace it named.
-fn an_open_asking_a_report(workspace: &str) -> String {
-    format!(
-        "a handoff asks for no report, so nothing was opened. Work this chat needs an answer \
-         from is a task: purlis dispatch --name \"<task>\" [--to <persona>] --in \
-         workspace:{}",
-        purlis_core::personas::one_line(workspace)
-    )
+/// workspace it named, **to the persona it named** (none for the chat's own). Where the older
+/// line was to create that workspace, the refusal names the command that creates it first: a
+/// dispatch into a workspace that is not there yet is refused before it would say so.
+fn an_open_asking_a_report(open: &OpenChat) -> String {
+    let one = purlis_core::personas::one_line;
+    let workspace = one(&open.workspace);
+    // A name the line sent that is no persona's name is not echoed as one: the placeholder
+    // stands in for it, as it did before.
+    let to = match open.persona.as_deref().map(str::trim) {
+        None | Some("") => String::new(),
+        Some(persona) if purlis_core::personas::valid_name(persona) => format!(" --to {persona}"),
+        Some(_) => " --to <persona>".to_owned(),
+    };
+    let dispatch = format!("purlis dispatch --name \"<task>\"{to} --in workspace:{workspace}");
+    match open.create_vision {
+        Some(_) => format!(
+            "a handoff asks for no report, so nothing was opened and workspace '{workspace}' \
+             was not created. Work this chat needs an answer from is a task, sent into a \
+             workspace that exists: create it first with purlis workspace create {workspace} \
+             --vision \"<the goal>\", then {dispatch}"
+        ),
+        None => format!(
+            "a handoff asks for no report, so nothing was opened. Work this chat needs an \
+             answer from is a task: {dispatch}"
+        ),
+    }
 }
 
 /// Whose words a report is: the chat's own, or purlis's, written in its place.
@@ -5824,7 +5842,8 @@ mod tests {
         assert!(
             why.starts_with("a handoff asks for no report, so nothing was opened.")
                 && why.ends_with(
-                    "purlis dispatch --name \"<task>\" [--to <persona>] --in workspace:alpha"
+                    "Work this chat needs an answer from is a task: purlis dispatch --name \
+                     \"<task>\" --in workspace:alpha"
                 ),
             "{why}"
         );
