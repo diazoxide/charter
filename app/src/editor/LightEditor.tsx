@@ -132,11 +132,14 @@ export function MergeViewer({
   base,
   head,
   hunks,
+  label,
 }: {
   path: string;
   base: string;
   head: string;
   hunks: readonly GitHunk[];
+  /** Its accessible name: which file, and against what (#1189). */
+  label?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -157,5 +160,13 @@ export function MergeViewer({
       merge.destroy();
     };
   }, [path, base, head, hunks]);
-  return <div ref={host} className="light-editor merge" data-testid="merge-viewer" />;
+  return (
+    <div
+      ref={host}
+      role="group"
+      aria-label={label ?? `What changed in ${path}`}
+      className="light-editor merge"
+      data-testid="merge-viewer"
+    />
+  );
 }

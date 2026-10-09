@@ -38,6 +38,7 @@ export function EmptyState({
   action,
   size = "page",
   testid,
+  role,
 }: {
   /** The one line. A claim about what is true, never an instruction. */
   headline: string;
@@ -50,9 +51,12 @@ export function EmptyState({
   action?: ReactNode;
   size?: "page" | "panel";
   testid?: string;
+  /** `status` where the state is what a surface is doing or why it shows nothing, said to a
+   *  screen reader as it changes: a read in progress, or a refusal. */
+  role?: "status";
 }) {
   return (
-    <div className={clsx("empty-state", `empty-state-${size}`)} data-testid={testid}>
+    <div className={clsx("empty-state", `empty-state-${size}`)} data-testid={testid} role={role}>
       {Mark && <Mark className="empty-state-mark" />}
       <p className="empty-state-headline">{headline}</p>
       {body !== undefined && body !== "" && <p className="empty-state-body">{body}</p>}
