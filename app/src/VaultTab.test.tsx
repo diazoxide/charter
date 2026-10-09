@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { VaultTab } from "./VaultTab";
+import { saidOfTheOldExport } from "./VaultSignIn";
 import type { UnreadFor, VaultContents, VaultSecret } from "./bindings";
 
 afterEach(() => {
@@ -946,6 +947,7 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
         marked: [],
         skipped: [{ name: "edge", why: "changed", said: null }],
         no_longer_read: [],
+        checked_every_project: true,
       },
     });
     const onChanged = draw();
@@ -1016,6 +1018,7 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
         marked: [],
         skipped: [],
         no_longer_read: ["OP_TEAM_TOKEN"],
+        checked_every_project: true,
       },
     });
     draw();
@@ -1033,9 +1036,23 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart. No vault reads $OP_TEAM_TOKEN any more. If your shell's startup files export it, remove that line: until then every shell started from them carries the token outside the Keychain.",
+      "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart. No vault of any project this machine opened reads $OP_TEAM_TOKEN any more. If your shell's startup files export it, remove that line: until then every shell started from them, and every program started from such a shell, still carries the token.",
     );
     noValueAnywhere(GIVEN);
+  });
+
+  it("speaks for this project alone where another project could not be checked", () => {
+    const said = saidOfTheOldExport({
+      contents: onePassword({ identity: kept("keyring") }),
+      marked: [],
+      skipped: [],
+      no_longer_read: ["OP_TEAM_TOKEN"],
+      checked_every_project: false,
+    });
+    expect(said).toMatch(
+      /^No vault of this project reads \$OP_TEAM_TOKEN any more; purlis could not check/,
+    );
+    expect(said).not.toMatch(/Keychain/);
   });
 
   it("offers Store anyway beside the reason when the test did not pass", async () => {

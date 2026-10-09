@@ -199,9 +199,14 @@ and point to the tab for the others.
 
 **It is refused inside a chat, or a shell the app started, before anything is read**: a chat is
 never the one supplying a vault's token. A chat of any project this machine has opened counts,
-not only one of the project the command names. It is refused too where purlis cannot tell (the
-record of open chats of one of those projects, or the machine store that lists them, cannot be
-read, or this process's parent or session cannot). Type it in a terminal of your own.
+not only one of the project the command names. The projects are those the machine store
+remembers, read both where the command's environment points and under your account's own
+home, so a redirected environment does not hide them; of each, only the chats' processes are
+read, from a record of any version. It is refused too where purlis cannot tell (one of those
+records, or a machine store, cannot be read, or this process's parent or session cannot). The
+refusal says how to clear the doubt where there is a way (delete the record named, which the app
+writes again, or forget that project under Settings, This machine), and the token can always be
+given in the vault's tab instead.
 
 In the app, a token given to the set-up is held only for the window that began it, and goes
 when the set-up ends, when that window closes or reloads, and at the latest fifteen minutes
@@ -221,11 +226,14 @@ replaced by the keyring record in this machine's half. The next read uses it; no
 restarted and nothing is exported. A vault the committed half binds is converted on this
 machine alone, and `vaults.json` is left as it is.
 
-**After a conversion, remove the old export.** When no registered vault reads the variable any
-more, the tab (and `vault add --token-stdin`) names it and asks for its `export` line to be
-taken out of your shell's startup files. Until it is, every shell started from them carries the
-token outside the keyring, and once no vault declares the variable, nothing strips it from a
-chat by name. A variable another vault still reads is not named: that vault still needs it.
+**After a conversion, remove the old export.** When no vault reads the variable any more, the
+tab (and `vault add --token-stdin`) names it and asks for its `export` line to be taken out of
+your shell's startup files. Until it is, every shell started from them, and every program
+started from such a shell, still carries the token. (A chat is not one of those: it starts from
+an allowlisted environment.) An export is the whole machine's, so a variable a vault of this
+project or of any other project this machine opened still reads is never named; where another
+project could not be checked, the sentence says it speaks for this project alone. Only a name a
+shell can export is ever named.
 
 **An identity read from an environment variable is still supported**, for a machine with no
 keyring and for CI, and is no longer what the app sets up:

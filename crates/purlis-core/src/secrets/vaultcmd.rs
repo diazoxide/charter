@@ -315,7 +315,7 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
         req.name,
         super::keyring::STORE_NAME
     )));
-    if let Some(hint) = setup::remove_the_export(&made.no_longer_read) {
+    if let Some(hint) = setup::remove_the_export(&made) {
         io.say(Say::Info(format!("  {hint}")));
     }
     io.say(Say::Info(format!(
@@ -471,7 +471,7 @@ fn token_for_a_registered_vault(
         req.name,
         super::keyring::STORE_NAME
     )));
-    if let Some(hint) = setup::remove_the_export(&changed.no_longer_read) {
+    if let Some(hint) = setup::remove_the_export(&changed) {
         io.say(Say::Info(format!("  {hint}")));
     }
     0

@@ -998,6 +998,9 @@ pub(crate) struct SetupDone {
     /// The variables the vault was read through before that no vault reads now (#1542): the
     /// tab asks for their export to be removed from the shell's startup files.
     pub no_longer_read: Vec<String>,
+    /// Whether every project this machine opened was checked too; where one could not be,
+    /// the note speaks for this project alone.
+    pub checked_every_project: bool,
 }
 
 fn alike_shown(all: Vec<setup::Alike>) -> Vec<SetupAlike> {
@@ -1050,6 +1053,7 @@ fn done(ctx: &Ctx, vault: &str, marked: setup::Marked) -> Result<SetupDone, Stri
             })
             .collect(),
         no_longer_read: marked.no_longer_read,
+        checked_every_project: marked.checked_every_project,
     })
 }
 

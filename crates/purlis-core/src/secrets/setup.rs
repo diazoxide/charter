@@ -554,47 +554,106 @@ pub struct Marked {
     /// Ticked and not given it, with why.
     pub skipped: Vec<(String, NotMarked)>,
     /// The variables the vault was read through before a conversion that no registered vault
-    /// declares any more, sorted (#1542). The person's shell profile may still export one of
-    /// them, and it is then the one copy of the token outside the keyring, which no chat is
-    /// held back from by name any more: what is said after a conversion asks them to remove
-    /// it.
+    /// declares any more, sorted (#1542): only names a shell can export. The person's shell
+    /// profile may still export one of them, and every shell started from it, and every
+    /// program started from such a shell, then carries the token: what is said after a
+    /// conversion asks for the line to be removed.
     pub no_longer_read: Vec<String>,
+    /// Whether every project this machine opened was checked too, so that no vault of any of
+    /// them reads [`Self::no_longer_read`] (#1542 review, M2). Where one could not be, the
+    /// sentence speaks for this project alone.
+    pub checked_every_project: bool,
 }
 
-/// Of the variables in `was`, those no vault of the registry declares now, sorted. A
-/// registry that cannot be read names none: telling the person to remove an export another
-/// vault still reads would break that vault.
-fn no_longer_read(ctx: &Ctx, was: &BTreeSet<String>) -> Vec<String> {
-    let Ok(doc) = registry::load_registry(ctx) else {
-        return Vec::new();
+/// Whether `name` is one a POSIX shell can export: a letter or `_`, then letters, digits and
+/// `_`. Anything else is never named, since it is not in a startup file's `export` line, and a
+/// committed name is never printed to a terminal raw (#1542 review, A).
+fn exportable(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The sources the vaults of `ctx`'s project are read through, or `None` where its registry
+/// cannot be read.
+fn sources_in(ctx: &Ctx) -> Option<BTreeSet<String>> {
+    let doc = registry::load_registry(ctx).ok()?;
+    Some(
+        registry::vaults(&doc)
+            .keys()
+            .filter_map(|name| registry::vault_in(&doc, name).ok())
+            .flat_map(|vault| sources_of(&vault))
+            .collect(),
+    )
+}
+
+/// `marked`, with the variables in `was` that no vault reads now ([`Marked::no_longer_read`]).
+///
+/// An export in a shell profile is the whole machine's, so a variable is named only when no
+/// vault of this project **and of every other project this machine opened** reads it; one any
+/// of them still reads is never named, since removing its export would break that vault. A
+/// registry of this project that cannot be read names none. Where another project's cannot
+/// (or the machine store cannot), the names stand for this project and say so
+/// ([`Marked::checked_every_project`]).
+fn with_unread(ctx: &Ctx, was: &BTreeSet<String>, marked: Marked) -> Marked {
+    let Some(mut still) = sources_in(ctx) else {
+        return marked;
     };
-    let still: BTreeSet<String> = registry::vaults(&doc)
-        .keys()
-        .filter_map(|name| registry::vault_in(&doc, name).ok())
-        .flat_map(|vault| sources_of(&vault))
-        .collect();
-    was.iter()
-        .filter(|source| !identity::kept(source) && !still.contains(*source))
-        .cloned()
-        .collect()
+    #[cfg(unix)]
+    let home = account_home();
+    #[cfg(not(unix))]
+    let home: Option<std::path::PathBuf> = None;
+    let mut everywhere = true;
+    match projects_asked(ctx, home.as_deref()) {
+        Ok(projects) => {
+            for project in projects.iter().filter(|p| **p != ctx.root) {
+                match sources_in(&Ctx::new(project, ctx.env.clone())) {
+                    Some(theirs) => still.extend(theirs),
+                    None => everywhere = false,
+                }
+            }
+        }
+        Err(_) => everywhere = false,
+    }
+    Marked {
+        no_longer_read: was
+            .iter()
+            .filter(|source| {
+                !identity::kept(source) && exportable(source) && !still.contains(*source)
+            })
+            .cloned()
+            .collect(),
+        checked_every_project: everywhere,
+        ..marked
+    }
 }
 
 /// What is said of the variables a conversion left no vault reading ([`Marked::no_longer_read`]):
 /// remove their export. `None` where there are none.
-pub fn remove_the_export(names: &[String]) -> Option<String> {
-    let listed = match names {
+pub fn remove_the_export(marked: &Marked) -> Option<String> {
+    let listed = match marked.no_longer_read.as_slice() {
         [] => return None,
-        [one] => format!("${one}"),
-        many => many
+        names => names
             .iter()
+            .filter(|n| exportable(n))
             .map(|n| format!("${n}"))
             .collect::<Vec<_>>()
             .join(", "),
     };
+    let whose = if marked.checked_every_project {
+        format!("No vault of any project this machine opened reads {listed} any more.")
+    } else {
+        format!(
+            "No vault of this project reads {listed} any more; purlis could not check every \
+             other project this machine opened, so make sure none of them needs it."
+        )
+    };
     Some(format!(
-        "No vault reads {listed} any more. If your shell's startup files export it, remove that \
-         line: until then every shell started from them, and every program started from such \
-         a shell, carries the token outside the keyring."
+        "{whose} If your shell's startup files export it, remove that line: until then every \
+         shell started from them, and every program started from such a shell, still carries \
+         the token."
     ))
 }
 
@@ -912,10 +971,7 @@ pub fn create(ctx: &Ctx, req: &Request) -> Result<Marked, VaultError> {
             req.share,
         )?;
         identity::forget(ctx, &replaced);
-        return Ok(Marked {
-            no_longer_read: no_longer_read(ctx, &was_read_through),
-            ..Marked::default()
-        });
+        return Ok(with_unread(ctx, &was_read_through, Marked::default()));
     };
 
     cfg.insert(
@@ -973,10 +1029,7 @@ pub fn create(ctx: &Ctx, req: &Request) -> Result<Marked, VaultError> {
         );
     }
     let marked = mark(ctx, token, &kept_sources(), &req.name, &req.also);
-    Ok(Marked {
-        no_longer_read: no_longer_read(ctx, &was_read_through),
-        ..marked
-    })
+    Ok(with_unread(ctx, &was_read_through, marked))
 }
 
 /// The refusal for a change the committed half stands in the way of.
@@ -1064,10 +1117,7 @@ pub fn change(
         };
         registry::save_local(ctx, &local)?;
         identity::forget(ctx, &replaced);
-        return Ok(Marked {
-            no_longer_read: no_longer_read(ctx, &was),
-            ..Marked::default()
-        });
+        return Ok(with_unread(ctx, &was, Marked::default()));
     };
 
     if !token_only || was.len() > 1 {
@@ -1131,10 +1181,7 @@ pub fn change(
         was.clone()
     };
     let marked = mark(ctx, token, &basis, name, also);
-    Ok(Marked {
-        no_longer_read: no_longer_read(ctx, &was),
-        ..marked
-    })
+    Ok(with_unread(ctx, &was, marked))
 }
 
 /// Whether this process runs inside a chat (or a shell) the app started, as far as purlis can
@@ -1175,6 +1222,7 @@ pub fn in_a_chat(ctx: &Ctx) -> Where {
             std::process::id(),
             purlis_same_user::Parents::of,
             purlis_same_user::session_of,
+            account_home().as_deref(),
         )
     }
     #[cfg(not(unix))]
@@ -1184,16 +1232,31 @@ pub fn in_a_chat(ctx: &Ctx) -> Where {
             std::process::id(),
             |_| None,
             |_| Err(std::io::Error::other("no sessions here")),
+            None,
         )
     }
 }
 
-/// [`in_a_chat`] for process `me`, with the kernel's answers handed in.
+/// This account's home as the user database records it, whatever `$HOME` says, for the machine
+/// store under it. A fenced (test) build reads none outside its fence: the real account's store
+/// names the person's real projects, which a test never reads.
+#[cfg(unix)]
+fn account_home() -> Option<std::path::PathBuf> {
+    let home = purlis_same_user::account_home()?;
+    #[cfg(feature = "fenced")]
+    if !crate::fence::inside(&home, &crate::fence::fence()) {
+        return None;
+    }
+    Some(home)
+}
+
+/// [`in_a_chat`] for process `me`, with the kernel's answers and this account's home handed in.
 pub(crate) fn in_a_chat_with(
     ctx: &Ctx,
     me: u32,
     parent: impl Fn(u32) -> Option<u32>,
     session: impl Fn(u32) -> std::io::Result<u32>,
+    account_home: Option<&std::path::Path>,
 ) -> Where {
     let env = |name: &str| ctx.env.get(name);
     let set = |name: &str| env(name).is_some_and(|v| !v.trim().is_empty());
@@ -1203,38 +1266,42 @@ pub(crate) fn in_a_chat_with(
     {
         return Where::Inside;
     }
-    let projects = match projects_asked(ctx) {
+    let projects = match projects_asked(ctx, account_home) {
         Ok(projects) => projects,
         Err(why) => return Where::Unsure(why),
     };
     let mut programs: Vec<u32> = Vec::new();
     for project in &projects {
-        let record = match crate::reopen::read_strictly(project) {
-            Ok(record) => record.unwrap_or_default(),
-            Err(e) if *project == ctx.root => {
-                return Where::Unsure(format!(
-                    "purlis could not read the project's record of its open chats ({})",
-                    e.kind()
-                ));
-            }
+        // Only the chats' processes, read leniently: a record of another version still names
+        // the programs it knew (#1542 review, D).
+        let pids = match crate::reopen::chat_pids(project) {
+            Ok(pids) => pids,
             Err(e) => {
+                let record =
+                    crate::personas::one_line(&crate::reopen::path(project).display().to_string());
+                let whose = if *project == ctx.root {
+                    "the project's record of its open chats".to_owned()
+                } else {
+                    format!(
+                        "the record of open chats of {}, a project this machine opened",
+                        crate::personas::one_line(&project.display().to_string())
+                    )
+                };
+                let forget = if *project == ctx.root {
+                    ""
+                } else {
+                    ", or forget that project under Settings, This machine"
+                };
                 return Where::Unsure(format!(
-                    "purlis could not read the record of open chats of {}, a project this \
-                     machine opened ({})",
-                    crate::personas::one_line(&project.display().to_string()),
+                    "purlis could not read {whose} ({}). To clear the doubt, delete {record} \
+                     (the app writes it again){forget}, then run this command again",
                     e.kind()
                 ));
             }
         };
         // 0 and 1 are the kernel's and `init`'s, above every process: a record naming either
         // vouches for nothing.
-        programs.extend(
-            record
-                .chats
-                .iter()
-                .filter_map(|chat| chat.pid)
-                .filter(|pid| *pid > 1),
-        );
+        programs.extend(pids.into_iter().filter(|pid| *pid > 1));
     }
     if programs.is_empty() {
         return Where::Outside;
@@ -1258,22 +1325,47 @@ pub(crate) fn in_a_chat_with(
 }
 
 /// The projects whose records of open chats [`in_a_chat`] reads: this one, and every project
-/// the machine store remembers opening or had open in a window (#1542), so a chat of another
+/// a machine store remembers opening or had open in a window (#1542), so a chat of another
 /// project that names this one is still found below its program. A store that cannot be read,
 /// or is not one this purlis knows, is a doubt and answers why; a machine with no store, or no
-/// home to find one in, remembers nothing. The store is found from `ctx`'s environment, as
-/// every reader of the config home finds it.
-fn projects_asked(ctx: &Ctx) -> Result<Vec<std::path::PathBuf>, String> {
+/// home to find one in, remembers nothing.
+///
+/// **Two stores are read, and their projects joined**: the one `ctx`'s environment finds, as
+/// every reader of the config home finds it, and the default one under `account_home`, this
+/// account's home as the user database records it. A chat that points the environment at an
+/// empty store of its own still has the person's projects read (#1542 review, B).
+pub(crate) fn projects_asked(
+    ctx: &Ctx,
+    account_home: Option<&std::path::Path>,
+) -> Result<Vec<std::path::PathBuf>, String> {
     let mut projects = vec![ctx.root.clone()];
+    #[cfg(not(unix))]
+    let _ = account_home;
     #[cfg(unix)]
-    if let Some(config) = crate::machine::rooted(
-        ctx.env.get(crate::machine::HOME_VAR).map(Into::into),
-        ctx.env.get("XDG_CONFIG_HOME").map(Into::into),
-        ctx.env
-            .get("HOME")
-            .filter(|h| !h.is_empty())
-            .map(std::path::PathBuf::from),
-    ) {
+    let stores: Vec<std::path::PathBuf> = {
+        let mut stores: Vec<std::path::PathBuf> = crate::machine::rooted(
+            ctx.env.get(crate::machine::HOME_VAR).map(Into::into),
+            ctx.env.get("XDG_CONFIG_HOME").map(Into::into),
+            ctx.env
+                .get("HOME")
+                .filter(|h| !h.is_empty())
+                .map(std::path::PathBuf::from),
+        )
+        .into_iter()
+        .chain(
+            account_home
+                .and_then(|home| crate::machine::rooted(None, None, Some(home.to_path_buf()))),
+        )
+        .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        stores.retain(|root| {
+            seen.insert(std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()))
+        });
+        stores
+    };
+    #[cfg(not(unix))]
+    let stores: Vec<std::path::PathBuf> = Vec::new();
+    for config in stores {
         let loaded = crate::machine::read(&config);
         let doubt = loaded.unreadable.clone().or_else(|| {
             loaded.dropped.iter().find_map(|dropped| match dropped {
@@ -1340,14 +1432,14 @@ pub fn token_again_for(ctx: &Ctx, vault: &str) -> Option<String> {
 pub const COMMITTED_ONLY: &str = "Its record is made in its tab in the app, which shows the \
      settings the committed vaults.json gives it before anything is stored.";
 
-/// What is said when purlis could not tell whether it runs inside a chat: the reason, then
-/// [`NOT_FROM_A_CHAT`]'s way out.
+/// What is said when purlis could not tell whether it runs inside a chat: the reason, with how
+/// to clear the doubt where there is a way, then where the token is given instead. Never "a
+/// terminal of your own": the person may already be in one.
 pub fn could_not_tell(why: &str) -> String {
     format!(
-        "{why}, so purlis cannot tell whether this runs inside a chat, and a vault's token is \
-         never given from one. purlis read nothing from standard input and stored nothing. Give \
-         it in New vault in the app (or the vault's own tab), or run this command in a terminal \
-         of your own, outside the app."
+        "purlis cannot tell whether this runs inside a chat: {why}. A vault's token is never \
+         given from a chat, so purlis read nothing from standard input and stored nothing. \
+         Give it in New vault in the app, or in the vault's own tab, instead."
     )
 }
 

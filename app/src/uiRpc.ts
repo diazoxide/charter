@@ -6322,6 +6322,11 @@ export type SetupDone = {
 	 *  tab asks for their export to be removed from the shell's startup files.
 	 */
 	no_longer_read: string[],
+	/**
+	 *  Whether every project this machine opened was checked too; where one could not be,
+	 *  the note speaks for this project alone.
+	 */
+	checked_every_project: boolean,
 };
 
 /**
