@@ -787,6 +787,29 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(shape(tree)).toHaveLength(4);
   });
 
+  it("keeps a fold set by hand when the window is drawn again, as a reload draws it (#1459)", async () => {
+    core(threeDeep());
+    const first = render(<App />);
+    let tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    row(tree, "drop commons").focus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "1 steward 4"]);
+
+    // The window again, from nothing: what a reload of the webview draws.
+    first.unmount();
+    forgetThisLaunch();
+    render(<App />);
+    tree = await section();
+
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "1 steward 4"]),
+    );
+    row(tree, "drop commons").focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(shape(tree)).toHaveLength(4);
+  });
+
   it("counts a task on the workspace of the tab it lives in, not the one it works in", async () => {
     const { move } = core(threeDeep());
     render(<App />);

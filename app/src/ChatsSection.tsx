@@ -43,6 +43,7 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
+import { keepFolds, keptFolds } from "./chatFolds";
 import {
   ASKED_BY_YOU,
   cameFromSaid,
@@ -260,9 +261,10 @@ export function ChatsSection({
   const [ranks, setRanks] = useState<readonly Rank[]>([]);
   const filter = useMemo<Filter>(() => ({ text, ranks }), [text, ranks]);
   const filtering = filters(filter);
-  /** The folds the person set, by chat: true is folded. This window's own, and forgotten with
-   *  it. A chat that is not here folds and opens by itself. */
-  const [hand, setHand] = useState<ReadonlyMap<number, boolean>>(NO_FOLDS);
+  /** The folds the person set, by chat: true is folded. Kept across a reload of the window
+   *  and not across a launch (`chatFolds.ts`, #1459). A chat that is not here folds and opens
+   *  by itself. */
+  const [hand, setHand] = useState<ReadonlyMap<number, boolean>>(() => keptFolds(chats.plane));
   /** The folds the person set while a filter is on, which last as long as the filter does: a
    *  filter opens every row above what it found, whatever `hand` says, and leaves `hand` be. */
   const [handFiltered, setHandFiltered] = useState<ReadonlyMap<number, boolean>>(NO_FOLDS);
@@ -460,6 +462,8 @@ export function ChatsSection({
     return () => onDrawn(NOTHING_DRAWN);
   }, [given, onDrawn, onScreen]);
 
+  // What the person folded outlives a reload of the window (#1459).
+  useEffect(() => keepFolds(plane, hand), [plane, hand]);
   const fold = useCallback(
     (session: number, shut: boolean) => {
       (filtering ? setHandFiltered : setHand)((was) => {

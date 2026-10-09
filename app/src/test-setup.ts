@@ -10,6 +10,9 @@ afterEach(() => {
   forgetExtensionsOn();
   forgetExtensionThemes();
   forgetProjectThemes();
+  // A reload keeps the window's session storage (the Chats list's folds, `chatFolds.ts`); a
+  // new window, as every test's is, starts without it.
+  globalThis.sessionStorage?.clear();
 });
 
 // jsdom has no ResizeObserver, and the panes and their splits watch their own size with one.
