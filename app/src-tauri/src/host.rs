@@ -209,6 +209,15 @@ pub struct Glance {
     pub turns: u32,
 }
 
+impl Glance {
+    /// Whether it is stopped, now, on the prompt it asked mid-turn (#1601): it asked, and it
+    /// has not been answered or got past it since, which puts it back to running.
+    /// `purlis_core::state::Chat::waits_on_its_prompt`, read off one glance.
+    pub fn waits_on_its_prompt(&self) -> bool {
+        self.asking && self.state == State::Waiting
+    }
+}
+
 /// What the host's board says about each chat, as its hooks reported it, and the moves the
 /// window makes on it. Nothing here reads a harness's output (ADR 0018).
 ///

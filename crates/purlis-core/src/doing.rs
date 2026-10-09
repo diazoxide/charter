@@ -166,6 +166,18 @@ pub enum Said {
 }
 
 impl Said {
+    /// **Whether this says its chat got past a prompt it was stopped on** (#1601): the person
+    /// answered it in the chat's own pane, which no hook says. A tool of the chat's own that
+    /// came back says it, since a tool runs only once the prompt before it is answered: the
+    /// call it asked about ran, or the turn went on to another that did.
+    ///
+    /// - **Not a tool about to run**: that may be the very call the prompt is about, heard
+    ///   after its prompt was.
+    /// - **Not a helper that came back**: another of its helpers may be the one asking.
+    pub fn goes_on_past_a_prompt(&self) -> bool {
+        matches!(self, Self::Ended { kind } if *kind != Some(Kind::Helper))
+    }
+
     /// The same, believing nothing of it: a kind only a hook can see
     /// ([`Kind::as_the_wire_may_say`]), and a name only for a kind that has one, and only if it
     /// passes that kind's rule unchanged.
@@ -627,6 +639,22 @@ mod tests {
 
     fn unnamed(kind: Kind) -> Said {
         Said::Began { kind, name: None }
+    }
+
+    #[test]
+    fn only_a_tool_of_its_own_that_came_back_says_a_chat_got_past_its_prompt() {
+        // #1601: a chat stopped on its harness's prompt goes on once the person answers it in
+        // its pane, which no hook says. A tool of its own that came back says it: the call
+        // the prompt was about ran, or the turn went on to the next one.
+        for kind in [Kind::Command, Kind::Editing, Kind::Reading, Kind::Tool] {
+            assert!(ended(kind).goes_on_past_a_prompt(), "{kind:?}");
+        }
+        assert!(Said::Ended { kind: None }.goes_on_past_a_prompt());
+        // A helper that came back is no answer: another helper may be the one asking.
+        assert!(!ended(Kind::Helper).goes_on_past_a_prompt());
+        // A tool about to run may be the very call being asked about, heard late.
+        assert!(!unnamed(Kind::Command).goes_on_past_a_prompt());
+        assert!(!named(Kind::Editing, "a.rs").goes_on_past_a_prompt());
     }
 
     /// A line as the window is told it: in flight, or `over`.

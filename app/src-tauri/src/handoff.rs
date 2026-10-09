@@ -273,7 +273,7 @@ fn task_prompt(held: &Held, chat: u32) -> Option<purlis_core::awareness::Prompt>
     use purlis_core::awareness::Prompt;
     if held.asks_open_for(chat) {
         Some(Prompt::Permission)
-    } else if held.board().glance(chat).asking {
+    } else if held.board().glance(chat).waits_on_its_prompt() {
         Some(Prompt::Other)
     } else {
         None
@@ -10946,6 +10946,29 @@ mod tests {
                 .waiting_on_you
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn a_task_past_its_prompt_before_the_asking_chat_s_turn_is_not_told_as_waiting() {
+        // #1601: the person answered the prompt in the task's pane and a tool of its came
+        // back, so the turn goes on; the board's "asked this turn" stays, and is no wait.
+        use purlis_core::awareness::Tell;
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        works(&held, task);
+        working(&held, &id, steward, Tell::Start);
+
+        the_board_hears(&held, task, Event::Notification);
+        assert!(held.hooks().board().answered(task));
+
+        assert!(
+            working(&held, &id, steward, Tell::Turn)
+                .waiting_on_you
+                .is_empty()
         );
     }
 

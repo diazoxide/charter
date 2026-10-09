@@ -15,6 +15,7 @@ import {
   reportsTo,
   stateOf,
   underneath,
+  waitsOnItsPrompt,
 } from "./chatState";
 import type { ChildAgent, Moved, OpenChat } from "./bindings";
 
@@ -466,5 +467,31 @@ describe("what the chats a chat started have done (#1448)", () => {
     // Its next prompt reads it: the core sends none.
     expect(moved(told, doing(3, "running")).stoppedBelow[3]).toEqual([]);
     expect(moved(told, { ...doing(3, "running"), stopped: null }).stoppedBelow[3]).toEqual([]);
+  });
+});
+
+describe("a chat stopped on its prompt (#1601)", () => {
+  const asks = (session: number, queue: number[] = [session]): Moved => ({
+    ...doing(session, "waiting", queue),
+    asking: true,
+  });
+
+  it("is kept from the snapshot that says so to the one that says it went on", () => {
+    const asked = moved(nothingKnown, asks(5));
+    expect(waitsOnItsPrompt(asked, 5)).toBe(true);
+    expect(waitsOnItsPrompt(asked, 4)).toBe(false);
+    // Another chat's move leaves it as it was, the same map.
+    const other = moved(asked, doing(4, "running", [5]));
+    expect(other.asking).toBe(asked.asking);
+
+    // Its turn ended: still waiting and in the queue, and no longer on its prompt.
+    expect(waitsOnItsPrompt(moved(asked, doing(5, "waiting", [5])), 5)).toBe(false);
+    expect(waitsOnItsPrompt(moved(asked, { ...doing(5, "running"), asking: null }), 5)).toBe(false);
+  });
+
+  it("is not undone by an older snapshot that landed late", () => {
+    const older = doing(5, "running");
+    const newer = asks(5);
+    expect(waitsOnItsPrompt(moved(moved(nothingKnown, newer), older), 5)).toBe(true);
   });
 });
