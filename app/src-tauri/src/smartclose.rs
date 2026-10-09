@@ -380,28 +380,27 @@ impl Closing {
     /// waits for the person and asks nothing (`waiting`), is the person submitting it — what a
     /// smart-close pass is issued on (#1361). The terminal's own answers and the mouse are not
     /// the person typing, and are not followed.
+    ///
+    /// Answers the line the first Enter in `bytes` submitted, by how many bytes were typed on
+    /// it where their keys could be followed (`Some(None)` where they could not), or `None`
+    /// where nothing was submitted: what tells a prompt they sent a dispatched task from a key
+    /// that sent nothing (#1442, #1463).
     pub fn person_typed(
         &self,
         session: u32,
         bytes: &[u8],
         at: std::time::Instant,
         waiting: impl FnOnce() -> bool,
-    ) {
+    ) -> Option<Option<usize>> {
         if !typed_by_the_operator(bytes) {
-            return;
+            return None;
         }
         let submitted = self.lines().entry(session).or_default().follow(bytes);
+        let sent = submitted.as_ref().map(line::Line::len);
         if submitted.is_some_and(|line| line.is_smart_close()) && waiting() {
             self.submitted().insert(session, at);
         }
-    }
-
-    /// How many bytes the person has typed into chat `session`'s pane since their last Enter,
-    /// where their keys could be followed ([`line::Line`]): none typed is 0, and `None` is a
-    /// line this could not follow. What tells their words in a dispatched task from their
-    /// answer to a prompt it showed them (#1442).
-    pub fn line_len(&self, session: u32) -> Option<usize> {
-        self.lines().get(&session).map_or(Some(0), line::Line::len)
+        sent
     }
 
     /// Takes the person's `/smart-close` in chat `session`, answering whether they submitted

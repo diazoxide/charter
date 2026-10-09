@@ -435,7 +435,7 @@ fn where_purlis_may_not_type_into_a_task_it_says_so_and_a_stop_closes_it_as_it_s
             "the person is typing in it",
             |held, task| {
                 rests(held, task);
-                crate::dispatched::person_typed(held, task, b"wa", Some(2));
+                crate::dispatched::person_typed(held, task, b"wa", None);
             },
             "You have typed in",
         ),
