@@ -92,11 +92,8 @@ pub(crate) fn chat_ref(held: &Held, session: u32) -> Option<ChatRef> {
 /// Where `cwd` is, as a record says it: relative to the project (`.` for its root), or the
 /// path itself for a folder outside it.
 pub(crate) fn folder(root: &Path, cwd: &Path) -> String {
-    match cwd.strip_prefix(root) {
-        Ok(inside) if inside.as_os_str().is_empty() => ".".to_owned(),
-        Ok(inside) => inside.to_string_lossy().into_owned(),
-        Err(_) => cwd.to_string_lossy().into_owned(),
-    }
+    // One rule, which a launch holds a restored task to (#1513).
+    dispatchrecord::folder_of(root, cwd)
 }
 
 /// The app started a persona chat: its dispatch has a record from now, under `id` where one

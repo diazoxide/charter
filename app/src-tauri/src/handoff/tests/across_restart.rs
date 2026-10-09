@@ -621,3 +621,58 @@ fn a_later_session_record_of_the_asker_resumes_it_too() {
         vec![("check prod".to_owned(), false, false)]
     );
 }
+
+// ---- #1513 follow-ups (#1546) -----------------------------------------------------------------
+
+#[test]
+fn try_to_start_again_on_a_task_whose_dispatch_ended_meanwhile_tells_it_nothing() {
+    // Train 66 join review, U1.
+    let plane = a_plane_with_personas();
+    let config = tempfile::tempdir().expect("a config home");
+    let host = Pretend::default();
+    let planes = planes_kept_in(&host, config.path());
+    let id = planes.open(&plane.root);
+    let held = planes.held(&id).expect("held");
+    let alpha = plane.root.join("workspaces").join("alpha");
+    let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+    let task = a_task_of(&held, &id, steward, "check prod");
+    works(&held, task);
+    let at_quit = quits(&held);
+    let record = record_of(&held, task);
+    let task_id = held
+        .chats()
+        .chat_at(task)
+        .and_then(|at| at.id)
+        .expect("an id");
+    planes
+        .stop_every_agent(purlis_core::halt::Actor::Window)
+        .expect("kept");
+    let relaunched = Pretend::default();
+    let next = planes_kept_in(&relaunched, config.path());
+    let (_again, held, _opened) = reopens(
+        &plane,
+        (host.clone(), planes, held),
+        &next,
+        Ok(at_quit),
+        Choice::ReopenAll,
+    );
+    // Another hand ended its dispatch while it waited to start.
+    dispatchrecord::close(
+        held.root(),
+        &record.id,
+        dispatchrecord::Ending::default(),
+        chrono::Utc::now(),
+    )
+    .expect("closed");
+
+    next.rearm().expect("re-armed");
+    crate::restored::retrying(&held, &task_id, || held.chats().retry(&task_id, A_SIZE))
+        .expect("it starts");
+
+    assert!(
+        !started_with(&relaunched, task)
+            .iter()
+            .any(|arg| arg == CARRY_ON),
+        "a dispatch no longer running is not carried on"
+    );
+}

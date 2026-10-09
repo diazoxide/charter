@@ -9,6 +9,8 @@ const STEWARD_ID: &str = "01K6ASKER0000000000000000A";
 const TASK_ID: &str = "01K6W0RKER000000000000000B";
 const OTHER_ID: &str = "01K60THER0000000000000000C";
 const BRIEF: &str = "# Check prod\nIs the rollout healthy?";
+/// The folder the task was started in: one outside the project, which a record names whole.
+const WORKED_IN: &str = "/work/alpha";
 
 fn project() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -53,6 +55,7 @@ fn the_task() -> Chat {
         profile: Some("work".to_owned()),
         number: Some(TASK),
         resume: Some(SessionId::new("conv-7").unwrap()),
+        cwd: Some(PathBuf::from(WORKED_IN)),
         from: Some(HandedFrom {
             chat: STEWARD,
             name: "steward 3".to_owned(),
@@ -109,7 +112,7 @@ fn opening(brief: &str) -> Opening {
         task: Some("check prod".to_owned()),
         place: dispatchrecord::Place {
             workspace: Some("alpha".to_owned()),
-            folder: Some("workspaces/alpha".to_owned()),
+            folder: Some(WORKED_IN.to_owned()),
             worktree: None,
         },
         brief: brief.to_owned(),
@@ -134,7 +137,7 @@ fn a_working_task_is_brought_back_under_its_session_and_told_to_carry_on() {
     dispatched(&root);
     let record = recorded(vec![the_steward(), the_task()]);
 
-    let launch = at_launch(&record, &dispatchrecord::list(&root));
+    let launch = at_launch(&root, &record, &dispatchrecord::list(&root));
 
     // Both come back, and the task's entry is as it was: who asked, and what it owes.
     assert_eq!(launch.back, record);
@@ -167,7 +170,11 @@ fn the_chain_above_a_task_comes_back_with_it_and_the_loop_rule_still_refuses() {
         from.above = Some(vec![Some("steward".to_owned())]);
     }
 
-    let launch = at_launch(&recorded(vec![task.clone()]), &dispatchrecord::list(&root));
+    let launch = at_launch(
+        &root,
+        &recorded(vec![task.clone()]),
+        &dispatchrecord::list(&root),
+    );
 
     assert_eq!(launch.back.chats, [task.clone()]);
     let back = &launch.back.chats[0];
@@ -208,8 +215,8 @@ fn the_order_the_two_come_back_in_changes_nothing() {
     let (_d, root) = project();
     dispatched(&root);
     let running = dispatchrecord::list(&root);
-    let asker_first = at_launch(&recorded(vec![the_steward(), the_task()]), &running);
-    let task_first = at_launch(&recorded(vec![the_task(), the_steward()]), &running);
+    let asker_first = at_launch(&root, &recorded(vec![the_steward(), the_task()]), &running);
+    let task_first = at_launch(&root, &recorded(vec![the_task(), the_steward()]), &running);
 
     assert_eq!(numbers(&asker_first.back.chats), [STEWARD, TASK]);
     assert_eq!(numbers(&task_first.back.chats), [TASK, STEWARD]);
@@ -243,6 +250,7 @@ fn a_task_with_no_conversation_to_resume_is_left_out_and_not_started_on_its_brie
     };
 
     let launch = at_launch(
+        &root,
         &recorded(vec![showing, lost.clone()]),
         &dispatchrecord::list(&root),
     );
@@ -259,7 +267,7 @@ fn an_entry_the_dispatch_store_does_not_vouch_for_is_told_nothing() {
     let (_d, root) = project();
     // No dispatch record at all: the entry alone says it is a task.
     let record = recorded(vec![the_steward(), the_task()]);
-    let launch = at_launch(&record, &dispatchrecord::list(&root));
+    let launch = at_launch(&root, &record, &dispatchrecord::list(&root));
     assert_eq!(launch.back, record);
     assert_eq!(launch.told(&the_task()), None);
     assert!(!launch.is_a_listed_task(TASK_ID));
@@ -273,7 +281,7 @@ fn an_entry_the_dispatch_store_does_not_vouch_for_is_told_nothing() {
         at("2026-10-09T08:05:00Z"),
     )
     .unwrap();
-    let launch = at_launch(&record, &dispatchrecord::list(&root));
+    let launch = at_launch(&root, &record, &dispatchrecord::list(&root));
     assert_eq!(launch.told(&the_task()), None);
 }
 
@@ -300,6 +308,7 @@ fn an_entry_that_names_another_chat_as_its_asker_is_told_nothing_and_never_repor
 
     let running = dispatchrecord::list(&root);
     let launch = at_launch(
+        &root,
         &recorded(vec![the_steward(), other.clone(), bent.clone()]),
         &running,
     );
@@ -307,7 +316,7 @@ fn an_entry_that_names_another_chat_as_its_asker_is_told_nothing_and_never_repor
     assert!(!launch.is_a_listed_task(TASK_ID));
 
     // With no conversation it comes back as the chat it was: nothing is reported to chat 5.
-    let launch = at_launch(&recorded(vec![the_steward(), other, lost]), &running);
+    let launch = at_launch(&root, &recorded(vec![the_steward(), other, lost]), &running);
     assert!(launch.not_resumed.is_empty());
     assert_eq!(numbers(&launch.back.chats), [STEWARD, 5, TASK]);
 }
@@ -322,7 +331,11 @@ fn a_task_that_has_reported_or_was_handed_its_work_is_not_told_to_carry_on() {
     let mut handoff = the_task();
     handoff.from.as_mut().unwrap().mode = Mode::Handoff;
     for chat in [reported, handoff] {
-        let launch = at_launch(&recorded(vec![the_steward(), chat.clone()]), &running);
+        let launch = at_launch(
+            &root,
+            &recorded(vec![the_steward(), chat.clone()]),
+            &running,
+        );
         assert_eq!(launch.told(&chat), None);
         assert!(launch.not_resumed.is_empty());
     }
@@ -334,7 +347,7 @@ fn a_task_whose_asker_is_gone_carries_on_or_ends_and_one_the_person_started_is_n
     dispatched(&root);
     let running = dispatchrecord::list(&root);
     // The chat that asked closed before the quit: the task is alone in the record.
-    let launch = at_launch(&recorded(vec![the_task()]), &running);
+    let launch = at_launch(&root, &recorded(vec![the_task()]), &running);
     assert_eq!(launch.told(&the_task()), Some(CARRY_ON));
     assert!(!launch.is_a_listed_task(TASK_ID));
     // With no conversation it would come back blank, owing a report it could not know of: it
@@ -343,7 +356,7 @@ fn a_task_whose_asker_is_gone_carries_on_or_ends_and_one_the_person_started_is_n
         resume: None,
         ..the_task()
     };
-    let launch = at_launch(&recorded(vec![lost.clone()]), &running);
+    let launch = at_launch(&root, &recorded(vec![lost.clone()]), &running);
     assert!(launch.back.chats.is_empty());
     assert_eq!(launch.not_resumed, std::slice::from_ref(&lost));
 
@@ -351,7 +364,7 @@ fn a_task_whose_asker_is_gone_carries_on_or_ends_and_one_the_person_started_is_n
     let mut theirs = the_task();
     theirs.from.as_mut().unwrap().by_person = true;
     theirs.resume = None;
-    let launch = at_launch(&recorded(vec![the_steward(), theirs]), &running);
+    let launch = at_launch(&root, &recorded(vec![the_steward(), theirs]), &running);
     assert!(launch.not_resumed.is_empty());
     assert!(!launch.is_a_listed_task(TASK_ID));
 }
@@ -963,6 +976,7 @@ fn a_second_entry_with_a_task_s_id_is_vouched_for_in_nothing_and_ends_nothing() 
     };
 
     let launch = at_launch(
+        &root,
         &recorded(vec![the_steward(), the_task(), copy.clone()]),
         &dispatchrecord::list(&root),
     );
@@ -983,6 +997,7 @@ fn an_entry_that_runs_as_another_persona_than_its_dispatch_is_told_nothing() {
     };
 
     let launch = at_launch(
+        &root,
         &recorded(vec![the_steward(), bent.clone()]),
         &dispatchrecord::list(&root),
     );
@@ -1002,6 +1017,7 @@ fn a_task_on_no_profile_cannot_be_told_to_carry_on_and_has_ended() {
     };
 
     let launch = at_launch(
+        &root,
         &recorded(vec![the_steward(), bare.clone()]),
         &dispatchrecord::list(&root),
     );
@@ -1149,4 +1165,81 @@ fn a_copy_kept_again_while_another_reopen_started_goes_with_its_claim() {
 
     assert!(handback::take(&root, For::Place(&alpha())).is_empty());
     assert_eq!(handback::take(&root, For::Chat(12)), [report]);
+}
+
+// ---- what a launch believes, held to the record (#1546) ---------------------------------------
+
+#[test]
+fn an_entry_on_another_profile_or_in_another_folder_than_its_dispatch_is_told_nothing() {
+    let (_d, root) = project();
+    let made = dispatched(&root);
+    let elsewhere = Chat {
+        cwd: Some(root.join("workspaces/beta")),
+        ..the_task()
+    };
+    let another_profile = Chat {
+        profile: Some("other".to_owned()),
+        ..the_task()
+    };
+
+    for bent in [elsewhere, another_profile] {
+        let launch = at_launch(
+            &root,
+            &recorded(vec![the_steward(), bent.clone()]),
+            &dispatchrecord::list(&root),
+        );
+        assert_eq!(launch.told(&bent), None, "{bent:?}");
+        assert!(!launch.is_a_listed_task(TASK_ID));
+        assert!(launch.not_resumed.is_empty());
+    }
+    assert!(dispatchrecord::read(&root, &made.id).unwrap().running());
+}
+
+#[test]
+fn a_task_whose_dispatch_ended_meanwhile_is_no_longer_at_work() {
+    let (_d, root) = project();
+    let made = dispatched(&root);
+    assert!(still_at_work(
+        &root,
+        &dispatchrecord::list(&root),
+        &the_task()
+    ));
+
+    // Another hand ended its record while it waited to start again.
+    dispatchrecord::close(
+        &root,
+        &made.id,
+        Ending::default(),
+        at("2026-10-09T08:05:00Z"),
+    )
+    .unwrap();
+
+    assert!(!still_at_work(
+        &root,
+        &dispatchrecord::list(&root),
+        &the_task()
+    ));
+}
+
+#[test]
+fn a_task_settled_as_the_project_opens_is_kept_for_the_chat_that_asked() {
+    // The record of open chats does not bring the task back: it has ended, and the chat that
+    // asked is told when it comes back, as after a launch.
+    let (_d, root) = project();
+    let made = dispatched(&root);
+
+    assert_eq!(
+        dispatchrecord::settle_on_open(&root, at("2026-10-09T09:00:00Z")),
+        1
+    );
+
+    assert!(
+        dispatchrecord::read(&root, &made.id)
+            .unwrap()
+            .undelivered
+            .is_some()
+    );
+    let owing = take_back(&root, by_the_steward);
+    assert_eq!(owing.len(), 1);
+    assert!(owing[0].report.task.as_ref().unwrap().unreported);
 }

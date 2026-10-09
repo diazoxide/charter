@@ -19,9 +19,9 @@
 //! - **One whose start is refused waits, as any chat does.** A refusal is not an end: the
 //!   switch that stopped every agent, a profile to approve again, a folder that moved. It stays
 //!   in the list of chats that did not start, drawn under the chat that asked, and **Try to
-//!   start again** on that row starts it told to carry on. Only **End task** on that row (or
-//!   Forget, for a chat listed across the window, [`NotBack::LetGo`]) ends it, and then its
-//!   asking chat is told.
+//!   start again** on that row starts it told to carry on, while its dispatch still runs
+//!   ([`still_at_work`]). Only **End task** on that row (or Forget, for a chat listed across
+//!   the window, [`NotBack::LetGo`]) ends it, and then its asking chat is told.
 //! - **A brief is not dispatched a second time** ([`dispatched_before`]). A chat cut off in the
 //!   middle of `purlis dispatch` never read its answer, and asks again when it carries on:
 //!   the same brief, to the same persona, while the task that brief started before the chat's
@@ -32,7 +32,8 @@
 //! **The record of open chats is a file, and a chat may have written to it.** A task is told
 //! to carry on, or reported for, only where the app's own dispatch record of it agrees
 //! ([`Vouched`]): a running task that owes a report, worked by that chat's id as the persona
-//! the dispatch went to, and asked for by the id of the chat the entry names. The dispatch store is the one a sandboxed chat can
+//! the dispatch went to, on the profile and in the folder it was started on, and asked for by
+//! the id of the chat the entry names. The dispatch store is the one a sandboxed chat can
 //! neither read nor write ([`crate::dispatchrecord`]). An entry the store does not vouch for
 //! comes back as the chat it was and is told nothing. Nothing here grants anything: a chat is
 //! started by the launch as every recorded chat is, on its own profile read again, and a
@@ -117,26 +118,19 @@ enum Vouched {
 }
 
 /// What the store says of `chat`, one of `record`'s. **Both sides are matched by id**: the
-/// chat that worked, and the chat its entry names as the one that asked; and the persona its
-/// entry runs as is the one the dispatch went to. An entry that disagrees with the store in
-/// any of these is vouched for in nothing.
-fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &Chat) -> Vouched {
+/// chat that worked, and the chat its entry names as the one that asked; and the entry is the
+/// chat the dispatch started ([`its_dispatch`]). An entry that disagrees with the store in any
+/// of these is vouched for in nothing.
+fn vouched(
+    root: &Path,
+    record: &reopen::Record,
+    running: &[dispatchrecord::Record],
+    chat: &Chat,
+) -> Vouched {
+    let Some(dispatch) = its_dispatch(root, running, chat) else {
+        return Vouched::No;
+    };
     let Some(from) = chat.from.as_ref() else {
-        return Vouched::No;
-    };
-    let Some(id) = chat.identity.id.as_deref() else {
-        return Vouched::No;
-    };
-    if from.mode != Mode::Task || from.report != Owed::Due {
-        return Vouched::No;
-    }
-    let Some(dispatch) = running.iter().find(|one| {
-        one.running()
-            && one.mode == dispatchrecord::Mode::Task
-            && one.report_owed
-            && one.worker.chat.id.as_deref() == Some(id)
-            && one.persona == chat.persona
-    }) else {
         return Vouched::No;
     };
     if dispatch.asker.by_person || from.by_person {
@@ -157,8 +151,48 @@ fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &C
     }
 }
 
+/// **The running dispatch that `chat`, an entry of the record of open chats, is the task of**,
+/// where the app's own store says so: a task that still owes its report, worked by the
+/// entry's id, as the persona the dispatch went to, on the profile it was started on, in the
+/// folder it was started in. An entry with no profile is matched on the rest: it cannot be
+/// told to carry on, and has ended ([`at_launch`]). `None` for anything else, an entry the
+/// store contradicts among them.
+fn its_dispatch<'a>(
+    root: &Path,
+    running: &'a [dispatchrecord::Record],
+    chat: &Chat,
+) -> Option<&'a dispatchrecord::Record> {
+    let from = chat.from.as_ref()?;
+    let id = chat.identity.id.as_deref()?;
+    if from.mode != Mode::Task || from.report != Owed::Due {
+        return None;
+    }
+    let folder = chat
+        .cwd
+        .as_deref()
+        .map(|cwd| dispatchrecord::folder_of(root, cwd));
+    running.iter().find(|one| {
+        one.running()
+            && one.mode == dispatchrecord::Mode::Task
+            && one.report_owed
+            && one.worker.chat.id.as_deref() == Some(id)
+            && one.persona == chat.persona
+            && (chat.profile.is_none() || one.worker.profile == chat.profile)
+            && one.place.folder == folder
+    })
+}
+
+/// **Whether `chat`, waiting to start, is still a task at work** (#1513): the app's own store
+/// has its dispatch running and owing its report, as a launch holds it to ([`its_dispatch`]).
+/// What **Try to start again** asks before it tells the chat to carry on: a dispatch ended
+/// meanwhile, by another hand, leaves a chat that is told nothing.
+pub fn still_at_work(root: &Path, running: &[dispatchrecord::Record], chat: &Chat) -> bool {
+    its_dispatch(root, running, chat).is_some()
+}
+
 /// **What a launch does with the tasks of `record` that had not reported** (#1513): `running`
-/// is the app's own dispatch store ([`dispatchrecord::list`]), read once.
+/// is the app's own dispatch store ([`dispatchrecord::list`]), read once, of the project at
+/// `root`.
 ///
 /// A task the store vouches for is told to carry on where it can be: it has a conversation to
 /// resume and a profile to be started on, which is the road a first message travels. **One
@@ -174,7 +208,11 @@ fn vouched(record: &reopen::Record, running: &[dispatchrecord::Record], chat: &C
 /// Every chat that stays keeps its entry whole: its lineage ([`reopen::HandedFrom`]) is
 /// neither read into anything new nor written again here, so what a later change adds to it
 /// crosses a restart with no word from this module.
-pub fn at_launch(record: &reopen::Record, running: &[dispatchrecord::Record]) -> AtLaunch {
+pub fn at_launch(
+    root: &Path,
+    record: &reopen::Record,
+    running: &[dispatchrecord::Record],
+) -> AtLaunch {
     let mut carry_on = Vec::new();
     let mut listed = Vec::new();
     let mut not_resumed = Vec::new();
@@ -187,7 +225,7 @@ pub fn at_launch(record: &reopen::Record, running: &[dispatchrecord::Record]) ->
             .as_ref()
             .is_some_and(|id| seen.insert(id.clone()));
         let stands = if first {
-            vouched(record, running, chat)
+            vouched(root, record, running, chat)
         } else {
             Vouched::No
         };
