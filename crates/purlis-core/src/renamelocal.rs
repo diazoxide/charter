@@ -877,8 +877,13 @@ fn exclude_of(plane: &Path) -> Result<Option<(PathBuf, String)>, String> {
 /// repository, and nothing else (#1285). A folder may be named with what git reads as a
 /// pattern, so `*`, `?`, `[` and `\` in the path are escaped and match only themselves. The
 /// line starts with `/`, so a `!` or `#` in the path never begins it and needs no escape.
-/// `name` is purlis's own and holds none of them.
-fn exclude_line(prefix: &str, name: &str) -> String {
+/// `name` is purlis's own and holds none of them. `None` for a path holding a line break,
+/// which no exclude line can name: written as it is, it would end the line early and make the
+/// rest of the path a pattern of its own (`*` ignoring every untracked file).
+fn exclude_line(prefix: &str, name: &str) -> Option<String> {
+    if prefix.contains(['\n', '\r']) {
+        return None;
+    }
     let mut line = String::with_capacity(prefix.len() + name.len() + 1);
     line.push('/');
     for c in prefix.chars() {
@@ -888,7 +893,7 @@ fn exclude_line(prefix: &str, name: &str) -> String {
         line.push(c);
     }
     line.push_str(name);
-    line
+    Some(line)
 }
 
 /// Make git ignore each of `names` at the top of `plane`, through the repository's own
@@ -906,6 +911,13 @@ fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
     let lines: Vec<String> = names
         .iter()
         .map(|name| exclude_line(&prefix, name))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            io::Error::other(
+                "the project's path holds a line break, which git's exclude file cannot name",
+            )
+        })?
+        .into_iter()
         .filter(|line| !had.lines().any(|there| there.trim() == line))
         .collect();
     if lines.is_empty() {
@@ -1082,10 +1094,15 @@ fn only_our_moves(local: &Local, planes: &[PathBuf], pending: &[&Entry]) -> Resu
         // cannot be asked about now has none of its appends counted as ours.
         if let Ok(Some((file, prefix))) = exclude_of(plane) {
             made.extend(file.parent().map(Path::to_path_buf));
-            let lines = vec![
-                format!("/{prefix}{}/", STATE_DIR.write),
-                format!("/{prefix}{}", LOCAL_SETTINGS.write),
-            ];
+            // Spelled as [`ignore`] wrote them, escapes and all (#1285), or an undo would
+            // refuse its own append in a project whose path holds a pattern character.
+            let lines: Vec<String> = [
+                exclude_line(&prefix, &format!("{}/", STATE_DIR.write)),
+                exclude_line(&prefix, LOCAL_SETTINGS.write),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
             excludes.push((file, lines));
         }
     }
