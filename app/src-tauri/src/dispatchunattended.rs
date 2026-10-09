@@ -211,10 +211,12 @@ fn answered(
                         && Some(one.workspace.as_str()) == works_in
                 })
     });
-    Ok(dispatchunattended::answer_of(
-        dispatchgrant::covers(persona, target, &standing, locks),
+    // The core's own answer, so the window's and the command's cannot drift (#1586).
+    Ok(dispatchunattended::covers(
         persona,
         target,
+        &standing,
+        locks,
         named_by_the_project,
         runs.sandboxed,
     ))
