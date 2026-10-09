@@ -27,7 +27,8 @@ import { listen } from "./here";
  * folder read before the watch held could miss a file made in between and never hear of it: the
  * tree drew it without the file until something else moved there. A newly opened folder is read
  * once the core has answered the watch that names it, so whatever changed before that is in the
- * read and whatever changes after it is told.
+ * read and whatever changes after it is told — or after {@link WATCH_WAIT_MS}, so a watch that is
+ * slow to answer delays the folder and never hides it.
  */
 
 /** One folder of a branch, as the explorer names it. */
@@ -206,8 +207,28 @@ function watchFor(owner: symbol, folders: BranchFolder[]): Promise<void> {
   return newest();
 }
 
+/**
+ * How long a folder's first read waits for its watch, in milliseconds. The watch is what makes
+ * the read complete, but a read that waits for good draws nothing: a `files_watch` the core
+ * never answers, or newer ones sent faster than they are answered while folders are toggled,
+ * would hold the folder back. Past this the folder is read anyway, and a change made before the
+ * watch held is missed until something else moves there — what happened before #1427, and only
+ * when the core is this slow (under pressure on the branch-reader gate, for instance).
+ */
+export const WATCH_WAIT_MS = 2_000;
+
+/** Settles once the newest `files_watch` has answered, however many are sent meanwhile, or
+ *  after {@link WATCH_WAIT_MS}, whichever is first. */
+function newest(): Promise<void> {
+  let bound: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((go) => {
+    bound = setTimeout(go, WATCH_WAIT_MS);
+  });
+  return Promise.race([answered(), late]).finally(() => clearTimeout(bound));
+}
+
 /** Settles once the newest `files_watch` has answered, however many are sent meanwhile. */
-async function newest(): Promise<void> {
+async function answered(): Promise<void> {
   let waited: Promise<unknown>;
   do {
     waited = newestWatch;
