@@ -363,6 +363,7 @@ fn what_a_chat_that_was_not_put_back_is_follows_its_own_record_of_who_started_it
         depth: 1,
         root: None,
         by_person: false,
+        above: None,
     };
     let of = |from: Option<&HandedFrom>, open| NotPutBack::of(from, open);
     // A task that still owed its report, under a chat that came back: drawn under it.

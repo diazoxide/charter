@@ -573,8 +573,8 @@ tickets start from:
 The operator ruled on these on 2026-10-08, in the grill that is spec #1483 (rulings V100-1 to
 V100-76). This is the one amendment of that day: each ticket recorded its part as it was
 built, and the trains that carried them joined the parts here. Items 1 and 2 came with train
-62 (#1485), the section on ending a task by hand with train 63 (#1488), and items 3 to 17
-with train 64 (#1502 to #1507, #1509). **Where two items once said
+62 (#1485), the section on ending a task by hand with train 63 (#1488), and items 3 to 18
+with train 64 (#1502 to #1507, #1509, #1521). **Where two items once said
 different things, what stands here is the later ruling**, and the item says so. Where this
 section and the changes above differ, this section holds; everything else in this record
 stands.
@@ -993,6 +993,26 @@ while nobody was there, and the reads of what stands, what waits, and those two 
 served to the person's own window over its own channel and on no link, whatever scope a link
 holds. The link's client is generated without them.
 
+**18. The chain is read from the record, not from the chats still open (V100-58).** #1521
+builds it. A task's record of open chats keeps the personas above it (`chats[].from.above`,
+`docs/plane-format.md`), written by the app when it starts the task, from its own record of
+the asking chat: the asking chat's persona, then the chain that chat's record keeps. The loop
+rule and the person's never for a chat above read it, so a chain holds where a chat in the
+middle has finished, closed or been cleared. Nothing a chat sends goes into it. A finished
+task reopened as an ordinary chat names no asking chat and starts a new chain.
+
+- **A record written before the key fails closed.** Its chain is read from the chats still
+  open, as before. Where that walk meets a chat that has closed, purlis cannot say who was
+  above, and refuses as if any persona were: every dispatch to another persona, and one to
+  its own where the person said never to any persona dispatching there. The refusal says that
+  the chat's chain began under an older version, which kept no record of it. Such a chat's
+  tasks keep no chain either, and are held the same way. Recovering such a chain from the
+  dispatch records first is #1548.
+- **The asking chat is read under the lock the decision is made under.** One that has closed
+  or ended by then is refused, so a chain read short is never written into a new chat.
+- A kept chain whose length is not the record's depth, or that names what cannot be a
+  persona's name, reads as no chain kept: never as a shorter one.
+
 Still open, and not decided here:
 
 - telling a teammate's grant limited to one workspace, and a narrowing of one, on the Notice
@@ -1002,7 +1022,7 @@ Still open, and not decided here:
 - a history rewritten so that no commit this machine has took a grant out (item 14);
 - a task's request named with its whole path, and one question for several tasks at the same
   block (V100-56, V100-57; #1508), and boxes filtered by a never above the asking chat
-  (#1521): neither is in train 64.
+  (#1548): neither is in train 64.
 
 #### Rulings added in review of #1512 (2026-10-09, delegated to the dispatcher; the operator is told)
 

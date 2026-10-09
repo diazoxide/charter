@@ -40,6 +40,7 @@ fn quiet() -> Lineage {
         lineage: 1,
         as_target: 0,
         by_asking: 0,
+        chain_unread: false,
     }
 }
 
@@ -697,6 +698,51 @@ fn a_chat_on_no_persona_above_is_no_loop() {
         ..quiet()
     };
     assert_eq!(decide(&committed(""), &lineage), Decision::Allowed);
+}
+
+#[test]
+fn a_chain_purlis_cannot_read_whole_refuses_any_other_persona_and_says_why() {
+    // #1521: an older record kept no chain, and a chat above it has closed. Whoever was
+    // there may be the target, so the loop rule refuses it as if it were, and says so.
+    let unread = Lineage {
+        depth: 2,
+        chain: vec![Some("reviewer".to_owned())],
+        chain_unread: true,
+        ..quiet()
+    };
+    let refused = decide(&committed("[dispatch]\ndepth = 8\n"), &unread);
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::ChainUnread("devops".to_owned())
+    );
+    assert_eq!(limit_of(&refused), None);
+    assert_eq!(
+        sentence_of(&refused),
+        "this chat's chain began under an older version of purlis, which kept no record of \
+         the personas above it, and a chat above it has closed. Persona 'devops' may be one \
+         of them, and a persona is never dispatched to from below itself, nor \
+         against the person's never for a chat above, so nothing was started. Send it what \
+         you found in your report instead."
+    );
+    // One it can read is said as the loop it is.
+    let above = Lineage {
+        chain: vec![Some("devops".to_owned())],
+        ..unread.clone()
+    };
+    assert_eq!(
+        refused_of(&decide(&committed(""), &above)),
+        &Refused::Loop("devops".to_owned())
+    );
+    // Its own persona is never above it, read or not.
+    let own = in_force(
+        &nothing(),
+        Some("alpha"),
+        Some("devops"),
+        Some("devops"),
+        &nothing(),
+        &no_policy(),
+    );
+    assert_eq!(decide(&own, &unread), Decision::Allowed);
 }
 
 #[test]

@@ -541,8 +541,14 @@ pub struct Lineage {
     /// for that chat.
     pub depth: u32,
     /// The personas of the chats above the asking chat in its lineage, nearest first; `None`
-    /// for a chat on no persona. The asking chat itself is not in it.
+    /// for a chat on no persona. The asking chat itself is not in it. Read from the personas
+    /// the asking chat's own record keeps (#1521, [`crate::reopen::HandedFrom::above`]), so a
+    /// chat above it that has closed is still in it.
     pub chain: Vec<Option<String>>,
+    /// **The chain goes on above what [`Self::chain`] lists, and purlis cannot read who is
+    /// there** (#1521): a record written before the chain was kept, with a chat above it that
+    /// has closed. Read as if any persona could be there ([`Refused::ChainUnread`]).
+    pub chain_unread: bool,
     /// How many persona chats the asking chat dispatched are still running.
     pub running: u32,
     /// How many chats its lineage holds that are still running, itself included.
@@ -569,6 +575,9 @@ pub enum Refused {
     },
     /// The persona is already above the asking chat in its chain.
     Loop(String),
+    /// Purlis cannot read the whole of the asking chat's chain ([`Lineage::chain_unread`]),
+    /// so the persona may be above it: refused as the loop rule would refuse it if it were.
+    ChainUnread(String),
     /// The chain is as deep as it may go: `depth` dispatches below the chat the person started.
     TooDeep { limit: u32, depth: u32 },
     /// The asking chat has as many persona chats running as it may: `running` of them.
@@ -629,7 +638,7 @@ impl Refused {
     pub fn limit(&self) -> Option<Limit> {
         match self {
             Self::Off { limit, .. } => Some(*limit),
-            Self::Loop(_) => None,
+            Self::Loop(_) | Self::ChainUnread(_) => None,
             Self::TooDeep { .. } => Some(Limit::Depth),
             Self::TooManyRunning { .. } => Some(Limit::RunningPerChat),
             Self::LineageFull { .. } => Some(Limit::LivePerLineage),
@@ -671,6 +680,14 @@ impl Refused {
             Self::Loop(name) => format!(
                 "persona '{}' is already in this chat's own chain of dispatches, and a persona \
                  is never dispatched to from below itself. {REPORT_INSTEAD}",
+                crate::shown::short(name)
+            ),
+            Self::ChainUnread(name) => format!(
+                "this chat's chain began under an older version of purlis, which kept no \
+                 record of the personas above it, and a chat above it has closed. Persona '{}' \
+                 may be one of them, and a persona is never dispatched to from \
+                 below itself, nor against the person's never for a chat above, so nothing was \
+                 started. {REPORT_INSTEAD}",
                 crate::shown::short(name)
             ),
             Self::TooDeep { limit, depth } => format!(
@@ -768,7 +785,9 @@ impl Limits {
 /// limit refuses at its number and allows one below it. Messages a minute are [`may_send`]'s.
 ///
 /// **The loop rule**: never to a persona above the asking chat. Its own persona is not above
-/// it, so a chat may split its own work, as deep as the depth allows.
+/// it, so a chat may split its own work, as deep as the depth allows. Where the chain cannot
+/// be read whole ([`Lineage::chain_unread`]), any other persona may be above it, and is
+/// refused as if it were.
 pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
     if let Some(off) = limits.switched_off() {
         return Decision::Refused(off);
@@ -778,6 +797,13 @@ pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
         && lineage.chain.iter().any(|one| one.as_ref() == Some(target))
     {
         return Decision::Refused(Refused::Loop(target.clone()));
+    }
+    // A chain it cannot read whole may hold the target: refused as if it did (#1521).
+    if let Some(target) = &limits.target
+        && limits.target != limits.asking
+        && lineage.chain_unread
+    {
+        return Decision::Refused(Refused::ChainUnread(target.clone()));
     }
     if lineage.depth >= limits.depth {
         return Decision::Refused(Refused::TooDeep {
