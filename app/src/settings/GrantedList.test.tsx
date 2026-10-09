@@ -329,3 +329,32 @@ describe("the Granted list", () => {
     );
   });
 });
+
+describe("the Granted list's answers (#1543)", () => {
+  it("draws the newest answer, though an older one lands after it", async () => {
+    // Both commands answer off the window's thread, so a first revoke's answer can land after
+    // a second's: the grant the second took away must not come back.
+    let landFirst: (list: SandboxGrant[]) => void = () => {};
+    mockIPC((cmd, args) => {
+      if (cmd === "sandbox_grants") return [CHAT, MINE];
+      if (cmd === "revoke_sandbox_grant") {
+        if ((args as { id: string }).id === MINE.id)
+          return new Promise<SandboxGrant[]>((land) => (landFirst = land));
+        return [];
+      }
+      return null;
+    });
+    render(<Granted />);
+    const list = await screen.findByRole("list", { name: "Granted" });
+    await userEvent.click(within(list).getByRole("button", { name: "Revoke writing /opt/cache" }));
+    await userEvent.click(
+      within(list).getByRole("button", { name: "Revoke reaching api.example.com" }),
+    );
+    expect(
+      await screen.findByText("Nothing is granted past this project's sandbox."),
+    ).toBeInTheDocument();
+    landFirst([CHAT]);
+    await new Promise((settle) => setTimeout(settle, 20));
+    expect(screen.getByText("Nothing is granted past this project's sandbox.")).toBeInTheDocument();
+  });
+});
