@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { MemoryTab } from "./MemoryTab";
@@ -60,10 +60,12 @@ function draw(
     changed?: number;
     onSaved?: (memory: MemoryView) => void;
     onClose?: () => void;
+    onOpenArchive?: () => void;
   } = {},
 ) {
   const onSaved = over.onSaved ?? vi.fn();
   const onClose = over.onClose ?? vi.fn();
+  const onOpenArchive = over.onOpenArchive ?? vi.fn();
   const view = (changed: number) => (
     <MemoryTab
       plane={PLANE}
@@ -71,10 +73,16 @@ function draw(
       changed={changed}
       onSaved={onSaved}
       onClose={onClose}
+      onOpenArchive={onOpenArchive}
     />
   );
   const drawn = render(view(over.changed ?? 0));
-  return { onSaved, onClose, rerender: (changed: number) => drawn.rerender(view(changed)) };
+  return {
+    onSaved,
+    onClose,
+    onOpenArchive,
+    rerender: (changed: number) => drawn.rerender(view(changed)),
+  };
 }
 
 describe("a memory's tab", () => {
@@ -100,6 +108,16 @@ describe("a memory's tab", () => {
     draw();
 
     expect(await screen.findByTestId("view-gone")).toHaveTextContent(/not here any more/);
+  });
+
+  it("offers the store's archive as a gone memory's way out (#1191)", async () => {
+    core([null]);
+    const { onOpenArchive } = draw();
+
+    const gone = await screen.findByTestId("view-gone");
+    await userEvent.click(within(gone).getByRole("button", { name: "Open steward's archive" }));
+
+    expect(onOpenArchive).toHaveBeenCalledTimes(1);
   });
 
   it("reads the memory again when the plane changes on disk", async () => {

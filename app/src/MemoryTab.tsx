@@ -12,6 +12,7 @@ import {
   type PlaneId,
 } from "./bindings";
 import {
+  archiveWhere,
   DRAFT,
   memoryKey,
   scopeKey,
@@ -52,6 +53,7 @@ export function MemoryTab({
   changed,
   onSaved,
   onClose,
+  onOpenArchive,
 }: {
   plane: PlaneId;
   at: MemoryRef;
@@ -62,6 +64,8 @@ export function MemoryTab({
   onSaved: (memory: MemoryView) => void;
   /** The tab asks to be closed: a new memory's Cancel. */
   onClose: () => void;
+  /** Open the store's archive (`memory.archived:<store>`): a gone memory's way out. */
+  onOpenArchive?: () => void;
 }) {
   const key = memoryKey(at);
   const isNew = at.slug === DRAFT;
@@ -250,10 +254,18 @@ export function MemoryTab({
   }
   if (memory === undefined) {
     // **Not an error**: a tab the last launch left open can name a memory archived since.
+    // So its way out is the store's archive, where a deleted memory went (#1191).
     return (
       <EmptyState
         headline="This memory is not here any more"
         body={`Nothing is called ${slug} in ${scopeWord(scope)}'s memory now.`}
+        action={
+          onOpenArchive && (
+            <button type="button" tabIndex={0} onClick={onOpenArchive}>
+              {`Open ${archiveWhere(scope)}`}
+            </button>
+          )
+        }
         testid="view-gone"
       />
     );
