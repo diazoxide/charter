@@ -139,7 +139,9 @@ function core(marks: Mark[], chats = [chat(1, "devops"), chat(2, null)]) {
     if (cmd === "project_theme_drawn") return null;
     // The chat as devops was handed off, and holds the asking chat's hosts (#1362).
     if (cmd === "persona_grants_held")
-      return given.session === 1 ? { from: "steward 3", persona: "devops", locked: null } : null;
+      return given.session === 1
+        ? { from: "steward 3", persona: "devops", locked: null, waits_here: false }
+        : null;
     if (cmd === "workspace_panels")
       return {
         workspace: "alpha",

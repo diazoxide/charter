@@ -19,6 +19,10 @@ import { Notice } from "./Notice";
  *
  * **Where an administrator's policy forbids a persona's own hosts** (#1343), allowing them would
  * reach nothing: the Notice says so, naming the policy and who set it, and offers no Allow.
+ *
+ * **Where the persona's hosts also wait for this machine's Allow** (#1362, D-1362-7), lifting the
+ * hold alone reaches none of them: the Notice says so, before and after Allow, and names where
+ * the other Allow is (the project's notice, or Settings › Sandbox).
  */
 export function PersonaGrantsNotice({
   plane,
@@ -56,6 +60,9 @@ export function PersonaGrantsNotice({
 
   if (held === undefined || kept) return null;
   const persona = held.persona ?? "its persona";
+  const alsoHere = held.waits_here
+    ? ` ${persona}'s hosts also wait for your Allow on this machine, on the project's notice or in Settings › Sandbox; until then this chat reaches none of them, even after it restarts.`
+    : "";
 
   if (allowed)
     return (
@@ -68,7 +75,9 @@ export function PersonaGrantsNotice({
         // the pane then shows the new run, whose hold is gone.
         fixes={[{ label: "Restart now", onPress: onRestart }]}
       >
-        Allowed. This chat reaches {persona}'s hosts from its next start.
+        {held.waits_here
+          ? `Allowed for this chat.${alsoHere}`
+          : `Allowed. This chat reaches ${persona}'s hosts from its next start.`}
         {owed && running && " It restarts, resuming its conversation, when this turn ends."}
       </Notice>
     );
@@ -109,7 +118,7 @@ export function PersonaGrantsNotice({
         { label: "Keep", onPress: () => setKept(true) },
       ]}
     >
-      {how} It can't reach {persona}'s hosts until you allow it.
+      {how} It can't reach {persona}'s hosts until you allow it.{alsoHere}
     </Notice>
   );
 }

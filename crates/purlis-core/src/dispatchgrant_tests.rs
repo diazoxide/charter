@@ -482,8 +482,11 @@ fn reached(start: &Dispatched) -> Vec<String> {
     let root = tempfile::tempdir().expect("a project");
     let plane = Plane::of(Some(PROJECT));
     let with = crate::start::grants_persona(start.held.as_ref(), Some(&start.persona), || None);
+    let policy = plane.said().policy.expect("on");
+    // A machine where the person allowed every persona's hosts (D-1362-7).
+    crate::sandbox::persona::allow_every_as_listed(root.path(), &policy);
     Compiled::granted(
-        &plane.said().policy.expect("on"),
+        &policy,
         &plane,
         root.path(),
         &machine(),

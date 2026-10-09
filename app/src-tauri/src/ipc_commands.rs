@@ -57,6 +57,7 @@ macro_rules! app_commands {
                 sandboxing::answer_sandbox_offer,
                 sandboxing::acknowledge_project_hosts,
                 sandboxing::acknowledge_project_presets,
+                sandboxing::allow_persona_hosts,
                 sandboxing::persona_grants_held,
                 sandboxing::allow_persona_grants,
                 sandboxing::type_sandbox_install,

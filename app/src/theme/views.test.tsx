@@ -606,6 +606,7 @@ const RECORD: SessionRecordView = {
   persona_hosts: [],
   resume_holds: false,
   persona_hosts_locked: null,
+  persona_hosts_wait: false,
   dispatches: [{ persona: "devops", task: "check prod", outcome: "done" }],
 };
 

@@ -230,11 +230,27 @@ pub struct SandboxPreset {
     pub widens_caches: bool,
 }
 
-/// The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`).
+/// The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`),
+/// and whether the person allowed them on this machine (#1362, D-1362-7).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct PersonaHosts {
     pub persona: String,
+    /// Each as the project's file lists it.
     pub hosts: Vec<String>,
+    /// Those a chat would reach, which an Allow allows: none an administrator's policy locks
+    /// out. Empty where policy forbids persona hosts, and then nothing is asked.
+    pub reached: Vec<String>,
+    /// What an Allow of exactly this list sends back (`allow_persona_hosts`).
+    pub digest: String,
+    /// Whether the person allowed exactly this list here. Until then no chat reaches them, and
+    /// the project view's Notice asks.
+    pub allowed: bool,
+    /// Whether it is the project's default persona, so its hosts reach every chat that names
+    /// no persona too: part of what an Allow is of (D-1362-12).
+    pub default: bool,
+    /// Whether an Allow was kept here and the list, or its default-ness, has changed since: it
+    /// grants nothing, and the Notice asks anew (D-1362-13).
+    pub waiting: bool,
 }
 
 /// Every preset as the project at `plane` would have it reach under `locks`: a forge's host a
@@ -251,22 +267,25 @@ fn presets_of(plane: &sandbox::Plane, locks: &sandbox::policy::Locks) -> Vec<San
         .collect()
 }
 
-/// Each persona's own hosts in the policy in force for `plane` under `locks`, where one is.
-fn persona_hosts_of(plane: &sandbox::Plane, locks: &sandbox::policy::Locks) -> Vec<PersonaHosts> {
-    plane
-        .in_force(locks)
-        .map(|policy| {
-            policy
-                .personas
-                .into_iter()
-                .filter(|(_, grants)| !grants.hosts.is_empty())
-                .map(|(persona, grants)| PersonaHosts {
-                    persona,
-                    hosts: grants.hosts.iter().map(ToString::to_string).collect(),
-                })
-                .collect()
+/// Each persona's own hosts in the project at `root`, read as `plane`, under `locks`, and
+/// whether the person allowed them here ([`sandbox::persona::shown_in`]).
+fn persona_hosts_of(
+    root: &std::path::Path,
+    plane: &sandbox::Plane,
+    locks: &sandbox::policy::Locks,
+) -> Vec<PersonaHosts> {
+    sandbox::persona::shown_in(root, plane, locks)
+        .into_iter()
+        .map(|one| PersonaHosts {
+            allowed: one.allowed(),
+            persona: one.persona,
+            hosts: one.listed.iter().map(ToString::to_string).collect(),
+            reached: one.hosts.iter().map(ToString::to_string).collect(),
+            default: one.default,
+            waiting: one.standing == sandbox::persona::Standing::Waiting,
+            digest: one.digest,
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The project's hosts as they changed (`sandbox::local::HostsChange`): each spelled as the
@@ -318,7 +337,7 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
             now: change.now,
         }),
         presets: presets_of(&plane, &locks),
-        persona_hosts: persona_hosts_of(&plane, &locks),
+        persona_hosts: persona_hosts_of(root, &plane, &locks),
         besides: sandbox::besides(root, &plane, &sandbox::Machine::this()).into(),
         policy: SandboxPolicy::of(&locks),
     }
@@ -379,6 +398,20 @@ pub struct GrantsHeld {
     /// Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
     /// policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
     pub locked: Option<String>,
+    /// Whether the persona's hosts also wait for the person's Allow on this machine (D-1362-7):
+    /// lifting the hold alone then reaches none of them.
+    pub waits_here: bool,
+}
+
+/// Whether `persona`'s hosts in the project at `root` wait for the person's Allow on this
+/// machine: it lists hosts a chat would reach, and they are not allowed as they stand.
+pub(crate) fn persona_hosts_wait(root: &std::path::Path, persona: Option<&str>) -> bool {
+    let Some(persona) = persona else {
+        return false;
+    };
+    sandbox::persona::shown(root)
+        .into_iter()
+        .any(|one| one.persona == persona && !one.hosts.is_empty() && !one.allowed())
 }
 
 /// Why a persona's own hosts reach no chat in the project at `root`, where policy says so.
@@ -407,6 +440,7 @@ pub fn persona_grants_held(
         .chats()
         .grants_held(session)
         .map(|(from, persona)| GrantsHeld {
+            waits_here: persona_hosts_wait(held.root(), persona.as_deref()),
             from,
             persona,
             locked,
@@ -460,6 +494,77 @@ fn acknowledge_presets(root: &std::path::Path, shown: &[String]) -> Result<Sandb
 fn acknowledge(root: &std::path::Path, shown: &[String]) -> Result<SandboxState, String> {
     sandbox::local::acknowledge_hosts(root, shown).map_err(|err| err.to_string())?;
     Ok(state_of(root))
+}
+
+/// **Allow** on a persona's hosts' Notice (#1362, D-1362-7): the person lets chats running as
+/// `persona` reach its committed hosts on this machine, exactly as the Notice showed them,
+/// `digest`. A list that changed since it was shown is refused, and nothing is kept. The window's
+/// alone (`WINDOW_ONLY`): no link and no chat makes it.
+#[tauri::command]
+#[specta::specta]
+pub fn allow_persona_hosts(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    persona: String,
+    digest: String,
+) -> Result<SandboxState, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    allow_persona(
+        &root,
+        &persona,
+        &digest,
+        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        now_secs(),
+    )?;
+    Ok(state_of(&root))
+}
+
+/// [`allow_persona_hosts`] in the project at `root`: checked against the list as it stands,
+/// audited, then kept with the digest of what was shown, and recorded for the Granted list.
+/// Chats already running take it at their next start.
+fn allow_persona(
+    root: &std::path::Path,
+    persona: &str,
+    digest: &str,
+    audit: Audit<'_>,
+    at: u64,
+) -> Result<(), String> {
+    let shown = sandbox::persona::shown_now(root, persona, digest)?;
+    let hosts: Vec<String> = shown.hosts.iter().map(ToString::to_string).collect();
+    audit(
+        None,
+        &sandbox::grant::Audited {
+            granted: true,
+            what: sandbox::local::PERSONA_HOSTS,
+            target: &format!(
+                "{persona}: {}{}",
+                hosts.join(", "),
+                if shown.default {
+                    " (the default persona: every chat that names no persona too)"
+                } else {
+                    ""
+                }
+            ),
+            level: sandbox::grant::Level::You,
+        },
+    )?;
+    sandbox::local::allow_persona_hosts(root, persona, &shown.digest)
+        .map_err(|why| format!("purlis could not keep it, so nothing was allowed: {why}"))?;
+    if let Err(why) = sandbox::local::record_made(
+        root,
+        sandbox::local::Made {
+            what: sandbox::local::PERSONA_HOSTS.to_owned(),
+            target: persona.to_owned(),
+            level: sandbox::grant::Level::You.word().to_owned(),
+            at,
+            chat: None,
+        },
+    ) {
+        // The Allow stands, and is audited; only the Granted list's "when" is lost.
+        tracing::warn!("purlis: a persona's hosts were allowed without when ({why})");
+    }
+    Ok(())
 }
 
 /// The line [`type_sandbox_install`] types: SD-30's command for what `missing` names on the
@@ -614,6 +719,9 @@ pub enum GrantWhat {
     /// persona (#1430). Granted from a refused vault's Notice (`crate::vaultroute`), never from
     /// a block's Allow.
     Vault,
+    /// A persona's committed hosts, which you allowed on this machine (#1362). Allowed from
+    /// their own Notice (`allow_persona_hosts`), never from a block's Allow.
+    PersonaHosts,
 }
 
 impl GrantWhat {
@@ -622,11 +730,12 @@ impl GrantWhat {
             Self::Host => "host",
             Self::Write => "write",
             Self::Vault => sandbox::local::VAULT,
+            Self::PersonaHosts => sandbox::local::PERSONA_HOSTS,
         }
     }
 
     fn of_word(word: &str) -> Option<Self> {
-        [Self::Host, Self::Write, Self::Vault]
+        [Self::Host, Self::Write, Self::Vault, Self::PersonaHosts]
             .into_iter()
             .find(|what| what.word() == word)
     }
@@ -746,6 +855,13 @@ pub(crate) fn judged(
                     .to_owned(),
             );
         }
+        GrantWhat::PersonaHosts => {
+            return Err(
+                "purlis allows a persona's hosts from the notice that shows them, not from a \
+                 block's."
+                    .to_owned(),
+            );
+        }
         GrantWhat::Host => What::Host(grant::host(target).map_err(|why| why.to_string())?),
         GrantWhat::Write => {
             let folder = folder.ok_or_else(|| {
@@ -861,9 +977,9 @@ pub struct SandboxGrant {
     /// What Revoke is sent by.
     pub id: String,
     pub what: GrantWhat,
-    /// The host, the folder, or the vault's name.
+    /// The host, the folder, the vault's name, or a persona's hosts.
     pub target: String,
-    /// For a vault, the persona whose chats may use it.
+    /// For a vault, the persona whose chats may use it; for a persona's hosts, that persona.
     pub persona: Option<String>,
     pub level: GrantLevel,
     /// Who committed it, for one the project carries; null for one you granted, or one the
@@ -876,6 +992,12 @@ pub struct SandboxGrant {
     /// Why an administrator's policy locks it out, where one does: it is kept, and reaches or
     /// writes nothing while the policy stands. The list marks it "Locked by policy".
     pub locked: Option<String>,
+    /// For a persona's hosts you allowed whose list has changed since: why it grants nothing.
+    /// It stays listed, with Revoke, and never returns to force unless allowed anew.
+    pub waiting: Option<String>,
+    /// For a persona's hosts: the persona is the project's default, so they reach every chat
+    /// that names no persona too.
+    pub for_no_persona: bool,
 }
 
 /// Who last committed a line naming `host` in the project's committed file, and when: the
@@ -930,6 +1052,8 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
         at,
         chat: None,
         locked: None,
+        waiting: None,
+        for_no_persona: false,
     };
     let mut out: Vec<SandboxGrant> = chats
         .chat_grants()
@@ -990,6 +1114,42 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
             ..row(GrantWhat::Vault, grant.vault, Level::You, None)
         });
     }
+    // Each persona's hosts you allowed here (#1362), credited to the persona: one row for the
+    // list, since an Allow is of the list as it was shown. One whose list changed since grants
+    // nothing and says so, with Revoke (D-1362-13).
+    let shown = sandbox::persona::shown_in(root, &sandbox::Plane::read(root), &locks);
+    for kept in sandbox::local::allowed_persona_hosts(root) {
+        let now = shown.iter().find(|one| one.persona == kept.persona);
+        let in_force = now.is_some_and(sandbox::persona::Shown::allowed);
+        let hosts: Vec<String> = now
+            .map(|one| one.hosts.iter().map(ToString::to_string).collect())
+            .unwrap_or_default();
+        out.push(SandboxGrant {
+            id: format!(
+                "you{SEP}{}{SEP}{}",
+                sandbox::local::PERSONA_HOSTS,
+                kept.persona
+            ),
+            at: when(GrantWhat::PersonaHosts, &kept.persona, Level::You),
+            waiting: (!in_force).then(|| {
+                "waiting: the list changed since you allowed it, so it reaches nothing until \
+                 you allow it again"
+                    .to_owned()
+            }),
+            for_no_persona: in_force && now.is_some_and(|one| one.default),
+            persona: Some(kept.persona),
+            ..row(
+                GrantWhat::PersonaHosts,
+                if hosts.is_empty() {
+                    "no host now".to_owned()
+                } else {
+                    hosts.join(", ")
+                },
+                Level::You,
+                None,
+            )
+        });
+    }
     // What is kept and policy now drops is said, never listed as granted (#1423): a host at
     // the level it is kept at, and every folder where policy forbids write grants.
     for one in &mut out {
@@ -1005,6 +1165,8 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
             GrantWhat::Write => locks.write_grants_refused(),
             // A vault's row was given its own lock as it was listed (#1430).
             GrantWhat::Vault => one.locked.take(),
+            // Only hosts a chat would reach are listed for a persona (#1362).
+            GrantWhat::PersonaHosts => None,
         };
     }
     out
@@ -1025,6 +1187,9 @@ fn revoke(
     if let ["you", sandbox::local::VAULT, vault, persona] = parts.as_slice() {
         return revoke_vault(root, vault, persona, audit);
     }
+    if let ["you", sandbox::local::PERSONA_HOSTS, persona] = parts.as_slice() {
+        return revoke_persona(root, persona, audit);
+    }
     let (level, chat, what, target) = match parts.as_slice() {
         ["chat", chat, what, target] => (Level::Chat, Some(*chat), *what, *target),
         [level, what, target] => (
@@ -1036,8 +1201,8 @@ fn revoke(
         _ => return Err(gone()),
     };
     let grant = match GrantWhat::of_word(what).ok_or_else(gone)? {
-        // A vault's grant is named with its persona, above.
-        GrantWhat::Vault => return Err(gone()),
+        // A vault's grant is named with its persona, and a persona's hosts by it, above.
+        GrantWhat::Vault | GrantWhat::PersonaHosts => return Err(gone()),
         GrantWhat::Host => What::Host(sandbox::hosts::Host::parse(target).map_err(|_| gone())?),
         GrantWhat::Write => What::Write(std::path::PathBuf::from(target)),
     };
@@ -1109,6 +1274,31 @@ fn revoke_vault(
     )?;
     sandbox::local::revoke_vault(root, vault, persona)
         .map_err(|why| format!("purlis could not revoke vault {vault} for {persona}: {why}"))
+}
+
+/// **Revokes your Allow of `persona`'s hosts** in the project at `root` (#1362): checked to be
+/// there, audited, then taken off this machine's record. Chats as `persona` reach them no more
+/// from their next start, and the Notice asks again.
+fn revoke_persona(root: &std::path::Path, persona: &str, audit: Audit<'_>) -> Result<(), String> {
+    let gone = || "purlis did not revoke it: that grant is no longer there.".to_owned();
+    if !sandbox::local::allowed_persona_hosts(root)
+        .iter()
+        .any(|kept| kept.persona == persona)
+    {
+        return Err(gone());
+    }
+    audit(
+        None,
+        &sandbox::grant::Audited {
+            granted: false,
+            what: sandbox::local::PERSONA_HOSTS,
+            target: persona,
+            level: sandbox::grant::Level::You,
+        },
+    )?;
+    sandbox::local::revoke_persona_hosts(root, persona)
+        .map_err(|why| format!("purlis could not revoke {persona}'s hosts: {why}"))
+        .map(|_| ())
 }
 
 /// Every grant in force here, for Settings' Granted list (#1348).
@@ -1415,6 +1605,8 @@ mod tests {
                 at: Some(42),
                 chat: Some("steward 1".to_owned()),
                 locked: None,
+                waiting: None,
+                for_no_persona: false,
             }]
         );
         // A block's Allow never grants one: only the refused vault's own Notice does.
@@ -1461,6 +1653,114 @@ mod tests {
                 "devops for steward".to_owned()
             )],
             "one audit, for the one revoke that happened"
+        );
+    }
+
+    /// #1362, D-1362-7: a persona's committed hosts reach nothing here until the person allows
+    /// them as shown; the Allow is audited, listed credited to the persona, and revocable.
+    #[test]
+    fn a_persona_s_hosts_are_allowed_as_shown_listed_for_the_persona_and_revoked() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        std::fs::write(
+            root.join("charter.toml"),
+            "schema = 1\n\n[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\n\
+             hosts = [\"10.0.0.5:6443\", \"*.internal.example\"]\n",
+        )
+        .expect("toml");
+        let chats = crate::chats::Chats::new();
+        let state = state_of(root);
+        assert_eq!(state.persona_hosts.len(), 1);
+        let shown = state.persona_hosts[0].clone();
+        assert!(!shown.allowed);
+        assert!(grants_of(root, &chats).is_empty());
+
+        // A digest that is not the list's as it stands allows nothing.
+        let stale = allow_persona(root, "devops", "not-what-stands", &no_audit(), 7)
+            .expect_err("changed since");
+        assert!(stale.contains("changed after they were shown"), "{stale}");
+        // An Allow that is not audited is no Allow.
+        assert!(allow_persona(root, "devops", &shown.digest, &no_audit(), 7).is_err());
+        assert!(!state_of(root).persona_hosts[0].allowed);
+
+        let heard = std::sync::Mutex::new(Vec::new());
+        let audit = |number: Option<u32>, audited: &sandbox::grant::Audited<'_>| {
+            heard.lock().unwrap().push((
+                number,
+                audited.kind(),
+                audited.what.to_owned(),
+                audited.target.to_owned(),
+            ));
+            Ok(())
+        };
+        allow_persona(root, "devops", &shown.digest, &audit, 42).expect("allowed");
+        assert!(state_of(root).persona_hosts[0].allowed);
+        let listed = grants_of(root, &chats);
+        assert_eq!(
+            listed,
+            [SandboxGrant {
+                id: "you\u{1f}persona-hosts\u{1f}devops".to_owned(),
+                what: GrantWhat::PersonaHosts,
+                target: "10.0.0.5:6443, *.internal.example".to_owned(),
+                persona: Some("devops".to_owned()),
+                level: GrantLevel::You,
+                by: None,
+                at: Some(42),
+                chat: None,
+                locked: None,
+                waiting: None,
+                for_no_persona: false,
+            }]
+        );
+        // A teammate changes the list: the Allow grants nothing, and is listed as waiting.
+        std::fs::write(
+            root.join("charter.toml"),
+            "schema = 1\n\n[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\n\
+             hosts = [\"10.0.0.5:6443\"]\n",
+        )
+        .expect("toml");
+        let now = state_of(root).persona_hosts[0].clone();
+        assert!(!now.allowed);
+        assert!(now.waiting);
+        let waiting = grants_of(root, &chats);
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].id, listed[0].id);
+        assert!(
+            waiting[0]
+                .waiting
+                .as_deref()
+                .is_some_and(|why| why.starts_with("waiting: the list changed")),
+            "{waiting:?}"
+        );
+        // Put back as it was allowed: it stays waiting until it is allowed anew (D-1362-13).
+        std::fs::write(
+            root.join("charter.toml"),
+            "schema = 1\n\n[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\n\
+             hosts = [\"10.0.0.5:6443\", \"*.internal.example\"]\n",
+        )
+        .expect("toml");
+        assert!(state_of(root).persona_hosts[0].waiting);
+        assert!(grants_of(root, &chats)[0].waiting.is_some());
+        revoke(root, &chats, &listed[0].id, &audit).expect("revoked");
+        assert!(grants_of(root, &chats).is_empty());
+        assert!(!state_of(root).persona_hosts[0].allowed);
+        assert!(!state_of(root).persona_hosts[0].waiting);
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [
+                (
+                    None,
+                    "trust.sandbox.grant",
+                    "persona-hosts".to_owned(),
+                    "devops: 10.0.0.5:6443, *.internal.example".to_owned()
+                ),
+                (
+                    None,
+                    "trust.sandbox.revoke",
+                    "persona-hosts".to_owned(),
+                    "devops".to_owned()
+                ),
+            ]
         );
     }
 
@@ -1516,6 +1816,8 @@ mod tests {
                 at: Some(42),
                 chat: None,
                 locked: None,
+                waiting: None,
+                for_no_persona: false,
             }]
         );
         // Not audited, not revoked.
@@ -1739,22 +2041,35 @@ mod tests {
         );
     }
 
-    /// #1340, #1362: a persona's own hosts, as the core read them.
+    /// #1340, #1362: a persona's own hosts, as the core read them, and whether the person
+    /// allowed them here (D-1362-7).
     #[test]
     fn settings_is_handed_each_personas_own_hosts() {
+        let root = tempfile::tempdir().expect("a project");
         let plane = sandbox::Plane::of(Some(
             "[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\nhosts = [\"10.0.0.5:6443\"]\n",
         ));
+        let none = sandbox::policy::Locks::none();
+        let digest = sandbox::persona::digest(
+            &[sandbox::hosts::Host::parse("10.0.0.5:6443").expect("a host")],
+            false,
+        );
+        let devops = |allowed: bool| PersonaHosts {
+            persona: "devops".to_owned(),
+            hosts: vec!["10.0.0.5:6443".to_owned()],
+            reached: vec!["10.0.0.5:6443".to_owned()],
+            digest: digest.clone(),
+            allowed,
+            default: false,
+            waiting: false,
+        };
         assert_eq!(
-            persona_hosts_of(&plane, &sandbox::policy::Locks::none()),
-            [PersonaHosts {
-                persona: "devops".to_owned(),
-                hosts: vec!["10.0.0.5:6443".to_owned()],
-            }]
+            persona_hosts_of(root.path(), &plane, &none),
+            [devops(false)]
         );
-        assert!(
-            persona_hosts_of(&sandbox::Plane::of(None), &sandbox::policy::Locks::none()).is_empty()
-        );
+        sandbox::local::allow_persona_hosts(root.path(), "devops", &digest).expect("kept");
+        assert_eq!(persona_hosts_of(root.path(), &plane, &none), [devops(true)]);
+        assert!(persona_hosts_of(root.path(), &sandbox::Plane::of(None), &none).is_empty());
     }
 
     #[test]

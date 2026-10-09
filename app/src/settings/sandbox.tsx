@@ -1,5 +1,20 @@
-import type { SandboxPolicy, SandboxPreset, SandboxState, SettingsFile } from "../bindings";
+import { useState } from "react";
+import type {
+  PersonaHosts,
+  PlaneId,
+  SandboxPolicy,
+  SandboxPreset,
+  SandboxState,
+  SettingsFile,
+} from "../bindings";
+import {
+  allowLabel,
+  allowPersonaHosts,
+  FROM_NEXT_START,
+  mayAllowPersonaHosts,
+} from "../personaHostsAllow";
 import { key, onOffAt, textAt, valueAt, type Control, type Shown } from "./fileControls";
+import type { RowIds } from "./components";
 import type { LiveSetting } from "./groups";
 
 /**
@@ -299,9 +314,7 @@ export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): 
           (one) =>
             `A chat as ${one.persona} reaches none of its own hosts (${listed(one.hosts)}). ${lockedBy}`,
         )
-      : (sandbox?.persona_hosts ?? []).map(
-          (one) => `A chat as ${one.persona} also reaches ${listed(one.hosts)}.`,
-        )),
+      : (sandbox?.persona_hosts ?? []).map(personaSaid)),
     ...(allowedHosts !== null
       ? [
           allowedHosts.length > 0
@@ -312,13 +325,88 @@ export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): 
     ...(!personaLocked && (sandbox?.persona_hosts ?? []).length > 0
       ? [
           // start::grants_persona, D-1362-5 and D-1362-6.
-          "A chat that names no persona reaches its default persona's hosts. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
+          "A chat that names no persona reaches its default persona's hosts, once they are allowed on this machine. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
         ]
       : []),
     ...(sandbox !== undefined && sandbox.never.length > 0
       ? [`On this machine these run without it: ${sandbox.never.join("; ")}.`]
       : []),
   ];
+}
+
+/**
+ * **What a chat as one persona reaches of its own hosts here** (#1362, D-1362-7): only what the
+ * person on this machine allowed as it stands, said with the next step where there is one.
+ */
+export function personaSaid(one: PersonaHosts): string {
+  const noPersona = one.default ? ", and so does every chat that names no persona" : "";
+  if (one.allowed)
+    return `A chat as ${one.persona} also reaches ${listed(one.reached)}${noPersona}.`;
+  if (one.reached.length === 0)
+    return `A chat as ${one.persona} reaches none of its own hosts (${listed(one.hosts)}): policy allows none of them.`;
+  if (one.waiting)
+    return `A chat as ${one.persona} reaches none of its own hosts (${listed(one.reached)}): they changed after you allowed them on this machine. Allow them again below.`;
+  return `A chat as ${one.persona} reaches ${listed(one.reached)} only once you allow them on this machine, below.`;
+}
+
+/** **Allow** for one persona's hosts, in Settings: the same window-only call and digest as the
+ *  project view's Notice. */
+function PersonaHostsAllow({
+  plane,
+  one,
+  ids,
+}: {
+  plane: PlaneId;
+  one: PersonaHosts;
+  ids: RowIds;
+}) {
+  const [said, setSaid] = useState<string>();
+  return (
+    <div
+      id={ids.id}
+      className="ui-setting-status"
+      aria-labelledby={ids.labelledBy}
+      aria-describedby={ids.describedBy}
+    >
+      {said === undefined ? (
+        <button
+          type="button"
+          onClick={() =>
+            void allowPersonaHosts(plane, one).then((answer) =>
+              setSaid(
+                "state" in answer ? `Allowed on this machine. ${FROM_NEXT_START}` : answer.refused,
+              ),
+            )
+          }
+        >
+          {allowLabel(one)}
+        </button>
+      ) : (
+        <p>{said}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * **A row per persona whose hosts wait for this machine's Allow** (#1362): the Allow itself, the
+ * window's alone, so a link draws none. None where policy forbids a persona's own hosts, and
+ * none for a persona none of whose hosts a chat would reach.
+ */
+export function personaHostsRows(plane: PlaneId, sandbox: SandboxState | undefined): LiveSetting[] {
+  if (!mayAllowPersonaHosts() || sandbox === undefined || sandbox.policy?.persona_hosts === true)
+    return [];
+  return sandbox.persona_hosts
+    .filter((one) => !one.allowed && one.reached.length > 0)
+    .map((one) => ({
+      id: `project.sandbox.persona.${one.persona}`,
+      label: `${one.persona}'s hosts`,
+      help: personaSaid(one),
+      useControl: () => ({
+        grouped: true,
+        control: (ids) => <PersonaHostsAllow plane={plane} one={one} ids={ids} />,
+      }),
+    }));
 }
 
 /** One item of a read-only list: what, and why in one sentence. */

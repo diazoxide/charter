@@ -121,7 +121,7 @@ function core(
     /** The focused workspace's records, when not {@link ALPHAS}. */
     alphas?: SessionRecordRow[];
     /** The record's persona hosts, and the policy that locks them out (#1343). */
-    personaHosts?: { hosts: string[]; holds: boolean; locked: string | null };
+    personaHosts?: { hosts: string[]; holds: boolean; locked: string | null; wait?: boolean };
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -171,6 +171,7 @@ function core(
         persona_hosts: on.personaHosts?.hosts ?? [],
         resume_holds: on.personaHosts?.holds ?? false,
         persona_hosts_locked: on.personaHosts?.locked ?? null,
+        persona_hosts_wait: on.personaHosts?.wait ?? false,
         dispatches: [],
       };
     if (cmd === "resume_session") {
@@ -246,6 +247,20 @@ describe("the Sessions panel", () => {
       await screen.findByText(`10.0.0.5:6443; no chat as this persona reaches them. ${locked}`),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Resume holds them back/)).toBeNull();
+  });
+
+  it("says a persona's hosts wait for this machine's Allow before any Resume reaches them (#1362)", async () => {
+    core({ personaHosts: { hosts: ["10.0.0.5:6443"], holds: true, locked: null, wait: true } });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-sessions");
+    await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
+
+    await screen.findByTestId("session-record");
+    expect(
+      await screen.findByText(
+        "10.0.0.5:6443; no chat as this persona reaches them until you allow them on this machine, on the project's notice or in Settings › Sandbox, and a Resume then holds them back until you also allow them on the new chat's tab",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("resumes a record from its row's menu as a new chat that says it was resumed", async () => {

@@ -56,7 +56,8 @@ pub fn normalised(what: GrantWhat, target: &str) -> Option<String> {
             })
         }
         GrantWhat::Write => (!target.is_empty()).then(|| target.to_owned()),
-        GrantWhat::Vault => None,
+        // Neither is ever a block's: each is granted from its own Notice (#1430, #1362).
+        GrantWhat::Vault | GrantWhat::PersonaHosts => None,
     }
 }
 

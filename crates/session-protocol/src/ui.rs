@@ -106,6 +106,10 @@ pub struct Server {
 /// - **it starts a chat again**: `restart_chat_without_sandbox`, `restart_chat`,
 ///   `start_chat_fresh`, `ask_chat_restart`.
 ///
+/// - **it lets a persona's committed hosts reach past this machine's sandbox** (#1362):
+///   `allow_persona_hosts`, which the person at this machine's window allows as it was shown
+///   there.
+///
 /// None is served on a link. A command added later that does one of these belongs here.
 ///
 /// **What this rule does not cover.** The other commands that act as the person (an answer
@@ -228,6 +232,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     // One answer to several tasks' sandbox block (#1508).
     "allow_sandbox_block_for_tasks",
     "keep_sandbox_block_for_tasks",
+    // Widens what a persona's chats reach on this machine (#1362).
+    "allow_persona_hosts",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on
