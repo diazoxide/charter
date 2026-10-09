@@ -723,6 +723,28 @@ describe("the explorer", () => {
     }
   });
 
+  /**
+   * **The explorer's rows draw the icon theme** (FM-3, #1106; #1145), in the real app: the
+   * built-in theme draws README.md as `readme`, by its file name, and a folder it has no name
+   * for, `.claude`, as its plain folder. Vitest holds the mapping and the tones; this holds that
+   * the real tree draws through it.
+   */
+  it("draws a file's and a folder's icon from the icon theme", async () => {
+    await onAlpha();
+    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+    await files.waitForExist({ timeout: 20_000 });
+    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+
+    const readme = await explorerRow("fix-login", "README.md");
+    await expect(readme.$("svg.file-icon")).toHaveAttribute("data-icon", "readme");
+    const folder = await explorerRow("fix-login", ".claude");
+    const open = (await folder.getAttribute("aria-expanded")) === "true";
+    await expect(folder.$("svg.file-icon")).toHaveAttribute(
+      "data-icon",
+      open ? "folder-open" : "folder",
+    );
+  });
+
   it("does not list every workspace, because the strip above already answers that", async () => {
     // ADR 0038, and the reason this region was rewritten: the old sidebar drew every
     // workspace with its vision text under the strip that had just been made the axis.
