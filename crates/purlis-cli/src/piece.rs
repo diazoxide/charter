@@ -73,7 +73,8 @@ pub enum WorktreeCommand {
         workspace: Option<String>,
     },
     /// Remove a piece with `git worktree remove`. Refused, naming what would be lost, while
-    /// it holds uncommitted changes or commits no other ref reaches.
+    /// it holds uncommitted changes or commits no other ref reaches. A branch folder purlis
+    /// cut for a task is discarded from that task's Changes tab instead.
     Remove {
         repo: String,
         piece: String,

@@ -1380,6 +1380,37 @@ pub fn list(root: &Path) -> Vec<Record> {
     ids(root).iter().filter_map(|id| read(root, id)).collect()
 }
 
+/// **Every file of the store named as a record that is not one this build reads**, by id, with
+/// the text it holds (#1534): a record whose write was cut short, one edited by hand, or one of
+/// another version. [`list`] skips these, so a guard that must fail closed where a record
+/// might stand reads them here, and takes nothing from them but what their text names.
+///
+/// Read as [`read`] reads a record, through no link and only from a plain file, and at most
+/// [`crate::reopen::MAX_BYTES`] of each, as [`aged_from`] bounds its read; text that is not
+/// UTF-8 is read lossily, so a write torn inside a character still shows the names before it.
+pub fn unread(root: &Path) -> Vec<(String, String)> {
+    ids(root)
+        .into_iter()
+        .filter(|id| read(root, id).is_none())
+        .filter_map(|id| raw(root, &id).map(|text| (id, text)))
+        .collect()
+}
+
+/// The text of record `id`'s file, however it reads as a record ([`unread`]).
+fn raw(root: &Path, id: &str) -> Option<String> {
+    use std::io::Read;
+    let path = path_of(root, id)?;
+    let file = crate::contain::open_no_link(root, &path).ok()?;
+    if !file.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(crate::reopen::MAX_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// The ids the store's file names hold, newest first by the time each was minted.
 fn ids(root: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir(root)) else {
