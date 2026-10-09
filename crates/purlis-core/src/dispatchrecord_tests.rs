@@ -2173,3 +2173,57 @@ fn names_dated_after_now_never_push_the_real_records_out_of_a_bounded_read() {
     // Read where there is room after the real ones.
     assert_eq!(newest(&root, 10, chrono::Utc::now()).0.len(), 5);
 }
+
+#[test]
+fn a_task_settled_at_open_whose_asking_chat_does_not_come_back_is_cleared_and_forgotten() {
+    // As one that ends after its asking chat closed is while the app runs (#1520).
+    let (_d, root) = project();
+    let back = ChatRef {
+        chat: 4,
+        id: Some("01K6ASKERBACK0000000000000".to_owned()),
+        name: "steward 4".to_owned(),
+        persona: Some("steward".to_owned()),
+    };
+    let task = |asker: ChatRef, worker: u32| Opening {
+        mode: Mode::Task,
+        task: Some(format!("task {worker}")),
+        asker: Asker {
+            chat: asker,
+            ..a_handoff().asker
+        },
+        worker: Worker {
+            chat: ChatRef {
+                chat: worker,
+                id: Some(mint()),
+                name: format!("task {worker}"),
+                persona: Some("devops".to_owned()),
+            },
+            ..a_handoff().worker
+        },
+        ..a_handoff()
+    };
+    let gone = open(&root, task(steward(), 7), at("2026-10-07T12:00:00Z")).unwrap();
+    let kept = open(&root, task(back.clone(), 8), at("2026-10-07T12:00:00Z")).unwrap();
+    for id in [&gone.id, &kept.id] {
+        said(
+            &root,
+            id,
+            crate::dispatchtalk::Kind::Note,
+            "The words.",
+            at("2026-10-07T12:01:00Z"),
+        )
+        .unwrap();
+    }
+    // The reopen record brings back the second task's asking chat, and neither task's chat.
+    reopening(&root, 4, back.id.as_deref().unwrap());
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 2);
+
+    let gone = read(&root, &gone.id).unwrap();
+    assert!(gone.cleared, "nobody is left to see its row");
+    assert!(gone.talk.iter().all(|said| said.text.is_empty()));
+    assert!(gone.report.is_some(), "its report stays with the record");
+    let kept = read(&root, &kept.id).unwrap();
+    assert!(!kept.cleared);
+    assert_eq!(kept.talk[0].text, "The words.");
+}
