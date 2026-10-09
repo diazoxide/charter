@@ -18,7 +18,8 @@ purlis persona clear                      # drop this session's, pane's and plan
 purlis persona lint                       # dangling uses:/extends:, missing role/vault, retired keys
 purlis persona approve-mcp                # approve the MCP servers that take a vault credential
 purlis persona stats                      # roster health: memory, verification, dispatches
-purlis persona remove qa                  # refused while another persona extends or uses it
+purlis persona remove qa                  # refused while another persona extends or uses it,
+                                          # or while a running chat has adopted it
 ```
 
 A persona's memory is kept up the way a workspace's is:

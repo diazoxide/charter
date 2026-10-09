@@ -395,6 +395,30 @@ fn remove_refuses_a_parent_or_a_used_persona_unless_forced() {
 }
 
 #[test]
+fn a_persona_a_running_chat_adopted_is_refused_forced_or_not_and_kept() {
+    // V27d (ADR 0076 §10): a run's persona is fixed for its life, and its files outlast it.
+    let plane = Plane::fixture("daily");
+    for force in [false, true] {
+        let mut heard = Heard::default();
+        let rc = remove_unless_adopted(
+            plane.root(),
+            "steward",
+            force,
+            &nothing_selected(),
+            &["steward 1".to_owned()],
+            &mut heard.sink(),
+        );
+        assert_eq!(rc, 1);
+        assert_eq!(
+            heard.err,
+            "✗ Refusing to remove 'steward' — a chat has adopted it and is running: steward 1. \
+             A chat keeps its persona for its life, so close it first.\n"
+        );
+        assert!(plane.path("personas/steward").exists());
+    }
+}
+
+#[test]
 fn remove_takes_its_generated_agent_and_the_plane_wide_selection_with_it() {
     let plane = Plane::fixture("daily");
     plane.write(

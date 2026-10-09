@@ -426,11 +426,33 @@ fn mark_gone_after_removing(root: &Path, name: &str, say: Sink) {
 
 /// `charter persona remove <name>`, and its exit code. `selection` is what this shell
 /// resolves to now: the plane-wide file is dropped when it is what selects `name`.
+///
+/// **Refused while a live run has adopted it** (V27d, ADR 0076 §10), `--force` or not: a run's
+/// persona is fixed for its life, and its files must outlast the run. The runs are the chats
+/// the app has open as it ([`crate::wscmd::rename::adopting_in_app`]).
 pub fn remove(
     root: &Path,
     name: &str,
     force: bool,
     selection: &crate::active::ActivePersona,
+    say: Sink,
+) -> u8 {
+    let adopted = if crate::personas::shape_refusal(name).is_none() {
+        crate::wscmd::rename::adopting_in_app(root, name)
+    } else {
+        Vec::new()
+    };
+    remove_unless_adopted(root, name, force, selection, &adopted, say)
+}
+
+/// [`remove`], with the chats that adopted the persona already asked: `adopted`, by the name
+/// each is shown under.
+pub(crate) fn remove_unless_adopted(
+    root: &Path,
+    name: &str,
+    force: bool,
+    selection: &crate::active::ActivePersona,
+    adopted: &[String],
     say: Sink,
 ) -> u8 {
     if let Some(refused) = crate::personas::shape_refusal(name) {
@@ -440,6 +462,20 @@ pub fn remove(
     if !crate::personas::def_path(root, name).exists() {
         say(Say::Fail(format!(
             "no persona '{name}' (create it: purlis persona create {name})"
+        )));
+        return 1;
+    }
+    if !adopted.is_empty() {
+        let (has, them) = if adopted.len() == 1 {
+            ("a chat has", "it")
+        } else {
+            ("chats have", "them")
+        };
+        say(Say::Fail(format!(
+            "Refusing to remove '{name}' — {has} adopted it and {} running: {}. A chat keeps \
+             its persona for its life, so close {them} first.",
+            if adopted.len() == 1 { "is" } else { "are" },
+            adopted.join(", ")
         )));
         return 1;
     }

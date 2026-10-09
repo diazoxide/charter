@@ -579,6 +579,10 @@ fn a_default_in_the_settings_is_named_not_rewritten() {
 fn the_terminal_sees_the_apps_chats_only_while_an_app_is_listening() {
     let plane = a_plane();
     assert_eq!(open_in_app(&plane.root, &["alpha"]), Vec::<String>::new());
+    assert_eq!(
+        adopting_in_app(&plane.root, "steward"),
+        Vec::<String>::new()
+    );
 
     let socket = plane.root.join(".charter/app/hooks.sock");
     let _app = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -586,6 +590,12 @@ fn the_terminal_sees_the_apps_chats_only_while_an_app_is_listening() {
     assert_eq!(open_in_app(&plane.root, &["alpha"]), vec!["steward 1"]);
     assert_eq!(open_in_app(&plane.root, &["other"]), vec!["steward 2"]);
     assert_eq!(open_in_app(&plane.root, &["nope"]), Vec::<String>::new());
+    // The live runs that adopted a persona (V27d), which removing it is refused over.
+    assert_eq!(
+        adopting_in_app(&plane.root, "steward"),
+        vec!["steward 1", "steward 2"]
+    );
+    assert_eq!(adopting_in_app(&plane.root, "devops"), Vec::<String>::new());
 }
 
 /// Every view keyed by the workspace's name is keyed by the new one, the rest of its key kept
