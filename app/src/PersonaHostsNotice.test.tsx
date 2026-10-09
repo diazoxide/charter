@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { PersonaHostsNotice } from "./PersonaHostsNotice";
@@ -185,5 +185,95 @@ describe("a persona's hosts Notice", () => {
 
     await waitFor(() => expect(screen.queryByRole("status", { name: NAME })).toBeNull());
     expect(asked.map((one) => one.cmd)).not.toContain("allow_persona_hosts");
+  });
+});
+
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__: { runCallback: (id: number, payload: unknown) => void };
+  }
+}
+
+/**
+ * A core whose state is `states[0]` until it is told the project moved, then the next, and a
+ * way to say so: `plane-changed` for the project, as the plane watcher sends it.
+ */
+function changing(...states: SandboxState[]) {
+  const listeners = new Map<string, number[]>();
+  let at = 0;
+  mockIPC((cmd, args) => {
+    if (cmd === "plugin:event|listen") {
+      const { event, handler } = args as { event: string; handler: number };
+      listeners.set(event, [...(listeners.get(event) ?? []), handler]);
+      return 1;
+    }
+    if (cmd === "sandbox_state") return states[Math.min(at, states.length - 1)];
+    return null;
+  });
+  return {
+    pulled: async (answers: { answer: string }[]) => {
+      at += 1;
+      await waitFor(() => expect(listeners.get("plane-changed") ?? []).not.toHaveLength(0));
+      await act(async () => {
+        for (const handler of listeners.get("plane-changed") ?? [])
+          window.__TAURI_INTERNALS__.runCallback(handler, {
+            event: "plane-changed",
+            id: 1,
+            payload: { plane: PLANE, changes: null, answers },
+          });
+        await Promise.resolve();
+      });
+    },
+    focused: () => {
+      at += 1;
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+    },
+  };
+}
+
+/** The Notice follows the project's state while it is open, not only when it mounts (#1407). */
+describe("a persona's hosts Notice, live", () => {
+  const quiet = async () => {
+    render(<PersonaHostsNotice plane={PLANE} />);
+    await waitFor(() => expect(screen.queryByRole("status", { name: NAME })).toBeNull());
+  };
+
+  it("asks when a pull changes the project's settings while it is open", async () => {
+    const { pulled } = changing(QUIET, WAITING);
+    await quiet();
+
+    await pulled([{ answer: "settings" }]);
+
+    expect(await screen.findByRole("status", { name: NAME })).toBeInTheDocument();
+  });
+
+  it("is gone once the list is allowed elsewhere and the settings say so", async () => {
+    const { pulled } = changing(WAITING, ALLOWED);
+    render(<PersonaHostsNotice plane={PLANE} />);
+    await screen.findByRole("status", { name: NAME });
+
+    await pulled([{ answer: "settings" }]);
+
+    await waitFor(() => expect(screen.queryByRole("status", { name: NAME })).toBeNull());
+  });
+
+  it("is not read again for a change that is not the settings'", async () => {
+    const { pulled } = changing(QUIET, WAITING);
+    await quiet();
+
+    await pulled([{ answer: "sidebar" }]);
+
+    expect(screen.queryByRole("status", { name: NAME })).not.toBeInTheDocument();
+  });
+
+  it("is read again when the window comes back into focus", async () => {
+    const { focused } = changing(QUIET, WAITING);
+    await quiet();
+
+    focused();
+
+    expect(await screen.findByRole("status", { name: NAME })).toBeInTheDocument();
   });
 });

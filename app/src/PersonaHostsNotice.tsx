@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { commands, type PersonaHosts, type PlaneId, type SandboxState } from "./bindings";
 import { Notice } from "./Notice";
+import { SETTINGS, usePlaneChanged } from "./planeChanged";
 import {
   allowLabel,
   allowPersonaHosts,
@@ -9,6 +10,7 @@ import {
   mayAllowPersonaHosts,
   whoReaches,
 } from "./personaHostsAllow";
+import { useWindowFocused } from "./windowFocused";
 
 /** The personas whose hosts this machine has not allowed as they stand, and a chat would reach. */
 export function waitingPersonas(state: SandboxState | null | undefined): PersonaHosts[] {
@@ -29,6 +31,10 @@ export function waitingPersonas(state: SandboxState | null | undefined): Persona
  * as it is now. An Allow whose list changed since is said as such, and asks anew (D-1362-13).
  * **Not now** hides it until the project is opened again; nothing is kept. Allow is the
  * window's alone: on a link, whose client has no such call, the Notice says where to allow it.
+ *
+ * **It follows the project live** (#1407): the state is read again when the project's settings
+ * change on disk (a pull, a branch switched, a hand's edit) and each time the window comes back
+ * into focus, so a list a teammate changed is asked about while the project is open.
  */
 export function PersonaHostsNotice({
   plane,
@@ -41,6 +47,8 @@ export function PersonaHostsNotice({
   const [state, setState] = useState<SandboxState>();
   const [later, setLater] = useState<readonly string[]>([]);
   const [said, setSaid] = useState<Readonly<Record<string, string>>>({});
+  const onDisk = usePlaneChanged([plane], SETTINGS);
+  const focused = useWindowFocused();
 
   useEffect(() => {
     let live = true;
@@ -55,7 +63,7 @@ export function PersonaHostsNotice({
     return () => {
       live = false;
     };
-  }, [plane]);
+  }, [plane, onDisk, focused]);
 
   const allow = (one: PersonaHosts) =>
     void allowPersonaHosts(plane, one).then((answer) => {

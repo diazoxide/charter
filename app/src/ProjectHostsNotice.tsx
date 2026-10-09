@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { commands, type HostsChanged, type PlaneId } from "./bindings";
 import { Notice } from "./Notice";
 import { SETTINGS, usePlaneChanged } from "./planeChanged";
+import { useWindowFocused } from "./windowFocused";
 
 /**
  * **The project's own hosts changed** (ADR 0067 §1 as amended, #1341): the one-time Notice each
@@ -27,6 +28,9 @@ export function ProjectHostsNotice({
   // Read again when the project's settings change on disk (a pull, a branch switched, a hand's
   // edit, #1550), so a change is told while the window is open, before more chats start.
   const onDisk = usePlaneChanged([plane], SETTINGS);
+  // And each time the window comes back into focus (#1407): the cover for what no watcher
+  // reports.
+  const focused = useWindowFocused();
 
   useEffect(() => {
     let live = true;
@@ -40,7 +44,7 @@ export function ProjectHostsNotice({
     return () => {
       live = false;
     };
-  }, [plane, onDisk]);
+  }, [plane, onDisk, focused]);
 
   if (changed === undefined) return null;
 
