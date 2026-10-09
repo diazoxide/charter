@@ -185,6 +185,29 @@ impl<'a> Linter<'a> {
         if !super::chatstart::denied_tools(root, name).is_empty() {
             issues.push(Issue::warn(super::retired::DENIED_TOOLS));
         }
+        // A colour the window cannot draw (#1460): the persona keeps its name's colour, and
+        // the persona view and the fix say so; lint is the check that reads every persona.
+        if let Some(colour) = meta
+            .get(crate::personamark::COLOR)
+            .map(|c| crate::memstore::py_strip(c))
+            .filter(|c| !c.is_empty())
+            && crate::extension::project::theme::Colour::parse(colour).is_none()
+        {
+            let said = crate::personas::one_line(colour);
+            let remedy = match crate::doctor::fix::persona_agents::rewritten_colour(colour) {
+                Some(ours) => {
+                    format!("`purlis doctor --fix persona-agents` rewrites it to `{ours}`")
+                }
+                None => format!(
+                    "Use {} or #rrggbb",
+                    crate::extension::project::theme::PALETTE.join(", ")
+                ),
+            };
+            issues.push(Issue::warn(format!(
+                "`color: {said}` is not a colour purlis draws, so this persona keeps the \
+                 colour of its name. {remedy}"
+            )));
+        }
         // A harness's own helper cannot be started while a persona has its name: a call to
         // it is refused with "is a persona".
         if super::retired::HELPERS.contains(&name) {

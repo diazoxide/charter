@@ -49,6 +49,15 @@ use super::Fixed;
 /// Claude Code's names for a sub-agent colour that purlis's palette spells otherwise.
 const COLOURS: [(&str, &str); 2] = [("cyan", "teal"), ("magenta", "pink")];
 
+/// The palette's spelling of `colour`, where it is one of Claude Code's names this fix
+/// rewrites: what `persona lint` names beside the line.
+pub fn rewritten_colour(colour: &str) -> Option<&'static str> {
+    COLOURS
+        .iter()
+        .find(|(theirs, _)| theirs.eq_ignore_ascii_case(colour))
+        .map(|(_, ours)| *ours)
+}
+
 /// What a run reads of the machine and of git, apart from the project's own files.
 pub struct Facts<'a> {
     /// The names of the profiles the project offers on this machine.
@@ -292,11 +301,7 @@ fn definition(root: &Path, name: &str, facts: &Facts<'_>, work: &mut Work) {
         && crate::extension::project::theme::Colour::parse(colour).is_none()
     {
         let said = crate::personas::one_line(colour);
-        let ours = COLOURS
-            .iter()
-            .find(|(theirs, _)| theirs.eq_ignore_ascii_case(colour))
-            .map(|(_, ours)| *ours);
-        match ours {
+        match rewritten_colour(colour) {
             Some(ours) => {
                 next = with_line(&next, crate::personamark::COLOR, |_| {
                     format!("{}: {ours}", crate::personamark::COLOR)
