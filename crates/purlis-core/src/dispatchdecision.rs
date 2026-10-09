@@ -43,14 +43,17 @@
 //!    to, for its own persona or for one above it in its chain, is refused and nobody is asked
 //!    ([`Refused::Never`]); its own persona needs no grant; any other pair answers
 //!    [`Decision::NeedsGrant`] until one is in force, and also while this machine's record of
-//!    nevers does not read, when no grant counts.
+//!    nevers does not read, when no grant counts;
+//! 8. memory, once the grant stands ([`waits`], #1467): a chat's dispatch every check above
+//!    let through **waits, and is not refused**, while this machine is short on memory
+//!    ([`crate::memorypressure`]). The app holds it, tells the asking chat it waits, and
+//!    decides it again from step 1 once memory frees, against the limits and chats as they
+//!    are then. One still waiting after [`MEMORY_WAIT`] starts nothing, and the asking chat is
+//!    told ([`gave_up_on_memory`]). The person's own dispatch from a tab does not wait.
 //!
 //! A limit is said before a grant is asked for: asking the person for a grant that would
-//! start nothing wastes their yes.
-//!
-//! The spec's last step is not built yet (#1467): a start that waits while the machine is
-//! short on memory. Nothing in purlis reads the machine's memory today, so a dispatch the
-//! checks above allow starts at once.
+//! start nothing wastes their yes. And the grant is asked before memory is waited on: the
+//! person's answer is not kept waiting behind the machine's.
 
 use crate::dispatchgrant::Covers;
 /// Where an asking chat stands among the chats the app has open, and the limits it is held
@@ -213,6 +216,39 @@ impl Refused {
             Self::NotOpen(chat) => format!("chat {chat} is not one this app has open"),
         }
     }
+}
+
+/// Why a dispatch every check let through waits instead of starting: the spec's last step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waits {
+    /// This machine is short on memory (#1467).
+    Memory,
+}
+
+/// **Step 8, after the grant** (#1467): whether a dispatch every other check let through waits
+/// on `memory` before it starts. A chat's dispatch waits while memory is short. **The person's
+/// own, from a tab, does not** (D-1467-4): they are at the machine and asked for it now, and a
+/// dialog that answers "later" leaves them nothing to act on.
+pub fn waits(by: By, memory: crate::memorypressure::Memory) -> Option<Waits> {
+    (by == By::Chat && memory.is_short()).then_some(Waits::Memory)
+}
+
+/// How long a dispatch waits on memory before it starts nothing (D-1467-5): long enough for a
+/// build or a test run that filled the machine to end, short enough that the chat that asked
+/// is not left waiting on work that will never come.
+pub const MEMORY_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(MEMORY_WAIT_MINUTES * 60);
+
+/// [`MEMORY_WAIT`], in the minutes a sentence says it in.
+pub const MEMORY_WAIT_MINUTES: u64 = 10;
+
+/// What the asking chat is told where its dispatch waited [`MEMORY_WAIT`] on memory and
+/// started nothing.
+pub fn gave_up_on_memory() -> String {
+    format!(
+        "this machine was still short on memory after {MEMORY_WAIT_MINUTES} minutes, so \
+         nothing was started. Do the work in this chat, or dispatch it again later"
+    )
 }
 
 /// What a helper sub-agent that tries to dispatch is told ([`Refused::Helper`]). Spelled once:
@@ -935,6 +971,27 @@ pub fn start_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ----- step 8: memory (#1467) -----------------------------------------------------------
+
+    #[test]
+    fn a_chats_dispatch_waits_while_memory_is_short_and_the_persons_does_not() {
+        use crate::memorypressure::Memory;
+        assert_eq!(waits(By::Chat, Memory::Short), Some(Waits::Memory));
+        assert_eq!(waits(By::Chat, Memory::Enough), None);
+        // A reader that cannot answer holds nothing (D-1467-3).
+        assert_eq!(waits(By::Chat, Memory::Unread), None);
+        // The person at the machine asked for it now (D-1467-4).
+        assert_eq!(waits(By::Person, Memory::Short), None);
+    }
+
+    #[test]
+    fn a_dispatch_that_waited_past_the_bound_is_told_nothing_started_and_how_long_it_waited() {
+        assert_eq!(MEMORY_WAIT, std::time::Duration::from_secs(600));
+        let said = gave_up_on_memory();
+        assert!(said.contains("after 10 minutes"), "{said}");
+        assert!(said.contains("nothing was started"), "{said}");
+    }
 
     // ----- the facts, from the app's records ------------------------------------------------
 
