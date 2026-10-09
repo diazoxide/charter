@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791527951277,
+  "lastUpdate": 1791529131054,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4452,6 +4452,48 @@ window.BENCHMARK_DATA = {
             "value": 106.56055,
             "unit": "ms",
             "extra": "median of 5 runs: 101.834, 103.640, 106.561, 107.549, 108.603 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "2b348df6e6ad4b748af6a365096fada3918a2071",
+          "message": "Policy and the sandbox: refuse a locked host at the write, revoke what is locked, lead with the policy\n\nThree of the #1423 follow-ups (the macOS ACL line waits on a ruling):\n\n- A whole-file save (Edit as TOML, form edits, the Shared/this-machine move) now refuses a host\n  an administrator's policy locks out at the file's level when the write adds it, with the\n  sentence Settings' Add gives. Hosts the file already held are kept and never block another\n  edit (settings::hosts::locked_out, checked in settings::refused_of).\n- Settings > Sandbox > Granted draws Revoke on an entry policy has locked out. The backend\n  already took it away; a test now pins that, audited, while the policy stands.\n- Where policy requires the sandbox, a refusal to start a sandboxed chat leads with\n  \"policy requires the sandbox for every chat on this machine\" instead of the project, and\n  ends with the policy and who set it (sandbox::under_policy, LEAD, POLICY_LEAD), including\n  the app's two refusals that did not name the policy before.\n\nDocs: plane-format's policy section, ADR 0067 §4 and §5 wording, a changes/ fragment.\n\nRefs #1431\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T10:57:44+04:00",
+          "tree_id": "75ef4b1a351d5b2a86297dd886ea1a6068beff61",
+          "url": "https://github.com/purlis/purlis/commit/2b348df6e6ad4b748af6a365096fada3918a2071"
+        },
+        "date": 1791529130344,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.273453,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.255, 0.256, 0.273, 0.287, 0.312 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.386162000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.354, 16.386, 16.386, 16.554, 16.602 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.690619,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.959, 101.089, 101.691, 101.707, 101.788 ms"
           }
         ]
       }
