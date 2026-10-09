@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791530897269,
+  "lastUpdate": 1791531930048,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4536,6 +4536,48 @@ window.BENCHMARK_DATA = {
             "value": 101.729733,
             "unit": "ms",
             "extra": "median of 5 runs: 100.765, 100.982, 101.730, 101.991, 102.211 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "47d653d758c9629da15ae9dbde449a8d1e256d7d",
+          "message": "Review of #1556: an owed report's record is kept, a resumed asker is back\n\n- A dispatch record that still owes its asking chat a report is aged\n  from when it was last written, not from its end. It is marked owed\n  when the report reaches no chat, which can be long after the task\n  ended (an asking chat open for weeks that closes with the report\n  unread): aged from its end, it was collected at the next open, and\n  the chat's reopen was never handed the report. The collection\n  wording in the format docs, retention and the workspace removal's\n  sentence says so.\n- A task whose asking chat came back as a chat that resumed it keeps\n  its row and its words: settling at open (from the reopen record),\n  after a launch (open chats and chats waiting to start), and as a task\n  ends while the app runs. That chat is handed the report, so the\n  asking chat is not gone. dispatchrecord::settle_asked takes the\n  asker's answer apart from the worker's.\n- expire_talk and expire_in answer the ids they changed, and the daily\n  sweep tells an open Activity tab the lines whose words it took.\n\nRefs #1556\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T11:30:14+04:00",
+          "tree_id": "79984aaaea5338d064f9e15f2f5038ba82f86941",
+          "url": "https://github.com/purlis/purlis/commit/47d653d758c9629da15ae9dbde449a8d1e256d7d"
+        },
+        "date": 1791531929195,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5186615,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.485, 0.515, 0.519, 0.546, 0.565 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.919673,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.499, 16.808, 16.920, 17.085, 17.117 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.342896,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.968, 102.968, 104.343, 104.471, 105.846 ms"
           }
         ]
       }
