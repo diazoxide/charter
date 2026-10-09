@@ -742,13 +742,32 @@ pub enum InFolder {
 /// record that does not read but whose text names the workspace, the repo and the folder,
 /// each as a JSON string. [`task_in_folder`] skips the second; a guard that must fail closed
 /// reads this.
+///
+/// **The names are matched without regard to ASCII case**: they are typed at a terminal, and
+/// on a file system that folds case (macOS's, by default) `Check-1` names the folder `check-1`
+/// is, which git then removes. A folder of another case only on a file system that does not
+/// fold it is held too: a guard that fails closed holds a little more, never less.
 pub fn held_in_folder(root: &Path, workspace: &str, repo: &str, piece: &str) -> Option<InFolder> {
-    if let Some(record) = task_in_folder(root, workspace, repo, piece) {
+    let same = |one: &str, other: &str| one.eq_ignore_ascii_case(other);
+    if let Some(record) = dispatchrecord::list(root).into_iter().find(|record| {
+        record
+            .place
+            .workspace
+            .as_deref()
+            .is_some_and(|ws| same(ws, workspace))
+            && record
+                .place
+                .worktree
+                .as_ref()
+                .is_some_and(|tree| same(&tree.repo, repo) && same(&tree.piece, piece))
+    }) {
         return Some(InFolder::Task(Box::new(record)));
     }
     let names = |text: &str| {
+        let text = text.to_ascii_lowercase();
         [workspace, repo, piece].iter().all(|name| {
-            serde_json::to_string(name).is_ok_and(|quoted| text.contains(quoted.as_str()))
+            serde_json::to_string(&name.to_ascii_lowercase())
+                .is_ok_and(|quoted| text.contains(quoted.as_str()))
         })
     };
     dispatchrecord::unread(root)
