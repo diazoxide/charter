@@ -1000,31 +1000,20 @@ pub struct SandboxGrant {
     pub for_no_persona: bool,
 }
 
-/// Who last committed a line naming `host` in the project's committed file, and when: the
-/// project's history, asked of git. `None` where git has nothing to say (not committed yet).
-fn committed_by(root: &std::path::Path, host: &str) -> Option<(String, u64)> {
-    let manifest = purlis_core::names::manifest(root);
-    let file = manifest.file_name()?.to_str()?.to_owned();
-    // Through the hardened runner: no hook, no inherited `GIT_*`, and the project's `.git`
-    // read by purlis where it is a file (#1055).
-    let quoted = format!("\"{host}\"");
-    let run = purlis_core::worktree::git::run(
-        root,
-        &[
-            "log",
-            "-1",
-            "--format=%an%x09%at",
-            "-S",
-            &quoted,
-            "--",
-            &file,
-        ],
-        purlis_core::worktree::git::READ,
-    )
-    .ok()?;
-    let line = run.out;
-    let (name, at) = line.trim().split_once('\t')?;
-    Some((name.to_owned(), at.parse().ok()?))
+/// Who last committed a line naming each of `hosts` in the project's committed file, and when:
+/// the project's history, asked of git **once for them all** (#1464,
+/// [`purlis_core::committedby`]), through the hardened runner. `None` for one git has nothing
+/// to say of (not committed yet).
+fn committed_by(
+    root: &std::path::Path,
+    hosts: &[String],
+) -> Vec<Option<purlis_core::committedby::Committed>> {
+    let quoted: Vec<String> = hosts.iter().map(|host| format!("\"{host}\"")).collect();
+    let wanted: Vec<_> = quoted
+        .iter()
+        .map(|host| move |line: &str| line.contains(host.as_str()))
+        .collect();
+    purlis_core::committedby::last_touching(root, &wanted)
 }
 
 /// The separator of a grant's id: no host or folder purlis grants holds it.
@@ -1080,16 +1069,15 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
     }
     let locks = sandbox::policy::Locks::of(root);
     if let Some(policy) = sandbox::Plane::read(root).in_force(&locks) {
-        for host in policy.hosts {
-            let target = host.to_string();
-            let committed = committed_by(root, &target);
+        let hosts: Vec<String> = policy.hosts.iter().map(ToString::to_string).collect();
+        for (target, committed) in hosts.iter().zip(committed_by(root, &hosts)) {
             let at = committed
                 .as_ref()
-                .and_then(|(_, at)| u32::try_from(*at).ok())
-                .or_else(|| when(GrantWhat::Host, &target, Level::Project));
+                .and_then(|one| u32::try_from(one.at).ok())
+                .or_else(|| when(GrantWhat::Host, target, Level::Project));
             out.push(SandboxGrant {
-                by: committed.map(|(name, _)| name),
-                ..row(GrantWhat::Host, target, Level::Project, at)
+                by: committed.map(|one| one.by),
+                ..row(GrantWhat::Host, target.clone(), Level::Project, at)
             });
         }
     }
