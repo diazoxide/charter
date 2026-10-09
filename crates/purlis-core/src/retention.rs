@@ -33,7 +33,8 @@
 //! share, and which the pointer writers (`wscmd::select`, `active`) do not read either. Each
 //! directory is opened from the plane one component at a time without following a link, and
 //! every file is aged, read and removed through that handle, so a link swapped in on the way
-//! after the sweep started cannot point it anywhere else. The tool gate's `.tools` and `.gate`
+//! after the sweep started cannot point it anywhere else. A file is looked at again after it
+//! is read and kept when it was written to or replaced meanwhile. The tool gate's `.tools` and `.gate`
 //! are [`crate::personagate::sweep_ceilings`]'s; the hook spool, the event log, `terminals/`
 //! and every other store under `.charter/` are left alone.
 
@@ -268,11 +269,11 @@ fn collect_by(
         let Some(mut file) = store.file(&name) else {
             continue;
         };
-        let Some(written) = file
+        let Some((found, written)) = file
             .metadata()
             .ok()
             .filter(std::fs::Metadata::is_file)
-            .and_then(|found| found.modified().ok())
+            .and_then(|found| found.modified().ok().map(|written| (found, written)))
         else {
             continue;
         };
@@ -280,11 +281,37 @@ fn collect_by(
             continue;
         }
         let stale = from(&mut file, written).is_some_and(|at| aged(at, now));
-        if stale && store.remove(&name) {
+        // Looked at again after the read, which for a trace can be long (#1027): a file
+        // written to meanwhile, or another renamed over the name, is not the one judged stale.
+        if stale && unchanged(&store, &name, &found) && store.remove(&name) {
             gone += 1;
         }
     }
     gone
+}
+
+/// Whether `name` in `store` is still the file `before` describes: the same file, neither
+/// written to nor replaced since. What is left is the moment between this look and the unlink.
+fn unchanged(store: &held::Dir, name: &str, before: &std::fs::Metadata) -> bool {
+    store
+        .file(name)
+        .and_then(|file| file.metadata().ok())
+        .is_some_and(|now| same_file_unwritten(before, &now))
+}
+
+#[cfg(unix)]
+fn same_file_unwritten(before: &std::fs::Metadata, now: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    before.dev() == now.dev()
+        && before.ino() == now.ino()
+        && before.size() == now.size()
+        && before.mtime() == now.mtime()
+        && before.mtime_nsec() == now.mtime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file_unwritten(before: &std::fs::Metadata, now: &std::fs::Metadata) -> bool {
+    before.len() == now.len() && before.modified().ok() == now.modified().ok()
 }
 
 /// Whether `at` is [`KEEP_FOR`] or more before `now`.
@@ -328,11 +355,15 @@ mod held {
             names(&self.path)
         }
 
-        /// `name` in this directory, opened read-only without following a link and without
-        /// blocking on a FIFO.
+        /// `name` in this directory, opened read-only without following a link, without
+        /// blocking on a FIFO, and never as a controlling terminal.
         pub(super) fn file(&self, name: &str) -> Option<std::fs::File> {
             use rustix::fs::{Mode, OFlags};
-            let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            let flags = OFlags::RDONLY
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | OFlags::NOCTTY
+                | OFlags::CLOEXEC;
             rustix::fs::openat(&self.fd, name, flags, Mode::empty())
                 .ok()
                 .map(std::fs::File::from)
