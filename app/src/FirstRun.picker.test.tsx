@@ -75,4 +75,28 @@ describe("the first run's Open a repo…", () => {
       expect(onOpenRepo).toHaveBeenCalledWith("/home/dev/widget", expect.anything()),
     );
   });
+
+  it("gives a failed dialog's line to a newer refusal (#1291)", async () => {
+    core(() => {
+      throw "the folder dialog could not be opened";
+    });
+    const props = {
+      onOpenRepo: vi.fn(),
+      onOpenProject: vi.fn(),
+      onSignInToForge: vi.fn(),
+      opening: false,
+    };
+    const { rerender } = render(<FirstRun {...props} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Open a repo…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be opened");
+
+    // A refusal that came after it, from something other than the dialog: a sign-in that
+    // could not start, say. The newer one is said.
+    rerender(<FirstRun {...props} trouble="the forge's command line is not installed" />);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "the forge's command line is not installed",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("could not be opened");
+  });
 });
