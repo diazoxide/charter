@@ -743,7 +743,8 @@ fn a_time(text: &str) -> bool {
 /// ([`Said::text`] is never empty as it is taken). **Counted from the dispatch's end, and
 /// whichever chats are still open**: a record is kept for as long as either of its chats
 /// comes back at launch ([`crate::retention`]), and what was said in it is not. The app runs
-/// this when it opens a project and before it reads a timeline.
+/// this when it opens a project, once a day while the project is open (#1556), and before it
+/// reads a timeline.
 pub fn expire_talk(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
     expire_in(root, &mut list(root), now)
 }

@@ -369,6 +369,56 @@ pub(crate) fn ended(held: &Held, id: &str) {
     );
 }
 
+/// How often an open project's dispatch records are looked at for what their chats said past
+/// its 30 days (#1556).
+pub(crate) const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// **The daily expiry of an open project** (#1556): what the chats of a dispatch said is
+/// emptied 30 days after it ended (`dispatchrecord::expire_talk`). Opening the project expires
+/// every record, and a timeline expires the records it reads, the newest 2,000; without this
+/// an older record of a project held open for weeks would keep its words past their days.
+///
+/// A thread that sleeps a day between sweeps, and ends when this is dropped, as the project is
+/// let go of: it holds the project's root and nothing of the project.
+pub(crate) struct Daily {
+    _stop: std::sync::mpsc::Sender<()>,
+}
+
+impl Daily {
+    /// Starts the daily sweep of the project at `root`.
+    pub(crate) fn start(root: std::path::PathBuf) -> Self {
+        Self::every(root, SWEEP_EVERY, |root| {
+            dispatchrecord::expire_talk(root, chrono::Utc::now());
+        })
+    }
+
+    /// `sweep` of `root` once every `period`, the first a `period` after the start, until
+    /// this is dropped.
+    fn every(
+        root: std::path::PathBuf,
+        period: std::time::Duration,
+        sweep: impl Fn(&std::path::Path) + Send + 'static,
+    ) -> Self {
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let spawned = std::thread::Builder::new()
+            .name("purlis-talk-sweep".into())
+            .spawn(move || {
+                // Nothing is ever sent: the sender's drop is the stop.
+                while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    stopped.recv_timeout(period)
+                {
+                    sweep(&root);
+                }
+            });
+        if let Err(why) = spawned {
+            tracing::warn!(
+                "purlis: the daily expiry of a project's activity did not start ({why})"
+            );
+        }
+        Self { _stop: stop }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use purlis_core::activity::Kind;
@@ -676,6 +726,39 @@ mod tests {
 
         // The window holding it, and no other: the window holding another project hears none.
         assert_eq!(read(&counts), [1, 0, 1]);
+    }
+
+    #[test]
+    fn the_daily_sweep_runs_each_period_and_stops_when_it_is_dropped() {
+        // #1556: a project held open for weeks has its records expired each day.
+        let (swept, sweeps) = std::sync::mpsc::channel();
+        let daily = Daily::every(
+            std::path::PathBuf::from("/projects/ours"),
+            std::time::Duration::from_millis(5),
+            move |root| {
+                let _ = swept.send(root.to_path_buf());
+            },
+        );
+        let patience = std::time::Duration::from_secs(10);
+        for _ in 0..2 {
+            assert_eq!(
+                sweeps.recv_timeout(patience).expect("a sweep"),
+                std::path::PathBuf::from("/projects/ours")
+            );
+        }
+
+        drop(daily);
+
+        // The thread ends, and with it the sender it held: no sweep is left to come.
+        loop {
+            match sweeps.recv_timeout(patience) {
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("the sweep did not stop")
+                }
+            }
+        }
     }
 
     #[test]

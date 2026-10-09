@@ -263,6 +263,10 @@ pub struct Held {
     dispatches: crate::dispatches::Waiting,
     /// The files each task's file tools named while this app has run (#1511): in memory only.
     touched_files: crate::taskchanges::Touched,
+    /// The daily expiry of what the chats of a dispatch said (#1556). Stopped when the plane
+    /// is let go of.
+    #[expect(dead_code, reason = "held for its drop, which stops the sweep")]
+    talk_sweep: crate::activity::Daily,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -2609,6 +2613,9 @@ impl Planes {
                 .ok()
         });
 
+        // What the chats of a dispatch said, expired once a day while the project is open
+        // (#1556): the open and a timeline's read expire only what they read.
+        let talk_sweep = crate::activity::Daily::start(root.clone());
         Held {
             id,
             root,
@@ -2636,6 +2643,7 @@ impl Planes {
             unattended: crate::handoff::Unattended::default(),
             dispatches: crate::dispatches::Waiting::default(),
             touched_files: crate::taskchanges::Touched::default(),
+            talk_sweep,
             me,
         }
     }
