@@ -1,8 +1,8 @@
-import { useId, useState } from "react";
+import { useContext, useId, useState } from "react";
 import { commands, type PlaneId } from "./bindings";
 import { useAskPersona } from "./AskPersona";
 import { useDispatchesHeld } from "./dispatchesHeld";
-import { Notice, type NoticeAction } from "./Notice";
+import { Notice, NoticeOf, type NoticeAction } from "./Notice";
 import { useVaultRefusals } from "./vaultRefusals";
 
 /** What a press answers: the sentence the Notice then says, or nothing for Keep blocked. */
@@ -39,6 +39,10 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  * Only a press does any of it. Where an administrator's policy forbids Allow, it is not
  * offered, and the Notice says what policy forbids and who set it.
  *
+ * **Drawn for a chat that is not on screen** (#1538), on its session's tab: the Notice starts
+ * with the chat's whole path (`NoticeOf`), so its own sentences say "it" and "that chat", never
+ * "this chat", which would read as the chat on screen. On its own pane it says "this chat".
+ *
  * The persona the chat runs as is drawn as the sentence's mark, on what Allow answered too
  * (#1454).
  *
@@ -48,6 +52,12 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  */
 export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
+  /** "this chat" on its own pane; "it" where its path is said first (#1538). */
+  const offScreen = useContext(NoticeOf) !== null;
+  const self = offScreen ? "it" : "this chat";
+  const Self = offScreen ? "It" : "This chat";
+  const that = offScreen ? "that chat" : "this chat";
+  const That = offScreen ? "That chat" : "This chat";
   const { refused, heard, read } = useVaultRefusals(plane, session);
   /** What the last press answered, and the persona it was for, said until it is put away. */
   const [answered, setAnswered] = useState<{ persona: string; said: string }>();
@@ -151,21 +161,22 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
         {newest.locked === null && (
           <p>
             Allow lets every chat opened as {persona} use vault{" "}
-            <code className="block-allow-target">{vault}</code> in this project on this machine.
-            This chat does not restart. You can revoke it in Settings › Sandbox › Granted.
+            <code className="block-allow-target">{vault}</code> in this project on this machine.{" "}
+            {That} does not restart. You can revoke it in Settings › Sandbox › Granted.
           </p>
         )}
         {dispatch !== null && !asked && (
           <p>
             {newest.locked === null ? "The other way" : "The way forward"} is to have {dispatch} do
-            the work. Dispatch to {dispatch}… asks it from this chat, in your words. purlis also
-            told this chat how to dispatch to it.
+            the work. Dispatch to {dispatch}… asks it from {that}, in your words. purlis also told{" "}
+            {that} how to dispatch to {dispatch}.
           </p>
         )}
         {dispatch !== null && asked && (
           <p>
             {newest.locked === null ? "The other way" : "The way forward"} is to have {dispatch} do
-            the work, and this chat has asked it to. Nothing starts until you answer that request.
+            the work, and {self} has asked {dispatch} to. Nothing starts until you answer that
+            request.
           </p>
         )}
       </div>
@@ -181,10 +192,10 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
       fixes={fixes}
       under={under}
     >
-      This chat runs as {persona}, and vault <code className="block-allow-target">{vault}</code> is{" "}
+      {Self} runs as {persona}, and vault <code className="block-allow-target">{vault}</code> is{" "}
       {theirs === null ? "tagged for no persona" : `tagged for ${theirs}`}, so purlis did not open
       it.{newest.locked !== null && ` ${newest.locked}`}
-      {asked && ` This chat has already asked ${newest.dispatch_to}: answer that above.`}
+      {asked && ` ${Self} has already asked ${newest.dispatch_to}: answer that above.`}
       {said !== undefined && ` ${said}`}
       {behind}
     </Notice>
