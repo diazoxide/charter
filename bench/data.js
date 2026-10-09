@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791563457117,
+  "lastUpdate": 1791564723505,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5292,6 +5292,48 @@ window.BENCHMARK_DATA = {
             "value": 104.0648585,
             "unit": "ms",
             "extra": "median of 5 runs: 102.496, 103.602, 104.065, 104.154, 104.745 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f15495d62edd036e171d4aec0183f028c2fea375",
+          "message": "Own a chat tab that goes into the background with its name open\n\nThe chat strip's tablist left out the tab being renamed, but a chat can\ngo into the background while its name box is open: the core's smart-close\nstep turns the tab into a chip, which is drawn as a tab, and the tablist\nthen missed it. The strip and the tablist now ask one predicate,\nnameBoxFor, whether a tab is drawn as its name box.\n\nRefs #1204\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T20:30:13+04:00",
+          "tree_id": "b5fbd6f37349a959cc0fb90b960c0d9fa222e8ae",
+          "url": "https://github.com/purlis/purlis/commit/f15495d62edd036e171d4aec0183f028c2fea375"
+        },
+        "date": 1791564722564,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.513369,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.503, 0.508, 0.513, 0.540, 0.541 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.983567999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.463, 16.521, 16.984, 17.353, 17.445 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.5456825,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.496, 105.081, 105.546, 106.951, 107.120 ms"
           }
         ]
       }
