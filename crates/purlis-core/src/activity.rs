@@ -174,6 +174,34 @@ pub struct Timeline {
     /// their records ([`dispatchrecord::sound`]): a record whose asking chat is the session or
     /// a chat on its timeline. Another session's is not counted here.
     pub refused: usize,
+    /// How many of the tasks this session dispatched itself, the oldest, are not listed, with
+    /// the tasks under them, because a timeline lists at most [`Bounds::tasks`] (#1520). The
+    /// tasks under those are not counted here.
+    pub unlisted: usize,
+    /// How many of the project's dispatch records, the oldest, were not read because a
+    /// timeline reads at most [`Bounds::records`] (#1520). Which session's they are is not
+    /// known: they were not read.
+    pub unread: usize,
+}
+
+/// **How much one timeline reads and lists** (#1520), so a session with many records, in a
+/// project with more, is read in bounded time and draws a bounded list. What is past either
+/// bound is counted ([`Timeline::unlisted`], [`Timeline::unread`]) and said, never silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    /// The newest records of the project read ([`dispatchrecord::newest`]).
+    pub records: usize,
+    /// The newest tasks the session dispatched itself that are listed, each with every task
+    /// under it.
+    pub tasks: usize,
+}
+
+impl Bounds {
+    /// What the Activity tab reads: the newest 2,000 records, and 200 tasks.
+    pub const TAB: Self = Self {
+        records: 2_000,
+        tasks: 200,
+    };
 }
 
 /// **Where `record`'s task worked**, as one word to compare: its workspace and the folder it
@@ -289,16 +317,26 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
 /// ([`dispatchrecord::same_chat`]), and each record is taken once, so records that name each
 /// other in a ring end where they began.
 fn under<'a>(records: &'a [Record], session: &ChatRef) -> Vec<(&'a Record, u32)> {
-    let mut found: Vec<(&Record, u32)> = Vec::new();
-    let mut askers = vec![(session.clone(), 0u32)];
-    while let Some((asker, depth)) = askers.pop() {
+    under_tops(records, session)
+        .into_iter()
+        .map(|(record, depth, _)| (record, depth))
+        .collect()
+}
+
+/// [`under`], each task with the id of the session's own task it is under (its own, for a
+/// task the session dispatched itself).
+fn under_tops<'a>(records: &'a [Record], session: &ChatRef) -> Vec<(&'a Record, u32, &'a str)> {
+    let mut found: Vec<(&Record, u32, &str)> = Vec::new();
+    let mut askers: Vec<(ChatRef, u32, Option<&str>)> = vec![(session.clone(), 0u32, None)];
+    while let Some((asker, depth, top)) = askers.pop() {
         for record in records {
             let theirs = record.mode == Mode::Task
                 && dispatchrecord::same_chat(&record.asker.chat, &asker)
-                && !found.iter().any(|(taken, _)| taken.id == record.id);
+                && !found.iter().any(|(taken, _, _)| taken.id == record.id);
             if theirs {
-                found.push((record, depth + 1));
-                askers.push((record.worker.chat.clone(), depth + 1));
+                let top = top.unwrap_or(record.id.as_str());
+                found.push((record, depth + 1, top));
+                askers.push((record.worker.chat.clone(), depth + 1, Some(top)));
             }
         }
     }
@@ -307,8 +345,16 @@ fn under<'a>(records: &'a [Record], session: &ChatRef) -> Vec<(&'a Record, u32)>
 
 /// The timeline of `session` among `records`, which are ones purlis draws.
 pub fn of(records: &[Record], session: &ChatRef) -> Timeline {
+    Timeline {
+        lines: lines_in(under(records, session)),
+        ..Timeline::default()
+    }
+}
+
+/// The lines of `tasks`, each at its depth, in time order.
+fn lines_in(tasks: Vec<(&Record, u32)>) -> Vec<Line> {
     let mut lines: Vec<(String, Line)> = Vec::new();
-    for (record, depth) in under(records, session) {
+    for (record, depth) in tasks {
         // **A task's own lines never change places.** Each is sorted by its time, and never
         // by one earlier than the line before it: where the clock stepped back between a
         // question and its answer, the answer still stands after the question.
@@ -324,10 +370,7 @@ pub fn of(records: &[Record], session: &ChatRef) -> Timeline {
     // one second stand in the order their dispatches started, and a dispatch's own in the
     // order it kept them.
     lines.sort_by(|(at, a), (bt, b)| (at, &a.dispatch, a.n).cmp(&(bt, &b.dispatch, b.n)));
-    Timeline {
-        lines: lines.into_iter().map(|(_, line)| line).collect(),
-        refused: 0,
-    }
+    lines.into_iter().map(|(_, line)| line).collect()
 }
 
 /// The timeline of `session` in the project at `root`, read at `now`: its tasks and
@@ -335,20 +378,48 @@ pub fn of(records: &[Record], session: &ChatRef) -> Timeline {
 /// ([`dispatchrecord::sound`]).
 ///
 /// What a record that ended 30 days ago kept of its messages' words is taken out first
-/// ([`dispatchrecord::expire_talk`]), so a timeline never shows words past their time, however
-/// long the project has been open.
+/// ([`dispatchrecord::expire_in`]), so a timeline never shows words past their time, however
+/// long the project has been open. **The store is read once**, within [`Bounds::TAB`], and the
+/// expiry works on that one read (#1520).
 pub fn timeline(root: &Path, session: &ChatRef, now: chrono::DateTime<chrono::Utc>) -> Timeline {
-    dispatchrecord::expire_talk(root, now);
-    let (drawn, refused): (Vec<Record>, Vec<Record>) = dispatchrecord::list(root)
-        .into_iter()
-        .partition(dispatchrecord::sound);
-    let found = of(&drawn, session);
-    // The chats on the timeline: the session, and every task under it.
+    timeline_within(root, session, now, Bounds::TAB)
+}
+
+/// [`timeline`], reading and listing within `bounds`.
+pub fn timeline_within(
+    root: &Path,
+    session: &ChatRef,
+    now: chrono::DateTime<chrono::Utc>,
+    bounds: Bounds,
+) -> Timeline {
+    let (mut read, unread) = dispatchrecord::newest(root, bounds.records);
+    dispatchrecord::expire_in(root, &mut read, now);
+    let (drawn, refused): (Vec<Record>, Vec<Record>) =
+        read.into_iter().partition(dispatchrecord::sound);
+    let tasks = under_tops(&drawn, session);
+    // The chats on the timeline: the session, and every task under it, listed or not.
     let mut on_it = vec![session.clone()];
     on_it.extend(
-        under(&drawn, session)
-            .into_iter()
-            .map(|(record, _)| record.worker.chat.clone()),
+        tasks
+            .iter()
+            .map(|(record, _, _)| record.worker.chat.clone()),
+    );
+    // The session's own newest tasks, each whole with the tasks under it, so a listed task's
+    // parent is always listed: a record's id sorts as the time it was minted.
+    let mut tops: Vec<&str> = tasks
+        .iter()
+        .filter(|(_, depth, _)| *depth == 1)
+        .map(|(record, _, _)| record.id.as_str())
+        .collect();
+    tops.sort_by(|a, b| b.cmp(a));
+    let unlisted = tops.len().saturating_sub(bounds.tasks);
+    tops.truncate(bounds.tasks);
+    let lines = lines_in(
+        tasks
+            .iter()
+            .filter(|(_, _, top)| tops.contains(top))
+            .map(|(record, depth, _)| (*record, *depth))
+            .collect(),
     );
     let refused = refused
         .iter()
@@ -359,7 +430,12 @@ pub fn timeline(root: &Path, session: &ChatRef, now: chrono::DateTime<chrono::Ut
                     .any(|chat| dispatchrecord::same_chat(&record.asker.chat, chat))
         })
         .count();
-    Timeline { refused, ..found }
+    Timeline {
+        lines,
+        refused,
+        unlisted,
+        unread,
+    }
 }
 
 /// **The files a report says its task changed**: the ones it lists (`changed.files`), then the

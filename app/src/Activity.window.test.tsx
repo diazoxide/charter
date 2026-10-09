@@ -127,6 +127,8 @@ function core(
   on: {
     lines?: ActivityLine[];
     undrawn?: number;
+    unlisted?: number;
+    unread?: number;
     reopened?: ViewTab[];
     /** The session each chat has now, by its key: what a press on a line's chat is answered. */
     now?: Record<string, number | null>;
@@ -170,6 +172,10 @@ function core(
           key: STEWARD_KEY,
           lines: on.lines ?? LINES,
           undrawn: on.undrawn ?? 0,
+          unlisted: on.unlisted ?? 0,
+          unread: on.unread ?? 0,
+          most_listed: 200,
+          most_read: 2000,
         };
         return answer;
       }
@@ -583,6 +589,24 @@ describe("a session's Activity tab", () => {
       "2 messages of talk are not listed: they were sent before purlis kept what tasks say.",
     );
     expect(screen.queryByText(/first 500/)).toBeNull();
+  });
+
+  it("says above the oldest line what a long-lived chat's timeline does not list (#1520)", async () => {
+    core({ unlisted: 3, unread: 40 });
+    render(<App />);
+    await opened();
+
+    expect(screen.getByTestId("activity-older")).toHaveTextContent(
+      "The 3 oldest tasks steward 3 dispatched are not listed, nor the tasks under them: a chat's activity lists the newest 200 it dispatched. purlis read this project's newest 2,000 dispatch records, so a task older than those is not listed.",
+    );
+  });
+
+  it("says nothing of older tasks where none was left out", async () => {
+    core();
+    render(<App />);
+    await opened();
+
+    expect(screen.queryByTestId("activity-older")).toBeNull();
   });
 
   it("keeps the line of a message whose words are no longer kept, and says for how long they were", async () => {

@@ -111,6 +111,15 @@ pub struct Activity {
     /// How many of this chat's tasks, and of the tasks under them, are not listed because
     /// purlis will not draw their records.
     pub undrawn: u32,
+    /// How many of the tasks this chat dispatched itself, the oldest, are not listed, with the
+    /// tasks under them: a timeline lists the newest `most_listed` (#1520).
+    pub unlisted: u32,
+    /// How many of the project's dispatch records, the oldest, were not read: a timeline reads
+    /// the newest `most_read` (#1520). Whose they are is not known.
+    pub unread: u32,
+    /// The bounds that were read within (`activity::Bounds::TAB`), for the tab to say.
+    pub most_listed: u32,
+    pub most_read: u32,
 }
 
 /// A line the app has just recorded, and the project it is in.
@@ -183,7 +192,8 @@ fn open_question(held: &Held, task: u32) -> Option<(u32, String)> {
 pub(crate) fn read(held: &Held, session: u32) -> Option<Activity> {
     let chat = crate::dispatches::chat_ref(held, session)?;
     let open = crate::dispatches::open_chats(held);
-    let found = activity::timeline(held.root(), &chat, chrono::Utc::now());
+    let bounds = activity::Bounds::TAB;
+    let found = activity::timeline_within(held.root(), &chat, chrono::Utc::now(), bounds);
     let mut lines: Vec<ActivityLine> = found
         .lines
         .iter()
@@ -195,6 +205,10 @@ pub(crate) fn read(held: &Held, session: u32) -> Option<Activity> {
         name: chat.name,
         lines,
         undrawn: u32::try_from(found.refused).unwrap_or(u32::MAX),
+        unlisted: u32::try_from(found.unlisted).unwrap_or(u32::MAX),
+        unread: u32::try_from(found.unread).unwrap_or(u32::MAX),
+        most_listed: u32::try_from(bounds.tasks).unwrap_or(u32::MAX),
+        most_read: u32::try_from(bounds.records).unwrap_or(u32::MAX),
     })
 }
 
