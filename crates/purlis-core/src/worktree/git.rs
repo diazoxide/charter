@@ -253,7 +253,8 @@ const NO_PROGRAMS: [&str; 6] = [
 /// **"Every git call" is every git process purlis starts** (#1550). A branch the files view
 /// reads with gitoxide (`files::status`) starts no git, so this key does not reach it, and it
 /// needs none: the branch is opened at the folder purlis names, never found by climbing, and is
-/// refused unless that folder is its repository's work tree, so a bare repository is never
+/// refused unless that folder is its repository's work tree and not its git directory, so a
+/// bare repository, or a git directory made at the folder naming it as its work tree, is never
 /// read in its place.
 ///
 /// **On git 2.38 to 2.44** the key also refuses a repository's own `.git` folder as the folder
