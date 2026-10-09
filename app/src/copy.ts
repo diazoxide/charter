@@ -1,6 +1,6 @@
 /**
  * **The copy guide's rules a machine can hold** (`docs/ui-copy.md`, DS-2). The guide has more
- * rules than these; the rest need a reader, and DS-8's audit is that reader. These two are here
+ * rules than these; the rest need a reader, and DS-8's audit is that reader. These three are here
  * because each is cheap to check, has no false alarm in the window's copy as it stands, and is
  * the first thing a hurried change gets wrong:
  *
@@ -8,8 +8,14 @@
  *   what happened, so a phrase that fits every failure is refused wherever it is written.
  * - **Sentence case on what the window shows.** "Open project…", never "Open Project…". And
  *   charter is lowercase, but for the About dialog's title.
+ * - **No raised voice on what the window shows** (#1156): no sentence ends in "!", and no word
+ *   of four letters or more is written in capitals ("NEVER close"). Acronyms keep theirs.
  *
- * `copy.test.ts` runs both over every string in `app/src` (`uiStrings.ts` finds them).
+ * A code span (`` `git log` ``) and an id (`ask.please`, `hooks/please-hold.sh`) are what a
+ * person types or what the code calls something, not words, so none of the rules reads them.
+ *
+ * `copy.test.ts` runs them over every string in `app/src`, and `copy.rust.test.ts` over the
+ * window's copy written in Rust.
  */
 
 /** Where a string was found: drawn in the window, or anywhere else in the source. */
@@ -24,6 +30,48 @@ const STOCK =
  */
 const NAMES =
   /\b(Claude Code|Codex|opencode|GitHub|GitLab|Keychain|Touch ID|Windows Hello|LM Studio|Ollama|Finder|File Explorer|Files|macOS|Linux|Windows)\b/g;
+
+/**
+ * Acronyms of four letters or more, the environment variables the window names, and a
+ * workspace's LIVE and LOCAL (ADR 0072's own labels, written in capitals), which keep their
+ * capitals. Shorter ones (`PR`, `CLI`, `SSH`) are under the length the capitals rule reads. A
+ * missing one fails the guard on its first label; adding it here is the fix, and it is the only
+ * list.
+ */
+const ACRONYMS = /\b(JSON|YAML|TOML|HTML|HTTP|HTTPS|README|UUID|ASCII|PATH|LIVE|LOCAL)\b/g;
+
+/** A code span: what a person types, read as a whole and never as words. */
+const CODE_SPAN = /`[^`]*`/g;
+
+/**
+ * An id or a path: letters or digits joined by `.`, `/`, `:`, `_` or `-` with no space, such
+ * as `ask.please` or `hooks/please-hold.sh`. "Re-arm" is one too, which is harmless: a stock
+ * phrase is never hyphenated.
+ */
+const ID = /\S*[A-Za-z0-9][./:_-][A-Za-z0-9]\S*/g;
+
+/** The words of `text` a person reads: without its code spans and its ids. */
+function words(text: string): string {
+  return text.replace(CODE_SPAN, " ").replace(ID, " ").trim();
+}
+
+/** A sentence that ends in "!": after a letter, before a space, a closing mark or the end. */
+const EXCLAIMED = /[A-Za-z]!+(?=[\s)"'\u2019\u201d]|$)/;
+
+/**
+ * A word in capitals: four letters or more, none of them small. Code spans, ids and file names
+ * (`AGENTS.md`), acronyms, names and chords are taken out first; a placeholder is read as `…`,
+ * so it is no word.
+ */
+function shouted(text: string): boolean {
+  const said = text
+    .replace(CODE_SPAN, " ")
+    .replace(ID, " ")
+    .replace(CHORD, " ")
+    .replace(NAMES, " ")
+    .replace(ACRONYMS, " ");
+  return /\b[A-Z]{4,}\b/.test(said);
+}
 
 /** A key chord — `Ctrl+Shift+F`, `CmdOrCtrl+W` — is keys, not words, so it has no case. */
 const CHORD = /\b[A-Za-z]+(\+[A-Za-z0-9,.]+)+/g;
@@ -63,9 +111,11 @@ function titleCased(text: string): boolean {
 export function copyFaults(text: string, seen: Seen = "source"): string[] {
   const faults: string[] = [];
   const said = text.trim();
-  if (STOCK.test(said)) faults.push("a stock phrase: say what happened instead");
+  if (STOCK.test(words(said))) faults.push("a stock phrase: say what happened instead");
   if (seen === "shown") {
-    if (/[A-Za-z]!$/.test(said)) faults.push("an exclamation mark: say it plainly");
+    if (EXCLAIMED.test(said.replace(CODE_SPAN, " ")))
+      faults.push("an exclamation mark: say it plainly");
+    if (shouted(said)) faults.push("capitals: write the word in lowercase, or name it");
     if (titleCased(said)) faults.push("title case: write labels in sentence case");
     if (/\b(Charter|Purlis)\b/.test(said))
       faults.push("a capital product name: purlis is lowercase, the About title too");

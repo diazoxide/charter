@@ -122,8 +122,13 @@ empty state and error copy follow it.
 TypeScript's parser) and fails on:
 
 - **a stock phrase**, in any string: *something went wrong*, *an error occurred*, *unknown
-  error*, *oops*, *please*, *successfully*, or a leading *error:*;
-- **an exclamation mark** at the end of text the window shows;
+  error*, *oops*, *please*, *successfully*, or a leading *error:*. A code span and an id or a
+  path (`ask.please`, `hooks/please-hold.sh`) are not read as words;
+- **an exclamation mark** ending any sentence of text the window shows;
+- **a word in capitals** in text the window shows: four letters or more, all capitals, as in
+  *NEVER close*. Acronyms and the words the window keeps in capitals (`ACRONYMS` in `copy.ts`:
+  *JSON*, *README*, *PATH*, a workspace's *LIVE* and *LOCAL*), names, key chords, code spans
+  and file names such as `AGENTS.md` are taken out first;
 - **title case** in text the window shows: two or more words of four letters or more, all
   capitalised. Names (`NAMES` in `copy.ts`) and key chords such as `Ctrl+Shift+F` are taken
   out first. A name the check does not know fails on its first label, and adding it to
@@ -140,6 +145,12 @@ TypeScript's parser) and fails on:
   `actions.ts`, and the third of `cannot`.
 
 Through an expression, both branches of a conditional and the right-hand side of `&&`, `||` and
-`??` count as shown; the condition does not. Copy written in Rust and sent to the window, such
-as a panel's empty state, is outside the check. So is copy assembled from parts at run time. DS-8's audit of every surface reads what the check cannot,
-and a review reads every new string against this page.
+`??` count as shown; the condition does not.
+
+Copy written in Rust and sent to the window is held to the same rules by `copy.rust.test.ts`,
+which reads the string literals of named places in the Rust source and builds nothing: purlis's
+own panels' empty states (a headline and a body, not the offer's id), the native menu's and the
+tray's labels, and the core's `in_window` sentences. A format string's `{name}` reads as `…`. A
+new place the window shows Rust copy from is added to its `PLACES`. Copy assembled from parts at
+run time is outside the check. DS-8's audit of every surface reads what the check cannot, and a
+review reads every new string against this page.
