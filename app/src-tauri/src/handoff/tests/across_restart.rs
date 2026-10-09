@@ -625,6 +625,33 @@ fn a_later_session_record_of_the_asker_resumes_it_too() {
 // ---- #1513 follow-ups (#1546) -----------------------------------------------------------------
 
 #[test]
+fn an_answer_to_a_task_brought_back_says_its_question_was_not_kept() {
+    let (plane, host, planes, _id, held, steward, task) = a_steward_and_a_working_task();
+    let at_quit = quits(&held);
+
+    let (_relaunched, _planes, again, held, _opened) =
+        launches_again(&plane, (host.clone(), planes, held), &at_quit);
+
+    // The question the task asked before the quit was in the app's memory: the steward chat,
+    // reading it in its next turn, is told why its answer reaches nothing.
+    let said = asks(
+        &held,
+        &again,
+        steward,
+        What::Answer {
+            to: task,
+            text: "the blue one".to_owned(),
+        },
+    );
+    assert_eq!(
+        said,
+        Answer::No {
+            why: purlis_core::dispatchtalk::asked_before_the_restart("check prod", task)
+        }
+    );
+}
+
+#[test]
 fn try_to_start_again_on_a_task_whose_dispatch_ended_meanwhile_tells_it_nothing() {
     // Train 66 join review, U1.
     let plane = a_plane_with_personas();

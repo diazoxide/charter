@@ -193,6 +193,10 @@ pub struct Talk {
     /// How many questions have been asked in this project since the app started: the next
     /// one's number is one more.
     asked: u32,
+    /// The tasks brought back by this launch and told to carry on (#1513, #1546): a question
+    /// one asked before the restart was not kept, and an answer to it is told so
+    /// ([`asked_before_the_restart`]).
+    restored: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,8 +331,10 @@ impl Talk {
                 answer: None,
             },
         );
-        // A new question: how the one before it was closed says nothing of this one.
+        // A new question: how the one before it was closed says nothing of this one, nor
+        // does the restart before it.
         self.closed.remove(&task);
+        self.restored.remove(&task);
         Ok(number)
     }
 
@@ -427,8 +433,16 @@ impl Talk {
     pub fn nothing_to_answer(&self, name: &str, task: u32) -> String {
         match self.closed.get(&task) {
             Some(Closed::ByPerson) => answered_by_the_person(name, task),
+            _ if self.restored.contains(&task) => asked_before_the_restart(name, task),
             _ => no_question(name, task),
         }
+    }
+
+    /// `task` was brought back by this launch and told to carry on (#1546): what it asked its
+    /// asking chat before the restart was in the app's memory, and is gone. An answer to it is
+    /// told so ([`Self::nothing_to_answer`]).
+    pub fn restored(&mut self, task: u32) {
+        self.restored.insert(task);
     }
 
     /// **The person answers question `number`, which `task`, called `name`, put to its asking
@@ -594,6 +608,9 @@ impl Talk {
         if self.closed_unread.remove(&old) {
             self.closed_unread.insert(new);
         }
+        if self.restored.remove(&old) {
+            self.restored.insert(new);
+        }
         // What an asking chat is told names its task by number: the number it has now.
         for said in self.person.values_mut().flatten() {
             if let PersonSaid::AnsweredFor { chat, .. } = said
@@ -622,6 +639,7 @@ impl Talk {
         self.closed.remove(&chat);
         self.person.remove(&chat);
         self.closed_unread.remove(&chat);
+        self.restored.remove(&chat);
         self.sent
             .retain(|(asker, task), _| *asker != chat && *task != chat);
     }
@@ -637,6 +655,19 @@ pub fn no_question(name: &str, task: u32) -> String {
         "'{name}' (chat {task}) has asked this chat no question that is still open, so there \
          is nothing here to answer. A question it has put to the person is the person's to \
          answer, in its own tab: no chat can answer it."
+    )
+}
+
+/// What an asking chat is told when it answers a task brought back after a restart that has
+/// asked it nothing since (#1546): **a question asked before the restart was not kept**, and
+/// the task was told to ask it again where its work waits on the answer
+/// ([`crate::dispatchrestart::CARRY_ON`]).
+pub fn asked_before_the_restart(name: &str, task: u32) -> String {
+    format!(
+        "'{name}' (chat {task}) has asked this chat no question since purlis was restarted, so \
+         this answer was not sent. A question it asked before the restart was not kept across \
+         it: '{name}' was told to ask again if its work waits on the answer, and this chat can \
+         answer it then."
     )
 }
 
@@ -1300,6 +1331,36 @@ mod tests {
         assert_eq!(talk.got_answer(TASK), None);
         assert_eq!(talk.answered(TASK), None);
         assert!(talk.ask(TASK, "And another?", None).is_ok());
+    }
+
+    #[test]
+    fn an_answer_to_a_task_brought_back_after_a_restart_says_its_question_was_not_kept() {
+        // #1546: the question was in the app's memory, and the asking chat may still read it
+        // in its next turn. Its answer is told why it reaches nothing.
+        let mut talk = Talk::default();
+        talk.restored(TASK);
+
+        assert_eq!(
+            talk.answer(TASK, ASKER, "check the queue", an_answer()),
+            Err(asked_before_the_restart("check the queue", TASK))
+        );
+        assert!(
+            asked_before_the_restart("check the queue", TASK).contains("was not kept across it")
+        );
+
+        // Asked again, it is answered as any question is; and after that, nothing is said of
+        // the restart.
+        talk.ask(TASK, "Which queue?", None).expect("asked again");
+        assert_eq!(
+            talk.answer(TASK, ASKER, "check the queue", an_answer()),
+            Ok(1)
+        );
+        talk.got_answer(TASK);
+        talk.turn_began(TASK);
+        assert_eq!(
+            talk.answer(TASK, ASKER, "check the queue", an_answer()),
+            Err(no_question("check the queue", TASK))
+        );
     }
 
     #[test]
