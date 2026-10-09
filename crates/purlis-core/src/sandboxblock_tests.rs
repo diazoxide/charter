@@ -452,6 +452,21 @@ fn the_per_user_folders_notices_name_each_folder_and_its_way_round() {
     );
 }
 
+/// #1416: `system-temp` also holds the per-user folders `0` and `X`, which are no temporary
+/// folder, so its sentence names the per-user folders and holds the temporary one up as one of
+/// them; and the cache folder's sentence names no harness, so it reads true in any chat.
+#[test]
+fn the_per_user_folders_sentences_fit_every_folder_and_harness_they_are_said_of() {
+    let temp = block(Operation::Write, Kind::SystemTemp, false).said();
+    assert!(temp.contains("one of macOS's per-user folders"), "{temp}");
+    assert!(!temp.contains("per-user temporary folder"), "{temp}");
+    let cache = block(Operation::Write, Kind::SystemCache, false).said();
+    for harness in ["Claude Code", "opencode", "Codex"] {
+        assert!(!cache.contains(harness), "{cache}");
+    }
+    assert!(cache.contains("harness runs its own sandbox"), "{cache}");
+}
+
 #[test]
 fn a_refused_connection_or_certificate_check_is_read_from_standard_error() {
     let cases = [
@@ -1055,6 +1070,57 @@ fn swiftc_and_xcrun_refusals_are_read_from_standard_error() {
          permitted)\" earlier"
     );
     assert!(detect(&came_back("x", "", &quoted), &place()).is_empty());
+}
+
+/// #1416: Foundation's refusal of a write, as a Swift program prints the error, names the path
+/// in its `NSFilePath` and the system's words in its underlying POSIX error. Read as any other
+/// program's own words: sorted by the path, and only outside what the chat may write. A line
+/// that names no path says nothing a block could be sorted by, and is not one, as
+/// `ps: Operation not permitted` is not.
+#[test]
+fn foundations_refused_write_is_read_by_the_path_it_names() {
+    let foundation = |path: &str| {
+        format!(
+            "Fatal error: Error Domain=NSCocoaErrorDomain Code=513 \"You don’t have permission to \
+             save the file “p1120.txt” in the folder “T”.\" UserInfo={{NSFilePath={path}, \
+             NSUnderlyingError=0x600000c84030 {{Error Domain=NSPOSIXErrorDomain Code=1 \
+             \"Operation not permitted\"}}}}"
+        )
+    };
+    for (path, kind) in [
+        (format!("{PER_USER_T}/p1120.txt"), Kind::SystemTemp),
+        (format!("/private{PER_USER_T}/p1120.txt"), Kind::SystemTemp),
+        (
+            "/Users/dev/plane/workspaces/beta/x.txt".to_owned(),
+            Kind::ProjectFiles,
+        ),
+    ] {
+        let line = foundation(&path);
+        assert_eq!(
+            detect(&came_back("swift p.swift", "", &line), &place()),
+            vec![block(Operation::Write, kind, false)],
+            "{line}"
+        );
+    }
+    // In what the chat may write, the sandbox did not refuse it.
+    let own = foundation(&format!("{CHAT}/out.txt"));
+    assert!(detect(&came_back("x", "", &own), &place()).is_empty());
+    // With no path, or with another underlying error, there is nothing to sort.
+    for line in [
+        "Error Domain=NSCocoaErrorDomain Code=513 \"You don’t have permission.\" \
+         UserInfo={NSUnderlyingError=0x6 {Error Domain=NSPOSIXErrorDomain Code=1 \
+         \"Operation not permitted\"}}"
+            .to_owned(),
+        foundation(&format!("{PER_USER_T}/p.txt")).replace(
+            "NSPOSIXErrorDomain Code=1 \"Operation not permitted\"",
+            "NSPOSIXErrorDomain Code=13 \"Permission denied\"",
+        ),
+    ] {
+        assert!(
+            detect(&came_back("x", "", &line), &place()).is_empty(),
+            "{line}"
+        );
+    }
 }
 
 /// The path between a line's last two quotes, past a word's apostrophe before them.

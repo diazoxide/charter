@@ -170,8 +170,8 @@ pub enum Kind {
     /// `TMPDIR` (#1120): `mktemp` without a path, Foundation's `NSTemporaryDirectory`, and
     /// `xcrun`'s cache, which only warns. No sandboxed chat may write it (D-1342-11). The two
     /// other per-user folders beside it that hold no cache, `…/0` (`DARWIN_USER_DIR`) and `…/X`,
-    /// are sorted here too (#1416): no new kind is stored for them, and like this one no grant
-    /// is offered for them.
+    /// are sorted here too (#1416): no new kind is stored for them, its sentence is said of all
+    /// three, and like this one no grant is offered for them.
     SystemTemp,
     /// macOS's per-user cache folder (`/var/folders/<a>/<b>/C`, `DARWIN_USER_CACHE_DIR`), where
     /// clang and Swift keep their module cache. A wrapped chat's module cache is its own temp
@@ -244,13 +244,19 @@ impl Kind {
             Self::ToolchainCache => "a toolchain's package cache",
             Self::Home => "your home folder",
             Self::Temp => "a temporary folder",
+            // One sentence for `T`, `0` and `X`, which this kind holds alike (#1416): the
+            // temporary folder is the one programs reach for, so its way round is the one said.
             Self::SystemTemp => {
-                "macOS's per-user temporary folder, which mktemp and Swift programs use in place \
-                 of this chat's own. mktemp -p \"$TMPDIR\" writes in this chat's own"
+                "one of macOS's per-user folders, such as its temporary folder, which mktemp and \
+                 Swift programs use in place of this chat's own. mktemp -p \"$TMPDIR\" writes in \
+                 this chat's own"
             }
+            // No harness named (#1416): a chat purlis wraps has its module cache moved into its
+            // own temp, and one whose harness runs its own sandbox does not yet.
             Self::SystemCache => {
                 "macOS's per-user cache folder, where Swift and clang builds keep compiled \
-                 modules. Swift and clang builds cannot write it in a sandboxed Claude Code chat yet"
+                 modules. Swift and clang builds cannot write it yet in a chat whose harness runs \
+                 its own sandbox"
             }
             Self::System => "a system folder",
             Self::Host => "an internet host this project does not allow",
@@ -589,6 +595,28 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
             kind_of(Path::new(path), place),
             path.to_owned(),
         ));
+    }
+    // Foundation, as a Swift program prints its error (#1416): `Error Domain=NSCocoaErrorDomain
+    // Code=513 "…" UserInfo={NSFilePath=/x/y, NSUnderlyingError=0x… {Error
+    // Domain=NSPOSIXErrorDomain Code=1 "Operation not permitted"}}`. 513 is a refused write, and
+    // the underlying POSIX error says it was not permitted. A line without the path names
+    // nothing to sort, and is no block.
+    if line.contains("NSCocoaErrorDomain Code=513 ")
+        && line.contains("NSPOSIXErrorDomain Code=1 \"Operation not permitted\"")
+    {
+        let path = line
+            .split_once("NSFilePath=")?
+            .1
+            .split([',', '}'])
+            .next()?
+            .trim();
+        return path.starts_with('/').then(|| {
+            (
+                Operation::Write,
+                kind_of(Path::new(path), place),
+                path.to_owned(),
+            )
+        });
     }
     let lower = line.to_ascii_lowercase();
     // Rust's io error on a line of its own, its path on a line before (cargo's `Caused by:`):
