@@ -942,6 +942,50 @@ enum Held {
     Record(Record),
 }
 
+/// The process of every chat the record names, read **leniently**: only `chats[].pid`, from a
+/// record of any version, every other field and every entry that is not one ignored (#1542).
+/// For a caller that asks whether a process runs inside a chat, where a record of a version
+/// this purlis does not write still names the programs it knew, and a version bump must not
+/// leave every project's record unreadable at once.
+///
+/// `Ok` and empty where there is no record. A file that is there and is not JSON, or cannot be
+/// read, is an error: the caller cannot tell what it named. Opened as [`read_strictly`] opens
+/// it, never through a link, and held to the same size.
+pub fn chat_pids(plane_root: &Path) -> Result<Vec<u32>, std::io::Error> {
+    let Some(text) = guarded_text(plane_root)? else {
+        return Ok(Vec::new());
+    };
+    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not JSON", path(plane_root).display()),
+        )
+    })?;
+    Ok(doc
+        .get("chats")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|chat| chat.get("pid")?.as_u64())
+        .filter_map(|pid| u32::try_from(pid).ok())
+        .collect())
+}
+
+/// The record's text, opened with every guard [`read_held`] asks for, or `None` for no record.
+fn guarded_text(plane_root: &Path) -> Result<Option<String>, std::io::Error> {
+    crate::fence::hold(crate::fence::Act::Read, plane_root);
+    let file = path(plane_root);
+    let mut open = match crate::contain::open_no_link(plane_root, &file) {
+        Ok(open) => open,
+        Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(unreadable) => return Err(unreadable),
+    };
+    refuse_unusable(&file, &open.metadata()?)?;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut open, &mut text)?;
+    Ok(Some(text))
+}
+
 fn read_held(plane_root: &Path) -> Result<Held, std::io::Error> {
     // Reading is guarded as well as writing, and the reason is the whole of ADR 0035: this
     // file says what to RUN. A test that reads a real plane's record starts the operator's

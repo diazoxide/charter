@@ -394,7 +394,9 @@ fn a_create_registers_the_vault_and_writes_its_record_together() {
 
     let marked = create(&set.ctx, &request("team", &format!("{GOOD}\n"))).unwrap();
 
-    assert_eq!(marked, Marked::default());
+    assert!(
+        marked.marked.is_empty() && marked.skipped.is_empty() && marked.no_longer_read.is_empty()
+    );
     let entry = &set.local()["vaults"]["team"];
     assert_eq!(entry["provider"], "1password");
     assert_eq!(entry["config"]["op-vault"], "Engineering");
@@ -945,6 +947,73 @@ fn a_variable_another_vault_still_reads_is_not_named_after_a_conversion() {
 }
 
 #[test]
+fn a_variable_a_vault_of_another_project_reads_is_never_named() {
+    // #1542 review, M2: an export is the whole machine's, so another project this machine
+    // opened that binds the same variable still needs it.
+    let config = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    let other = tempfile::tempdir().unwrap();
+    let theirs = Ctx::new(other.path(), Env::of(&[]));
+    let config_of =
+        json!({"op-vault": "Theirs", "env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}});
+    registry::add_vault(
+        &theirs,
+        "theirs",
+        "1password",
+        config_of.as_object().unwrap().clone(),
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    crate::machine::update(config.path(), |store| store.remember(other.path(), 1)).unwrap();
+
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &[]).unwrap();
+
+    assert!(marked.no_longer_read.is_empty(), "{marked:?}");
+    assert_eq!(remove_the_export(&marked), None);
+}
+
+#[test]
+fn where_another_project_cannot_be_checked_the_hint_speaks_for_this_project() {
+    let config = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    let other = tempfile::tempdir().unwrap();
+    let theirs = Ctx::new(other.path(), Env::of(&[]));
+    std::fs::create_dir_all(theirs.local_registry().parent().unwrap()).unwrap();
+    std::fs::write(theirs.local_registry(), "not a registry").unwrap();
+    crate::machine::update(config.path(), |store| store.remember(other.path(), 1)).unwrap();
+
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &[]).unwrap();
+
+    assert_eq!(marked.no_longer_read, ["OP_TEAM_TOKEN"]);
+    assert!(!marked.checked_every_project);
+    let said = remove_the_export(&marked).unwrap();
+    assert!(
+        said.starts_with("No vault of this project reads $OP_TEAM_TOKEN"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("Keychain") && !said.contains("keyring"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_variable_name_a_shell_cannot_export_is_never_named() {
+    // #1542 review, A: a committed source is never validated as a name, and is printed to a
+    // terminal: only what an `export` line can hold is named.
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM\u{1b}]0;x\u{7}");
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &[]).unwrap();
+    assert!(marked.no_longer_read.is_empty(), "{marked:?}");
+}
+
+#[test]
 fn a_vault_changed_to_the_app_names_the_variable_it_was_read_through() {
     let set = Set::new("unused");
     bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
@@ -972,9 +1041,16 @@ fn vault_add_on_a_vault_bound_to_a_variable_says_to_remove_the_old_export() {
     assert_eq!(vaultcmd::add(&set.ctx, &req, &mut rec), 0, "{}", rec.said());
 
     let said = rec.said();
-    assert!(said.contains("$OP_TEAM_TOKEN"), "{said}");
+    assert!(
+        said.contains(
+            "info:   No vault of any project this machine opened reads $OP_TEAM_TOKEN any more."
+        ),
+        "{said}"
+    );
     assert!(said.contains("shell's startup files"), "{said}");
+    // Names only: no value, and nothing but the variable's name.
     assert!(!all_of(&rec).contains(GOOD));
+    assert_eq!(said.matches('$').count(), 1, "{said}");
 }
 
 #[test]
@@ -1296,11 +1372,11 @@ fn a_process_in_a_chats_session_is_inside_it_though_its_parent_has_gone() {
         _ => None,
     };
     assert_eq!(
-        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(30)),
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(30), None),
         Where::Inside
     );
     assert_eq!(
-        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70)),
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), None),
         Where::Outside,
         "its own session, and launchd above it"
     );
@@ -1339,30 +1415,128 @@ fn a_chat_of_another_project_this_machine_opened_is_a_chat_too() {
     };
     let session = |_| Ok(70);
     assert_eq!(
-        in_a_chat_with(&set.ctx, 70, parents, session),
+        in_a_chat_with(&set.ctx, 70, parents, session, None),
         Where::Outside,
         "a project nobody opened on this machine is not asked"
     );
 
     crate::machine::update(config.path(), |store| store.remember(other.path(), 1)).unwrap();
     assert_eq!(
-        in_a_chat_with(&set.ctx, 70, parents, session),
+        in_a_chat_with(&set.ctx, 70, parents, session, None),
         Where::Inside
     );
 
     // Its record garbled: purlis cannot tell, and says so.
     std::fs::write(crate::reopen::path(other.path()), "not a record").unwrap();
     assert!(matches!(
-        in_a_chat_with(&set.ctx, 70, parents, session),
+        in_a_chat_with(&set.ctx, 70, parents, session, None),
         Where::Unsure(_)
     ));
 
     // A remembered project that is gone asks nothing.
     drop(other);
     assert_eq!(
-        in_a_chat_with(&set.ctx, 70, parents, session),
+        in_a_chat_with(&set.ctx, 70, parents, session, None),
         Where::Outside
     );
+}
+
+#[test]
+fn the_store_under_this_accounts_own_home_is_read_whatever_the_environment_says() {
+    // #1542 review, B: a chat that points the environment at an empty store of its own, and
+    // names another project, still has the person's projects read from the store under the
+    // account's home as the user database records it.
+    let home = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let redirected = empty.path().to_string_lossy().into_owned();
+    let set = Set::with_env(
+        "unused",
+        &[("PURLIS_CONFIG_HOME", &redirected), ("HOME", &redirected)],
+    );
+    a_project_with_a_chat(other.path(), 30);
+    let real_store = home.path().join(".config");
+    std::fs::create_dir_all(&real_store).unwrap();
+    crate::machine::update(&real_store, |store| store.remember(other.path(), 1)).unwrap();
+    let parents = |pid: u32| match pid {
+        70 => Some(30),
+        30 => Some(20),
+        _ => Some(1),
+    };
+
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), None),
+        Where::Outside,
+        "the environment's store alone remembers nothing"
+    );
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), Some(home.path())),
+        Where::Inside
+    );
+}
+
+#[test]
+fn a_project_a_window_had_open_is_asked_too() {
+    let config = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    a_project_with_a_chat(other.path(), 30);
+    crate::machine::update(config.path(), |store| {
+        store.windows.push(crate::machine::Window {
+            planes: vec![other.path().to_path_buf()],
+            active: 0,
+        });
+    })
+    .unwrap();
+    assert!(
+        crate::machine::read(config.path()).store.recents.is_empty(),
+        "remembered by its window alone"
+    );
+    let parents = |pid: u32| match pid {
+        70 => Some(30),
+        _ => Some(1),
+    };
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), None),
+        Where::Inside
+    );
+}
+
+#[test]
+fn a_record_of_another_version_still_names_its_chats_and_a_garbled_one_says_how_to_clear_it() {
+    // #1542 review, D: only the chats' processes are read, from a record of any version.
+    let config = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    a_project_with_a_chat(other.path(), 30);
+    crate::machine::update(config.path(), |store| store.remember(other.path(), 1)).unwrap();
+    let record = crate::reopen::path(other.path());
+    std::fs::write(
+        &record,
+        r#"{"version": 99, "chats": [{"pid": 30, "shape": "new"}, "odd", {"pid": "x"}]}"#,
+    )
+    .unwrap();
+    let parents = |pid: u32| match pid {
+        70 => Some(30),
+        _ => Some(1),
+    };
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), None),
+        Where::Inside
+    );
+
+    std::fs::write(&record, "not a record").unwrap();
+    let Where::Unsure(why) = in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70), None) else {
+        panic!("a garbled record was read as no chats");
+    };
+    assert!(why.contains("a project this machine opened"), "{why}");
+    assert!(why.contains("delete"), "{why}");
+    assert!(why.contains("Settings, This machine"), "{why}");
+    let said = could_not_tell(&why);
+    assert!(!said.contains("terminal of your own"), "{said}");
+    assert!(said.contains("vault's own tab"), "{said}");
 }
 
 #[test]
@@ -1374,7 +1548,7 @@ fn a_machine_store_purlis_cannot_read_is_a_doubt() {
     std::fs::create_dir_all(&store).unwrap();
     std::fs::write(store.join(crate::machine::FILE), "not a store").unwrap();
 
-    let Where::Unsure(why) = in_a_chat_with(&set.ctx, 70, |_| Some(1), |_| Ok(70)) else {
+    let Where::Unsure(why) = in_a_chat_with(&set.ctx, 70, |_| Some(1), |_| Ok(70), None) else {
         panic!("a garbled store was read as no other projects");
     };
     assert!(why.contains("projects this machine opened"), "{why}");
@@ -1386,7 +1560,7 @@ fn where_purlis_cannot_tell_it_says_so_and_takes_no_token() {
     with_a_chat(&set, 30);
     // A parent that cannot be read, or a session that cannot be.
     assert!(matches!(
-        in_a_chat_with(&set.ctx, 70, |_| None, |_| Ok(70)),
+        in_a_chat_with(&set.ctx, 70, |_| None, |_| Ok(70), None),
         Where::Unsure(_)
     ));
     assert!(matches!(
@@ -1394,7 +1568,8 @@ fn where_purlis_cannot_tell_it_says_so_and_takes_no_token() {
             &set.ctx,
             70,
             |_| Some(1),
-            |_| Err(std::io::Error::other("gone"))
+            |_| Err(std::io::Error::other("gone")),
+            None
         ),
         Where::Unsure(_)
     ));

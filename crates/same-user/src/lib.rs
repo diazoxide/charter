@@ -73,6 +73,18 @@ impl std::fmt::Display for Uid {
     }
 }
 
+/// This account's home directory, as the user database records it (`getpwuid`), never as an
+/// environment says: a process can be started with any `$HOME`, and a caller that must find
+/// this user's own files whatever its environment was given asks here. `None` where the
+/// database has no entry for this uid, or no home in it.
+pub fn account_home() -> Option<std::path::PathBuf> {
+    nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|user| user.dir)
+        .filter(|dir| dir.is_absolute())
+}
+
 /// The uid of the process at the other end of the unix socket `socket`.
 pub fn peer_of(socket: &impl AsFd) -> io::Result<Uid> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -259,6 +271,12 @@ mod tests {
 
     fn other() -> Uid {
         Uid(ours().0.wrapping_add(1))
+    }
+
+    #[test]
+    fn this_account_s_home_is_the_user_database_s_and_absolute() {
+        let home = account_home().expect("this account has a home");
+        assert!(home.is_absolute(), "{}", home.display());
     }
 
     fn run(command: &mut std::process::Command) -> io::Result<std::process::Output> {

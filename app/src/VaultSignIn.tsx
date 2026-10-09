@@ -496,14 +496,18 @@ export function VaultSignIn({
 
 /**
  * What a finished conversion says of the variables the vault was read through before that no
- * vault reads now (#1542): the export left in a shell profile is the one copy of the token
- * outside the keyring. Empty when there are none.
+ * vault reads now (#1542): an export left in a shell profile still hands the token to every
+ * shell started from it, and to what those shells start. Empty when there are none. Where purlis
+ * could not check every project this machine opened, it speaks for this project alone.
  */
 export function saidOfTheOldExport(done: SetupDone): string {
   const names = done.no_longer_read.map((name) => `$${name}`);
   if (names.length === 0) return "";
   const listed = names.join(", ");
-  return `No vault reads ${listed} any more. If your shell's startup files export it, remove that line: until then every shell started from them carries the token outside the Keychain.`;
+  const whose = done.checked_every_project
+    ? `No vault of any project this machine opened reads ${listed} any more.`
+    : `No vault of this project reads ${listed} any more; purlis could not check every other project this machine opened, so make sure none of them needs it.`;
+  return `${whose} If your shell's startup files export it, remove that line: until then every shell started from them, and every program started from such a shell, still carries the token.`;
 }
 
 /** What a finished set-up says of the other vaults ticked: which got the token, which not. */
