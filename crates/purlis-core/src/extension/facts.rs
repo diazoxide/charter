@@ -62,7 +62,7 @@ const MOST_BADGES: usize = 8;
 const MOST_COLUMNS: usize = 4;
 
 /// The most bytes a label or a title may be.
-const MOST_LABEL_BYTES: usize = 40;
+pub(super) const MOST_LABEL_BYTES: usize = 40;
 
 /// The longest a value may be declared fresh for: a week. A value older than that is not a
 /// status, whatever its extension says.
@@ -284,6 +284,13 @@ fn id_ok(id: &str) -> bool {
         && id.starts_with(|c: char| c.is_ascii_alphanumeric())
 }
 
+/// Whether purlis draws `text` as a label: at most [`MOST_LABEL_BYTES`], with no control or
+/// invisible formatting character in it ([`crate::panel::undrawable`]). The one rule for a
+/// label, a title and a theme's name (#1145).
+pub(super) fn drawable_label(text: &str) -> bool {
+    text.len() <= MOST_LABEL_BYTES && !text.contains(crate::panel::undrawable)
+}
+
 /// A label or a title: present, short, and drawable.
 fn words(
     object: &serde_json::Map<String, serde_json::Value>,
@@ -297,7 +304,7 @@ fn words(
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| format!("declares the {what} {id:?} with no {key}"))?;
-    if text.len() > MOST_LABEL_BYTES || text.contains(crate::panel::undrawable) {
+    if !drawable_label(text) {
         return Err(format!(
             "declares the {what} {id:?} with a {key} purlis will not draw: it is longer than \
              {MOST_LABEL_BYTES} bytes or holds a control or invisible formatting character"

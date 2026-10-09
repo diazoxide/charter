@@ -1437,7 +1437,8 @@ fn array(value: &serde_json::Value) -> Vec<serde_json::Value> {
 }
 
 /// The themes `contributes.<key>` declares — colour themes or icon themes, one shape: each an
-/// object with a `file` inside the extension and a `name` (the file's, when it has none).
+/// object with a `file` inside the extension and a `name` (the file's, when it has none) that
+/// purlis draws as a label.
 fn themes_of(
     contributes: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -1460,13 +1461,21 @@ fn themes_of(
             .ok_or_else(|| format!("declares a {noun} at {at} with no file"))?;
         declarable(file)
             .map_err(|why| format!("declares the {noun} file {file:?}, which {why}"))?;
-        let name = raw
+        let named = raw
             .get("name")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(file)
-            .to_owned();
+            .filter(|name| !name.is_empty());
+        // A declared name is drawn in the settings tabs' picks and the approval, so it is held
+        // to a label's rule (#1145). The file it falls back to is held by `declarable`.
+        if named.is_some_and(|name| !facts::drawable_label(name)) {
+            return Err(format!(
+                "declares a {noun} at {at} with a name purlis will not draw: it is longer than \
+                 {} bytes or holds a control or invisible formatting character",
+                facts::MOST_LABEL_BYTES
+            ));
+        }
+        let name = named.unwrap_or(file).to_owned();
         themes.push(Theme {
             name,
             file: file.to_owned(),
