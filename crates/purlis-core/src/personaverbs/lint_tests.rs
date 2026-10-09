@@ -186,6 +186,35 @@ fn the_keys_that_have_a_job_now_are_no_finding() {
 }
 
 #[test]
+fn a_colour_purlis_cannot_draw_is_a_warning_and_a_hex_is_none() {
+    // #1460: the persona view and the fix said it; lint, the one check a person runs over
+    // every persona, did not.
+    let with = |colour: &str| clean("c").replace("---\n\n", &format!("color: {colour}\n---\n\n"));
+    let p = plane(&[("c", &with("#1a2b3c"))]);
+    assert_eq!(messages(&linter(&p).definition("c")), vec![]);
+    let p = plane(&[("c", &with("chartreuse"))]);
+    assert_eq!(
+        messages(&linter(&p).definition("c")),
+        vec![(
+            Level::Warn,
+            "`color: chartreuse` is not a colour purlis draws, so this persona keeps the \
+             colour of its name. Use red, orange, yellow, green, teal, blue, purple, pink or \
+             #rrggbb"
+        )]
+    );
+    // A name Claude Code gave a sub-agent's colour: the fix rewrites it, and lint says so.
+    let p = plane(&[("c", &with("cyan"))]);
+    assert_eq!(
+        messages(&linter(&p).definition("c")),
+        vec![(
+            Level::Warn,
+            "`color: cyan` is not a colour purlis draws, so this persona keeps the colour of \
+             its name. `purlis doctor --fix persona-agents` rewrites it to `teal`"
+        )]
+    );
+}
+
+#[test]
 fn a_model_is_a_finding_unless_it_names_the_profile_a_chat_starts_on() {
     let with = |extra: &str| clean("m").replace("---\n\n", &format!("{extra}\n---\n\n"));
     // A built-in profile's name, and no `profile:` line: it is what a chat starts on.
