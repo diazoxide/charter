@@ -189,11 +189,24 @@ fn answered(
     let persona = asking.persona.as_deref();
     // A pair the project's file names counts on this machine only once someone here allowed
     // it (D-1437-R1), so what is in force no longer says whether the file names it. The file
-    // is asked: a pair it names that still needs a grant is one nobody here has reviewed.
+    // is asked: a pair it names that still needs a grant is one nobody here has reviewed. So
+    // is the project's "any persona" for the asking persona that waits for a yes here, and a
+    // grant of the project's limited to the task's workspace that nobody here accepted
+    // (#1464): each covers the pair once a person accepts it, under Settings.
     let named_by_the_project = persona.is_some_and(|persona| {
         dispatchgrant::committed_at(root)
             .iter()
             .any(|pair| pair.asking == persona && pair.target == target)
+            || dispatchgrant::any_unaccepted(root)
+                .iter()
+                .any(|asking| asking == persona)
+            || purlis_core::dispatchwithin::unaccepted(root)
+                .iter()
+                .any(|one| {
+                    one.asking == persona
+                        && (one.any() || one.target == target)
+                        && Some(one.workspace.as_str()) == works_in
+                })
     });
     Ok(dispatchunattended::answer_of(
         dispatchgrant::covers(persona, target, &standing, locks),

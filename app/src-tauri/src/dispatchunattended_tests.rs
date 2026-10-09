@@ -136,6 +136,56 @@ fn a_grant_in_the_project_s_file_starts_an_unattended_dispatch() {
 }
 
 #[test]
+fn an_unattended_chat_whose_project_any_persona_waits_is_told_to_have_it_reviewed() {
+    // #1464: the project's "any persona" covers nothing on a machine until it is accepted
+    // there. A chat nobody is at reads the sentence that says so, not that no grant exists.
+    let project = tempfile::tempdir().expect("a project");
+    std::fs::write(
+        purlis_core::names::manifest(project.path()),
+        "schema = 1\n[dispatch.grants]\nsteward = [\"*\"]\n",
+    )
+    .expect("the project lets steward dispatch to any persona");
+    let ask = || {
+        unattended(
+            project.path(),
+            &Locks::none(),
+            &chat(3, Some("steward")),
+            SANDBOXED,
+            "devops",
+            None,
+        )
+    };
+
+    assert_eq!(
+        ask(),
+        Requested::Refused(
+            dispatchunattended::Missing {
+                asking: Some("steward".to_owned()),
+                target: "devops".to_owned(),
+                unreviewed: true,
+            }
+            .say()
+        )
+    );
+    // Another persona's "any persona" is nothing this chat waits on.
+    assert!(matches!(
+        unattended(
+            project.path(),
+            &Locks::none(),
+            &chat(4, Some("devops")),
+            SANDBOXED,
+            "steward",
+            None
+        ),
+        Requested::Refused(said) if said != dispatchunattended::Missing {
+            asking: Some("devops".to_owned()),
+            target: "steward".to_owned(),
+            unreviewed: true,
+        }.say()
+    ));
+}
+
+#[test]
 fn a_grant_made_for_this_chat_while_a_person_answered_it_does_not_count_once_nobody_does() {
     let project = tempfile::tempdir().expect("a project");
     let root = project.path();
