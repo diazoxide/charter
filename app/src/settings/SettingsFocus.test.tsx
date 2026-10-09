@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -98,6 +98,26 @@ function core(plane: string | null) {
       if (cmd === "workspace_settings") return WORKSPACE((args as { workspace: string }).workspace);
       if (cmd === "plane_doctor") return { rows: [ROW], full: true, app_rows: [], path: null };
       if (cmd === "alerts_everywhere") return [];
+      if (cmd === "start_options")
+        return {
+          profiles: [
+            {
+              name: "claude",
+              kind: "claude",
+              shown: "claude",
+              source: "built-in",
+              is_default: true,
+              approval: null,
+            },
+          ],
+          refused: [["bad", "has kind nope"]],
+          personas: [],
+          persona: null,
+          persona_profiles: {},
+          ignore_fix: null,
+          ignore_fix_id: null,
+          declares_none: true,
+        };
       return null;
     },
     { shouldMockEvents: true },
@@ -155,13 +175,18 @@ async function fromTheDoctor() {
 }
 
 describe("every way into Settings leaves the keyboard on the nav's current group", () => {
-  it("the palette's Settings…", async () => {
+  it("the palette's Settings…, and not back where the palette was opened", async () => {
     core(PLANE);
     render(<App />);
-    await screen.findByRole("tab", { name: /plane/ });
+    const tab = await screen.findByRole("tab", { name: /plane/ });
+    // Opened over something still on the page, which the palette would hand the keyboard back to.
+    tab.focus();
 
     await palette("Settings…");
 
+    await onTheCurrentGroup();
+    await settled();
+    expect(document.activeElement).not.toBe(tab);
     await onTheCurrentGroup();
   });
 
@@ -287,5 +312,39 @@ describe("every way into Settings leaves the keyboard on the nav's current group
 
     await waitFor(() => expect(level("You")).toBeChecked());
     await onTheCurrentGroup();
+  });
+  it("a tab's menu, and not back on the tab", async () => {
+    core(PLANE);
+    render(<App />);
+    const tab = await screen.findByRole("tab", { name: /alpha/ });
+    await userEvent.click(tab);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "F10", shiftKey: true });
+    const menu = await screen.findByRole("menu");
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Workspace settings…" }));
+
+    await waitFor(() => expect(level("Workspace")).toBeChecked());
+    await onTheCurrentGroup();
+    await settled();
+    expect(document.activeElement).not.toBe(tab);
+    await onTheCurrentGroup();
+  });
+
+  it("the start dialog's link to Settings › Harness & profiles", async () => {
+    core(PLANE);
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+    await userEvent.click(screen.getAllByRole("button", { name: "New tab" })[0]);
+    await userEvent.click(await screen.findByText("1 refused"));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open Settings › Harness & profiles" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument(),
+    );
+    await onTheCurrentGroup("Harness & profiles");
   });
 });
