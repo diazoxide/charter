@@ -115,7 +115,7 @@ pub fn clone(request: &Request, say: Sink) -> u8 {
 
     let ws = request.ws;
     banner(ws, say);
-    let ws_dir = match workspace_dir(root, ws) {
+    let ws_dir = match workspace_dir(request, say) {
         Ok(dir) => dir,
         Err(why) => {
             say(Say::Fail(why));
@@ -212,12 +212,20 @@ pub fn clone(request: &Request, say: Sink) -> u8 {
     u8::from(failures > 0)
 }
 
-/// The workspace directory, which must already exist.
+/// The workspace directory, made and scaffolded first when it is not there (#1382).
 ///
-/// Python's `ensure` creates and scaffolds a workspace that is not there. The Rust charter
-/// does not scaffold one yet, and a half-made workspace is one Python's `reinit` then flags
-/// on every turn — so it refuses, and says what to do.
-fn workspace_dir(root: &Path, ws: &str) -> Result<PathBuf, String> {
+/// Python's `ensure` created a workspace a clone named, and [`crate::wscmd::ensure`] is that
+/// step here: the directory AND its baseline, so the new workspace is not one `reinit` then
+/// flags on every turn. Only a workspace that is ABSENT is made: anything else that stops
+/// [`confine::workspace_dir`] — a bad name, a link at `workspaces/<ws>`, a path outside the
+/// project — is refused as it was, before anything is written, so nothing is scaffolded
+/// through a link.
+///
+/// **Not for a sandboxed chat.** Its clone is run by the app on its behalf
+/// ([`Request::hosts`] is `Some`), and that route clones; making a workspace is a separate
+/// step, `purlis workspace create`, which the person or the chat takes on its own.
+fn workspace_dir(request: &Request, say: Sink) -> Result<PathBuf, String> {
+    let (root, ws) = (request.root, request.ws);
     if !contain::workspace_name_ok(ws) {
         return Err(format!(
             "invalid workspace name '{ws}' (use letters, digits, '.', '_', '-'; must not start \
@@ -226,10 +234,20 @@ fn workspace_dir(root: &Path, ws: &str) -> Result<PathBuf, String> {
     }
     match confine::workspace_dir(root, ws) {
         Ok(dir) => Ok(dir),
-        Err(Outside::NoWorkspace { .. }) => Err(format!(
-            "no workspace '{ws}' — this purlis clones into a workspace that exists, and does \
-             not create one yet. Create it first (`purlis workspace create {ws}`)."
+        Err(Outside::NoWorkspace { .. }) if request.hosts.is_some() => Err(format!(
+            "no workspace '{ws}' — a clone the app runs for a sandboxed chat clones into a \
+             workspace that exists and makes none. Create it first (`purlis workspace create \
+             {ws}`)."
         )),
+        Err(Outside::NoWorkspace { .. }) => {
+            crate::wscmd::ensure::ensure(root, ws, request.now, request.author)?;
+            let dir = confine::workspace_dir(root, ws).map_err(|why| why.to_string())?;
+            say(Say::Info(format!(
+                "Made workspace '{ws}' to clone into → workspaces/{ws}/ (LOCAL — private; \
+                 `purlis workspace live` to share)"
+            )));
+            Ok(dir)
+        }
         Err(other) => Err(other.to_string()),
     }
 }
@@ -676,6 +694,97 @@ mod tests {
         assert!(
             !root.join("workspaces/alpha/widget").exists(),
             "git ran against a host the chat may not reach"
+        );
+    }
+
+    /// A plane whose inventory holds one repo, `widget`, at a host the plane does not manage:
+    /// the clone of it is refused before git runs, so a test sees everything up to the clone
+    /// and no network.
+    fn plane_with_an_unreachable_widget() -> (tempfile::TempDir, PathBuf) {
+        let (dir, root) = plane();
+        std::fs::create_dir_all(root.join("inventory")).unwrap();
+        std::fs::write(
+            root.join("inventory/repos.json"),
+            json!({"group": "acme", "count": 1, "repos": [{
+                "name": "widget",
+                "path_with_namespace": "acme/widget",
+                "web_url": "https://unmanaged.example/acme/widget",
+                "forge": "github",
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        (dir, root)
+    }
+
+    fn clone_widget(root: &Path, ws: &str, hosts: Option<&[String]>) -> (u8, Vec<Say>) {
+        let mut said = Vec::new();
+        let code = clone(
+            &Request {
+                root,
+                ws,
+                repos: &["widget".to_owned()],
+                now: chrono::Utc::now(),
+                author: "tester",
+                hosts,
+            },
+            &mut |line| said.push(line),
+        );
+        (code, said)
+    }
+
+    #[test]
+    fn a_clone_into_a_workspace_that_is_not_there_makes_it_first() {
+        // #1382: `wscmd::ensure` scaffolds a workspace, so the clone makes one as Python's
+        // did, instead of refusing and sending the person to `workspace create`.
+        let (_dir, root) = plane_with_an_unreachable_widget();
+        let (_, said) = clone_widget(&root, "beta", None);
+        let ws = root.join("workspaces/beta");
+        assert!(ws.is_dir(), "{said:?}");
+        assert!(
+            ws.join("memory/MEMORY.md").is_file(),
+            "the workspace was made but not scaffolded: {said:?}"
+        );
+        assert!(
+            said.iter()
+                .any(|line| matches!(line, Say::Info(text) if text.contains("workspaces/beta/"))),
+            "the person is not told a workspace was made: {said:?}"
+        );
+        assert!(
+            !said
+                .iter()
+                .any(|line| matches!(line, Say::Fail(text) if text.contains("no workspace"))),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_clone_for_a_sandboxed_chat_does_not_make_a_workspace() {
+        // A sandboxed chat's clone is run by the app for it; making a workspace is a step the
+        // person or the chat takes on its own (`workspace create`), so it is refused here and
+        // nothing is written.
+        let (_dir, root) = plane_with_an_unreachable_widget();
+        let (code, said) = clone_widget(&root, "beta", Some(&["github.com".to_owned()]));
+        assert_eq!(code, 1, "{said:?}");
+        assert!(!root.join("workspaces/beta").exists(), "{said:?}");
+        assert!(
+            said.iter().any(|line| matches!(line, Say::Fail(text)
+                if text.contains("purlis workspace create beta") && !text.contains("yet"))),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_workspace_that_is_a_link_is_not_made_or_scaffolded_through() {
+        let (_dir, root) = plane_with_an_unreachable_widget();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("workspaces/evil")).unwrap();
+        let (code, said) = clone_widget(&root, "evil", None);
+        assert_eq!(code, 1, "{said:?}");
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "something was written through the link: {said:?}"
         );
     }
 
