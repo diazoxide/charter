@@ -192,6 +192,7 @@ macro_rules! app_commands {
                 workspaces::workspace_create,
                 live::workspace_live_preview,
                 live::workspace_live,
+                live::plane_remote_readers,
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,
                 workspaces::workspace_rename,

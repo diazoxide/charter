@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { LiveDialog } from "./LiveDialog";
-import type { LivePreview, LiveSwitched } from "./bindings";
+import type { LivePreview, LiveSwitched, RemoteReaders } from "./bindings";
 
 afterEach(() => {
   cleanup();
@@ -27,11 +27,13 @@ type Asked = { cmd: string; args: Record<string, unknown> };
 function core(
   read: LivePreview,
   switched: LiveSwitched | Error = { said: ["✓ Workspace 'ide' is now LIVE"], notSaved: null },
+  readers: RemoteReaders | Promise<RemoteReaders> | null = null,
 ) {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: args as Record<string, unknown> });
     if (cmd === "workspace_live_preview") return read;
+    if (cmd === "plane_remote_readers") return readers;
     if (cmd === "workspace_live") {
       if (switched instanceof Error) throw switched.message;
       return switched;
@@ -54,6 +56,64 @@ describe("LiveDialog", () => {
       ),
     ).toBeTruthy();
     expect(asked.some((a) => a.cmd === "workspace_live")).toBe(false);
+  });
+
+  it("says whether the remote is public, as its forge answers (ADR 0051)", async () => {
+    const asked = core(preview(), undefined, { kind: "public" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+
+    expect(
+      await screen.findByText("That repository is public: anyone can read what is pushed to it."),
+    ).toBeTruthy();
+    expect(asked.find((a) => a.cmd === "plane_remote_readers")?.args).toEqual({ plane: PLANE });
+  });
+
+  it("says who else can read an internal or a private remote", async () => {
+    core(preview(), undefined, { kind: "internal", host: "gitlab.corp" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+    expect(
+      await screen.findByText(
+        "That repository is internal: everyone signed in to gitlab.corp can read it.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    core(preview(), undefined, { kind: "private" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+    expect(
+      await screen.findByText("That repository is private: only those given access can read it."),
+    ).toBeTruthy();
+  });
+
+  it("says when whether it is public is not known, and why, and never calls it private", async () => {
+    core(preview(), undefined, { kind: "unknown", why: "gh: not logged in" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+    expect(
+      await screen.findByText("Whether that repository is public is not known: gh: not logged in"),
+    ).toBeTruthy();
+  });
+
+  it("can be confirmed while the forge is still being asked", async () => {
+    core(preview(), undefined, new Promise<RemoteReaders>(() => {}));
+    const onDone = vi.fn();
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={onDone} />);
+
+    expect(await screen.findByText("Asking who can read that repository…")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Make live" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  });
+
+  it("asks no forge with no remote, or when it is going local", async () => {
+    const asked = core(preview({ remote: null }), undefined, { kind: "public" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Make live" })).toBeTruthy();
+    cleanup();
+    const local = core(preview({ live: true }), undefined, { kind: "public" });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Make local" })).toBeTruthy();
+
+    expect([...asked, ...local].some((a) => a.cmd === "plane_remote_readers")).toBe(false);
+    expect(screen.queryByText(/That repository is/)).toBeNull();
   });
 
   it("switches and saves when the operator says yes", async () => {

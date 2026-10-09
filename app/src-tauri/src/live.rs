@@ -62,6 +62,68 @@ pub async fn workspace_live(
     switched
 }
 
+/// **Who can read what the project's saves push**, for the going-LIVE confirmation (ADR 0051,
+/// #1369): its `origin`'s visibility, as the forge answers it.
+///
+/// Asked apart from [`workspace_live_preview`] because it asks the network: the confirmation
+/// shows what it publishes and where at once, and says who reads it when the forge answers.
+#[tauri::command]
+#[specta::specta]
+pub async fn plane_remote_readers(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<RemoteReaders, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        readers_of(
+            &root,
+            &purlis_core::forge::Caller::window(),
+            std::sync::Arc::new(purlis_core::forge::cli::Cli::default()),
+        )
+    })
+    .await
+    .map_err(|err| format!("asking who can read the remote did not finish: {err}"))
+}
+
+/// Who can read what a push to the project's `origin` publishes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteReaders {
+    /// No one else: the project has no `origin`, or it is a path on this machine.
+    Nobody,
+    /// Everyone.
+    Public,
+    /// Everyone signed in to `host`: GitLab's `internal`, GitHub Enterprise's.
+    Internal { host: String },
+    /// Only those given access to the repository.
+    Private,
+    /// Not known, and why on one line: a host no forge purlis knows, or a forge that did not
+    /// answer. Never read as private.
+    Unknown { why: String },
+}
+
+/// [`plane_remote_readers`], without a runtime, asking as `caller` over `transport`.
+pub fn readers_of(
+    root: &Path,
+    caller: &purlis_core::forge::Caller,
+    transport: std::sync::Arc<dyn purlis_core::forge::transport::Transport>,
+) -> RemoteReaders {
+    use purlis_core::doctor::Readers;
+    use purlis_core::forge::backend::Visibility;
+    let Some(url) = origin_of(root) else {
+        return RemoteReaders::Nobody;
+    };
+    match purlis_core::doctor::readers(&url, root, caller, transport) {
+        Readers::ThisMachine => RemoteReaders::Nobody,
+        Readers::Known { visibility, host } => match visibility {
+            Visibility::Public => RemoteReaders::Public,
+            Visibility::Internal => RemoteReaders::Internal { host },
+            Visibility::Private => RemoteReaders::Private,
+        },
+        Readers::Unknown(why) => RemoteReaders::Unknown { why },
+    }
+}
+
 /// [`workspace_live_preview`], without a runtime.
 pub fn preview(root: &Path, name: &str) -> Result<LivePreview, String> {
     if !purlis_core::contain::workspace_name_ok(name) {
@@ -279,6 +341,65 @@ mod tests {
         assert!(
             planegit::journal(dir.path()).is_empty(),
             "nothing was saved"
+        );
+    }
+
+    /// A forge that answers `path` with `out`, or, with `None`, answers nothing.
+    fn forge(
+        answer: Option<(&str, serde_json::Value)>,
+    ) -> std::sync::Arc<dyn purlis_core::forge::transport::Transport> {
+        let exchanges = match answer {
+            Some((path, out)) => serde_json::json!([{
+                "call": {"endpoint": {"rest": {"method": null, "path": path}}, "fields": []},
+                "reply": {"code": 0, "out": out.to_string()}
+            }]),
+            None => serde_json::json!([]),
+        };
+        let text = serde_json::json!({"source": "test", "exchanges": exchanges}).to_string();
+        std::sync::Arc::new(purlis_core::forge::recorded::Recorded::parse(&text).unwrap())
+    }
+
+    #[test]
+    fn the_confirmation_is_told_a_public_origin_is_public() {
+        let dir = plane("push");
+        git(
+            dir.path(),
+            &["remote", "add", "origin", "git@github.com:acme/plane.git"],
+        );
+        let got = readers_of(
+            dir.path(),
+            &purlis_core::forge::Caller::window(),
+            forge(Some((
+                "repos/acme/plane",
+                serde_json::json!({"visibility": "public"}),
+            ))),
+        );
+        assert_eq!(got, RemoteReaders::Public);
+    }
+
+    #[test]
+    fn a_project_with_no_origin_publishes_to_nobody_and_an_unanswered_forge_is_unknown() {
+        let dir = plane("push");
+        let window = purlis_core::forge::Caller::window();
+        assert_eq!(
+            readers_of(dir.path(), &window, forge(None)),
+            RemoteReaders::Nobody
+        );
+        git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/plane.git",
+            ],
+        );
+        assert!(
+            matches!(
+                readers_of(dir.path(), &window, forge(None)),
+                RemoteReaders::Unknown { .. }
+            ),
+            "an unanswered ask is never read as private"
         );
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { Radio } from "lucide-react";
-import { commands, type LivePreview, type PlaneId } from "./bindings";
+import { commands, type LivePreview, type PlaneId, type RemoteReaders } from "./bindings";
 import { tellSaved } from "./saving";
 
 /**
@@ -15,8 +15,11 @@ import { tellSaved } from "./saving";
  * stay on disk) and saves the untracking; what was pushed before stays in history, and the
  * dialog says so rather than let "private" suggest otherwise.
  *
- * Whether the remote is public is not something charter can see, so the dialog names the
- * remote and says who reads it: whoever can read that repository.
+ * **Whether the remote is public** (#1369): going LIVE, the dialog names the remote and asks
+ * its forge who can read it — the doctor's `project remote` read (`plane_remote_readers`). That
+ * asks the network, so it is asked apart from what the dialog reads first: the files and the
+ * remote are on screen at once, the answer follows, and Make live does not wait for it. A forge
+ * that does not answer is said as not known, with its reason, and never as private.
  */
 export function LiveDialog({
   plane,
@@ -32,6 +35,8 @@ export function LiveDialog({
   const [read, setRead] = useState<LivePreview | null>(null);
   const [trouble, setTrouble] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Who can read the remote, once the forge has answered; `undefined` while it is asked. */
+  const [readers, setReaders] = useState<{ said: RemoteReaders | null }>();
   /** A switch that happened and a save that did not: kept on screen until it is closed. */
   const [switched, setSwitched] = useState<{ said: string[]; notSaved: string } | null>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -52,6 +57,26 @@ export function LiveDialog({
       gone = true;
     };
   }, [plane, workspace]);
+
+  // Asked only going LIVE, and only of a project with a remote: nothing else publishes.
+  const asksForge = read !== null && !read.live && read.remote !== null;
+  useEffect(() => {
+    if (!asksForge) return;
+    let gone = false;
+    void commands
+      .planeRemoteReaders(plane)
+      .then((got) => {
+        if (gone) return;
+        if (got.status === "ok") setReaders({ said: got.data });
+        else setReaders({ said: { kind: "unknown", why: got.error } });
+      })
+      .catch((err: unknown) => {
+        if (!gone) setReaders({ said: { kind: "unknown", why: String(err) } });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [plane, asksForge]);
 
   const going = read === null ? undefined : !read.live;
   const word = going === false ? "local" : "live";
@@ -109,6 +134,9 @@ export function LiveDialog({
                 </ul>
               )}
               <p className="came-back">{whereText(read)}</p>
+              {asksForge && (
+                <ReadersLine readers={readers === undefined ? "asking" : readers.said} />
+              )}
             </>
           )}
           {read !== null && read.mode !== null && read.mode !== "off" && (
@@ -174,6 +202,38 @@ function whereText(read: LivePreview): string {
     return "This project has no remote purlis can push to, so they are committed on this machine only.";
   }
   return `The next save pushes them to ${read.remote} — anyone who can read that repository will read them.`;
+}
+
+/** Who can read the remote, as its forge answered; a public one in bold. Nothing for an answer
+ *  that is not one, as a window test's `null` is. */
+function ReadersLine({ readers }: { readers: RemoteReaders | "asking" | null }) {
+  if (readers === "asking") return <p className="pending">Asking who can read that repository…</p>;
+  switch (readers?.kind) {
+    case "public":
+      return (
+        <p className="came-back">
+          <strong>That repository is public: anyone can read what is pushed to it.</strong>
+        </p>
+      );
+    case "internal":
+      return (
+        <p className="came-back">{`That repository is internal: everyone signed in to ${readers.host} can read it.`}</p>
+      );
+    case "private":
+      return (
+        <p className="came-back">
+          That repository is private: only those given access can read it.
+        </p>
+      );
+    case "nobody":
+      return <p className="came-back">That remote is on this machine: a push publishes nothing.</p>;
+    case "unknown":
+      return (
+        <p className="came-back">{`Whether that repository is public is not known: ${readers.why}`}</p>
+      );
+    default:
+      return null;
+  }
 }
 
 /**
