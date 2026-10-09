@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791522120682,
+  "lastUpdate": 1791523814459,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4242,6 +4242,48 @@ window.BENCHMARK_DATA = {
             "value": 101.89402100000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.875, 101.718, 101.894, 102.051, 102.790 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "1ff31a105f31512d24c102d5792c259673e121af",
+          "message": "dispatch: a recovered chain is whole only at the lineage's first chat, never by depth alone\n\nReview round for reading an older chain from the dispatch records.\n\n- Where the records stop at a chat that has closed, the chain is whole only\n  when that chat's id is the asking chat's `root` (the chat the person\n  started, copied down each dispatch), and as deep as the asking chat's\n  record says. The depth is now an extra condition, never enough alone: a\n  chat dispatched below one from before the depth key was given a depth\n  that is short and names no root, so a chain whose records stopped there\n  read as whole while missing the chats above. Such a chain stays unread\n  and refused. Regression tests at the chain and at the decision.\n- An open chat that names no asking chat ends the chain only where it is\n  the chat the asking chat's `root` names, where one is kept.\n- `dispatchchain::Above` has no `Default`: \"nothing above\" offers every box,\n  so each caller now names it.\n- Docs: ADR 0090 item 18, the handoff refusal table and the changelog\n  fragment say what is whole; plane-format's `chats[].from` says the chain\n  is read from the dispatch records before refusing, and that a depth is\n  read as at least the chain the walk finds.\n\nRefs #1548\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T09:29:02+04:00",
+          "tree_id": "4612163aed865560efc96cbc42f32b994410a8d4",
+          "url": "https://github.com/purlis/purlis/commit/1ff31a105f31512d24c102d5792c259673e121af"
+        },
+        "date": 1791523813573,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5167165,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.499, 0.513, 0.517, 0.528, 0.536 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1335045,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.868, 17.086, 17.134, 17.204, 17.218 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.64872500000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.317, 103.381, 103.649, 104.274, 104.594 ms"
           }
         ]
       }
