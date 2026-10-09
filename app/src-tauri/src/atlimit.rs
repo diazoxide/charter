@@ -39,9 +39,12 @@ pub struct AtLimit {
     pub row: String,
     /// The whole sentence for the person: which limit, how many, and where it is changed.
     pub said: String,
-    /// Whether it is the chat's own running limit in its own workspace: the one its tab menu's
-    /// footer already counts against (`6 of 6 running`). Any other limit that binds is said on
-    /// that footer too, in `row`'s words (#1540).
+    /// Whether it may be the limit its tab menu's footer counts against (`6 of 6 running`): the
+    /// chat's own running limit, in its own workspace, counting its tasks only. The footer
+    /// counts tasks only and reads the limit by the chat's own persona, so a chat nobody is at
+    /// (its handoffs counted too) or one whose limit is read by another persona (one held, or
+    /// one on the default) can meet a different number: the window leaves the row's words off
+    /// the footer only where the footer's own numbers say the same limit (#1540).
     pub own: bool,
 }
 
@@ -244,7 +247,7 @@ fn binds(
     if let Decision::Refused(why) =
         dispatchlimits::decide(&limits_in(workspace.as_deref()), &lineage)
     {
-        return bound_by(&why, None);
+        return bound_by(&why, None, counted);
     }
     // Then the one it was to work in, where that is another (#1453): off there is no slot's to
     // free, so no line.
@@ -253,14 +256,14 @@ fn binds(
         return None;
     }
     match dispatchlimits::decide(&limits_in(Some(there)), &lineage) {
-        Decision::Refused(why) => bound_by(&why, Some(there)),
+        Decision::Refused(why) => bound_by(&why, Some(there), counted),
         Decision::Allowed => None,
     }
 }
 
 /// What a row says of the limit `why`, met in workspace `there` where that is another than the
 /// chat's own, or nothing where no slot frees it.
-fn bound_by(why: &Limited, there: Option<&str>) -> Option<AtLimit> {
+fn bound_by(why: &Limited, there: Option<&str>, counted: Counted) -> Option<AtLimit> {
     let limit = match why {
         Limited::TooManyRunning { limit, .. }
         | Limited::LineageFull { limit, .. }
@@ -270,7 +273,9 @@ fn bound_by(why: &Limited, there: Option<&str>) -> Option<AtLimit> {
     };
     Some(AtLimit {
         limit,
-        own: there.is_none() && matches!(why, Limited::TooManyRunning { .. }),
+        own: there.is_none()
+            && counted == Counted::Tasks
+            && matches!(why, Limited::TooManyRunning { .. }),
         row: row_words_in(why, there)?,
         said: crate::handoff::said_to_the_person(&Refused::Limit(why.clone())),
     })
@@ -354,6 +359,24 @@ mod tests {
             "devops is full (1 at once), not this chat's limit"
         );
         assert_eq!(row_words(&Limited::TooDeep { limit: 3, depth: 3 }), None);
+    }
+
+    #[test]
+    fn only_its_own_running_limit_counting_tasks_alone_may_be_the_footer_s() {
+        let full = Limited::TooManyRunning {
+            limit: 6,
+            running: 6,
+        };
+        let own = |there, counted| bound_by(&full, there, counted).expect("bound").own;
+        assert!(own(None, Counted::Tasks));
+        // A chat nobody is at counts its handoffs too: not the footer's count.
+        assert!(!own(None, Counted::HandoffsToo));
+        assert!(!own(Some("beta"), Counted::Tasks));
+        let chain = Limited::LineageFull {
+            limit: 16,
+            lineage: 16,
+        };
+        assert!(!bound_by(&chain, None, Counted::Tasks).expect("bound").own);
     }
 
     #[test]

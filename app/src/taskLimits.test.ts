@@ -13,8 +13,12 @@ function own(
   return { session: 1, level, tasksLimit, tasksRunning, atLimit } as unknown as ChatRow;
 }
 
-function binds(row: string, own: boolean): AtLimit {
-  return { limit: 1, row, said: "the sentence", own };
+function ownRow(tasksLimit: number, tasksRunning: number, atLimit: AtLimit): ChatRow {
+  return own(tasksLimit, tasksRunning, 1, atLimit);
+}
+
+function binds(row: string, own: boolean, limit = 1): AtLimit {
+  return { limit, row, said: "the sentence", own };
 }
 
 describe("the tab menu's footer (#1498)", () => {
@@ -39,7 +43,24 @@ describe("the tab menu's footer (#1498)", () => {
     expect(runningSaid(own(6, 0, 1, chain))).toBe("at its chain's limit (16 live)");
     expect(runningSaid(own(null, null, 1, chain))).toBe("at its chain's limit (16 live)");
     // Its own running limit: `6 of 6 running` says it already.
-    expect(runningSaid(own(6, 6, 1, binds("at its task limit (6)", true)))).toBe("6 of 6 running");
+    expect(runningSaid(own(6, 6, 1, binds("at its task limit (6)", true, 6)))).toBe(
+      "6 of 6 running",
+    );
+  });
+
+  it("says its own limit too where the footer's numbers are not that limit's (#1540)", () => {
+    const own = (limit: number) => ({
+      limit,
+      row: `at its task limit (${limit})`,
+      said: "",
+      own: true,
+    });
+    // A chat nobody is at: refused at 6 with its handoffs counted, while 4 tasks run.
+    expect(runningSaid(ownRow(6, 4, own(6)))).toBe("4 of 6 running · at its task limit (6)");
+    // Only handoffs running: the footer has no count, and the limit is still said.
+    expect(runningSaid(ownRow(6, 0, own(6)))).toBe("at its task limit (6)");
+    // A held chat, or one on the default persona: held to 2, while the footer reads 6.
+    expect(runningSaid(ownRow(6, 2, own(2)))).toBe("2 of 6 running · at its task limit (2)");
   });
 
   it("reads each tab's own session, never a task listed under it", () => {

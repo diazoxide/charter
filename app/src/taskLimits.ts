@@ -9,8 +9,10 @@
  *
  * **Where another limit binds, the footer says that one too** (#1540): its chain's, a
  * persona's, another workspace's, or its token figure, in the row's own words
- * (`AtLimit.row`). Only the chat's own running limit is left out, since `6 of 6 running` says
- * it already (`AtLimit.own`).
+ * (`AtLimit.row`). It is left out only where the footer's own numbers already say that very
+ * limit: the chat's own running limit (`AtLimit.own`), at the footer's number, with as many
+ * running. A chat nobody is at counts its handoffs too, and a held chat or one on the default
+ * persona can be held to another number than the footer's: those are said.
  */
 import type { ChatRow, ListedChat } from "./chatsTree";
 
@@ -35,10 +37,14 @@ function countedSaid(
   return `${running} of ${limit} running`;
 }
 
-function bindsSaid(chat: Pick<ListedChat, "atLimit"> | undefined): string | undefined {
+function bindsSaid(
+  chat: Pick<ListedChat, "tasksLimit" | "tasksRunning" | "atLimit"> | undefined,
+): string | undefined {
   const at = chat?.atLimit;
-  if (at === null || at === undefined || at.own) return undefined;
-  return at.row;
+  if (at === null || at === undefined) return undefined;
+  const footerSaysIt =
+    at.own && chat?.tasksLimit === at.limit && (chat.tasksRunning ?? 0) >= at.limit;
+  return footerSaysIt ? undefined : at.row;
 }
 
 /** Each tab's footer, by tab: what its own session (the chat at the top of its list) says. */

@@ -702,6 +702,9 @@ impl Held {
         } else {
             tracing::info!("purlis: plane {}, nothing to reopen", self.root.display());
         }
+        // The limits' clock looks now, not at its next round: a session already past its
+        // token limit says so at once (#1545).
+        crate::overlimit::put_back(&self.id);
     }
 
     /// Ends a chat and takes it off the board — the tab's ×, or ending its pane — and tells
