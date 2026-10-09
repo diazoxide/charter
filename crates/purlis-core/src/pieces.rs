@@ -295,14 +295,16 @@ pub const UNCLAIMED_AFTER_SECS: i64 = 5 * 60;
 /// - its branch carries the base record `add` writes ([`crate::worktree::cut_branches`]), so a
 ///   branch or worktree made with plain git is never called unclaimed (ADR 0027);
 /// - its folder is there (a stale registration already says so on its row);
-/// - nothing in the piece log (`claimed`, `done`, `abandoned`) and no heartbeat is dated at or
-///   after the cut. One dated before it is about an earlier branch of the same name, which a
-///   chat reuses once the first is removed;
+/// - nothing in the piece log (`claimed`, `done`, `abandoned`), no heartbeat and no claim
+///   mark ([`mark_claimed`]) is dated at or after the cut. One dated before it is about an
+///   earlier branch of the same name, which a chat reuses once the first is removed;
 /// - the cut is older than [`UNCLAIMED_AFTER_SECS`].
 ///
-/// When it was cut is read from the tree's `.git` file, which `git worktree add` writes and
-/// nothing rewrites but git's own `repair` and `move`. Best-effort like the rest of this
-/// module: a clone git cannot read answers no branches, never a refusal.
+/// When it was cut is read from the branch's reflog ([`branch_created`]), which survives
+/// `git worktree repair`, `move` and a copy of the folder. A clone that keeps no reflog for
+/// it falls back to the tree's `.git` file, which `git worktree add` writes and nothing
+/// rewrites but those. Best-effort like the rest of this module: a clone git cannot read
+/// answers no branches, never a refusal.
 pub fn unclaimed(
     plane: &Path,
     ws: &str,
@@ -321,12 +323,18 @@ pub fn unclaimed(
         return BTreeMap::new();
     };
     let logged = events(plane, ws);
+    let common = common_git_dir(&plane.join("workspaces").join(ws).join(repo));
+    let mut marks: Option<BTreeMap<String, String>> = None;
     let mut out = BTreeMap::new();
     for piece in candidates {
-        if !piece.branch.as_ref().is_some_and(|b| cut.contains(b)) {
+        let Some(branch) = piece.branch.as_ref().filter(|b| cut.contains(*b)) else {
             continue;
-        }
-        let Some(cut_at) = cut_when(&piece.path) else {
+        };
+        let Some(cut_at) = common
+            .as_deref()
+            .and_then(|common| branch_created(common, branch))
+            .or_else(|| tree_written(&piece.path))
+        else {
             continue;
         };
         let mark = last_seen(plane, ws, repo, &piece.piece);
@@ -336,6 +344,15 @@ pub fn unclaimed(
             .map(|e| e.get("ts"))
             .chain(std::iter::once(mark.as_ref().and_then(|m| m.get("ts"))))
             .collect();
+        if unclaimed_age(cut_at, &stamps, now).is_none() {
+            continue;
+        }
+        // Read only now, and once per clone: a mark is left only when a claim could not be
+        // logged, so a listing with nothing unclaimed never pays the git call.
+        let marks = marks.get_or_insert_with(|| claim_marks(plane, ws, repo));
+        let marked = marks.get(branch).cloned().map(Value::String);
+        let mut stamps = stamps;
+        stamps.push(marked.as_ref());
         if let Some(age) = unclaimed_age(cut_at, &stamps, now) {
             out.insert(piece.piece.clone(), age);
         }
@@ -343,8 +360,130 @@ pub fn unclaimed(
     out
 }
 
-/// When the tree at `path` was cut: the modification time of its `.git` file.
-fn cut_when(path: &Path) -> Option<DateTime<Utc>> {
+/// The config key under a branch that says a chat claimed it when the piece log could not.
+fn claim_key(branch: &str) -> String {
+    format!("branch.{branch}.charterClaimed")
+}
+
+/// Leave a mark on `branch` in `repo`'s clone that a chat claimed it at `when`, for a claim
+/// the piece log could not take (#835). `false` when the mark could not be written either.
+///
+/// Kept in the clone's config, beside the base record the cut wrote
+/// ([`crate::worktree::cut_branches`]), rather than beside the log that just refused a
+/// write: git drops a branch's config with the branch, and a mark dated before a later cut of
+/// the same name is about the earlier one, as a log line is ([`unclaimed`]).
+pub fn mark_claimed(plane: &Path, ws: &str, repo: &str, branch: &str, when: DateTime<Utc>) -> bool {
+    let Ok(clone) = crate::worktree::clone_dir(plane, ws, repo) else {
+        return false;
+    };
+    crate::worktree::git::run(
+        &clone,
+        &[
+            "config",
+            "--replace-all",
+            &claim_key(branch),
+            &iso_seconds(when),
+        ],
+        crate::worktree::git::READ,
+    )
+    .is_ok_and(|wrote| wrote.ok())
+}
+
+/// Every claim mark in `repo`'s clone ([`mark_claimed`]), by branch. Empty when git will not
+/// read the config: a mark only takes a label away, so its absence says what the log says.
+fn claim_marks(plane: &Path, ws: &str, repo: &str) -> BTreeMap<String, String> {
+    let Ok(clone) = crate::worktree::clone_dir(plane, ws, repo) else {
+        return BTreeMap::new();
+    };
+    let Ok(asked) = crate::worktree::git::run(
+        &clone,
+        &[
+            "config",
+            "--null",
+            "--get-regexp",
+            r"^branch\..*\.charterclaimed$",
+        ],
+        crate::worktree::git::READ,
+    ) else {
+        return BTreeMap::new();
+    };
+    if !asked.ok() {
+        return BTreeMap::new();
+    }
+    claim_marks_in(&asked.out)
+}
+
+/// [`claim_marks`]'s reading of `git config --null --get-regexp`: each record is the key, a
+/// newline and the value. git prints the variable name lowercased and the branch, which is a
+/// subsection, as it is. A key given twice keeps its last value, which is the one git uses.
+fn claim_marks_in(out: &str) -> BTreeMap<String, String> {
+    out.split('\0')
+        .filter_map(|record| {
+            let (key, value) = record.split_once('\n')?;
+            let branch = key
+                .strip_prefix("branch.")?
+                .strip_suffix(".charterclaimed")?;
+            (!branch.is_empty()).then(|| (branch.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+/// The git directory a clone's branches live in: its `.git` folder, or the common directory a
+/// `.git` file leads to (a clone made with `--separate-git-dir`, or itself a linked tree).
+///
+/// Read from the clone rather than from a tree a chat writes in, with no subprocess: this runs
+/// for every listed branch.
+fn common_git_dir(clone: &Path) -> Option<PathBuf> {
+    let dot_git = clone.join(".git");
+    let meta = dot_git.symlink_metadata().ok()?;
+    if meta.is_dir() {
+        return Some(dot_git);
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir = clone.join(text.lines().next()?.strip_prefix("gitdir:")?.trim());
+    match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(common) => Some(git_dir.join(common.trim())),
+        Err(_) => Some(git_dir),
+    }
+}
+
+/// When `branch` was created, from the first line of its reflog in the git directory `common`
+/// (`logs/refs/heads/<branch>`), the line git writes as `branch: Created from …`.
+///
+/// git deletes a branch's reflog with the branch, so the first line is this branch's own
+/// creation and not an earlier one's of the same name; `git worktree repair` and `move` leave
+/// it alone. `None` when there is no reflog (`core.logAllRefUpdates` off, a reftable clone) or
+/// its first line is not a creation, as after `git reflog expire` dropped it.
+pub fn branch_created(common: &Path, branch: &str) -> Option<DateTime<Utc>> {
+    let reflog = common.join("logs").join("refs").join("heads").join(branch);
+    let mut text = String::new();
+    // The first line is all that is read, and a long-lived branch's reflog can be long.
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(std::fs::File::open(reflog).ok()?, 4096),
+        &mut text,
+    )
+    .ok()?;
+    created_in(text.lines().next()?)
+}
+
+/// The instant a reflog line records, when the line is a branch's creation.
+///
+/// A line is `<old> <new> <name> <<email>> <seconds> <offset>\t<message>`; the name can hold
+/// spaces, so the instant is read from the right.
+fn created_in(line: &str) -> Option<DateTime<Utc>> {
+    let (head, message) = line.split_once('\t')?;
+    if !message.starts_with("branch: Created from") {
+        return None;
+    }
+    let mut fields = head.rsplitn(3, ' ');
+    let _offset = fields.next()?;
+    let seconds: i64 = fields.next()?.parse().ok()?;
+    DateTime::<Utc>::from_timestamp(seconds, 0)
+}
+
+/// When the tree at `path` was written: the modification time of its `.git` file, which
+/// `git worktree add` writes and `repair` or `move` rewrite.
+fn tree_written(path: &Path) -> Option<DateTime<Utc>> {
     let modified = path.join(".git").symlink_metadata().ok()?.modified().ok()?;
     Some(DateTime::<Utc>::from(modified))
 }

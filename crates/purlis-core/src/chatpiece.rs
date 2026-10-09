@@ -179,8 +179,12 @@ fn cut_as(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Cut, Refusa
 
 /// Log the cut `claimed`, once the chat it was cut for has started. `None` when the log could
 /// not be written; the branch is there either way.
+///
+/// A claim the log refused still leaves a mark on the branch ([`pieces::mark_claimed`]), so a
+/// chat that did start is never listed as one that never did (#835). The answer stays `None`:
+/// the log, which says how long the branch has been quiet, has nothing.
 pub fn claim(plane: &Path, cut: &Cut, who: &Who, now: DateTime<Utc>) -> Option<PathBuf> {
-    pieces::record(
+    let logged = pieces::record(
         plane,
         &cut.workspace,
         Event::Claimed,
@@ -189,7 +193,11 @@ pub fn claim(plane: &Path, cut: &Cut, who: &Who, now: DateTime<Utc>) -> Option<P
         None,
         who,
         now,
-    )
+    );
+    if logged.is_none() {
+        pieces::mark_claimed(plane, &cut.workspace, &cut.repo, &cut.branch, now);
+    }
+    logged
 }
 
 /// What taking a cut back did.
