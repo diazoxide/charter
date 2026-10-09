@@ -1072,13 +1072,17 @@ impl Store {
         entry.pinned = pinned;
         // Unpinning puts the entry back under the recents bound, where it may now be past it.
         //
-        // Only then, though `trim` would be harmless otherwise: every other change here keeps
-        // the store inside both bounds (a pin moves an entry from the recents count to the
-        // pinned one, and the check above keeps the pinned count within its bound), and a
-        // store inside its bounds is one `trim` leaves as it is. So `||` for this `&&` is an
-        // equivalent mutant, excluded in `.cargo/mutants.toml` on that ground.
+        // Only then, though the trim would be harmless otherwise: every other change here keeps
+        // the store inside both bounds, and the trim leaves such a store as it is. So `||` for
+        // this `&&` is an equivalent mutant, excluded in `.cargo/mutants.toml` on that ground.
+        //
+        // **The entry just unpinned is kept** (#1240 F2): its Undo pins it back, and the
+        // operator just touched it. It counts first, so the oldest of the others goes instead.
         if moved && !pinned {
-            self.trim();
+            let mut room = Room::default();
+            room.fits(false);
+            self.recents
+                .retain(|entry| entry.plane == plane || room.fits(entry.pinned));
         }
         Ok(moved)
     }
@@ -3950,17 +3954,35 @@ mod tests {
     }
 
     #[test]
-    fn unpinning_lets_a_plane_past_the_bound_go() {
+    fn unpinning_keeps_the_plane_unpinned_and_lets_the_oldest_other_one_past_the_bound_go() {
+        // #1240 F2: the unpin's Undo pins it back, which needs it remembered. The bound still
+        // holds: the oldest of the others goes in its place.
         let mut store = remembering(&["/planes/kept"]);
         store.pin(Path::new("/planes/kept"), true).unwrap();
         for n in 0..MOST_RECENTS + 10 {
             store.remember(&PathBuf::from(format!("/planes/{n}")), 100 + n as u64);
         }
+        let oldest = store.recents[MOST_RECENTS - 1].plane.clone();
 
         store.pin(Path::new("/planes/kept"), false).unwrap();
 
-        assert!(store.recent(Path::new("/planes/kept")).is_none());
+        assert!(
+            store
+                .recent(Path::new("/planes/kept"))
+                .is_some_and(|kept| !kept.pinned)
+        );
+        assert!(store.recent(&oldest).is_none(), "the oldest other one went");
         assert_eq!(store.recents.len(), MOST_RECENTS);
+        assert_eq!(
+            store.pin(Path::new("/planes/kept"), true),
+            Ok(true),
+            "the Undo pins it back"
+        );
+        assert_eq!(
+            store.recents.len(),
+            MOST_RECENTS,
+            "a pin with the recents full lets nothing go"
+        );
     }
 
     #[test]
