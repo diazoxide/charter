@@ -23,10 +23,11 @@
 //! skip any of these lines, so nothing may treat them as a security signal.
 //!
 //! **What is not known is left out**, trailer by trailer, and a model charter has not been told
-//! leaves `Assisted-by: <harness>` with no colon. A value that could not stand on one trailer line
-//! is not known either. **No harness, no trailers**: a commit no agent run made is a human's, and
-//! a human's commit carries nothing of charter's. There is no on-behalf-of trailer: the human is
-//! the commit's author.
+//! leaves `Assisted-by: <harness>` with no colon. The model is the one the chat's harness last
+//! reported in its `SessionStart`, as the app records it ([`crate::reopen::Chat::model`]). A
+//! value that could not stand on one trailer line is not known either. **No harness, no
+//! trailers**: a commit no agent run made is a human's, and a human's commit carries nothing of
+//! charter's. There is no on-behalf-of trailer: the human is the commit's author.
 //!
 //! Two places add them: the project save `charter save` makes from inside a chat
 //! ([`crate::planegit`]), and every commit an agent makes itself in a chat whose git runs
@@ -130,18 +131,19 @@ impl Provenance {
         Self::of(plane, &chat_numbered(plane, number)?)
     }
 
-    /// `chat` of the project at `plane`, as the app's record holds it: its ULID, its harness
-    /// and its persona. `None` — no agent run — where the chat was started on no harness
-    /// profile this project has (a shell tab is the operator's). The harness is the profile's
-    /// declared kind, never guessed from the program the chat runs. Read the way
-    /// `charter session record` reads it (ADR 0066: the id is asked for by number, never
-    /// carried in the environment).
+    /// `chat` of the project at `plane`, as the app's record holds it: its ULID, its harness,
+    /// the model its harness reported, and its persona. `None` — no agent run — where the chat
+    /// was started on no harness profile this project has (a shell tab is the operator's). The
+    /// harness is the profile's declared kind, never guessed from the program the chat runs.
+    /// Read the way `charter session record` reads it (ADR 0066: the id is asked for by number,
+    /// never carried in the environment).
     fn of(plane: &Path, chat: &crate::reopen::Chat) -> Option<Self> {
         let profiles = crate::profiles::derive(plane);
         let harness = harness_word(&profiles.get(chat.profile.as_deref()?)?.kind)?;
         Some(Self {
             harness: Some(harness.to_owned()),
-            model: None,
+            // As the chat's harness last reported it (ADR 0087 §6, #1021).
+            model: chat.model.clone(),
             chat: chat.identity.id.clone(),
             persona: chat.persona.clone(),
             change: None,

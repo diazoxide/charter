@@ -216,6 +216,12 @@ impl Report {
                     && field("prompt")
                         .is_some_and(|prompt| crate::state::smart_close_typed(&prompt)),
                 unattended: crate::floorguard::unattended(field("permission_mode").as_deref()),
+                // The model the session runs on, only where a `SessionStart` names it (#1021):
+                // what a commit's `Assisted-by` then names.
+                model: (event == Event::SessionStart)
+                    .then(|| field("model"))
+                    .flatten()
+                    .and_then(|model| crate::state::Model::new(&model)),
             },
         })
     }
@@ -3059,6 +3065,55 @@ mod tests {
             // And a report that does not say it writes the line it always wrote.
             assert!(!serde_json::to_string(&asks).unwrap().contains("unattended"));
         }
+    }
+
+    #[test]
+    fn a_session_start_names_its_model_and_nothing_else_does() {
+        // #1021: what a commit's `Assisted-by` names. Claude Code 2.1.295's `SessionStart`
+        // payload carries `model`; no other event's is read for it.
+        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        let payload = |model: serde_json::Value| {
+            serde_json::json!({
+                "session_id": "11111111-2222-4333-8444-555555555555",
+                "source": "startup",
+                "model": model,
+            })
+            .to_string()
+        };
+        let named = Report::read(
+            Event::SessionStart,
+            &payload("claude-opus-4-1".into()),
+            &env,
+        )
+        .expect("one");
+        assert_eq!(
+            named.detail.model.as_ref().map(crate::state::Model::as_str),
+            Some("claude-opus-4-1")
+        );
+        let line = serde_json::to_string(&named).expect("json");
+        assert!(line.contains(r#""model":"claude-opus-4-1""#), "{line}");
+        assert_eq!(serde_json::from_str::<Report>(&line).expect("read"), named);
+
+        let stop =
+            Report::read(Event::Stop, &payload("claude-opus-4-1".into()), &env).expect("one");
+        assert_eq!(stop.detail.model, None, "only a SessionStart names it");
+        assert!(!serde_json::to_string(&stop).unwrap().contains("model"));
+
+        // A name that cannot stand on one trailer line is no name, never one cut to fit.
+        for odd in [
+            serde_json::json!("two words"),
+            serde_json::json!(""),
+            serde_json::json!("x".repeat(101)),
+            serde_json::json!("mod\u{e8}le"),
+            serde_json::json!(4),
+        ] {
+            let read = Report::read(Event::SessionStart, &payload(odd.clone()), &env).expect("one");
+            assert_eq!(read.detail.model, None, "{odd}");
+        }
+        // And a line another build wrote with an odd value still reads, without it.
+        let odd = line.replace("claude-opus-4-1", "two words");
+        let read: Report = serde_json::from_str(&odd).expect("the rest of the line reads");
+        assert_eq!((read.chat, read.detail.model), (7, None));
     }
 
     #[test]

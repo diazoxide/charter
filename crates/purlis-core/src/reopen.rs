@@ -228,6 +228,16 @@ pub struct Chat {
     /// chat whose program is not running, and every record written before this field — not a
     /// format change, for [`Self::pinned`]'s reason. A chat with none stamps nothing.
     pub pid: Option<u32>,
+    /// The model the chat's harness last said its session runs on, in the program that runs
+    /// now (ADR 0087 §6, #1021): what a commit's `Assisted-by: <harness>:<model>` names.
+    ///
+    /// **The harness's report, never a choice charter made**, taken from its `SessionStart`
+    /// only where the board took that report as the chat's own harness speaking (ADR 0024).
+    /// Like [`Self::pid`] it is of the program that runs now: a new start knows none until its
+    /// harness says, so a model of an earlier run never names a later one. `None` is a model
+    /// not reported yet, which leaves `Assisted-by: <harness>`, and every record written before
+    /// this field — not a format change, for [`Self::pinned`]'s reason.
+    pub model: Option<String>,
 }
 
 impl Chat {
@@ -1456,6 +1466,10 @@ struct ChatOnDisk {
     /// whole process group to `kill(2)`, is never one and reads as absent.
     #[serde(default, skip_serializing_if = "is_zero")]
     pid: u32,
+    /// The model the chat's harness reported, or absent — see [`Chat::model`]. A value that is
+    /// not one word of printable ASCII, at most 100 bytes, reads as absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    model: String,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -1671,6 +1685,7 @@ impl From<&Record> for OnDisk {
                     run: chat.identity.run.clone().unwrap_or_default(),
                     resumed_from: chat.identity.resumed_from.clone().unwrap_or_default(),
                     pid: chat.pid.unwrap_or_default(),
+                    model: chat.model.clone().unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -1753,6 +1768,7 @@ impl From<ChatOnDisk> for Chat {
                 resumed_from: a_ulid(&chat.resumed_from),
             },
             pid: (chat.pid > 0).then_some(chat.pid),
+            model: crate::state::Model::new(&chat.model).map(|model| model.as_str().to_owned()),
         }
     }
 }
@@ -2113,6 +2129,36 @@ pub(crate) mod tests {
 
         fs::write(path(plane.path()), text.replace("4242", "0")).unwrap();
         assert_eq!(read(plane.path()).chats[0].pid, None, "zero is no process");
+    }
+
+    #[test]
+    fn the_model_a_harness_reported_is_recorded_and_a_chat_with_none_writes_no_key() {
+        // #1021: what `Assisted-by: <harness>:<model>` names.
+        let plane = tempfile::tempdir().unwrap();
+        let reported = Chat {
+            model: Some("claude-opus-4-1".to_owned()),
+            ..claude("ide.7", None)
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![reported.clone(), claude("ide.8", Some(ID))],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"model\"").count(), 1, "{text}");
+        assert_eq!(read(plane.path()).chats[0], reported);
+        assert_eq!(read(plane.path()).chats[1].model, None);
+
+        // A value somebody else wrote that cannot stand on one trailer line reads as none.
+        fs::write(
+            path(plane.path()),
+            text.replace("claude-opus-4-1", "two words"),
+        )
+        .unwrap();
+        assert_eq!(read(plane.path()).chats[0].model, None);
     }
 
     #[test]

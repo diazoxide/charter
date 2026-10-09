@@ -126,6 +126,74 @@ pub struct Detail {
     /// older hook's does, takes nothing away.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// On a `SessionStart`: the model the harness said the session runs on, as its provider
+    /// names it (Claude Code's payload carries `model`). What a commit's `Assisted-by` names
+    /// once the app has recorded it for the chat (ADR 0087 §6, #1021). Absent where the harness
+    /// said none, from an older hook, and on every other event.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "Model::lenient"
+    )]
+    pub model: Option<Model>,
+}
+
+/// A model's name as a harness reported it: one word of printable ASCII, at most
+/// [`Model::MOST`] bytes, so it can stand on one trailer line (`Assisted-by: <harness>:<model>`).
+///
+/// Held inline so a [`Detail`] stays `Copy`. A name that is not one such word is no name: it
+/// is never cut to fit, because a model shown without its tail is another model.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Model {
+    len: u8,
+    bytes: [u8; Model::MOST],
+}
+
+impl Model {
+    /// The longest name kept, the same bound a provenance trailer's value has.
+    pub const MOST: usize = 100;
+
+    /// `name` where it is one word of printable ASCII no longer than [`Self::MOST`].
+    pub fn new(name: &str) -> Option<Self> {
+        let raw = name.as_bytes();
+        if raw.is_empty() || raw.len() > Self::MOST || !raw.iter().all(u8::is_ascii_graphic) {
+            return None;
+        }
+        let mut bytes = [0; Self::MOST];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self {
+            len: u8::try_from(raw.len()).ok()?,
+            bytes,
+        })
+    }
+
+    /// The name.
+    pub fn as_str(&self) -> &str {
+        // Only ASCII is ever kept, so this cannot fail.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or_default()
+    }
+
+    /// A line's `model`, read leniently: a value that is not a name reads as none, and never
+    /// costs the rest of the line.
+    fn lenient<'de, D: serde::Deserializer<'de>>(into: D) -> Result<Option<Self>, D::Error> {
+        let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(into)?;
+        Ok(value
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .and_then(Self::new))
+    }
+}
+
+impl std::fmt::Debug for Model {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Model").field(&self.as_str()).finish()
+    }
+}
+
+impl serde::Serialize for Model {
+    fn serialize<S: serde::Serializer>(&self, into: S) -> Result<S::Ok, S::Error> {
+        into.serialize_str(self.as_str())
+    }
 }
 
 /// Whether a prompt a harness hands its `UserPromptSubmit` hook is the person typing purlis's
