@@ -86,6 +86,7 @@ fn shown(raised: Raised) -> Option<Shown> {
             Action::Command { line } => format!("Run {line}"),
             Action::Edit { path } => format!("Change {path}"),
             Action::Tool { name, .. } => format!("Use {name}"),
+            Action::Elicit { .. } => "Asks you for values".to_owned(),
             Action::Unsaid => "Asks for your permission".to_owned(),
         }
     } else {

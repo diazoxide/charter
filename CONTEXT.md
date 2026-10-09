@@ -687,7 +687,8 @@ a chat nobody is at is another thing, whatever the window is doing.
 _Avoid_: digest, recap, notification
 
 **Ask**:
-A chat's harness handing control to a human: a permission, a question, or a nudge. Every
+A chat's harness handing control to a human: a permission, a question, a request for values (an
+ACP elicitation, which always elicits a secret), or a nudge. Every
 harness's own form of it is read into one shape: what it would do, the options as the harness
 offered them, who may answer, its deadline, its risk, a masked one-line summary, and whether it
 elicits a secret. One answer per ask, and the first wins; every later one hears "answered

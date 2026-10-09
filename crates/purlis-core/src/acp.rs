@@ -9,9 +9,10 @@
 //!   the one profile gate and sandbox decision, then the agent in the chat's environment and
 //!   nothing else of the host's. No chat in a sandboxed project runs over ACP, opted out or
 //!   not (D-87h); it starts in its terminal.
-//! - **`initialize` offers nothing optional** (§2, V28a): no `fs`, no `terminal`, no elicitation.
-//!   A call to a client method charter did not offer is refused with *method not found* and
-//!   reported as [`Event::Refused`], the input to the audit's `acp.call.refused`.
+//! - **`initialize` offers no `fs` and no `terminal`** (§2, V28a), and elicitation in form mode
+//!   only ([`elicit`], #1377). A call to a client method charter did not offer, a URL mode
+//!   elicitation among them, is refused and reported as [`Event::Refused`], the input to the
+//!   audit's `acp.call.refused`.
 //! - **The handshake is the fact for the run** (§4): [`Negotiated`] maps what the agent answered
 //!   onto harness capabilities. An agent on another protocol version does not start
 //!   ([`NotStarted::Version`]), and neither does one that needs a login
@@ -29,6 +30,10 @@
 //!   human scope (V16, V75), so the agent's own stdio can ask and never answer. An ACP ask has
 //!   no deadline (V28d) and nothing answers it on a timer. [`Chat::cancel`] sends
 //!   `session/cancel` and answers every waiting request `cancelled`, as ACP requires.
+//! - **An elicitation is an ask that elicits a secret** ([`elicit`]): raised with its form as
+//!   [`Event::Elicited`], every piece of the agent's text in it plain and bounded, answered
+//!   only from the window ([`Chat::answer_elicitation`]), and its values sent to the agent and
+//!   nowhere else.
 //! - **The kill switch reaches a chat a waiting turn still holds** ([`Chat::kill`]): the
 //!   agent's group ends, and every ask it left open is withdrawn as the connection ends.
 //!
@@ -57,18 +62,22 @@ use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientCapabilities, ContentBlock, Implementation, InitializeRequest,
-    NewSessionRequest, PlanEntryStatus, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent,
+    CancelNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest,
+    CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction, ElicitationCapabilities,
+    ElicitationFormCapabilities, Implementation, InitializeRequest, NewSessionRequest,
+    PlanEntryStatus, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, StopReason, TextContent,
 };
 use agent_client_protocol::{Client, ConnectionTo, Responder, UntypedMessage};
 use futures::{AsyncBufReadExt, StreamExt};
 
+pub mod elicit;
 mod launch;
+pub use elicit::{Elicited, Form, Given};
 pub use launch::{Host, NotOffered};
 
-use crate::harness::asks::{Answerer, Applied, AskId, Asks, Raised, Refused};
+use crate::harness::asks::{Answerer, Applied, AskId, Asks, HumanScope, Raised, Refused};
 use crate::harness::model::{Plan, Said, Session, Step, Turn, Usage};
 
 /// What starts one level-3 chat's agent.
@@ -111,6 +120,8 @@ pub enum Event {
     ToolCallStatus { id: String, status: String },
     /// The agent asked permission, and the ask now waits on a human.
     Raised(Raised),
+    /// The agent asked the person for values, and the ask now waits on the window.
+    Elicited(Elicitation),
     /// The agent called a client method charter does not offer, and was refused.
     Refused { method: String },
     /// The agent's stdio closed: it exited, or was stopped.
@@ -125,7 +136,9 @@ impl Event {
     pub fn said(&self) -> Option<Said> {
         match self {
             Self::Said(said) => Some(said.clone()),
-            Self::Raised(raised) => Some(Said::Ask(raised.ask.clone())),
+            Self::Raised(raised) | Self::Elicited(Elicitation { raised, .. }) => {
+                Some(Said::Ask(raised.ask.clone()))
+            }
             Self::Text(_)
             | Self::ToolCall { .. }
             | Self::ToolCallStatus { .. }
@@ -133,6 +146,13 @@ impl Event {
             | Self::Ended => None,
         }
     }
+}
+
+/// An elicitation raised as an ask: the ask, and the form the window draws for it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Elicitation {
+    pub raised: Raised,
+    pub form: Form,
 }
 
 /// Why a turn ended.
@@ -288,6 +308,9 @@ fn weight(event: &Event) -> usize {
             } => id.len() + title.len() + kind.len() + status.len(),
             Event::ToolCallStatus { id, status } => id.len() + status.len(),
             Event::Raised(raised) => serde_json::to_string(raised).map_or(0, |json| json.len()),
+            Event::Elicited(elicitation) => {
+                serde_json::to_string(elicitation).map_or(0, |json| json.len())
+            }
             Event::Refused { method } => method.len(),
             Event::Said(Said::Plan(plan)) => plan.steps.iter().map(|step| step.text.len()).sum(),
             Event::Said(_) | Event::Ended => 0,
@@ -345,11 +368,40 @@ enum Command {
     Cancel,
 }
 
-/// A permission request charter still owes an answer, and what ends the watch on the agent
-/// withdrawing it: dropped with the waiter, once it is answered one way or another.
+/// A request charter still owes an answer, and what ends the watch on the agent withdrawing
+/// it: dropped with the waiter, once it is answered one way or another.
 struct Waiter {
-    responder: Responder<RequestPermissionResponse>,
+    owed: Owed,
     _answered: futures::channel::oneshot::Sender<()>,
+}
+
+/// What a [`Waiter`] answers: a permission request, or an elicitation and the form it asked
+/// for, which its values are checked against.
+enum Owed {
+    Permission(Responder<RequestPermissionResponse>),
+    Elicitation {
+        responder: Responder<CreateElicitationResponse>,
+        form: Form,
+    },
+}
+
+impl Owed {
+    /// Answers it `cancelled`: a turn cancelled, or a newer ask in its place.
+    fn cancel(self) -> Result<(), agent_client_protocol::Error> {
+        match self {
+            Self::Permission(responder) => responder.respond(cancelled()),
+            Self::Elicitation { responder, .. } => responder.respond(elicitation_cancelled()),
+        }
+    }
+
+    /// Answers it with the error ACP gives a request its sender withdrew.
+    fn withdrawn(self) {
+        let error = agent_client_protocol::Error::request_cancelled;
+        let _ = match self {
+            Self::Permission(responder) => responder.respond_with_error(error()),
+            Self::Elicitation { responder, .. } => responder.respond_with_error(error()),
+        };
+    }
 }
 
 /// What the chat's handle and its protocol thread share.
@@ -613,22 +665,57 @@ impl Chat {
     /// Answers ask `id` with `option`, from `by`: the first answer wins (HP-5), and the chosen
     /// option goes back to the agent on its stdio. Only this chat's asks: the registry is
     /// shared, and another chat's ask is [`Refused::Unknown`] here.
+    ///
+    /// An elicitation's ask is answered by its option too, as
+    /// [`Chat::answer_elicitation`] with no values: `decline`, `cancel`, or `accept` for a
+    /// form whose fields are all optional.
     pub fn answer(&self, id: &AskId, option: &str, by: Answerer) -> Result<Applied, Refused> {
         let shared = &self.shared;
         // Held across the answer and the reply, so a cancel cannot slip between them and send
         // the agent `cancelled` for an ask the operator was told they answered.
-        let mut waiting = lock(&shared.waiting);
+        let waiting = lock(&shared.waiting);
+        if let Some(Waiter {
+            owed: Owed::Elicitation { .. },
+            ..
+        }) = waiting.get(id)
+        {
+            let answer = match option {
+                elicit::ACCEPT => Elicited::Accept(std::collections::BTreeMap::new()),
+                elicit::DECLINE => Elicited::Decline,
+                elicit::CANCEL => Elicited::Cancel,
+                other => return Err(Refused::NotAnOption(other.to_owned())),
+            };
+            return elicited(shared, waiting, id, answer, by);
+        }
+        let mut waiting = waiting;
         let applied = shared
             .asks
             .answer(&shared.chat, id, option, by, Instant::now())?;
         if let Some(waiter) = waiting.remove(id) {
-            let _ = waiter.responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    applied.choice.id.clone(),
-                )),
+            let selected = RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                SelectedPermissionOutcome::new(applied.choice.id.clone()),
             ));
+            let _ = match waiter.owed {
+                Owed::Permission(responder) => responder.respond(selected),
+                // Not reached: an elicitation is answered above, under the same lock.
+                Owed::Elicitation { responder, .. } => responder.respond(elicitation_cancelled()),
+            };
         }
         Ok(applied)
+    }
+
+    /// Answers elicitation `id` with `answer`, from `by`: only the window may (its ask elicits
+    /// a secret), the first answer wins, and the values must fit the form, or the ask stays
+    /// open and [`Refused::Unfit`] names the field. The values go back to the agent on its
+    /// stdio and are kept nowhere: [`Applied`] holds only the option chosen.
+    pub fn answer_elicitation(
+        &self,
+        id: &AskId,
+        answer: Elicited,
+        by: Answerer,
+    ) -> Result<Applied, Refused> {
+        let waiting = lock(&self.shared.waiting);
+        elicited(&self.shared, waiting, id, answer, by)
     }
 
     /// Cancels the turn: `session/cancel`, and every waiting request answered `cancelled`, its
@@ -679,6 +766,49 @@ impl Drop for Chat {
         }
         reap(&mut self.child);
     }
+}
+
+/// Answers elicitation `id` with `answer`, from `by`, under `waiting`, the lock a cancel takes.
+fn elicited(
+    shared: &Shared,
+    mut waiting: std::sync::MutexGuard<'_, HashMap<AskId, Waiter>>,
+    id: &AskId,
+    answer: Elicited,
+    by: Answerer,
+) -> Result<Applied, Refused> {
+    let option = answer.option();
+    // The values are checked first, so an answer that does not fit leaves the ask open, and
+    // only for the window, so no other client learns anything of the form from a refusal.
+    let content = match (&answer, waiting.get(id)) {
+        (
+            Elicited::Accept(values),
+            Some(Waiter {
+                owed: Owed::Elicitation { form, .. },
+                ..
+            }),
+        ) if by.scope() == HumanScope::LocalUi => Some(form.check(values).map_err(Refused::Unfit)?),
+        _ => None,
+    };
+    let applied = shared
+        .asks
+        .answer(&shared.chat, id, option, by, Instant::now())?;
+    if let Some(waiter) = waiting.remove(id) {
+        let action = match (answer, content) {
+            (Elicited::Accept(_), Some(content)) => {
+                ElicitationAction::Accept(ElicitationAcceptAction::new().content(content))
+            }
+            (Elicited::Decline, _) => ElicitationAction::Decline,
+            _ => ElicitationAction::Cancel,
+        };
+        let _ = match waiter.owed {
+            Owed::Elicitation { responder, .. } => {
+                responder.respond(CreateElicitationResponse::new(action))
+            }
+            // Not reached: the registry refuses an elicitation's option on a permission ask.
+            Owed::Permission(responder) => responder.respond(cancelled()),
+        };
+    }
+    Ok(applied)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -954,7 +1084,8 @@ impl Protocol {
             session_new,
             shared,
         } = self;
-        let (reporting, asking, refusing, ignoring, serving) = (
+        let (reporting, asking, eliciting, refusing, ignoring, serving) = (
+            Arc::clone(&shared),
             Arc::clone(&shared),
             Arc::clone(&shared),
             Arc::clone(&shared),
@@ -996,6 +1127,14 @@ impl Protocol {
                             .respond_with_error(agent_client_protocol::Error::invalid_params());
                     }
                     raise(&asking, &request, responder, &cx)
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CreateElicitationRequest,
+                            responder: Responder<CreateElicitationResponse>,
+                            cx: ConnectionTo<agent_client_protocol::Agent>| {
+                    elicit_from(&eliciting, &request, responder, &cx)
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -1075,29 +1214,105 @@ fn raise(
     }
     let ask = crate::harness::asked::acp_request_permission(&params);
     let withdrawn = responder.cancellation();
+    hold(
+        shared,
+        ask,
+        Owed::Permission(responder),
+        withdrawn,
+        cx,
+        Event::Raised,
+    )
+}
+
+/// Raises an elicitation as an ask that elicits a secret, its form plain and bounded
+/// ([`elicit`]). A URL mode request, or any mode but a form, is refused as a method charter does
+/// not offer; one naming another session, or a request rather than the session, is refused as
+/// a foreign permission request is; one past a bound is answered `cancel` and never raised.
+fn elicit_from(
+    shared: &Arc<Shared>,
+    request: &CreateElicitationRequest,
+    responder: Responder<CreateElicitationResponse>,
+    cx: &ConnectionTo<agent_client_protocol::Agent>,
+) -> Result<(), agent_client_protocol::Error> {
+    let Some(session) = shared.session.get() else {
+        return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+    };
+    // Weighed as the agent sent it, before anything is kept of it.
+    let weighs = serde_json::to_string(request).map_or(usize::MAX, |json| json.len());
+    if weighs > MOST_ASK_BYTES {
+        shared.asks_refused.fetch_add(1, Ordering::Relaxed);
+        return responder.respond(elicitation_cancelled());
+    }
+    let form = match Form::read(request, session) {
+        Ok(form) => form,
+        Err(elicit::Unfit::NotAForm) => {
+            shared.emit(Event::Refused {
+                method: "elicitation/create".to_owned(),
+            });
+            return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+        }
+        Err(elicit::Unfit::NotOurs) => {
+            return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+        }
+        Err(elicit::Unfit::TooMuch) => {
+            shared.asks_refused.fetch_add(1, Ordering::Relaxed);
+            return responder.respond(elicitation_cancelled());
+        }
+    };
+    let ask = form.ask(session);
+    let withdrawn = responder.cancellation();
+    let shown = form.clone();
+    hold(
+        shared,
+        ask,
+        Owed::Elicitation { responder, form },
+        withdrawn,
+        cx,
+        move |raised| {
+            Event::Elicited(Elicitation {
+                raised,
+                form: shown,
+            })
+        },
+    )
+}
+
+/// Holds `owed` and raises `ask` for it, the waiter stored first, under the same lock, so an
+/// answer never finds the ask raised and its request not yet held; then tells the host, as
+/// `event` makes of the ask raised. Past [`MOST_OPEN_ASKS`] it is answered `cancelled` and never
+/// raised. The agent may withdraw the request (`$/cancel_request`), and then the ask is
+/// withdrawn too.
+fn hold(
+    shared: &Arc<Shared>,
+    ask: crate::harness::model::Ask,
+    owed: Owed,
+    withdrawn: agent_client_protocol::RequestCancellation,
+    cx: &ConnectionTo<agent_client_protocol::Agent>,
+    event: impl FnOnce(Raised) -> Event,
+) -> Result<(), agent_client_protocol::Error> {
     let (answered, settled) = futures::channel::oneshot::channel();
     let mut waiting = lock(&shared.waiting);
     if waiting.len() >= MOST_OPEN_ASKS {
         drop(waiting);
         shared.asks_refused.fetch_add(1, Ordering::Relaxed);
-        return responder.respond(cancelled());
+        return owed.cancel();
     }
     let raising = shared.asks.raise(&shared.chat, ask, Instant::now());
     for old in &raising.superseded {
         if let Some(old) = waiting.remove(old) {
-            let _ = old.responder.respond(cancelled());
+            let _ = old.owed.cancel();
         }
     }
     let id = raising.raised.id.clone();
     waiting.insert(
         id.clone(),
         Waiter {
-            responder,
+            owed,
             _answered: answered,
         },
     );
     drop(waiting);
-    shared.emit(Event::Raised(raising.raised));
+    shared.emit(event(raising.raised));
     let shared = Arc::clone(shared);
     cx.spawn(async move {
         // Ends when the agent withdraws the request, or when charter answers it and drops its
@@ -1107,9 +1322,7 @@ fn raise(
             let taken = lock(&shared.waiting).remove(&id);
             if let Some(waiter) = taken {
                 shared.asks.withdraw(&id);
-                let _ = waiter
-                    .responder
-                    .respond_with_error(agent_client_protocol::Error::request_cancelled());
+                waiter.owed.withdrawn();
             }
         }
         Ok(())
@@ -1124,7 +1337,9 @@ async fn handshake(
     let init = cx
         .send_request(
             InitializeRequest::new(ProtocolVersion::V1)
-                .client_capabilities(ClientCapabilities::default())
+                .client_capabilities(ClientCapabilities::default().elicitation(
+                    ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()),
+                ))
                 .client_info(Implementation::new("charter", env!("CARGO_PKG_VERSION"))),
         )
         .block_task()
@@ -1209,7 +1424,7 @@ async fn serve(
                 cx.send_notification(CancelNotification::new(session.clone()))?;
                 for (id, waiter) in waiting.drain() {
                     shared.asks.withdraw(&id);
-                    waiter.responder.respond(cancelled())?;
+                    waiter.owed.cancel()?;
                 }
             }
         }
@@ -1218,6 +1433,10 @@ async fn serve(
 
 fn cancelled() -> RequestPermissionResponse {
     RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+}
+
+fn elicitation_cancelled() -> CreateElicitationResponse {
+    CreateElicitationResponse::new(ElicitationAction::Cancel)
 }
 
 fn stop(reason: StopReason) -> Stop {
