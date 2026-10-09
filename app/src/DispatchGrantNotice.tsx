@@ -2,10 +2,15 @@ import { useId, useState } from "react";
 import { commands, type GrantLevel, type PlaneId } from "./bindings";
 import { useDispatchesHeld } from "./dispatchesHeld";
 import { Notice, type NoticeAction } from "./Notice";
+import { Choice } from "./settings/components";
 
 /** About how many lines the brief's box shows before it scrolls (`App.css`,
  *  `.block-report-brief`). */
 const SHOWN_LINES = 8;
+
+/** What the Notice says when its question read differently on a re-read while it was up. */
+const BOXES_CHANGED =
+  "What is offered under the answers changed while this was shown, so every box is unticked. Read it again before you answer.";
 
 /** What each level's Allow says, in the order they read. */
 const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
@@ -30,10 +35,29 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * **Where the list of nevers does not read, the Notice says so** (`never_unread`): no grant
  * counts until it does, which is why a pair already granted is asked about again.
  *
- * **It reads top to bottom as it is answered** (#1481): the sentence, then the ways out in the
- * order above, then the brief in a box of about eight lines that scrolls. The brief is under
- * the buttons and never beside or above them: a long brief must not push the answer out of
- * sight. On a pane it is the first Notice, above what purlis only reports (`PaneFrame`).
+ * **It reads top to bottom as it is answered** (#1481, #1502): the sentence, then the ways out
+ * in the order above, then what the asking persona wants besides and what the target works
+ * with, then the brief in a box of about eight lines that scrolls. The brief is under the
+ * buttons and never beside or above them: a long brief must not push the answer out of sight.
+ * On a pane it is the first Notice, above what purlis only reports (`PaneFrame`).
+ *
+ * **Several pairs in one answer** (#1502). A persona's definition may say which personas it
+ * usually works with. That grants nothing; it puts a box under the answers for each of them
+ * nothing answers for yet, **unticked**, with what that persona works with beside it. An Allow
+ * keeps the asked pair and every ticked one at the level pressed. Keep blocked and Never for
+ * this pair are about the asked pair only, and send no box.
+ *
+ * **The boxes and the access lines are the core's, read from the project's own files.** The
+ * window draws the names and sentences it is told and sends back only the names ticked and the
+ * digest of what it showed (`shown`): the core reads the files again at the answer, and an
+ * answer to a question that reads differently now allows nothing and is shown again, with every
+ * box unticked: a tick is for the words it was made under. **The boxes never change in place
+ * with nothing said**: when the core's list is read again while the question is up and it reads
+ * differently, the Notice says so and every box is unticked. The boxes stand in alphabetical
+ * order, which is the core's, so where one stands is not a persona file's to choose.
+ *
+ * **Allowing a dispatch is not allowing a secret**, and the Notice says so: what a persona's
+ * chat does with a vault is asked as it was before.
  *
  * **The brief is the chat's text, never purlis's.** It is drawn in its own block, under a line
  * that says so, as plain text: nothing in it is markup, a control or a sentence of the
@@ -65,6 +89,17 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
   /** The held dispatch the person chose "in any workspace" for. A later question is not it,
    *  so each starts from the narrower choice. */
   const [wide, setWide] = useState<number>();
+  /** The boxes ticked, and the question they were ticked on: the held dispatch, and what it
+   *  read as (`shown`). Another question, or this one once it reads differently, starts with
+   *  none, so a tick is never carried onto words the person has not read. */
+  const [ticks, setTicks] = useState<{
+    on: number;
+    shown: string;
+    names: ReadonlySet<string>;
+  }>();
+  /** The question last drawn, and the held dispatch whose question changed while it was up. */
+  const [drawn, setDrawn] = useState<{ on: number; shown: string }>();
+  const [moved, setMoved] = useState<number>();
 
   if (allowed !== undefined)
     return (
@@ -84,6 +119,13 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
 
   const [first, ...rest] = waiting;
   if (first === undefined) return null;
+  // The same held dispatch, reading differently than when it was last drawn: said on the
+  // Notice, so a box is never swapped under the pointer with no word. Adjusted while
+  // rendering, as React has state follow what it is drawn from.
+  if (drawn?.on !== first.id || drawn.shown !== first.shown) {
+    if (drawn?.on === first.id) setMoved(first.id);
+    setDrawn({ on: first.id, shown: first.shown });
+  }
   const cause = `dispatch-grant:${session}:${first.id}`;
   const label = `Dispatch to ${first.target}`;
   const behind =
@@ -149,6 +191,52 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     </div>
   );
 
+  // Only a box this question offers, ticked while it read as it does now, is ticked.
+  const mine =
+    ticks !== undefined && ticks.on === first.id && ticks.shown === first.shown
+      ? ticks.names
+      : undefined;
+  const ticked = first.also.map((one) => one.persona).filter((name) => mine?.has(name));
+  const tick = (name: string, on: boolean) => {
+    const names = new Set(mine);
+    if (on) names.add(name);
+    else names.delete(name);
+    setTicks({ on: first.id, shown: first.shown, names });
+  };
+  const asker = first.asking ?? "this chat";
+
+  /** What the answer covers besides the asked pair, and what it does not. */
+  const besides = first.locked === null && (
+    <div className="dispatch-also">
+      {first.also.length > 0 && (
+        <>
+          <p id={`${id}-also-label`}>Also let {asker} dispatch to:</p>
+          <Choice
+            kind="checks"
+            ids={{
+              id: `${id}-also`,
+              labelledBy: `${id}-also-label`,
+              describedBy: `${id}-also-says`,
+            }}
+            options={first.also.map((one) => ({
+              value: one.persona,
+              label: one.persona,
+              says: one.works_with,
+            }))}
+            checked={new Set(ticked)}
+            onCheckedChange={tick}
+          />
+          <p id={`${id}-also-says`}>
+            A ticked box is allowed with the Allow you press, for the same people and the same
+            workspace as that answer. Keep blocked and Never are about {first.target} only.
+          </p>
+        </>
+      )}
+      <p className="dispatch-works-with">{first.works_with}</p>
+      <p>Allowing a dispatch does not allow the use of a secret: that is asked as before.</p>
+    </div>
+  );
+
   const brief = (
     <div className="block-report" id={id}>
       <p>The brief, as the chat wrote it. purlis did not write it.</p>
@@ -184,10 +272,12 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     if (busy) return;
     setBusy(true);
     setSaid(undefined);
-    // The wider answer is a command of its own, and only the two wider Allows have one.
+    setMoved(undefined);
+    // The wider answer is a command of its own, and only the two wider Allows have one. The
+    // ticked boxes go with either: each is kept where the answer itself holds.
     const run =
       anywhere && level !== "chat" ? commands.allowDispatchAnywhere : commands.allowDispatch;
-    void run(plane, first.id, level)
+    void run(plane, first.id, level, ticked, first.shown)
       .then((done) => {
         if (done.status === "error") {
           setSaid(done.error);
@@ -244,6 +334,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       under={
         <>
           {where}
+          {besides}
           {brief}
         </>
       }
@@ -254,9 +345,12 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       {first.asking === null ? "this chat runs" : "those chats run"} too: what one of them asks is
       asked as its chat.
       {holds}
+      {first.also.length > 0 &&
+        " Under the answers are boxes for more personas: tick any you want before you press Allow."}
       {first.never_unread !== null &&
         ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}
+      {moved === first.id && ` ${BOXES_CHANGED}`}
       {behind}
     </Notice>
   );

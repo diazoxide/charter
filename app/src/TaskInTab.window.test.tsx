@@ -135,6 +135,9 @@ function held(session: number, id: number): DispatchPending {
     works_in: null,
     works_in_missing: false,
     allowed_in: [],
+    works_with: "devops works with its own access: no vault; no hosts beyond the project's.",
+    also: [],
+    shown: "s0",
   };
 }
 
@@ -1187,7 +1190,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     // The answer is the held dispatch's own, which is steward 1's: never the shown chat's.
     await waitFor(() =>
       expect(commandsOf(asked, "allow_dispatch")).toEqual([
-        { plane: PLANE, id: 71, level: "chat" },
+        { plane: PLANE, id: 71, level: "chat", also: [], shown: "s0" },
       ]),
     );
     expect(onScreen()).toEqual([4]);
