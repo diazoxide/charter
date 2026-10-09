@@ -2083,7 +2083,7 @@ pub const SETTLES: [&str; 10] = [
 ];
 
 /// **The window commands that ask git's history without settling anything** (#1543): Settings'
-/// list of grants names who committed each of the project's, and asks git once per pair. Each
+/// list of grants names who committed each of the project's, and asks git once a page (#1464). Each
 /// is `async` and asks on a blocking thread, as [`SETTLES`] do. `off_the_main_thread`'s test
 /// holds them to it.
 #[cfg(test)]
@@ -3216,38 +3216,29 @@ pub struct DispatchGrants {
     pub locked_by: Option<String>,
 }
 
-/// Who last committed the line granting `pair` in the project's committed file, and when: the
-/// project's history, asked of git. `None` where git has nothing to say (not committed yet).
-fn committed_by(root: &Path, pair: &Pair) -> Option<(String, u64)> {
-    let manifest = purlis_core::names::manifest(root);
-    let file = manifest.file_name()?.to_str()?.to_owned();
-    // A persona's name is letters, digits, dots, underscores and hyphens: only the dot means
-    // anything to the pattern.
-    let plain = |name: &str| name.replace('.', "\\.");
-    let pattern = format!(
-        "^[[:space:]]*\"?{}\"?[[:space:]]*=.*\"{}\"",
-        plain(&pair.asking),
-        plain(&pair.target)
-    );
-    // Through the hardened runner (#1415): a constructed environment, no program a config
-    // names, a bare repository only where it is named.
-    use purlis_core::worktree::git;
-    let out = git::run(
-        root,
-        &[
-            "log",
-            "-1",
-            "--format=%an%x09%at",
-            "-G",
-            &pattern,
-            "--",
-            &file,
-        ],
-        git::READ,
-    )
-    .ok()?;
-    let (name, at) = out.out.trim().split_once('\t')?;
-    Some((name.to_owned(), at.parse().ok()?))
+/// Whether `line` of the project's file is the line granting `pair`: the asking persona's key,
+/// quoted or not, set to a list that names the target.
+fn grants_line(line: &str, pair: &Pair) -> bool {
+    let rest = line.trim_start();
+    let rest = rest.strip_prefix('"').unwrap_or(rest);
+    let Some(rest) = rest.strip_prefix(pair.asking.as_str()) else {
+        return false;
+    };
+    let rest = rest.strip_prefix('"').unwrap_or(rest);
+    rest.trim_start()
+        .strip_prefix('=')
+        .is_some_and(|list| list.contains(&format!("\"{}\"", pair.target)))
+}
+
+/// Who last committed the line granting each of `pairs` in the project's committed file, and
+/// when: the project's history, asked of git **once for them all** (#1464,
+/// [`purlis_core::committedby`]). `None` for one git has nothing to say of (not committed yet).
+fn committed_by(root: &Path, pairs: &[Pair]) -> Vec<Option<purlis_core::committedby::Committed>> {
+    let wanted: Vec<_> = pairs
+        .iter()
+        .map(|pair| move |line: &str| grants_line(line, pair))
+        .collect();
+    purlis_core::committedby::last_touching(root, &wanted)
 }
 
 /// **Every dispatch grant in force for the project at `root`**: each open chat's (a closed
@@ -3317,14 +3308,14 @@ fn grants_of(
             .iter()
             .map(|pair| row(pair, Level::You)),
     );
-    for pair in dispatchgrant::committed_at(root) {
-        let committed = committed_by(root, &pair);
-        let mut one = row(&pair, Level::Project);
-        one.waiting = unseen.contains(&pair);
+    let committed = dispatchgrant::committed_at(root);
+    for (pair, by) in committed.iter().zip(committed_by(root, &committed)) {
+        let mut one = row(pair, Level::Project);
+        one.waiting = unseen.contains(pair);
         one.declined = one.waiting && declined.contains(&pair.to_string());
-        if let Some((name, at)) = committed {
-            one.at = u32::try_from(at).ok().or(one.at);
-            one.by = Some(name);
+        if let Some(by) = by {
+            one.at = u32::try_from(by.at).ok().or(one.at);
+            one.by = Some(by.by);
         }
         out.push(one);
     }
@@ -3526,7 +3517,7 @@ fn open_ids(held: &crate::planes::Held) -> std::collections::HashSet<String> {
 
 /// Every dispatch grant in force here, and what policy locks: for Settings' list.
 // On a blocking thread ([`READS_HISTORY`]): who committed each of the project's grants is
-// asked of git, once per pair.
+// asked of git, once for the page.
 #[tauri::command]
 #[specta::specta]
 pub async fn dispatch_grants(

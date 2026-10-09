@@ -20,6 +20,7 @@ pub mod cliname;
 pub mod clipath;
 pub mod commitgate;
 pub mod commitguard;
+pub mod committedby;
 pub mod compat;
 pub mod consentspelling;
 pub mod contain;
