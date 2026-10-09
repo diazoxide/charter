@@ -310,3 +310,43 @@ fn a_session_s_tokens_count_its_ended_tasks_from_what_their_records_kept() {
         "past its token limit (105k of 100k) · not enforced yet"
     );
 }
+
+#[test]
+fn a_session_past_its_token_limit_says_so_as_soon_as_its_chats_are_put_back() {
+    // #1545: a restart puts the chats back after the plane is open; the clock is told then,
+    // and looks at once, not at its next round.
+    let (plane, _host, planes, _id, held, steward) = a_steward_under("tokens-per-session = 100000");
+    rests(&held, steward);
+    has_used(&held, steward, 150_000, 0);
+    // The quit: the last record is written, and the app that wrote it is kept, as a quit ends
+    // nothing.
+    held.chats().write_last(|record| {
+        purlis_core::reopen::write(held.root(), record).expect("the last record is written");
+    });
+    let _before = (planes, held);
+
+    let host = Pretend::default();
+    let planes = planes_on(&host);
+    let id = planes.open(&plane.root);
+    let held = planes.held(&id).expect("held");
+    held.reopen(
+        STARTING,
+        purlis_core::reopen::read_or_refusal(&plane.root),
+        purlis_core::reopen::Choice::ReopenAll,
+    );
+    assert!(
+        held.chats().recorded_chat(steward).is_some(),
+        "the session is back, under its number"
+    );
+
+    // The clock hears of it with no wait, and looks.
+    let round_due =
+        crate::overlimit::looks_at_what_was_put_back(&planes, std::time::Duration::ZERO);
+    assert!(!round_due, "told of the put back, not timed out");
+
+    let said = row_of(&held, steward).at_limit.expect("shown at once");
+    assert_eq!(
+        said.row,
+        "past its token limit (150k of 100k) · not enforced yet"
+    );
+}

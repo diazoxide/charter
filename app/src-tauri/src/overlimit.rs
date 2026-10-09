@@ -7,8 +7,9 @@
 //!   else is read**. Otherwise the dispatch store is listed once for the look, and only the
 //!   records of tasks still at work, and new ones, are read: an ended record is kept from the
 //!   first look that saw it ended, since nothing the clock reads of it changes after
-//!   ([`Store`], #1545). A project just opened is looked at within [`TICK`], so a session
-//!   past its token limit says so at once after a restart (#1545).
+//!   ([`Store`], #1545). **A project whose chats are put back is looked at then**
+//!   ([`put_back`], from the end of `Held::reopen`), so a session past its token limit says so
+//!   at once after a restart, not at the clock's next round (#1545).
 //! - **Working time** ([`Worked`]): a task's time counts only while it works, its turn running
 //!   and no prompt showing: not while it waits on the person, not while it waits on its own
 //!   tasks, and not while purlis is not running. The clock adds what it saw since its last look,
@@ -28,7 +29,7 @@
 //!   says the figure against the limit with "not enforced yet". No dispatch is refused and no
 //!   task is stopped by it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
@@ -40,18 +41,65 @@ use purlis_core::reopen::{Chat, Owed};
 use purlis_core::state::State;
 
 use crate::host::ChatBoard;
-use crate::planes::{Held, Planes};
+use crate::planes::{Held, PlaneId, Planes};
 
 /// How often the app looks: a minute is the unit of the time limit.
 pub const EVERY: Duration = Duration::from_secs(30);
 
-/// How often the clock wakes to see whether a project is due a look: one opened since its last
-/// wake is looked at then, and every other one [`EVERY`] after its last look.
-pub const TICK: Duration = Duration::from_secs(2);
+/// **The projects whose chats were put back**, told to the clock as it happens: the clock
+/// waits on this between its rounds, and looks at such a project at once.
+fn nudges() -> &'static (
+    std::sync::mpsc::Sender<PlaneId>,
+    Mutex<std::sync::mpsc::Receiver<PlaneId>>,
+) {
+    static NUDGES: OnceLock<(
+        std::sync::mpsc::Sender<PlaneId>,
+        Mutex<std::sync::mpsc::Receiver<PlaneId>>,
+    )> = OnceLock::new();
+    NUDGES.get_or_init(|| {
+        let (send, hear) = std::sync::mpsc::channel();
+        (send, Mutex::new(hear))
+    })
+}
 
-/// Whether a project last looked at `last` (never, for `None`) is due a look at `now`.
-fn due(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    last.is_none_or(|last| now.saturating_duration_since(last) >= EVERY)
+/// **Project `id`'s chats were put back** (the end of `Held::reopen`): the clock looks at it now,
+/// so a session already past its token limit says so at once (#1545).
+pub(crate) fn put_back(id: &PlaneId) {
+    // The receiver lives as long as the process: a send cannot fail.
+    let _ = nudges().0.send(id.clone());
+}
+
+/// **Waits up to `wait` for a project whose chats were put back**, and looks at each one told
+/// (and any told meanwhile). Answers whether the wait ran out with none told: the clock's round
+/// is due.
+pub(crate) fn looks_at_what_was_put_back(planes: &Planes, wait: Duration) -> bool {
+    let hear = nudges().1.lock().unwrap_or_else(PoisonError::into_inner);
+    let first = match hear.recv_timeout(wait) {
+        Ok(id) => id,
+        Err(_) => return true,
+    };
+    let mut told: Vec<PlaneId> = vec![first];
+    told.extend(hear.try_iter());
+    drop(hear);
+    told.dedup();
+    for id in told {
+        if let Ok(held) = planes.held(&id) {
+            look_guarded(&held);
+        }
+    }
+    false
+}
+
+/// [`look`], with a panic said and survived.
+fn look_guarded(held: &Arc<Held>) {
+    let looked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| look(held)));
+    if looked.is_err() {
+        tracing::warn!(
+            "purlis: the clock that holds tasks to their time limit failed one look at a \
+             project, and looks again in {} seconds",
+            EVERY.as_secs()
+        );
+    }
 }
 
 /// The most working time one look adds: a look that comes late (a machine asleep, a slow look)
@@ -116,7 +164,7 @@ pub(crate) fn session_tokens(
     root: &Path,
     board: &dyn ChatBoard,
     open: &[(u32, &Chat)],
-    ended: &[Record],
+    ended: &[Ended],
     chat: u32,
 ) -> u64 {
     let top = session_of(open, chat);
@@ -145,11 +193,10 @@ pub(crate) fn session_tokens(
     while grew {
         grew = false;
         for record in ended {
-            if record.mode != dispatchrecord::Mode::Task || record.running() {
+            if record.mode != dispatchrecord::Mode::Task {
                 continue;
             }
-            let (Some(asker), Some(worker)) = (&record.asker.chat.id, &record.worker.chat.id)
-            else {
+            let (Some(asker), Some(worker)) = (&record.asker, &record.worker) else {
                 continue;
             };
             if known.contains(asker) && !by_chat.contains_key(worker) {
@@ -184,47 +231,82 @@ struct Kept {
     stores: HashMap<PathBuf, Store>,
 }
 
+/// **What the clock reads of an ended record**: no more, so a store of thousands costs a few
+/// hundred bytes each, never their briefs, reports and talk.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Ended {
+    mode: dispatchrecord::Mode,
+    /// The id of the chat that asked.
+    asker: Option<String>,
+    /// The id of the chat that worked on it.
+    worker: Option<String>,
+    usage: Option<dispatchrecord::Usage>,
+}
+
+impl Ended {
+    fn of(record: &Record) -> Self {
+        Self {
+            mode: record.mode,
+            asker: record.asker.chat.id.clone(),
+            worker: record.worker.chat.id.clone(),
+            usage: record.usage,
+        }
+    }
+}
+
+/// One look's read of the store: the records of tasks at work, whole, and what the clock reads
+/// of every ended one.
+#[derive(Debug, Default)]
+struct Read {
+    running: Vec<Record>,
+    ended: Vec<Ended>,
+}
+
 /// **The ended records of one project's dispatch store**, as the clock last read them, by id.
 ///
 /// What the clock reads of an ended record (who asked, who worked, its mode and what its
 /// harness reported) is written in the one step that ends it, and never changes after. So each
 /// look lists the store's names and reads only the records not kept here: the tasks still at
-/// work, and any record new since. A record whose file is gone is let go of.
+/// work, and any record new since. A record whose file is gone is let go of, and so is the
+/// whole store when its project closes.
 #[derive(Default)]
 struct Store {
-    ended: HashMap<String, Record>,
+    ended: HashMap<String, Ended>,
 }
 
 impl Store {
-    /// Every record of the project at `root`, newest first, as [`dispatchrecord::list`] answers
-    /// them, reading only those not kept.
-    fn records(&mut self, root: &Path) -> Vec<Record> {
+    /// The records of the project at `root`, reading only those not kept.
+    fn read(&mut self, root: &Path) -> Read {
         let Ok(entries) = std::fs::read_dir(dispatchrecord::dir(root)) else {
             self.ended.clear();
-            return Vec::new();
+            return Read::default();
         };
-        let ids: Vec<String> = entries
+        let ids: HashSet<String> = entries
             .flatten()
             .filter_map(|entry| entry.file_name().into_string().ok())
             .filter_map(|name| name.strip_suffix(".json").map(str::to_owned))
             .collect();
         self.ended.retain(|id, _| ids.contains(id));
-        let mut records: Vec<Record> = ids
-            .iter()
-            .filter_map(|id| match self.ended.get(id) {
-                Some(kept) => Some(kept.clone()),
-                None => {
-                    let read = dispatchrecord::read(root, id)?;
-                    if !read.running() {
-                        self.ended.insert(id.clone(), read.clone());
-                    }
-                    Some(read)
-                }
-            })
-            .collect();
-        // A ULID sorts by the time it was minted.
-        records.sort_by(|a, b| b.id.cmp(&a.id));
-        records
+        let mut running = Vec::new();
+        for id in &ids {
+            if self.ended.contains_key(id) {
+                continue;
+            }
+            let Some(record) = dispatchrecord::read(root, id) else {
+                continue;
+            };
+            if record.running() {
+                running.push(record);
+            } else {
+                self.ended.insert(id.clone(), Ended::of(&record));
+            }
+        }
+        // A ULID sorts by the time it was minted: newest first, as the store lists them.
+        running.sort_by(|a, b| b.id.cmp(&a.id));
+        Read {
+            running,
+            ended: self.ended.values().cloned().collect(),
+        }
     }
 }
 
@@ -278,22 +360,25 @@ pub(crate) fn look_at(held: &Arc<Held>, now: chrono::DateTime<chrono::Utc>) {
         return;
     }
     let default = purlis_core::start::persona_for_a_new_chat(root);
-    let records = kept()
-        .stores
-        .entry(root.to_owned())
-        .or_default()
-        .records(root);
+    // Read with the clock's lock let go: every row of every project reads that lock.
+    let mut store = kept().stores.remove(root).unwrap_or_default();
+    let records = store.read(root);
+    kept().stores.insert(root.to_owned(), store);
     let found = held.chats().deciding_over(|open, _| {
         let mut found = Found::default();
         if timed {
-            time_each(held, root, open, &records, &files, &policy, now, &mut found);
+            time_each(
+                held,
+                root,
+                open,
+                &records.running,
+                &files,
+                &policy,
+                now,
+                &mut found,
+            );
         }
         if tokens {
-            let ended: Vec<Record> = records
-                .iter()
-                .filter(|record| !record.running())
-                .cloned()
-                .collect();
             for (top, chat) in open.iter().filter(|(n, chat)| asker_of(chat, *n).is_none()) {
                 let pair = purlis_core::dispatchdecision::pair_of(chat, None, default.as_deref());
                 let workspace = chat
@@ -309,7 +394,7 @@ pub(crate) fn look_at(held: &Arc<Held>, now: chrono::DateTime<chrono::Utc>) {
                 if limits.tokens_per_session.is_none() {
                     continue;
                 }
-                let used = session_tokens(root, held.board(), open, &ended, *top);
+                let used = session_tokens(root, held.board(), open, &records.ended, *top);
                 if let Some(limit) = dispatchlimits::tokens_past(&limits, used) {
                     found.spent.push((*top, used, limit));
                 }
@@ -385,12 +470,8 @@ fn time_each(
 ) {
     let mut kept = kept();
     // A task that has ended keeps no clock here.
-    kept.clocks.retain(|(plane, id), _| {
-        plane != root
-            || records
-                .iter()
-                .any(|record| record.running() && &record.id == id)
-    });
+    kept.clocks
+        .retain(|(plane, id), _| plane != root || records.iter().any(|record| &record.id == id));
     let tasks = open.iter().filter(|(number, chat)| {
         asker_of(chat, *number).is_some()
             && chat
@@ -478,42 +559,43 @@ pub(crate) fn tokens_shown(held: &Held, chat: u32) -> Option<crate::atlimit::AtL
     })
 }
 
-/// **Starts the app's clock**: each open project is looked at ([`look`]) as soon as the clock
-/// sees it open, within [`TICK`], and then every [`EVERY`]. On a thread of its own for the life
-/// of the app; a look that panics is said and the clock goes on.
+/// Lets go of what the clock kept for every project not among `open` (their roots): a closed
+/// project's records, clocks and token lines.
+fn forget_all_but(kept: &mut Kept, open: &HashSet<PathBuf>) {
+    kept.stores.retain(|root, _| open.contains(root));
+    kept.tokens.retain(|(root, _), _| open.contains(root));
+    kept.clocks.retain(|(root, _), _| open.contains(root));
+}
+
+/// **Starts the app's clock**: every [`EVERY`], each open project is looked at ([`look`]), and
+/// a project whose chats are put back is looked at then ([`put_back`]). On a thread of its own
+/// for the life of the app, which waits on those puts back between rounds; a look that panics
+/// is said and the clock goes on.
 pub(crate) fn keep_looking(app: tauri::AppHandle) {
     use tauri::Manager;
     let spawned = std::thread::Builder::new()
         .name("purlis-limits".into())
         .spawn(move || {
-            let mut looked_at: HashMap<crate::planes::PlaneId, std::time::Instant> = HashMap::new();
+            let mut round = std::time::Instant::now() + EVERY;
             loop {
-                std::thread::sleep(TICK);
                 let Some(planes) = app.try_state::<Planes>() else {
+                    std::thread::sleep(EVERY);
                     continue;
                 };
-                let open = planes.open_now();
-                looked_at.retain(|id, _| open.contains(id));
-                for id in open {
-                    let now = std::time::Instant::now();
-                    if !due(looked_at.get(&id).copied(), now) {
-                        continue;
-                    }
-                    looked_at.insert(id.clone(), now);
+                let wait = round.saturating_duration_since(std::time::Instant::now());
+                if !looks_at_what_was_put_back(&planes, wait) {
+                    continue;
+                }
+                round = std::time::Instant::now() + EVERY;
+                let mut roots = HashSet::new();
+                for id in planes.open_now() {
                     let Ok(held) = planes.held(&id) else {
                         continue;
                     };
-                    let looked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        look(&held);
-                    }));
-                    if looked.is_err() {
-                        tracing::warn!(
-                            "purlis: the clock that holds tasks to their time limit failed one \
-                             look at a project, and looks again in {} seconds",
-                            EVERY.as_secs()
-                        );
-                    }
+                    roots.insert(held.root().to_owned());
+                    look_guarded(&held);
                 }
+                forget_all_but(&mut kept(), &roots);
             }
         });
     if let Err(why) = spawned {
@@ -543,15 +625,6 @@ mod tests {
         };
         assert_eq!(counted(&half), 250);
         assert_eq!(counted(&purlis_core::usage::Spent::default()), 0);
-    }
-
-    #[test]
-    fn a_project_just_opened_is_looked_at_on_the_next_tick_and_then_every_thirty_seconds() {
-        let now = std::time::Instant::now();
-        assert!(due(None, now), "never looked at: now");
-        assert!(!due(Some(now), now + TICK));
-        assert!(!due(Some(now), now + EVERY - TICK));
-        assert!(due(Some(now), now + EVERY));
     }
 
     /// A record of a task asked for by chat id `asker`, ended or not, in the store of `root`.
@@ -592,21 +665,50 @@ mod tests {
         let ended = a_record(root, "01ASKER", true);
         let running = a_record(root, "01ASKER", false);
         let mut store = Store::default();
-        let first = store.records(root);
-        assert_eq!(first.len(), 2);
-        assert_eq!(dispatchrecord::list(root), first, "as the store lists them");
+        let first = store.read(root);
+        assert_eq!(
+            first
+                .running
+                .iter()
+                .map(|r| r.id.clone())
+                .collect::<Vec<_>>(),
+            vec![running.clone()]
+        );
+        let listed = dispatchrecord::list(root);
+        let was_ended = listed.iter().find(|r| r.id == ended).expect("listed");
+        assert_eq!(
+            first.ended,
+            vec![Ended::of(was_ended)],
+            "only what the clock reads"
+        );
 
         // Both files are spoiled: the ended one is not read again, the running one is.
         let dir = dispatchrecord::dir(root);
         for id in [&ended, &running] {
             std::fs::write(dir.join(format!("{id}.json")), "not a record").expect("spoiled");
         }
-        let ids: Vec<String> = store.records(root).into_iter().map(|r| r.id).collect();
-        assert_eq!(ids, vec![ended.clone()]);
+        let again = store.read(root);
+        assert!(again.running.is_empty());
+        assert_eq!(again.ended.len(), 1);
 
         // A record whose file is gone is let go of.
         std::fs::remove_file(dir.join(format!("{ended}.json"))).expect("gone");
-        assert!(store.records(root).is_empty());
+        assert!(store.read(root).ended.is_empty());
         assert!(store.ended.is_empty());
+    }
+
+    #[test]
+    fn a_closed_project_s_store_and_lines_are_let_go_of() {
+        let open = PathBuf::from("/a/open/project");
+        let closed = PathBuf::from("/a/closed/project");
+        let mut kept = Kept::default();
+        for root in [&open, &closed] {
+            kept.stores.insert(root.clone(), Store::default());
+            kept.tokens.insert((root.clone(), 1), (5, 1));
+        }
+        forget_all_but(&mut kept, &HashSet::from([open.clone()]));
+        assert!(kept.stores.contains_key(&open) && !kept.stores.contains_key(&closed));
+        assert!(kept.tokens.contains_key(&(open.clone(), 1)));
+        assert!(!kept.tokens.contains_key(&(closed, 1)));
     }
 }

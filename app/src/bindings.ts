@@ -2618,9 +2618,12 @@ export type AtLimit = {
 	/**  The whole sentence for the person: which limit, how many, and where it is changed. */
 	said: string,
 	/**
-	 *  Whether it is the chat's own running limit in its own workspace: the one its tab menu's
-	 *  footer already counts against (`6 of 6 running`). Any other limit that binds is said on
-	 *  that footer too, in `row`'s words (#1540).
+	 *  Whether it may be the limit its tab menu's footer counts against (`6 of 6 running`): the
+	 *  chat's own running limit, in its own workspace, counting its tasks only. The footer
+	 *  counts tasks only and reads the limit by the chat's own persona, so a chat nobody is at
+	 *  (its handoffs counted too) or one whose limit is read by another persona (one held, or
+	 *  one on the default) can meet a different number: the window leaves the row's words off
+	 *  the footer only where the footer's own numbers say the same limit (#1540).
 	 */
 	own: boolean,
 };
