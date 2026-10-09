@@ -111,6 +111,9 @@ const sameAsked = (one: readonly number[] | null, other: readonly number[] | nul
 /** The chats a chat that handed nothing off handed off to. */
 const NOT_HANDED_OFF: readonly number[] = [];
 
+/** No restart has anything to say. */
+const NO_RESTARTS: Readonly<Record<number, string>> = {};
+
 /** No folds set by hand. */
 const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
 
@@ -198,6 +201,7 @@ export function ChatsSection({
   offers = NO_OFFERS,
   onPress,
   stopping,
+  restarts = NO_RESTARTS,
   finished = NONE_FINISHED,
   onClearFinished = NOT_CLEARED,
   onReopen = NOT_REOPENED,
@@ -223,6 +227,9 @@ export function ChatsSection({
   onPress?: (offer: Offer) => void;
   /** The chats being stopped, whose rows say so. */
   stopping?: ReadonlySet<number>;
+  /** What a restart asked for from a row says, by chat: why it was refused, or why it waits
+   *  (#1462). Said on the row of a chat with no tab, which has no pane to say it on. */
+  restarts?: Readonly<Record<number, string>>;
   /** Each chat's finished tasks, by its number (#1485). */
   finished?: ReadonlyMap<number, FinishedTask[]>;
   /** Clear finished: takes those rows away, and nothing else. */
@@ -769,6 +776,7 @@ export function ChatsSection({
                           : (byNumber.get(lead)?.name ?? null)
                       }
                       stopping={stopping?.has(row.session) ?? false}
+                      restartSaid={row.tab ? null : (restarts[row.session] ?? null)}
                       asks={second?.session === row.session ? second.says : null}
                       answer={second?.session === row.session ? second.answer : null}
                       busy={second?.session === row.session && second.busy}
@@ -882,6 +890,7 @@ const Row = memo(function Row({
   needs,
   needsName,
   stopping,
+  restartSaid,
   asks,
   answer,
   busy,
@@ -940,6 +949,8 @@ const Row = memo(function Row({
   /** That chat's name, when it is a chat below this one. */
   needsName: string | null;
   stopping: boolean;
+  /** What its restart says, where it has no pane to say it on (#1462). */
+  restartSaid: string | null;
   /** The second step of ending this task, while it is asked here: what is asked, and the
    *  button that does it. Nothing while it is not. */
   asks: string | null;
@@ -1154,6 +1165,13 @@ const Row = memo(function Row({
           <button type="button" className="at-limit-settings" onClick={onLimits}>
             Dispatch settings
           </button>
+        </span>
+      )}
+      {restartSaid !== null && (
+        /* **A restart asked for from this row, refused or waiting** (#1462): said here, in
+           the core's words, for a chat with no pane to say it on. */
+        <span className="restart-said" role="status" aria-label={`Restart of ${name}`}>
+          {restartSaid}
         </span>
       )}
       {asks !== null && answer !== null && (

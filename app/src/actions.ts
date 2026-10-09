@@ -203,6 +203,8 @@ export type Does =
    *  same chat, in a new run with no conversation resumed. */
   | { verb: "startFresh"; tab: number }
   | { verb: "restartChat"; tab: number }
+  /** Restart chat on a row of the Chats list, for a chat with no tab (#1462): by its number. */
+  | { verb: "restartListed"; session: number }
   /** Opens the dialog that asks a persona for something from a chat's tab. It starts nothing
    *  by itself: the dialog's answer does, through `ask_persona_chat`. */
   | { verb: "askPersona"; tab: number; persona: string }
@@ -703,6 +705,8 @@ export type Doing = {
   startFresh: (tab: number) => void;
   /** Restarts the tab's chat on its conversation, once its turn has ended. */
   restartChat: (tab: number) => void;
+  /** The same for a chat with no tab, from its row in the Chats list (#1462). */
+  restartListed: (session: number) => void;
   /** Opens the dialog that asks `persona` for something from the tab's chat. */
   askPersona: (tab: number, persona: string) => void;
   /** Ends the chat's work link, through `chat_work_unlink`; a refusal is the core's sentence. */
@@ -2152,6 +2156,7 @@ export function catalogue(now: Now): Offer[] {
   offers.push(besideInFront(now.tabs, now.listed ?? [], now.nameOf));
   offers.push(...briefRows(now.listed ?? []));
   offers.push(...answerRows(now.listed ?? []));
+  offers.push(...restartRows(now.listed ?? [], now.restartable));
 
   const remove = "Remove the folder of this chat's branch";
   offers.push(
@@ -2353,6 +2358,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "restartChat":
       doing.restartChat(does.tab);
+      return DID;
+    case "restartListed":
+      doing.restartListed(does.session);
       return DID;
     case "askPersona":
       doing.askPersona(does.tab, does.persona);
@@ -2879,6 +2887,32 @@ export function handedOffId(from: number, to: number): string {
 /** The catalogue's id for the row that shows a task. */
 export function taskShowId(session: number): string {
   return `chat.show:${session}`;
+}
+
+/** The catalogue's id for Restart chat on a chat's row in the Chats list. */
+export function restartId(session: number): string {
+  return `chat.restart:${session}`;
+}
+
+/**
+ * **Restart chat, for a chat with no tab** (#1462): `chat.restart:<session>`, on its row in the
+ * Chats list and in the palette. A task shown inside its session's tab, or not shown at all,
+ * has no tab whose menu has the row (`tab.restart:<tab>`), so its own row offers it, with the
+ * same words and the same wait for a turn to end. A chat with a tab is restarted from there,
+ * so it is not offered twice. It ends a program, so it is under a menu's line.
+ */
+export function restartRows(
+  listed: readonly ListedChat[],
+  restartable: ((session: number) => boolean) | undefined,
+): Offer[] {
+  return listed
+    .filter((chat) => !chat.tab && !chat.shell && (restartable?.(chat.session) ?? false))
+    .map(({ session, name }) => ({
+      ...can(restartId(session), `Restart chat ${name}`, { verb: "restartListed", session }, name),
+      note: RESTART_NOTE,
+      midTurn: { session, title: `Restart chat ${name} when this turn ends` },
+      noState: { session, note: restartNoteNoState(name) },
+    }));
 }
 
 /**
@@ -3624,6 +3658,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           backId(what.session),
         ],
         below: [
+          restartId(what.session),
           stopId(what.session),
           stopBelowId(what.session),
           stopAllId(what.session),

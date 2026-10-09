@@ -4525,6 +4525,16 @@ export const PlaneView = memo(function PlaneView({
       out[Number(session)] = { trouble };
     return out;
   }, [owedRestarts, restartsRunning, restartNotYet, restartTrouble, chats]);
+  /** What a row of the Chats list says of its chat's restart (#1462): why it was refused, or
+   *  why it waits. */
+  const restartsOnRows = useMemo(() => {
+    const out: Record<number, string> = {};
+    for (const [session, said] of Object.entries(restartsSaid)) {
+      const words = said.trouble ?? said.notYet;
+      if (words !== undefined) out[Number(session)] = words;
+    }
+    return out;
+  }, [restartsSaid]);
   /**
    * **The person asks for chat `session` to restart** (#1428, and #1362's Restart now): the core
    * owes it the restart (`ask_chat_restart`), and it happens when the chat's turn has ended.
@@ -4581,11 +4591,7 @@ export const PlaneView = memo(function PlaneView({
         setTaskEndInline({
           session,
           where: "crumb",
-          way: "now",
-          says: `Restart ${name}? Its program ends and starts again on the same conversation, once its turn has ended. It stays a task, and still owes its report.`,
-          answer: "Restart it",
-          busy: false,
-          act: "restart",
+          ...restartAsked(name),
         });
         return;
       }
@@ -4593,17 +4599,40 @@ export const PlaneView = memo(function PlaneView({
     },
     [askRestart, askedByNow, bringToFront, setRestartingTask],
   );
+  /**
+   * **Restart chat on a row of the Chats list**, for a chat with no tab (#1462). A task is
+   * asked first, as its tab's row asks, on the row it was pressed on; the answer restarts it.
+   * Any other chat restarts as a tab's row restarts it.
+   */
+  const restartListed = useCallback(
+    (session: number) => {
+      if (askedByNow(session) !== undefined) {
+        const name =
+          chatsListed.current.find((one) => one.session === session)?.name ?? `chat ${session}`;
+        setTaskEndInline({ session, where: "row", ...restartAsked(name) });
+        return;
+      }
+      void askRestart(session);
+    },
+    [askRestart, askedByNow],
+  );
   /** Whether a chat has a Restart chat row: not a shell, which has no conversation. */
   const restartable = useCallback((session: number) => !shells.has(session), [shells]);
-  /** The chats on the strip, as one word: what is open, for a read that follows it. */
-  const chatsOpen = useMemo(
-    () =>
-      tabs.order
-        .map((tab) => chatOf(tabs, tab))
-        .filter((chat) => chat !== undefined)
-        .join(","),
-    [tabs],
-  );
+  /**
+   * The chats open, as one word, for a read that follows it: those on the strip and those the
+   * Chats list holds, so a task with no tab starting or ending moves it too (#1462), as it
+   * moves the core's answer.
+   */
+  const chatsOpen = useMemo(() => {
+    const open = new Set<number>();
+    for (const tab of tabs.order) {
+      const chat = chatOf(tabs, tab);
+      if (chat !== undefined) open.add(chat);
+    }
+    for (const chat of sidebar?.unfiled ?? []) open.add(chat.session);
+    for (const ws of sidebar?.workspaces ?? []) for (const chat of ws.chats) open.add(chat.session);
+    return [...open].sort((a, b) => a - b).join(",");
+  }, [sidebar, tabs]);
   /** Moves when one of the window's own sandbox commands returns: what those write is in the
    *  project's state folder, which the watcher of its root does not report (D-1428-10). */
   const sandboxCommands = useSandboxCommands();
@@ -5029,6 +5058,7 @@ export const PlaneView = memo(function PlaneView({
       unlinkWorkItem,
       startFresh: askStartFresh,
       restartChat: restartTab,
+      restartListed,
       askPersona,
       pinTab,
       pinWorkspace,
@@ -5100,6 +5130,7 @@ export const PlaneView = memo(function PlaneView({
     [
       beginRename,
       restartTab,
+      restartListed,
       linkWorkItem,
       unlinkWorkItem,
       askStartFresh,
@@ -7311,6 +7342,7 @@ export const PlaneView = memo(function PlaneView({
                   reveal={revealed}
                   onRevealed={revealedSettled}
                   onLookFinished={lookedAtFinished}
+                  restarts={restartsOnRows}
                   ending={taskEndInline}
                   onEndTask={endTaskOnRow}
                   onEndConfirm={answerTaskEndOnRow}
@@ -9730,3 +9762,15 @@ const FORGET_THIS_CHAT = "Forget this chat…";
 /** The waiting chat's Notice's way to its profile's approval question (#1246), and where a
  *  Cancel goes back to. */
 const REVIEW_AND_APPROVE = "Review and approve…";
+
+/** A task's Restart chat, asked first where it was pressed (#1489, #1462): the question, and
+ *  the answer that restarts it. */
+function restartAsked(name: string) {
+  return {
+    way: "now" as const,
+    says: `Restart ${name}? Its program ends and starts again on the same conversation, once its turn has ended. It stays a task, and still owes its report.`,
+    answer: "Restart it",
+    busy: false,
+    act: "restart" as const,
+  };
+}

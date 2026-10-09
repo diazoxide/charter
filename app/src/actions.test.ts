@@ -91,6 +91,7 @@ function doing(): Doing & { calls: string[] } {
     linkWorkItem: note("linkWorkItem"),
     startFresh: note("startFresh"),
     restartChat: note("restartChat"),
+    restartListed: note("restartListed"),
     askPersona: note("askPersona"),
     unlinkWorkItem: async (...args: unknown[]) => {
       note("unlinkWorkItem")(...args);
