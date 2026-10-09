@@ -405,7 +405,22 @@ fn shared_refusals(root: &Path, text: &str) -> Vec<String> {
     ));
     let mut out = said(root, &set, COMMITTED_FILE, &cfg);
     out.extend(names_nothing(root, &cfg));
+    out.extend(chat_env_is_local(&cfg));
     out
+}
+
+/// `[chat_env]` in the Shared file (#1197): it is this machine's, read from the Local file
+/// alone ([`crate::chatenv::from_text`]), so in the committed file it would sit unread. Refused
+/// in the reader's own words, as the Local file's reader refuses the tables it does not carry,
+/// so a save or a move never writes it there without a word.
+fn chat_env_is_local(cfg: &toml::Table) -> Option<String> {
+    let table = crate::chatenv::TABLE;
+    cfg.contains_key(table).then(|| {
+        format!(
+            "[{table}] in {COMMITTED_FILE} is not read — it names what this machine passes to \
+             a chat, so it is read from {LOCAL_FILE} alone. Put [{table}] in {LOCAL_FILE}."
+        )
+    })
 }
 
 /// `[persona] default` naming no persona in this project (ST-1, #1225), as `[harness] default`'s
