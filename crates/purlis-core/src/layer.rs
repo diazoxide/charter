@@ -625,8 +625,12 @@ pub fn publish_io(base: &Path, record: &Record) -> std::io::Result<()> {
     }
     write_whole_io(&path, &crate::pyjson::dumps_indent2(&record.document()))?;
     // Published under the purlis name, so a record left under an older one is a leftover that
-    // would contradict it: gone, never beside it.
-    remove_older(base)
+    // would contradict it: gone, never beside it. Best-effort (#1282): the record under the
+    // purlis name is the one read whenever it is there ([`read_record`]), so a leftover that
+    // could not be removed is never read, and the next publish tries again. It does not fail
+    // a publish that has landed.
+    let _ = remove_older(base);
+    Ok(())
 }
 
 /// Remove the record under every older name in `base`, at the link node.
@@ -953,6 +957,23 @@ mod tests {
         publish(dir.path(), &record).unwrap();
         assert!(!dir.path().join(".charter-generated").exists());
         assert!(dir.path().join(MARKER).is_file());
+    }
+
+    #[test]
+    fn an_old_record_that_cannot_be_removed_does_not_fail_the_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        // Something under the old name that `remove_file` refuses: a directory with a file in it.
+        std::fs::create_dir(dir.path().join(".charter-generated")).unwrap();
+        std::fs::write(dir.path().join(".charter-generated/kept"), "x").unwrap();
+        let mut record = Record::new();
+        record.settle("a.json", "abc".into());
+
+        publish(dir.path(), &record).unwrap();
+        assert_eq!(read_record(dir.path()).settled("a.json"), Some("abc"));
+        assert!(
+            dir.path().join(".charter-generated").is_dir(),
+            "left as a leftover, never read over the purlis record"
+        );
     }
 
     #[test]
