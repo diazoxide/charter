@@ -335,13 +335,17 @@ pub fn set_vision(root: &Path, place: &Place, who: &str, text: &str) -> Result<W
     if text.is_empty() {
         return Err("a vision has words: nothing was written".to_owned());
     }
-    if crate::mdsection::split_lines(text)
-        .iter()
-        .any(|line| line.starts_with("## ") || *line == "##")
-    {
+    // Any `##` at the start of a line, however it is spaced: the reader ends the vision at
+    // `^##\s` (a tab, a no-break space), the writer finds a section by `^##\s+<name>`, and a
+    // Markdown renderer takes an indented one for a heading too. The writer's own end-of-
+    // section scan, a literal `"## "`, is the narrowest of them and not the one to check.
+    if crate::mdsection::split_lines(text).iter().any(|line| {
+        line.trim_start_matches(crate::memstore::is_python_space)
+            .starts_with("##")
+    }) {
         return Err(
-            "a line of a vision starts with `## `, which would start a section of its own in \
-             workspace.md: nothing was written"
+            "a line of a vision starts with `## `, or `##` spaced another way, which would \
+             start a section of its own in workspace.md: nothing was written"
                 .to_owned(),
         );
     }

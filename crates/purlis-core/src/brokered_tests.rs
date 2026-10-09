@@ -262,6 +262,53 @@ fn a_vision_that_would_start_a_section_of_its_own_is_refused() {
     assert!(!root.join("workspaces/alpha/workspace.md").exists());
 }
 
+#[test]
+fn a_vision_line_any_reader_takes_for_a_heading_is_refused_however_it_is_spaced() {
+    // `##` and a tab, or a no-break space, is no `"## "` to the writer's end-of-section scan,
+    // but the reader's `^##\s` ends the vision there and the writer's header match finds a
+    // section by that name. Indented, a Markdown renderer still shows a heading.
+    let (_dir, root) = a_project();
+    for text in [
+        "Ship\n##\tSessions\nforged",
+        "Ship\n##\u{a0}Context & decisions\nforged",
+        "Ship\n   ## Glossary\nforged",
+        "Ship\r##\tLog",
+        "Ship\n##",
+    ] {
+        let write = Write::WorkspaceVision {
+            text: text.to_owned(),
+        };
+        let why = perform(&root, &in_alpha_as(None), &write, now()).expect_err(text);
+        assert!(why.contains("##"), "{why}");
+    }
+    assert!(!root.join("workspaces/alpha/workspace.md").exists());
+}
+
+#[test]
+fn an_entry_that_would_take_workspace_md_past_the_bound_on_a_plane_file_is_refused() {
+    // Each entry is bounded, and the write rate holds a chat to so many a minute, but nothing
+    // else ends a section that only grows; a file past the bound is one purlis calls broken.
+    let (_dir, root) = a_project();
+    let ws = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap();
+    ws.set_vision("Ship").unwrap();
+    let path = root.join("workspaces/alpha/workspace.md");
+    let mut big = std::fs::read_to_string(&path).unwrap();
+    let room = usize::try_from(crate::memstore::MAX_BYTES).unwrap() - big.len();
+    big.push_str(&format!("\n{}\n", "x".repeat(room - 100)));
+    std::fs::write(&path, &big).unwrap();
+    let write = Write::WorkspaceSection {
+        section: Section::Glossary,
+        text: "y".repeat(200),
+    };
+
+    let why = perform(&root, &in_alpha_as(None), &write, now()).expect_err("refused");
+
+    assert!(why.contains("bytes"), "{why}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), big);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_workspace_md_that_is_a_link_out_of_the_project_is_never_written_through() {

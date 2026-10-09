@@ -16,11 +16,11 @@ use crate::{manifest, mdsection, memstore};
 /// declared difference: the `## Sessions` section before `## Log` (SI-8, ADR 0064), whose one
 /// line charter keeps pointing at the workspace's session records
 /// ([`crate::sessionrecord::point`]).
+const CHARTER_TEMPLATE: &str = "# {name}\n\n> **Living charter** for this workspace — its north star and shared context.\n> Keep it current as the work evolves (edit this file, or `{program} workspace vision \"…\"`).\n> It's committed + shared for LIVE workspaces, and a fork inherits it — so anyone\n> can pick up the task with full context. Never put secrets here (vault only).\n\n## Vision\n\n{vision}\n\n## Context & decisions\n\n<!-- Key facts, constraints, and design/architecture decisions found while working —\n     the durable \"why\", not a chronological log. Grow this as you learn. -->\n\n_Nothing yet._\n\n## Glossary\n\n<!-- Task/domain vocabulary so a teammate or a fork isn't lost: `term` — definition. -->\n\n_Nothing yet._\n\n## Sessions\n\n{sessions}\n\n## Log\n\nChronological \"what was done\" lives in the task memo — `memory/notes.md`\n(append with `{program} workspace note \"…\"`).\n";
+
 /// What the template writes under a section nobody has written in yet: an entry added there
 /// takes its place ([`Workspace::add_to_section`]).
 const NOTHING_YET: &str = "_Nothing yet._";
-
-const CHARTER_TEMPLATE: &str = "# {name}\n\n> **Living charter** for this workspace — its north star and shared context.\n> Keep it current as the work evolves (edit this file, or `{program} workspace vision \"…\"`).\n> It's committed + shared for LIVE workspaces, and a fork inherits it — so anyone\n> can pick up the task with full context. Never put secrets here (vault only).\n\n## Vision\n\n{vision}\n\n## Context & decisions\n\n<!-- Key facts, constraints, and design/architecture decisions found while working —\n     the durable \"why\", not a chronological log. Grow this as you learn. -->\n\n_Nothing yet._\n\n## Glossary\n\n<!-- Task/domain vocabulary so a teammate or a fork isn't lost: `term` — definition. -->\n\n_Nothing yet._\n\n## Sessions\n\n{sessions}\n\n## Log\n\nChronological \"what was done\" lives in the task memo — `memory/notes.md`\n(append with `{program} workspace note \"…\"`).\n";
 
 /// The vision body charter writes when no vision is set, and reads back as "unset".
 pub const VISION_PLACEHOLDER: &str = "_Not set yet — describe the goal: what are we building or fixing, and why? Set it with `{program} workspace vision \"…\"` (or edit this file)._";
@@ -393,10 +393,21 @@ impl Workspace {
         self.writable(&path)?;
         self.scaffold_charter()?;
         let current = std::fs::read_to_string(&path)?;
+        let next = mdsection::add_entry(&current, header, entry, NOTHING_YET);
+        // An entry is bounded and a chat's writes are rated, but a section only grows: past
+        // the bound on one plane file, purlis calls the file broken rather than reading it.
+        let bytes = u64::try_from(next.len()).unwrap_or(u64::MAX);
+        if bytes > memstore::MAX_BYTES {
+            return Err(io::Error::other(format!(
+                "workspace.md would be {bytes} bytes, over the {}-byte bound on one plane file: \
+                 nothing was written. Fold its sections down by hand first",
+                memstore::MAX_BYTES
+            )));
+        }
         crate::rewrite::replace(
             &self.plane_root,
             &path,
-            mdsection::add_entry(&current, header, entry, NOTHING_YET).as_bytes(),
+            next.as_bytes(),
             crate::rewrite::Mode::Kept,
         )
     }
