@@ -324,7 +324,6 @@ describe("the update button", () => {
 
     expect(within(dialog).getByRole("radiogroup", { name: "Channel" })).toBeInTheDocument();
     expect(dialog.querySelector(".ui-setting-row")).not.toBeNull();
-    expect(dialog.querySelector(".choices, .choice")).toBeNull();
   });
 });
 

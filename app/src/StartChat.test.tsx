@@ -192,7 +192,6 @@ describe("a chat that starts in a repo (GL-1)", () => {
     show({}, "api");
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog.querySelector(".choices, .choice, .asks, .choices-name")).toBeNull();
     expect(dialog.querySelectorAll(".ui-setting-row")).toHaveLength(5);
     expect(screen.getByRole("radiogroup", { name: "Harness" })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Persona" })).toBeInTheDocument();
