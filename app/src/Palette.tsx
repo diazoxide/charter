@@ -16,6 +16,9 @@ import { hitSaid, scopeSaid, useFileFind, type Part } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
 import { landSettingsFocus } from "./settings/entering";
+import { FileIcon } from "./FileIcon";
+import { useFileIcons } from "./projectTheme";
+import { iconFor } from "./theme/icons";
 
 /**
  * The command palette: every action the window can do, reachable by typing.
@@ -616,6 +619,7 @@ export function Palette({
                         className={index === aimed ? "palette-row aimed" : "palette-row"}
                         onClick={() => openFile(file)}
                       >
+                        <FoundIcon file={file} />
                         <span className="palette-title">
                           <Marked parts={marks.name} />
                         </span>
@@ -634,6 +638,18 @@ export function Palette({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/**
+ * A found file's icon (#1145), in the icon theme of the project and workspace it was found in —
+ * the theme its own tree draws it with, so a hit looks the same here as in the explorer. A row of
+ * its own because the hits of "all open projects" can come from several projects, and each
+ * asks its own once.
+ */
+function FoundIcon({ file }: { file: FoundFile }) {
+  const icons = useFileIcons(file.plane, file.workspace);
+  const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+  return <FileIcon symbol={iconFor(icons, { name, folder: false })} />;
 }
 
 /** A file row's text with the letters the query matched marked (#1131): `<mark>`, which a
