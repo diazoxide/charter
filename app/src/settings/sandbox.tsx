@@ -16,6 +16,8 @@ import {
 import { key, onOffAt, textAt, valueAt, type Control, type Shown } from "./fileControls";
 import type { RowIds } from "./components";
 import type { LiveSetting } from "./groups";
+import { showPersona } from "./links";
+import { OutLink } from "./OutLink";
 
 /**
  * **Settings › Project › Sandbox explains what a chat here can do** (#1340, spec #1330): one
@@ -384,6 +386,10 @@ function PersonaHostsAllow({
       ) : (
         <p>{said}</p>
       )}
+      {/* The persona stays in its own tab, and Settings links to it (#1388). */}
+      <OutLink plane={plane} action={showPersona(one.persona)}>
+        {`Show ${one.persona}`}
+      </OutLink>
     </div>
   );
 }

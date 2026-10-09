@@ -26,7 +26,9 @@ import {
   focusedSetting,
   levelOf,
   linkToGroup,
+  PICK_VAULT,
   settingsPlace,
+  showPersona,
   useShownGroup,
 } from "./links";
 import { kept, projectGroups, useProjectLevel } from "./project";
@@ -34,6 +36,7 @@ import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawTo
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 import { CollectionView, type Asked } from "./Collection";
+import { OutLink } from "./OutLink";
 import { standingIn, type Standing } from "./standing";
 
 /**
@@ -180,7 +183,10 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
       plane={plane}
       place={settingsPlace("project", plane)}
       {...switcher}
-      about="This project, for everyone who opens it. Never put a secret in its files: keep it in a vault and name it as vault:<vault>/<key>."
+      about={withVaults(
+        "This project, for everyone who opens it. Never put a secret in its files: keep it in a vault and name it as vault:<vault>/<key>.",
+        plane,
+      )}
       groups={groups}
       waiting={waitingFor(project)}
       standing={standing}
@@ -235,6 +241,22 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
   );
 }
 
+/**
+ * A level's sentence that names a vault, with the link to the vaults (#1388): a vault stays in
+ * its own tab, and Settings links to it. Settings names "a vault", not one, so the link opens
+ * the vault picker, as the palette's Open vault… does.
+ */
+function withVaults(sentence: string, plane: PlaneId): ReactNode {
+  return (
+    <>
+      {sentence}{" "}
+      <OutLink plane={plane} action={PICK_VAULT}>
+        Open vault…
+      </OutLink>
+    </>
+  );
+}
+
 /** What stands in for a level's groups until it has been read. */
 function waitingFor(
   level: { state: "reading" } | { state: "trouble"; trouble: string } | Driven<unknown>,
@@ -284,7 +306,10 @@ function WorkspaceLevelTab({
       plane={plane}
       place={settingsPlace("workspace", plane, workspace)}
       {...switcher}
-      about={`The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`}
+      about={withVaults(
+        `The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`,
+        plane,
+      )}
       groups={groups}
       waiting={waitingFor(level)}
       standing={
@@ -332,7 +357,7 @@ function Shown({
   plane?: PlaneId;
   /** Where the group shown is remembered (`links.settingsPlace`). */
   place: string;
-  about: string;
+  about: ReactNode;
   groups: readonly SettingsGroup[];
   waiting?: ReactNode;
   /** What charter refuses in the level's files as they stand, each with the setting it is about
@@ -570,7 +595,15 @@ function ShownGroup({
 }) {
   const row = (setting: Setting) =>
     inAFile(setting) ? (
-      driver && <FileRow key={setting.id} setting={setting} driver={driver} onNew={onNew} />
+      driver && (
+        <FileRow
+          key={setting.id}
+          setting={setting}
+          driver={driver}
+          onNew={onNew}
+          onAction={onAction}
+        />
+      )
     ) : (
       <LiveRow key={setting.id} setting={setting} />
     );
@@ -704,10 +737,13 @@ function FileRow({
   setting,
   driver: project,
   onNew,
+  onAction,
 }: {
   setting: FileSetting;
   driver: Driven<unknown>;
   onNew?: OnNew;
+  /** Runs a link out of Settings: a picked persona's Show (#1388). */
+  onAction?: (action: string) => void;
 }) {
   const from = heldIn(setting, project.files);
   const [pick, setPick] = useState<SettingsWhich>();
@@ -793,14 +829,32 @@ function FileRow({
         ) : setting.kind === "colour" ? (
           <Colour ids={ids} setting={setting} value={value} onValueChange={write} />
         ) : setting.names !== undefined ? (
-          <Picker
-            ids={ids}
-            setting={setting}
-            names={setting.names}
-            value={value}
-            onValueChange={write}
-            onNew={onNew}
-          />
+          <>
+            <Picker
+              ids={ids}
+              setting={setting}
+              names={setting.names}
+              value={value}
+              onValueChange={write}
+              onNew={onNew}
+            />
+            {/* A persona stays in its own tab, and the picker links to it (#1388): only one the
+                project lists, so the link never names a persona that is not there. */}
+            {onAction &&
+              setting.names === "persona" &&
+              value !== "" &&
+              (setting.choices ?? []).includes(value) && (
+                <button
+                  type="button"
+                  className="ui-setting-reset"
+                  // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+                  tabIndex={0}
+                  onClick={() => onAction(showPersona(value))}
+                >
+                  {`Show ${value}`}
+                </button>
+              )}
+          </>
         ) : setting.kind === "choice" ? (
           <Choice
             kind="select"

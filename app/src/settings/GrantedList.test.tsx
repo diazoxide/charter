@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
@@ -6,6 +6,7 @@ import type { SandboxGrant } from "../bindings";
 import { grantedGroup, grantSaid } from "./GrantedList";
 import type { LiveSetting } from "./groups";
 import { useSandboxCommands } from "../sandboxAsked";
+import { SETTINGS_ACTION, type SettingsActionAsk } from "./links";
 
 /**
  * **Settings › Sandbox › Granted** (#1348): every grant at every level, who granted it and when,
@@ -67,6 +68,36 @@ function Setting({ at }: { at: number }) {
 }
 
 const Granted = () => <Setting at={0} />;
+
+describe("the Granted list's links (#1388)", () => {
+  it("links a vault grant to the vault's tab and its persona's", async () => {
+    const heard: SettingsActionAsk[] = [];
+    const on = (event: Event) => heard.push((event as CustomEvent<SettingsActionAsk>).detail);
+    window.addEventListener(SETTINGS_ACTION, on);
+    onTestFinished(() => window.removeEventListener(SETTINGS_ACTION, on));
+    const VAULT: SandboxGrant = {
+      ...MINE,
+      id: "you\u001fvault\u001fforge\u001fsteward",
+      what: "vault",
+      target: "forge",
+      persona: "steward",
+    };
+    mockIPC((cmd) => (cmd === "sandbox_grants" ? [VAULT, CHAT] : null));
+    render(<Granted />);
+
+    const list = await screen.findByRole("list", { name: "Granted" });
+    const [vault, chat] = within(list).getAllByRole("listitem");
+    await userEvent.click(within(vault).getByRole("button", { name: "Open vault forge" }));
+    await userEvent.click(within(vault).getByRole("button", { name: "Show steward" }));
+
+    expect(heard).toEqual([
+      { plane: PLANE, action: "vault.open:forge" },
+      { plane: PLANE, action: "persona.show:steward" },
+    ]);
+    // A host names neither.
+    expect(within(chat).queryByRole("button", { name: /^(Open vault|Show) / })).toBeNull();
+  });
+});
 
 describe("the Granted list", () => {
   it("lists every level with who granted it, and Revoke takes one out", async () => {

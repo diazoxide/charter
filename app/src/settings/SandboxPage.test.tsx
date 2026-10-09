@@ -437,6 +437,8 @@ describe("Settings › Project › Sandbox", () => {
       ),
     ).toBeVisible();
     expect(within(page).queryByRole("button", { name: "Allow for devops chats" })).toBeNull();
+    // The persona stays in its own tab, and its row links to it (#1388).
+    expect(within(page).getByRole("button", { name: "Show qa" })).toBeVisible();
   });
 
   it("says a change applies to a chat from its next start, and how to restart one", async () => {

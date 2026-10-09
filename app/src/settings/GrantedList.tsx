@@ -4,7 +4,8 @@ import { Notice } from "../Notice";
 import { sandboxCommandReturned } from "../sandboxAsked";
 import type { RowIds } from "./components";
 import { DISPATCH } from "./dispatch";
-import { linkToGroup, settingsPlace } from "./links";
+import { linkToGroup, openVault, settingsPlace, showPersona } from "./links";
+import { OutLink } from "./OutLink";
 import type { SettingsGroup } from "./groups";
 
 /** The address of the Granted list (#1348): a sub-page of Sandbox. */
@@ -110,6 +111,18 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
           {grants.map((one) => (
             <li key={one.id}>
               <span>{grantSaid(one)}</span>
+              {/* A vault and a persona stay in their own tabs, and the list links to them
+                  (#1388). */}
+              {one.what === "vault" && (
+                <OutLink plane={plane} action={openVault(one.target)}>
+                  {`Open vault ${one.target}`}
+                </OutLink>
+              )}
+              {(one.what === "vault" || one.what === "persona-hosts") && one.persona !== null && (
+                <OutLink plane={plane} action={showPersona(one.persona)}>
+                  {`Show ${one.persona}`}
+                </OutLink>
+              )}
               {one.level === "project" && (
                 <span className="granted-note">Revoking it edits the committed {file}.</span>
               )}
