@@ -18,6 +18,7 @@ function choiceOf(value: string): TemplateChoice {
   return { kind: "named", id: value };
 }
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
+import { useNewerTrouble } from "./pickTrouble";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
@@ -109,18 +110,18 @@ export function FirstRun({
   }, []);
 
   // A cancelled dialog is null and says nothing. One that could not open is said where a refused
-  // open is (#1291), until the next try.
-  const [pickTrouble, setPickTrouble] = useState<string>();
+  // open is (#1291), until any open starts or a newer refusal comes.
+  const { said, pickFailed, started } = useNewerTrouble(trouble);
   const pick = useCallback(() => {
-    setPickTrouble(undefined);
+    started();
     void commands
       .pickProject()
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
       .then((answer) => {
-        if (answer.status === "error") setPickTrouble(answer.error);
+        if (answer.status === "error") pickFailed(answer.error);
         else if (answer.data) onOpenRepo(answer.data, choiceOf(template));
       });
-  }, [onOpenRepo, template]);
+  }, [onOpenRepo, template, pickFailed, started]);
 
   return (
     <section className="opener first-run" aria-labelledby="first-run-heading">
@@ -142,7 +143,7 @@ export function FirstRun({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          setPickTrouble(undefined);
+          started();
           if (typed.trim() && !opening) onOpenRepo(typed.trim(), choiceOf(template));
         }}
       >
@@ -204,9 +205,9 @@ export function FirstRun({
       {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
 
       {/* Verbatim: the sentence names the path and what was wrong with it. */}
-      {(pickTrouble ?? trouble) && (
+      {said && (
         <p className="trouble said-in-full" role="alert">
-          {pickTrouble ?? trouble}
+          {said}
         </p>
       )}
 
@@ -231,7 +232,14 @@ export function FirstRun({
                 {row.installed && !row.signed_in && (
                   <>
                     {" "}
-                    <button type="button" tabIndex={0} onClick={() => onSignInToForge(row)}>
+                    <button
+                      type="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        started();
+                        onSignInToForge(row);
+                      }}
+                    >
                       Sign in to {row.title}
                     </button>
                   </>

@@ -49,6 +49,8 @@ function core(
     refuses?: string;
     repoRefuses?: string;
     asksForge?: boolean;
+    /** Refuses once the forge is answered: a refusal that comes after the question. */
+    refusesWithForge?: string;
     pickFails?: string;
   } = {},
 ) {
@@ -76,6 +78,7 @@ function core(
     }
     if (cmd === "create_project") {
       if (over.refuses !== undefined) throw over.refuses;
+      if (over.refusesWithForge !== undefined && got.forge !== null) throw over.refusesWithForge;
       if (over.asksForge && got.forge === null)
         return { opened: null, asks_forge: "no repo was named to read it from" };
       return {
@@ -378,6 +381,33 @@ describe("making a project", () => {
       "the folder dialog could not be opened",
     );
     expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
+  });
+
+  it("gives a failed dialog's line to a newer refusal (#1291)", async () => {
+    // The forge's answer sends the form again without the form's own button, so a refusal can
+    // come after the dialog failed. The newer one is said, never the old line in its place.
+    core({
+      asksForge: true,
+      pickFails: "the folder dialog could not be opened",
+      refusesWithForge: "✗ /home/dev/new-thing is not empty. Nothing was written.",
+    });
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+    const question = await within(dialog).findByRole("group", {
+      name: "Which forge are its repos on?",
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Browse for the repo" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("could not be opened");
+
+    await userEvent.click(within(question).getByRole("button", { name: "GitHub" }));
+
+    await vi.waitFor(() =>
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("is not empty"),
+    );
+    expect(within(dialog).getByRole("alert")).not.toHaveTextContent("could not be opened");
   });
 
   it("says nothing when the folder dialog is cancelled", async () => {
