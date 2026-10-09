@@ -250,9 +250,12 @@ pub fn answer(
         // record of its open chats.
         Ask::WhereWorking(asks) => held
             .chats()
-            .working(asks.chat, asks.tell, &|chat| {
-                held.board().glance(chat).state
-            })
+            .working(
+                asks.chat,
+                asks.tell,
+                &|chat| held.board().glance(chat).state,
+                &|chat| task_prompt(held, chat),
+            )
             .map_or_else(
                 || no(format!("chat {} is not one this app has open", asks.chat)),
                 |working| Answer::Working(Box::new(working)),
@@ -260,6 +263,20 @@ pub fn answer(
         // An ask after a task this chat dispatched (#1441): no ticket, for the record's reason,
         // and whose task it names is the app's record of that chat.
         Ask::Task(asked) => crate::dispatched::answer(held, &asked, connection),
+    }
+}
+
+/// What chat `chat` is stopped on for the person, as the chat that asked for it is told: a
+/// permission its harness asked on the hook purlis holds, or another prompt its harness said
+/// it waits on (a question, or a permission on a harness that asks no hook).
+fn task_prompt(held: &Held, chat: u32) -> Option<purlis_core::awareness::Prompt> {
+    use purlis_core::awareness::Prompt;
+    if held.asks_open_for(chat) {
+        Some(Prompt::Permission)
+    } else if held.board().glance(chat).asking {
+        Some(Prompt::Other)
+    } else {
+        None
     }
 }
 
@@ -10836,6 +10853,80 @@ mod tests {
             waiting(&held, For::Chat(steward)).len(),
             1,
             "its own report"
+        );
+    }
+
+    #[test]
+    fn the_asking_chat_s_next_turn_is_told_once_that_its_task_waits_on_the_person() {
+        // Reported 2026-10-09: a task stopped on its harness's permission prompt in a tab
+        // nobody was at, and the chat that asked for it was told nothing.
+        use purlis_core::awareness::{Prompt, Tell, Waiting};
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        works(&held, task);
+        let told = |held: &Held| working(held, &id, steward, Tell::Turn).waiting_on_you;
+        working(&held, &id, steward, Tell::Start);
+        assert_eq!(told(&held), Vec::new());
+
+        // Its harness holds a permission prompt on the hook purlis listens on: said as one.
+        let _hook = held
+            .hooks()
+            .asks()
+            .raise(
+                &task.to_string(),
+                purlis_core::harness::hooked::Source::ClaudeCode,
+                &serde_json::json!({"tool_name": "Bash",
+                    "tool_input": {"command": "purlis persona where"}}),
+                std::time::Instant::now(),
+            )
+            .expect("raised");
+        let waiting = told(&held);
+        assert_eq!(
+            waiting,
+            [Waiting {
+                name: "check prod".to_owned(),
+                prompt: Prompt::Permission
+            }]
+        );
+        // Once: the next turn is told nothing more of the same prompt, and never its words.
+        assert_eq!(told(&held), Vec::new());
+        assert!(!format!("{waiting:?}").contains("persona where"));
+    }
+
+    #[test]
+    fn a_task_whose_harness_says_only_that_it_waits_is_told_as_waiting_on_the_person() {
+        use purlis_core::awareness::{Prompt, Tell};
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        works(&held, task);
+        working(&held, &id, steward, Tell::Start);
+
+        the_board_hears(&held, task, Event::Notification);
+
+        let waiting = working(&held, &id, steward, Tell::Turn).waiting_on_you;
+        assert_eq!(
+            waiting.iter().map(|one| one.prompt).collect::<Vec<_>>(),
+            [Prompt::Other]
+        );
+        // Answered, then asked again: a new prompt, told again.
+        works(&held, task);
+        assert!(
+            working(&held, &id, steward, Tell::Turn)
+                .waiting_on_you
+                .is_empty()
+        );
+        the_board_hears(&held, task, Event::Notification);
+        assert_eq!(
+            working(&held, &id, steward, Tell::Turn)
+                .waiting_on_you
+                .len(),
+            1
         );
     }
 

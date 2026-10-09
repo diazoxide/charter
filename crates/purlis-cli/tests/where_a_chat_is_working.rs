@@ -31,6 +31,7 @@ fn a_chat(chat: u32, name: &str, persona: &str, workspace: &str) -> Known {
         started: Some(STARTED),
         lineage: None,
         from: None,
+        asking: None,
     }
 }
 

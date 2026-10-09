@@ -292,6 +292,8 @@ fn settings(
     // And what a chat asks after a task it dispatched, each by its own name (D-T59-j8).
     allow.extend(DISPATCH_TASK_ALLOW.iter().map(|rule| (*rule).to_owned()));
     allow.extend(HANDOFF_ALLOW.iter().map(|rule| (*rule).to_owned()));
+    // And purlis's read-only commands, by name, beside their tools (reported 2026-10-09).
+    allow.extend(READ_ALLOW.iter().map(|rule| (*rule).to_owned()));
     allow.extend(
         crate::chattools::DISPATCH_TOOLS
             .iter()
@@ -427,6 +429,17 @@ fn permission_hook(binary: &std::path::Path) -> serde_json::Value {
 /// session record`, with any arguments, runs without asking (SI-8e, ADR 0064). Beside it, the
 /// read-only charter tools of [`crate::chattools::PRE_ALLOWED`] (V79).
 pub const SMART_CLOSE_ALLOW: &str = "Bash(purlis session record *)";
+
+/// The permission rules a Claude Code chat the app starts carries for **purlis's read-only
+/// commands that only answer from the app's own record of the chat** (reported 2026-10-09,
+/// on the terms of V98a and ADR 0064): a task whose brief ran `purlis persona where` stopped
+/// on the harness's prompt in a tab nobody was at, and waited there on the person.
+///
+/// Each is the command twin of a tool already in [`crate::chattools::PRE_ALLOWED`]: one
+/// operation, two entrances, allowed the same way (as `session_record` and its command are).
+/// **The whole line, with no wildcard**: the command takes no argument a chat would pass, so a
+/// line with anything more after it is asked about, and so is every other `persona` word.
+pub const READ_ALLOW: [&str; 1] = ["Bash(purlis persona where)"];
 
 /// The permission rules a Claude Code chat the app starts carries for a dispatch (V98b,
 /// amending ADR 0064): the task, by each flag its line can start with, and its report.
@@ -776,6 +789,86 @@ mod tests {
         assert!(settings["permissions"]["allow"].as_array().is_some());
         let (_, settings) = armed_as(&plane, "steward");
         assert_eq!(settings["permissions"].get("deny"), None);
+    }
+
+    /// Whether a rule of `allow` lets `command` run in Claude Code without asking: a `Bash(…)`
+    /// rule by its glob, as the dispatch guard's tests match one.
+    fn bash_allowed(allow: &[serde_json::Value], command: &str) -> bool {
+        allow
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|rule| {
+                rule.strip_prefix("Bash(")
+                    .and_then(|rule| rule.strip_suffix(')'))
+                    .is_some_and(|glob| crate::pypath::fnmatch(command, glob))
+            })
+    }
+
+    #[test]
+    fn a_task_chat_runs_the_read_only_purlis_commands_its_brief_runs_without_asking() {
+        // Reported 2026-10-09: a task whose brief ran `purlis persona where` and `purlis
+        // dispatch list` stopped on the harness's permission prompt in a tab nobody was at,
+        // and waited there on the person. A task chat is armed as any chat running as its
+        // persona is, so this is the settings a task gets.
+        use crate::personaverbs::tests_plane::Plane;
+        let plane = Plane::fixture("minimal");
+        let (_, task) = armed_as(&plane, "steward");
+        let allow = task["permissions"]["allow"].as_array().expect("allow");
+
+        for command in [
+            "purlis persona where",
+            "purlis dispatch list",
+            "purlis dispatch note \"half way\"",
+            "purlis dispatch ask \"which cluster?\"",
+            "purlis dispatch report --outcome done \"all green\"",
+        ] {
+            assert!(bash_allowed(allow, command), "{command:?} asks: {allow:?}");
+        }
+        for tool in ["persona_where", "dispatch_list", "dispatch_report"] {
+            let rule = serde_json::json!(format!("mcp__purlis__{tool}"));
+            assert!(allow.contains(&rule), "{rule} asks");
+        }
+
+        // Never more than any other chat the app starts, the one that asked included: a task
+        // is armed with the same allows, by the same code.
+        let empty = tempfile::tempdir().expect("a directory");
+        let StateHooks::ThisSessionOnly { args, .. } = adapter().arm(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(std::path::Path::new("/app/plugin")),
+                persona: None,
+            },
+            Some(empty.path()),
+            &crate::harness_plugin::Chosen::new(),
+            None,
+        ) else {
+            panic!("armed per session");
+        };
+        let at = args
+            .iter()
+            .position(|arg| arg == "--settings")
+            .expect("--settings");
+        let asker: serde_json::Value = serde_json::from_str(&args[at + 1]).expect("JSON");
+        assert_eq!(asker["permissions"]["allow"], task["permissions"]["allow"]);
+    }
+
+    #[test]
+    fn a_read_allowed_by_name_reaches_nothing_beside_it() {
+        // `purlis persona where` takes no argument a chat would pass, so its rule is the whole
+        // line: anything after it, or another word of `persona`, still asks.
+        let allow: Vec<serde_json::Value> = READ_ALLOW
+            .iter()
+            .map(|rule| serde_json::json!(rule))
+            .collect();
+        assert!(bash_allowed(&allow, "purlis persona where"));
+        for asks in [
+            "purlis persona where --now 2026-10-07T14:00:00",
+            "purlis persona where; touch x",
+            "purlis persona remember x",
+            "purlis persona",
+        ] {
+            assert!(!bash_allowed(&allow, asks), "{asks:?}");
+        }
     }
 
     #[test]
