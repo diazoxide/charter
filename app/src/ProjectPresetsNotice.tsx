@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { commands, type PlaneId, type PresetsChanged } from "./bindings";
 import { Notice } from "./Notice";
+import { SETTINGS, usePlaneChanged } from "./planeChanged";
 
 /**
  * **The project's Internet access presets changed** (ADR 0067 §1 as amended, spec #1330, #1385):
@@ -24,6 +25,10 @@ export function ProjectPresetsNotice({
 }) {
   const [changed, setChanged] = useState<PresetsChanged>();
 
+  // Read again when the project's settings change on disk (a pull, a branch switched, a hand's
+  // edit, #1550), so a change is told while the window is open, before more chats start.
+  const onDisk = usePlaneChanged([plane], SETTINGS);
+
   useEffect(() => {
     let live = true;
     void commands
@@ -36,7 +41,7 @@ export function ProjectPresetsNotice({
     return () => {
       live = false;
     };
-  }, [plane]);
+  }, [plane, onDisk]);
 
   if (changed === undefined) return null;
 
