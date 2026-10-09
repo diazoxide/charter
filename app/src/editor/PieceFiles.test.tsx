@@ -6,6 +6,7 @@ import type { ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { jumpTo } from "../fileJump";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
+import { SETTINGS_LINK, type SettingsLinkAsk } from "../settings/links";
 import { REVEAL_SAID, type Offer } from "../actions";
 
 const PLANE = "/plane" as unknown as PlaneId;
@@ -450,6 +451,25 @@ describe("open in your editor (RC-20)", () => {
 
     expect(await screen.findByText(/Choose your editor in Settings/)).toBeInTheDocument();
     expect(asked.some((one) => one.startsWith("open_in_your_editor"))).toBe(false);
+  });
+
+  it("links the ask for an editor to Settings' Editor group (#1201)", async () => {
+    core({ "a.txt": { kind: "text", text: "hello\n" } });
+    const asked: SettingsLinkAsk[] = [];
+    const heard = (event: Event) => asked.push((event as CustomEvent<SettingsLinkAsk>).detail);
+    window.addEventListener(SETTINGS_LINK, heard);
+    try {
+      render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
+      await userEvent.click(await button());
+
+      await userEvent.click(await screen.findByRole("button", { name: "Choose your editor" }));
+
+      expect(asked).toEqual([
+        { plane: PLANE, link: { group: "you.editor", setting: "you.editor.yours" } },
+      ]);
+    } finally {
+      window.removeEventListener(SETTINGS_LINK, heard);
+    }
   });
 
   it("says the core's sentence when the editor is not opened", async () => {
