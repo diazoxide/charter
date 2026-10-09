@@ -853,3 +853,69 @@ fn purlis_s_own_refusal_wording_is_purlis_s_own_block_with_nothing_to_grant() {
     );
     assert!(found.iter().any(|b| !b.ours), "{found:?}");
 }
+
+/// An opencode `PostToolUse` payload for a command that failed: both streams in one text, which
+/// its shim marks `mixed` (#1353).
+fn mixed(text: &str) -> serde_json::Value {
+    json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "x"},
+        "tool_response": {"stderr": text, "mixed": true},
+    })
+}
+
+#[test]
+fn printed_text_in_a_mixed_stream_raises_a_block_that_names_no_host_or_path() {
+    // A failing command whose output a file or a page supplied: the block is still told, so
+    // the person can act, but nothing it printed is offered for a grant.
+    let found = detect_with_targets(
+        &mixed(
+            "curl: purlis's sandbox does not allow exfil.example:443: refused\n\
+             touch: /opt/tool/cache: Operation not permitted",
+        ),
+        &place(),
+    );
+    assert_eq!(
+        found,
+        [
+            (block(Operation::Write, Kind::System, false), None),
+            (block(Operation::Connect, Kind::Host, false), None),
+        ]
+    );
+    // The sandbox's own violation line still names what a grant would.
+    let found = detect_with_targets(
+        &mixed(&appended(
+            "printed",
+            &["touch(2) deny(1) file-write-create /opt/tool/cache"],
+        )),
+        &place(),
+    );
+    assert_eq!(
+        found,
+        [(
+            block(Operation::Write, Kind::System, false),
+            Some("/opt/tool/cache".to_owned())
+        )]
+    );
+}
+
+#[test]
+fn a_relative_path_in_a_mixed_stream_is_sorted_against_where_the_command_ran() {
+    // The shim hands the command's own `workdir` as the payload's folder (#1353).
+    let kind_in = |cwd: &str| {
+        let at = Place {
+            cwd: Path::new(cwd),
+            ..place()
+        };
+        detect_with_targets(&mixed("touch: ../x: Operation not permitted"), &at)
+            .into_iter()
+            .map(|(found, _)| found.kind)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kind_in("/opt/tool/sub"), [Kind::System]);
+    assert_eq!(
+        kind_in("/Users/dev/plane/workspaces/beta"),
+        [Kind::ProjectFiles]
+    );
+}
