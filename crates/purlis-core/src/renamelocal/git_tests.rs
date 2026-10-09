@@ -37,15 +37,23 @@ fn a_folder_whose_git_link_purlis_will_not_follow_is_said_never_skipped() {
 fn a_project_path_holding_pattern_characters_is_excluded_as_written() {
     // #1285: a folder named with a glob character would otherwise make the line match other
     // folders, or none.
-    assert_eq!(exclude_line("", ".purlis/"), "/.purlis/");
-    assert_eq!(exclude_line("sub/", ".purlis/"), "/sub/.purlis/");
+    assert_eq!(exclude_line("", ".purlis/").unwrap(), "/.purlis/");
+    assert_eq!(exclude_line("sub/", ".purlis/").unwrap(), "/sub/.purlis/");
     assert_eq!(
-        exclude_line("a*b/c?d/[x]/e\\f/", "purlis.local.toml"),
+        exclude_line("a*b/c?d/[x]/e\\f/", "purlis.local.toml").unwrap(),
         "/a\\*b/c\\?d/\\[x]/e\\\\f/purlis.local.toml"
     );
     // Never at the start of the line, so neither is read as a negation or a comment.
     assert_eq!(
-        exclude_line("!keep/#note/", ".purlis/"),
+        exclude_line("!keep/#note/", ".purlis/").unwrap(),
         "/!keep/#note/.purlis/"
     );
+}
+
+#[test]
+fn a_project_path_holding_a_line_break_gets_no_exclude_line() {
+    // `a<LF>*/` written as it is would add the line `*/.purlis/`, and `x<LF>*<LF>y/` the line
+    // `*`, which ignores every untracked file in the repository.
+    assert_eq!(exclude_line("a\n*/", ".purlis/"), None);
+    assert_eq!(exclude_line("x\r\n*/", "purlis.local.toml"), None);
 }

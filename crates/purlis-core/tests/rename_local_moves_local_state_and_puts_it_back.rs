@@ -39,11 +39,16 @@ fn git(dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 fn machine() -> Machine {
+    machine_in("work/plane", "work/plane")
+}
+
+/// [`machine`] with the project at `plane` under the home, in a repository made at `repo`.
+fn machine_in(plane: &str, repo: &str) -> Machine {
     let dir = tempfile::tempdir().unwrap();
     let home = std::fs::canonicalize(dir.path()).unwrap();
-    let plane = home.join("work/plane");
+    let plane = home.join(plane);
     std::fs::create_dir_all(&plane).unwrap();
-    assert!(git(&plane, &["init", "-q"]).status.success());
+    assert!(git(&home.join(repo), &["init", "-q"]).status.success());
     std::fs::write(plane.join("charter.toml"), "schema = 1\n").unwrap();
     std::fs::write(plane.join("charter.local.toml"), "[harness]\nuse = \"x\"\n").unwrap();
     std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
@@ -306,6 +311,23 @@ fn the_undo_gives_back_the_before_state_byte_for_byte() {
         .filter(|(path, _)| !path.starts_with(journal))
         .collect();
     assert!(again == before, "{:?}", differ(&again, &before));
+}
+
+#[test]
+fn a_project_whose_path_holds_a_pattern_character_is_ignored_and_undone_as_written() {
+    // #1285: the exclude line escapes the `*`, and the undo knows that line as its own.
+    purlis_core::unsteered!();
+    let m = machine_in("work/a*b", "work");
+
+    assert!(renamelocal::run(&m.local, &nobody_running()).complete);
+    let exclude = std::fs::read_to_string(m.home.join("work/.git/info/exclude")).unwrap();
+    assert!(
+        exclude.lines().any(|line| line == "/a\\*b/.purlis/"),
+        "{exclude}"
+    );
+    let undone = renamelocal::undo(&m.local, &nobody_running());
+    assert!(undone.complete && undone.changed, "{:#?}", undone.said);
+    assert!(m.plane.join("charter.local.toml").is_file());
 }
 
 #[test]
