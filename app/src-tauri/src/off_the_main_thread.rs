@@ -16,6 +16,11 @@
 //! name who committed each of the project's grants, which asks git, so the dispatch grants'
 //! read and revoke and the sandbox grants' read and revoke answer off it as well (#1543).
 //!
+//! **And every command that reads a branch's files** (#1007): a file for the light editor,
+//! which may be 5 MiB, and Move aside…, which asks git whether `AGENTS.md` is the operator's.
+//! Copy path and Reveal place the path on the disk off it too, then put it on the clipboard or
+//! hand it to the file manager. The rest of `piecefiles.rs` already was.
+//!
 //! `chat_usage` stays synchronous too: it reads one file of sixteen rows, about 30 µs, and walks
 //! nothing. So does `workspace_focused`, which checks a name and hands the extensions' report
 //! to a thread of its own.
@@ -507,6 +512,9 @@ mod tests {
         let plane = planes.open(root);
         let app = mock_builder()
             .manage(planes)
+            // Copy path's. A path in a project with nothing in it is refused before anything is
+            // put on it, and the system clipboard is opened only when something is.
+            .manage(crate::vaults::SystemClipboard::default())
             .invoke_handler(tauri::generate_handler![
                 crate::worktrees::worktree_of_chat,
                 crate::worktrees::worktree_list,
@@ -515,6 +523,9 @@ mod tests {
                 crate::worktrees::worktree_merge,
                 crate::worktrees::worktree_add,
                 crate::workspaces::workspace_at_risk,
+                crate::piecefiles::piece_file,
+                crate::piecefiles::move_their_agents_md_aside,
+                crate::piecefiles::copy_branch_path,
                 crate::smartclose::smart_close_offer,
                 crate::smartclose::smart_close,
                 crate::smartclose::cancel_smart_close,
@@ -527,8 +538,8 @@ mod tests {
         (app, plane)
     }
 
-    /// What the commands that run git are asked with, in a project with no workspace: each is
-    /// refused, or finds nothing, inside its work.
+    /// What the commands that run git, or read a branch's files, are asked with, in a project
+    /// with no workspace: each is refused, or finds nothing, inside its work.
     ///
     /// `workspace_create` and `workspace_remove` are not here: they take the app's handle to
     /// tell the extensions, and the mock runtime cannot hand them one. Each runs its work in
@@ -539,6 +550,15 @@ mod tests {
         });
         let mut remove = piece.clone();
         remove["force"] = json!(false);
+        // A branch's files (#1007): each is refused inside its work, as there is no branch.
+        let aside = piece.clone();
+        let mut file = piece.clone();
+        // Not `reveal_branch_path`: it takes the app's handle to reach the file manager, which
+        // the mock runtime cannot hand it. It places the path in `crate::off_the_window`, as
+        // Copy path does.
+        file["path"] = json!("README.md");
+        let mut copy = file.clone();
+        copy["absolute"] = json!(true);
         vec![
             (
                 "worktree_of_chat",
@@ -559,6 +579,9 @@ mod tests {
                 "workspace_at_risk",
                 json!({ "plane": plane, "workspace": "alpha" }),
             ),
+            ("piece_file", file),
+            ("move_their_agents_md_aside", aside),
+            ("copy_branch_path", copy),
         ]
     }
 
