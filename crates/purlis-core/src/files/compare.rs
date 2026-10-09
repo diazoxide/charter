@@ -1193,7 +1193,22 @@ mod tests {
         assert!(made.ok(), "{}", made.err);
         std::fs::write(work.join("tracked.txt"), "one\n").unwrap();
         assert!(crate::testgit::run(&work, &["add", "tracked.txt"]).ok());
-        assert!(crate::testgit::run(&work, &["commit", "-q", "-m", "one"]).ok());
+        assert!(
+            crate::testgit::run(
+                &work,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "one",
+                ]
+            )
+            .ok()
+        );
         // Past Linux's 4,096 bytes, and so past macOS's 1,024 too.
         deep_chain(&work, 4096 + work.as_os_str().len());
         // Walked after `top`: the walk has to come back from the chain to find it.
@@ -1267,7 +1282,22 @@ mod tests {
         std::fs::write(work.join(&folder).join("kept.txt"), "kept\n").unwrap();
         let tracked = format!("{folder}/kept.txt");
         assert!(crate::testgit::run(&work, &["add", "--", &tracked]).ok());
-        assert!(crate::testgit::run(&work, &["commit", "-q", "-m", "deep"]).ok());
+        assert!(
+            crate::testgit::run(
+                &work,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "deep",
+                ]
+            )
+            .ok()
+        );
         std::fs::write(work.join(&folder).join("new.txt"), "new\n").unwrap();
 
         let repo = gix::open(&work).unwrap();
