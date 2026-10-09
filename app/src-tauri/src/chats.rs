@@ -2213,12 +2213,7 @@ impl Chats {
                     purlis_core::active::Place::Workspace,
                 ),
                 state: purlis_core::state::State::Unknown,
-                started: one
-                    .chat
-                    .identity
-                    .id
-                    .as_deref()
-                    .and_then(purlis_core::awareness::started_of),
+                started: purlis_core::awareness::run_started(&one.chat.identity),
                 // The lineage it is in, as a dispatch counts it (#1455).
                 lineage: one
                     .chat
