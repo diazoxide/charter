@@ -67,6 +67,7 @@ pub fn note_after_an_unknown_word(first: &str) {
     if first.starts_with('-') || !extension::project::id_ok(first) {
         return;
     }
+    // The command line reaching the app's built-in extensions: #1366.
     eprintln!(
         "No extension installed on this machine is called '{first}' either. The command line \
          runs the commands of extensions you installed, and does not reach the app's built-in \

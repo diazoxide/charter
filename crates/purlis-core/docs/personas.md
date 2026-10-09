@@ -224,9 +224,9 @@ purlis persona remember devops "the migration runbook is at ..." --shared
 purlis persona remember devops "trying approach X for this task" --ephemeral
 ```
 
-Persistent memory is written into the committed tree. Committing it as it is written is not
-in this version yet: when the plane's `[memory].share` is anything but `local`, `remember`
-says so, and you commit and push `memory/` with git (or `purlis save`). Ephemeral memory is
+Persistent memory is written into the committed tree, and no command commits it as it is
+written: the plane's save commits it with everything else (`purlis save`, or auto-save), as
+far as `[plane].mode` says. Ephemeral memory is
 gitignored scratch for one session.
 
 Read it back with `purlis persona recall devops [--query "kubeconfig"]`, or search the

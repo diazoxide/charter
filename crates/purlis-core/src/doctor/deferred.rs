@@ -18,7 +18,7 @@
 
 use super::Row;
 
-/// What every deferred row says to do about it.
+/// What every deferred row says to do about it. The checks are OB-8's (#994) and FG-2's (#802).
 pub(crate) const DEFERRED_HINT: &str = "This purlis does not run this check yet, so its \
                                         silence means nothing — it is not saying the check \
                                         passed.";

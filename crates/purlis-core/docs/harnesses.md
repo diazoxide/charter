@@ -1,9 +1,8 @@
 # Harnesses
 
-A **harness** is the agent program a chat runs: Claude Code or Codex. The app starts both,
-arms each chat it starts with purlis's hooks and its Bash guard for that session alone, and
-installs nothing into either. Starting opencode chats is not in this version yet: an opencode
-profile is read and listed, and a start on it is refused.
+A **harness** is the agent program a chat runs: Claude Code, Codex or opencode. The app starts
+each, arms each chat it starts with purlis's hooks and its Bash guard for that session alone,
+and installs nothing into any of them.
 
 Chats are started from the app's window. On the command line, `purlis harness list` shows
 what a chat can be started on:
@@ -34,7 +33,8 @@ refused:
 ! to use the profiles in charter.local.toml: purlis reinit
 ```
 
-A `purlis <profile>` command that starts a chat from a terminal is not in this version yet.
+A `purlis <profile>` command that starts a chat from a terminal is not in this version yet
+(#1576).
 
 ## Two accounts of one harness, or one version pinned
 
@@ -298,6 +298,6 @@ reads `unknown` rather than being half-armed from somewhere else.
 Claude Code's footer command. Inside the app it prints an empty line — the window already
 draws the plane — and still records the turn's token usage. Run anywhere else, it draws the
 plane's identity row and says in its body which parts it does not draw yet: repos, personas
-and the session. `--watch` is refused with a reason (exit 1): there is no repaint yet, and
+and the session (#997). `--watch` is refused with a reason (exit 1): there is no repaint yet, and
 one frame would pass for a watch that stopped. `--interval` is still parsed, so the refusal is
 purlis's and not a usage error.

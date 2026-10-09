@@ -129,7 +129,7 @@ the keys and the command — never a value.
 - **`reference`** — the file holds URIs, not values, resolved at read time:
   `op://<vault>/<item>/<field>` through `op read`, `vault://<path>#<FIELD>` through
   `vault kv get`. A reference file is safe to commit. `browser://` references are recognised
-  and refused: the browser lane is not in this version yet.
+  and refused: the browser lane is not in this version yet (#996).
 - **`1password`** — purlis keeps the vault in one 1Password item (`charter-<vault>`, or
   `--op-item`), each secret a concealed field of it, read and written through the `op` CLI; a
   value reaches `op` on stdin, never in its arguments.
@@ -161,7 +161,7 @@ keyring.** In the app, *New vault* with 1Password chosen is a short set-up:
    command-line integration and its own unlock: choose the account from the ones `op` lists,
    or type its sign-in address (`my.1password.com`, a regional one such as
    `acme.1password.eu`, a company's own). The account is pinned for this machine only. A
-   1Password Connect server is not offered: the provider does not support one yet.
+   1Password Connect server is not offered: the provider does not support one yet (#1542).
 2. **Where the items live.** The 1Password vault, chosen from the ones that sign-in can see
    (typed where it may not list them), and the item purlis keeps this vault's secrets in
    (`charter-<vault>` unless you name another).
@@ -370,7 +370,7 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
   Clipboard** is on, macOS may sync the copy to your other Apple devices, which purlis cannot
   reach to clear; turn it off for a machine that copies secrets.
 
-`purlis doctor`'s vaults row does not check vaults yet. Its `op for vaults` and `vault for
+`purlis doctor`'s vaults row does not check vaults yet (#994). Its `op for vaults` and `vault for
 vaults` rows say only whether each provider's program is found. Its `vault tokens` row says,
 for each vault read with a token (through a variable, or kept in the keyring alone), whether the token is marked as kept in the
 system keyring, in this environment only, or nowhere. It warns for the last two. It says so
