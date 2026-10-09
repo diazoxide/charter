@@ -7,8 +7,21 @@
 //! read every workspace, every memory or every session record are `async` and do their reading
 //! on a blocking thread, as `workspace_repos` already did for git.
 //!
+//! **Every command that runs git answers off the window's thread too** (#1007): a git process
+//! takes milliseconds to start before it does anything, so no such command can stay under the
+//! 1 ms the window can spare. That is the worktree verbs (list, which piece a chat is in,
+//! remove, done, merge, and New branch, which already was), and a workspace's create, its
+//! at-risk reading and its remove. Create and remove also read the sidebar's model again under
+//! its lock, which the watcher holds while it applies a change.
+//!
 //! `chat_usage` stays synchronous too: it reads one file of sixteen rows, about 30 µs, and walks
-//! nothing.
+//! nothing. So does `workspace_focused`, which checks a name and hands the extensions' report
+//! to a thread of its own.
+//!
+//! Smart close's offer, its start and its cancel stay synchronous, for a terminal's reason. They
+//! run no git and read only what the app holds in memory, well under 1 ms. The start types its
+//! prompt into the chat's pane, and a cancel pressed straight after must land after it: Tauri
+//! keeps that order only for synchronous commands.
 //!
 //! A terminal's own commands stay synchronous on purpose. They take well under 5 ms, and the
 //! window relies on their order: a pane's resize must land before the watch that follows it
@@ -433,6 +446,210 @@ mod tests {
             json!({ "plane": plane, "id": 7 }),
         );
         assert_eq!(kept.answered_on, asking);
+    }
+
+    /// A project with no workspace in it, as the window holds it, with the commands that run
+    /// git and the ones beside them that stay where they were asked.
+    fn app_running_git(root: &Path) -> (tauri::App<MockRuntime>, PlaneId) {
+        let planes = Planes::telling(std::sync::Arc::new(|_| {}), crate::Shipped::default(), None);
+        let plane = planes.open(root);
+        let app = mock_builder()
+            .manage(planes)
+            .invoke_handler(tauri::generate_handler![
+                crate::worktrees::worktree_of_chat,
+                crate::worktrees::worktree_list,
+                crate::worktrees::worktree_remove,
+                crate::worktrees::worktree_done,
+                crate::worktrees::worktree_merge,
+                crate::worktrees::worktree_add,
+                crate::workspaces::workspace_at_risk,
+                crate::smartclose::smart_close_offer,
+                crate::smartclose::smart_close,
+                crate::smartclose::cancel_smart_close,
+            ])
+            .build(tauri_context!(test = true))
+            .expect("the app builds");
+        tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::default())
+            .build()
+            .expect("the main window");
+        (app, plane)
+    }
+
+    /// What the commands that run git are asked with, in a project with no workspace: each is
+    /// refused, or finds nothing, inside its work.
+    ///
+    /// `workspace_create` and `workspace_remove` are not here: they take the app's handle to
+    /// tell the extensions, and the mock runtime cannot hand them one. Each runs its work in
+    /// `crate::off_the_window`, as `workspace_at_risk` does.
+    fn the_git_commands(plane: &PlaneId, root: &Path) -> Vec<(&'static str, Value)> {
+        let piece = json!({
+            "plane": plane, "workspace": "alpha", "repo": "thing", "piece": "piece",
+        });
+        let mut remove = piece.clone();
+        remove["force"] = json!(false);
+        vec![
+            (
+                "worktree_of_chat",
+                json!({ "plane": plane, "cwd": root.join("workspaces/alpha/thing") }),
+            ),
+            (
+                "worktree_list",
+                json!({ "plane": plane, "workspace": "alpha", "repo": "thing" }),
+            ),
+            ("worktree_remove", remove),
+            ("worktree_done", piece.clone()),
+            ("worktree_merge", piece),
+            (
+                "worktree_add",
+                json!({ "plane": plane, "workspace": "alpha", "repo": "thing", "branch": null }),
+            ),
+            (
+                "workspace_at_risk",
+                json!({ "plane": plane, "workspace": "alpha" }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_commands_that_run_git_answer_off_the_thread_that_asked() {
+        // #1007. Where each answers is the point, not what: a refusal given inside the work is
+        // given on the blocking thread the work runs on.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (app, plane) = app_running_git(dir.path());
+        let asking = std::thread::current().id();
+
+        let on_the_asking_thread: Vec<&str> = the_git_commands(&plane, dir.path())
+            .into_iter()
+            .filter(|(command, args)| ask(&app, command, args.clone()).answered_on == asking)
+            .map(|(command, _)| command)
+            .collect();
+
+        assert!(
+            on_the_asking_thread.is_empty(),
+            "answered on the thread that asked, which in the app is the window's: \
+             {on_the_asking_thread:?}"
+        );
+    }
+
+    #[test]
+    fn smart_close_and_its_cancel_answer_on_the_thread_that_asked_so_they_keep_their_order() {
+        // #1007: the start types its prompt into the pane, and a cancel pressed after it must
+        // land after it. Each refuses or does nothing here, as there is no chat 7.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (app, plane) = app_running_git(dir.path());
+        let asking = std::thread::current().id();
+        let chat = json!({ "plane": plane, "session": 7 });
+
+        for command in ["smart_close_offer", "smart_close", "cancel_smart_close"] {
+            assert_eq!(
+                ask(&app, command, chat.clone()).answered_on,
+                asking,
+                "{command}"
+            );
+        }
+    }
+
+    /// How long the commands #1007 lists hold the thread that asked, five asks each, printed.
+    fn print_how_long_each_holds(app: &tauri::App<MockRuntime>, cases: &[(&str, Value)]) {
+        for (command, args) in cases {
+            let mut held: Vec<(Duration, Duration)> = (0..5)
+                .map(|_| {
+                    let started = Instant::now();
+                    let asked = ask(app, command, args.clone());
+                    (asked.held_for, started.elapsed())
+                })
+                .collect();
+            held.sort();
+            println!(
+                "  {command}: asking thread held for a median of {:?} (min {:?}, max {:?}); \
+                 answered after {:?}",
+                held[2].0, held[0].0, held[4].0, held[2].1
+            );
+        }
+    }
+
+    /// How long the commands #1007 lists hold the thread that asked: `cargo test -p purlis-app
+    /// off_the_main_thread -- --ignored --nocapture`. First in a project with nothing in it,
+    /// which runs anywhere; then, where `git init` may write a `.git` folder, in one with a
+    /// clone and a branch of it.
+    #[test]
+    #[ignore = "a measurement, printed; run it by hand"]
+    fn how_long_the_commands_that_run_git_hold_the_thread_that_asked() {
+        // What one git process costs before it does anything: the floor under every command
+        // that runs one, and so the least each held the window for while it was synchronous.
+        let mut spawns: Vec<Duration> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                purlis_core::forklock::output(std::process::Command::new("git").arg("--version"))
+                    .expect("git runs");
+                started.elapsed()
+            })
+            .collect();
+        spawns.sort();
+        println!("one `git --version`: a median of {:?}", spawns[2]);
+
+        let empty = tempfile::tempdir().expect("a temp dir");
+        let (app, plane) = app_running_git(empty.path());
+        let chat = json!({ "plane": plane, "session": 7 });
+        let mut cases = the_git_commands(&plane, empty.path());
+        cases.extend([
+            ("smart_close_offer", chat.clone()),
+            ("smart_close", chat.clone()),
+            ("cancel_smart_close", chat),
+        ]);
+        println!("in a project with nothing in it:");
+        print_how_long_each_holds(&app, &cases);
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = std::fs::canonicalize(dir.path()).expect("its path");
+        let clone = root.join("workspaces/alpha/thing");
+        std::fs::create_dir_all(&clone).expect("the clone's folder");
+        std::fs::write(root.join("workspaces/alpha/workspace.md"), "# alpha\n").expect("its md");
+        let git = |args: &[&str]| {
+            purlis_core::forklock::output(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&clone)
+                    .args(["-c", "user.email=t@e.invalid", "-c", "user.name=t"])
+                    .args(["-c", "commit.gpgsign=false"])
+                    .args(args),
+            )
+            .is_ok_and(|ran| ran.status.success())
+        };
+        std::fs::write(clone.join("README.md"), "one\n").expect("a file");
+        if !(git(&["init", "-q", "-b", "main", "."])
+            && git(&["add", "-A"])
+            && git(&["commit", "-q", "-m", "one"]))
+        {
+            println!("git could not make a clone here, so there is no measure with one");
+            return;
+        }
+        let added = purlis_core::worktree::add(&root, "alpha", "thing", "piece", None)
+            .expect("a branch of it");
+        let (app, plane) = app_running_git(&root);
+        let piece = json!({
+            "plane": plane, "workspace": "alpha", "repo": "thing", "piece": "piece",
+        });
+        println!("in a project with a clone and a branch of it:");
+        print_how_long_each_holds(
+            &app,
+            &[
+                (
+                    "worktree_of_chat",
+                    json!({ "plane": plane, "cwd": added.path }),
+                ),
+                (
+                    "worktree_list",
+                    json!({ "plane": plane, "workspace": "alpha", "repo": "thing" }),
+                ),
+                ("worktree_done", piece.clone()),
+                ("worktree_merge", piece),
+                (
+                    "workspace_at_risk",
+                    json!({ "plane": plane, "workspace": "alpha" }),
+                ),
+            ],
+        );
     }
 
     #[test]
