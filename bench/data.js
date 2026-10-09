@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791526783420,
+  "lastUpdate": 1791527951277,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4410,6 +4410,48 @@ window.BENCHMARK_DATA = {
             "value": 104.8081605,
             "unit": "ms",
             "extra": "median of 5 runs: 101.692, 102.976, 104.808, 105.314, 105.842 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "63148fa5497000ce802cf0b714480bbb555919ea",
+          "message": "Say why an ask that leaves the window unanswered is not looked at again\n\nRead every route by which a window ask can leave without an answer: its\ndeadline passing, and its hook going away. In both the hook decides\nnothing, so the harness asks in its pane (the person's to answer, a key\nthat stands the end down), or the harness stopped (its turn's end or its\nprogram's end is the look). None leaves a reported task with neither a\nprompt nor a bound while it works on. A bound the ask spent is\ndeliberately not given anew there, so an unannounced pane prompt is never\nended under the person. Recorded on Seen::prompt_showing. Whether Claude\nCode says a pane prompt with a Notification after a hook decides\nnothing is still to be probed on a real chat.\n\nRefs #1525\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T10:38:02+04:00",
+          "tree_id": "71a42ee33aaba6ae0d417f0007969be37a60b02a",
+          "url": "https://github.com/purlis/purlis/commit/63148fa5497000ce802cf0b714480bbb555919ea"
+        },
+        "date": 1791527950508,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5470395000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.504, 0.540, 0.547, 0.567, 0.574 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.384251499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.357, 16.705, 17.384, 17.463, 17.538 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 106.56055,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.834, 103.640, 106.561, 107.549, 108.603 ms"
           }
         ]
       }
