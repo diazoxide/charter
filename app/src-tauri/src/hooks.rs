@@ -1552,26 +1552,23 @@ impl ChatBoard for Hooks {
     }
 }
 
-/// **A tool of chat `chat`'s own came back while it was stopped on its prompt** (#1601): the
-/// person answered the prompt in the chat's pane, which no hook says, and its turn goes on, as
-/// for an answer in the window (`Board::answered`). What the window is told, or nothing for a
-/// chat that waited on no prompt or a line that says no tool came back
-/// (`purlis_core::doing::Said::goes_on_past_a_prompt`). Before the chat's line is told, so the
-/// line is drawn for a chat the board has running again.
+/// **A tool of chat `chat`'s own, heard while it was stopped on its prompt** (#1601): one that
+/// came back after another began past the prompt says the person answered it in the chat's
+/// pane, which no hook says, and its turn goes on, as for an answer in the window
+/// (`Board::answered`). What the window is told, or nothing for a chat that waited on no prompt
+/// or a line that does not say so (`purlis_core::state::Chat::tool_said`). Before the chat's
+/// line is told, so the line is drawn for a chat the board has running again.
 fn got_past_its_prompt(
     board: &Mutex<Board>,
     plane: &PlaneId,
     chat: u32,
     said: &purlis_core::doing::Said,
 ) -> Option<Moved> {
-    if !said.goes_on_past_a_prompt() {
+    if !said.goes_on_past_a_prompt() && !said.starts_a_tool_of_its_own() {
         return None;
     }
     let mut board = held_board(board);
-    if !board.waits_on_its_prompt(chat) {
-        return None;
-    }
-    moving(&mut board, plane, chat, |board| board.answered(chat))
+    moving(&mut board, plane, chat, |board| board.tool_said(chat, said))
 }
 
 /// Makes one move of chat `session` on the board, and answers what the window must now be
@@ -1903,12 +1900,11 @@ mod tests {
         let (hooks, _) = stopped_on_its_prompt(7);
         let past = |said: Said| got_past_its_prompt(&hooks.board, &hooks.plane, 7, &said);
 
-        // A tool about to run may be the call being asked about; a helper back is not the
-        // chat's own answer. Neither moves it.
+        // A tool at work when the chat asked, run beside the asked call, comes back whatever
+        // the person does; a helper back is not the chat's own answer. Neither moves it.
         assert!(
-            past(Said::Began {
-                kind: Kind::Command,
-                name: None
+            past(Said::Ended {
+                kind: Some(Kind::Command)
             })
             .is_none()
         );
@@ -1918,8 +1914,17 @@ mod tests {
             })
             .is_none()
         );
+        // A tool about to run may be the call being asked about: no move of its own.
+        assert!(
+            past(Said::Began {
+                kind: Kind::Command,
+                name: None
+            })
+            .is_none()
+        );
         assert!(hooks.board().waits_on_its_prompt(7));
 
+        // One of its own that comes back after it: the turn went on past the prompt.
         let moved = past(Said::Ended {
             kind: Some(Kind::Command),
         })

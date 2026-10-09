@@ -616,8 +616,11 @@ answered only where it always was:
   Past that hold the harness's own prompt decides in the task's pane and the needs-you row
   goes, and the Notice stays, without the prompt's words, for as long as the board says the
   task is stopped on its prompt: from the harness's `Notification` in the middle of a turn
-  until the prompt is answered in the window, a tool of the task's own comes back (it was
-  answered in the task's pane, which no hook says), its turn ends, or it ends (#1601);
+  until the prompt is answered in the window, a tool of the task's own that began after the
+  prompt comes back (it was answered in the task's pane, which no hook says; a tool already
+  at work beside the asked call is no answer), its turn ends, its next prompt begins, or it
+  ends (#1601). A Deny or an Esc in the task's pane ends the turn with no hook that says so,
+  so the Notice then stays until the task's next prompt;
 - the asking chat's next turn is told in one line, once for each prompt, that the task waits on
   the person, and that only the person answers it, in the task's own tab.
 

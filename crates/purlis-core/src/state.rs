@@ -402,6 +402,10 @@ pub struct Chat {
     /// why this is a fact of its own and not `needs_you`. Only while the chat still waits on
     /// that prompt is it part of what a reader is shown ([`Chat::waits_on_its_prompt`], #1601).
     asking: bool,
+    /// Whether a tool of the chat's own began after it came to wait on its prompt (#1601): what
+    /// a tool that comes back must follow to say the chat got past the prompt
+    /// ([`Chat::tool_said`]). Cleared by each prompt it asks and each turn it begins.
+    began_past_its_prompt: bool,
     /// How many prompts have started a turn of this chat since the app started it.
     turns: u32,
     /// The child agents of its current run, shown under it (FD-18, W8).
@@ -432,6 +436,7 @@ impl Chat {
             reported: false,
             refusals: Vec::new(),
             asking: false,
+            began_past_its_prompt: false,
             turns: 0,
             children: children::Children::default(),
             held: false,
@@ -735,6 +740,7 @@ impl Chat {
                 self.needs.clear();
                 self.reported = false;
                 self.asking = false;
+                self.began_past_its_prompt = false;
                 self.held = false;
                 self.turns = self.turns.saturating_add(1);
             }
@@ -743,6 +749,7 @@ impl Chat {
                 // Asked in the middle of a turn. After one has ended it is only a nudge.
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
+                self.began_past_its_prompt = false;
                 // The nudge of a chat that reported to the chat that asked is not it waiting
                 // on the person (#1448), and neither is the nudge of one that waits on its
                 // tasks or on its asker's answer (#1491). A question mid-turn always is.
@@ -828,9 +835,8 @@ impl Chat {
     }
 
     /// The person answered, in the window, the prompt this chat showed in the middle of a turn
-    /// (HP-6), or in its pane, as a tool of its own that came back says
-    /// ([`crate::doing::Said::goes_on_past_a_prompt`], #1601). The turn goes on: it is running again and no longer waits on them, and `asking`
-    /// stays set until the turn ends, as it does for a prompt answered anywhere. Nothing for a
+    /// (HP-6), or in its pane, as its tools say ([`Chat::tool_said`], #1601). The turn goes on:
+    /// it is running again and no longer waits on them, and `asking` stays set until the turn ends, as it does for a prompt answered anywhere. Nothing for a
     /// chat that was not asking mid-turn. Answers whether anything a reader can see changed.
     pub fn answered(&mut self) -> bool {
         if self.ended || !self.asking || self.state != State::Waiting {
@@ -840,6 +846,29 @@ impl Chat {
         self.state = State::Running;
         self.needs_you = false;
         was != self.seen()
+    }
+
+    /// A tool hook of the chat's own (never a helper's) said `said` (#1601): whether the
+    /// person answered, in the chat's pane, the prompt it is stopped on, which no hook says.
+    /// Answers whether anything a reader can see changed.
+    ///
+    /// **A tool that came back says it only after one that began past the prompt.** A tool
+    /// already at work when the chat asked (a call run beside the asked one, or the asked call
+    /// itself, heard late) comes back whatever the person does, so its end is no answer. A
+    /// tool that began since cannot be the asked call heard late once one of its own has come
+    /// back after it: the turn went on. The cost is one tool more before the Notice goes.
+    pub fn tool_said(&mut self, said: &crate::doing::Said) -> bool {
+        if !self.waits_on_its_prompt() {
+            return false;
+        }
+        if said.starts_a_tool_of_its_own() {
+            self.began_past_its_prompt = true;
+            return false;
+        }
+        if said.goes_on_past_a_prompt() && self.began_past_its_prompt {
+            return self.answered();
+        }
+        false
     }
 
     /// The session's program exited. Answers whether anything a reader can see changed.
@@ -1258,14 +1287,23 @@ impl Board {
             .is_some_and(|tracked| tracked.chat.ignored())
     }
 
-    /// The person answered chat `number`'s prompt in the window, or in its pane as a tool of
-    /// its own that came back says ([`Chat::answered`]). Answers whether anything a reader can
-    /// see changed.
+    /// The person answered chat `number`'s prompt in the window ([`Chat::answered`]). Answers
+    /// whether anything a reader can see changed.
     pub fn answered(&mut self, number: u32) -> bool {
         let changed = self
             .chats
             .get_mut(&number)
             .is_some_and(|tracked| tracked.chat.answered());
+        self.stamp(number, changed)
+    }
+
+    /// A tool hook of chat `number`'s own said `said` ([`Chat::tool_said`], #1601): it may have
+    /// got past the prompt it was stopped on. Answers whether anything a reader can see changed.
+    pub fn tool_said(&mut self, number: u32, said: &crate::doing::Said) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.tool_said(said));
         self.stamp(number, changed)
     }
 
@@ -2619,6 +2657,51 @@ mod tests {
         ended.reported(Event::Notification);
         ended.exited(Some(1));
         assert!(!ended.waits_on_its_prompt());
+    }
+
+    #[test]
+    fn only_a_tool_that_began_past_its_prompt_and_came_back_says_it_was_answered_in_its_pane() {
+        // #1601: the person answers the prompt in the chat's own pane, which no hook says.
+        use crate::doing::{Kind, Said as Tool};
+        let began = Tool::Began {
+            kind: Kind::Command,
+            name: None,
+        };
+        let back = Tool::Ended {
+            kind: Some(Kind::Command),
+        };
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        // A tool begun before the chat asked, run beside the asked one: it comes back whatever
+        // the person does, so its end is no answer.
+        assert!(!chat.tool_said(&began));
+        chat.reported(Event::Notification);
+        assert!(!chat.tool_said(&back));
+        assert!(chat.waits_on_its_prompt());
+
+        // A helper's start is no sign of it: another helper may be the one asking.
+        assert!(!chat.tool_said(&Tool::Began {
+            kind: Kind::Helper,
+            name: None,
+        }));
+        assert!(!chat.tool_said(&back));
+        assert!(chat.waits_on_its_prompt());
+
+        // A tool that began past the prompt, then one of its own that came back: answered.
+        assert!(!chat.tool_said(&began));
+        assert!(chat.tool_said(&back));
+        assert_eq!(
+            (chat.state(), chat.waits_on_its_prompt()),
+            (State::Running, false)
+        );
+        // Once: a chat at work is past nothing.
+        assert!(!chat.tool_said(&back));
+
+        // A second prompt in the same turn wants a tool of its own begun past it again.
+        chat.reported(Event::Notification);
+        assert!(chat.waits_on_its_prompt());
+        assert!(!chat.tool_said(&back));
+        assert!(chat.waits_on_its_prompt());
     }
 
     #[test]
