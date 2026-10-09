@@ -359,7 +359,7 @@ fn allow(
     let session = chat.session;
     if !refusals.holds(session, vault) {
         return Err(
-            "purlis allowed nothing: this chat was not refused that vault. A vault is allowed \
+            "purlis allowed nothing: the chat was not refused that vault. A vault is allowed \
              from the notice its refusal raises."
                 .to_owned(),
         );
@@ -368,7 +368,7 @@ fn allow(
     let Some(not) = brokered::not_tagged(&ctx, chat.persona, vault) else {
         refusals.put_away(session, vault);
         return Err(
-            "There is nothing to allow now: the vault is gone from this project, or this chat's \
+            "There is nothing to allow now: the vault is gone from this project, or the chat's \
              persona may use it already."
                 .to_owned(),
         );
@@ -421,11 +421,15 @@ pub fn told_allowed(grant: &sandbox::local::VaultGrant) -> String {
 }
 
 /// What the Notice says once a vault is allowed, by what became of the line to the chat.
+///
+/// **"The chat", never "this chat"** (#1538): the Notice is drawn on a tab whose chat is not
+/// on screen too (a task's, `NoticeOf`), where "this chat" would read as the one in front.
+/// The Notice's own sentence says which chat it is; the answer under it names none.
 pub fn allowed_said(grant: &sandbox::local::VaultGrant, told: Told) -> String {
     let then = match told {
-        Told::Sent => "This chat is told to run the command again.",
-        Told::Queued => "This chat is told to run the command again when its turn ends.",
-        Told::NotSent => "Ask this chat to run the command again.",
+        Told::Sent => "The chat is told to run the command again.",
+        Told::Queued => "The chat is told to run the command again when its turn ends.",
+        Told::NotSent => "Ask the chat to run the command again.",
     };
     format!(
         "Allowed. Chats opened as {} can use vault {} in this project on this machine. {then} \
@@ -1018,18 +1022,18 @@ mod tests {
                     this machine.";
         assert_eq!(
             allowed_said(&grant, Told::Sent),
-            format!("{head} This chat is told to run the command again. It does not restart.")
+            format!("{head} The chat is told to run the command again. It does not restart.")
         );
         assert_eq!(
             allowed_said(&grant, Told::Queued),
             format!(
-                "{head} This chat is told to run the command again when its turn ends. It does \
+                "{head} The chat is told to run the command again when its turn ends. It does \
                  not restart."
             )
         );
         assert_eq!(
             allowed_said(&grant, Told::NotSent),
-            format!("{head} Ask this chat to run the command again. It does not restart.")
+            format!("{head} Ask the chat to run the command again. It does not restart.")
         );
         let sent = sent_as(&told_allowed(&grant));
         assert!(
