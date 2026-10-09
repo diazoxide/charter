@@ -736,6 +736,10 @@ const ACTIVITY: Activity = {
   name: "steward 3",
   key: "01K6STEWARD",
   undrawn: 1,
+  unlisted: 0,
+  unread: 0,
+  most_listed: 200,
+  most_read: 2000,
   lines: (
     [
       ["01K6D1", 0, "dispatched", "steward 3", "check prod", "Is the rollout healthy?"],

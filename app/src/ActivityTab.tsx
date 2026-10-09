@@ -23,8 +23,22 @@ import {
 } from "./activity";
 import { saidAt } from "./dispatches";
 
+/** A count as the tab says it: `2,000`. */
+const count = (n: number) => n.toLocaleString("en-US");
+
 /** What the tab has read: the chat's name, the timeline, and the tasks it could not list. */
-type Read = { name: string; timeline: Timeline; undrawn: number };
+type Read = {
+  name: string;
+  timeline: Timeline;
+  undrawn: number;
+  /** This chat's oldest tasks past what a timeline lists, and the project's oldest records
+   *  past what it reads (#1520). */
+  unlisted: number;
+  unread: number;
+  /** The bounds the core read within: what the tab says of them. */
+  mostListed: number;
+  mostRead: number;
+};
 
 /** What the tab knows: nothing yet, the timeline, that its chat is not open, or why not. */
 type Said = { read?: Read; closed?: true; trouble?: string };
@@ -145,10 +159,12 @@ export function ActivityTab({
         setSaid({ closed: true });
         return;
       }
-      const { name, undrawn } = answer.data;
+      const { name, undrawn, unlisted, unread } = answer.data;
+      const mostListed = answer.data.most_listed;
+      const mostRead = answer.data.most_read;
       const timeline = (early ?? []).reduce(heard, timelineOf(answer.data));
       early = undefined;
-      setSaid({ read: { name, timeline, undrawn } });
+      setSaid({ read: { name, timeline, undrawn, unlisted, unread, mostListed, mostRead } });
     })();
     return () => {
       left = true;
@@ -230,7 +246,23 @@ export function ActivityTab({
       </Notice>
     );
   }
-  const { name, timeline, undrawn } = said.read;
+  const { name, timeline, undrawn, unlisted, unread, mostListed, mostRead } = said.read;
+  /* What a long-lived chat's timeline leaves out, said above the oldest line shown: the oldest
+     tasks past what one lists, and the project's oldest records past what one reads (#1520). */
+  const older = (unlisted > 0 || unread > 0) && (
+    <p className="none" data-testid="activity-older">
+      {[
+        unlisted > 0 &&
+          (unlisted === 1
+            ? `The oldest task ${name} dispatched is not listed, nor the tasks under it: a chat's activity lists the newest ${count(mostListed)} it dispatched.`
+            : `The ${unlisted} oldest tasks ${name} dispatched are not listed, nor the tasks under them: a chat's activity lists the newest ${count(mostListed)} it dispatched.`),
+        unread > 0 &&
+          `purlis read this project's newest ${count(mostRead)} dispatch records, so a task older than those is not listed.`,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    </p>
+  );
   /* Counted and never shown, as the Dispatches tab says it: this chat's tasks, and the tasks
      under them. */
   const refused = undrawn > 0 && (
@@ -249,12 +281,14 @@ export function ActivityTab({
           body={`When ${name} dispatches a task, what the two say to each other is listed here.`}
           testid="activity-empty"
         />
+        {older}
         {refused}
       </>
     );
   }
   return (
     <>
+      {older}
       <ol className="activity" aria-label={`Activity of ${name}`}>
         {timeline.lines.map(({ line, depth }) => {
           const key = lineKey(line);

@@ -5316,7 +5316,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   running and keep their words until they end and for 30 days after. Where the store cannot be read
   (a sandboxed chat runs the command), the removal says so and the words stay until they
   expire.
-  The app does this when it opens a project and before it reads a timeline. A dispatch that
+  The app does this when it opens a project, over every record, and as it reads a timeline,
+  over the records that timeline reads. A dispatch that
   has not ended keeps its words; **one whose `ended` does not read as a time, or stands more
   than five minutes after the app's clock, has them emptied at once** (#1520), since its 30
   days cannot be counted. `talk` is read back under the
@@ -5343,6 +5344,14 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   **What the tab does not list:** a record that does not pass the check is counted on the
   timeline of the chat that asked for it and shown on none; a file that does not parse as a
   record of this version at all is skipped and counted nowhere, as in the Dispatches tab.
+  **A timeline is bounded** (#1520, `activity::Bounds::TAB`): it reads the project's newest
+  2,000 records, found by their file names (a ULID sorts by the time it was minted), and
+  lists the newest 200 tasks the chat dispatched itself, each with every task under it, so a
+  listed task's parent is always listed; the tab says how many older tasks of the chat's own
+  it does not list, and that older records were not read where there are any. Both bounds
+  are the core's, handed to the tab. The 30-day expiry runs on that one
+  read, so a timeline reads the store once; a record older than the 2,000 is expired when the
+  project is next opened.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.

@@ -42,7 +42,16 @@ function line(over: Partial<ActivityLine> & Pick<ActivityLine, "dispatch" | "n">
 }
 
 function read(lines: ActivityLine[]): Activity {
-  return { name: "steward 3", key: "01K6STEWARD", lines, undrawn: 0 };
+  return {
+    name: "steward 3",
+    key: "01K6STEWARD",
+    lines,
+    undrawn: 0,
+    unlisted: 0,
+    unread: 0,
+    most_listed: 200,
+    most_read: 2000,
+  };
 }
 
 const drawn = (lines: ActivityLine[]): Drawn[] => lines.map((one) => ({ line: one, depth: 1 }));

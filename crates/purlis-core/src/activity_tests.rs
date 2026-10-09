@@ -1259,3 +1259,162 @@ fn a_record_that_says_a_message_was_left_out_and_holds_its_text_is_not_drawn() {
     let record = dispatchrecord::read(&root, &id).unwrap();
     assert!(!dispatchrecord::sound(&record));
 }
+
+// ----- a session with many records (#1520) -------------------------------------------------
+
+#[test]
+fn a_timeline_lists_the_newest_tasks_and_says_how_many_older_ones_it_does_not() {
+    let (_d, root) = project();
+    for (n, minute) in [(7, "01"), (8, "02"), (9, "03")] {
+        started(
+            &root,
+            &steward(),
+            &chat(n, &format!("task {n}")),
+            &format!("task {n}"),
+            &format!("2026-10-08T09:{minute}:00Z"),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+
+    let found = super::timeline_within(
+        &root,
+        &steward(),
+        at("2026-10-08T12:00:00Z"),
+        Bounds {
+            records: 10,
+            tasks: 2,
+        },
+    );
+
+    let tasks: Vec<&str> = found.lines.iter().map(|line| line.task.as_str()).collect();
+    assert_eq!(tasks, ["task 8", "task 9"], "the newest two, oldest first");
+    assert_eq!((found.unlisted, found.unread), (1, 0));
+}
+
+#[test]
+fn a_listed_task_s_parent_is_listed_and_the_tasks_under_one_not_listed_are_not_counted() {
+    // #1520: the bound is on the session's own tasks, each whole with the tasks under it.
+    let (_d, root) = project();
+    let old = chat(7, "old");
+    started(&root, &steward(), &old, "old", "2026-10-08T09:01:00Z");
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let parent = chat(8, "parent");
+    started(&root, &steward(), &parent, "parent", "2026-10-08T09:02:00Z");
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    // Under the old task, newer than the parent: still the old task's.
+    started(
+        &root,
+        &old,
+        &chat(9, "old's sub"),
+        "old's sub",
+        "2026-10-08T09:03:00Z",
+    );
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    started(
+        &root,
+        &parent,
+        &chat(10, "sub"),
+        "sub",
+        "2026-10-08T09:04:00Z",
+    );
+
+    let found = super::timeline_within(
+        &root,
+        &steward(),
+        at("2026-10-08T12:00:00Z"),
+        Bounds {
+            records: 10,
+            tasks: 1,
+        },
+    );
+
+    let tasks: Vec<(&str, u32)> = found
+        .lines
+        .iter()
+        .map(|line| (line.task.as_str(), line.depth))
+        .collect();
+    assert_eq!(tasks, [("parent", 1), ("sub", 2)]);
+    assert_eq!(found.unlisted, 1, "the old task, and not its sub-task");
+}
+
+#[test]
+fn a_timeline_reads_only_the_newest_records_and_counts_the_rest_unread() {
+    let (_d, root) = project();
+    let mut ids = Vec::new();
+    for (n, minute) in [(7, "01"), (8, "02"), (9, "03")] {
+        ids.push(started(
+            &root,
+            &steward(),
+            &chat(n, &format!("task {n}")),
+            &format!("task {n}"),
+            &format!("2026-10-08T09:{minute}:00Z"),
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+    // The oldest ended long ago and is past the read: it is not read, and so not changed.
+    says(
+        &root,
+        &ids[0],
+        Sent::Note,
+        "Old words.",
+        "2026-10-08T09:01:30Z",
+    );
+    reports(
+        &root,
+        &ids[0],
+        Outcome::Done,
+        "Done.",
+        None,
+        "2026-10-08T09:02:00Z",
+    );
+
+    let found = super::timeline_within(
+        &root,
+        &steward(),
+        at("2026-12-01T12:00:00Z"),
+        Bounds {
+            records: 2,
+            tasks: 10,
+        },
+    );
+
+    let tasks: Vec<&str> = found.lines.iter().map(|line| line.task.as_str()).collect();
+    assert_eq!(tasks, ["task 8", "task 9"]);
+    assert_eq!((found.unlisted, found.unread), (0, 1));
+    assert_eq!(
+        dispatchrecord::read(&root, &ids[0]).unwrap().talk[0].text,
+        "Old words.",
+        "a record that was not read was not touched; opening the project expires it"
+    );
+}
+
+#[test]
+fn a_timeline_expires_what_it_read_in_the_same_read() {
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-09-01T09:00:00Z",
+    );
+    says(&root, &id, Sent::Note, "Still up.", "2026-09-01T09:01:00Z");
+    reports(
+        &root,
+        &id,
+        Outcome::Done,
+        "Done.",
+        None,
+        "2026-09-01T09:02:00Z",
+    );
+
+    let found = super::timeline(&root, &steward(), at("2026-10-08T12:00:00Z"));
+
+    let note = found
+        .lines
+        .iter()
+        .find(|line| line.kind == Kind::Note)
+        .unwrap();
+    assert!(note.expired && note.text.is_empty(), "{note:?}");
+    assert_eq!(dispatchrecord::read(&root, &id).unwrap().talk[0].text, "");
+}

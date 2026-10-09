@@ -713,26 +713,37 @@ fn a_time(text: &str) -> bool {
 /// comes back at launch ([`crate::retention`]), and what was said in it is not. The app runs
 /// this when it opens a project and before it reads a timeline.
 pub fn expire_talk(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
+    expire_in(root, &mut list(root), now)
+}
+
+/// [`expire_talk`], over `records`, which were read from the store at `root` already (#1520):
+/// what a timeline reads once is expired from that one read, and each record changed on the
+/// disk is changed in `records` too. How many changed.
+pub fn expire_in(root: &Path, records: &mut [Record], now: chrono::DateTime<chrono::Utc>) -> usize {
     let due = |record: &Record| {
         talk_is_due(record, now) && record.talk.iter().any(|said| !said.text.is_empty())
     };
-    list(root)
-        .into_iter()
-        .filter(|record| due(record))
-        .filter(|record| {
-            change(root, &record.id, |record| {
-                // Looked at again under the lock: only what is still due is changed.
-                if !due(record) {
-                    return false;
-                }
-                for said in &mut record.talk {
-                    said.text.clear();
-                }
-                true
-            })
-            .unwrap_or(false)
+    let mut changed = 0;
+    for record in records.iter_mut().filter(|record| due(record)) {
+        let emptied = change(root, &record.id, |record| {
+            // Looked at again under the lock: only what is still due is changed.
+            if !due(record) {
+                return false;
+            }
+            for said in &mut record.talk {
+                said.text.clear();
+            }
+            true
         })
-        .count()
+        .unwrap_or(false);
+        if emptied {
+            for said in &mut record.talk {
+                said.text.clear();
+            }
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Closes dispatch `id` at `now`. `false` for a record that is not there or has already
@@ -1199,17 +1210,28 @@ impl Live {
 /// the app's own bookkeeping works on. A file that is not a record of this version is skipped
 /// and left as it is. What is put on the screen is [`drawn`]'s.
 pub fn list(root: &Path) -> Vec<Record> {
+    newest(root, usize::MAX).0
+}
+
+/// [`list`], **reading at most the `most` newest records** (#1520): those, newest first, and
+/// how many record files older than them were not read. A record's file is named by its id, a
+/// ULID, which sorts by the time it was minted, so the newest are found from the names alone
+/// and no file past `most` is opened.
+pub fn newest(root: &Path, most: usize) -> (Vec<Record>, usize) {
     let Ok(entries) = std::fs::read_dir(dir(root)) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
-    let mut records: Vec<Record> = entries
+    let mut ids: Vec<String> = entries
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter_map(|name| read(root, name.strip_suffix(".json")?))
+        .filter_map(|name| name.strip_suffix(".json").map(str::to_owned))
+        .filter(|id| an_id(id))
         .collect();
-    // A ULID sorts by the time it was minted.
-    records.sort_by(|a, b| b.id.cmp(&a.id));
-    records
+    ids.sort_by(|a, b| b.cmp(a));
+    let unread = ids.len().saturating_sub(most);
+    ids.truncate(most);
+    let records = ids.iter().filter_map(|id| read(root, id)).collect();
+    (records, unread)
 }
 
 /// The records purlis draws, and how many it will not.

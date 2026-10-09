@@ -1095,6 +1095,19 @@ export const commands = {
 	 *  purlis will not draw their records.
 	 */
 	undrawn: number,
+	/**
+	 *  How many of the tasks this chat dispatched itself, the oldest, are not listed, with the
+	 *  tasks under them: a timeline lists the newest `most_listed` (#1520).
+	 */
+	unlisted: number,
+	/**
+	 *  How many of the project's dispatch records, the oldest, were not read: a timeline reads
+	 *  the newest `most_read` (#1520). Whose they are is not known.
+	 */
+	unread: number,
+	/**  The bounds that were read within (`activity::Bounds::TAB`), for the tab to say. */
+	most_listed: number,
+	most_read: number,
 } | null, string>(__TAURI_INVOKE("activity", { plane, session })),
 	/**
 	 *  **The session the chat a line names has now** (#1495): `key` is the line's `from_key`, a
@@ -2348,6 +2361,19 @@ export type Activity = {
 	 *  purlis will not draw their records.
 	 */
 	undrawn: number,
+	/**
+	 *  How many of the tasks this chat dispatched itself, the oldest, are not listed, with the
+	 *  tasks under them: a timeline lists the newest `most_listed` (#1520).
+	 */
+	unlisted: number,
+	/**
+	 *  How many of the project's dispatch records, the oldest, were not read: a timeline reads
+	 *  the newest `most_read` (#1520). Whose they are is not known.
+	 */
+	unread: number,
+	/**  The bounds that were read within (`activity::Bounds::TAB`), for the tab to say. */
+	most_listed: number,
+	most_read: number,
 };
 
 /**  A line the app has just recorded, and the project it is in. */
