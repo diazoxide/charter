@@ -298,11 +298,6 @@ export const commands = {
 	 */
 	answerSandboxOffer: (plane: PlaneId, turnOn: boolean) => typedError<SandboxState, string>(__TAURI_INVOKE("answer_sandbox_offer", { plane, turnOn })),
 	/**
-	 *  The person read the Notice of the project's hosts as it showed them, `shown` (#1341): it is
-	 *  not shown again until they change from that.
-	 */
-	acknowledgeProjectHosts: (plane: PlaneId, shown: string[]) => typedError<SandboxState, string>(__TAURI_INVOKE("acknowledge_project_hosts", { plane, shown })),
-	/**
 	 *  Whether chat `session` holds the asking chat's persona grants instead of its own, and whose
 	 *  (#1362): `null` for a chat that holds its own.
 	 */

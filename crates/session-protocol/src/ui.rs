@@ -141,9 +141,10 @@ pub struct Server {
 /// answers from: the Notice that says a teammate's grant arrived (#1506), and the dispatches
 /// refused while nobody was there (#1507), which are offered on a refused chat's word.
 ///
-/// **And "Got it" on the Notice that the project's Internet access presets changed** (#1385):
-/// it records that this person was told a preset widens what chats may reach or write, so the
-/// Notice is not shown again. Only the person who read it says so; no link answers it for them.
+/// **And "Got it" on the Notices that the project's Internet access presets** (#1385) **or its
+/// own hosts** (#1341, #1550) **changed**: each records that this person was told what chats may
+/// now reach or write, so the Notice is not shown again. Only the person who read it says so; no
+/// link answers it for them.
 ///
 /// `task_branch_merge` and `dispatch_worktree_discard` are the person's acts on what a task
 /// left on a branch of its own (#1511, V100-67): a merge into the branch it was cut from, and
@@ -224,8 +225,9 @@ pub const WINDOW_ONLY: &[&str] = &[
     "allow_dispatch_away",
     "dismiss_dispatch_away",
     "never_dispatch_away",
-    // The person's "Got it" on a Notice that the project's presets changed.
+    // The person's "Got it" on a Notice that the project's presets or its hosts changed.
     "acknowledge_project_presets",
+    "acknowledge_project_hosts",
     // What a task left on a branch of its own: the person's merge or discard (#1511).
     "task_branch_merge",
     "dispatch_worktree_discard",
