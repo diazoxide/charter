@@ -275,7 +275,7 @@ impl Alert {
 }
 
 /// `update._TWO_CHARTERS`.
-const TWO_CHARTERS: &str = "two different charters";
+pub(crate) const TWO_CHARTERS: &str = "two different charters";
 
 /// `update.pin_beside_dev().brief` — the one wording of that state, which names the command
 /// whose output carries both ways out of it.
@@ -423,7 +423,7 @@ fn section<'a>(cfg: &'a toml::Table, name: &str) -> Result<Option<&'a toml::Tabl
 
 /// `channel.is_dev()`: `[update] channel` is exactly `"dev"`. Anything else, including a word
 /// charter does not know, is the conservative `stable`.
-fn follows_dev(cfg: &toml::Table) -> bool {
+pub(crate) fn follows_dev(cfg: &toml::Table) -> bool {
     cfg.get("update")
         .and_then(toml::Value::as_table)
         .and_then(|u| u.get("channel"))

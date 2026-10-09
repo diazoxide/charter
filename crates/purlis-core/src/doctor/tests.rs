@@ -586,6 +586,31 @@ fn pinned(version: &str) -> Row {
 }
 
 #[test]
+fn a_pin_beside_the_dev_channel_is_the_warning_the_status_line_gives() {
+    // #1036. The status line raises `PinBesideDev` for any pin on a project that follows the
+    // dev channel, met or not; doctor said OK there, so the two surfaces disagreed.
+    let app = crate::adopt::app_version();
+    let (_d, root) = plane(&format!(
+        "[charter]\nversion = \"{app}\"\n\n[update]\nchannel = \"dev\"\n"
+    ));
+    let r = one(&root, "version lock");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        format!("pinned {app} and follows the dev channel: two different charters")
+    );
+    assert!(r.hint.contains("purlis version"), "{r:?}");
+    // The stable channel, or none, keeps the verdict the pin alone gives.
+    let (_d, root) = plane(&format!(
+        "[charter]\nversion = \"{app}\"\n\n[update]\nchannel = \"stable\"\n"
+    ));
+    assert_eq!(one(&root, "version lock").status, Status::Ok);
+    // And a project that pins nothing has no pin to warn about on any channel.
+    let (_d, root) = plane("[update]\nchannel = \"dev\"\n");
+    assert_eq!(one(&root, "version lock").detail, "not pinned");
+}
+
+#[test]
 fn a_pin_this_charter_meets_is_fine() {
     let app = crate::adopt::app_version();
     let r = pinned(app);

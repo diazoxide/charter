@@ -1,9 +1,9 @@
 //! Whether this plane's `[charter] version` pin is one this charter meets — asked of
 //! `adopt::version_report`, and of nothing else (ADR 0030, as amended by ADR 0045).
 //!
-//! ADR 0030 rules the comparison out of every surface but one: *"when `doctor`'s `version lock`
-//! row stops deferring, it asks `adopt::version_report`'s comparison, not one of its own."* The
-//! status line is a second surface, so it gets the same rule. `drift` below is that report's
+//! ADR 0030 rules the comparison out of every surface but one: doctor's `version lock` row asks
+//! `adopt::pin_verdict`, the comparison `adopt::version_report` makes, and not one of its own.
+//! The status line is another surface, so it gets the same rule. `drift` below is that report's
 //! exit status — `charter version`'s 1 — and never a comparison made here; the sentences are
 //! the report's own, so the window cannot say "in sync" where the CLI refuses to.
 //!
