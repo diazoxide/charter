@@ -824,10 +824,15 @@ pub fn clear_gone(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<boo
     let path = within_workspace(plane, ws, &path)?;
     let clone = clone_dir(plane, ws, repo)?;
     if path.symlink_metadata().is_ok() {
-        return Err(Refusal::GitRefused {
-            what: GitStep::Remove,
-            name: piece.to_string(),
-            err: format!("something is at the folder of '{piece}' again, so nothing was cleared"),
+        // purlis's own finding, not git's: the window says what was found, not "git would not".
+        return Err(Refusal::Stuck {
+            what: GitStep::Remove.to_string(),
+            terminal: format!(
+                "something is at the folder of '{piece}' again, so nothing was cleared"
+            ),
+            window: format!(
+                "Something is at the folder of '{piece}' again, so purlis cleared nothing."
+            ),
         });
     }
     match clear_stale(plane, ws, repo, piece, &clone) {
