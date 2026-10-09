@@ -2137,3 +2137,39 @@ fn the_persona_chat_s_newest_session_record_is_the_one_its_dispatch_names() {
     );
     assert!(sound(&record));
 }
+
+// ----- #1556 -----
+
+#[test]
+fn names_dated_after_now_never_push_the_real_records_out_of_a_bounded_read() {
+    // A writer of the store could name files far in the future: they sort first by name, and a
+    // read of the newest would read them and none of the real ones.
+    let (_d, root) = project();
+    let mut real = Vec::new();
+    for _ in 0..2 {
+        real.push(open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+    let later = chrono::Utc::now() + chrono::Duration::days(365 * 50);
+    for n in 0..3 {
+        let ms = u64::try_from(later.timestamp_millis()).unwrap() + n;
+        let id = ulid::Ulid::from_parts(ms, 0).to_string();
+        let record = Record {
+            id: id.clone(),
+            ..real[0].clone()
+        };
+        std::fs::write(
+            dir(&root).join(format!("{id}.json")),
+            serde_json::to_string_pretty(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
+    let (read, unread) = newest(&root, 2, chrono::Utc::now());
+
+    let ids: Vec<&str> = read.iter().map(|record| record.id.as_str()).collect();
+    assert_eq!(ids, [real[1].id.as_str(), real[0].id.as_str()]);
+    assert_eq!(unread, 3);
+    // Read where there is room after the real ones.
+    assert_eq!(newest(&root, 10, chrono::Utc::now()).0.len(), 5);
+}

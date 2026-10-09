@@ -392,7 +392,7 @@ pub fn timeline_within(
     now: chrono::DateTime<chrono::Utc>,
     bounds: Bounds,
 ) -> Timeline {
-    let (mut read, unread) = dispatchrecord::newest(root, bounds.records);
+    let (mut read, unread) = dispatchrecord::newest(root, bounds.records, now);
     dispatchrecord::expire_in(root, &mut read, now);
     let (drawn, refused): (Vec<Record>, Vec<Record>) =
         read.into_iter().partition(dispatchrecord::sound);
