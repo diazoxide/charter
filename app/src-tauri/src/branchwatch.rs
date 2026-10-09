@@ -790,17 +790,37 @@ pub async fn branch_watch(
 ///
 /// Each branch is asked on its own (#1130), so one whose read hangs until its deadline does not
 /// hold back watching the window's others. [`BRANCHES`] bounds the threads, and the reader's own
-/// app-wide gate how many children run at once.
+/// app-wide gate how many children run at once. A branch whose ask found that gate full is asked
+/// again ([`past_busy`]): the window asks for its set only when the set changes, so a branch left
+/// out for that would go unwatched with nothing said.
 fn resolve(
     reader: &Reader,
     asked: Vec<(PathBuf, WatchedBranch)>,
 ) -> Vec<(WatchedBranch, Root, How)> {
     each_apart(asked, |(plane, branch)| {
         let named = crate::piecefiles::branch(&branch.workspace, &branch.repo, &branch.piece);
-        let root = purlis_core::files::root(reader, &plane, named).ok()?;
+        let root = past_busy(|| purlis_core::files::root(reader, &plane, named))?;
         let how = how(&root, reader);
         Some((branch, root, how))
     })
+}
+
+/// How often a branch is asked while the reader's gate stays full: enough for every branch a
+/// window may watch to have had its turn, [`purlis_core::files::AT_ONCE`] at a time, and once
+/// more.
+const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
+
+/// What `ask` answers, asked again while it finds every reader place taken, at most
+/// [`BUSY_TRIES`] times; nothing once it fails otherwise.
+fn past_busy<T>(mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>) -> Option<T> {
+    for _ in 0..BUSY_TRIES {
+        match ask() {
+            Ok(answer) => return Some(answer),
+            Err(why) if purlis_core::files::was_busy(&why) => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// `each` of `asked`, every one on a thread of its own, answered in `asked`'s order; one that
@@ -839,6 +859,39 @@ mod tests {
         // In turn they would take 900 ms; apart, about one wait.
         let took = started.elapsed();
         assert!(took < Duration::from_millis(800), "{took:?}");
+    }
+
+    #[test]
+    fn a_branch_that_found_the_readers_busy_is_asked_again_and_one_that_failed_is_not() {
+        let busy = || {
+            purlis_core::files::Refused::Read(format!(
+                "{}it was busy reading other branches for 30 seconds",
+                purlis_core::files::READ_FAILED
+            ))
+        };
+        let mut asks = 0;
+        let answered = past_busy(|| {
+            asks += 1;
+            if asks < 3 { Err(busy()) } else { Ok(asks) }
+        });
+        assert_eq!(answered, Some(3));
+
+        let mut asks = 0;
+        let failed: Option<()> = past_busy(|| {
+            asks += 1;
+            Err(purlis_core::files::Refused::Read(format!(
+                "{}the read did not finish within 30 seconds",
+                purlis_core::files::READ_FAILED
+            )))
+        });
+        assert_eq!((failed, asks), (None, 1));
+
+        let mut asks = 0;
+        let never: Option<()> = past_busy(|| {
+            asks += 1;
+            Err(busy())
+        });
+        assert_eq!((never, asks), (None, BUSY_TRIES));
     }
 
     #[cfg(target_os = "macos")]

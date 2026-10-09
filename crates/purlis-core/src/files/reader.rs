@@ -108,13 +108,19 @@ impl Drop for Permit<'_> {
     }
 }
 
+/// What follows [`READ_FAILED`] when an ask found every reader place taken for as long as its
+/// deadline.
+const BUSY: &str = "it was busy reading other branches for ";
+
 /// An ask that found every reader place taken for as long as its deadline.
 fn busy(deadline: Duration) -> Refused {
-    Refused::Read(format!(
-        "{READ_FAILED}purlis is busy reading other branches, and no read came free within {} \
-         seconds",
-        deadline.as_secs()
-    ))
+    Refused::Read(format!("{READ_FAILED}{BUSY}{} seconds", deadline.as_secs()))
+}
+
+/// Whether `why` is an ask that got no place among the [`AT_ONCE`] readers in time, rather than
+/// one whose read failed: asked again later, it may well answer.
+pub fn was_busy(why: &Refused) -> bool {
+    matches!(why, Refused::Read(said) if said.strip_prefix(READ_FAILED).is_some_and(|rest| rest.starts_with(BUSY)))
 }
 
 /// What starts an answer on the child's standard output: a test binary prints its own lines
@@ -450,10 +456,17 @@ mod tests {
     #[test]
     fn a_busy_reader_fails_as_a_read_that_gave_no_answer() {
         let busy = busy(Duration::from_secs(30));
-        let Refused::Read(said) = busy else {
+        let Refused::Read(said) = &busy else {
             panic!("{busy:?}")
         };
         assert!(said.starts_with(READ_FAILED), "{said}");
-        assert!(said.contains("busy"), "{said}");
+        assert_eq!(
+            said,
+            "purlis could not read the branch: it was busy reading other branches for 30 seconds"
+        );
+        assert!(was_busy(&busy));
+        assert!(!was_busy(&Refused::Read(format!(
+            "{READ_FAILED}the read did not finish within 30 seconds"
+        ))));
     }
 }
