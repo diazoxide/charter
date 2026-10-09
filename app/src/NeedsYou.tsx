@@ -244,6 +244,7 @@ export function NeedsYouMenu({
   onDismissAway,
   onNeverAway,
   onLook,
+  openAsked,
 }: {
   items: readonly Needing[];
   /** The chats that can be waiting without saying so, across every project. */
@@ -269,6 +270,9 @@ export function NeedsYouMenu({
   onNeverAway?: (item: AwayItem) => void;
   /** The person is coming to the list, or leaving it: what it holds is read again. */
   onLook?: () => void;
+  /** A count that goes up each time the list is asked open from elsewhere: the away
+   *  summary's part for the dispatches refused while nobody was there (#1551). */
+  openAsked?: number;
 }) {
   /**
    * Whether the list is up — held here rather than left to Radix, for the show-more menu's
@@ -334,6 +338,16 @@ export function NeedsYouMenu({
     setOpen(up);
   };
   if (!open && frozen !== null) setFrozen(null);
+  // **Asked open from elsewhere** (#1551): opened as a press opens it, on what it holds now;
+  // a list with nothing in it stays shut. Adjusted while rendering, as the rest of it is.
+  const [openedFor, setOpenedFor] = useState(openAsked);
+  if (openAsked !== openedFor) {
+    setOpenedFor(openAsked);
+    if (!none) {
+      setFrozen(away);
+      setOpen(true);
+    }
+  }
   const drawnAway = open && frozen !== null ? frozen : away;
   const listedNow = new Set(away.map(awayKey));
   return (

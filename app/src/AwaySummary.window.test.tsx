@@ -228,6 +228,23 @@ function core(open: OpenChat[], rows: FinishedTask[] = [], other?: Project) {
       moveIn(PLANE, session, state, queue, more),
     moveIn: (plane: string, session: number, state: State, queue: number[]) =>
       moveIn(plane, session, state, queue, {}),
+    /** The core keeps a dispatch of `asking`'s refused while nobody was there, last at `at`. */
+    refuse: (asking: string, at: number) =>
+      send("dispatch-away-changed", {
+        plane: PLANE,
+        refused: [
+          {
+            asking,
+            target: "devops",
+            workspace: "alpha",
+            latest: at / 1000,
+            times: 1,
+            allows: "steward chats may dispatch to devops in alpha.",
+            nowhere: null,
+            shown: "steward>devops@alpha",
+          },
+        ],
+      }),
   };
   async function finishIn(plane: string, more: FinishedTask[]) {
     projects[plane].rows.push(...more);
@@ -362,6 +379,41 @@ describe("while you were away (#1514)", () => {
     await held.finish(finished("01K7LATE", "check late", { ended: iso(LEFT + 31 * MINUTE) }));
 
     expect(said(await theSummary())).toBe("While you were away: 1 task done, 1 waiting on you");
+  });
+
+  it("counts a chat already waiting when the person left that asked them something new", async () => {
+    // #1551: steward 1 waited on a failure's look; while away it ended a turn waiting on the
+    // person too. steward 2 waited, and only went on waiting.
+    const held = await drawn();
+    await held.move(1, "running", [1], { needs: [failure] });
+    await held.move(2, "waiting", [1, 2]);
+    await leave();
+    await held.move(1, "waiting", [1, 2], { needs: [failure] });
+    await comeBack(LEFT + 30 * MINUTE);
+
+    const notice = await theSummary();
+    expect(said(notice)).toBe("While you were away: 1 chat waiting on you");
+    expect(
+      within(notice).getByRole("button", { name: "1 chat waiting on you: steward 1" }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts a dispatch refused while nobody was there, and opens the list it is answered in", async () => {
+    // #1551: #1507's item joins the summary as a part of its own.
+    const held = await drawn();
+    await leave();
+    await held.refuse("steward", LEFT + 10 * MINUTE);
+    await comeBack(LEFT + 30 * MINUTE);
+
+    const notice = await theSummary();
+    expect(said(notice)).toBe("While you were away: 1 dispatch refused");
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "1 dispatch refused: steward wanted devops" }),
+    );
+
+    // The title bar's needs-you list, open where its Allow, Never and Dismiss answer it.
+    const listed = await screen.findByText("steward wanted devops while you were away");
+    expect(listed.closest('[role="menu"]')).not.toBeNull();
   });
 
   it("goes from each part to the chats it counts", async () => {

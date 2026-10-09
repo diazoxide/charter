@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { FinishedTask } from "./bindings";
+import type { AwayRefusal, FinishedTask } from "./bindings";
 import { nothingKnown, type ChatStates } from "./chatState";
 import {
   awayPartsSaid,
   awaySaid,
   awaySummaryOf,
+  cameToNeedOf,
   countedAway,
   NOTHING_AWAY,
   whileAway,
@@ -137,6 +138,38 @@ describe("what a summary counts (#1514)", () => {
     ).toHaveLength(1);
   });
 
+  it("counts a dispatch refused while nobody was there by when it was last refused (#1551)", () => {
+    const refusal = (asking: string, latest: string): AwayRefusal => ({
+      asking,
+      target: "devops",
+      workspace: "alpha",
+      latest: at(latest) / 1000,
+      times: 2,
+      allows: "",
+      nowhere: null,
+      shown: "",
+    });
+    const counted = awaySummaryOf({
+      away: AWAY,
+      finished: [],
+      cameToNeed: new Set(),
+      states: nothingKnown,
+      nameOf,
+      refusedAway: [
+        refusal("steward", "2026-10-09T10:20:00Z"),
+        refusal("lead", "2026-10-09T09:20:00Z"),
+      ],
+    });
+    // Two personas and nothing a chat wrote; it goes to the list where it is answered.
+    expect(counted.refused).toEqual([
+      {
+        key: "refused:steward:devops:alpha",
+        says: "steward wanted devops",
+        go: { to: "needs-you" },
+      },
+    ]);
+  });
+
   it("counts nothing when the person was never away", () => {
     expect(summary([finished("A", "x")], [1], { needsYou: [1] }, [])).toBe(NOTHING_AWAY);
   });
@@ -150,6 +183,55 @@ describe("what a summary counts (#1514)", () => {
   });
 });
 
+describe("which chats came to need the person while away (#1514, #1551)", () => {
+  const states = (more: Partial<ChatStates>): ChatStates => ({ ...nothingKnown, ...more });
+
+  it("counts a chat that came into the queue, and none that left it", () => {
+    const was = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 3 } });
+    const now = states({
+      needsYou: [2],
+      bySession: { 1: "running", 2: "waiting" },
+      movedAt: { 1: 5, 2: 6 },
+    });
+    expect(cameToNeedOf(was, now)).toEqual([2]);
+  });
+
+  it("counts a chat already in the queue that has something new for the person", () => {
+    // 1 was waiting on a failure's look, and has since asked a question of its own; 2 was
+    // waiting on its turn and its tasks' report has since come with nowhere to go; 3 is as
+    // it was.
+    const was = states({
+      needsYou: [1, 2, 3],
+      bySession: { 1: "running", 2: "waiting", 3: "waiting" },
+      movedAt: { 1: 1, 2: 2, 3: 3 },
+      needs: { 1: ["check staging failed"], 3: ["Its report has nowhere to go"] },
+    });
+    const now = states({
+      needsYou: [1, 2, 3],
+      bySession: { 1: "waiting", 2: "waiting", 3: "waiting" },
+      movedAt: { 1: 9, 2: 2, 3: 3 },
+      needs: {
+        1: ["check staging failed"],
+        2: ["Its report has nowhere to go"],
+        3: ["Its report has nowhere to go"],
+      },
+    });
+    expect(cameToNeedOf(was, now)).toEqual([1, 2]);
+  });
+
+  it("counts a chat that answered and asked again while away, though it waits as it did", () => {
+    const was = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 3 } });
+    const now = states({ needsYou: [1], bySession: { 1: "waiting" }, movedAt: { 1: 8 } });
+    expect(cameToNeedOf(was, now)).toEqual([1]);
+  });
+
+  it("counts a second item of the same words as new", () => {
+    const was = states({ needsYou: [1], refusals: { 1: ["a commit"] } });
+    const now = states({ needsYou: [1], refusals: { 1: ["a commit", "a commit"] } });
+    expect(cameToNeedOf(was, now)).toEqual([1]);
+  });
+});
+
 describe("what a summary says (#1514)", () => {
   const items = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
@@ -159,24 +241,33 @@ describe("what a summary says (#1514)", () => {
     }));
 
   it("says the spec's sentence", () => {
-    const counted = { done: items(7), failed: items(1), waiting: items(2) };
+    const counted = { done: items(7), failed: items(1), waiting: items(2), refused: [] };
     expect(awaySaid(counted)).toBe("While you were away: 7 tasks done, 1 failed, 2 waiting on you");
     expect(countedAway(counted)).toBe(10);
   });
 
   it("names what it counts in its first part, and leaves out a part with none", () => {
-    expect(awayPartsSaid({ done: items(1), failed: [], waiting: [] })).toEqual([
+    expect(awayPartsSaid({ done: items(1), failed: [], waiting: [], refused: [] })).toEqual([
       { part: "done", says: "1 task done" },
     ]);
-    expect(awaySaid({ done: [], failed: items(2), waiting: items(1) })).toBe(
+    expect(awaySaid({ done: [], failed: items(2), waiting: items(1), refused: [] })).toBe(
       "While you were away: 2 tasks failed, 1 waiting on you",
     );
-    expect(awaySaid({ done: [], failed: [], waiting: items(1) })).toBe(
+    expect(awaySaid({ done: [], failed: [], waiting: items(1), refused: [] })).toBe(
       "While you were away: 1 chat waiting on you",
     );
-    expect(awaySaid({ done: [], failed: [], waiting: items(3) })).toBe(
+    expect(awaySaid({ done: [], failed: [], waiting: items(3), refused: [] })).toBe(
       "While you were away: 3 chats waiting on you",
     );
     expect(awaySaid(NOTHING_AWAY)).toBe("");
+  });
+
+  it("says refused dispatches last, always as dispatches (#1551)", () => {
+    expect(awaySaid({ done: items(2), failed: [], waiting: [], refused: items(1) })).toBe(
+      "While you were away: 2 tasks done, 1 dispatch refused",
+    );
+    expect(awaySaid({ done: [], failed: [], waiting: [], refused: items(3) })).toBe(
+      "While you were away: 3 dispatches refused",
+    );
   });
 });

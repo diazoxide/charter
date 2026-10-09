@@ -42,6 +42,7 @@ import {
 import {
   commands,
   type AtRisk,
+  type AwayRefusal,
   type ByHand,
   type ChatBlocked,
   type PlaneSaving,
@@ -475,6 +476,8 @@ export const PlaneView = memo(function PlaneView({
   firstChatAsked,
   shellAsked,
   fileAsked,
+  awayRefused,
+  onShowNeedsYou,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -520,6 +523,11 @@ export const PlaneView = memo(function PlaneView({
   /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`; with a
    *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
   fileAsked?: { place: Place; path: string; line?: number; at: number };
+  /** This project's dispatches refused while nobody was at their chat (#1507), which the
+   *  window holds for the title bar's needs-you list: a part of the away summary (#1551). */
+  awayRefused?: readonly AwayRefusal[];
+  /** Opens the title bar's needs-you list, where those are answered. */
+  onShowNeedsYou?: () => void;
   /** The first chat a repository opened into this project asks for (FR-4): started in that
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
@@ -6527,7 +6535,13 @@ export const PlaneView = memo(function PlaneView({
   /** **While you were away** (#1514): kept for this project whether or not it is in front,
    *  so a project behind another has its own summary when the person switches to it. */
   const { away: awayOn } = useChatsListPrefs();
-  const awayNow = useAwaySummary({ chats, on: awayOn, finished: finishedTasks, nameOf });
+  const awayNow = useAwaySummary({
+    chats,
+    on: awayOn,
+    finished: finishedTasks,
+    nameOf,
+    refusedAway: awayRefused,
+  });
 
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
@@ -7242,7 +7256,12 @@ export const PlaneView = memo(function PlaneView({
 
         {/* **While you were away** (#1514): what the project's tasks did while the person was
             away from the window, one line with a link to each part. It answers nothing. */}
-        <AwaySummary away={awayNow} onShowChat={showChat} onShowFinished={showFinished} />
+        <AwaySummary
+          away={awayNow}
+          onShowChat={showChat}
+          onShowFinished={showFinished}
+          onShowNeedsYou={onShowNeedsYou}
+        />
       </NoticeBand>
 
       {/* **The four regions** (ADR 0038): by default the explorer on the left, the

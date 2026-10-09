@@ -674,14 +674,16 @@ and comes back when its target does. Not an **Alert**, which is an event in the 
 _Avoid_: notification, banner, toast, message (for the thing itself)
 
 **Away summary** ("While you were away"):
-The one **Notice** each project of a window draws when the person comes back after five
-minutes or more away from the window (not in use, hidden, or with no input), in place of
-reading what each task did on its own: how many tasks finished done, how many failed, and how many chats came to need the
-person meanwhile, each part a link to the chats it counts. It counts only what happened while
-the person was away. It hides nothing: every task keeps its row and its **Activity** lines,
-and every question stays where it was asked. Going to a failed task from it marks the failure
-looked at, as its needs-you item's Go does; dismissing it dismisses nothing else. A setting turns it off. Away here is the person away from the window; a chat
-nobody is at is another thing, whatever the window is doing.
+The one **Notice** each project of a window draws when the person comes back after five minutes
+or more away from the window (not in use, hidden, or with no input), in place of reading what
+each task did on its own: how many tasks finished done, how many failed, how many chats came to
+need the person meanwhile (new to the needs-you list, or there already with something new), and
+how many dispatches were refused while nobody was at their chat, each part a link to where it is
+answered. It counts only what happened while the person was away. It hides nothing: every task
+keeps its row and its **Activity** lines, and every question stays where it was asked. Going to
+a failed task from it marks the failure looked at, as its needs-you item's Go does; dismissing
+it dismisses nothing else. A setting turns it off. Away here is the person away from the window;
+a chat nobody is at is another thing, whatever the window is doing.
 _Avoid_: digest, recap, notification
 
 **Ask**:
