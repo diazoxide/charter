@@ -218,7 +218,7 @@ has it; nothing reads the key after that.
   ],
   "text": { "window": 15, "terminal": 14 },
   "editor": "zed",
-  "chats": { "lines": 1, "grouped": true, "tabbed": true },
+  "chats": { "lines": 1, "grouped": true, "tabbed": true, "away": false },
   "dismissed": { "/home/me/project": ["pin-dormant:ide", "chat-fresh:3"] }
 }
 ```
@@ -251,12 +251,14 @@ has it; nothing reads the key after that.
   drawer says so. Settings writes it (`app/src/yourEditor.ts`). It is a word and never
   a program: the core builds the URL, or reads the variable itself, so nothing written here is
   run.
-- **`chats`** is how the Chats list is drawn (#1499, V100-73): **`lines`**, `2` or `1`, how
+- **`chats`** is how chats are listed and summed up, on this machine (#1499, V100-73): **`lines`**, `2` or `1`, how
   many lines a chat's row takes (on one, what the second line said is the row's tooltip), and
   **`grouped`**, `true` when the sessions of one workspace stand together. And what pressing a
   task does (#1489, V100-74): **`tabbed`**, `true` when it opens in a tab of its own, with a
-  minimise button in place of the close; `false`, its session's tab is switched to it. Leave
-  any out for its default, `2`, `false` and `false`; purlis leaves the whole of `chats` out
+  minimise button in place of the close; `false`, its session's tab is switched to it. And
+  **`away`** (#1514, V100-73), `false` when coming back to the window draws no summary of what
+  happened while you were away. Leave any out for its default, `2`, `false`, `false` and
+  `true`; purlis leaves the whole of `chats` out
   while all are the defaults. A value that is neither is the default, and the alerts drawer says so. Settings
   writes it (`app/src/chatsListPrefs.ts`). It is in this file because it is how one person
   likes their window, and a project would carry it to every clone.

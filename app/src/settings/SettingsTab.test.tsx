@@ -180,6 +180,19 @@ describe("the Chats list, in Settings (#1499, V100-73)", () => {
     expect(chatsListPrefs().tabbed).toBe(true);
     expect(box).toBeChecked();
   });
+
+  it("sums up what happened while you were away, on until it is turned off (#1514)", async () => {
+    render(<SettingsTab />);
+    await userEvent.click(group("Chats list"));
+
+    const box = screen.getByRole("checkbox", { name: "Away summary" });
+    expect(box).toBeChecked();
+
+    await userEvent.click(box);
+
+    expect(chatsListPrefs().away).toBe(false);
+    expect(box).not.toBeChecked();
+  });
 });
 
 describe("your editor, in Settings", () => {

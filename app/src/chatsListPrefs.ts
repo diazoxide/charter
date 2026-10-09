@@ -19,9 +19,17 @@ export type ChatsListPrefs = {
   /** Whether a pressed task opens in a tab of its own (V100-74, "Open tasks in their own
    *  tabs"), where otherwise its session's tab is switched to it. */
   tabbed: boolean;
+  /** Whether coming back to the window after a while away sums up what happened meanwhile
+   *  (#1514, V100-73, "Away summary"), one Notice per project (`AwaySummary.tsx`). */
+  away: boolean;
 };
 
-export const DEFAULT_CHATS_LIST: ChatsListPrefs = { lines: 2, grouped: false, tabbed: false };
+export const DEFAULT_CHATS_LIST: ChatsListPrefs = {
+  lines: 2,
+  grouped: false,
+  tabbed: false,
+  away: true,
+};
 
 /** The preferences as a layout document holds them, and what had to be put right. */
 export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: string[] } {
@@ -52,7 +60,11 @@ export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: stri
   if (typeof from.tabbed === "boolean") tabbed = from.tabbed;
   else if (from.tabbed !== undefined)
     said.push(`"chats.tabbed" ${JSON.stringify(from.tabbed)} is not true or false, so it is false`);
-  return { prefs: { lines, grouped, tabbed }, said };
+  let away = DEFAULT_CHATS_LIST.away;
+  if (typeof from.away === "boolean") away = from.away;
+  else if (from.away !== undefined)
+    said.push(`"chats.away" ${JSON.stringify(from.away)} is not true or false, so it is true`);
+  return { prefs: { lines, grouped, tabbed, away }, said };
 }
 
 /** Whether `prefs` are the defaults, which the layout file leaves out. */
@@ -60,7 +72,8 @@ export function isDefaultChatsList(prefs: ChatsListPrefs): boolean {
   return (
     prefs.lines === DEFAULT_CHATS_LIST.lines &&
     prefs.grouped === DEFAULT_CHATS_LIST.grouped &&
-    prefs.tabbed === DEFAULT_CHATS_LIST.tabbed
+    prefs.tabbed === DEFAULT_CHATS_LIST.tabbed &&
+    prefs.away === DEFAULT_CHATS_LIST.away
   );
 }
 
@@ -99,7 +112,13 @@ export function chatsListPrefs(): ChatsListPrefs {
 export function setChatsListPrefs(to: Partial<ChatsListPrefs>): void {
   const was = chatsListPrefs();
   const now = { ...was, ...to };
-  if (now.lines === was.lines && now.grouped === was.grouped && now.tabbed === was.tabbed) return;
+  if (
+    now.lines === was.lines &&
+    now.grouped === was.grouped &&
+    now.tabbed === was.tabbed &&
+    now.away === was.away
+  )
+    return;
   changed = now;
   sayAboutThisMachine("chats", undefined);
   for (const listener of listeners) listener(now);

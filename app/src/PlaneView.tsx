@@ -252,7 +252,7 @@ import {
   placedCrumbsOf,
   type Crumbs,
 } from "./tabChats";
-import { chatsListPrefs } from "./chatsListPrefs";
+import { chatsListPrefs, useChatsListPrefs } from "./chatsListPrefs";
 import { placeRowId, TabTasks, type Place as TaskPlace } from "./TabChip";
 import { runningByTab } from "./taskLimits";
 import { hasTasks, type Ended, type Needing } from "./tabTasks";
@@ -265,6 +265,7 @@ import { BriefButton, BriefOpener, BriefPanel, type BriefAsk, type OpenBrief } f
 import { activityTitle, activityView } from "./activity";
 import { PaneCrumbs } from "./PaneCrumbs";
 import { ChipExplained, type ChipToExplain } from "./ChipExplained";
+import { AwaySummary, useAwaySummary } from "./AwaySummary";
 import {
   asksInAModal,
   inPlace,
@@ -364,6 +365,7 @@ import {
   useChatsHere,
   useChatsSelect,
   type ChatStates,
+  type FailedBelow,
   type State,
 } from "./chatState";
 import { TabMarks } from "./ChatRows";
@@ -2992,6 +2994,47 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
+   * **Goes to a task that has ended**, for a needs-you item's Go and the away summary's link
+   * (#1491, #1514): its chat, where that is still open (a task that reported blocked stays
+   * one), and otherwise its finished row under the session `asker` that asked, which the Chats
+   * list brings into view. Where there is nothing to show (no finished row, or the Chats list
+   * is not on screen), this says so and shows the session. **A failure its session is flagged
+   * for is looked at only once it was shown**: the core is told which, by its id.
+   */
+  const goToEnded = useCallback(
+    (asker: number, ended: FailedBelow) => {
+      const flagged = (failedTasks[asker] ?? []).some((one) => one.id === ended.id);
+      const open =
+        ended.chat === null
+          ? undefined
+          : chatsListed.current.find((chat) => chat.session === ended.chat);
+      if (open !== undefined) {
+        showChat(open.session);
+        if (flagged) void commands.taskFailureSeen(plane, asker, ended.id).catch(() => undefined);
+        return;
+      }
+      const row = (finishedNow.current.get(asker) ?? []).find((task) => task.id === ended.id);
+      if (row === undefined || !chatsListDrawn()) {
+        refusedBy(
+          "needs-you",
+          row === undefined
+            ? `${ended.task} has no row left to show. Its chat is shown instead.`
+            : `${ended.task} is in the Chats list, which is not on screen. Its chat is shown instead.`,
+        );
+        showChat(asker);
+        return;
+      }
+      succeeded("needs-you");
+      setRevealed((was) => ({
+        asker,
+        task: row.name,
+        id: row.id,
+        at: (was?.at ?? 0) + 1,
+      }));
+    },
+    [failedTasks, plane, refusedBy, showChat, succeeded],
+  );
+  /**
    * **Go, on a needs-you item** (#1491, V100-15). An item that is there because a task failed,
    * ended without a report or did not start **goes to that task**: its chat, where that is
    * still open (a task that reported blocked stays one), and otherwise its finished row
@@ -3013,35 +3056,15 @@ export const PlaneView = memo(function PlaneView({
       }
       // The latest, which is the one the item says.
       const latest = failed[failed.length - 1];
-      const open =
-        latest.chat === null
-          ? undefined
-          : chatsListed.current.find((chat) => chat.session === latest.chat);
-      if (open !== undefined) {
-        showChat(open.session);
-        void commands.taskFailureSeen(plane, session, latest.id).catch(() => undefined);
-        return;
-      }
-      const row = (finishedNow.current.get(session) ?? []).find((task) => task.id === latest.id);
-      if (row === undefined || !chatsListDrawn()) {
-        refusedBy(
-          "needs-you",
-          row === undefined
-            ? `${latest.task} has no row left to show. Its chat is shown instead.`
-            : `${latest.task} is in the Chats list, which is not on screen. Its chat is shown instead.`,
-        );
-        showChat(session);
-        return;
-      }
-      succeeded("needs-you");
-      setRevealed((was) => ({
-        asker: session,
-        task: row.name,
-        id: row.id,
-        at: (was?.at ?? 0) + 1,
-      }));
+      goToEnded(session, latest);
     },
-    [failedTasks, plane, refusedBy, showChat, succeeded],
+    [failedTasks, goToEnded, showChat],
+  );
+  /** **Goes to a finished task** from the away summary (#1514): as a needs-you item's Go. */
+  const showFinished = useCallback(
+    (task: FinishedTask) =>
+      goToEnded(task.asker, { id: task.id, task: task.name, chat: task.chat }),
+    [goToEnded],
   );
   /**
    * What became of a row the Chats list was asked to bring into view. A failed task's row
@@ -3051,10 +3074,13 @@ export const PlaneView = memo(function PlaneView({
   const revealedSettled = useCallback(
     (asked: Reveal, shown: boolean) => {
       if (asked.id === undefined) return;
-      if (shown) void commands.taskFailureSeen(plane, asked.asker, asked.id).catch(() => undefined);
-      else showChat(asked.asker);
+      const id = asked.id;
+      // Only a failure its session is flagged for has anything to be looked at.
+      if (!shown) showChat(asked.asker);
+      else if ((failedTasks[asked.asker] ?? []).some((one) => one.id === id))
+        void commands.taskFailureSeen(plane, asked.asker, id).catch(() => undefined);
     },
-    [plane, showChat],
+    [failedTasks, plane, showChat],
   );
   /** A finished row was opened to be read: where it is a failure its session is flagged for,
    *  it has been looked at (#1491). */
@@ -6397,6 +6423,11 @@ export const PlaneView = memo(function PlaneView({
     shown.map(String),
   );
 
+  /** **While you were away** (#1514): kept for this project whether or not it is in front,
+   *  so a project behind another has its own summary when the person switches to it. */
+  const { away: awayOn } = useChatsListPrefs();
+  const awayNow = useAwaySummary({ chats, on: awayOn, finished: finishedTasks, nameOf });
+
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
   if (!inFront) return null;
@@ -7097,6 +7128,10 @@ export const PlaneView = memo(function PlaneView({
             again at the next launch.
           </Notice>
         ))}
+
+        {/* **While you were away** (#1514): what the project's tasks did while the person was
+            away from the window, one line with a link to each part. It answers nothing. */}
+        <AwaySummary away={awayNow} onShowChat={showChat} onShowFinished={showFinished} />
       </NoticeBand>
 
       {/* **The four regions** (ADR 0038): by default the explorer on the left, the
