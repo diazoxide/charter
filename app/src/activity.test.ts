@@ -29,6 +29,7 @@ function line(over: Partial<ActivityLine> & Pick<ActivityLine, "dispatch" | "n">
     unread: false,
     by_purlis: false,
     expired: false,
+    left_out: false,
     unkept: null,
     unkept_why: null,
     outcome: null,

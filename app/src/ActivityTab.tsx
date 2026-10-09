@@ -13,6 +13,8 @@ import {
   closedWhy,
   EXPIRED_SAID,
   heard,
+  LEFT_OUT_SAID,
+  leftOutAsked,
   lineKey,
   namedByOthers,
   timelineOf,
@@ -57,7 +59,8 @@ type Said = { read?: Read; closed?: true; trouble?: string };
  *
  * **What is not there is said where it would have stood.** A task's record keeps its first
  * messages; one line, in the task's place, says how many it did not keep and why. A message
- * whose words were kept for 30 days after its task ended keeps its line and says so.
+ * whose words were kept for 30 days after its task ended keeps its line and says so, and so does
+ * one whose text read like a credential, which purlis never kept (#1520).
  *
  * **A file another task's report also names is marked** (V100-68) on each of the two reports,
  * for tasks that worked in the same folder. It is what the reports say, and no more.
@@ -314,6 +317,11 @@ export function ActivityTab({
               {line.unkept !== null ? (
                 <p className="activity-text activity-absent" data-testid="activity-unkept">
                   {unkeptSaid(line)}
+                </p>
+              ) : line.left_out ? (
+                <p className="activity-text activity-absent" data-testid="activity-left-out">
+                  {LEFT_OUT_SAID}
+                  {line.kind === "question" && ` ${leftOutAsked(line)}`}
                 </p>
               ) : line.expired ? (
                 <p className="activity-text activity-absent" data-testid="activity-expired">

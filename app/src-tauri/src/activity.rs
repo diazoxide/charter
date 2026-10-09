@@ -76,6 +76,9 @@ pub struct ActivityLine {
     pub by_purlis: bool,
     /// A message whose words were kept for 30 days after its task ended, and are gone.
     pub expired: bool,
+    /// A message whose text read like a credential, so purlis never kept it (#1520). Its
+    /// `text` is empty.
+    pub left_out: bool,
     /// On a `not listed` line: how many messages the record counted after the last it kept.
     pub unkept: Option<u32>,
     /// And why it kept no more: `before` (they were sent before records kept any text),
@@ -155,6 +158,7 @@ pub(crate) fn drawn(line: &Line, open: &[OpenChat], depth: u32) -> ActivityLine 
         unread: line.unread,
         by_purlis: line.by_purlis,
         expired: line.expired,
+        left_out: line.left_out,
         unkept: line.unkept.map(|(count, _)| count),
         unkept_why: line.unkept.map(|(_, why)| why.word().to_owned()),
         outcome: line.outcome.map(|outcome| outcome.word().to_owned()),
@@ -207,7 +211,8 @@ fn still_asked(lines: &mut [ActivityLine], asks: impl Fn(u32) -> Option<(u32, St
         seen.push(line.dispatch.clone());
         line.asks = line
             .from_session
-            .filter(|_| !line.expired)
+            // A question whose words are gone, or were never kept, is not one to answer here.
+            .filter(|_| !line.expired && !line.left_out)
             .and_then(&asks)
             .filter(|(_, open)| *open == line.text)
             .map(|(number, _)| number);
@@ -379,6 +384,7 @@ mod tests {
             by_purlis: false,
             unread: false,
             expired: false,
+            left_out: false,
             unkept: None,
             outcome: Some(Outcome::Done),
             files: vec!["src/app.rs".to_owned()],
@@ -492,6 +498,23 @@ mod tests {
         still_asked(&mut lines, asked);
 
         assert!(lines.iter().all(|line| line.asks.is_none()), "{lines:?}");
+    }
+
+    #[test]
+    fn a_question_whose_text_was_left_out_is_not_one_to_answer_here() {
+        // #1520: its words read like a credential and were never kept, so the person would
+        // answer a question they cannot read. Even where the open question's words are as
+        // empty as its line's.
+        let asked = |_: u32| Some((5, String::new()));
+        let mut lines = vec![ActivityLine {
+            left_out: true,
+            text: String::new(),
+            ..a_question("A", 1, "")
+        }];
+
+        still_asked(&mut lines, asked);
+
+        assert_eq!(lines[0].asks, None);
     }
 
     #[test]

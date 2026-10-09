@@ -764,6 +764,7 @@ const ACTIVITY: Activity = {
     by_purlis: kind === "stopped" || kind === "not listed",
     // The answer's words were kept for 30 days and are gone.
     expired: kind === "answer",
+    left_out: false,
     unkept: kind === "not listed" ? 2 : null,
     unkept_why: kind === "not listed" ? "count" : null,
     place: "alpha\u0000workspaces/alpha/svc",

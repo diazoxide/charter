@@ -1731,6 +1731,7 @@ fn a_record_whose_times_do_not_read_as_times_is_counted_and_never_shown() {
         text: "Still up.".to_owned(),
         by: None,
         unread: false,
+        left_out: false,
     };
     let bad = [
         planted(&root, |record| record.started = "yesterday".to_owned()),
@@ -1792,6 +1793,7 @@ fn what_a_record_kept_is_taken_out_where_its_end_does_not_read_as_a_time() {
             text: "Still up.".to_owned(),
             by: None,
             unread: false,
+            left_out: false,
         }];
     });
 

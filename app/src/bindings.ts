@@ -2419,6 +2419,11 @@ export type ActivityLine = {
 	by_purlis: boolean,
 	/**  A message whose words were kept for 30 days after its task ended, and are gone. */
 	expired: boolean,
+	/**
+	 *  A message whose text read like a credential, so purlis never kept it (#1520). Its
+	 *  `text` is empty.
+	 */
+	left_out: boolean,
 	/**  On a `not listed` line: how many messages the record counted after the last it kept. */
 	unkept: number | null,
 	/**
