@@ -2,7 +2,8 @@ import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { PAGE, PanelList, SHORTEST, shorten } from "./PanelList";
+import { PAGE, PanelList, SHORTEST, codeSpans, shorten } from "./PanelList";
+import type { Offer } from "./actions";
 import type { PanelRow } from "./bindings";
 
 afterEach(cleanup);
@@ -331,6 +332,95 @@ describe("an empty list", () => {
 
     expect(screen.queryByRole("searchbox")).toBeNull();
     expect(screen.queryByRole("list")).toBeNull();
+  });
+});
+
+/**
+ * **The empty state's way out and its code font** (#1156): `panel::Empty::offer` is drawn as
+ * a button for the catalogue's row while the catalogue offers it, and a command the core writes
+ * in backticks is drawn as code rather than with its backticks.
+ */
+describe("an empty list's way out", () => {
+  const NEW: Offer = {
+    id: "memory.new:shared",
+    title: "New shared memory…",
+    available: true,
+    reason: "",
+    does: { verb: "newMemory", scope: { kind: "shared" } },
+    note: "Kept in personas/_shared/memory/, which every persona reads.",
+  };
+  const OFFERED = {
+    headline: "Nothing shared yet",
+    body: "A chat records one with `purlis persona remember --shared`.",
+    offer: "memory.new:shared",
+  };
+  const drawEmpty = (
+    offerFor: (id: string) => Offer | undefined,
+    onRun: ((id: string) => void) | undefined,
+  ) =>
+    render(
+      <PanelList
+        rows={[]}
+        empty={OFFERED}
+        label="Shared memory"
+        testid="list"
+        open={undefined}
+        onOpen={() => {}}
+        onRun={onRun}
+        offerFor={offerFor}
+      />,
+    );
+
+  it("draws the catalogue's row and runs it the way a row runs", async () => {
+    const ran: string[] = [];
+    drawEmpty(
+      (id) => (id === NEW.id ? NEW : undefined),
+      (id) => ran.push(id),
+    );
+
+    const empty = screen.getByTestId("list-empty");
+    await userEvent.click(within(empty).getByRole("button", { name: "New shared memory…" }));
+    expect(ran).toEqual(["memory.new:shared"]);
+  });
+
+  it("draws nothing once the catalogue no longer offers the row, or where nothing runs", () => {
+    drawEmpty(
+      () => undefined,
+      () => {},
+    );
+    expect(within(screen.getByTestId("list-empty")).queryByRole("button")).toBeNull();
+    cleanup();
+
+    drawEmpty(() => NEW, undefined);
+    expect(within(screen.getByTestId("list-empty")).queryByRole("button")).toBeNull();
+  });
+
+  it("draws a row that cannot run now as a button that says why", () => {
+    drawEmpty(
+      () => ({ ...NEW, available: false, reason: "No project is open." }),
+      () => {},
+    );
+
+    const button = within(screen.getByTestId("list-empty")).getByRole("button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "No project is open.");
+  });
+
+  it("draws a command in code font, without its backticks", () => {
+    drawEmpty(() => undefined, undefined);
+
+    const body = screen.getByText(/A chat records one with/);
+    expect(body).toHaveTextContent("A chat records one with purlis persona remember --shared.");
+    expect(body.querySelector("code")).toHaveTextContent("purlis persona remember --shared");
+    expect(body).not.toHaveTextContent("`");
+  });
+
+  it("leaves text with no pair of backticks as it is", () => {
+    expect(codeSpans("Todos are files.")).toBe("Todos are files.");
+    render(<p data-testid="said">{codeSpans("`this` is code, and a lone ` stays")}</p>);
+    const said = screen.getByTestId("said");
+    expect(said).toHaveTextContent("this is code, and a lone ` stays");
+    expect(said.querySelectorAll("code")).toHaveLength(1);
   });
 });
 
