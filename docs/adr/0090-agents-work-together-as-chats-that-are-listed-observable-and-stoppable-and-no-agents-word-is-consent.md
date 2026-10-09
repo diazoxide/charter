@@ -1092,11 +1092,11 @@ The operator's rulings V100-63 and V100-64 (spec #1483, built in #1513).
 - **A report kept for an asking chat is owed until it has been left for that chat.** Taken
   from the workspace as the chat starts, it is claimed only once the chat has started and as
   it is left for it; a start the app dies in, or a report that cannot be written, leaves it
-  owed on its record and kept for its workspace again. Reopen on a finished task's row hands
+  owed on its record, and kept for its workspace again should the chat not start after all. Reopen on a finished task's row hands
   the reopened chat what was kept for the tasks it had asked, as Resume does.
-- **What a launch believes is held to the dispatch record whole.** A task is told to carry on
-  only where its entry runs on the profile, and in the folder, the dispatch started it on, as
-  well as by the ids and persona; and **Try to start again** tells it to carry on only while
+- **What a launch believes is also held to the dispatch record's profile and folder.** A task
+  is told to carry on only where its entry runs on the profile, and in the folder, the
+  dispatch started it on, as well as by the ids and persona; and **Try to start again** tells it to carry on only while
   its dispatch is still running.
 - **A question a task asked its asking chat before a restart is not kept.** The task is told
   to ask again if its work waits on the answer; the asking chat, answering the question it
