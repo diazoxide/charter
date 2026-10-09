@@ -150,8 +150,10 @@ pub struct Model {
 }
 
 impl Model {
-    /// The longest name kept, the same bound a provenance trailer's value has.
-    pub const MOST: usize = 100;
+    /// The longest name kept: what is left of a provenance trailer value's 100 bytes once
+    /// the longest harness word and its colon (`claude-code:`) stand in front of it, so
+    /// `Assisted-by: <harness>:<model>` always fits the bound its reader holds it to.
+    pub const MOST: usize = 100 - "claude-code:".len();
 
     /// `name` where it is one word of printable ASCII no longer than [`Self::MOST`].
     pub fn new(name: &str) -> Option<Self> {
