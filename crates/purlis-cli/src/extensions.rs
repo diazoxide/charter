@@ -53,10 +53,14 @@ fn test_deadline() -> Option<std::time::Duration> {
 
 /// The executor this binary starts an extension's program with — for an event it hears, and
 /// for a command run from the command line.
+///
+/// It knows the built-in extensions of the bundle this binary shipped in (#1366), as the app's
+/// executor knows its own: none when the binary is not inside one.
 pub fn executor() -> Executor {
+    let executor = Executor::with_built_in(purlis_core::extension::BuiltIn::of_this_program());
     match test_deadline() {
-        Some(deadline) => Executor::default().with_deadline(deadline),
-        None => Executor::default(),
+        Some(deadline) => executor.with_deadline(deadline),
+        None => executor,
     }
 }
 
@@ -91,6 +95,6 @@ pub fn tell(root: &Path, event: &Event) {
 /// The folders a fork carries for the extensions this machine approved.
 pub fn carried() -> Vec<String> {
     purlis_core::machine::config_root_if_there()
-        .map(|config| events::carried(&config, &purlis_core::extension::BuiltIn::none()))
+        .map(|config| events::carried(&config, &purlis_core::extension::BuiltIn::of_this_program()))
         .unwrap_or_default()
 }

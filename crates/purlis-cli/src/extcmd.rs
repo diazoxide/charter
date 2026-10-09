@@ -16,10 +16,11 @@
 //! after the program's: a report of what the command changed outside the plane paths it
 //! declares, and nothing else.
 //!
-//! **Built-in extensions are not reached from here yet.** The app finds its built-ins from its
-//! own resource path (`extension::BuiltIn`), and this binary does not look for the bundle it
-//! was shipped in; ADR 0041's amendment of 2026-09-25 (charter-app#342) records why. None of
-//! them adds a command today, and the sentences here say so where it matters.
+//! **Built-in extensions are reached from the bundle this binary shipped in** (#1366). The app
+//! finds its built-ins from its own resource path; this binary finds the same directory from its
+//! own executable's real path (`extension::BuiltIn::of_this_program`), and never from the
+//! environment. A binary outside a bundle — a development build, a copy — reaches none, and the
+//! sentence after an unknown word says so (ADR 0041, amended 2026-10-09).
 //!
 //! **A core-owned alias** (`extension::cli::aliases`) is a core command whose words forward to an
 //! extension's command — how `charter ws todo` keeps its words once todos is an extension. None
@@ -51,7 +52,7 @@ pub fn intercept(argv: &[OsString], answers: impl Fn(&str) -> bool) -> Option<Ex
     // Installed, in whatever standing: the executor is what says it is not approved, turned off
     // or changed. A word nothing installed is called goes on to clap.
     let config_root = purlis_core::machine::config_root_if_there()?;
-    let entry = extension::read(&config_root, &extension::BuiltIn::none())
+    let entry = extension::read(&config_root, &extension::BuiltIn::of_this_program())
         .entry(first)?
         .clone();
     match words.get(1).map(String::as_str) {
@@ -67,12 +68,24 @@ pub fn note_after_an_unknown_word(first: &str) {
     if first.starts_with('-') || !extension::project::id_ok(first) {
         return;
     }
-    // The command line reaching the app's built-in extensions: #1366.
-    eprintln!(
-        "No extension installed on this machine is called '{first}' either. The command line \
-         runs the commands of extensions you installed, and does not reach the app's built-in \
-         extensions yet."
-    );
+    let in_a_bundle = extension::BuiltIn::of_this_program().root().is_some();
+    eprintln!("{}", unknown_word_note(first, in_a_bundle));
+}
+
+/// The line after clap's error for `first`: where else purlis looked — installed extensions,
+/// and the built-ins of the bundle this binary is in, or a word that it is in none.
+fn unknown_word_note(first: &str, in_a_bundle: bool) -> String {
+    if in_a_bundle {
+        format!(
+            "No extension on this machine is called '{first}' either, installed or built into \
+             the app."
+        )
+    } else {
+        format!(
+            "No extension installed on this machine is called '{first}' either. This purlis is \
+             not inside the app's bundle, so it does not reach the app's built-in extensions."
+        )
+    }
 }
 
 /// The arguments after the first `skip`, as text; one that is not UTF-8 is passed lossily, since
@@ -145,5 +158,25 @@ fn list_commands(dir: &std::path::Path, id: &str, code: ExitCode) -> ExitCode {
             eprintln!("purlis: purlis could not read '{id}': {why}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unknown_word_note;
+
+    #[test]
+    fn an_unknown_word_says_where_else_purlis_looked() {
+        assert_eq!(
+            unknown_word_note("stauts", true),
+            "No extension on this machine is called 'stauts' either, installed or built into the \
+             app."
+        );
+        let outside = unknown_word_note("stauts", false);
+        assert!(
+            outside.starts_with("No extension installed on this machine is called 'stauts'")
+                && outside.contains("not inside the app's bundle"),
+            "{outside}"
+        );
     }
 }

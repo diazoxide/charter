@@ -227,6 +227,10 @@ pub struct Ambient<'a> {
     /// charter's config home, where the extension record is — `None` draws no extension's
     /// badges (charter-app#340).
     pub config: Option<&'a Path>,
+    /// The built-in extensions of the bundle the drawing program shipped in
+    /// ([`crate::extension::BuiltIn::of_this_program`], #1366), whose badges are drawn as an
+    /// installed extension's are.
+    pub built_in: crate::extension::BuiltIn,
 }
 
 /// The whole footer, frame included, with the trailing newline `charter/statusline.py:render`
@@ -264,7 +268,13 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
         format!("{DIM}{NOT_DRAWN_YET}{R}"),
     ];
     if let Some(config) = ambient.config {
-        rows.extend(badge_rows(plane, config, workspace, ambient.now));
+        rows.extend(badge_rows(
+            plane,
+            config,
+            &ambient.built_in,
+            workspace,
+            ambient.now,
+        ));
     }
     rows.extend(alerts.alerts.iter().map(|alert| alert.line(&look)));
     let body = Node::stack(rows).render(width);
@@ -281,13 +291,14 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
 fn badge_rows(
     plane: &Path,
     config: &Path,
+    built_in: &crate::extension::BuiltIn,
     workspace: Option<&str>,
     now: DateTime<Utc>,
 ) -> Vec<String> {
     use crate::extension::{facts, project::Choices};
     let read = facts::gather(
         config,
-        &crate::extension::BuiltIn::none(),
+        built_in,
         || Choices::read_in(plane, workspace),
         now,
         facts::Reading::Footer,
