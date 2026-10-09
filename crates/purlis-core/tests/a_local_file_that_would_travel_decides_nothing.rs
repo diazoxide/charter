@@ -99,7 +99,7 @@ fn an_ignored_local_file_is_read_by_every_reader() {
     );
     assert_eq!(
         harness_plugin::Choices::read(root),
-        harness_plugin::Choices::from_text(Some(SHARED), Some(LOCAL))
+        harness_plugin::Choices::from_text(Some(SHARED), Some(LOCAL)).of_project(root)
     );
     assert_eq!(settings::layer_text(root, Which::Local).text(), Some(LOCAL));
     assert_eq!(settings::layer_text(root, Which::Local).left_out(), None);
@@ -150,7 +150,7 @@ fn a_local_file_git_would_commit_or_tracks_chooses_no_harness_plugin() {
         let root = dir.path();
 
         let (shared, local) = left_out(root);
-        let without = || harness_plugin::Choices::from_layers(&shared, &local);
+        let without = || harness_plugin::Choices::from_layers(&shared, &local).of_project(root);
         assert_eq!(harness_plugin::Choices::read(root), without(), "{how:?}");
         assert_eq!(
             harness_plugin::Choices::read_in(root, Some("alpha")),

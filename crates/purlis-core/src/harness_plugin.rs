@@ -593,13 +593,19 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self {
-            project: Some(root.to_path_buf()),
-            ..Self::from_layers(
-                &layer_text(root, Which::Shared),
-                &layer_text(root, Which::Local),
-            )
-        }
+        Self::from_layers(
+            &layer_text(root, Which::Shared),
+            &layer_text(root, Which::Local),
+        )
+        .of_project(root)
+    }
+
+    /// The same choices, read from the project at `root`, whose own plugin files a survey
+    /// lists ([`Adapter::in_project`]). [`Self::read`] is the files' text read there.
+    #[must_use]
+    pub fn of_project(mut self, root: &Path) -> Self {
+        self.project = Some(root.to_path_buf());
+        self
     }
 
     /// The two files as [`crate::settings::layer_text`] hands them — [`Self::from_text`], and,

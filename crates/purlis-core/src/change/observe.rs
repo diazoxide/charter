@@ -40,8 +40,8 @@ pub struct Observed {
     /// `Ok` when it has landed, by the land gate's definition ([`super::land::verdict`]);
     /// else why not, in the gate's words.
     pub landed: Result<(), String>,
-    /// Its blockers that have not landed, by this reading. On a merged member, it went in ahead
-    /// of them.
+    /// Its blockers that have not landed, by this reading. On a merged member, it merged before
+    /// they landed.
     pub waiting_on: Vec<String>,
 }
 

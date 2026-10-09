@@ -570,7 +570,7 @@ pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String>
             row.push_str(&format!("   needs: {}", needs.join(", ")));
             if !m.waiting_on.is_empty() {
                 row.push_str(if m.merged() {
-                    " — merged ahead of its blocker"
+                    " — merged before its blocker landed"
                 } else {
                     " — blocked"
                 });
