@@ -272,12 +272,65 @@ fn record_matches(rec: &Map<String, Value>, vault: &Vault) -> bool {
         && item
 }
 
+/// Whether the item `vault` reads is one the committed half chose: the item the merged vault
+/// names differs from the one this machine's half alone gives it (its own `op-item`, or the
+/// default). Compared through [`op_item_of`] both ways, never by which keys are present: the
+/// modern spelling outranks the legacy one across the merged map, so a committed `op-item`
+/// decides even where this half holds a legacy `op_item`.
+fn item_chosen_by_commit(ctx: &Ctx, vault: &Vault) -> bool {
+    let Ok(local) = registry::load_local(ctx) else {
+        return true;
+    };
+    let config = registry::usable_vaults(&local)
+        .get(&vault.name)
+        .and_then(|entry| entry.get("config"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let here = Vault {
+        config,
+        ..vault.clone()
+    };
+    op_item_of(vault) != op_item_of(&here)
+}
+
+/// The refusal for a record made before #1527 (it names no item) whose vault now reads an item
+/// the committed half chose, or `None` (#1542 review, M1). Pinning that item would be a
+/// committed entry changing a record, which ADR 0047 rules out, and honouring the record
+/// unpinned would let the commit redirect the token. So the token is not used until it is given
+/// again from the vault's tab, where the settings it will pin are shown.
+pub fn unpinned_item_refusal(ctx: &Ctx, vault: &Vault) -> Option<VaultError> {
+    let rec = record(ctx, vault)?;
+    if rec.contains_key("op_item") || !record_matches(&rec, vault) {
+        return None;
+    }
+    item_chosen_by_commit(ctx, vault).then(|| {
+        VaultError::new(format!(
+            "the token kept for vault '{}' was stored before purlis pinned the 1Password item it \
+             reads, and the item it would read now ('{}') is the one the committed vaults.json \
+             names, so purlis will not use it for that item. Give the token again from the \
+             vault's tab in the app, which shows the settings it will pin.",
+            vault.name,
+            crate::personas::one_line(&op_item_of(vault))
+        ))
+    })
+}
+
+/// This machine's record of `vault` where it is honoured: it matches the vault's effective
+/// binding, and either pins the item or reads an item this machine chose
+/// ([`unpinned_item_refusal`]).
+fn honoured(ctx: &Ctx, vault: &Vault) -> Option<Map<String, Value>> {
+    record(ctx, vault).filter(|rec| {
+        record_matches(rec, vault)
+            && (rec.contains_key("op_item") || !item_chosen_by_commit(ctx, vault))
+    })
+}
+
 /// Whether this machine's registry marks `vault`'s identity as moved AND the pinned binding still
 /// matches, under a base charter knows (a record naming another fails every read, so it is not
 /// shown as held either). Reads no keyring.
 pub fn in_keyring(ctx: &Ctx, vault: &Vault) -> bool {
-    record(ctx, vault)
-        .is_some_and(|rec| record_matches(&rec, vault) && base_of(&rec, vault).is_ok())
+    honoured(ctx, vault).is_some_and(|rec| base_of(&rec, vault).is_ok())
 }
 
 /// The item `source`'s token lives under for record item `id`, under the old base and under the
@@ -407,7 +460,10 @@ pub fn held(ctx: &Ctx, vault: &Vault) -> Vec<Binding> {
 /// matches; `None` otherwise, or when the keyring holds none. A keyring that could not be read is
 /// an error, never a value.
 pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<String>, VaultError> {
-    let Some(rec) = record(ctx, vault).filter(|rec| record_matches(rec, vault)) else {
+    if let Some(refused) = unpinned_item_refusal(ctx, vault) {
+        return Err(refused);
+    }
+    let Some(rec) = honoured(ctx, vault) else {
         return Ok(None);
     };
     if !rec.contains_key("op_item") {
@@ -430,9 +486,11 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
 
 /// **Upgrade a record made before #1527, which names no item, to pin the one it is read with
 /// now** (#1542), so a later commit that changes `op-item` unpins it as it does a record made
-/// since. Asked at a read through the record, which the record already honours for that item:
-/// pinning it changes nothing about this read, and only stops the next change of the item from
-/// being honoured. Best effort and quiet: a half that cannot be written now (a sandboxed chat's
+/// since. **Only for an item this machine chose** (its half's own `op-item`, or the default): a
+/// record whose vault reads an item the committed half chose is refused instead
+/// ([`unpinned_item_refusal`]), since a committed entry never changes a record. Asked at a read
+/// through the record, which it already honours for that item: pinning changes nothing about
+/// this read. Best effort and quiet: a half that cannot be written now (a sandboxed chat's
 /// read, a read-only file) is upgraded at a later read.
 ///
 /// The half is read again just before it is written, and the record is changed only while it
@@ -453,7 +511,8 @@ fn pin_the_item(ctx: &Ctx, vault: &Vault) {
     };
     let still = rec.get("held").and_then(Value::as_str) == Some(IN_KEYRING)
         && !rec.contains_key("op_item")
-        && record_matches(rec, vault);
+        && record_matches(rec, vault)
+        && !item_chosen_by_commit(ctx, vault);
     if !still {
         return;
     }
@@ -472,7 +531,7 @@ fn pin_the_item(ctx: &Ctx, vault: &Vault) {
 /// as before (no keyring item is at stake). An error when the pin is missing or fails to verify —
 /// charter never falls back to the caller's PATH for a keyring-held identity (#271 review, U1).
 pub fn pinned_op(ctx: &Ctx, vault: &Vault) -> Result<Option<PathBuf>, VaultError> {
-    let Some(rec) = record(ctx, vault).filter(|rec| record_matches(rec, vault)) else {
+    let Some(rec) = honoured(ctx, vault) else {
         return Ok(None);
     };
     let refuse = |why: &str| {

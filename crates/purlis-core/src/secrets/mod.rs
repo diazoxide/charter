@@ -496,6 +496,9 @@ pub fn identity_missing(ctx: &Ctx, vault: &registry::Vault) -> Option<VaultError
     if let Some(refused) = identity::token_refusal(vault) {
         return Some(refused);
     }
+    if let Some(refused) = identity::unpinned_item_refusal(ctx, vault) {
+        return Some(refused);
+    }
     identity::held(ctx, vault)
         .into_iter()
         .find(|b| b.held == identity::Held::Unset)
