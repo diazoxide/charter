@@ -77,13 +77,14 @@ export function useAheadBehind(
   return held !== undefined && held.key === key ? held.read : undefined;
 }
 
-/** The most commits the core counts on either side (`files::status::MOST_COUNTED`, #1152): a
- *  count that reached it means that many or more. */
+/** The most commits the core counts exactly on either side (`files::status::MOST_COUNTED`,
+ *  #1152). It counts to one past it, so a count past it means more than that. */
 export const MOST_COUNTED = 10_000;
 
-/** A count of commits as the header says it: "10,000+" once it reached the core's cap. */
+/** A count of commits as the header says it: exactly the core's cap is said as it is, and only a
+ *  count past it as "10,000+". */
 export function commitsSaid(n: number): string {
-  return n >= MOST_COUNTED ? `${MOST_COUNTED.toLocaleString("en")}+` : n.toLocaleString("en");
+  return n > MOST_COUNTED ? `${MOST_COUNTED.toLocaleString("en")}+` : n.toLocaleString("en");
 }
 
 /** What the ahead/behind reads as. */
