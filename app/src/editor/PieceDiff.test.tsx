@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { emit } from "@tauri-apps/api/event";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { PlaneId, WhatChanged } from "../bindings";
+import type { BranchChanged, PlaneId, WhatChanged } from "../bindings";
 import { PieceDiffTab } from "./PieceDiff";
 
 const PLANE = "/plane" as unknown as PlaneId;
@@ -195,5 +196,88 @@ describe("what changed, to a screen reader (#1189)", () => {
       await screen.findByRole("group", { name: "What changed in src/lib.rs against main" }),
     ).toHaveAttribute("data-testid", "merge-viewer");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("what changed, read again when the branch moves (#1189)", () => {
+  const TEXT = changed({
+    kind: "text",
+    base: "one\n",
+    head: "ONE\n",
+    hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 }],
+  });
+
+  /** The core, its `what_changed` answered by hand: each ask waits for `answer()`. */
+  function slowCore() {
+    const waiting: (() => void)[] = [];
+    let asks = 0;
+    mockIPC(
+      (cmd) => {
+        if (cmd !== "what_changed") throw new Error(`unexpected ${cmd}`);
+        asks += 1;
+        return new Promise((done) => waiting.push(() => done(TEXT)));
+      },
+      { shouldMockEvents: true },
+    );
+    return {
+      asks: () => asks,
+      answer: () => act(async () => waiting.splice(0).forEach((done) => done())),
+    };
+  }
+
+  const moved = (piece: string | null, workspace = "alpha") =>
+    act(() =>
+      emit("branch-changed", {
+        branches: [{ plane: PLANE, workspace, repo: "svc", piece }],
+      } satisfies BranchChanged),
+    );
+
+  it("reads again when its own branch moved, and keeps the comparison drawn meanwhile", async () => {
+    const core = slowCore();
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+    await waitFor(() => expect(core.asks()).toBe(1));
+    await core.answer();
+    await screen.findByTestId("merge-viewer");
+
+    await moved("fix-it");
+
+    await waitFor(() => expect(core.asks()).toBe(2));
+    expect(screen.getByTestId("merge-viewer")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("does not read again for another branch", async () => {
+    const core = slowCore();
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+    await waitFor(() => expect(core.asks()).toBe(1));
+    await core.answer();
+
+    await moved("other");
+    await moved(null);
+    await moved("fix-it", "beta");
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+
+    expect(core.asks()).toBe(1);
+  });
+
+  it("reads once more after a read in flight, however often the branch moved meanwhile", async () => {
+    const core = slowCore();
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+    await waitFor(() => expect(core.asks()).toBe(1));
+
+    await moved("fix-it");
+    await moved("fix-it");
+    await moved("fix-it");
+    expect(core.asks()).toBe(1);
+    await core.answer();
+
+    await waitFor(() => expect(core.asks()).toBe(2));
+    await core.answer();
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+    expect(core.asks()).toBe(2);
   });
 });
