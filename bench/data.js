@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791560910490,
+  "lastUpdate": 1791561749175,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5208,6 +5208,48 @@ window.BENCHMARK_DATA = {
             "value": 103.73948899999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.202, 102.325, 103.739, 103.746, 103.860 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "03abc9ec2499e457a095a987c45fac7143fafdba",
+          "message": "Hold the tab strips to the rule that a tablist owns only tabs\n\nWrites out axe's aria-required-children reading of what a tablist owns\n(its DOM children through role-less wrappers, plus what aria-owns\nnames, less what is hidden from assistive technology) and checks it\nagainst small trees first. One of those settles the design question in\nthe issue: aria-owns adds to what a tablist owns and never removes its\nDOM children, so a tablist that keeps its cells still owns every close\nbutton and gear in them.\n\nThen it renders the window's three strips and lists, exactly, what each\nowns today that is not a tab: the project's close button, gear and the\nstrip's own Open and New buttons; the focused workspace's gear; each\nchat tab's close button. A new control inside a strip fails the test,\nand the fix for the strips crosses entries off until the lists are\nempty. axe itself is not a dependency and was not run.\n\nRefs #1204\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T19:57:09+04:00",
+          "tree_id": "fef90b9b7a2375e06b374f815d192e9882a76ba6",
+          "url": "https://github.com/purlis/purlis/commit/03abc9ec2499e457a095a987c45fac7143fafdba"
+        },
+        "date": 1791561748486,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.47214049999999996,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.455, 0.462, 0.472, 0.480, 0.483 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1053285,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.968, 17.025, 17.105, 17.140, 17.202 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.929596,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.652, 104.506, 104.930, 106.194, 106.396 ms"
           }
         ]
       }
