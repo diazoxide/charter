@@ -1101,6 +1101,7 @@ mod tests {
             mode: Mode::Task,
             depth: 1,
             root: None,
+            above: None,
             by_person: false,
         }
     }
@@ -1151,6 +1152,7 @@ mod tests {
         // A task the person started from that chat's tab: the chat receives its report and
         // nothing before it (D-T59-j1).
         let theirs = HandedFrom {
+            above: None,
             by_person: true,
             ..task_of(ASKER)
         };

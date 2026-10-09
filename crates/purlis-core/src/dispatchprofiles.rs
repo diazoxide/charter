@@ -713,6 +713,7 @@ mod tests {
                 mode: Mode::Task,
                 depth: 1,
                 root: None,
+                above: None,
                 by_person: false,
             }),
             ..Chat::default()

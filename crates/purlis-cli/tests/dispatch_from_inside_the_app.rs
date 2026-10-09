@@ -1052,7 +1052,6 @@ impl StandIn {
         let asked = dispatchdecision::asked_by_a_chat(
             &self.root,
             ask.chat,
-            &asking,
             ask.to.as_deref(),
             &Moment {
                 open: &records,
@@ -1110,6 +1109,7 @@ impl StandIn {
                 mode: Mode::Task,
                 depth: asked.depth,
                 root: asked.root,
+                above: None,
                 by_person: false,
             }),
             ..Default::default()
@@ -1253,6 +1253,7 @@ fn a_task_goes_end_to_end() {
             mode: Mode::Task,
             depth: 1,
             root: None,
+            above: None,
             by_person: false,
         })
     );

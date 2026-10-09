@@ -178,6 +178,10 @@ pub enum Refused {
     /// above it in its chain. The whole sentence ([`crate::dispatchgrant::never_said`],
     /// [`crate::dispatchgrant::never_above_said`]). No grant covers it and nobody is asked.
     Never(String),
+    /// The asking chat, by its number, is not among the chats the app has open when the
+    /// decision is made (#1521): it closed or ended while its ask was on its way. Its chain and
+    /// depth are on its own record, so nothing is decided without it.
+    NotOpen(u32),
 }
 
 impl Refused {
@@ -206,6 +210,7 @@ impl Refused {
             Self::Profile(why) => why.say(),
             Self::Limit(why) => why.say(),
             Self::Never(said) => said.clone(),
+            Self::NotOpen(chat) => format!("chat {chat} is not one this app has open"),
         }
     }
 }
@@ -321,10 +326,17 @@ pub struct Asked {
     /// The stable id of the chat the person started, which the whole lineage descends from
     /// ([`crate::reopen::HandedFrom::root`]): what the new chat's record keeps.
     pub root: Option<String>,
+    /// **The personas above the new chat, nearest first** (#1521): the asking chat's own, then
+    /// its chain as its record keeps it ([`crate::reopen::HandedFrom::above`]), one for each
+    /// of [`Self::depth`]. Read from the app's record of the asking chat, never from what it
+    /// sent. `None` where purlis cannot read that chain whole, which the new chat's own asks
+    /// are then held to ([`crate::dispatchlimits::Lineage::chain_unread`]).
+    pub above: Option<Vec<Option<String>>>,
 }
 
-/// The decision for a dispatch the chat `number`, recorded as `asking`, asks for, naming
-/// `named` (or no persona, for its own), in the project at `root`.
+/// The decision for a dispatch the chat `number` asks for, naming `named` (or no persona, for
+/// its own), in the project at `root`. The chat is read from `moment.open`, under the lock the
+/// app decides under; one that is not there is refused ([`Refused::NotOpen`]).
 ///
 /// **The one place the parts are joined.** Every fact about the asker is read here from the
 /// app's record of it, so no caller builds a [`Request`] its own way: the persona it runs as,
@@ -344,10 +356,22 @@ pub struct Asked {
 pub fn asked_by_a_chat(
     root: &std::path::Path,
     number: u32,
-    asking: &crate::reopen::Chat,
     named: Option<&str>,
     moment: &Moment<'_>,
 ) -> Asked {
+    // **Its own record, as the app holds it now** (#1521): the chain and depth a new chat
+    // keeps are read from it under the lock the decision is made under. A chat that left
+    // since `asking` was read would otherwise read as having nobody above it, and that
+    // shorter chain would be written into the chat it starts.
+    let Some(asking) = record(number, moment.open) else {
+        return Asked {
+            decision: Decision::Refused(Refused::NotOpen(number)),
+            to: None,
+            depth: 0,
+            root: None,
+            above: None,
+        };
+    };
     let pair = pair_of(asking, named, moment.default);
     let workspace = asking
         .cwd
@@ -417,6 +441,21 @@ pub fn asked_by_a_chat(
         lineage: &lineage,
     };
     let mut decision = decide(&request);
+    // **A chain it cannot read whole** (#1521) may hold a persona the person said never to for
+    // this target: refused as if it did. The loop rule has refused every other persona already
+    // ([`crate::dispatchlimits::Refused::ChainUnread`]); this is the chat's own. The person's own
+    // dispatch from a tab is held to no never.
+    if let (true, By::Chat, Some(to), Decision::Start | Decision::NeedsGrant { .. }) = (
+        lineage.chain_unread,
+        moment.by,
+        pair.to.as_deref(),
+        &decision,
+    ) && grants.refuses_any_to(to)
+    {
+        decision = Decision::Refused(Refused::Limit(crate::dispatchlimits::Refused::ChainUnread(
+            to.to_owned(),
+        )));
+    }
     let elsewhere = moment
         .works_in
         .filter(|there| Some(*there) != workspace.as_deref());
@@ -439,12 +478,37 @@ pub fn asked_by_a_chat(
             decision = held_there;
         }
     }
+    let depth = lineage.depth.saturating_add(1).min(DEEPEST);
     Asked {
         decision,
-        depth: lineage.depth.saturating_add(1).min(DEEPEST),
+        depth,
         root: root_of(number, moment.open),
+        above: above_the_new_chat(asking, moment.default, &lineage, depth),
         to: pair.to,
     }
+}
+
+/// The personas above a chat `asking` dispatches, nearest first: its own persona (the
+/// default for a chat on none), then the chain above it. Kept only where it is whole and one
+/// per dispatch above the new chat, `depth` of them; otherwise `None`, a chain not kept, which
+/// is read as one purlis cannot read whole and never as a shorter one (#1521).
+fn above_the_new_chat(
+    asking: &crate::reopen::Chat,
+    default: Option<&str>,
+    lineage: &Lineage,
+    depth: u32,
+) -> Option<Vec<Option<String>>> {
+    if lineage.chain_unread {
+        return None;
+    }
+    let own = asking
+        .persona
+        .clone()
+        .or_else(|| default.map(str::to_owned));
+    let above: Vec<Option<String>> = std::iter::once(own)
+        .chain(lineage.chain.iter().cloned())
+        .collect();
+    (usize::try_from(depth).ok() == Some(above.len())).then_some(above)
 }
 
 /// Whether the dispatch `request` describes may start.
@@ -567,7 +631,15 @@ pub fn root_of(number: u32, open: &[(u32, &crate::reopen::Chat)]) -> Option<Stri
 ///
 /// **Read from the app's records and nothing else.** A chat's depth is the one its own record
 /// holds, written when it was dispatched, so closing the chat above it never makes a chain
-/// look shallower. The chain is of the chats still open.
+/// look shallower. **So is its chain** (#1521): the personas above it as its record keeps
+/// them ([`crate::reopen::HandedFrom::above`]), so a chat above it that closed, finished or
+/// was cleared is still in it. A chat whose record names no asking chat, the person's own or a
+/// finished task reopened as an ordinary chat, has nothing above it.
+///
+/// **A record written before the chain was kept** is read by walking who dispatched whom
+/// among the chats still open, as before, up to a chat that names no asking chat or one whose
+/// record keeps its chain. Where the walk meets a chat that has closed, or a loop no dispatch
+/// made, purlis cannot say who is above: [`Lineage::chain_unread`].
 ///
 /// **A lineage is counted by its root** ([`root_of`]): every open chat whose record names the
 /// same chat the person started is in it, so closing a chat in the middle, or starting one
@@ -618,17 +690,44 @@ pub fn lineage_counting(
             default.map(str::to_owned)
         })
     };
-    // Up: the chats above it that are still open, nearest first. `seen` ends a loop that only
-    // a record somebody else wrote could hold.
+    // Up: the chats above it that are still open, nearest first, for the counts below. `seen`
+    // ends a loop that only a record somebody else wrote could hold.
     let mut seen = vec![asking];
-    let mut chain = Vec::new();
+    let mut walked = Vec::new();
+    // What the walk found of the chain for a record that keeps none: the first chat above
+    // whose record keeps its own, by how many it had walked to reach it.
+    let mut kept_above: Option<(usize, Vec<Option<String>>)> = None;
+    // Whether the walk stopped short of the chat the person started: at a chat that closed,
+    // or at a loop.
+    let mut short = false;
     let mut top = asking;
-    while let Some(above) = asker_of(top).filter(|above| !seen.contains(above)) {
-        let Some(chat) = record(above) else { break };
-        chain.push(persona(chat));
+    while let Some(above) = asker_of(top) {
+        let Some(chat) = record(above).filter(|_| !seen.contains(&above)) else {
+            short = true;
+            break;
+        };
+        walked.push(persona(chat));
+        if kept_above.is_none()
+            && let Some(kept) = chat.from.as_ref().and_then(|from| from.above.clone())
+        {
+            kept_above = Some((walked.len(), kept));
+        }
         seen.push(above);
         top = above;
     }
+    // The chain: the one the asking chat's own record keeps; for a record written before it
+    // was kept, the walk, finished by the first record above it that keeps its own.
+    let own = record(asking).and_then(|chat| chat.from.as_ref());
+    let (chain, chain_unread) = match (own.map(|from| from.above.clone()), kept_above) {
+        (None, _) => (Vec::new(), false),
+        (Some(Some(kept)), _) => (kept, false),
+        (Some(None), Some((reached, kept))) => {
+            walked.truncate(reached);
+            walked.extend(kept);
+            (walked, false)
+        }
+        (Some(None), None) => (walked, short),
+    };
     // Every open chat of the same root, then down from the top: every open chat that descends
     // from it, itself included.
     let root = root_of(asking, open);
@@ -715,6 +814,7 @@ pub fn lineage_counting(
             .and_then(|chat| chat.from.as_ref())
             .map_or(0, |from| from.depth),
         chain,
+        chain_unread,
         running: counted(running),
         lineage: counted(lineage),
         as_target: counted(as_target),
@@ -851,6 +951,7 @@ mod tests {
                 mode,
                 depth,
                 root: None,
+                above: None,
                 by_person: false,
             }),
             ..chat(persona)
@@ -898,6 +999,7 @@ mod tests {
                 // Itself: one chat is running as the persona it would dispatch to.
                 as_target: 1,
                 by_asking: 0,
+                chain_unread: false,
             }
         );
     }
@@ -1135,7 +1237,13 @@ mod tests {
     /// file is `manifest`.
     fn a_project(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("a project");
-        for (name, more) in [("steward", ""), ("devops", ""), ("intern", "draft: true\n")] {
+        for (name, more) in [
+            ("steward", ""),
+            ("devops", ""),
+            ("qa", ""),
+            ("ops", ""),
+            ("intern", "draft: true\n"),
+        ] {
             let dir = root.path().join("personas").join(name);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
@@ -1160,11 +1268,9 @@ mod tests {
         by: By,
     ) -> Asked {
         let root = a_project(manifest);
-        let asking = record(number, open).expect("the asking chat is open");
         asked_by_a_chat(
             root.path(),
             number,
-            asking,
             named,
             &Moment {
                 open,
@@ -1186,7 +1292,6 @@ mod tests {
         asked_by_a_chat(
             root.path(),
             2,
-            asking,
             named,
             &Moment {
                 open: &[(2, asking)],
@@ -1211,7 +1316,8 @@ mod tests {
 
     #[test]
     fn a_chats_ask_is_built_from_its_record_and_names_its_own_persona_when_none_is_named() {
-        let steward = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
+        // Dispatched by a chat on no persona, which has since closed.
+        let steward = kept(1, &[None], Some("steward"));
         assert_eq!(
             asked(&steward, None, None),
             Asked {
@@ -1219,6 +1325,7 @@ mod tests {
                 to: Some("steward".to_owned()),
                 depth: 2,
                 root: None,
+                above: Some(vec![Some("steward".to_owned()), None]),
             }
         );
         // A name with blanks around it is the name; a blank one is none.
@@ -1406,7 +1513,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 Some("devops"),
                 &Moment {
                     open: &[(1, &asking)],
@@ -1450,7 +1556,6 @@ mod tests {
         let said = asked_by_a_chat(
             root.path(),
             1,
-            &asking,
             Some("devops"),
             &Moment {
                 open: &[(1, &asking)],
@@ -1480,7 +1585,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 None,
                 &Moment {
                     open: &[(1, &asking)],
@@ -1548,7 +1652,6 @@ mod tests {
             asked_by_a_chat(
                 root.path(),
                 1,
-                &asking,
                 None,
                 &Moment {
                     open: &[(1, &asking)],
@@ -2659,19 +2762,298 @@ mod tests {
         let four = dispatched(2, 2, Mode::Task, Owed::Due, Some("devops"));
         let seen = seen(4, &[(4, &four)]);
         assert_eq!(seen.depth, 2);
+        // A record written before the chain was kept: who was above is not known, and never
+        // read as nobody (#1521).
         assert_eq!(seen.chain, Vec::<Option<String>>::new());
+        assert!(seen.chain_unread);
         assert_eq!(seen.lineage, 1);
     }
 
     #[test]
     fn records_that_name_each_other_are_walked_once() {
         // The record is a file anything running as the person can write. Two chats that each
-        // say the other dispatched it are a loop no dispatch made, and reading it ends.
+        // say the other dispatched it are a loop no dispatch made, and reading it ends, with
+        // the chain above read as one purlis cannot read whole.
         let one = dispatched(2, 1, Mode::Task, Owed::Due, Some("steward"));
         let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
         let seen = seen(1, &[(1, &one), (2, &two)]);
         assert_eq!(seen.chain, vec![Some("devops".to_owned())]);
+        assert!(seen.chain_unread);
         assert_eq!(seen.lineage, 2);
+    }
+
+    // ----- the chain, from the dispatch record (#1521) --------------------------------------
+
+    /// [`dispatched`], keeping the personas above it as the app writes them.
+    fn kept(by: u32, above: &[Option<&str>], persona: Option<&str>) -> Chat {
+        let depth = u32::try_from(above.len()).expect("a depth");
+        let mut chat = dispatched(by, depth, Mode::Task, Owed::Due, persona);
+        if let Some(from) = chat.from.as_mut() {
+            from.above = Some(above.iter().map(|one| one.map(str::to_owned)).collect());
+        }
+        chat
+    }
+
+    fn grant(pairs: &[(&str, &str)]) -> InForce {
+        InForce {
+            you: pairs
+                .iter()
+                .map(|(from, to)| crate::dispatchgrant::Pair::new(from, to).unwrap())
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn loop_to(name: &str) -> Decision {
+        Decision::Refused(Refused::Limit(dispatchlimits::Refused::Loop(
+            name.to_owned(),
+        )))
+    }
+
+    #[test]
+    fn a_persona_above_a_chat_that_closed_is_still_refused_by_the_loop_rule() {
+        // steward (1) dispatched devops (2), and chat 1 has closed. Devops asks for steward:
+        // A to B to A, with the first A gone. Its own record still says who asked it.
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let open = [(2, &two)];
+        let grants = grant(&[("devops", "steward")]);
+        let said = asked_in("", 2, &open, Some("steward"), &grants, By::Chat);
+        assert_eq!(said.decision, loop_to("steward"));
+        // The person's own ask from its tab is held to the loop rule too.
+        assert_eq!(
+            asked_in("", 2, &open, Some("steward"), &grants, By::Person).decision,
+            loop_to("steward")
+        );
+        // Three down, with both chats in the middle closed, finished or cleared.
+        let three = kept(2, &[Some("devops"), Some("steward")], Some("qa"));
+        let open = [(3, &three)];
+        let grants = grant(&[("qa", "steward"), ("qa", "devops")]);
+        for to in ["steward", "devops"] {
+            assert_eq!(
+                asked_in(
+                    "[dispatch]\ndepth = 8\n",
+                    3,
+                    &open,
+                    Some(to),
+                    &grants,
+                    By::Chat
+                )
+                .decision,
+                loop_to(to)
+            );
+        }
+        // A persona not above it is not refused by the rule.
+        let grants = grant(&[("qa", "ops")]);
+        assert_eq!(
+            asked_in(
+                "[dispatch]\ndepth = 8\n",
+                3,
+                &open,
+                Some("ops"),
+                &grants,
+                By::Chat
+            )
+            .decision,
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn a_chat_that_left_before_its_ask_is_decided_starts_nothing_and_keeps_no_chain() {
+        // #1521: devops (2), under steward, asked; by the time the app decides, under its lock,
+        // chat 2 has ended. Read from the chats open then, it would have nobody above it, and
+        // a shorter chain would be written into the chat it starts. It is refused instead.
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let three = kept(1, &[Some("steward")], Some("qa"));
+        let grants = grant(&[("devops", "steward"), ("devops", "qa")]);
+        for to in ["steward", "qa"] {
+            for by in [By::Chat, By::Person] {
+                let said = asked_in("", 2, &[(3, &three)], Some(to), &grants, by);
+                assert_eq!(said.decision, Decision::Refused(Refused::NotOpen(2)));
+                assert_eq!((said.depth, said.above.clone()), (0, None));
+                assert_eq!(refusal(&said), "chat 2 is not one this app has open");
+            }
+        }
+        // While it is open, the same ask is decided over its own record.
+        assert_eq!(
+            asked_in("", 2, &[(2, &two)], Some("steward"), &grants, By::Chat).decision,
+            loop_to("steward")
+        );
+    }
+
+    #[test]
+    fn the_record_s_chain_is_read_whatever_the_chats_still_open_say() {
+        // The chat above is open, but under a number that is now another chat's: the walk
+        // would read reviewer above it. What the asking chat's own record keeps is the chain.
+        let one = started(Some("reviewer"), ROOT_ID);
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let seen = seen(2, &[(1, &one), (2, &two)]);
+        assert_eq!(seen.chain, vec![Some("steward".to_owned())]);
+        assert!(!seen.chain_unread);
+    }
+
+    #[test]
+    fn the_person_s_never_for_a_chat_above_holds_when_a_chat_in_the_middle_closed() {
+        // steward (1) to devops (2) to qa (3); 1 and 2 have closed. The person said never to
+        // steward chats dispatching to ops: it holds for qa, below steward.
+        let three = kept(2, &[Some("devops"), Some("steward")], Some("qa"));
+        let open = [(3, &three)];
+        let grants = InForce {
+            never: vec![("steward".to_owned(), "ops".to_owned())],
+            ..grant(&[("qa", "ops")])
+        };
+        let said = asked_in(
+            "[dispatch]\ndepth = 8\n",
+            3,
+            &open,
+            Some("ops"),
+            &grants,
+            By::Chat,
+        );
+        assert_eq!(
+            said.decision,
+            Decision::Refused(Refused::Never(crate::dispatchgrant::never_above_said(
+                "steward", "ops"
+            )))
+        );
+    }
+
+    #[test]
+    fn a_dispatch_keeps_the_personas_above_the_chat_it_starts() {
+        // The person's chat (1, steward) asks for devops: steward is above the new chat.
+        let one = started(Some("steward"), ROOT_ID);
+        let grants = grant(&[("steward", "devops"), ("devops", "qa")]);
+        let first = asked_in("", 1, &[(1, &one)], Some("devops"), &grants, By::Chat);
+        assert_eq!(
+            (first.depth, first.above),
+            (1, Some(vec![Some("steward".to_owned())]))
+        );
+        // That chat (2) asks for qa with chat 1 closed: its own record, then itself.
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let second = asked_in("", 2, &[(2, &two)], Some("qa"), &grants, By::Chat);
+        assert_eq!(
+            (second.depth, second.above.clone()),
+            (
+                2,
+                Some(vec![Some("devops".to_owned()), Some("steward".to_owned())])
+            )
+        );
+        // The person asking from a tab: the chain is the tab's chat's, the same.
+        let by_person = asked_in("", 2, &[(2, &two)], Some("qa"), &grants, By::Person);
+        assert_eq!(by_person.above, second.above);
+    }
+
+    #[test]
+    fn a_finished_task_reopened_as_an_ordinary_chat_starts_a_new_chain() {
+        // A reopened task names no asking chat: nothing is above it, and what it dispatches
+        // has only it above.
+        let reopened = chat(Some("devops"));
+        let grants = grant(&[("devops", "steward")]);
+        let said = asked_in("", 5, &[(5, &reopened)], Some("steward"), &grants, By::Chat);
+        assert_eq!(said.decision, Decision::Start);
+        assert_eq!(
+            (said.depth, said.above),
+            (1, Some(vec![Some("devops".to_owned())]))
+        );
+    }
+
+    #[test]
+    fn an_older_record_is_read_from_the_chats_still_open_as_before() {
+        // Written before the chain was kept, with every chat above it still open: the walk
+        // reads it whole, and the new chat keeps it.
+        let one = started(Some("steward"), ROOT_ID);
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let open = [(1, &one), (2, &two)];
+        let grants = grant(&[("devops", "steward"), ("devops", "qa")]);
+        assert_eq!(
+            asked_in("", 2, &open, Some("steward"), &grants, By::Chat).decision,
+            loop_to("steward")
+        );
+        let said = asked_in("", 2, &open, Some("qa"), &grants, By::Chat);
+        assert_eq!(said.decision, Decision::Start);
+        assert_eq!(
+            said.above,
+            Some(vec![Some("devops".to_owned()), Some("steward".to_owned())])
+        );
+        // The walk ends at the first record above that keeps its own chain.
+        let three = dispatched(2, 2, Mode::Task, Owed::Due, Some("qa"));
+        let two = kept(1, &[Some("steward")], Some("devops"));
+        let seen = seen(3, &[(2, &two), (3, &three)]);
+        assert_eq!(
+            seen.chain,
+            vec![Some("devops".to_owned()), Some("steward".to_owned())]
+        );
+        assert!(!seen.chain_unread);
+    }
+
+    #[test]
+    fn an_older_record_whose_chain_has_a_closed_chat_is_refused_any_other_persona_and_told_why() {
+        // Written before the chain was kept, and the chat that asked it has closed: who was
+        // above is not known, so any persona but its own may have been, and is refused.
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let open = [(2, &two)];
+        let grants = grant(&[("devops", "steward"), ("devops", "qa")]);
+        for to in ["steward", "qa"] {
+            let said = asked_in("", 2, &open, Some(to), &grants, By::Chat);
+            let unread = dispatchlimits::Refused::ChainUnread(to.to_owned());
+            assert_eq!(
+                said.decision,
+                Decision::Refused(Refused::Limit(unread.clone()))
+            );
+            assert!(
+                unread
+                    .say()
+                    .starts_with("this chat's chain began under an older version"),
+                "{}",
+                unread.say()
+            );
+            // The person's own ask from its tab is held to it too.
+            assert_eq!(
+                asked_in("", 2, &open, Some(to), &grants, By::Person).decision,
+                said.decision
+            );
+        }
+        // Its own persona is not above it, so it may split its own work, and what it starts
+        // keeps no chain: its asks are held the same way.
+        let own = asked_in("[dispatch]\ndepth = 8\n", 2, &open, None, &grants, By::Chat);
+        assert_eq!(own.decision, Decision::Start);
+        assert_eq!(own.above, None);
+    }
+
+    #[test]
+    fn an_older_record_whose_chain_has_a_closed_chat_holds_every_never_to_the_target() {
+        // Its own persona: a never from any persona to it may be one from above. Refused for
+        // the chat, and not for the person, whom no never holds.
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let open = [(2, &two)];
+        let grants = InForce {
+            never: vec![("steward".to_owned(), "devops".to_owned())],
+            ..Default::default()
+        };
+        let depth = "[dispatch]\ndepth = 8\n";
+        assert_eq!(
+            asked_in(depth, 2, &open, Some("devops"), &grants, By::Chat).decision,
+            Decision::Refused(Refused::Limit(dispatchlimits::Refused::ChainUnread(
+                "devops".to_owned()
+            )))
+        );
+        assert_eq!(
+            asked_in(depth, 2, &open, Some("devops"), &grants, By::Person).decision,
+            Decision::Start
+        );
+        // No never to it: its own work splits as before.
+        assert_eq!(
+            asked_in(
+                depth,
+                2,
+                &open,
+                Some("devops"),
+                &InForce::default(),
+                By::Chat
+            )
+            .decision,
+            Decision::Start
+        );
     }
 
     #[test]
