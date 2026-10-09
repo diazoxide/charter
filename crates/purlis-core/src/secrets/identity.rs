@@ -264,7 +264,7 @@ fn record_matches(rec: &Map<String, Value>, vault: &Vault) -> bool {
         .unwrap_or_default();
     let recorded = |k: &str| rec.get(k).and_then(Value::as_str).map(str::to_owned);
     // The item is pinned by every record made since #1527; an older record does not name one
-    // and is not held to it.
+    // and is not held to it until its next read pins it ([`pin_the_item`], #1542).
     let item = !rec.contains_key("op_item") || recorded("op_item") == Some(op_item_of(vault));
     recorded_env == env
         && recorded("op_vault") == op_vault
@@ -410,6 +410,9 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
     let Some(rec) = record(ctx, vault).filter(|rec| record_matches(rec, vault)) else {
         return Ok(None);
     };
+    if !rec.contains_key("op_item") {
+        pin_the_item(ctx, vault);
+    }
     let Some(id) = rec
         .get("ids")
         .and_then(Value::as_object)
@@ -423,6 +426,45 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
         .get(&format!("{base}/{id}"), source)?
         .map(keyring::Secret::into_inner)
         .filter(|v| !v.is_empty()))
+}
+
+/// **Upgrade a record made before #1527, which names no item, to pin the one it is read with
+/// now** (#1542), so a later commit that changes `op-item` unpins it as it does a record made
+/// since. Asked at a read through the record, which the record already honours for that item:
+/// pinning it changes nothing about this read, and only stops the next change of the item from
+/// being honoured. Best effort and quiet: a half that cannot be written now (a sandboxed chat's
+/// read, a read-only file) is upgraded at a later read.
+///
+/// The half is read again just before it is written, and the record is changed only while it
+/// is still the one honoured here, with no item: one a store replaced in between is left alone.
+fn pin_the_item(ctx: &Ctx, vault: &Vault) {
+    let Ok(mut local) = registry::load_local(ctx) else {
+        return;
+    };
+    let Some(rec) = local
+        .get_mut("vaults")
+        .and_then(Value::as_object_mut)
+        .and_then(|vaults| vaults.get_mut(&vault.name))
+        .and_then(|entry| entry.get_mut("config"))
+        .and_then(|config| config.get_mut(MARK))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let still = rec.get("held").and_then(Value::as_str) == Some(IN_KEYRING)
+        && !rec.contains_key("op_item")
+        && record_matches(rec, vault);
+    if !still {
+        return;
+    }
+    rec.insert("op_item".into(), Value::String(op_item_of(vault)));
+    if let Err(why) = registry::save_local(ctx, &local) {
+        tracing::debug!(
+            "purlis: the record of vault '{}' was not upgraded to pin its item ({})",
+            crate::personas::one_line(&vault.name),
+            why.message
+        );
+    }
 }
 
 /// The absolute `op` a keyring-held read must run, verified against the pinned path and Team id;
