@@ -547,11 +547,14 @@ A chat that has dispatched tasks and then ends its turn is waiting on them, not 
   it and a way to Settings › Project › Dispatch. Only its own running limit is `at its task
   limit (6)`, the number its tab menu counts against; its chain's says `at its chain's limit
   (16 live)`, and a persona's says it is that persona's, across the project (`devops is full
-  (1 at once), not this chat's limit`). The line goes as soon as a slot frees: a task reports
-  or ends, you raise the limit, the chat dispatches again and is let through, or it closes. A
-  refusal no slot frees (the depth, a limit of 0) is said to whoever asked, and puts nothing on
-  the row. The line is held in memory only: after a restart it comes back with the next
-  refusal.
+  (1 at once), not this chat's limit`). A dispatch into another workspace refused at that
+  workspace's limit names it (`at its task limit in beta (2)`) and is re-checked against it, as
+  it was decided. Any limit that binds other than its own running one is said on its tab
+  menu's footer too, after the count (`2 of 6 running · at its chain's limit (16 live)`). The
+  line goes as soon as a slot frees: a task reports or ends, you raise the limit, the chat
+  dispatches again and is let through, or it closes. A refusal no slot frees (the depth, a
+  limit of 0) is said to whoever asked, and puts nothing on the row. The line is held in
+  memory only: after a restart it comes back with the next refusal.
 - **It becomes one only when every task has reported or ended and it has then stopped with
   nothing to do.** A report that lands types the chat its one line; it reads the report in a
   turn of its own, and the end of that turn is the item. A turn that ends with a report it

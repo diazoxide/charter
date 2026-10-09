@@ -8,4 +8,6 @@
 - **A limit is shown where it binds.** A session's tab menu ends with `4 of 6 running`. A
   session whose dispatch was refused for a limit says which one under its row (`at its task
   limit (6)`, or its chain's, or a persona's across the project), with a link to Settings ›
-  Project › Dispatch, until a slot frees (#1498).
+  Project › Dispatch, until a slot frees (#1498). A limit other than its own running one is
+  said on the tab menu's footer too, and a dispatch into another workspace refused at that
+  workspace's limit names it and keeps its line until a slot frees there (#1540).

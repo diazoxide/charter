@@ -80,6 +80,8 @@ fn a_session_refused_for_its_task_limit_says_so_on_its_row_until_a_slot_frees() 
     assert_eq!(said.limit, 1);
     // Its own running limit: the number its tab menu's footer counts against.
     assert_eq!(said.row, "at its task limit (1)");
+    // The footer counts this one already, and says no second line of it (#1540).
+    assert!(said.own);
     assert!(
         said.said.contains("Settings › Project › Dispatch"),
         "{}",
@@ -94,6 +96,50 @@ fn a_session_refused_for_its_task_limit_says_so_on_its_row_until_a_slot_frees() 
     assert!(matches!(reported, Answer::Finished { .. }), "{reported:?}");
     assert_eq!(row_of(&held, asking).at_limit, None);
     assert!(!held.at_limits().marked(asking), "the mark is let go of");
+}
+
+#[test]
+fn a_refusal_at_another_workspace_s_limit_stays_on_the_row_until_a_slot_frees_there() {
+    // #1540: the chat works in alpha, whose limit lets it run more, and dispatches into beta,
+    // which lets one chat run one task there.
+    let (plane, _host, _planes, id, held, asking) =
+        a_steward_under("[dispatch.workspaces.beta]\nrunning-per-chat = 1");
+    std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+    let (first, _) = dispatch_in(
+        &held,
+        &id,
+        &Tickets::default(),
+        asking,
+        (None, "check the queue"),
+        "workspace:beta",
+    );
+    let Answer::Dispatched { chat: task, .. } = first else {
+        panic!("dispatched, not {first:?}");
+    };
+    let (second, _) = dispatch_in(
+        &held,
+        &id,
+        &Tickets::default(),
+        asking,
+        (None, "and more"),
+        "workspace:beta",
+    );
+    assert!(matches!(second, Answer::No { .. }), "{second:?}");
+
+    // Read again against alpha alone, nothing would bind; against beta, as it was decided,
+    // its limit does, and the row says whose.
+    let said = row_of(&held, asking)
+        .at_limit
+        .expect("at beta's task limit");
+    assert_eq!(said.limit, 1);
+    assert_eq!(said.row, "at its task limit in beta (1)");
+    // Not the number the footer counts (alpha's): the footer says this line too.
+    assert!(!said.own);
+
+    // The task in beta reports: a slot is free there, and the line goes.
+    let reported = reports(&held, &id, task);
+    assert!(matches!(reported, Answer::Finished { .. }), "{reported:?}");
+    assert_eq!(row_of(&held, asking).at_limit, None);
 }
 
 #[test]
