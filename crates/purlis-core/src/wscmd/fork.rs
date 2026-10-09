@@ -248,8 +248,9 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         doc.insert("updated_by".into(), Value::String(wscmd::git_user(root)));
         // Under the new workspace's manifest lock (#1292), as every writer of one is: a
         // scaffold or a clone in the fork meanwhile waits rather than interleaving.
-        let _held = fresh.manifest_lock();
-        let _ = fresh.write_manifest(&Value::Object(doc));
+        if let Ok(_held) = fresh.manifest_lock() {
+            let _ = fresh.write_manifest(&Value::Object(doc));
+        }
     }
 
     // The fork's own note says what it did NOT inherit, so a later reader of its memory is

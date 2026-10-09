@@ -848,7 +848,7 @@ fn rename_manifest(root: &Path, new: &str) -> std::io::Result<()> {
     let ws = plane
         .workspace(new)
         .map_err(|why| std::io::Error::other(why.to_string()))?;
-    let _held = ws.manifest_lock();
+    let _held = ws.manifest_lock()?;
     let (doc, owner) = ws.manifest();
     let Some(serde_json::Value::Object(mut map)) = doc else {
         return Ok(());
