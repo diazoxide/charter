@@ -8,6 +8,7 @@ import { DEFAULT_TEXT, setTextSize, textSizes } from "../textSize";
 import { GLOBAL } from "../windowprefs";
 import { yourEditor } from "../yourEditor";
 import { chatsListPrefs } from "../chatsListPrefs";
+import { forgetGroups, linkToGroup } from "./links";
 
 /**
  * **The Settings tab at the You level** (SE-16, #1166; the spec on #558, rulings V89a–i): a
@@ -247,5 +248,27 @@ describe("the Settings tab, by keyboard", () => {
     await userEvent.keyboard("{Enter}");
 
     expect(shown()).toHaveAccessibleName("Editor");
+  });
+});
+
+describe("a link that names a setting (NO-7, #1292)", () => {
+  afterEach(() => forgetGroups());
+
+  it("focuses the setting in its own tab, not a row of that name elsewhere in the window", async () => {
+    // What a second Settings tab of the same level, split beside this one, draws first.
+    render(
+      <>
+        <div data-setting="you.editor.yours">
+          <button type="button">In the other tab</button>
+        </div>
+        <SettingsTab />
+      </>,
+    );
+
+    act(() => linkToGroup("you", "you.editor", "you.editor.yours"));
+
+    const mine = await screen.findByRole("radiogroup", { name: "Your editor" });
+    expect(mine).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole("button", { name: "In the other tab" })).not.toHaveFocus();
   });
 });
