@@ -844,6 +844,10 @@ key refuses.
   (`charter/profiletrust.py:144`), `approval_needed` (`charter/profiletrust.py:195`),
   `refusal` (`charter/profiletrust.py:306`), the frame launcher and `purlis reopen`.
 - **Git:** gitignored (inside `/.charter/`, `charter/commands.py:1096`).
+- **Sandbox:** **a sandboxed chat never writes it** (ADR 0067 §5, the integrity class, #1458),
+  under either name of the state folder and wherever the chat stands, so an approval recorded
+  here is one the person gave. A chat may read it. Where the project's sandbox is off, or for a
+  chat started without it, it is as writable as `charter.local.toml`.
 - **Encoding details:** `indent=2`, trailing newline, `ensure_ascii` default (true); key order
   is insertion order of the existing document with an updated key keeping its position; `env`
   is a dict built from the already-sorted `Profile.env` pairs (`charter/profiletrust.py:126`).
@@ -861,8 +865,11 @@ key refuses.
 - **Status:** **stable** — it is committed and travels to every clone, and it decides which
   program a chat runs.
 - **Tier:** Plane — a harness this project runs that purlis does not ship, committed so every clone has it.
-- **Written by:** nothing in purlis. The operator writes it, or a chat does, and every clone
-  approves it before it runs (below).
+- **Written by:** nothing in purlis. The operator writes it, and every clone approves it
+  before it runs (below). **A sandboxed chat never writes in `harnesses/`** (ADR 0067 §5, the
+  later-code class, #1458): the folder at the project root is denied to its writes, so a
+  declaration a person approves is one a person wrote or reviewed. A chat may read it. Where the
+  project's sandbox is off, a chat can write one, and the approval below is what stands.
 - **Read by:** `crates/purlis-core/src/harness_declaration.rs` `read`, which every launch,
   `purlis harness list`, `purlis harness show <name>`, `purlis doctor` and the app's
   new-chat picker go through (`profiles::derive`). Each file is opened with no link on the
@@ -937,6 +944,8 @@ key refuses.
   `kind` is a project's declaration, with the same gates as the profile record: no link on the
   way, a plain file, at most 1 MiB. Every unreadable state reads as "nothing approved".
 - **Git:** gitignored (inside `/.charter/`).
+- **Sandbox:** **a sandboxed chat never writes it** (ADR 0067 §5, the integrity class, #1458),
+  as for the profile record above.
 - **Encoding details:** the digest is of the declaration file's **bytes**, so any change to the
   file, a comment included, asks again. Kept apart from the profile record because that one is
   keyed by profile and records a command, which a declaration does not have (ADR 0073 §5).
@@ -3448,6 +3457,10 @@ write into this folder cannot make its own text arrive as the person's.
 - **Read by:** `charter/mcpseen.py:247` (`approved`) → `charter/persona.py:779`
   (`mcp_render_entry`) and `mcp_withheld` (`:832`).
 - **Git:** gitignored (under `/.charter/`).
+- **Sandbox:** **a sandboxed chat never writes it** (ADR 0067 §5, the integrity class, #1458),
+  under either name of the state folder and where `$PURLIS_HOME` puts it. A chat may read it.
+  A write that fails is never said to be recorded: `approve-mcp` exits 1 and says nothing was
+  approved, and inside a sandboxed chat that it is the person's to give.
 - **Encoding details:** `{"<persona>": ["<64-hex sha256>", …]}`, values sorted
   (`charter/mcpseen.py:262`, digest at `charter/mcpseen.py:236`). The fingerprint is a SHA-256 of the **consent line** the
   operator was shown. (This file sits on the boundary with the secrets area; included here

@@ -118,11 +118,11 @@ fn an_approval_is_recorded_per_persona_replacing_that_personas_set_and_no_other(
     let state = plane.state();
     assert_eq!(approvals_path(&state), state.join("mcp-approved.json"));
     assert!(approved(&state, "ops").is_empty());
-    approve(plane.root(), &state, "dev", &["abc".to_string()]);
+    approve(plane.root(), &state, "dev", &["abc".to_string()]).expect("recorded");
     let fps: Vec<String> = [OPS_APPROVED[1], "", OPS_APPROVED[0], OPS_APPROVED[1]]
         .map(String::from)
         .to_vec();
-    approve(plane.root(), &state, "ops", &fps);
+    approve(plane.root(), &state, "ops", &fps).expect("recorded");
     assert_eq!(
         plane.read(".charter/mcp-approved.json"),
         format!(
@@ -144,7 +144,7 @@ fn an_approval_is_recorded_per_persona_replacing_that_personas_set_and_no_other(
         OPS_APPROVED.map(String::from).into_iter().collect()
     );
     assert_eq!(approved(&state, "dev"), ["abc".to_string()].into());
-    approve(plane.root(), &state, "ops", &[]);
+    approve(plane.root(), &state, "ops", &[]).expect("recorded");
     assert!(approved(&state, "ops").is_empty());
     assert_eq!(approved(&state, "dev"), ["abc".to_string()].into());
 }
@@ -177,12 +177,12 @@ fn a_credentialed_server_is_withheld_until_its_own_line_is_approved() {
             ("gsc".to_string(), GSC_LINE.to_string())
         ]
     );
-    approve(plane.root(), &state, "ops", &[sha256(GSC_LINE)]);
+    approve(plane.root(), &state, "ops", &[sha256(GSC_LINE)]).expect("recorded");
     assert_eq!(
         withheld(plane.root(), &state, "ops"),
         [("grafana".to_string(), GRAFANA_LINE.to_string())]
     );
-    approve(plane.root(), &state, "ops", &OPS_APPROVED.map(String::from));
+    approve(plane.root(), &state, "ops", &OPS_APPROVED.map(String::from)).expect("recorded");
     assert!(withheld(plane.root(), &state, "ops").is_empty());
 }
 
@@ -241,4 +241,17 @@ fn a_wrapped_servers_args_are_what_pythons_list_makes_of_them() {
     assert_eq!(wrap(json!("ab")), with(&["a", "b"]));
     assert_eq!(wrap(json!({"k1": 1, "k2": 2})), with(&["k1", "k2"]));
     assert_eq!(wrap(json!(7)), with(&[]));
+}
+
+/// #1458: where `$PURLIS_HOME` puts the state folder outside the project, the approval is
+/// written there, contained at that folder as every other state reader trusts it, and read back.
+#[test]
+fn an_approval_is_recorded_where_purlis_home_puts_the_state_folder_outside_the_project() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let home = tempfile::tempdir().expect("a state folder elsewhere");
+    let state = home.path().join("state");
+    approve(plane.path(), &state, "ops", &["abc".to_string()]).expect("recorded");
+    assert!(approvals_path(&state).is_file());
+    assert_eq!(approved(&state, "ops"), ["abc".to_string()].into());
+    assert!(!plane.path().join(".charter").exists());
 }

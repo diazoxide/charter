@@ -6,13 +6,14 @@
 //! planted giant: each reads as "no record", never as approval. Treating silence as a yes is
 //! the one state this record exists to keep out.
 //!
-//! **And it is not a boundary**, which `charter/profiletrust.py` says at full volume and this
-//! module did not. A chat that can edit `charter.local.toml` can edit this record too — both
-//! sit under paths no guard covers — so the ask catches a command the operator did not change
-//! themselves *unless whatever changed it also forged the record*. That is worth having: it
-//! closes the accident and the careless edit, and it is the difference between a command that
-//! ran unseen and one that was read out loud first. It is not a defence against an agent that
-//! set out to forge it, and nothing here should be built as though it were.
+//! **Where it is a boundary, and where it is not.** In a project that turns the sandbox on, a
+//! sandboxed chat is denied writing this record, the declarations' record beside it,
+//! `charter.local.toml` and `harnesses/` ([`crate::sandbox::Denied::of`], ADR 0067 §5, #1458),
+//! so an approval recorded there is one the person gave in the window. Where the sandbox is
+//! off, or for a chat started without it, a chat that can edit `charter.local.toml` can edit
+//! this record too, so the ask catches a command the operator did not change themselves
+//! *unless whatever changed it also forged the record*: it closes the accident and the careless
+//! edit, and nothing that runs unsandboxed should be built as though it were more.
 
 use std::collections::BTreeMap;
 use std::io;

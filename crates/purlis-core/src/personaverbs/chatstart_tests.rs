@@ -44,7 +44,8 @@ fn an_approval_recorded_for_the_sub_agent_carries_and_the_credential_goes_throug
         &plane.state(),
         "ops",
         &OPS_APPROVED.map(String::from),
-    );
+    )
+    .expect("recorded");
 
     let got = of(&plane);
 
@@ -85,7 +86,8 @@ fn an_approval_recorded_for_the_sub_agent_carries_and_the_credential_goes_throug
         &plane.state(),
         "ops",
         &[OPS_APPROVED[0].to_owned()],
-    );
+    )
+    .expect("recorded");
     assert_eq!(of(&plane).withheld.len(), 1);
 }
 
@@ -198,7 +200,8 @@ fn the_chat_is_told_which_servers_it_did_not_get_and_how_they_are_approved() {
         &plane.state(),
         "ops",
         &OPS_APPROVED.map(String::from),
-    );
+    )
+    .expect("recorded");
     assert_eq!(told_on(Some(Harness::ClaudeCode)).len(), 1);
     // A persona with no servers is told nothing.
     assert!(

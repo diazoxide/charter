@@ -733,7 +733,8 @@ mod tests {
             &plane.state(),
             "ops",
             &OPS_APPROVED.map(String::from),
-        );
+        )
+        .expect("recorded");
         let (config, _) = armed_as(&plane, "ops");
         let servers = config["mcpServers"].as_object().expect("servers");
         assert_eq!(servers.len(), 4, "{servers:?}");

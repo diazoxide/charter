@@ -500,12 +500,24 @@ with a shell. Codex trusts its hooks by hash for the same reason.
 | a chat reopened when the app starts again | refused by name and left in the record — a reopen has nobody to ask. Start it once from the picker, and it comes back next time |
 | a chat handed off by another chat | refused before anything is written: no chat, no first message |
 
-**The limit, said plainly.** The record lives in `.charter/harness-profiles-launched.json`,
-which is as writable by a chat as `charter.local.toml` is: both sit under paths no guard
-covers, and purlis does not police paths (that is host policy). So this catches a command
-you did not change yourself **unless whatever changed it also forged the record**. It closes
-the accident and the careless edit, and it is the difference between a command that ran
-unseen and one that was read out loud first. It is not a boundary.
+**What an approval protects, said plainly.** The record lives in
+`.purlis/harness-profiles-launched.json` (`.charter/` in an older project), and a project's
+harness declarations are approved in `harness-declarations-approved.json` beside it.
+
+- **In a project that turns the sandbox on**, a sandboxed chat cannot write either record,
+  nor `charter.local.toml`, nor the `harnesses/` folder at the project root, wherever it
+  stands, the project root included (ADR 0067 §5, #1458). So "approved" means you approved
+  it: a chat cannot change a profile's command or a declaration and then approve the change
+  itself. The records stay readable, and the app writes them when you approve.
+- **Where the sandbox is off**, or for a chat you started without it, the records are as
+  writable as `charter.local.toml` is. There the question catches a command you did not
+  change yourself **unless whatever changed it also forged the record**. It closes the
+  accident and the careless edit, and it is the difference between a command that ran unseen
+  and one that was read out loud first. It is not a boundary there.
+
+Either way, the approval covers the command and the declaration as they were shown to you.
+It does not vouch for what the program then does, and it does not reach a program that was
+never asked about: a built-in harness never asks.
 
 If purlis cannot write that record, the approval fails and nothing starts: starting anyway
 would mean asking you the identical question at the next open, which is not something you can
