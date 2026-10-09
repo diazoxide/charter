@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   configure,
   fireEvent,
@@ -141,12 +142,19 @@ function inStore(slug: string, inShared: boolean): MemoryView {
 }
 
 /** The core. The persona's memories are the ones not archived. */
-function core({ gone = [] as string[] } = {}) {
+function core({
+  gone = [] as string[],
+  back,
+}: {
+  gone?: string[];
+  /** How a move back out of the shared store is answered: held until it settles, or refused. */
+  back?: Promise<void> | string;
+} = {}) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const archived = new Set<string>();
   /** Memories moved to the shared store, by slug. */
   const shared = new Set<string>();
-  mockIPC((cmd, args) => {
+  mockIPC(async (cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
@@ -201,6 +209,8 @@ function core({ gone = [] as string[] } = {}) {
     if (cmd === "memory_move") {
       const slug = String(given.slug);
       const toShared = (given.to as { kind: string }).kind === "shared";
+      if (!toShared && typeof back === "string") throw back;
+      if (!toShared && back !== undefined) await back;
       if (toShared) shared.add(slug);
       else shared.delete(slug);
       return inStore(slug, toShared);
@@ -450,5 +460,60 @@ describe("Move, in the window", () => {
         "personas/steward/memory/never-pkill.md",
       ),
     );
+  });
+});
+
+describe("Move's Undo, when it does not simply land", () => {
+  async function moved() {
+    render(<App />);
+    await userEvent.click(await memoryRowIn("never-pkill"));
+    await screen.findByTestId("memory-body");
+    await userEvent.selectOptions(
+      await screen.findByRole("combobox", { name: "Move to" }),
+      "shared",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Move" }));
+    return waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-cause="memory-moved"]');
+      if (!found) throw new Error("no Undo line yet");
+      return found;
+    });
+  }
+
+  it("says a refused Undo on its line, and leaves the tab on the memory where it is", async () => {
+    core({ back: "steward's memory already holds a memory named 'never-pkill', so nothing moved" });
+    const line = await moved();
+
+    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-cause="memory-moved"]')).toHaveTextContent(
+        "already holds a memory named 'never-pkill', so nothing moved",
+      ),
+    );
+    expect(screen.getByTestId("memory-meta")).toHaveTextContent(
+      "personas/_shared/memory/never-pkill.md",
+    );
+    expect(screen.queryByTestId("view-gone")).toBeNull();
+  });
+
+  it("leaves a newer act's Undo line alone when an earlier Undo lands after it", async () => {
+    let land = () => {};
+    core({ back: new Promise<void>((resolve) => (land = resolve)) });
+    const line = await moved();
+    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+
+    // While the move back is on its way, another memory is deleted: its Undo takes the line.
+    fireEvent.contextMenu(await memoryRowIn("defects-go-upstream"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Delete memory/ }));
+    const deleted = await memoryUndo();
+    await act(async () => {
+      land();
+      // The move back answers, and whatever it does to the line is done.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(deleted).toBeInTheDocument();
+    expect(deleted).toHaveTextContent("Deleted “Charter defects go upstream”");
   });
 });
