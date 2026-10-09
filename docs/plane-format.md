@@ -5309,6 +5309,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   short turn a close gives it, say) is cleared and forgotten the same way as it ends, since
   nobody is left to clear its row; not while the app quits, when every chat is kept. A Reopen,
   which also sets `cleared`, forgets nothing.
+  **Removing a workspace forgets them too** (#1520): `purlis workspace remove` and the window's
+  Remove empty `talk`'s texts on every ended record whose `place.workspace` is the workspace
+  removed (`dispatchrecord::workspace_removed`), and say how many records of work in it stay,
+  each with its brief and report, until they are collected, and how many of those are still
+  running and keep their words until they end and for 30 days after. Where the store cannot be read
+  (a sandboxed chat runs the command), the removal says so and the words stay until they
+  expire.
   The app does this when it opens a project and before it reads a timeline. A dispatch that
   has not ended keeps its words; **one whose `ended` does not read as a time, or stands more
   than five minutes after the app's clock, has them emptied at once** (#1520), since its 30

@@ -150,6 +150,9 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
     // them is for a workspace made under the name later (#1505).
     let left = crate::dispatchwithin::naming(root, name);
     crate::dispatchwithin::noticed(root);
+    for said in dispatches_left_behind(root, name) {
+        say(said);
+    }
     say(Say::Done(format!(
         "Removed workspace '{name}' and its clones."
     )));
@@ -159,6 +162,57 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
         )));
     }
     Removal::just(0)
+}
+
+/// What the removal leaves in the project's dispatch records (#1520), said, and only where
+/// there is something to say: what the tasks that worked in `ws` and their asking chats said to
+/// each other is forgotten, and the records themselves, with each brief and report, stay until
+/// they are collected. A store that cannot be read here is said so: its words stay until they
+/// expire.
+fn dispatches_left_behind(root: &Path, ws: &str) -> Vec<Say> {
+    match crate::dispatchrecord::workspace_removed(root, ws) {
+        Ok(left) if left.records == 0 => Vec::new(),
+        Ok(left) => vec![Say::Info(left_behind_said(ws, left))],
+        Err(why) => vec![Say::Warn(format!(
+            "purlis could not read the project's dispatch records here ({}), so what tasks \
+             that worked in '{ws}' and their asking chats said to each other stays until it \
+             expires, 30 days after each task ended.",
+            crate::rewrite::os_words(&why)
+        ))],
+    }
+}
+
+/// The sentence for `left`, true of each part of it: the records that stay, the words that
+/// were forgotten, and the running tasks that keep theirs.
+fn left_behind_said(ws: &str, left: crate::dispatchrecord::LeftBehind) -> String {
+    let many = |n: usize, one: &str, more: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {more}")
+        }
+    };
+    let mut said = format!(
+        "Kept {} of work in '{ws}' in the project's own state, each with its brief and report, \
+         until it is collected 30 days after it was last written.",
+        many(left.records, "dispatch record", "dispatch records")
+    );
+    if left.forgot > 0 {
+        said.push_str(&format!(
+            " What {} and the chats that asked said to each other is forgotten now.",
+            many(left.forgot, "task that ended", "tasks that ended")
+        ));
+    }
+    if left.running > 0 {
+        said.push_str(&format!(
+            " {} still running {} what {} chats say until {} end, and for 30 days after.",
+            many(left.running, "task", "tasks"),
+            if left.running == 1 { "keeps" } else { "keep" },
+            if left.running == 1 { "its" } else { "their" },
+            if left.running == 1 { "it" } else { "they" },
+        ));
+    }
+    said
 }
 
 /// Every `info/exclude` outside this workspace that still holds charter's managed block, as
@@ -259,6 +313,98 @@ mod tests {
         assert_eq!(code, 0, "{said:?}");
         assert!(!dir.path().join("workspaces/beta").exists());
         assert_eq!(said, vec!["✓ Removed workspace 'beta' and its clones."]);
+    }
+
+    #[test]
+    fn removing_a_workspace_forgets_what_its_tasks_said_and_says_what_it_leaves() {
+        // #1520: the records of work in it stay, each with its brief and report; the words its
+        // tasks and their asking chats sent each other go with the workspace.
+        use crate::dispatchrecord::{self, Asker, Mode, Opening, Place, Worker};
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("workspaces/beta")).unwrap();
+        let now = chrono::Utc::now();
+        let opened = dispatchrecord::open(
+            dir.path(),
+            Opening {
+                mode: Mode::Task,
+                asker: Asker::default(),
+                persona: None,
+                worker: Worker::default(),
+                task: None,
+                place: Place {
+                    workspace: Some("beta".to_owned()),
+                    ..Place::default()
+                },
+                brief: "Check prod.".to_owned(),
+                report_owed: false,
+            },
+            now,
+        )
+        .unwrap();
+        dispatchrecord::said(
+            dir.path(),
+            &opened.id,
+            crate::dispatchtalk::Kind::Note,
+            "Still up.",
+            now,
+        )
+        .unwrap();
+        dispatchrecord::close(
+            dir.path(),
+            &opened.id,
+            dispatchrecord::Ending::default(),
+            now,
+        )
+        .unwrap();
+
+        let (code, said) = run(dir.path(), "beta", false);
+
+        assert_eq!(code, 0, "{said:?}");
+        assert!(
+            said.iter().any(
+                |line| line.contains("Kept 1 dispatch record of work in 'beta'")
+                    && line.contains("forgotten now")
+            ),
+            "{said:?}"
+        );
+        let kept = dispatchrecord::read(dir.path(), &opened.id).expect("the record stays");
+        assert_eq!(kept.brief, "Check prod.");
+        assert_eq!(kept.talk[0].text, "");
+    }
+
+    #[test]
+    fn what_a_removal_leaves_is_said_true_of_each_record() {
+        use crate::dispatchrecord::LeftBehind;
+        let said = |records, forgot, running| {
+            left_behind_said(
+                "beta",
+                LeftBehind {
+                    records,
+                    forgot,
+                    running,
+                },
+            )
+        };
+        assert_eq!(
+            said(1, 1, 0),
+            "Kept 1 dispatch record of work in 'beta' in the project's own state, each with its \
+             brief and report, until it is collected 30 days after it was last written. What 1 \
+             task that ended and the chats that asked said to each other is forgotten now."
+        );
+        // Some ended and some run on: the running ones are not said to be forgotten.
+        let mixed = said(3, 1, 2);
+        assert!(mixed.contains("What 1 task that ended"), "{mixed}");
+        assert!(
+            mixed.ends_with(
+                "2 tasks still running keep what their chats say until they end, and for 30 \
+                 days after."
+            ),
+            "{mixed}"
+        );
+        // All running: nothing is said to be forgotten.
+        let running = said(1, 0, 1);
+        assert!(!running.contains("forgotten"), "{running}");
+        assert!(running.contains("1 task still running keeps what its chats say"));
     }
 
     #[test]
