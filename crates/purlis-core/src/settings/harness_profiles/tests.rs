@@ -466,6 +466,24 @@ fn a_rename_everywhere_renames_the_profile_and_this_files_default_in_one_write()
 }
 
 #[test]
+fn a_rename_everywhere_keeps_a_triple_quoted_default_as_written_and_undoes_to_it() {
+    for written in ["'''claude-work'''", "\"\"\"claude-work\"\"\""] {
+        let text = format!("[harness]\ndefault = {written} # mine\n\n{LOCAL}");
+        let dir = plane(Some(&text));
+        let renamed =
+            rename_everywhere(dir.path(), Some(&text), &id(&text, "claude-work"), "work").unwrap();
+        let now = local(dir.path());
+        assert_eq!(
+            now,
+            text.replace(written, &written.replace("claude-work", "work"))
+                .replace("[harness.claude-work]", "[harness.work]")
+        );
+        rename_everywhere(dir.path(), Some(&now), &renamed, "claude-work").unwrap();
+        assert_eq!(local(dir.path()), text);
+    }
+}
+
+#[test]
 fn a_rename_everywhere_of_a_profile_nothing_uses_is_a_rename() {
     let dir = plane(Some(LOCAL));
     rename_everywhere(dir.path(), Some(LOCAL), &id(LOCAL, "claude-work"), "work").unwrap();
@@ -502,4 +520,21 @@ fn a_rename_everywhere_still_refuses_a_name_the_rules_refuse() {
         rename_everywhere(dir.path(), Some(&text), &id(&text, "claude-work"), "a.b").unwrap_err();
     assert_eq!(fields(&refusal), ["name"]);
     assert_eq!(local(dir.path()), text);
+}
+
+#[test]
+fn a_default_that_is_not_the_profiles_plain_name_refuses_the_whole_write() {
+    // D-1380-3: what cannot be rewritten as a name refuses the write, never half of it.
+    let dir = plane(None);
+    for text in [
+        "[harness]\ndefault = 3\n",
+        "[harness]\ndefault = \"other\"\n",
+        "[harness]\n",
+    ] {
+        let refusal = defaulted(dir.path(), text, "claude-work", "work").unwrap_err();
+        assert!(
+            refusal.file[0].contains("is not written as a name a form can change"),
+            "{refusal:?}"
+        );
+    }
 }
