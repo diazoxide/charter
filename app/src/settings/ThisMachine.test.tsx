@@ -218,6 +218,19 @@ describe("You › This machine", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps another row's Undo on offer when Locate…'s dialog is cancelled (D-1291-2)", async () => {
+    await thisMachine();
+    await userEvent.click(await screen.findByRole("button", { name: "Unpin ide in plane" }));
+    await screen.findByRole("button", { name: "Undo" });
+    picked = null;
+
+    await userEvent.click(screen.getByRole("button", { name: "Locate old" }));
+
+    await waitFor(() => expect(sent.map(({ cmd }) => cmd)).toContain("pick_project"));
+    expect(sent.map(({ cmd }) => cmd)).toEqual(["pin_on_this_machine", "pick_project"]);
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+  });
+
   it("says why a picked folder was refused in the recents row, and keeps the entry", async () => {
     await thisMachine();
     refuse = "/mnt/disk/old is not a purlis project: it has no workspaces folder";
