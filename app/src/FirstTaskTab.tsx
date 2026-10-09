@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { Notice } from "./Notice";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import { Choice, SettingActions } from "./settings/components";
 import {
@@ -60,6 +61,11 @@ export function FirstTaskTab({
   does?: FirstTaskDoes;
 }) {
   const [options, setOptions] = useState<StartOptions>();
+  /** Why the start options could not be read, which Read again clears. */
+  const [unread, setUnread] = useState<string>();
+  /** Bumped by Read again: the tab reads once when it opens (NO-8's follow-up, #1296). */
+  const [again, setAgain] = useState(0);
+  /** Why the run just pressed did not start. */
   const [trouble, setTrouble] = useState<string>();
   const [picked, setPicked] = useState<Partial<Record<number, string>>>({});
   const [starting, setStarting] = useState<number>();
@@ -71,16 +77,16 @@ export function FirstTaskTab({
       .startOptions(plane)
       .then((answer) => {
         if (gone) return;
-        if (answer.status === "error") setTrouble(answer.error);
+        if (answer.status === "error") setUnread(answer.error);
         else setOptions(answer.data);
       })
       .catch((err: unknown) => {
-        if (!gone) setTrouble(String(err));
+        if (!gone) setUnread(String(err));
       });
     return () => {
       gone = true;
     };
-  }, [plane]);
+  }, [plane, again]);
 
   const runs = does?.runs[clone] ?? {};
   const profiles = options?.profiles ?? [];
@@ -140,6 +146,23 @@ export function FirstTaskTab({
         compare what each did. Each chat works on a branch of its own in purlis&apos;s copy of your
         repo, and the task is typed in for you to read before you send it.
       </p>
+      {unread !== undefined && (
+        <Notice
+          cause={`first-task-unread:${clone}`}
+          tone="trouble"
+          fixes={[
+            {
+              label: "Read again",
+              onPress: () => {
+                setUnread(undefined);
+                setAgain((was) => was + 1);
+              },
+            },
+          ]}
+        >
+          {unread}
+        </Notice>
+      )}
       {RUNS.map((run) => {
         const done = runs[run];
         const profile = chosen(run);
