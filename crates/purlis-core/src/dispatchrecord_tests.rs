@@ -254,6 +254,20 @@ fn what_a_chat_said_it_cost_after_its_report_is_kept_once_it_has_gone() {
         "unchanged"
     );
     assert!(!usage_settled(&root, &opened.id, Usage::default()).unwrap());
+    // A lower figure is another run of the chat counting from nothing, not more of this one.
+    assert!(!usage_settled(&root, &opened.id, said(3)).unwrap(), "lower");
+    assert!(
+        !usage_settled(
+            &root,
+            &opened.id,
+            Usage {
+                cost_usd: Some(1.0),
+                ..Usage::default()
+            }
+        )
+        .unwrap(),
+        "silent on the tokens it had"
+    );
     let record = read(&root, &opened.id).unwrap();
     assert_eq!(record.usage, Some(said(12)));
     assert_eq!(record.report, Some(done("ok")), "nothing else of it moves");

@@ -845,16 +845,39 @@ pub fn worked(root: &Path, id: &str, secs: u64) -> io::Result<bool> {
 /// **What dispatch `id`'s chat said it cost in all, once its chat has gone** (#1457): the figure
 /// kept at its end was read as the reporting turn was still running, so it is a little short of
 /// the whole. Kept over it where the chat's harness said more since, and only on a record that
-/// has ended, which nothing else of it changes. An empty figure keeps what was kept. `false`
-/// where nothing changed.
+/// has ended, which nothing else of it changes. An empty figure keeps what was kept, and so
+/// does one below it in any part, or silent on a part it had: a running total never goes down,
+/// so a smaller figure is another run of the chat (started again with a count from nothing),
+/// not more of this one. `false` where nothing changed.
 pub fn usage_settled(root: &Path, id: &str, usage: Usage) -> io::Result<bool> {
     change(root, id, |record| {
         if record.running() || usage.is_empty() || record.usage == Some(usage) {
             return false;
         }
+        if record
+            .usage
+            .is_some_and(|kept| !goes_on_from(&kept, &usage))
+        {
+            return false;
+        }
         record.usage = Some(usage);
         true
     })
+}
+
+/// Whether `said` is `kept` or more of the same running total: every part `kept` holds is said
+/// again, and none is lower.
+fn goes_on_from(kept: &Usage, said: &Usage) -> bool {
+    fn at_least<T: PartialOrd>(kept: Option<T>, said: Option<T>) -> bool {
+        match (kept, said) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(kept), Some(said)) => said >= kept,
+        }
+    }
+    at_least(kept.input_tokens, said.input_tokens)
+        && at_least(kept.output_tokens, said.output_tokens)
+        && at_least(kept.cost_usd, said.cost_usd)
 }
 
 /// **purlis is stopping dispatch `id` at `reached`** (#1512): kept before its end, so its
