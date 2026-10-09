@@ -31,6 +31,8 @@ let sent: { cmd: string; args: Record<string, unknown> }[];
 let refuse: string | undefined;
 /** What every read of the store waits on: resolved, unless a test holds the reads back. */
 let gate: Promise<void>;
+/** The folder the next Locate…'s dialog answers with; null is a cancelled dialog. */
+let picked: string | null;
 
 function machine(): ThisMachine {
   return { projects: structuredClone(store), dropped: [], forgetful: null };
@@ -67,6 +69,12 @@ function act(cmd: string, args: Record<string, unknown>) {
     }
   }
   if (cmd === "set_update_channel") channel = args.channel as string;
+  if (cmd === "locate_project") {
+    // The core re-points the entry at the project it found there, which is no longer gone.
+    const was = store.find((p) => p.path === args.gone);
+    if (was) Object.assign(was, { path: args.picked, gone: null });
+    return args.picked;
+  }
   return null;
 }
 
@@ -92,16 +100,25 @@ beforeEach(() => {
   sent = [];
   refuse = undefined;
   gate = Promise.resolve();
+  picked = "/mnt/disk/old";
   mockIPC(
     (cmd, args) => {
       if (cmd === "plane_at_launch") return { plane: null, from: null, why: "no plane here" };
       if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
       if (cmd === "this_machine") return gate.then(machine);
       if (cmd === "update_channel") return channel;
+      if (cmd === "pick_project") {
+        sent.push({ cmd, args: {} });
+        return picked;
+      }
       if (
-        ["forget_project", "revoke_approval", "pin_on_this_machine", "set_update_channel"].includes(
-          cmd,
-        )
+        [
+          "forget_project",
+          "revoke_approval",
+          "pin_on_this_machine",
+          "set_update_channel",
+          "locate_project",
+        ].includes(cmd)
       )
         return act(cmd, (args ?? {}) as Record<string, unknown>);
       return null;
@@ -141,7 +158,7 @@ describe("You › This machine", () => {
     await waitFor(() =>
       expect(entries("Recent projects")).toEqual([
         `plane${PLANE}Forget`,
-        "old/mnt/usb/oldgoneForget",
+        "old/mnt/usb/oldgoneLocate…Forget",
       ]),
     );
     expect(entries("Pins")).toEqual([
@@ -167,6 +184,53 @@ describe("You › This machine", () => {
       }),
       "a forgotten approval is not put back by an Undo",
     ).not.toBeInTheDocument();
+  });
+
+  it("locates a recent that has moved, as the gone notices do, and lists it where it is now", async () => {
+    await thisMachine();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Locate old" }));
+
+    await waitFor(() =>
+      expect(entries("Recent projects")).toEqual([`plane${PLANE}Forget`, "old/mnt/disk/oldForget"]),
+    );
+    expect(sent).toEqual([
+      { cmd: "pick_project", args: {} },
+      { cmd: "locate_project", args: { gone: "/mnt/usb/old", picked: "/mnt/disk/old" } },
+    ]);
+    expect(
+      screen.queryByRole("button", { name: "Undo" }),
+      "Locate… re-points the entry; the old path is not put back by an Undo",
+    ).not.toBeInTheDocument();
+  });
+
+  it("does nothing when Locate…'s dialog is cancelled", async () => {
+    await thisMachine();
+    picked = null;
+
+    await userEvent.click(await screen.findByRole("button", { name: "Locate old" }));
+
+    await waitFor(() => expect(sent).toEqual([{ cmd: "pick_project", args: {} }]));
+    expect(entries("Recent projects")).toEqual([
+      `plane${PLANE}Forget`,
+      "old/mnt/usb/oldgoneLocate…Forget",
+    ]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says why a picked folder was refused in the recents row, and keeps the entry", async () => {
+    await thisMachine();
+    refuse = "/mnt/disk/old is not a purlis project: it has no workspaces folder";
+
+    await userEvent.click(await screen.findByRole("button", { name: "Locate old" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "/mnt/disk/old is not a purlis project: it has no workspaces folder",
+    );
+    expect(entries("Recent projects")).toEqual([
+      `plane${PLANE}Forget`,
+      "old/mnt/usb/oldgoneLocate…Forget",
+    ]);
   });
 
   it("forgets a dormant pin, and its Undo pins it back in its place", async () => {
