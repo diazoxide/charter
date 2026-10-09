@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791521012427,
+  "lastUpdate": 1791522120682,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4200,6 +4200,48 @@ window.BENCHMARK_DATA = {
             "value": 101.372949,
             "unit": "ms",
             "extra": "median of 5 runs: 100.756, 101.089, 101.373, 101.772, 102.239 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "dd6371dd896214f4ec8aef208695b302afe7346b",
+          "message": "dispatch: the review of #1543's follow-ups\n\n- The table's Notice and row notes say what is true in each state\n  (M1). Not checked since purlis started: the next dispatch checks\n  first, and where the history reads the grants count. History that\n  cannot be read: none counts; a chat someone is at is asked on its\n  tab, one nobody is at is refused and listed under Needs you. The core\n  tells the two apart (dispatcharrival::unsettled), and the window gets\n  ProjectUnsettled.\n- Nothing is said where nothing of the project's is accepted here: a\n  decline alone, or a commit kept from an earlier settling, no longer\n  shows it (F1).\n- Accepted project rows are greyed in either state (F2).\n- The crossing rule stands aside for an unsandboxed chat by the very\n  comparison the no-sandbox refusal makes, and both go by one read of\n  the asking chat: the decision is now asked with it\n  (request_dispatch_as, requested_as). The session-based entry points\n  remain for the tests (F3).\n\nRefs #1543\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T08:54:16+04:00",
+          "tree_id": "46abf1c3c2e779db9249102f990acf8502b5c6a4",
+          "url": "https://github.com/purlis/purlis/commit/dd6371dd896214f4ec8aef208695b302afe7346b"
+        },
+        "date": 1791522119693,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.43515800000000004,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.418, 0.434, 0.435, 0.444, 0.449 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.397793,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.330, 16.384, 16.398, 16.431, 16.832 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.89402100000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.875, 101.718, 101.894, 102.051, 102.790 ms"
           }
         ]
       }
