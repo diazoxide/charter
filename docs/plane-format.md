@@ -5328,9 +5328,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   long as one of its chats is brought back at launch, and what was said in it is not. A
   message is never taken empty, so an empty `text` means its words were kept and are gone.
   The app does this when it opens a project and before it reads a timeline. A dispatch that
-  has not ended keeps its words. `talk` is read back under the record's own check
-  (`dispatchrecord::sound`): a record whose `talk` holds text purlis will not draw, more
-  than 500 messages, or more than 256 KiB of their text is counted and never shown. **The
+  has not ended keeps its words; **one whose `ended` does not read as a time, or stands more
+  than five minutes after the app's clock, has them emptied at once** (#1520), since its 30
+  days cannot be counted. `talk` is read back under the
+  record's own check (`dispatchrecord::sound`): a record whose `talk` holds text purlis will
+  not draw, more than 500 messages, or more than 256 KiB of their text, or whose `started`,
+  `ended` or any `at` does not read as a time, or whose `ended` is before its `started`, is
+  counted and never shown. **The
   one writer of `talk` is `dispatchrecord::said`** (`said_by`, for the person's answer, is
   the same write).
 - **In a chat's Activity tab** (#1495): one timeline for a chat, oldest first, of every task

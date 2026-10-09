@@ -653,14 +653,37 @@ pub fn answer_unread(root: &Path, id: &str) -> io::Result<bool> {
 /// How long after a dispatch ended its record keeps what the two chats said (D-1495-12).
 pub const TALK_KEPT_FOR: chrono::Duration = chrono::Duration::days(30);
 
+/// How far past `now` a recorded end may stand before it is taken as not a real end: a clock
+/// a little ahead of this one.
+const END_SKEW: chrono::Duration = chrono::Duration::minutes(5);
+
 /// Whether `record` ended [`TALK_KEPT_FOR`] or longer before `now`. A record that has not
-/// ended, or whose end does not read as a time, has not.
+/// ended has not. **One whose end does not read as a time, or stands in the future, is due**
+/// (#1520): when it ended cannot be told, so the days cannot be counted, and its words are not
+/// kept on without end.
 fn talk_is_due(record: &Record, now: chrono::DateTime<chrono::Utc>) -> bool {
-    record
-        .ended
-        .as_deref()
-        .and_then(|ended| chrono::DateTime::parse_from_rfc3339(ended).ok())
-        .is_some_and(|ended| now.signed_duration_since(ended) >= TALK_KEPT_FOR)
+    record.ended.as_deref().is_some_and(|ended| {
+        chrono::DateTime::parse_from_rfc3339(ended).map_or(true, |ended| {
+            let ago = now.signed_duration_since(ended);
+            ago >= TALK_KEPT_FOR || ago < -END_SKEW
+        })
+    })
+}
+
+/// Whether `ended` is no earlier than `started`, where both read as times.
+fn in_order(started: &str, ended: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(started),
+        chrono::DateTime::parse_from_rfc3339(ended),
+    ) {
+        (Ok(started), Ok(ended)) => ended >= started,
+        _ => false,
+    }
+}
+
+/// Whether `text` reads as a time, as [`crate::dispatch::stamp`] writes one (RFC 3339).
+fn a_time(text: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(text).is_ok()
 }
 
 /// **Takes the text out of every message of a dispatch that ended [`TALK_KEPT_FOR`] ago or
@@ -1307,8 +1330,9 @@ fn listed(all: &[String], held: &impl Fn(&str) -> String) -> Vec<String> {
 }
 
 /// Whether `record` is one purlis will put on the screen: every text in it within the cap the
-/// store writes it to, and none holding a character that draws as nothing or turns the words
-/// around it ([`crate::panel::undrawable`]).
+/// store writes it to, none holding a character that draws as nothing or turns the words
+/// around it ([`crate::panel::undrawable`]), and every time in it one that reads as a time
+/// (#1520): a time that does not would sort anywhere on a timeline.
 ///
 /// **Checked on the way in, as a report waiting to be handed back is** ([`crate::handback`]).
 /// The store is the app's to write, and a file in it is still whatever is on the disk: a
@@ -1350,7 +1374,10 @@ pub fn sound(record: &Record) -> bool {
             .is_none_or(|tree| name(&tree.repo) && name(&tree.piece) && maybe(&tree.branch, &name))
         && prose(&record.brief, MOST_BRIEF_BYTES)
         && name(&record.started)
-        && maybe(&record.ended, &name)
+        && a_time(&record.started)
+        && maybe(&record.ended, &|ended| {
+            name(ended) && a_time(ended) && in_order(&record.started, ended)
+        })
         && maybe(&record.conversation, &name)
         && record.talk.len() <= MOST_SAID
         && record
@@ -1362,7 +1389,7 @@ pub fn sound(record: &Record) -> bool {
         && record
             .talk
             .iter()
-            .all(|said| name(&said.at) && prose(&said.text, MOST_MESSAGE_BYTES))
+            .all(|said| name(&said.at) && a_time(&said.at) && prose(&said.text, MOST_MESSAGE_BYTES))
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
                 && report
