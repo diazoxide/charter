@@ -1,9 +1,9 @@
 import { memo, type ReactNode } from "react";
 import { Hand, ListTodo, SquareTerminal } from "lucide-react";
-import { ChatMark, WrappingUp } from "./NeedsYou";
+import { ChatMark, StoppingMark, WrappingUp } from "./NeedsYou";
 import { markOf, useChatsHere, useChatsSelect } from "./chatState";
 import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
-import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
+import { chatOf, contentsOf, panesOf, shownIn, type Tabs } from "./tabs";
 import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
 import { shownState, type Shown, type TaskFacts } from "./shownState";
@@ -97,6 +97,17 @@ export const ChatShownState = memo(function ChatShownState({
   return shown === undefined ? null : <StateShown shown={shown} changed={changed} />;
 });
 
+/**
+ * **Whether tab `id` shows a chat being stopped** (#1459): its own chat, or the task one of its
+ * panes shows in its place. A task of the tab that is not on screen is the chip's to tell.
+ */
+export function showsStopping(tabs: Tabs, id: number, stopping: ReadonlySet<number>): boolean {
+  return shownIn(tabs, id).some((one) => stopping.has(one.own) || stopping.has(one.session));
+}
+
+/** No chats: what a tab is handed where nothing is being stopped. */
+const NO_SESSIONS: ReadonlySet<number> = new Set();
+
 /** No names: what a tab with no hidden task that needs you is handed. */
 const NO_NAMES: readonly string[] = [];
 
@@ -115,6 +126,7 @@ export function TabMarks({
   shells,
   pin,
   wrapping,
+  stopping = NO_SESSIONS,
   persona,
   task,
   taskOf,
@@ -141,6 +153,8 @@ export function TabMarks({
   persona?: string | null;
   /** The chats wrapping up — being smart-closed (ADR 0064). */
   wrapping: ReadonlySet<number>;
+  /** The chats being stopped (#1459): a tab that shows one says so, as its row does. */
+  stopping?: ReadonlySet<number>;
   /** The chats the plane's instructions changed under, by session (charter#369). Left out on the
    *  strip, where the mark is a button beside the tab (`FreshMark`) rather than inside it. */
   updates?: PlaneUpdates;
@@ -230,6 +244,7 @@ export function TabMarks({
           <Hand aria-hidden="true" />
         </span>
       )}
+      <StoppingMark held={showsStopping(tabs, id, stopping)} />
       <WrappingUp held={panesOf(tabs, id).some((one) => wrapping.has(one.session))} />
     </>
   );
