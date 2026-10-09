@@ -1443,6 +1443,14 @@ export const commands = {
 	 */
 	startOptions: (plane: PlaneId) => typedError<StartOptions, string>(__TAURI_INVOKE("start_options", { plane })),
 	/**
+	 *  Every harness the project has, its card at a glance (HP-19): the palette's *What <product>
+	 *  can do here* rows, one per harness, reached with no chat open (#1134).
+	 * 
+	 *  Only the declarations are read, never a program, so it is cheap to ask whenever the project
+	 *  comes in front; off the main thread all the same, as every read of the plane is.
+	 */
+	harnessCards: (plane: PlaneId) => typedError<HarnessGlance[], string>(__TAURI_INVOKE("harness_cards", { plane })),
+	/**
 	 *  Records that the operator approved running this profile's command — **the one they were
 	 *  shown**.
 	 * 

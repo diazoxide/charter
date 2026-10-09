@@ -40,6 +40,7 @@ import {
   SEARCH_ID,
   SEARCH_KEY_SAID,
   SWITCHER_KEY_SAID,
+  harnessCardId,
   type BranchPath,
   type Cut,
   type Doing,
@@ -3374,5 +3375,31 @@ describe("Search in files in the palette (#1137)", () => {
 
     expect(row?.available).toBe(false);
     expect(row?.reason).toBe("No project is open, so there are no files to search.");
+  });
+});
+
+describe("a harness's card with no chat open (#1134)", () => {
+  const codex = {
+    name: "codex",
+    title: "Codex",
+    label: "What Codex can do here",
+    lines: [],
+    cannot_type: null,
+  };
+
+  it("offers a row per harness that opens its card tab", async () => {
+    const offers = catalogue(now({ harnesses: [codex] }));
+    const row = by(offers, harnessCardId("codex"));
+    const hands = doing();
+
+    await run(offers, harnessCardId("codex"), hands);
+
+    expect(row?.title).toBe("What Codex can do here");
+    expect(row?.name).toBe("Codex");
+    expect(hands.calls).toEqual(["openView:charter/harness/codex,What Codex can do here"]);
+  });
+
+  it("offers none where the project's harnesses are not known", () => {
+    expect(ids(catalogue(now())).some((id) => id.startsWith("harness.card:"))).toBe(false);
   });
 });

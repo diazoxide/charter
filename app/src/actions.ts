@@ -32,6 +32,7 @@ import type {
   ExtensionCommand,
   ExtensionView,
   FinishedTask,
+  HarnessGlance,
   MemoryScope,
   PanelBlock,
   RowAction,
@@ -74,6 +75,7 @@ import {
   contentsOf,
   focusedChat,
   focusedContent,
+  harnessCardView,
   panesOf,
   placedOf,
   sessionOf,
@@ -701,6 +703,9 @@ export type Now = {
   /** The branch nearest the operator: the cockpit's, else the one the explorer picked. What
    *  *Search in files* searches first, as ⌘⇧F does (#1137). */
   branch?: Place;
+  /** The cards of the harnesses the project has (`harnessCards.ts`, #1134): one
+   *  *What <product> can do here* row each, with no chat open. */
+  harnesses?: readonly HarnessGlance[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -1170,6 +1175,11 @@ export function noteOf(offer: Offer, unknown: boolean): string | undefined {
 /** *Search in files*'s row (#1137). */
 export const SEARCH_ID = "search.files";
 
+/** The row that opens `harness`'s card (#1134). */
+export function harnessCardId(harness: string): string {
+  return `harness.card:${harness}`;
+}
+
 /** What a Search tab opened on `ask` looks in, as its row's note says it. */
 function searchedSaid(ask: SearchAsk): string {
   if (ask.kind === "branch" && ask.branch !== undefined)
@@ -1299,6 +1309,20 @@ export function catalogue(now: Now): Offer[] {
             note: `Every file of ${searchedSaid(ask)}, in a Search tab. ${SEARCH_KEY_SAID}.`,
           },
     );
+  }
+
+  // **A harness's card with no chat open** (HP-19, #1134): one row per harness the project
+  // has, opening its card tab as a chat's header button does.
+  for (const card of now.harnesses ?? []) {
+    offers.push({
+      ...can(
+        harnessCardId(card.name),
+        card.label,
+        { verb: "openView", view: harnessCardView(card.name), title: card.label },
+        card.title,
+      ),
+      note: `What a chat on ${card.title} can and cannot do in this project, in a tab of its own.`,
+    });
   }
 
   for (const [id, title, direction] of [
