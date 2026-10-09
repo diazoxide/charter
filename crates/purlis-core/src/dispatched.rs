@@ -369,6 +369,13 @@ impl Seen {
     /// it asked this turn and is waiting on it. A prompt answered in the window puts the chat
     /// back to running with `asking` kept until the turn ends (`state::Chat::answered`); one
     /// answered in its pane is a key of the person's, which stands the end down for good.
+    ///
+    /// **An ask that leaves the window unanswered** (its deadline passed, or its hook went
+    /// away) is not looked at again (#1525): its hook decided nothing, so the harness asks in
+    /// its pane, and that prompt is the person's to answer there, a key that stands the end
+    /// down; or the harness stopped, and its turn's end or its program's end is the look. A
+    /// bound the ask spent is not given anew then, so that a prompt in the pane its harness
+    /// does not say it showed is not ended under the person by a bound given after it.
     pub fn prompt_showing(self) -> bool {
         !self.ended && (self.ask_open || (self.asking && self.waiting))
     }
