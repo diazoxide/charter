@@ -3105,6 +3105,13 @@ mod tests {
             crate::brokered::Write::Todo {
                 text: "todo".to_owned(),
             },
+            crate::brokered::Write::WorkspaceVision {
+                text: "vision".to_owned(),
+            },
+            crate::brokered::Write::WorkspaceSection {
+                section: crate::brokered::Section::Glossary,
+                text: "term".to_owned(),
+            },
         ] {
             let ask = Ask::Write(Box::new(WriteAsk { chat: 3, write }));
             let token = ChatToken("t".repeat(64));

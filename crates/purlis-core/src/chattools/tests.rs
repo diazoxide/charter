@@ -110,6 +110,8 @@ fn the_tools_are_the_ones_charter_names_and_each_says_what_it_does() {
             "session_record_list",
             "session_record_read",
             "session_record",
+            "workspace_vision",
+            "workspace_section",
             "change_status",
             "dispatch",
             "dispatch_list",
@@ -355,6 +357,66 @@ fn a_session_record_is_handed_to_the_app_by_the_server_and_not_written_by_call()
     .unwrap_err();
     assert!(refused.contains(SESSION_RECORD), "{refused}");
     assert_eq!(snapshot(p.path()), before, "call wrote something");
+}
+
+#[test]
+fn a_vision_and_a_section_entry_are_handed_to_the_app_by_the_server_and_not_written_by_call() {
+    // Brokered writes (#1384), as the session record is: workspace.md is an instruction file,
+    // which the app writes for the chat and nothing in the chat writes itself.
+    let p = project(&["alpha"]);
+    let before = snapshot(p.path());
+    for (tool, given) in [
+        (WORKSPACE_VISION, json!({"text": "Ship it"})),
+        (
+            WORKSPACE_SECTION,
+            json!({"section": "glossary", "text": "`svc` — the service"}),
+        ),
+    ] {
+        let refused = call(p.path(), &in_ws("alpha"), tool, &args(given), at(9, 0)).unwrap_err();
+        assert!(refused.contains(tool), "{refused}");
+    }
+    assert_eq!(snapshot(p.path()), before, "call wrote something");
+}
+
+#[test]
+fn a_workspace_md_tool_s_arguments_are_its_text_and_for_a_section_which_one() {
+    use crate::brokered::{Section, Write};
+    assert_eq!(
+        workspace_write(WORKSPACE_VISION, &args(json!({"text": "Ship it"}))),
+        Ok(Write::WorkspaceVision {
+            text: "Ship it".to_owned()
+        })
+    );
+    assert_eq!(
+        workspace_write(
+            WORKSPACE_SECTION,
+            &args(json!({"section": "decisions", "text": "Fridays only"}))
+        ),
+        Ok(Write::WorkspaceSection {
+            section: Section::Decisions,
+            text: "Fridays only".to_owned()
+        })
+    );
+    let other = workspace_write(
+        WORKSPACE_SECTION,
+        &args(json!({"section": "sessions", "text": "x"})),
+    )
+    .unwrap_err();
+    assert!(other.contains("decisions or glossary"), "{other}");
+    let missing = workspace_write(WORKSPACE_SECTION, &args(json!({"text": "x"}))).unwrap_err();
+    assert!(missing.contains("`section`"), "{missing}");
+    let no_text = workspace_write(WORKSPACE_VISION, &args(json!({}))).unwrap_err();
+    assert!(no_text.contains("`text`"), "{no_text}");
+    // The schema offers exactly the sections the write takes.
+    let schema = (TOOLS
+        .iter()
+        .find(|tool| tool.name == WORKSPACE_SECTION)
+        .unwrap()
+        .schema)();
+    assert_eq!(
+        schema["properties"]["section"]["enum"],
+        json!(["decisions", "glossary"])
+    );
 }
 
 #[test]

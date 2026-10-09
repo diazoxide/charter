@@ -41,6 +41,50 @@ pub enum Write {
     },
     /// `purlis workspace todo "<text>"`: one todo in the chat's workspace.
     Todo { text: String },
+    /// `purlis workspace vision "<text>"` and the `workspace_vision` tool: the `## Vision` of
+    /// the chat's workspace, replaced (#1384).
+    WorkspaceVision { text: String },
+    /// The `workspace_section` tool: one entry added to a section of the chat's workspace's
+    /// `workspace.md`, everything already there kept (#1384).
+    WorkspaceSection { section: Section, text: String },
+}
+
+/// A section of `workspace.md` a chat adds entries to (#1384, spec #1330's "the decisions and
+/// glossary sections"). Only these two: `## Vision` is replaced whole by its own write,
+/// `## Sessions` is purlis's line, and `## Log` points at the memo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    /// `## Context & decisions`: a decision every later chat should act on.
+    Decisions,
+    /// `## Glossary`: a term this work coined.
+    Glossary,
+}
+
+impl Section {
+    /// Every section, in the order `workspace.md` has them.
+    pub const ALL: [Self; 2] = [Self::Decisions, Self::Glossary];
+
+    /// Its word in a tool's arguments and on the wire.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Decisions => "decisions",
+            Self::Glossary => "glossary",
+        }
+    }
+
+    /// The section by its word, or `None` for any other.
+    pub fn named(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.word() == word)
+    }
+
+    /// Its heading in `workspace.md`, without the `## `.
+    pub fn header(self) -> &'static str {
+        match self {
+            Self::Decisions => "Context & decisions",
+            Self::Glossary => "Glossary",
+        }
+    }
 }
 
 /// The longest text a brokered write carries, in bytes. Well below what one line of the hook
@@ -56,7 +100,9 @@ impl Write {
             Self::PersonaRemember { text, title, .. } | Self::WorkspaceRemember { text, title } => {
                 (text, title.as_deref())
             }
-            Self::Todo { text } => (text, None),
+            Self::Todo { text }
+            | Self::WorkspaceVision { text }
+            | Self::WorkspaceSection { text, .. } => (text, None),
         };
         let bytes = text.len() + title.map_or(0, str::len);
         if bytes > MOST_TEXT_BYTES {
@@ -79,6 +125,8 @@ impl Write {
             Self::PersonaRemember { .. } => "persona_remember",
             Self::WorkspaceRemember { .. } => "workspace_remember",
             Self::Todo { .. } => "todo",
+            Self::WorkspaceVision { .. } => "workspace_vision",
+            Self::WorkspaceSection { .. } => "workspace_section",
         }
     }
 }
@@ -137,6 +185,14 @@ pub fn perform(
                 to: owner.to_owned(),
                 path: shown(root, &path),
             }
+        }
+        Write::WorkspaceVision { text } => {
+            let who = format!("chat {}", asker.chat);
+            set_vision(root, &asker.place, &who, text)?
+        }
+        Write::WorkspaceSection { section, text } => {
+            let who = format!("chat {}", asker.chat);
+            add_to_section(root, &asker.place, &who, *section, text)?
         }
         Write::WorkspaceRemember { text, title } => {
             let ws = own_workspace(root, asker)?;
@@ -271,13 +327,71 @@ fn held_persona_write(
     Err("persona memory is not written on this platform yet".to_owned())
 }
 
-/// The chat's own workspace, which must be there: a brokered write never makes one.
-fn own_workspace(root: &Path, asker: &Asker) -> Result<crate::workspaces::Workspace, String> {
-    let Place::Workspace(name) = &asker.place else {
+/// Sets the `## Vision` of the workspace at `place` to `text`: the write `purlis workspace
+/// vision` makes, brokered for a chat or made by purlis's MCP server where no app takes it
+/// (#1384). `who` is the chat, as a refusal names it.
+pub fn set_vision(root: &Path, place: &Place, who: &str, text: &str) -> Result<Written, String> {
+    let text = crate::memstore::py_strip(text);
+    if text.is_empty() {
+        return Err("a vision has words: nothing was written".to_owned());
+    }
+    if crate::mdsection::split_lines(text)
+        .iter()
+        .any(|line| line.starts_with("## ") || *line == "##")
+    {
+        return Err(
+            "a line of a vision starts with `## `, which would start a section of its own in \
+             workspace.md: nothing was written"
+                .to_owned(),
+        );
+    }
+    let ws = workspace_at(root, place, who, "a vision")?;
+    let path = ws.dir().join("workspace.md");
+    guard(root, &path, None)?;
+    ws.set_vision(text).map_err(|e| e.to_string())?;
+    Ok(Written {
+        to: ws.name().to_owned(),
+        path: shown(root, &path),
+    })
+}
+
+/// Adds `text` as one entry under `section` of the `workspace.md` of the workspace at `place`,
+/// keeping what is there (#1384). `who` is the chat, as a refusal names it.
+pub fn add_to_section(
+    root: &Path,
+    place: &Place,
+    who: &str,
+    section: Section,
+    text: &str,
+) -> Result<Written, String> {
+    if crate::memstore::py_strip(text).is_empty() {
         return Err(format!(
-            "chat {} works at the project root, not in a workspace, so it has no workspace \
-             memory or todos to write",
-            asker.chat
+            "an entry for ## {} has words: nothing was written",
+            section.header()
+        ));
+    }
+    let ws = workspace_at(root, place, who, "a workspace.md")?;
+    let path = ws.dir().join("workspace.md");
+    guard(root, &path, None)?;
+    ws.add_to_section(section.header(), text)
+        .map_err(|e| e.to_string())?;
+    Ok(Written {
+        to: ws.name().to_owned(),
+        path: shown(root, &path),
+    })
+}
+
+/// The workspace at `place`, which must be there: a brokered write never makes one. `who` and
+/// `what` say, in a refusal, which chat has no workspace and what it has none of.
+fn workspace_at(
+    root: &Path,
+    place: &Place,
+    who: &str,
+    what: &str,
+) -> Result<crate::workspaces::Workspace, String> {
+    let Place::Workspace(name) = place else {
+        return Err(format!(
+            "{who} works at the project root, not in a workspace, so it has no {what} to write"
         ));
     };
     let ws = crate::workspaces::Plane::open(root)
@@ -287,6 +401,16 @@ fn own_workspace(root: &Path, asker: &Asker) -> Result<crate::workspaces::Worksp
         return Err(format!("no workspace '{name}' in this project"));
     }
     Ok(ws)
+}
+
+/// The chat's own workspace, which must be there: a brokered write never makes one.
+fn own_workspace(root: &Path, asker: &Asker) -> Result<crate::workspaces::Workspace, String> {
+    workspace_at(
+        root,
+        &asker.place,
+        &format!("chat {}", asker.chat),
+        "workspace memory or todos",
+    )
 }
 
 fn shown(root: &Path, path: &Path) -> String {

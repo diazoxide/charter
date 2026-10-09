@@ -55,15 +55,18 @@ impl NotTaken {
     /// The sentence a process outside the sandbox refuses with, where it may not write:
     /// `command` is the one to run in the chat instead.
     pub fn refusal(self, command: &str) -> String {
+        format!("{}: run `{command}` in the chat instead", self.why())
+    }
+
+    /// Why the write was not made, without what to do instead: for a write no command in the
+    /// chat makes, whose refusal names something else to do.
+    pub fn why(self) -> &'static str {
         match self {
-            Self::NoConnection => format!(
+            Self::NoConnection => {
                 "this harness does not hand purlis's tools the chat's connection to the app, so \
-                 the app cannot write it for this chat: run `{command}` in the chat instead"
-            ),
-            _ => format!(
-                "the app that started this chat did not take the write, so nothing was written: \
-                 run `{command}` in the chat instead"
-            ),
+                 the app cannot write it for this chat"
+            }
+            _ => "the app that started this chat did not take the write, so nothing was written",
         }
     }
 }

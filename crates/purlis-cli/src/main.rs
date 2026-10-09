@@ -2796,6 +2796,20 @@ fn run(command: Command) -> Result<u8, String> {
             }
         }
         Command::Workspace(WorkspaceCommand::Vision { text, common }) => {
+            // Inside a chat the app started, the app writes it for the chat (#1384), as it does
+            // `workspace remember`'s: workspace.md is not the chat's to write from its sandbox.
+            if let Some(text) = text.as_deref().filter(|t| !t.is_empty())
+                && common.workspace.is_none()
+            {
+                let write = purlis_core::brokered::Write::WorkspaceVision {
+                    text: text.to_owned(),
+                };
+                if let Some(code) =
+                    memory::said_forwarded(crate::brokered::forwarded(write), |_, _| {})
+                {
+                    return Ok(code);
+                }
+            }
             let ws = here.workspace(common.workspace.as_deref())?;
             // A workspace charter does not have is not one this scaffolds: `vision` shows or
             // replaces, and inventing the directory is what made a bad `-w` silent.
