@@ -544,10 +544,19 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
         if let Some(item) = req.op_item.as_deref().filter(|v| !v.is_empty()) {
             cfg.insert("op-item".into(), Value::String(item.into()));
         }
-        if let Some(account) = req.account.as_deref().filter(|v| !v.is_empty()) {
-            cfg.insert("account".into(), Value::String(account.into()));
+        // The account reaches `op`'s arguments: held to the address rule the guided set-up
+        // holds it to, and a pasted link read as its address (#1542).
+        match super::setup::clean_account(req.account.as_deref()) {
+            Ok(Some(account)) => {
+                cfg.insert("account".into(), Value::String(account));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                io.say(Say::Err(e.message));
+                return 1;
+            }
         }
-        for key in ["op-vault", "op-item", "account"] {
+        for key in ["op-vault", "op-item"] {
             if let Some(value) = cfg.get(key).and_then(Value::as_str)
                 && let Err(e) = onepassword::not_a_flag(key, &req.name, value)
             {
