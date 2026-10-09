@@ -22,6 +22,12 @@ import { listen } from "./here";
  * core says it moved — an agent adding or removing a file — so the tree never needs a manual
  * refresh. A folder closed and opened again is read again, because it was not watched while
  * closed.
+ *
+ * **Watched first, then read** (#1427). A change is told only once its folder is watched, so a
+ * folder read before the watch held could miss a file made in between and never hear of it: the
+ * tree drew it without the file until something else moved there. A newly opened folder is read
+ * once the core has answered the watch that names it, so whatever changed before that is in the
+ * read and whatever changes after it is told.
  */
 
 /** One folder of a branch, as the explorer names it. */
@@ -98,28 +104,34 @@ export function useBranchFolders(
   const owner = useRef(Symbol("branch folders"));
   const watch = useRef((folders: BranchFolder[]) => watchFor(owner.current, folders));
 
-  // Each folder newly open is read, and the whole open set is what the core watches.
+  // The whole open set is what the core watches, and each folder newly open is read once the
+  // watch naming it holds.
   useEffect(() => {
     if (plane === undefined || workspace === undefined) {
-      watch.current([]);
+      void watch.current([]);
       return;
     }
     const refs = keys === "" ? [] : keys.split("\0").map(unkey);
     if (asked.current.workspace !== workspace) asked.current = { workspace, keys: new Set() };
     const now = new Set(refs.map(folderKey));
     byKey.current = new Map(refs.map((ref) => [folderKey(ref), ref]));
-    for (const ref of refs) {
-      if (!asked.current.keys.has(folderKey(ref))) read.current(ref);
-    }
+    const fresh = refs.filter((ref) => !asked.current.keys.has(folderKey(ref)));
     // A folder closed is forgotten, so opening it again reads it again.
     asked.current.keys = now;
-    watch.current(refs.map((ref) => ({ plane, workspace, ...ref })));
+    const held = watch.current(refs.map((ref) => ({ plane, workspace, ...ref })));
+    if (fresh.length === 0) return;
+    void held.then(() => {
+      // Only what is still open: one closed meanwhile is read when it is opened again.
+      for (const ref of fresh) {
+        if (byKey.current.has(folderKey(ref))) read.current(ref);
+      }
+    });
   }, [keys, plane, workspace]);
 
   // Nothing watched once the explorer is gone.
   useEffect(() => {
     const unwatch = watch.current;
-    return () => unwatch([]);
+    return () => void unwatch([]);
   }, []);
 
   // A folder that moved on disk is read again. Listened under the plane alone: focusing another
@@ -166,14 +178,21 @@ const watchedBy = new Map<symbol, BranchFolder[]>();
  *  folder never asks it to watch nothing. */
 let watchingAny = false;
 
+/** The newest `files_watch` this window has sent, answered or not. */
+let newestWatch: Promise<unknown> = Promise.resolve();
+
 /**
  * Tells the core what this window watches now that `owner`'s open folders are `folders`.
  *
  * **The core keeps one set per window, and each call replaces it** (FM-1's D-6). Two trees in
  * one window — the explorer and a file tab — would each replace the other's, so the core is told
  * their union, once per folder, up to what one call takes.
+ *
+ * Settles once the newest set sent by then, from any tree, has been answered — the core has
+ * watched it, or refused. Not just this call's: the core sets a window's newest set and passes
+ * over an older one, so an older call can answer before the set that names the folder holds.
  */
-function watchFor(owner: symbol, folders: BranchFolder[]) {
+function watchFor(owner: symbol, folders: BranchFolder[]): Promise<void> {
   if (folders.length === 0) watchedBy.delete(owner);
   else watchedBy.set(owner, folders);
   const union = new Map<string, BranchFolder>();
@@ -181,9 +200,19 @@ function watchFor(owner: symbol, folders: BranchFolder[]) {
     union.set(`${one.plane}\0${one.workspace}\0${folderKey(one)}`, one);
   }
   const all = [...union.values()].slice(0, WATCHED);
-  if (all.length === 0 && !watchingAny) return;
+  if (all.length === 0 && !watchingAny) return newest();
   watchingAny = all.length > 0;
-  void commands.filesWatch(all).catch(() => undefined);
+  newestWatch = commands.filesWatch(all).catch(() => undefined);
+  return newest();
+}
+
+/** Settles once the newest `files_watch` has answered, however many are sent meanwhile. */
+async function newest(): Promise<void> {
+  let waited: Promise<unknown>;
+  do {
+    waited = newestWatch;
+    await waited;
+  } while (waited !== newestWatch);
 }
 
 /** A key back into the folder it names. */
