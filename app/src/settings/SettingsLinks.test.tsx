@@ -269,3 +269,23 @@ describe("the Saving view's notice about a request mode no forge serves (NO-7, #
     await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveFocus());
   });
 });
+
+describe("a link out of Settings (#1387)", () => {
+  it("opens the Extensions dialog from the Extensions group, offered while no extension is installed", async () => {
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+    await fromTheDoctor();
+    await waitFor(() => expect(group("Extensions")).toBeInTheDocument());
+
+    await userEvent.click(group("Extensions"));
+    const extensions = screen.getByRole("region", { name: "Extensions" });
+    expect(
+      within(extensions).getByText(
+        "No extension is installed on this machine or named by this project.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(within(extensions).getByRole("button", { name: "Go to Extensions…" }));
+
+    expect(await screen.findByRole("dialog", { name: "Extensions" })).toBeInTheDocument();
+  });
+});

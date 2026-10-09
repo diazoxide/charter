@@ -6,7 +6,7 @@ import {
   workspaceSettingsView,
   type ViewRef,
 } from "../tabs";
-import { LEVELS, type Level } from "./groups";
+import { LEVELS, type GroupLink, type Level } from "./groups";
 
 /**
  * **Deep links into Settings** (SE-22, #1172; the spec on #558, V89c). A group's stable id
@@ -92,6 +92,36 @@ export function askSettingsLink(plane: string, link: SettingsLink): void {
     new CustomEvent<SettingsLinkAsk>(SETTINGS_LINK, { detail: { plane, link } }),
   );
 }
+
+/**
+ * **A link out of Settings** (#1387, #1388; the spec on #1221, stories 37 and 38): what Settings
+ * does not hold itself has one home elsewhere — extensions in the Extensions dialog, a vault or a
+ * persona in its own tab — and Settings links to it. The link names a row of the window's
+ * catalogue (`actions.ts`) by its id, and the project's window runs that row as the palette
+ * would (`PlaneView` hears it). A row the catalogue does not hold now does nothing.
+ */
+export const SETTINGS_ACTION = "charter-settings-action";
+
+/** What a link out of Settings asked of a project's window: which project, and the row's id. */
+export type SettingsActionAsk = { plane: string; action: string };
+
+/** Asks the window of the project `plane` to run the catalogue's row `action`. */
+export function askSettingsAction(plane: string, action: string): void {
+  window.dispatchEvent(
+    new CustomEvent<SettingsActionAsk>(SETTINGS_ACTION, { detail: { plane, action } }),
+  );
+}
+
+/** The catalogue's rows a link out of Settings runs, by the ids `actions.ts` gives them. */
+export const OPEN_EXTENSIONS = "extensions.show";
+/** The Extensions group's link, at every level: where an extension is installed and approved. */
+export const EXTENSIONS_LINK: GroupLink = { label: "Go to Extensions…", action: OPEN_EXTENSIONS };
+/** Opens the vault picker: Settings names "a vault", not one. */
+export const PICK_VAULT = "vault.pick";
+/** Opens the vault `vault`'s tab. */
+export const openVault = (vault: string) => `vault.open:${vault}`;
+/** Opens the persona `persona`'s tab. */
+export const showPersona = (persona: string) => `persona.show:${persona}`;
 
 /** What `place` shows, redrawn as it changes; `undefined` until a group is picked or linked. */
 export function useShownGroup(place: string): Shown | undefined {

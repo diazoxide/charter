@@ -21,6 +21,7 @@ import {
   type Control,
   type Shown,
 } from "./fileControls";
+import { EXTENSIONS_LINK } from "./links";
 import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
 import type { FileSetting, LiveSetting, SettingsGroup } from "./groups";
 import { workspaceDispatchGroup } from "./dispatch";
@@ -173,6 +174,9 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
       help: "Which of this machine's extensions are on in this workspace, and what each is set to.",
       settings: fromFile("workspace.extensions", extensions.controls),
       notes: extensions.notes,
+      // Installed and approved in the Extensions dialog, their one home (#1387).
+      links: [EXTENSIONS_LINK],
+      empty: "No extension is installed on this machine or named by this workspace.",
     },
     {
       id: "workspace.appearance",
