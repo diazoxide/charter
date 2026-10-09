@@ -458,9 +458,15 @@ pub fn orphan(root: &Path, chat: u32) -> Vec<Handback> {
 
 /// [`orphan`], answering beside each report the file it is now kept in for its workspace,
 /// where it could be kept there (#1513): what a dispatch's record names it by.
+///
+/// **The app's word that a dispatch waits on memory is not moved** (#1617): it is dropped. The
+/// wait went with the chat that asked (`HeldDispatches::forget`), so the word would tell the
+/// next chat in that workspace of a dispatch that will never start and a later word that will
+/// never come.
 pub fn orphan_kept(root: &Path, chat: u32) -> Vec<(Handback, Option<PathBuf>)> {
     take(root, For::Chat(chat))
         .into_iter()
+        .filter(|report| report.answered != Some(Answered::WaitingOnMemory))
         .map(|report| {
             let kept = leave_at(root, For::Place(&report.to_workspace), &report).ok();
             (report, kept)
@@ -1380,6 +1386,34 @@ mod tests {
             ["first", "second"]
         );
         assert!(orphan(plane.path(), 3).is_empty(), "nothing waits twice");
+    }
+
+    #[test]
+    fn closing_a_chat_drops_the_word_that_its_dispatch_waits_on_memory_and_moves_the_rest() {
+        // #1617: the wait goes with the chat, so the word that it waits would mislead whoever
+        // reads it next in that workspace.
+        let plane = tempfile::tempdir().unwrap();
+        leave(plane.path(), For::Chat(3), &a_report("first")).unwrap();
+        leave(
+            plane.path(),
+            For::Chat(3),
+            &answered(Answered::WaitingOnMemory, "waits"),
+        )
+        .unwrap();
+        let started = answered(Answered::Started, "running as devops");
+        leave(plane.path(), For::Chat(3), &started).unwrap();
+
+        let moved = orphan(plane.path(), 3);
+
+        assert_eq!(moved, vec![a_report("first"), started.clone()]);
+        assert_eq!(
+            take(
+                plane.path(),
+                For::Place(&Place::Workspace("ops".to_owned()))
+            ),
+            vec![a_report("first"), started],
+            "and only those are kept for the workspace"
+        );
     }
 
     // ----- a task's report (#1436) ----------------------------------------------------------

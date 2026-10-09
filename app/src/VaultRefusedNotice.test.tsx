@@ -78,7 +78,7 @@ function core(held: VaultRefused[], dispatches: DispatchPending[] = []) {
       if (cmd === "allow_refused_vault") {
         answered();
         return {
-          said: "Allowed. Chats opened as steward can use vault devops in this project on this machine. This chat is told to run the command again. It does not restart.",
+          said: "Allowed. Chats opened as steward can use vault devops in this project on this machine. The chat is told to run the command again. It does not restart.",
         };
       }
       if (cmd === "keep_vault_blocked") {
@@ -236,7 +236,7 @@ describe("the refused vault Notice", () => {
 
   it("says to ask the chat where the core sent it nothing", async () => {
     const said =
-      "Allowed. Chats opened as steward can use vault devops in this project on this machine. Ask this chat to run the command again. It does not restart.";
+      "Allowed. Chats opened as steward can use vault devops in this project on this machine. Ask the chat to run the command again. It does not restart.";
     mockIPC((cmd) => {
       if (cmd === "vault_refusals") return [DEVOPS];
       if (cmd === "allow_refused_vault") return { said };
@@ -258,7 +258,7 @@ describe("the refused vault Notice", () => {
       .click(await screen.findByRole("button", { name: "Allow steward to use this vault" }));
 
     expect(await notice()).toHaveTextContent(
-      "Allowed. Chats opened as steward can use vault devops in this project on this machine. This chat is told to run the command again. It does not restart.",
+      "Allowed. Chats opened as steward can use vault devops in this project on this machine. The chat is told to run the command again. It does not restart.",
     );
     // The window sends no persona: whose chat it is, is the core's own record.
     expect(pressed()).toEqual([
