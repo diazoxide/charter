@@ -9,8 +9,9 @@ import { tellSaved } from "./saving";
  * goes, and a yes before anything happens. Opened from the workspace's menu, the palette, and
  * Settings at its level (SE-20) — one dialog, so the three say the same thing.
  *
- * LIVE publishes the workspace's charter, memory and todos with the plane, and the plane is
- * saved at once: going LIVE is an explicit intent to publish. LOCAL stops publishing them (they
+ * LIVE publishes the workspace's charter, memory and todos with the project, and the project is
+ * saved at once: going LIVE is an explicit intent to publish. What a person reads says
+ * "project", never "plane" (#1192). LOCAL stops publishing them (they
  * stay on disk) and saves the untracking; what was pushed before stays in history, and the
  * dialog says so rather than let "private" suggest otherwise.
  *
@@ -95,7 +96,7 @@ export function LiveDialog({
           <AlertDialog.Description className="came-back">
             {going === false
               ? "Its charter, memory and todos stay on this machine and stop being committed."
-              : "Its charter, memory and todos are committed with the plane, and every save publishes them."}
+              : "Its charter, memory and todos are committed with the project, and every save publishes them."}
           </AlertDialog.Description>
           {read === null && trouble === null && <p className="pending">Reading the workspace…</p>}
           {read !== null && (
@@ -112,7 +113,7 @@ export function LiveDialog({
           )}
           {read !== null && read.mode !== null && read.mode !== "off" && (
             <p className="came-back">
-              The save also takes every other unsaved change in the plane.
+              The save also takes every other unsaved change in the project.
             </p>
           )}
           {trouble !== null && (
@@ -122,7 +123,7 @@ export function LiveDialog({
           )}
           {switched !== null && (
             <p className="trouble" role="alert">
-              {`It is ${word} now, and the plane was not saved: ${switched.notSaved}`}
+              {`It is ${word} now, and the project was not saved: ${switched.notSaved}`}
             </p>
           )}
           {switched !== null ? (
@@ -155,22 +156,22 @@ export function LiveDialog({
   );
 }
 
-/** Where the files go, or that they stop going: said from the plane's mode and remote. */
+/** Where the files go, or that they stop going: said from the project's mode and remote. */
 function whereText(read: LivePreview): string {
   if (read.live) {
     return "It stops publishing them from now on. What was already pushed stays in the repository's history.";
   }
   if (read.mode === null) {
-    return "This plane has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.";
+    return "This project has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.";
   }
   if (read.mode === "off") {
-    return "This plane's mode is off, so purlis commits nothing; they are published when you commit and push them.";
+    return "This project's mode is off, so purlis commits nothing; they are published when you commit and push them.";
   }
   if (read.mode === "commit") {
-    return "This plane's mode is commit, so they are committed on this machine and published when you push.";
+    return "This project's mode is commit, so they are committed on this machine and published when you push.";
   }
   if (read.remote === null) {
-    return "This plane has no remote purlis can push to, so they are committed on this machine only.";
+    return "This project has no remote purlis can push to, so they are committed on this machine only.";
   }
   return `The next save pushes them to ${read.remote} — anyone who can read that repository will read them.`;
 }
@@ -182,7 +183,12 @@ function whereText(read: LivePreview): string {
  */
 export function LiveMark() {
   return (
-    <span className="live-mark" role="img" aria-label="live" title="Live: published with the plane">
+    <span
+      className="live-mark"
+      role="img"
+      aria-label="live"
+      title="Live: published with the project"
+    >
       <Radio aria-hidden="true" />
     </span>
   );

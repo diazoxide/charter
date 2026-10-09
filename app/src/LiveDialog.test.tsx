@@ -84,12 +84,12 @@ describe("LiveDialog", () => {
     expect(screen.getByRole("button", { name: "Make local" })).toBeTruthy();
   });
 
-  it("says a plane with no remote only commits, and one whose mode is off commits nothing", async () => {
+  it("says a project with no remote only commits, and one whose mode is off commits nothing", async () => {
     core(preview({ remote: null }));
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "This plane has no remote purlis can push to, so they are committed on this machine only.",
+        "This project has no remote purlis can push to, so they are committed on this machine only.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -98,7 +98,7 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "This plane's mode is off, so purlis commits nothing; they are published when you commit and push them.",
+        "This project's mode is off, so purlis commits nothing; they are published when you commit and push them.",
       ),
     ).toBeTruthy();
   });
@@ -125,24 +125,24 @@ describe("LiveDialog", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Make live" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "It is live now, and the plane was not saved: Refusing to save",
+      "It is live now, and the project was not saved: Refusing to save",
     );
     expect(onDone).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("tells a plane not yet asked how it saves that the save waits for that answer", async () => {
+  it("tells a project not yet asked how it saves that the save waits for that answer", async () => {
     core(preview({ mode: null }));
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "This plane has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.",
+        "This project has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.",
       ),
     ).toBeTruthy();
   });
 
-  it("names a remote on any host, and says the save takes the plane's other changes too", async () => {
+  it("names a remote on any host, and says the save takes the project's other changes too", async () => {
     core(preview({ remote: "git@git.corp:team/plane.git" }));
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
@@ -151,7 +151,7 @@ describe("LiveDialog", () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText("The save also takes every other unsaved change in the plane."),
+      screen.getByText("The save also takes every other unsaved change in the project."),
     ).toBeTruthy();
   });
 });

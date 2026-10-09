@@ -103,7 +103,7 @@ fn origin_of(root: &Path) -> Option<String> {
 }
 
 /// The sentence for a plane that has not been asked how it saves.
-pub const NOT_ASKED: &str = "Not saved: this plane has not been told how it is saved yet — \
+pub const NOT_ASKED: &str = "Not saved: this project has not been told how it is saved yet — \
                              choose in the Saving tab, and the next save takes the switch.";
 
 /// [`workspace_live`], without a runtime.
