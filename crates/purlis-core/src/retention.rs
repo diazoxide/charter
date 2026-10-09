@@ -266,7 +266,7 @@ fn ephemeral_of(session: &held::Dir, now: SystemTime) -> Option<Vec<Held>> {
         return None;
     }
     let mut held = Vec::new();
-    for persona in session.names() {
+    for persona in session.every_name()? {
         if !a_session_key(&persona) {
             return None;
         }
@@ -275,7 +275,7 @@ fn ephemeral_of(session: &held::Dir, now: SystemTime) -> Option<Vec<Held>> {
             return None;
         }
         let mut files = Vec::new();
-        for name in dir.names() {
+        for name in dir.every_name()? {
             let found = dir
                 .file(&name)?
                 .metadata()
@@ -621,6 +621,12 @@ mod held {
             names(&self.path)
         }
 
+        /// Every name in the directory, or `None` when it cannot be listed or a name is not
+        /// UTF-8: for a store kept whole unless all of it can be judged.
+        pub(super) fn every_name(&self) -> Option<Vec<String>> {
+            every_name(&self.path)
+        }
+
         /// `name` in this directory, opened read-only without following a link, without
         /// blocking on a FIFO, and never as a controlling terminal.
         pub(super) fn file(&self, name: &str) -> Option<std::fs::File> {
@@ -688,6 +694,12 @@ mod held {
             names(&self.path)
         }
 
+        /// Every name in the directory, or `None` when it cannot be listed or a name is not
+        /// UTF-8: for a store kept whole unless all of it can be judged.
+        pub(super) fn every_name(&self) -> Option<Vec<String>> {
+            every_name(&self.path)
+        }
+
         pub(super) fn file(&self, name: &str) -> Option<std::fs::File> {
             crate::contain::open_no_link(&self.plane, &self.path.join(name)).ok()
         }
@@ -728,6 +740,15 @@ mod held {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// [`names`], but `None` rather than a shorter list when the directory cannot be read or
+    /// holds a name that is not UTF-8, so a caller that must see everything keeps it all.
+    fn every_name(dir: &Path) -> Option<Vec<String>> {
+        std::fs::read_dir(dir)
+            .ok()?
+            .map(|entry| entry.ok()?.file_name().into_string().ok())
+            .collect()
     }
 }
 
