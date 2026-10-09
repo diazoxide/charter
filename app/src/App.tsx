@@ -63,7 +63,7 @@ import { Opener } from "./Opener";
 import { SettingsTab } from "./settings/SettingsTab";
 import { levelOf, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import { enterSettings } from "./settings/entering";
-import { whenRecentSettled } from "./settings/thisMachine";
+import { machineChanged, whenRecentSettled } from "./settings/thisMachine";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
 import { drawTint } from "./theme/theme";
@@ -446,6 +446,8 @@ function App() {
         return { ok: false, refused: answer.error };
       }
       mark(pinned);
+      // Settings › You › This machine lists the pins, and may be on screen (#1240).
+      machineChanged();
       return { ok: true };
     },
     [],
