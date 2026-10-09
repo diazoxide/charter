@@ -95,7 +95,7 @@ function done(over: Partial<SetupDone> = {}): SetupDone {
     identity: [{ variable: "service-account-token", held: "keyring", kept: true }],
     identity_in_app_env: [],
   };
-  return { contents, marked: [], skipped: [], ...over };
+  return { contents, marked: [], skipped: [], no_longer_read: [], ...over };
 }
 
 /** The document holds no token: not in the markup, and not in any field. */

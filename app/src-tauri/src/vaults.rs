@@ -995,6 +995,9 @@ pub(crate) struct SetupDone {
     pub contents: VaultContents,
     pub marked: Vec<String>,
     pub skipped: Vec<SetupSkipped>,
+    /// The variables the vault was read through before that no vault reads now (#1542): the
+    /// tab asks for their export to be removed from the shell's startup files.
+    pub no_longer_read: Vec<String>,
 }
 
 fn alike_shown(all: Vec<setup::Alike>) -> Vec<SetupAlike> {
@@ -1046,6 +1049,7 @@ fn done(ctx: &Ctx, vault: &str, marked: setup::Marked) -> Result<SetupDone, Stri
                 }
             })
             .collect(),
+        no_longer_read: marked.no_longer_read,
     })
 }
 
@@ -2972,6 +2976,10 @@ mod tests {
         assert_eq!(keys(&done.contents), ["DEPLOY"]);
         assert!(done.contents.identity[0].kept);
         assert!(done.marked.is_empty() && done.skipped.is_empty());
+        assert!(
+            done.no_longer_read.is_empty(),
+            "edge still reads the variable, so its export is still needed"
+        );
         assert!(open(&ctx, "edge").unwrap().refused.is_some());
     }
 

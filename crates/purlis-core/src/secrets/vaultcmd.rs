@@ -300,9 +300,10 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
             also: Vec::new(),
         },
     );
-    if let Err(e) = made {
-        return refuse(io, e.message);
-    }
+    let made = match made {
+        Ok(made) => made,
+        Err(e) => return refuse(io, e.message),
+    };
     let where_ = if req.share {
         "shared — commit vaults.json"
     } else {
@@ -314,6 +315,9 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
         req.name,
         super::keyring::STORE_NAME
     )));
+    if let Some(hint) = setup::remove_the_export(&made.no_longer_read) {
+        io.say(Say::Info(format!("  {hint}")));
+    }
     io.say(Say::Info(format!(
         "  add secrets with: purlis secret set {} <key> --stdin",
         req.name
@@ -457,15 +461,19 @@ fn token_for_a_registered_vault(
     let Some(sign_in) = token_tested(ctx, &req.name, &place, io) else {
         return 1;
     };
-    if let Err(e) = setup::change(ctx, &req.name, &sign_in, None, &[]) {
-        return refuse(io, e.message);
-    }
+    let changed = match setup::change(ctx, &req.name, &sign_in, None, &[]) {
+        Ok(changed) => changed,
+        Err(e) => return refuse(io, e.message),
+    };
     io.say(Say::Ok(format!(
         "Stored the token of vault '{}' in {}. Its other settings are as they were, and no \
          variable is needed.",
         req.name,
         super::keyring::STORE_NAME
     )));
+    if let Some(hint) = setup::remove_the_export(&changed.no_longer_read) {
+        io.say(Say::Info(format!("  {hint}")));
+    }
     0
 }
 
