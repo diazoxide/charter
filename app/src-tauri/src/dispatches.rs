@@ -891,8 +891,9 @@ pub(crate) async fn dispatches(
 /// Compared whole, with a fingerprint of everything in the folder beside the paths
 /// ([`WorktreeLoss::seal`]), so a listed file written again, a file added inside a folder git
 /// ignores whole and a commit made in a nested repository are each a change (#1472). The last
-/// comparison is made in the same call as the removal, just before git runs it; git's own time
-/// to remove the folder is the moment it does not cover.
+/// comparison is made in the same call as the removal. What it does not cover: a write to an
+/// entry after that last walk read it, through the rest of the walk, one git call and git's own
+/// removal of the folder. A folder too big to fingerprint whole is not discarded.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub(crate) struct WorktreeLoss {
     /// The task, by the name its row has.
@@ -1000,12 +1001,24 @@ pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
         purlis_core::dispatchplace::at_risk(held.root(), &tree, &crate::gitbroker::isolation())
             .map_err(|not_done| not_done.in_window(&tree.repo))?
             .ok_or_else(|| ALREADY_GONE.to_owned())?;
-    let seal = tree
-        .folder(held.root())
-        .and_then(|folder| purlis_core::dispatchplace::sealed(&folder))
-        .ok_or_else(unread)?;
+    let folder = tree.folder(held.root()).ok_or_else(unread)?;
+    let changes = risk.changes.as_deref().ok_or_else(unread)?;
+    let seal = purlis_core::dispatchplace::sealed(&folder, changes).map_err(|not| match not {
+        NotSealed::TooMany => TOO_MANY.to_owned(),
+        NotSealed::Unread => unread(),
+    })?;
     loss_from(&record, &tree, risk, seal)
 }
+
+use purlis_core::dispatchplace::NotSealed;
+
+/// What is said of a branch's folder too big to check that nothing in it changes between the
+/// person's look and the removal (#1472): Discard fails closed there, and says the way on.
+pub(crate) const TOO_MANY: &str = "That branch's folder holds more than 100,000 files and \
+     folders, too many for purlis to check that nothing in it changes between your look and the \
+     removal, so it will not discard it. Review changes shows what its branch holds. Remove its \
+     build output (an ignored folder such as node_modules or target) yourself, then press \
+     Discard again.";
 
 /// What is said where purlis cannot read what a branch's folder holds.
 fn unread() -> String {

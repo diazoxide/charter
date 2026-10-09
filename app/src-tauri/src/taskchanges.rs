@@ -155,11 +155,19 @@ pub(crate) struct OwnBranch {
 pub(crate) struct LeftBranch {
     /// The commit it is at, by its full id: what a delete is of.
     pub tip: String,
-    /// Whether the branch the repo is on holds every commit of it: the one case Delete branch
-    /// is offered, and the one case git deletes it.
-    pub merged: bool,
-    /// How many of its commits the branch the repo is on does not hold.
+    /// The branch it was cut from, as the repo recorded it; `null` where none was, and then it
+    /// is measured against the branch the repo is on.
+    pub base: Option<String>,
+    /// `merged`, `squashed` (its changes are in that branch, not its commits) or `not-merged`:
+    /// against the branch it was cut from, as its row says it.
+    pub landed: String,
+    /// How many of its commits that branch does not hold.
     pub ahead: u32,
+    /// Whether the repo is on it now: git deletes no such branch.
+    pub checked_out: bool,
+    /// Whether Delete branch is offered: git's own `branch -d` would delete it (the branch the
+    /// repo is on holds every commit of it, and the repo is not on it).
+    pub deletable: bool,
 }
 
 /// What a task changed, as its Changes tab draws it.
@@ -257,8 +265,11 @@ fn of_its_own_branch(held: &Held, record: &Record, changes: &mut TaskChanges) {
                 .flatten()
                 .map(|left| LeftBranch {
                     tip: left.tip,
-                    merged: left.merged,
+                    base: left.base,
+                    landed: left.landed.word().to_owned(),
                     ahead: left.ahead,
+                    checked_out: left.checked_out,
+                    deletable: left.deletable,
                 })
         }
         _ => None,

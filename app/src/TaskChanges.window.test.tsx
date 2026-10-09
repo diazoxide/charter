@@ -150,7 +150,14 @@ const LEFT_CHANGES: TaskChanges = {
     branch: LEFT_BRANCH,
     standing: "discarded",
     acts: false,
-    left: { tip: "b".repeat(40), merged: true, ahead: 0 },
+    left: {
+      tip: "b".repeat(40),
+      base: "main",
+      landed: "merged",
+      ahead: 0,
+      checked_out: false,
+      deletable: true,
+    },
   },
   places: [],
   elsewhere: [],
@@ -372,7 +379,7 @@ describe("what a task changed", () => {
     const tab = await openChangesOf("Review changes of left behind");
 
     expect(within(tab).getByTestId("task-changes-left")).toHaveTextContent(
-      `The branch ${LEFT_BRANCH} is still in api, and the branch api is on holds every commit of it, so deleting it loses nothing.`,
+      `The branch ${LEFT_BRANCH} is still in api, and main holds every commit of it. Deleting it loses nothing.`,
     );
     // Its folder is gone: nothing to merge or discard.
     expect(within(tab).queryByRole("button", { name: "Merge…" })).toBeNull();
@@ -399,7 +406,14 @@ describe("what a task changed", () => {
           branch: LEFT_BRANCH,
           standing: "discarded",
           acts: false,
-          left: { tip: "c".repeat(40), merged: false, ahead: 2 },
+          left: {
+            tip: "c".repeat(40),
+            base: "main",
+            landed: "not-merged",
+            ahead: 2,
+            checked_out: false,
+            deletable: false,
+          },
         },
       },
     });
@@ -407,7 +421,7 @@ describe("what a task changed", () => {
     const tab = await openChangesOf("Review changes of left behind");
 
     expect(within(tab).getByTestId("task-changes-left")).toHaveTextContent(
-      `The branch ${LEFT_BRANCH} is still in api, holding 2 commits the branch api is on does not have. It stays: merge it, or delete it with git, yourself.`,
+      `The branch ${LEFT_BRANCH} is still in api, holding 2 commits main does not have. git does not find it merged into the branch api is on, so it stays: merge it, or delete it with git, yourself.`,
     );
     expect(within(tab).queryByRole("button", { name: "Delete branch…" })).toBeNull();
   });

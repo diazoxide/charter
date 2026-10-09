@@ -230,7 +230,7 @@ pub fn landed(plane: &Path, ws: &str, repo: &str, piece: &str, branch: &str) -> 
 ///
 /// **This lets a folder go, never a commit** ([`Landed::Carried`]): the folder is taken away
 /// and the branch stays, an ordinary branch of the repo, since git does not find it merged.
-fn carried_in(clone: &Path, branch: &str, base: &str) -> Option<bool> {
+pub(crate) fn carried_in(clone: &Path, branch: &str, base: &str) -> Option<bool> {
     let (branch, base) = (name::as_ref(branch), name::as_ref(base));
     let parted = git::run(clone, &["merge-base", &branch, &base], git::READ)
         .ok()
@@ -249,6 +249,8 @@ fn carried_in(clone: &Path, branch: &str, base: &str) -> Option<bool> {
                 "--no-renames",
                 "--no-ext-diff",
                 "--no-textconv",
+                // A repo's own settings may hide a change of a submodule's commit (#1472).
+                "--ignore-submodules=none",
                 from,
                 to,
                 "--",

@@ -58,22 +58,32 @@ export function ownSaid(own: OwnBranch): string {
 
 /**
  * What the tab says of a task's own branch **whose folder is gone and which is still in the
- * repo** (#1472), or nothing where that is not so: whether the branch the repo is on holds it
- * (then it can be deleted), or how many of its commits it does not (then it stays: deleting a
- * branch that holds work is never purlis's act).
+ * repo** (#1472), or nothing where that is not so. Measured against the branch it was cut from,
+ * as its row's word is: merged, squashed in (its changes there, its own commits not), or holding
+ * work that branch lacks. Then whether it can be deleted here: only where git's own `branch -d`
+ * would, and never while the repo is on it. Deleting a branch that holds work is never
+ * purlis's act.
  */
 export function leftSaid(own: OwnBranch): string | undefined {
   const left = own.left;
   if (left === null) return undefined;
-  const branch = own.branch ?? "Its own branch";
-  if (left.merged)
-    return `The branch ${branch} is still in ${own.repo}, and the branch ${own.repo} is on holds every commit of it, so deleting it loses nothing.`;
-  return `The branch ${branch} is still in ${own.repo}, holding ${commits(left.ahead)} the branch ${own.repo} is on does not have. It stays: merge it, or delete it with git, yourself.`;
+  const branch = own.branch ?? "its own branch";
+  const into = left.base ?? `the branch ${own.repo} is on`;
+  const stands =
+    left.landed === "merged"
+      ? `The branch ${branch} is still in ${own.repo}, and ${into} holds every commit of it.`
+      : left.landed === "squashed"
+        ? `The branch ${branch} is still in ${own.repo}. Its changes are in ${into}, squashed or rebased in, but its own ${commits(left.ahead)} are not.`
+        : `The branch ${branch} is still in ${own.repo}, holding ${commits(left.ahead)} ${into} does not have.`;
+  if (left.checked_out)
+    return `${stands} ${own.repo} is on it now, so it is not deleted here: git deletes no branch a repo is on.`;
+  if (left.deletable) return `${stands} Deleting it loses nothing.`;
+  return `${stands} git does not find it merged into the branch ${own.repo} is on, so it stays: merge it, or delete it with git, yourself.`;
 }
 
 /** What the question says before a task's merged branch, whose folder is gone, is deleted. */
 export function deleteSays(own: OwnBranch): string {
-  return `This deletes the branch ${own.branch ?? ""} in ${own.repo}. The branch ${own.repo} is on holds every commit of it, so no commit is lost; git deletes it only if it still finds it merged.`;
+  return `This deletes the branch ${own.branch ?? ""} in ${own.repo}. The branch ${own.repo} is on holds every commit of it, so no commit is lost; git deletes it only if it still finds it so.`;
 }
 
 /** What the tab says above a task's files, where it worked in a folder other chats work in. */
