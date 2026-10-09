@@ -233,6 +233,20 @@ by a script that replaced it and nothing else, in `hrd` alone, on the 110 rows t
 for that reason: `shellseg-oracle.jsonl` rows 87, 100, 103, 105, 173, 505 to 509 and 511 to
 513, and 97 generated rows. No verdict moved.
 
+**And where a `cd` not joined by `&&` is answered with how to join it (#1326).** A `cd` followed
+by `;`, `||`, `&` or a newline still leaves the directory the line started in in play (#345),
+and agents read that refusal as "the guard ignores `cd`". A branch or reset refusal that names
+the root, on a line where such a `cd` (the shell's own, not redefined, not in a pipeline) comes
+before the refused `git`, now says so and says to join the two with `&&`. The sentence is the
+only change, and no verdict moved: `bra` gains it before the refusal's closing "The plane root is
+one working tree…", and `rst` gains it at its end. 29 answers on 28 rows took it, inserted by a
+script that changed nothing else on the line: `planeroot-oracle.jsonl` rows 183 and 184 (`bra`)
+and 185 (`rst`); generated rows 31, 40, 204, 217, 225, 364, 374, 448, 602, 677, 1109, 1148,
+1161, 1174, 1254, 1332, 1401, 1507, 1580 and 1611 (`bra`), and 352, 602, 871, 1003, 1310 and
+1321 (`rst`). Which rows was decided by reading each line's segments as the walk does, since a
+fixture with git repositories cannot be built where the edit was made; the replay checks every
+row on CI.
+
 ## The session recording
 
 Re-record with:
