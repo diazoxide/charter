@@ -143,11 +143,10 @@ pub fn of<'a>(personas: &'a BTreeMap<String, Grants>, persona: Option<&str>) -> 
 /// those of `trusted` (it widens nothing), or where the project does not sandbox its chats;
 /// otherwise the grants of `trusted`, until the person allows its own on its tab.
 ///
-/// `trusted` is, for a **handoff**, the grants the asking chat itself runs with, read from the
-/// app's own record of it ([`crate::start::runs_with`]) — so a chain of handoffs never climbs
-/// past the first chat's grants — and never the request. For a **Resume** of a session record,
-/// whose `persona:` a chat could have written, it is the default persona's. A chat the person
-/// starts from the window holds its own and asks nothing.
+/// `trusted` is, for a **Resume** of a session record, whose `persona:` a chat could have
+/// written, the default persona's. A chat the person starts from the window holds its own and
+/// asks nothing. A handoff is decided as a dispatch is (#1444), and holds what
+/// `dispatchgrant` gives a dispatched chat.
 pub fn held_unless_within(
     policy: Option<&super::Policy>,
     trusted: Option<&str>,
