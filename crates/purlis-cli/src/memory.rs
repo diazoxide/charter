@@ -1204,8 +1204,16 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             // that named a persona this plane does not have: THAT name is printed, because a
             // rung decided and is hiding every rung below it. A script reading this has
             // always been handed the name the ladder resolved.
-            let found = here.active_persona(None);
-            println!("{}", found.as_deref().unwrap_or("(none)"));
+            //
+            // The rung that decided goes to stderr, as `persona list` says it (#999), so the
+            // one line a script reads is unchanged. One resolution for both.
+            let found =
+                purlis_core::active::persona(&here.asking(None, here.persona_env.as_deref()));
+            println!("{}", found.name.as_deref().unwrap_or("(none)"));
+            voice::info(&format!(
+                "via {}",
+                purlis_core::personas::one_line(found.rung.label())
+            ));
             Ok(0)
         }
         PersonaCommand::Clear => {
