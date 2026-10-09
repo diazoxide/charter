@@ -1514,6 +1514,12 @@ impl ChatBoard for Hooks {
             board.failure_cleared(session, id)
         })
     }
+
+    fn answered(&self, session: u32) -> Option<Moved> {
+        moving(&mut self.board(), &self.plane, session, |board| {
+            board.answered(session)
+        })
+    }
 }
 
 /// Makes one move of chat `session` on the board, and answers what the window must now be

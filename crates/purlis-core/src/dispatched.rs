@@ -335,13 +335,18 @@ pub struct Seen {
     pub asking: bool,
     /// Its harness is one purlis has measured its typed line in ([`told_by_a_line`]).
     pub measured: bool,
+    /// A permission ask of its is open in the window's needs-you list (HP-6): its hook holds
+    /// it there until the person answers. Whether or not the harness also said it asked.
+    pub ask_open: bool,
 }
 
 impl Seen {
     /// Whether purlis knows enough of this chat to send its pane any key at all: a measured
-    /// harness that has been heard from, still running its program, showing no prompt.
+    /// harness that has been heard from, still running its program, showing no prompt
+    /// ([`Self::prompt_showing`]: an ask open in the window is one, and a prompt answered there
+    /// is not, though the board keeps `asking` until the turn ends).
     fn takes_keys(self) -> bool {
-        self.measured && self.heard && !self.ended && !self.asking
+        self.measured && self.heard && !self.ended && !self.prompt_showing()
     }
 
     /// Whether a line may be typed into it: [`Self::takes_keys`], and waiting for a prompt.
@@ -358,6 +363,14 @@ impl Seen {
     /// Its turn has ended, by its harness's own word, whatever its harness is.
     fn turn_ended(self) -> bool {
         self.heard && !self.ended && self.waiting && !self.asking
+    }
+
+    /// A prompt is in front of the person now: an ask of its is open in the window, or it said
+    /// it asked this turn and is waiting on it. A prompt answered in the window puts the chat
+    /// back to running with `asking` kept until the turn ends (`state::Chat::answered`); one
+    /// answered in its pane is a key of the person's, which stands the end down for good.
+    fn prompt_showing(self) -> bool {
+        !self.ended && (self.ask_open || (self.asking && self.waiting))
     }
 }
 
@@ -468,9 +481,10 @@ struct Task {
     end: Option<End>,
     /// A turn began in it after its report: the bound on the reporting turn is spent.
     later_turn: bool,
-    /// The bound on its reporting turn passed while it was held, with that turn not known to
-    /// be over: it is set again when the hold goes.
-    bound_passed_held: bool,
+    /// The bound on its reporting turn passed while something kept it from ending (it was
+    /// held, or it was showing the person a prompt), with that turn not known to be over: it
+    /// is set again once that has gone.
+    bound_owed: bool,
 }
 
 /// A report the app delivered, kept so a wait can answer with it.
@@ -713,7 +727,9 @@ pub fn report_turn(seen: Seen, keyed: bool, owed: Owed) -> Result<(), NoReportTu
         Err(NoReportTurn::Harness)
     } else if !seen.heard {
         Err(NoReportTurn::Unheard)
-    } else if seen.asking {
+    } else if seen.prompt_showing() {
+        // A window ask still open counts, and a prompt answered in the window does not,
+        // though the board keeps `asking` until the turn ends (#1525).
         Err(NoReportTurn::Prompt)
     } else if keyed {
         Err(NoReportTurn::PersonTyping)
@@ -1110,7 +1126,7 @@ impl Ledger {
         if ends && entry.end.is_none() {
             entry.end = Some(End::Reported);
             entry.later_turn = false;
-            entry.bound_passed_held = false;
+            entry.bound_owed = false;
         }
     }
 
@@ -1178,13 +1194,17 @@ impl Ledger {
     /// - **The bound ends the reporting turn and no other** ([`Looked::WaitedOut`],
     ///   [`ends_within`]): a turn that does not end, or a harness purlis hears nothing from.
     ///   Once a later turn has begun in the chat (purlis typed it a line: a report of a task
-    ///   of its own landed), the bound ends nothing, and that turn's own end is waited for.
-    ///   Nor does it end a chat that is showing the person a prompt.
+    ///   of its own landed, or its harness began one by itself after the reporting turn was
+    ///   over), the bound ends nothing, and that turn's own end is waited for. Nor does it end
+    ///   a chat that is showing the person a prompt: there the bound is set again once the
+    ///   prompt is answered, since the reporting turn goes on after it ([`Ends::Bound`]).
     /// - **Not while it is held.** Ending it while a task of its own works would leave that
     ///   one's report with nobody to read it; ending it in front of the person would take
     ///   away what they are reading. It is ended when the hold has gone. Where its bound
     ///   passed while it was held and its turn is still not over, the bound is set again as
-    ///   the hold goes ([`Ends::Bound`]), so a hold never keeps a program for good.
+    ///   the hold goes ([`Ends::Bound`]), so a hold never keeps a program for good. A task
+    ///   held once its turn was over, and found working when the hold goes, is in a later
+    ///   turn.
     pub fn end_step(&mut self, task: u32, seen: Seen, held: bool, looked: Looked) -> Ends {
         let Some(entry) = self.tasks.get_mut(&task) else {
             return Ends::Nothing;
@@ -1197,11 +1217,15 @@ impl Ledger {
             // The bound was the reporting turn's. A later turn is waited for, a prompt is the
             // person's to answer, and a settle under way is the settle's to finish.
             (Looked::WaitedOut, _) if entry.later_turn && !seen.ended => Ends::Hold,
-            (Looked::WaitedOut, _) if seen.asking && !seen.ended => Ends::Hold,
+            // The reporting turn goes on once the prompt is answered: the bound is owed it.
+            (Looked::WaitedOut, _) if seen.prompt_showing() => {
+                entry.bound_owed = true;
+                Ends::Hold
+            }
             (Looked::WaitedOut, End::Settling) => Ends::Hold,
             (Looked::WaitedOut, _) if held => {
                 entry.end = Some(End::Due);
-                entry.bound_passed_held = !over;
+                entry.bound_owed = !over;
                 Ends::Hold
             }
             (Looked::WaitedOut, _) => {
@@ -1232,17 +1256,33 @@ impl Ledger {
                 entry.end = Some(End::Due);
                 Ends::Hold
             }
-            // What held it has gone, and the turn that reported is still not over: a harness
-            // purlis hears nothing from, or a turn that will not end. The one bound it had
-            // passed while it was held, and nothing else would look at it again, so it is
-            // given the bound anew. Only that turn: a task held once its turn was over, and
-            // found working when the hold goes, is in a later turn, which has no bound.
-            (Looked::Moved, End::Due)
-                if !held && !over && entry.bound_passed_held && !entry.later_turn =>
+            // The reporting turn is still not over (a harness purlis hears nothing from, or a
+            // turn that will not end), and the one bound it had passed while it was held or
+            // showing a prompt. Nothing else would look at it again, so it is given the bound
+            // anew once neither is so. Held, it waits as a held task, so that the person's
+            // looking away is a look at it.
+            (Looked::Moved, End::Due | End::Reported)
+                if !over && entry.bound_owed && !entry.later_turn =>
             {
+                if held {
+                    entry.end = Some(End::Due);
+                    Ends::Hold
+                } else if seen.prompt_showing() {
+                    entry.end = Some(End::Reported);
+                    Ends::Hold
+                } else {
+                    entry.end = Some(End::Reported);
+                    entry.bound_owed = false;
+                    Ends::Bound
+                }
+            }
+            // Held once its turn was over, and found working when the hold goes: its harness
+            // began a turn, with or without a prompt purlis heard. A later turn, as one purlis
+            // heard begin is (`turn_began`): it has no bound, and its own end is waited for.
+            (Looked::Moved, End::Due) if !held && !over => {
                 entry.end = Some(End::Reported);
-                entry.bound_passed_held = false;
-                Ends::Bound
+                entry.later_turn = true;
+                Ends::Hold
             }
             (Looked::Moved, _) => Ends::Hold,
         }
@@ -1742,6 +1782,7 @@ mod tests {
         waiting: false,
         asking: false,
         measured: true,
+        ask_open: false,
     };
     const RUNNING: Seen = Seen {
         running: true,
@@ -2786,6 +2827,7 @@ mod tests {
         waiting: false,
         asking: false,
         measured: false,
+        ask_open: false,
     };
 
     #[test]
@@ -3587,6 +3629,21 @@ mod tests {
             report_turn(showing, false, Owed::Due),
             Err(NoReportTurn::Prompt)
         );
+        // An ask open in the window is a prompt showing, and one answered there is not: the
+        // board keeps `asking` until the turn ends (#1525).
+        let ask_open = Seen {
+            ask_open: true,
+            ..heard_and(true)
+        };
+        assert_eq!(
+            report_turn(ask_open, false, Owed::Due),
+            Err(NoReportTurn::Prompt)
+        );
+        let answered = Seen {
+            asking: true,
+            ..heard_and(true)
+        };
+        assert_eq!(report_turn(answered, false, Owed::Due), Ok(()));
         assert_eq!(
             report_turn(heard_and(true), true, Owed::Due),
             Err(NoReportTurn::PersonTyping)
@@ -3876,6 +3933,105 @@ mod tests {
         );
     }
 
+    /// What the app reads of a chat as the board has it ([`Seen`]'s other fields as KNOWN).
+    fn as_the_board_has_it(chat: &crate::state::Chat) -> Seen {
+        use crate::state::State as Board;
+        Seen {
+            running: chat.state() == Board::Running,
+            waiting: chat.state() == Board::Waiting,
+            asking: chat.asking(),
+            ..KNOWN
+        }
+    }
+
+    /// The board's own moves for a reported task that shows a prompt mid-turn, and has it
+    /// answered in the window: what the app reads before and after the answer.
+    fn asked_then_answered() -> (Seen, Seen) {
+        use crate::state::{Chat, Event};
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Notification);
+        let asked = as_the_board_has_it(&chat);
+        assert!(chat.answered());
+        (asked, as_the_board_has_it(&chat))
+    }
+
+    #[test]
+    fn a_bound_that_passes_on_a_prompt_is_given_again_once_it_is_answered() {
+        let (asked, answered) = asked_then_answered();
+        assert_eq!(asked, ASKING);
+        // The reporting turn shows the person a prompt, and its bound passes while it does:
+        // the prompt is theirs to answer, and the bound is owed.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        // Still showing: nothing.
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::Moved),
+            Ends::Hold
+        );
+        // They answer, and the reporting turn goes on: it is given the bound again, once.
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::Moved),
+            Ends::Hold
+        );
+        // The turn hangs after the answer: that bound ends it.
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
+            Ends::End
+        );
+        assert!(!ledger.ending(TASK));
+
+        // A prompt answered before the bound passes leaves nothing showing when it does.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
+            Ends::End
+        );
+
+        // Answered while the person reads the task: it waits as a held task, and is given the
+        // bound as they look away.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, answered, true, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(ledger.held_back(), [TASK]);
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
+            Ends::End
+        );
+
+        // A turn that ends after the answer is settled and ended as any other.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, ASKING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
     #[test]
     fn the_person_s_answer_to_a_question_the_chat_answered_changes_nothing() {
         let mut ledger = asked();
@@ -3967,6 +4123,72 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({"answered": {"from": "steward 3", "text": "go"}})
+        );
+    }
+
+    #[test]
+    fn a_turn_its_harness_begins_after_a_held_reporting_turn_is_a_later_turn() {
+        // Held with its reporting turn over, and the bound passes while it is held: nothing
+        // is owed, since the turn it was for is over.
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::Moved),
+            Ends::Hold
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, true, Looked::WaitedOut),
+            Ends::Hold
+        );
+        // Its harness then begins a turn by itself (a background job finished), with no
+        // prompt purlis hears. The person looks away and finds it working: a later turn,
+        // which has no bound, the same as one purlis heard begin. It is no longer held.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Hold
+        );
+        assert!(ledger.held_back().is_empty());
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        // And that turn's own end still ends it.
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Moved),
+            Ends::Settle
+        );
+        assert_eq!(
+            ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn an_ask_held_open_in_the_window_is_a_prompt_whatever_the_harness_said() {
+        // A permission hook holds its ask for the window, and the harness has said nothing of
+        // it: the board says running. The bound passes: the ask is the person's to answer.
+        let held = Seen {
+            ask_open: true,
+            ..RUNNING
+        };
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, held, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        assert_eq!(
+            ledger.end_step(TASK, held, false, Looked::Moved),
+            Ends::Hold
+        );
+        // Answered in the window: the ask goes, and the turn goes on. The bound is given again.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
+            Ends::End
         );
     }
 }
