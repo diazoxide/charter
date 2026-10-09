@@ -153,6 +153,27 @@ describe("a file more than one report names", () => {
     expect([...also.keys()]).toEqual([]);
   });
 
+  it("marks only tasks that ran at the same time as each other (#1520)", () => {
+    const at = (time: string) => `2026-10-08T${time}:00+00:00`;
+    const task = (dispatch: string, from: string, to: string) => [
+      line({ dispatch, n: 0, kind: "dispatched", at: at(from), task: dispatch }),
+      report(dispatch, { at: at(to), task: dispatch }),
+    ];
+    const also = namedByOthers(
+      drawn([
+        ...task("A", "09:00", "09:10"),
+        // Started while A ran.
+        ...task("C", "09:05", "09:20"),
+        // Long after both ended: a file it shares with them is not a clash.
+        ...task("B", "10:00", "10:05"),
+      ]),
+    );
+
+    expect(also.get("A")).toEqual([{ file: "src/app.rs", others: ["C"] }]);
+    expect(also.get("C")).toEqual([{ file: "src/app.rs", others: ["A"] }]);
+    expect(also.get("B")).toBeUndefined();
+  });
+
   it("says what it is: what another report names", () => {
     expect(alsoSaid({ file: "src/app.rs", others: ["lint"] })).toBe(
       "lint's report also names src/app.rs",

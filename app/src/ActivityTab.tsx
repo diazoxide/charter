@@ -63,7 +63,8 @@ type Said = { read?: Read; closed?: true; trouble?: string };
  * one whose text read like a credential, which purlis never kept (#1520).
  *
  * **A file another task's report also names is marked** (V100-68) on each of the two reports,
- * for tasks that worked in the same folder. It is what the reports say, and no more.
+ * for tasks that worked in the same folder at the same time. It is what the reports say, and no
+ * more.
  *
  * **It follows the work while it is open.** The timeline is read once. Every line the app
  * records after that arrives as an event and is added, so nothing is read again for it.
