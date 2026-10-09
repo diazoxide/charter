@@ -1102,6 +1102,24 @@ fn foundations_refused_write_is_read_by_the_path_it_names() {
             "{line}"
         );
     }
+    // A path holding a comma or a brace is read whole, and a file name in the description
+    // that looks like a key is not the path.
+    let odd = "/Users/dev/plane/workspaces/beta/a, b}c/x.txt";
+    let line = foundation(odd).replace(
+        "the file “p1120.txt”",
+        "the file “NSFilePath=/Users/dev/plane/workspaces/alpha/x”",
+    );
+    let found = detect_with_targets(&came_back("swift p.swift", "", &line), &place());
+    assert_eq!(found.len(), 1, "{line}");
+    assert_eq!(
+        found[0].0,
+        block(Operation::Write, Kind::ProjectFiles, false)
+    );
+    assert!(
+        format!("{:?}", found[0]).contains("a, b}c"),
+        "{:?}",
+        found[0]
+    );
     // In what the chat may write, the sandbox did not refuse it.
     let own = foundation(&format!("{CHAT}/out.txt"));
     assert!(detect(&came_back("x", "", &own), &place()).is_empty());

@@ -600,16 +600,18 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
     // Code=513 "…" UserInfo={NSFilePath=/x/y, NSUnderlyingError=0x… {Error
     // Domain=NSPOSIXErrorDomain Code=1 "Operation not permitted"}}`. 513 is a refused write, and
     // the underlying POSIX error says it was not permitted. A line without the path names
-    // nothing to sort, and is no block.
+    // nothing to sort, and is no block. The path is read from the last `NSFilePath=`, past the
+    // quoted description a file's own name is said in, to the next `, NS` key or the closing
+    // braces, so a path holding a comma or a brace is read whole.
     if line.contains("NSCocoaErrorDomain Code=513 ")
         && line.contains("NSPOSIXErrorDomain Code=1 \"Operation not permitted\"")
     {
-        let path = line
-            .split_once("NSFilePath=")?
-            .1
-            .split([',', '}'])
-            .next()?
-            .trim();
+        let rest = line.rsplit_once("NSFilePath=")?.1;
+        let path = match rest.find(", NS") {
+            Some(end) => &rest[..end],
+            None => rest.trim_end().trim_end_matches('}'),
+        }
+        .trim();
         return path.starts_with('/').then(|| {
             (
                 Operation::Write,
