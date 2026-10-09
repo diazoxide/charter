@@ -431,6 +431,27 @@ describe("the Chats section", () => {
     );
   });
 
+  it("says on the asking chat's row how many of its dispatches wait on memory (#1617)", async () => {
+    core([
+      chat(1, "alpha", { waiting_on_memory: 1 }),
+      chat(2, "alpha", { from: by(1, "task"), label: "drop commons" }),
+      chat(4, "beta", { persona: "devops", waiting_on_memory: 3 }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+
+    const one = await screen.findByTestId("on-memory-1");
+    expect(one.textContent).toBe("1 dispatch waits on memory");
+    // Where they are named, on the line's hover.
+    expect(one.getAttribute("title")).toContain("The Dispatches tab lists them under Not started.");
+    expect((await screen.findByTestId("on-memory-4")).textContent).toBe(
+      "3 dispatches wait on memory",
+    );
+    // A chat none of whose dispatches waits says nothing of memory.
+    expect(screen.queryByTestId("on-memory-2")).toBeNull();
+  });
+
   it("says a task's asker that waits to start after a launch is not open, not closed", async () => {
     core([
       chat(1, "alpha"),

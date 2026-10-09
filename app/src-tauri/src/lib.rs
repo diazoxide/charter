@@ -608,6 +608,11 @@ struct OpenChat {
     /// limit and where it is changed. Its row says "at its task limit" while it is set.
     #[specta(optional)]
     at_limit: Option<atlimit::AtLimit>,
+    /// How many of its dispatches wait until this machine has memory to spare (#1617): its row
+    /// says "1 dispatch waits on memory" beside the Dispatches tab's *Not started* list, which
+    /// names them. Only in a list of rows, and only where one waits; `null` otherwise.
+    #[specta(optional)]
+    waiting_on_memory: Option<u32>,
     /// The chat whose tab it has a pane in, by session, where it is not its tab's own chat
     /// (#1489). The window puts a task back beside the session that asked for it, where that
     /// session has a tab; any other chat comes back as a tab of its own.
@@ -825,6 +830,8 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let open_now = held.chats().open_now();
     // The limits' files, read at most once for each place and persona that asked (#1491).
     let mut limits = dispatched::RunningLimits::of(held, &open_now);
+    // What waits on memory, counted once for the whole list by the chat that asked (#1617).
+    let on_memory = held.held_dispatches().on_memory_by_chat();
     for open in open_now {
         let limit = limits.of_chat(&open);
         let running = limits.running(&open);
@@ -835,6 +842,7 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
         // (#1512): from what the clock kept, so no file is read for a row.
         chat.at_limit = atlimit::still(held, chat.session)
             .or_else(|| overlimit::tokens_shown(held, chat.session));
+        chat.waiting_on_memory = on_memory.get(&chat.session).copied();
         match chat
             .cwd
             .as_deref()
@@ -2266,6 +2274,7 @@ impl From<chats::Open> for OpenChat {
             tasks_limit: None,
             tasks_running: None,
             at_limit: None,
+            waiting_on_memory: None,
             beside: open.beside,
             pinned: open.pinned,
             label: open.label,

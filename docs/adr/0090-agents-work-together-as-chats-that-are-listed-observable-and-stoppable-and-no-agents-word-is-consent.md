@@ -524,7 +524,8 @@ stepped in, and not what was typed.
   the decision, after the grant. "Short" is the operating system's own verdict (macOS's
   critical memory pressure level; Linux's pressure stall information, else the memory
   available), and a machine purlis cannot read holds nothing. The dispatch is held, the asking
-  chat is told it waits, the Dispatches tab lists it, and it is decided again once memory
+  chat is told it waits (on the person's Allow too, #1617), the asking chat's row says how many
+  of its dispatches wait, the Dispatches tab lists it, and it is decided again once memory
   frees; after 10 minutes still short it starts nothing and the asking chat is told. The
   person's own dispatch from a chat's tab does not wait (D-1467-4, delegated).
 

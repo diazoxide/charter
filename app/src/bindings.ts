@@ -5343,6 +5343,12 @@ export type OpenChat = {
 	 */
 	at_limit?: AtLimit | null,
 	/**
+	 *  How many of its dispatches wait until this machine has memory to spare (#1617): its row
+	 *  says "1 dispatch waits on memory" beside the Dispatches tab's *Not started* list, which
+	 *  names them. Only in a list of rows, and only where one waits; `null` otherwise.
+	 */
+	waiting_on_memory?: number | null,
+	/**
 	 *  The chat whose tab it has a pane in, by session, where it is not its tab's own chat
 	 *  (#1489). The window puts a task back beside the session that asked for it, where that
 	 *  session has a tab; any other chat comes back as a tab of its own.

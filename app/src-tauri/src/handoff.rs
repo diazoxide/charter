@@ -148,8 +148,7 @@ fn task_dispatched(
         Ok(Dispatched::Held {
             from, to, waiting, ..
         }) => Answer::NeedsGrant { from, to, waiting },
-        Ok(Dispatched::WaitsOnMemory { to }) => match held.held_dispatches().wait_on_memory(wanted)
-        {
+        Ok(Dispatched::WaitsOnMemory { to }) => match waits_on_memory(held, wanted) {
             Ok(()) => Answer::WaitingOnMemory { to },
             Err(why) => no(why),
         },
@@ -212,12 +211,10 @@ pub fn answer(
                     from, to, waiting, ..
                 }) => Answer::NeedsGrant { from, to, waiting },
                 // Waits on memory, as a task does (#1467): opened once memory frees.
-                Ok(Dispatched::WaitsOnMemory { to }) => {
-                    match held.held_dispatches().wait_on_memory(&wanted) {
-                        Ok(()) => Answer::WaitingOnMemory { to },
-                        Err(why) => no(why),
-                    }
-                }
+                Ok(Dispatched::WaitsOnMemory { to }) => match waits_on_memory(held, &wanted) {
+                    Ok(()) => Answer::WaitingOnMemory { to },
+                    Err(why) => no(why),
+                },
                 Err(why) => no(why),
             }
         }
@@ -1734,6 +1731,24 @@ fn too_many_on_memory() -> String {
     )
 }
 
+/// **Holds `wanted` until memory frees** ([`HeldDispatches::wait_on_memory`]), and tells the
+/// window the asking chat's row moved: it says how many of its dispatches wait (#1617).
+fn waits_on_memory(held: &Held, wanted: &Wanted) -> Result<(), String> {
+    held.held_dispatches().wait_on_memory(wanted)?;
+    held.rows_changed();
+    Ok(())
+}
+
+/// What the asking chat is told beside [`purlis_core::handback::Answered::WaitingOnMemory`]
+/// (#1617): how long it may wait, and what then.
+fn still_short_after_the_wait() -> String {
+    format!(
+        "if this machine is still short on memory after {} minutes, nothing starts and this \
+         chat is told",
+        dispatchdecision::MEMORY_WAIT_MINUTES
+    )
+}
+
 /// How many dispatches the person kept blocked the Dispatches tab lists, newest kept.
 pub const KEPT_BLOCKED_LISTED: usize = 50;
 
@@ -1915,6 +1930,16 @@ impl HeldDispatches {
             .iter()
             .map(|one| (one.wanted.clone(), one.at.clone()))
             .collect()
+    }
+
+    /// How many dispatches wait on memory now, by the chat that asked for each (#1617): what
+    /// that chat's row says. Counted, and nothing of any brief copied.
+    pub(crate) fn on_memory_by_chat(&self) -> std::collections::HashMap<u32, u32> {
+        let mut by_chat = std::collections::HashMap::new();
+        for one in self.on_memory().iter() {
+            *by_chat.entry(one.wanted.chat).or_insert(0) += 1;
+        }
+        by_chat
     }
 
     /// `wanted` waited on memory past the bound and started nothing: listed, newest last, as
@@ -2924,17 +2949,21 @@ pub fn answered(
             // **Allowed, and the machine is short on memory** (#1467): it waits, as one let
             // through at once does, and is decided again once memory frees, its grant asked
             // again with the rest (D-1467-6): a grant the person kept still covers it, and
-            // one they took back meanwhile is not gone round. The chat is told when it starts
-            // or gives up, as it would have been.
-            Ok(Dispatched::WaitsOnMemory { .. }) => {
-                match held.held_dispatches().wait_on_memory(&wanted) {
-                    Ok(()) => {
-                        held.dispatch_grants().end_once(answer.pending.id);
-                        return;
-                    }
-                    Err(why) => (Answered::NotStarted, why),
+            // one they took back meanwhile is not gone round. The chat is told now that it
+            // waits (#1617), and again when it starts or gives up, as it would have been.
+            Ok(Dispatched::WaitsOnMemory { .. }) => match waits_on_memory(held, &wanted) {
+                Ok(()) => {
+                    held.dispatch_grants().end_once(answer.pending.id);
+                    tell_the_asker(
+                        held,
+                        &wanted,
+                        Answered::WaitingOnMemory,
+                        &still_short_after_the_wait(),
+                    );
+                    return;
                 }
-            }
+                Err(why) => (Answered::NotStarted, why),
+            },
             Err(not) => {
                 row = not.row;
                 (Answered::NotStarted, not.why)
@@ -3066,6 +3095,7 @@ pub fn memory_freed(
         return;
     }
     let short = held.held_dispatches().memory().read().is_short();
+    let before = held.held_dispatches().on_memory_by_chat();
     for (id, since) in waiting {
         if short && now.saturating_duration_since(since) < dispatchdecision::MEMORY_WAIT {
             continue;
@@ -3114,6 +3144,10 @@ pub fn memory_freed(
             Ok(Dispatched::Held { .. }) => {}
             Err(not) => not_started_after_holding(held, &one.wanted, persona, not.row, &not.why),
         }
+    }
+    // What the asking chats' rows say of what waits (#1617) moved: the window reads them again.
+    if held.held_dispatches().on_memory_by_chat() != before {
+        held.rows_changed();
     }
 }
 

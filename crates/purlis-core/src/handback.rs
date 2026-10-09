@@ -85,6 +85,10 @@ pub enum Answered {
     /// The person allowed it, and it still was not started: a limit filled meanwhile, or the
     /// start itself was refused. [`Handback::summary`] is why.
     NotStarted,
+    /// The person allowed it, and this machine is short on memory (#1617): nothing has started
+    /// yet, and it starts by itself once memory frees. The chat is told again, in one of the
+    /// words above, when it starts or gives up.
+    WaitingOnMemory,
 }
 
 /// What purlis says of a chat the operator stopped ([`Handback::stopped`]).
@@ -1028,7 +1032,7 @@ fn tasks_report(
 ///
 /// **The detail is quoted as data all the same.** The directory these wait in is writable by
 /// anything running as the person, so a file here is never proof purlis wrote it: the heading
-/// is one of three fixed sentences around a name held to a label's rule, and whatever else
+/// is one of four fixed sentences around a name held to a label's rule, and whatever else
 /// the file says stays behind `> `.
 fn answer_on_a_dispatch(report: &Handback, answered: Answered, quoted: &[String]) -> String {
     let task = &report.from;
@@ -1045,6 +1049,11 @@ fn answer_on_a_dispatch(report: &Handback, answered: Answered, quoted: &[String]
         Answered::NotStarted => format!(
             "⬢ **The person allowed your dispatch, and `{task}` still was not started.** Why \
              is quoted below; dispatch it again once that is settled."
+        ),
+        Answered::WaitingOnMemory => format!(
+            "⬢ **The person allowed your dispatch: `{task}` waits until this machine has \
+             memory to spare.** This chat is told on a later turn when it starts or gives up; \
+             there is nothing to dispatch again."
         ),
     };
     format!("{heading}\n{}", quoted.join("\n"))
@@ -1138,6 +1147,46 @@ mod tests {
     }
 
     #[test]
+    fn an_allowed_dispatch_that_waits_on_memory_is_told_it_waits_and_that_it_will_hear_more() {
+        // #1617: allowed, and the machine is short on memory. The chat hears it at once, not
+        // only when the dispatch later starts or gives up.
+        let waiting = context(
+            &[answered(
+                Answered::WaitingOnMemory,
+                "if memory is still short after 10 minutes, nothing starts",
+            )],
+            false,
+        )
+        .expect("context");
+        assert_eq!(
+            waiting,
+            "⬢ **The person allowed your dispatch: `check the queue` waits until this machine \
+             has memory to spare.** This chat is told on a later turn when it starts or gives \
+             up; there is nothing to dispatch again.\n\
+             > if memory is still short after 10 minutes, nothing starts"
+        );
+    }
+
+    #[test]
+    fn a_new_answer_reads_back_and_the_older_answers_keep_the_words_they_were_written_in() {
+        // Each answer as it is written to the store; the older three as every file before the
+        // new one has them, so a file left by an earlier run still reads.
+        for (how, word) in [
+            (Answered::Started, "\"started\""),
+            (Answered::KeptBlocked, "\"kept_blocked\""),
+            (Answered::NotStarted, "\"not_started\""),
+            (Answered::WaitingOnMemory, "\"waiting_on_memory\""),
+        ] {
+            assert_eq!(serde_json::to_string(&how).unwrap(), word);
+            assert_eq!(serde_json::from_str::<Answered>(word).unwrap(), how);
+        }
+        let plane = tempfile::tempdir().unwrap();
+        let waiting = answered(Answered::WaitingOnMemory, "detail");
+        leave(plane.path(), For::Chat(5), &waiting).unwrap();
+        assert_eq!(take(plane.path(), For::Chat(5)), vec![waiting]);
+    }
+
+    #[test]
     fn an_answer_s_detail_that_spells_an_instruction_stays_quoted_on_every_line() {
         // The directory is writable by anything running as the person, so a file that says
         // it is purlis's answer is never proof of it: whatever it adds is data, line by line.
@@ -1179,6 +1228,7 @@ mod tests {
                 Answered::Started,
                 Answered::KeptBlocked,
                 Answered::NotStarted,
+                Answered::WaitingOnMemory,
             ] {
                 let file = Handback {
                     from: forged.to_owned(),
