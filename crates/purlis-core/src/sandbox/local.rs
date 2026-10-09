@@ -135,6 +135,11 @@ struct OnDisk {
     /// been accepted before, with the reason.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_gone: Vec<Gone>,
+    /// Each persona whose committed hosts you allowed on this machine (#1362), with the digest
+    /// of the list you were shown ([`super::persona::digest`]): the only place such an Allow is
+    /// kept. A list that changed since grants nothing until it is allowed again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    persona_hosts_mine: Vec<PersonaHostsAllowed>,
 }
 
 /// One dispatch grant that holds in one workspace only (#1505), as this file keeps it.
@@ -239,6 +244,20 @@ pub struct Known {
     pub away: bool,
 }
 
+/// One persona whose hosts you allowed on this machine (#1362): its name, the digest of what
+/// the Notice showed you, and whether that has been seen to change since — after which it
+/// grants nothing, even should the list come back (D-1362-13).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PersonaHostsAllowed {
+    pub persona: String,
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed: bool,
+}
+
+/// What a [`Made`] record and the audit call your Allow of a persona's hosts (#1362).
+pub const PERSONA_HOSTS: &str = "persona-hosts";
+
 /// One dispatch grant of yours, as the file keeps it: chats running as `asking` may dispatch
 /// to `target`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -269,10 +288,10 @@ pub const VAULT: &str = "vault";
 /// it: what Settings' Granted list says of it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Made {
-    /// `host`, `write` or `vault`.
+    /// `host`, `write`, `vault` or `persona-hosts`.
     pub what: String,
     /// The host or the folder, as the sandbox writes it; a vault and the persona it was allowed
-    /// for, as [`VaultGrant::target`] says them.
+    /// for, as [`VaultGrant::target`] says them; the persona whose hosts were allowed.
     pub target: String,
     /// `you` or `project`.
     pub level: String,
@@ -452,8 +471,8 @@ pub struct HostsChange {
 /// and in a project whose chats are not sandboxed, where its hosts reach nothing. A project
 /// first seen on this machine with hosts is a change: nothing widens unseen. Order is no change.
 ///
-/// A persona's own hosts (#1362) are committed too, so they are told the same way, each named
-/// with the persona whose chats reach it ([`Plane::granted_hosts`]).
+/// A persona's own hosts (#1362) are not told here: they reach nothing on this machine until
+/// the person allows them, which their own Notice asks ([`super::persona::shown`]).
 ///
 /// **Held to an administrator's policy** (#1423): a host policy locks out reaches no chat, so
 /// the Notice never names it as one that does. A policy that comes to lock a host out, or lets
@@ -464,7 +483,15 @@ pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
     let locks = super::policy::Locks::of(root);
     plane.in_force(&locks)?;
     let now = plane.granted_hosts(&locks);
-    let seen = read(root).hosts_seen.unwrap_or_default();
+    // A host never holds a space: an entry that does is an older purlis's `<host> for <persona>
+    // chats`, from before a persona's hosts were asked for apart (D-1362-7), and is no host of
+    // the project's to say was taken away.
+    let seen: Vec<String> = read(root)
+        .hosts_seen
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|one| !one.contains(' '))
+        .collect();
     let added: Vec<String> = now
         .iter()
         .filter(|one| !seen.contains(one))
@@ -753,6 +780,55 @@ pub fn grant_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
             held.vaults_mine.push(grant);
         }
     })
+}
+
+// ---- the persona hosts you allowed here (#1362) ----------------------------------------------
+
+/// Each persona whose hosts you allowed in the project at `root` on this machine, with the
+/// digest of what you allowed. A file that cannot be read allows nothing.
+pub fn allowed_persona_hosts(root: &Path) -> Vec<PersonaHostsAllowed> {
+    read(root).persona_hosts_mine
+}
+
+/// Marks your Allow of `persona`'s hosts as one whose list has changed since: it grants
+/// nothing from now on, and stays listed, with Revoke, until it is allowed anew or revoked.
+pub fn persona_hosts_changed(root: &Path, persona: &str) -> io::Result<()> {
+    change(root, |held| {
+        for one in &mut held.persona_hosts_mine {
+            if one.persona == persona {
+                one.changed = true;
+            }
+        }
+    })
+}
+
+/// Records that you allowed `persona`'s hosts as the list whose digest is `digest`, replacing
+/// any Allow of an older list: the arrival Notice's Allow, checked by
+/// [`super::persona::shown_now`] first, never a chat (a sandboxed chat cannot write this file,
+/// and no line on the hook channel reaches this).
+pub fn allow_persona_hosts(root: &Path, persona: &str, digest: &str) -> io::Result<()> {
+    change(root, |held| {
+        held.persona_hosts_mine.retain(|one| one.persona != persona);
+        held.persona_hosts_mine.push(PersonaHostsAllowed {
+            persona: persona.to_owned(),
+            digest: digest.to_owned(),
+            changed: false,
+        });
+    })
+}
+
+/// Takes back your Allow of `persona`'s hosts: Settings' Revoke. Answers whether there was one.
+/// A chat already running keeps what it started with until it starts again.
+pub fn revoke_persona_hosts(root: &Path, persona: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.persona_hosts_mine.len();
+        held.persona_hosts_mine.retain(|one| one.persona != persona);
+        was = held.persona_hosts_mine.len() != before;
+        held.granted
+            .retain(|made| !(made.what == PERSONA_HOSTS && made.target == persona));
+    })?;
+    Ok(was)
 }
 
 // ---- your dispatch grants, and the project's as you were told of them (#1437) ----------------

@@ -99,6 +99,19 @@ dispatch ships (ADR 0090 as amended, change 3), a chat that another chat started
 dispatch grant starts with its own persona's hosts, because the grant is the person's yes to
 that, and D-1362-5's hold is retired for it. Until then a handoff holds as written above.
 
+*Amended 2026-10-09 (#1362; D-1362-7):* **a persona's hosts are in force on a machine only once
+the person there allowed them, bound to the list they were shown.** "Told once to each
+teammate" above becomes "asked on each machine" for the Persona level. A persona's hosts are
+committed settings a teammate can change, and they are the hosts that reach past the presets
+into private networks, so a pull alone never widens what a chat reaches. The project view
+shows each persona's list as a chat would reach it, and Allow keeps the digest of exactly that
+list on this machine, and of whether the persona is the project's default (whose hosts then
+reach every chat that names no persona; the Allow says so). A list or default-ness that changes
+in any way after it was allowed grants none of it until it is allowed again; never a part,
+never the old one, and not even when it later changes back. Settings has the same Allow. The Allow is the window's alone,
+audited, listed in Settings' Granted list credited to the persona, and revocable there. The
+project's own hosts keep the rule above: they apply and are told.
+
 ### 2. One schema, compiled per harness
 
 The policy is neutral data. Each harness gets an adapter that compiles it, in the same shape as

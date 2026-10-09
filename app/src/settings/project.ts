@@ -54,6 +54,7 @@ import {
   lockedRow,
   sandboxControls,
   sandboxNotes,
+  personaHostsRows,
   sandboxReasons,
   sandboxSentence,
 } from "./sandbox";
@@ -547,7 +548,10 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
         same(one.key, SANDBOX_MODE) || one.kind === "status" ? { ...one, oneWay: true } : one,
       ),
       ...(sharedOk ? { collection: hostsCollection(read.shared, "hosts") } : {}),
-      after: sharedOk ? sandboxReasons(read.shared, read.local, read.sandbox) : [],
+      after: [
+        ...(read.plane !== undefined ? personaHostsRows(read.plane, read.sandbox) : []),
+        ...(sharedOk ? sandboxReasons(read.shared, read.local, read.sandbox) : []),
+      ],
     },
     ...(localOk
       ? [

@@ -204,6 +204,7 @@ function core({
   hosts?: string[];
 } = {}) {
   const sent: { which: SettingsWhich; edits: SettingsEdit[] }[] = [];
+  const allowed: unknown[] = [];
   const files: Record<SettingsWhich, SettingsFile> = {
     shared: fileOf("shared", sharedName, shared, hosts),
     local: fileOf("local", localName, []),
@@ -227,6 +228,9 @@ function core({
           return null;
         case "sandbox_state":
           return sandbox;
+        case "allow_persona_hosts":
+          allowed.push(given);
+          return sandbox;
         case "save_project_settings": {
           const which = given.which as SettingsWhich;
           const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
@@ -246,7 +250,7 @@ function core({
     },
     { shouldMockEvents: true },
   );
-  return { sent };
+  return { sent, allowed };
 }
 
 beforeEach(() => {
@@ -382,10 +386,27 @@ describe("Settings › Project › Sandbox", () => {
   });
 
   it("names a persona's own hosts", async () => {
-    core({
+    const { allowed } = core({
       sandbox: state({
         persona_hosts: [
-          { persona: "devops", hosts: ["10.0.0.5:6443", "charter.toml.example.com"] },
+          {
+            persona: "devops",
+            hosts: ["10.0.0.5:6443", "charter.toml.example.com"],
+            reached: ["10.0.0.5:6443", "charter.toml.example.com"],
+            digest: "d1",
+            allowed: true,
+            default: false,
+            waiting: false,
+          },
+          {
+            persona: "qa",
+            hosts: ["qa.example"],
+            reached: ["qa.example"],
+            digest: "d2",
+            allowed: false,
+            default: false,
+            waiting: false,
+          },
         ],
       }),
       sharedName: "purlis.toml",
@@ -398,9 +419,24 @@ describe("Settings › Project › Sandbox", () => {
         "A chat as devops also reaches 10.0.0.5:6443 and charter.toml.example.com.",
       ),
     );
+    // #1362, D-1362-7: a persona's hosts reach nothing here until they are allowed.
     expect(page).toHaveTextContent(
-      "A chat that names no persona reaches its default persona's hosts. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
+      "A chat as qa reaches qa.example only once you allow them on this machine, below.",
     );
+    expect(page).toHaveTextContent(
+      "A chat that names no persona reaches its default persona's hosts, once they are allowed on this machine. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
+    );
+    // Settings has the same Allow as the project's notice: the same call, the same digest.
+    await userEvent.click(within(page).getByRole("button", { name: "Allow for qa chats" }));
+    await waitFor(() =>
+      expect(allowed).toContainEqual({ plane: PLANE, persona: "qa", digest: "d2" }),
+    );
+    expect(
+      await within(page).findByText(
+        "Allowed on this machine. Chats started after you allow them reach them; a chat already running takes them when it restarts.",
+      ),
+    ).toBeVisible();
+    expect(within(page).queryByRole("button", { name: "Allow for devops chats" })).toBeNull();
   });
 
   it("says a change applies to a chat from its next start, and how to restart one", async () => {
@@ -614,7 +650,17 @@ describe("values an administrator's policy locks (#1343)", () => {
   it("says which hosts policy allows, and that a persona's own are locked out", async () => {
     core({
       sandbox: state({
-        persona_hosts: [{ persona: "devops", hosts: ["10.0.0.5:6443"] }],
+        persona_hosts: [
+          {
+            persona: "devops",
+            hosts: ["10.0.0.5:6443"],
+            reached: [],
+            digest: "d",
+            allowed: false,
+            default: false,
+            waiting: false,
+          },
+        ],
         policy: policy({ hosts: ["*.corp.example"], persona_hosts: true }),
       }),
     });

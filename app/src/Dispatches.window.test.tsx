@@ -242,6 +242,7 @@ function core(
         persona_hosts: [],
         resume_holds: false,
         persona_hosts_locked: null,
+        persona_hosts_wait: false,
         dispatches:
           given.path === ASKERS_RECORD
             ? [

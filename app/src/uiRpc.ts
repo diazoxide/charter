@@ -319,6 +319,11 @@ export const commands = {
 	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
 	 */
 	locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (D-1362-7):
+	 *  lifting the hold alone then reaches none of them.
+	 */
+	waits_here: boolean,
 } | null, string>(__TAURI_INVOKE("persona_grants_held", { plane, session })),
 	/**
 	 *  The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
@@ -714,6 +719,11 @@ export const commands = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (#1362,
+	 *  D-1362-7): until then no chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_wait: boolean,
 	/**
 	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
 	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,
@@ -3799,7 +3809,12 @@ export type GrantWhat =
  *  persona (#1430). Granted from a refused vault's Notice (`crate::vaultroute`), never from
  *  a block's Allow.
  */
-"vault";
+"vault" | 
+/**
+ *  A persona's committed hosts, which you allowed on this machine (#1362). Allowed from
+ *  their own Notice (`allow_persona_hosts`), never from a block's Allow.
+ */
+"persona-hosts";
 
 /**  The folders chats may be granted, and those just dropped from the list. */
 export type GrantableFolders = {
@@ -3833,6 +3848,11 @@ export type GrantsHeld = {
 	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
 	 */
 	locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (D-1362-7):
+	 *  lifting the hold alone then reaches none of them.
+	 */
+	waits_here: boolean,
 };
 
 /**  What became of a reference handed to a chat. */
@@ -4915,10 +4935,36 @@ export type PersonaChatState =
 /**  Its program ended before it reported, and the chat that asked was told it failed. */
 "ended";
 
-/**  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`). */
+/**
+ *  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`),
+ *  and whether the person allowed them on this machine (#1362, D-1362-7).
+ */
 export type PersonaHosts = {
 	persona: string,
+	/**  Each as the project's file lists it. */
 	hosts: string[],
+	/**
+	 *  Those a chat would reach, which an Allow allows: none an administrator's policy locks
+	 *  out. Empty where policy forbids persona hosts, and then nothing is asked.
+	 */
+	reached: string[],
+	/**  What an Allow of exactly this list sends back (`allow_persona_hosts`). */
+	digest: string,
+	/**
+	 *  Whether the person allowed exactly this list here. Until then no chat reaches them, and
+	 *  the project view's Notice asks.
+	 */
+	allowed: boolean,
+	/**
+	 *  Whether it is the project's default persona, so its hosts reach every chat that names
+	 *  no persona too: part of what an Allow is of (D-1362-12).
+	 */
+	default: boolean,
+	/**
+	 *  Whether an Allow was kept here and the list, or its default-ness, has changed since: it
+	 *  grants nothing, and the Notice asks anew (D-1362-13).
+	 */
+	waiting: boolean,
 };
 
 /**
@@ -5816,9 +5862,9 @@ export type SandboxGrant = {
 	/**  What Revoke is sent by. */
 	id: string,
 	what: GrantWhat,
-	/**  The host, the folder, or the vault's name. */
+	/**  The host, the folder, the vault's name, or a persona's hosts. */
 	target: string,
-	/**  For a vault, the persona whose chats may use it. */
+	/**  For a vault, the persona whose chats may use it; for a persona's hosts, that persona. */
 	persona: string | null,
 	level: GrantLevel,
 	/**
@@ -5835,6 +5881,16 @@ export type SandboxGrant = {
 	 *  writes nothing while the policy stands. The list marks it "Locked by policy".
 	 */
 	locked: string | null,
+	/**
+	 *  For a persona's hosts you allowed whose list has changed since: why it grants nothing.
+	 *  It stays listed, with Revoke, and never returns to force unless allowed anew.
+	 */
+	waiting: string | null,
+	/**
+	 *  For a persona's hosts: the persona is the project's default, so they reach every chat
+	 *  that names no persona too.
+	 */
+	for_no_persona: boolean,
 };
 
 /**
@@ -6091,6 +6147,11 @@ export type SessionRecordView = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (#1362,
+	 *  D-1362-7): until then no chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_wait: boolean,
 	/**
 	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
 	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,

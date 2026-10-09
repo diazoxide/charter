@@ -177,6 +177,8 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "restart_chat",
         "start_chat_fresh",
         "ask_chat_restart",
+        // Widens what a persona's chats reach on this machine (#1362).
+        "allow_persona_hosts",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
@@ -186,17 +188,19 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     // presets Notice (#1385): nothing else is kept from a link by it.
     assert_eq!(ui::STANDING_DISPATCH.len(), 25);
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
-    // And the person's acts named beside them: a task's merge and discard (#1511), and one
-    // answer to several tasks' sandbox block (#1508).
+    // And the person's acts named beside them: a task's merge and discard (#1511), one answer
+    // to several tasks' sandbox block (#1508), and the Allow of a persona's hosts on this
+    // machine (#1362).
     for command in [
         "task_branch_merge",
         "dispatch_worktree_discard",
         "allow_sandbox_block_for_tasks",
         "keep_sandbox_block_for_tasks",
+        "allow_persona_hosts",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 1 + 2 + 2);
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 1 + 2 + 2 + 1);
 }
 
 #[tokio::test]

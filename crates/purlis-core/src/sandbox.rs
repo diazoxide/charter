@@ -249,13 +249,14 @@ impl Plane {
     }
 
     /// The hosts that reach chats here because this file says so, under `locks`: its own
-    /// `[sandbox] hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts, then each
-    /// persona's own as `<host> for <persona> chats` (#1362), so the Notice says which chats a
-    /// host reaches — what the one-time Notice of a change names (#1341).
+    /// `[sandbox] hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts — what the
+    /// one-time Notice of a change names (#1341). A persona's own hosts (#1362) are not among
+    /// them: they reach nothing until the person on each machine allows them, which a Notice of
+    /// their own asks ([`persona::shown`], D-1362-7).
     ///
-    /// **Only what a chat reaches** (#1423): a host an administrator's policy locks out, a
-    /// forge's while policy turns the `forge` preset off, and a persona's where policy forbids
-    /// a persona's own, is not named, as [`Compiled::granted`] grants none of them.
+    /// **Only what a chat reaches** (#1423): a host an administrator's policy locks out, and a
+    /// forge's while policy turns the `forge` preset off, is not named, as [`Compiled::granted`]
+    /// grants neither.
     pub fn granted_hosts(&self, locks: &policy::Locks) -> Vec<String> {
         let Some(policy) = self.in_force(locks) else {
             return Vec::new();
@@ -282,15 +283,6 @@ impl Plane {
                     out.push(host);
                 }
             }
-        }
-        for (persona, grants) in &policy.personas {
-            out.extend(
-                grants
-                    .hosts
-                    .iter()
-                    .filter(|host| reaches(host, hosts::Level::Persona))
-                    .map(|host| format!("{host} for {persona} chats")),
-            );
         }
         out
     }
@@ -1504,8 +1496,9 @@ impl Compiled {
 
     /// `policy`, for a chat in `plane` at `root` running as `persona`, on `machine`: its
     /// presets' hosts, then the hosts in force at every level ([`hosts::in_force`]): the
-    /// project's, this machine's, then the persona's (#1362). A chat on another persona, or on
-    /// none, gets no persona's hosts.
+    /// project's, this machine's, then the persona's (#1362), those only as the person here
+    /// allowed them ([`persona::in_force_here`]). A chat on another persona, or on none, gets
+    /// no persona's hosts.
     pub fn of(
         policy: &Policy,
         plane: &Plane,
@@ -1543,10 +1536,9 @@ impl Compiled {
             ..policy.clone()
         };
         let mut reached = hosts(&policy.egress, plane, &locks);
-        let personas = persona::of(&policy.personas, persona)
-            .map(|grants| grants.hosts.as_slice())
-            .unwrap_or_default();
-        for one in granted_hosts(policy, root, personas, &chat.hosts, &locks) {
+        // A persona's hosts only as the person on this machine allowed them (D-1362-7).
+        let personas = persona::in_force_here(root, &policy.personas, persona, &locks);
+        for one in granted_hosts(policy, root, &personas, &chat.hosts, &locks) {
             let spelled = one.host.to_string();
             if !reached.contains(&spelled) {
                 reached.push(spelled);
