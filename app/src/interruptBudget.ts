@@ -2,6 +2,8 @@
  * **W10's interrupt budget** (DS-9, #631): at most three prompts stand between a new machine and
  * the first answered agent turn. It is part of ST9's definition of done, and the first run's
  * scenario tests (`FirstRun.test.tsx`) count every prompt each path shows and fail above it.
+ * The same budget holds on every later way back to a chat (#1078): a relaunch, a restart to
+ * update, someone else's project and a handoff (`interruptBudget.flows.test.tsx`).
  *
  * **A prompt is what stops the operator until they answer it**, told apart by what the page says
  * it is, never by how it is drawn:
@@ -20,11 +22,16 @@
  * **What it cannot see**, so a review has to:
  *
  * - a question whose group is named without a "?" ("Pick a forge");
- * - a toast or a `status` line that carries an action the operator has to take;
+ * - a toast or a `status` line that carries an action the operator has to take, such as a
+ *   dispatch grant's Notice (`interruptBudget.flows.test.tsx` names that one by hand);
  * - a native OS dialog (tauri-plugin-dialog, such as the folder picker), which is not on the
  *   page — only the real app sees one, which is why FR-1's clean-machine run should count too;
  * - a second prompt shown at the same moment as one with the same role and name, which counts
  *   once.
+ *
+ * **An OS notification is not a prompt** (#1078, D-1078-1), before the first answered turn or
+ * after it: a needs-you notification is not on the page and answers nothing. It points at a
+ * prompt that is, and that one is counted where it is shown.
  *
  * Test-only: nothing in the window imports this.
  */
