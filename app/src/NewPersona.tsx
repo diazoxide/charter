@@ -74,7 +74,7 @@ export function NewPersona({
         >
           <Dialog.Title>New persona</Dialog.Title>
           <p className="where">
-            in <code>{plane}/personas/</code>, committed with the plane
+            in <code>{plane}/personas/</code>, committed with the project
           </p>
 
           <form

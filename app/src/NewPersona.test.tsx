@@ -49,6 +49,13 @@ describe("the new-persona dialog", () => {
     expect(create).toHaveBeenCalledWith("qa", "QA Engineer", null, "steward");
   });
 
+  it("says where the persona is made, committed with the project (#1192)", () => {
+    const { dialog } = draw();
+    expect(within(dialog).getByText(/committed with the project/)).toHaveTextContent(
+      "in /home/dev/plane/personas/, committed with the project",
+    );
+  });
+
   it("says the core's refusal in the dialog", () => {
     const { dialog } = draw({ trouble: "persona 'qa' already exists (personas/qa/persona.md)." });
     expect(within(dialog).getByRole("alert")).toHaveTextContent("already exists");
