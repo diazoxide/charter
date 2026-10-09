@@ -24,17 +24,12 @@ each of the five in a few lines.
 
 ## 2. Fold what lasts into workspace.md
 
-In a workspace, move what should outlive this session into the section of its `workspace.md`
-it belongs to, with purlis's tools, one entry per call:
+In a workspace, open its `workspace.md`. Move what should outlive this session into the section
+it belongs to:
 
-- a decision every later chat should act on → `workspace_section` with `decisions`
-  (`## Context & decisions`);
-- a term this work coined → `workspace_section` with `glossary` (`## Glossary`);
-- a changed goal → `workspace_vision`.
-
-purlis writes them for this chat, keeping what the sections already hold. A harness without
-purlis's tools edits those sections of `workspace.md` and runs `purlis workspace vision "<the
-goal>"`.
+- a decision every later chat should act on → `## Context & decisions`;
+- a term this work coined → `## Glossary`;
+- a changed goal → `purlis workspace vision "<the goal>"`.
 
 Leave `## Sessions` alone; that line is purlis's. At the plane root there is no `workspace.md`; a
 lesson for every persona goes to `purlis persona remember <persona> --shared "<fact>"`. Done when
