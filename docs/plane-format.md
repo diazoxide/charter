@@ -4307,6 +4307,29 @@ winning while it exists (`charter/harness/claude_code.py:221`).
   `charter/gitconfig.py:61`); relative values resolve against the **git directory**
   (`charter/gitconfig.py:94`).
 
+**Git config a clone or worktree made for a chat does not read.** A clone or a worktree the **app** makes for a sandboxed chat (`purlis clone` and `purlis
+worktree add` run in a chat, ADR 0067 §2, #1335) runs git with **none of your git config**: no
+global file (`~/.gitconfig`, `~/.config/git/config`) and no system file. Only your
+`user.name` and `user.email` are passed on, on the command line. Your config routinely defines
+programs a repository can ask git to run, and git run by the app runs outside the chat's
+sandbox, so none is read. The same command in your own terminal reads your config as git
+always does. Two differences show (#1413):
+
+- **Filters do not run.** A repository whose `.gitattributes` names a filter (`filter=lfs`
+  for Git LFS, or one of its own) is checked out as stored: for LFS, small pointer files in
+  place of the real content. The answer says so for each filter the top `.gitattributes`
+  names, read as the checkout's `HEAD` commits it (a regular file of at most 64 KiB; the
+  working tree, which the chat writes, is never read). For LFS, run `git lfs pull` in the checkout, from the chat or your terminal, to
+  fetch the content.
+- **Network settings do not apply.** `http.proxy`, `http.sslCAInfo`, `http.sslCAPath`,
+  `http.sslVerify`, `http.sslCert`, `http.sslKey`, `http.cookieFile`, `http.extraHeader` (each
+  also as `http.<url>.*`) and `url.<base>.insteadOf`
+  rewrites are not read, so a clone can fail where your terminal's succeeds. When a clone made
+  for a chat fails, purlis reads your global config files to see whether one of these keys
+  would have changed the clone's route, and names the key, never its value. It reads them only
+  to tell you and never applies them. Clone it in your own terminal (`purlis clone <repo>`)
+  instead.
+
 ### 2d. Charter-private caches in this area
 
 ### `.charter/cache/harness-wiring.json`

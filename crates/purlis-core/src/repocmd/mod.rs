@@ -42,6 +42,7 @@ pub mod reachable;
 pub mod status;
 mod submodules;
 pub mod sync;
+pub mod unread;
 
 /// One line of what a command says, in charter's four voices.
 ///
