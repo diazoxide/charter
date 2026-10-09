@@ -282,8 +282,11 @@ impl Search {
             }
             if self.walking.is_none() {
                 let (plane, named) = &self.places[self.at];
-                match walking(plane, named) {
-                    Ok(walk) => self.walking = Some(walk),
+                match walking(plane, named, stop) {
+                    Ok(Some(walk)) => self.walking = Some(walk),
+                    // Called off while git listed the branch: the place is listed again by the
+                    // next page, so a stop costs nothing it had found.
+                    Ok(None) => return Ended::Stopped,
                     Err(why) => {
                         heard(Searched::Refused { at: self.at, why });
                         self.at += 1;
@@ -626,11 +629,16 @@ fn file_hits(
 /// an agent can plant as a link to a device or a FIFO, and reading one would follow it. The
 /// walk descends only into a folder that holds an offered path, so `target/` and
 /// `node_modules/` are never walked, and it opens nothing but folders.
-fn walking(plane: &Path, named: &Named) -> Result<Walking, String> {
+///
+/// **The listing hears `stop`** (#1137): `Ok(None)` when it was raised while git listed.
+fn walking(plane: &Path, named: &Named, stop: &AtomicBool) -> Result<Option<Walking>, String> {
     let branch = named.branch();
-    let ready = || -> Result<Walking, Refused> {
+    let ready = || -> Result<Option<Walking>, Refused> {
         let folder = super::folder_of(plane, branch)?;
-        let offered = std::sync::Arc::new(super::files_in(&folder, branch)?);
+        let Some(offered) = super::files_in_until(&folder, branch, stop)? else {
+            return Ok(None);
+        };
+        let offered = std::sync::Arc::new(offered);
         let unreadable = |e: std::io::Error| Refused::Unreadable {
             what: branch.called().to_string(),
             why: e.to_string(),
@@ -675,13 +683,13 @@ fn walking(plane: &Path, named: &Named) -> Result<Walking, String> {
                     .is_ok_and(|inside| holds_offered(&listed, &super::slashed(inside)))
             })
             .build();
-        Ok(Walking {
+        Ok(Some(Walking {
             base,
             held,
             offered,
             walk,
             unheard: VecDeque::new(),
-        })
+        }))
     };
     ready().map_err(|refused| refused.to_string())
 }
@@ -875,6 +883,73 @@ mod tests {
             .or_else(|| panicked.downcast_ref::<String>().cloned())
             .unwrap_or_default();
         assert!(said.contains("a reader panicked"), "{said:?}");
+        drop(dir);
+    }
+
+    /// #1137: a branch's listing hears the page's stop. A `.gitignore` that is a FIFO holds
+    /// `git ls-files --exclude-standard` in its open until the git deadline (30 s); a raised
+    /// stop ends that git and the page answers `Stopped` at once, keeping its place.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_ends_a_branch_listing_held_on_a_fifo_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(plane.join("charter.toml"), "schema = 1\n").unwrap();
+        let clone = plane.join("workspaces/alpha/thing");
+        std::fs::create_dir_all(&clone).unwrap();
+        let ran = crate::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone)
+                .args(["init", "-q"])
+                .env("GIT_CONFIG_GLOBAL", "/dev/null"),
+        )
+        .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+        std::fs::write(clone.join("a.txt"), "needle\n").unwrap();
+        let made = crate::forklock::output(
+            std::process::Command::new("mkfifo").arg(clone.join(".gitignore")),
+        )
+        .unwrap();
+        assert!(made.status.success(), "{made:?}");
+
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let raised = std::sync::Arc::clone(&stop);
+        let searching = std::thread::spawn(move || {
+            let scope = [Place {
+                plane: &plane,
+                branch: Branch::repo("alpha", "thing"),
+            }];
+            let mut search = search(&scope, "needle", SearchOptions::default()).unwrap();
+            let mut refused = Vec::new();
+            let ended = search.more(usize::MAX, &stop, &mut |heard| {
+                if let Searched::Refused { why, .. } = heard {
+                    refused.push(why);
+                }
+            });
+            (ended, refused)
+        });
+        // Long enough for git to be held in the FIFO's open.
+        std::thread::sleep(Duration::from_millis(500));
+        let raised_at = Instant::now();
+        raised.store(true, Ordering::Relaxed);
+        while !searching.is_finished() {
+            assert!(
+                raised_at.elapsed() < Duration::from_secs(10),
+                "the listing ran on past the stop"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (ended, refused) = searching.join().unwrap();
+        // The stop asks git first and kills it only after its grace, so a second's answer
+        // plus that grace is the bound, never the 30 s deadline.
+        assert!(
+            raised_at.elapsed() < Duration::from_secs(1) + Duration::from_secs(2),
+            "{:?}",
+            raised_at.elapsed()
+        );
+        assert_eq!(ended, Ended::Stopped);
+        assert!(refused.is_empty(), "a stop is not a refusal: {refused:?}");
         drop(dir);
     }
 }
