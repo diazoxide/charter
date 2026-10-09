@@ -81,6 +81,7 @@ fn a_refusal_is_kept_with_who_wanted_whom_where_and_when() {
             latest: 1_000,
             times: 1,
             dismissed: None,
+            crossing: false,
         }]
     );
     assert!(path(root).ends_with("app/dispatches/refused-while-away.json"));
@@ -109,6 +110,7 @@ fn the_same_pair_in_the_same_workspace_is_one_entry_with_a_count_and_the_latest_
             latest: 1_120,
             times: 3,
             dismissed: None,
+            crossing: false,
         }]
     );
 }
@@ -342,6 +344,7 @@ fn a_dismissed_entry_is_listed_again_only_by_a_refusal_after_the_quiet_period() 
             latest: 2_000 + 7 * DAY,
             times: 3,
             dismissed: None,
+            crossing: false,
         }]
     );
 }
@@ -476,6 +479,7 @@ fn an_entry_the_app_would_not_have_written_is_not_listed_and_goes_at_the_next_wr
             latest: 1_000,
             times: 2,
             dismissed: None,
+            crossing: false,
         }]
     );
     refused(root, "qa", "devops", 1_001);

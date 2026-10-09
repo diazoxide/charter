@@ -687,7 +687,19 @@ impl Store {
         }
     }
 
-    /// `held` as the window is told it, in project `plane` at `root`: [`told`], with what this
+    /// [`Facts`] of `held`, with the other workspaces the asking chat's own grants allow the
+    /// pair in.
+    fn facts_of(&self, root: &Path, held: &Pending) -> Facts {
+        let mut facts = facts(root, held);
+        if held.locked.is_none() {
+            facts.allowed_in.extend(self.chat_allowed_elsewhere(held));
+            facts.allowed_in.sort();
+            facts.allowed_in.dedup();
+        }
+        facts
+    }
+
+    /// `held` as the window is told it, in project `plane` at `root`: its [`Facts`], with what this
     /// store alone knows. The other workspaces the asking chat's own grants allow this pair
     /// in, so a chat allowed for one workspace that sends the persona to another is asked with
     /// the reason said (#1505); and what the question offers ([`Store::offer`], #1502).
@@ -698,15 +710,12 @@ impl Store {
         locks: &sandbox::policy::Locks,
         held: &Pending,
     ) -> DispatchPending {
-        let mut shown = told(plane, root, held);
-        if held.locked.is_none() {
-            shown.allowed_in.extend(self.chat_allowed_elsewhere(held));
-            shown.allowed_in.sort();
-            shown.allowed_in.dedup();
-        }
+        let facts = self.facts_of(root, held);
         let offer = self.offer(root, locks, held);
+        let stamp = stamp_of(&offer, &facts);
+        let mut shown = told_of(plane, held, facts);
         shown.works_with = offer.target.said();
-        shown.shown = stamp_of(&offer, &shown);
+        shown.shown = stamp;
         shown.also = offer
             .also
             .iter()
@@ -899,8 +908,11 @@ impl Store {
         // the boxes, the answers offered, where it is already allowed, whether the list of
         // nevers reads, and whether the workspace is there.
         let offer = self.offer(ground.root, ground.locks, &held);
-        let now = self.told(&unplaced(ground.root), ground.root, ground.locks, &held);
-        if ticked.shown.is_some_and(|shown| shown != now.shown) {
+        let now = self.facts_of(ground.root, &held);
+        if ticked
+            .shown
+            .is_some_and(|shown| shown != stamp_of(&offer, &now))
+        {
             return Err(CHANGED.to_owned());
         }
         let mut wanted: Vec<&str> = Vec::new();
@@ -952,7 +964,7 @@ impl Store {
             Level::You => GrantLevel::You,
             Level::Project => GrantLevel::Project,
         };
-        if !now.works_in_missing && !now.levels.contains(&offered) {
+        if !now.missing && !now.levels.contains(&offered) {
             return Err(
                 "That answer is not one this question offers, so nothing was allowed. Read it \
                  again, then answer."
@@ -1593,10 +1605,27 @@ pub struct DispatchPending {
     pub shown: String,
 }
 
+/// What a dispatch's question draws its answers from, read from the project at `root`: the
+/// answers offered, whether the task's workspace is there yet, whether the list of nevers
+/// reads, and the workspaces the pair is already allowed in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Facts {
+    levels: Vec<GrantLevel>,
+    missing: bool,
+    never_unread: Option<String>,
+    allowed_in: Vec<String>,
+}
+
 /// `held` as the window is told it, in project `plane`, **less what the store says of it**:
 /// what the question offers and what the target works with are [`Store::told`]'s to fill, and
-/// are empty here.
+/// are empty here. The tests' reading of it; the window is told by [`Store::told`].
+#[cfg(test)]
 fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
+    told_of(plane, held, facts(root, held))
+}
+
+/// [`Facts`] of `held` in the project at `root`.
+fn facts(root: &Path, held: &Pending) -> Facts {
     let mut levels = Vec::new();
     if held.locked.is_none() {
         if held.asking.id.is_some() {
@@ -1624,9 +1653,11 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
     if missing {
         levels.truncate(1);
     }
-    // Where the person's and the project's limited grants already allow the pair.
+    // Where the person's and the project's limited grants already allow the pair: as they
+    // are in force, by the last settling's verdict (#1506), never as kept on disk.
     let mut allowed_in: Vec<String> = match (&held.locked, held.asking.persona.as_deref()) {
-        (None, Some(asking)) => dispatchwithin::in_force(root)
+        (None, Some(asking)) => InForce::read(root, Vec::new())
+            .limited
             .into_iter()
             .filter(|(_, one)| {
                 one.asking == asking
@@ -1639,6 +1670,20 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
     };
     allowed_in.sort();
     allowed_in.dedup();
+    Facts {
+        levels,
+        missing,
+        never_unread: held
+            .locked
+            .is_none()
+            .then(|| dispatchgrant::nevers_unread(root))
+            .flatten(),
+        allowed_in,
+    }
+}
+
+/// `held` as the window is told it, from its [`Facts`].
+fn told_of(plane: &PlaneId, held: &Pending, facts: Facts) -> DispatchPending {
     DispatchPending {
         plane: plane.clone(),
         id: held.id,
@@ -1649,27 +1694,16 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
         brief: held.brief.text.clone(),
         brief_cut: held.brief.cut,
         brief_lines: held.brief.lines,
-        levels,
-        never_unread: held
-            .locked
-            .is_none()
-            .then(|| dispatchgrant::nevers_unread(root))
-            .flatten(),
+        levels: facts.levels,
+        never_unread: facts.never_unread,
         locked: held.locked.clone(),
         works_in: held.works_in.clone(),
-        works_in_missing: missing,
-        allowed_in,
+        works_in_missing: facts.missing,
+        allowed_in: facts.allowed_in,
         works_with: String::new(),
         also: Vec::new(),
         shown: String::new(),
     }
-}
-
-/// A project's id where none is at hand, for a [`DispatchPending`] read for its digest alone:
-/// the digest never reads it, and no command is ever given it.
-fn unplaced(root: &Path) -> PlaneId {
-    serde_json::from_value(serde_json::Value::String(root.display().to_string()))
-        .expect("a project's id is its root, spelled")
 }
 
 /// **The digest of everything a dispatch's question says beyond who asks and the brief**: what
@@ -1677,7 +1711,7 @@ fn unplaced(root: &Path) -> PlaneId {
 /// draws its answers from: the answers offered, whether the workspace is there yet, whether
 /// the list of nevers reads, and where the pair is already allowed. An Allow sends it back,
 /// and one for a question that reads differently now grants nothing.
-fn stamp_of(offer: &Offer, told: &DispatchPending) -> String {
+fn stamp_of(offer: &Offer, told: &Facts) -> String {
     let levels: Vec<&str> = told
         .levels
         .iter()
@@ -1691,7 +1725,7 @@ fn stamp_of(offer: &Offer, told: &DispatchPending) -> String {
         "{}\u{1e}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         offer.stamp(),
         levels.join(","),
-        told.works_in_missing,
+        told.missing,
         told.never_unread.as_deref().unwrap_or_default(),
         told.allowed_in.join(",")
     )

@@ -496,7 +496,9 @@ pub fn follow_within(
             let one = Limited::new(asking, target, workspace)?;
             crate::dispatchwithin::accept(root, &one).map_err(|why| written_not_accepted(&why))
         }
-        Within::Any if any => crate::sandbox::local::acknowledge_dispatch_any(root, asking)
+        // Bound to the project's history as every acceptance is (it settles before and
+        // after).
+        Within::Any if any => crate::dispatchgrant::acknowledge_any(root, asking)
             .map_err(|why| written_not_accepted(&format!("({why})"))),
         Within::Any => {
             let pair = Pair::new(asking, target)?;
