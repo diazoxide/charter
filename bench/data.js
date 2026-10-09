@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791512393846,
+  "lastUpdate": 1791513712247,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4032,6 +4032,48 @@ window.BENCHMARK_DATA = {
             "value": 104.29757899999998,
             "unit": "ms",
             "extra": "median of 5 runs: 102.115, 103.986, 104.298, 105.028, 105.541 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "048f82058a5412f22690b98b58ab50558b801364",
+          "message": "Brokered git says when your git config would have mattered\n\nA clone or worktree the app makes for a sandboxed chat reads none of the\nperson's git config, by design (D-1335-7), and the difference from the terminal\nwas silent. `repocmd::unread` now says so where it shows:\n\n- a checkout whose top `.gitattributes` names a filter says it was checked out\n  as stored; for Git LFS, that the files are pointer files and `git lfs pull`\n  fetches them. Both a brokered clone and a brokered worktree add say it. The\n  file is read as `HEAD` commits it, through the hardened runner: a regular\n  file of at most 64 KiB, never a link and never the working tree the chat\n  writes;\n- a brokered clone that fails reads the person's global config files, through\n  the hardened runner with `--file` and no includes, only to see whether a\n  proxy, certificate, client certificate, cookie, extra-header or\n  `url.<base>.insteadOf` key would have changed the clone's route, and names\n  the key, never its value, with the terminal as the way round. Nothing read is\n  applied.\n\nThe CLI test that compares a brokered run with the terminal's now expects the\none filter note on the brokered side. `docs/plane-format.md` explains the\ndifference beside the git config purlis sets.\n\nThe `unread` fixtures commit with no global or system git config\n(`testgit::run_unconfigured`), so a machine whose config defines the\nGit LFS filter does not commit their `.gitattributes` as a pointer.\n\nCloses #1413\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T06:32:31+04:00",
+          "tree_id": "0cf607ddd85641b701b1f5b6a498b0a6a6cbf07a",
+          "url": "https://github.com/purlis/purlis/commit/048f82058a5412f22690b98b58ab50558b801364"
+        },
+        "date": 1791513711038,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5079605,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.492, 0.496, 0.508, 0.511, 0.535 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.852973,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.479, 16.782, 16.853, 16.996, 17.022 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.9661345,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.477, 103.691, 103.966, 104.117, 106.109 ms"
           }
         ]
       }
