@@ -1219,22 +1219,35 @@ pub fn fresh_warning(chats: &[String]) -> Option<String> {
 /// socket to live beside the record puts it elsewhere, and a harness started by hand in a
 /// terminal is not the app's: neither is seen here.
 pub fn open_in_app(root: &Path, workspaces: &[&str]) -> Vec<String> {
+    let plane = crate::workspaces::Plane::open(root);
+    open_in_app_where(root, |chat| {
+        chat.cwd
+            .as_deref()
+            .and_then(|cwd| plane.workspace_of(cwd))
+            .is_some_and(|ws| workspaces.contains(&ws.as_str()))
+    })
+}
+
+/// The chats an app listening on this plane has open as persona `persona`, by the name each is
+/// shown under: the live runs that have adopted it, which removing it is refused over (V27d,
+/// ADR 0076 §10). Read as [`open_in_app`] reads the record, and only while the app listens.
+pub fn adopting_in_app(root: &Path, persona: &str) -> Vec<String> {
+    open_in_app_where(root, |chat| chat.persona.as_deref() == Some(persona))
+}
+
+/// The chats the app's record holds that `keep` keeps, by the name each is shown under, while
+/// an app listens on this plane; none otherwise.
+fn open_in_app_where(root: &Path, keep: impl Fn(&crate::reopen::Chat) -> bool) -> Vec<String> {
     if !app_is_listening(root) {
         return Vec::new();
     }
     let Ok(record) = crate::reopen::read_or_refusal(root) else {
         return Vec::new();
     };
-    let plane = crate::workspaces::Plane::open(root);
     record
         .chats
         .iter()
-        .filter(|chat| {
-            chat.cwd
-                .as_deref()
-                .and_then(|cwd| plane.workspace_of(cwd))
-                .is_some_and(|ws| workspaces.contains(&ws.as_str()))
-        })
+        .filter(|chat| keep(chat))
         .map(|chat| crate::reopen::shown_name(chat, chat.harness().map(|h| h.name())))
         .collect()
 }

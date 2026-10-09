@@ -78,7 +78,27 @@ impl Removal {
 ///
 /// Exit 2 for the guard, as Python does: a refusal that protected work is not the same
 /// failure as a name that is not a workspace, and a script can tell them apart.
+///
+/// **Refused while a chat in it has a live run** (V27d, ADR 0076 §10), `--force` or not: a
+/// removal must not leave a program running in a deleted directory. The chats are the ones the
+/// app has open in it ([`wscmd::rename::open_in_app`]), as a rename is refused over them.
 pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
+    let running = match wscmd::workspace_dir(root, name) {
+        Some(_) => wscmd::rename::open_in_app(root, &[name]),
+        None => Vec::new(),
+    };
+    remove_unless_running(root, name, force, &running, say)
+}
+
+/// [`remove`], with the chats running in the workspace already asked: `running`, by the name
+/// each is shown under.
+pub(crate) fn remove_unless_running(
+    root: &Path,
+    name: &str,
+    force: bool,
+    running: &[String],
+    say: Sink,
+) -> Removal {
     let Some(dir) = wscmd::workspace_dir(root, name) else {
         say(Say::Fail(format!(
             "invalid workspace name '{}' (use letters, digits, '.', '_', '-'; must not start \
@@ -99,6 +119,10 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
             "'{name}' does not resolve to a directory inside this plane, so nothing was \
              removed ({why})."
         )));
+        return Removal::just(1);
+    }
+    if !running.is_empty() {
+        say(Say::Fail(still_running(name, running)));
         return Removal::just(1);
     }
 
@@ -162,6 +186,20 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
         )));
     }
     Removal::just(0)
+}
+
+/// The refusal for a workspace with chats running in it: which, and what to do first.
+fn still_running(name: &str, running: &[String]) -> String {
+    let (are, them) = if running.len() == 1 {
+        ("a chat is", "it")
+    } else {
+        ("chats are", "them")
+    };
+    format!(
+        "Refusing to remove '{name}' — {are} running in it: {}. Removing it would leave {them} \
+         running in a deleted folder; close {them} first.",
+        running.join(", ")
+    )
 }
 
 /// What the removal leaves in the project's dispatch records (#1520), said, and only where
@@ -314,6 +352,48 @@ mod tests {
         assert_eq!(code, 0, "{said:?}");
         assert!(!dir.path().join("workspaces/beta").exists());
         assert_eq!(said, vec!["✓ Removed workspace 'beta' and its clones."]);
+    }
+
+    #[test]
+    fn a_workspace_a_chat_runs_in_is_refused_forced_or_not_and_kept() {
+        // V27d (ADR 0076 §10): a removal must not leave a program running in a deleted folder.
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("workspaces/beta")).unwrap();
+        for force in [false, true] {
+            let mut said = Vec::new();
+            let done = remove_unless_running(
+                dir.path(),
+                "beta",
+                force,
+                &["steward 1".to_owned(), "codex 2".to_owned()],
+                &mut |line: Say| said.push(line.to_string()),
+            );
+            assert_eq!(done.code, 1, "{said:?}");
+            assert_eq!(
+                said,
+                vec![
+                    "✗ Refusing to remove 'beta' — chats are running in it: steward 1, codex 2. \
+                     Removing it would leave them running in a deleted folder; close them first."
+                ]
+            );
+            assert!(dir.path().join("workspaces/beta").is_dir());
+        }
+
+        // Once nothing runs in it, it goes.
+        let mut said = Vec::new();
+        let done = remove_unless_running(dir.path(), "beta", false, &[], &mut |line: Say| {
+            said.push(line.to_string())
+        });
+        assert_eq!(done.code, 0, "{said:?}");
+        assert!(!dir.path().join("workspaces/beta").exists());
+    }
+
+    #[test]
+    fn with_no_app_listening_no_chat_runs_in_any_workspace() {
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("workspaces/beta")).unwrap();
+        assert!(wscmd::rename::open_in_app(dir.path(), &["beta"]).is_empty());
+        assert!(wscmd::rename::adopting_in_app(dir.path(), "steward").is_empty());
     }
 
     #[test]

@@ -354,7 +354,8 @@ both.
   or git fails to answer, none of those worktrees gets the layer, and `reinit` and `clone`
   name the clone.
 - **`purlis workspace remove`** checks every piece for commits that exist nowhere else
-  before it deletes anything, and takes purlis's files out of every piece.
+  before it deletes anything, and takes purlis's files out of every piece. It is refused,
+  `--force` or not, while a chat is running in the workspace, as a rename is.
 
 The local file is written for the same reason a clone gets one, and one reading of it is not
 measured. The table above shows a linked worktree reads its main checkout's
