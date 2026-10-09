@@ -402,7 +402,7 @@ name, and keeps the file out of git; the app's new-chat picker, a chat reopened 
 starts again and a chat opened by a handoff all run the profile they name and record it. A
 profile this file declares runs once you have seen its command and said so — see *A new or
 changed command asks once*, below. Starting a chat on a profile from a terminal
-(`purlis <profile>`) is not in this version yet (#1576).
+(`purlis <profile>`) is not in this version yet (#1608).
 
 ### Profiles live in `charter.local.toml`, never in `charter.toml`
 

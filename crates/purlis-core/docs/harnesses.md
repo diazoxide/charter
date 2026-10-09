@@ -34,7 +34,7 @@ refused:
 ```
 
 A `purlis <profile>` command that starts a chat from a terminal is not in this version yet
-(#1576).
+(#1608).
 
 ## Two accounts of one harness, or one version pinned
 
