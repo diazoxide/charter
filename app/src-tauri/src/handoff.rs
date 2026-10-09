@@ -9107,6 +9107,45 @@ mod tests {
         );
     }
 
+    /// #1456: `start_of_a_persona_chat`'s own promise, at the joined start in the app. The
+    /// persona chat a dispatch opens runs as the persona it was dispatched to, holds no other
+    /// persona's grants, is not run without the sandbox, and resumes nothing of the asking
+    /// chat's: whether that persona is the asking chat's own or another's under a grant.
+    #[test]
+    fn the_persona_chat_a_dispatch_opens_takes_nothing_of_the_asking_chat_s_but_its_folder() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
+            .expect("the person allowed the pair");
+        let asked = held.chats().recorded_chat(asking).expect("the asking chat");
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+
+        for (to, runs_as) in [(None, "steward"), (Some("devops"), "devops")] {
+            let (said, _) = dispatch_with(&held, &id, asking, to, "task", brief, None);
+            let Answer::Dispatched { chat: task, .. } = said else {
+                panic!("{to:?}: dispatched, not {said:?}")
+            };
+            let task = held.chats().recorded_chat(task).expect("the task's record");
+            assert_eq!(task.persona.as_deref(), Some(runs_as), "{to:?}");
+            assert_eq!(task.held, None, "{to:?}: another persona's grants");
+            assert!(!task.unsandboxed, "{to:?}: run without the sandbox");
+            assert!(
+                task.resume.is_none() || task.resume != asked.resume,
+                "{to:?}: the asking chat's conversation"
+            );
+            assert_eq!(task.identity.resumed_from, None, "{to:?}");
+            assert_ne!(task.identity.id, asked.identity.id, "{to:?}");
+            assert_eq!(
+                task.cwd, asked.cwd,
+                "{to:?}: its folder is the asking chat's"
+            );
+            assert_eq!(task.profile.as_deref(), Some("work"), "{to:?}");
+        }
+    }
+
     #[test]
     fn a_held_dispatch_whose_profile_asks_nobody_by_the_time_it_is_allowed_is_not_started() {
         // Held on a profile that asks. Before the person answers, that profile's command is
