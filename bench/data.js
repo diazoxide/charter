@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791552627934,
+  "lastUpdate": 1791553844541,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4998,6 +4998,48 @@ window.BENCHMARK_DATA = {
             "value": 102.000181,
             "unit": "ms",
             "extra": "median of 5 runs: 100.840, 101.966, 102.000, 102.817, 103.026 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "b0df86ca0efb27cf0e1519a080806a2572d7e4a1",
+          "message": "Hold the trailer bound to a whole Assisted-by value of 100\n\nThe test that pins the 100-character trailer value built a 100-character\nmodel, which with the harness in front is a 112-character value. Since\nthe model is kept at most 88 so the whole value fits, the writer leaves\nthe bare harness there. The test now sizes the model so the whole value is\nexactly 100, kept, and 101, left out. It holds a value that stands alone\n(the persona) to the same bound, and the reader to what the writer keeps.\n\nRefs #1021\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T17:26:08+04:00",
+          "tree_id": "b3c295814b69fa0ca7da530275211bba3cf7393d",
+          "url": "https://github.com/purlis/purlis/commit/b0df86ca0efb27cf0e1519a080806a2572d7e4a1"
+        },
+        "date": 1791553843226,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4485405,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.421, 0.426, 0.449, 0.459, 0.466 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.700328,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.382, 16.482, 16.700, 16.795, 16.921 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.18795750000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.854, 102.066, 102.188, 102.599, 103.884 ms"
           }
         ]
       }
