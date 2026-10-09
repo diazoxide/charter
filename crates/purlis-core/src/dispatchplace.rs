@@ -868,86 +868,229 @@ pub fn at_risk(
     .map_err(|refusal| NotDone::Git(refusal.in_window()))
 }
 
-/// The most entries of a folder [`sealed`] reads. Past them, what else the folder holds is not
-/// compared: a build tree of that size is one path of the list the person is shown anyway.
+/// The most entries of a folder [`sealed`] walks. A folder holding more is not discarded by
+/// purlis ([`NotSealed::TooMany`]): past them a later write would not be seen, and the walk goes
+/// by name, so a large `node_modules/` or `.venv/` is reached before `src/`.
 pub const MOST_SEALED: usize = 100_000;
 
+/// Why [`sealed`] has no fingerprint of a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotSealed {
+    /// The folder, or something in it, could not be read: a link, a folder that is gone, an
+    /// entry that vanished or could not be opened while it was read.
+    Unread,
+    /// It holds more than [`MOST_SEALED`] entries.
+    TooMany,
+}
+
 /// **What the folder at `folder` holds now, as one fingerprint** (#1472): every entry below it,
-/// by its path, its kind, its size and the time it was last written, read without following a
-/// link, and a link by what it points at. The folder's own `.git` pointer is not read: it is
-/// git's, and names the clone.
+/// by its path, its kind, its size, the time it was last written, the time it last changed and
+/// its inode, read without following a link, and a link by what it points at. The folder's own
+/// `.git` pointer is not read: it is git's, and names the clone.
 ///
 /// What a discard compares besides the paths git lists, so that **a listed file written again,
 /// a file added inside a folder git ignores whole, and anything done inside a nested
-/// repository** each read as a change. Contents are not hashed: a write that kept a file's size
-/// and its time to the nanosecond is not seen. At most [`MOST_SEALED`] entries are read, in
-/// the order of their names. `None` where the folder, or anything in it, cannot be read: a
-/// discard that cannot compare is not asked for.
-pub fn sealed(folder: &Path) -> Option<String> {
+/// repository** each read as a change. Contents are not hashed: the change time and the inode
+/// are the kernel's, which no ordinary tool sets back as `touch -r` or `cp -p` sets the written
+/// time, so a rewrite that keeps a file's size and written time still reads as one.
+///
+/// **It fails closed.** Each path git lists in `changes` (`git status --porcelain` lines) and
+/// every nested repository among them are read first and whole, whatever the cap; then the
+/// whole folder is walked, and a folder of more than [`MOST_SEALED`] entries is
+/// [`NotSealed::TooMany`], never a fingerprint of part of it.
+pub fn sealed(folder: &Path, changes: &[String]) -> Result<String, NotSealed> {
+    sealed_at_most(folder, changes, MOST_SEALED)
+}
+
+/// [`sealed`], with the walk of the whole folder capped at `most` entries.
+fn sealed_at_most(folder: &Path, changes: &[String], most: usize) -> Result<String, NotSealed> {
     use sha2::Digest;
-    let top = folder.symlink_metadata().ok()?;
+    let top = folder.symlink_metadata().map_err(|_| NotSealed::Unread)?;
     if !top.is_dir() {
-        return None;
+        return Err(NotSealed::Unread);
     }
     let mut digest = sha2::Sha256::new();
+    // What git lists, first: each path as it stands now (a deleted one as absent).
+    for line in changes {
+        for path in porcelain_paths(line) {
+            let path = inside(&path).ok_or(NotSealed::Unread)?;
+            digest.update(b"listed\0");
+            stamp(&mut digest, folder, &path, true)?;
+        }
+    }
+    // Every nested repository whole, its history too.
+    for nested in nested_repositories(changes) {
+        let path = inside(&nested).ok_or(NotSealed::Unread)?;
+        digest.update(b"nested\0");
+        walk(&mut digest, folder, &path, None)?;
+    }
+    digest.update(b"folder\0");
+    walk(&mut digest, folder, Path::new(""), Some(most))?;
+    Ok(crate::extension::hex(&digest.finalize()))
+}
+
+/// `path`, a path git printed, as one inside the folder: relative, and climbing nowhere.
+fn inside(path: &str) -> Option<PathBuf> {
+    let path = Path::new(path.trim_end_matches('/'));
+    path.components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+        .then(|| path.to_path_buf())
+}
+
+/// Hashes the entry at `folder/path`: its path, then what it is. Whether it is a folder. A
+/// missing entry is said as absent where `absent_ok`, and is otherwise one that could not be
+/// read.
+fn stamp(
+    digest: &mut sha2::Sha256,
+    folder: &Path,
+    path: &Path,
+    absent_ok: bool,
+) -> Result<bool, NotSealed> {
+    use sha2::Digest;
+    digest.update(path.as_os_str().as_encoded_bytes());
+    digest.update(b"\0");
+    let meta = match folder.join(path).symlink_metadata() {
+        Ok(meta) => meta,
+        Err(err) if absent_ok && err.kind() == std::io::ErrorKind::NotFound => {
+            digest.update(b"-\0");
+            return Ok(false);
+        }
+        Err(_) => return Err(NotSealed::Unread),
+    };
+    let kind = meta.file_type();
+    let is_dir = kind.is_dir();
+    if kind.is_symlink() {
+        let to = std::fs::read_link(folder.join(path)).map_err(|_| NotSealed::Unread)?;
+        digest.update(b"l");
+        digest.update(to.as_os_str().as_encoded_bytes());
+    } else if is_dir {
+        digest.update(b"d");
+    } else {
+        let written = meta
+            .modified()
+            .ok()
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_nanos());
+        digest.update(format!("f{}:{written}", meta.len()).as_bytes());
+    }
+    // The kernel's own: when it last changed, and which inode it is.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        digest.update(format!(":{}.{}:{}", meta.ctime(), meta.ctime_nsec(), meta.ino()).as_bytes());
+    }
+    digest.update(b"\0");
+    Ok(is_dir)
+}
+
+/// Hashes every entry below `folder/from`, in the order of their names, a folder's own entries
+/// before the folders in it. At most `most` entries, else [`NotSealed::TooMany`]. The folder's
+/// own `.git` pointer is left out.
+fn walk(
+    digest: &mut sha2::Sha256,
+    folder: &Path,
+    from: &Path,
+    most: Option<usize>,
+) -> Result<(), NotSealed> {
     let mut read = 0usize;
-    let mut stack = vec![PathBuf::new()];
+    let mut stack = vec![from.to_path_buf()];
     while let Some(below) = stack.pop() {
         let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder.join(&below))
-            .ok()?
+            .map_err(|_| NotSealed::Unread)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<Result<_, _>>()
-            .ok()?;
+            .map_err(|_| NotSealed::Unread)?;
         names.sort();
-        // Read in name order; folders are opened after this one's entries, last name first
-        // off the stack, so the walk's order is fixed by the names alone.
         let mut folders = Vec::new();
         for name in names {
             if below.as_os_str().is_empty() && name == ".git" {
                 continue;
             }
-            if read == MOST_SEALED {
-                digest.update(b"\0more");
-                return Some(crate::extension::hex(&digest.finalize()));
+            if most.is_some_and(|most| read == most) {
+                return Err(NotSealed::TooMany);
             }
             read += 1;
             let path = below.join(&name);
-            let meta = folder.join(&path).symlink_metadata().ok()?;
-            digest.update(path.as_os_str().as_encoded_bytes());
-            digest.update(b"\0");
-            let kind = meta.file_type();
-            if kind.is_symlink() {
-                let to = std::fs::read_link(folder.join(&path)).ok()?;
-                digest.update(b"l");
-                digest.update(to.as_os_str().as_encoded_bytes());
-            } else if kind.is_dir() {
-                digest.update(b"d");
+            if stamp(digest, folder, &path, false)? {
                 folders.push(path);
-            } else {
-                let written = meta
-                    .modified()
-                    .ok()
-                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |since| since.as_nanos());
-                digest.update(format!("f{}:{written}", meta.len()).as_bytes());
             }
-            digest.update(b"\0");
         }
         stack.extend(folders.into_iter().rev());
     }
-    Some(crate::extension::hex(&digest.finalize()))
+    Ok(())
+}
+
+/// The paths of one `git status --porcelain` line: its path, or both sides of a rename
+/// (`R  old -> new`), each as the file is called, git's quoting taken off ([`unquoted`]).
+pub fn porcelain_paths(line: &str) -> Vec<String> {
+    let Some(rest) = line.get(3..) else {
+        return Vec::new();
+    };
+    let sides: Vec<&str> = if rest.starts_with('"') {
+        match rest.find("\" -> ") {
+            Some(end) => vec![&rest[..=end], &rest[end + 5..]],
+            None => vec![rest],
+        }
+    } else {
+        rest.splitn(2, " -> ").collect()
+    };
+    sides.into_iter().map(unquoted).collect()
+}
+
+/// A path as git prints it, its C-style quotes taken off where it has them (`"a b/"` is
+/// `a b/`, `"caf\303\251"` is `café`).
+pub fn unquoted(path: &str) -> String {
+    let Some(inner) = path
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return path.to_owned();
+    };
+    let mut bytes = Vec::with_capacity(inner.len());
+    let mut chars = inner.bytes().peekable();
+    while let Some(byte) = chars.next() {
+        if byte != b'\\' {
+            bytes.push(byte);
+            continue;
+        }
+        match chars.next() {
+            Some(b'n') => bytes.push(b'\n'),
+            Some(b't') => bytes.push(b'\t'),
+            Some(b'r') => bytes.push(b'\r'),
+            Some(b'a') => bytes.push(0x07),
+            Some(b'b') => bytes.push(0x08),
+            Some(b'f') => bytes.push(0x0c),
+            Some(b'v') => bytes.push(0x0b),
+            Some(digit @ b'0'..=b'7') => {
+                let mut value = u32::from(digit - b'0');
+                for _ in 0..2 {
+                    match chars.peek() {
+                        Some(next @ b'0'..=b'7') => {
+                            value = value * 8 + u32::from(next - b'0');
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                bytes.push(u8::try_from(value).unwrap_or(u8::MAX));
+            }
+            Some(other) => bytes.push(other),
+            None => bytes.push(b'\\'),
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// The uncommitted paths of `changes`, as `git status --porcelain` prints them, that are
-/// **repositories of their own** made inside the folder: git lists every other new file by its
-/// own path, and a nested repository as one folder (`?? vendor/lib/`), whose files and history
-/// all go with it (#1472).
+/// **repositories of their own** made inside the folder, as the folder is called (git's quotes
+/// taken off): git lists every other new file by its own path, and a nested repository as one
+/// folder (`?? vendor/lib/`), whose files and history all go with it (#1472).
 pub fn nested_repositories(changes: &[String]) -> Vec<String> {
     changes
         .iter()
-        .filter_map(|line| line.strip_prefix("?? "))
-        .filter(|path| path.trim_end_matches('"').ends_with('/'))
-        .map(str::to_owned)
+        .filter(|line| line.starts_with("?? "))
+        .flat_map(|line| porcelain_paths(line))
+        .filter(|path| path.ends_with('/'))
         .collect()
 }
 
@@ -977,8 +1120,9 @@ pub fn discard(root: &Path, tree: &Tree, isolation: &git::Isolated) -> Result<Di
 /// and just before git runs it, and `as_shown` is asked whether it is what they agreed to. Where
 /// it is not, or cannot be read, nothing is removed ([`NotDone::Changed`]).
 ///
-/// What is left between that read and git's removal is git's own time to remove the folder:
-/// a write landing in it then is not seen (#1472).
+/// **What it does not cover** (#1472): the fingerprint is read entry by entry, so a write to an
+/// entry after the walk read it is not seen, through the rest of the walk, the one git call
+/// that names the folder's branch, and git's own removal of the folder.
 pub fn discard_as_shown(
     root: &Path,
     tree: &Tree,
@@ -992,7 +1136,8 @@ pub fn discard_as_shown(
             .map_err(|refusal| NotDone::Git(refusal.in_window()))?
             .map(|risk| without_purlis_own(&folder, risk))
             .ok_or(NotDone::Changed)?;
-        let seal = sealed(&folder).ok_or(NotDone::Changed)?;
+        let changes = risk.changes.as_deref().ok_or(NotDone::Changed)?;
+        let seal = sealed(&folder, changes).map_err(|_| NotDone::Changed)?;
         if !as_shown(&risk, &seal) {
             return Err(NotDone::Changed);
         }
@@ -1015,6 +1160,29 @@ pub fn discard_as_shown(
 // a branch whose folder is gone
 // ---------------------------------------------------------------------------------------
 
+/// How a task's branch whose folder is gone stands against the branch it was cut from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftIn {
+    /// Every commit of it is in that branch.
+    Merged,
+    /// Not its commits, but every file it changed reads there as it has it: squashed, rebased
+    /// or picked in ([`standing::Landed::Carried`]).
+    Squashed,
+    /// It holds work that branch does not.
+    NotMerged,
+}
+
+impl LeftIn {
+    /// The word the window is handed.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::Squashed => "squashed",
+            Self::NotMerged => "not-merged",
+        }
+    }
+}
+
 /// **A task's own branch whose folder is gone**, as its repo has it now (#1472): discarded,
 /// removed from the explorer or by hand, or taken away merged while git kept the branch. The
 /// branch stays an ordinary branch of the repo, and this is what is said of it.
@@ -1022,11 +1190,18 @@ pub fn discard_as_shown(
 pub struct BranchLeft {
     /// The commit it is at, by its full id.
     pub tip: String,
-    /// Whether the branch the clone is on holds every commit of it: the one case git's own
-    /// `branch -d` deletes it, and so the one case purlis offers to.
-    pub merged: bool,
-    /// How many of its commits the branch the clone is on does not hold.
+    /// The branch it was cut from, as the clone recorded it; `None` where none was recorded,
+    /// and then it is measured against the branch the clone is on.
+    pub base: Option<String>,
+    /// How it stands against that branch: what the row's word for it says too.
+    pub landed: LeftIn,
+    /// How many of its commits that branch does not hold.
     pub ahead: u32,
+    /// Whether the clone has it checked out: git deletes no such branch.
+    pub checked_out: bool,
+    /// Whether git's own `branch -d` would delete it: the branch the clone is on holds every
+    /// commit of it, and the clone is not on it. The one case purlis offers to.
+    pub deletable: bool,
 }
 
 /// Why a task's branch was not deleted. Nothing was changed by any of them.
@@ -1040,8 +1215,12 @@ pub enum NotDeleted {
     Gone,
     /// The branch is not at the commit the person was shown.
     Moved,
-    /// git does not find it merged.
+    /// The clone has the branch checked out.
+    CheckedOut,
+    /// The branch the clone is on does not hold every commit of it.
     NotMerged,
+    /// git refused, in its own words.
+    Git(String),
 }
 
 impl NotDeleted {
@@ -1066,10 +1245,18 @@ impl NotDeleted {
                 "'{branch}' has a commit you were not shown. Look at it again before you delete \
                  it. Nothing was deleted."
             ),
+            Self::CheckedOut => format!(
+                "{repo} is on '{branch}' now, and git deletes no branch a repo is on. Switch \
+                 {repo} to another branch first. Nothing was deleted."
+            ),
             Self::NotMerged => format!(
-                "git does not find '{branch}' merged into the branch {repo} is on, so purlis \
+                "The branch {repo} is on does not hold every commit of '{branch}', so purlis \
                  keeps it: deleting a branch that holds work is never purlis's act. Nothing was \
                  deleted."
+            ),
+            Self::Git(why) => format!(
+                "git would not delete '{branch}': {}. Nothing was deleted.",
+                crate::shown::short(why.trim().trim_end_matches('.'))
             ),
         }
     }
@@ -1083,8 +1270,23 @@ fn answered(dir: &Path, args: &[&str]) -> Option<String> {
         .map(|run| run.line().trim().to_owned())
 }
 
+/// Whether `ancestor` is in `of`, by git's answer, or `None` where git did not answer.
+fn is_in(dir: &Path, ancestor: &str, of: &str) -> Option<bool> {
+    match git::run(
+        dir,
+        &["merge-base", "--is-ancestor", ancestor, of],
+        git::READ,
+    ) {
+        Ok(seen) if seen.ok() => Some(true),
+        Ok(seen) if seen.code == Some(1) => Some(false),
+        _ => None,
+    }
+}
+
 /// How `branch` stands in the clone at `clone`, read with the brokered route's pins in force:
-/// `Ok(None)` where it is not there.
+/// `Ok(None)` where it is not there. Measured against the branch it was cut from, as the clone
+/// recorded it ([`worktree::recorded_base`]), and where none was recorded against the branch
+/// the clone is on.
 fn left_in(clone: &Path, branch: &str) -> Result<Option<BranchLeft>, NotDone> {
     let unread = || NotDone::Git(format!("purlis could not read the branch '{branch}'."));
     let named = name::as_ref(branch);
@@ -1100,19 +1302,37 @@ fn left_in(clone: &Path, branch: &str) -> Result<Option<BranchLeft>, NotDone> {
     .filter(|tip| !tip.is_empty()) else {
         return Ok(None);
     };
-    let merged = match git::run(
-        clone,
-        &["merge-base", "--is-ancestor", &named, "HEAD"],
-        git::READ,
-    ) {
-        Ok(seen) if seen.ok() => true,
-        Ok(seen) if seen.code == Some(1) => false,
-        _ => return Err(unread()),
+    let on = answered(clone, &["symbolic-ref", "--quiet", "HEAD"]);
+    let checked_out = on.as_deref() == Some(named.as_str());
+    let base = worktree::recorded_base(clone, branch);
+    let against = base
+        .as_deref()
+        .map_or_else(|| "HEAD".to_owned(), name::as_ref);
+    let landed = if is_in(clone, &named, &against).ok_or_else(unread)? {
+        LeftIn::Merged
+    } else if base
+        .as_deref()
+        .is_some_and(|base| standing::carried_in(clone, branch, base) == Some(true))
+    {
+        LeftIn::Squashed
+    } else {
+        LeftIn::NotMerged
     };
-    let ahead = answered(clone, &["rev-list", "--count", &format!("HEAD..{named}")])
-        .and_then(|count| count.parse().ok())
-        .ok_or_else(unread)?;
-    Ok(Some(BranchLeft { tip, merged, ahead }))
+    let ahead = answered(
+        clone,
+        &["rev-list", "--count", &format!("{against}..{named}")],
+    )
+    .and_then(|count| count.parse().ok())
+    .ok_or_else(unread)?;
+    let in_head = is_in(clone, &named, "HEAD").ok_or_else(unread)?;
+    Ok(Some(BranchLeft {
+        tip,
+        base,
+        landed,
+        ahead,
+        checked_out,
+        deletable: in_head && !checked_out,
+    }))
 }
 
 /// **What is left of `tree`'s branch where its folder is gone**, read under the brokered
@@ -1144,8 +1364,10 @@ pub fn branch_left(
 /// nothing else in purlis calls it. By git's own `branch -d` and nothing stronger: a branch
 /// that holds work stays (ADR 0072 §4), whatever the window asked.
 ///
-/// git's record of the gone folder is cleared first, as the explorer's Remove of a gone folder
-/// clears it: git keeps a branch that a registered folder is on.
+/// Every question is asked again inside the pinned call, the folder's absence too. git's record
+/// of the gone folder is cleared first, and only where git itself finds that folder gone
+/// ([`worktree::clear_gone`]): nothing at that path is ever removed. A refusal of git's is said
+/// in git's words, never as "not merged".
 pub fn delete_left_branch(
     root: &Path,
     tree: &Tree,
@@ -1165,21 +1387,32 @@ pub fn delete_left_branch(
         .join(&tree.repo);
     let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
     crate::gitbroker::in_a_checked_clone(root, ws, repo, isolation, || {
+        if tree.there(root) {
+            return Err(NotDeleted::FolderThere);
+        }
         let left = left_in(&clone, branch)
             .map_err(NotDeleted::Route)?
             .ok_or(NotDeleted::Gone)?;
         if left.tip != seen {
             return Err(NotDeleted::Moved);
         }
-        if !left.merged {
+        if left.checked_out {
+            return Err(NotDeleted::CheckedOut);
+        }
+        if !left.deletable {
             return Err(NotDeleted::NotMerged);
         }
-        // A folder gone by other hands may still be registered. Nothing is there to lose.
-        let _ = worktree::remove(root, ws, repo, piece, false, false);
-        if standing::drop_if_merged(root, ws, repo, branch) {
+        worktree::clear_gone(root, ws, repo, piece)
+            .map_err(|refusal| NotDeleted::Git(refusal.in_window()))?;
+        let deleted = git::run(&clone, &["branch", "-d", "--", branch], git::READ)
+            .map_err(|_| NotDeleted::Git("git did not answer".to_owned()))?;
+        if deleted.ok() {
             Ok(())
         } else {
-            Err(NotDeleted::NotMerged)
+            let said = deleted.err.lines().next().unwrap_or_default();
+            Err(NotDeleted::Git(
+                said.trim_start_matches("error: ").to_owned(),
+            ))
         }
     })
     .map_err(|why| NotDeleted::Route(NotDone::Repo(why)))?

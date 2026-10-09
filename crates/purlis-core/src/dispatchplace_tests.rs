@@ -928,6 +928,11 @@ fn a_task_folder() -> (tempfile::TempDir, PathBuf) {
     (dir, folder)
 }
 
+/// [`sealed`] of a folder git lists nothing in, or `None`.
+fn seal(folder: &Path) -> Option<String> {
+    sealed(folder, &[]).ok()
+}
+
 /// Sets the time `path` was last written to `secs` after the epoch.
 fn written_at(path: &Path, secs: u64) {
     let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
@@ -938,30 +943,38 @@ fn written_at(path: &Path, secs: u64) {
 #[test]
 fn a_folder_reads_the_same_until_something_in_it_is_written_added_or_removed() {
     let (_dir, folder) = a_task_folder();
-    let first = sealed(&folder).expect("a readable folder");
-    assert_eq!(sealed(&folder).as_deref(), Some(first.as_str()));
+    let first = seal(&folder).expect("a readable folder");
+    assert_eq!(seal(&folder).as_deref(), Some(first.as_str()));
 
     // A listed file written again: the same path, so the list alone would pass it.
     std::fs::write(folder.join("notes.txt"), "second, and longer\n").unwrap();
-    let written = sealed(&folder).unwrap();
+    let written = seal(&folder).unwrap();
     assert_ne!(written, first);
 
     // Written again to the same size: its time tells it.
     written_at(&folder.join("notes.txt"), 1_000);
-    let before = sealed(&folder).unwrap();
+    let before = seal(&folder).unwrap();
     std::fs::write(folder.join("notes.txt"), "second, and LONGER\n").unwrap();
     written_at(&folder.join("notes.txt"), 2_000);
-    assert_ne!(sealed(&folder).unwrap(), before);
+    assert_ne!(seal(&folder).unwrap(), before);
+
+    // Written again to the same size, and its written time put back as `touch -r` or `cp -p`
+    // puts it: the kernel's change time tells it.
+    let before = seal(&folder).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(folder.join("notes.txt"), "second, and l0NGER\n").unwrap();
+    written_at(&folder.join("notes.txt"), 2_000);
+    assert_ne!(seal(&folder).unwrap(), before);
 
     // A file added inside a folder git ignores whole, which git lists as `target/` either way.
-    let before = sealed(&folder).unwrap();
+    let before = seal(&folder).unwrap();
     std::fs::write(folder.join("target/debug/new"), "x").unwrap();
-    assert_ne!(sealed(&folder).unwrap(), before);
+    assert_ne!(seal(&folder).unwrap(), before);
 
     // Removed again.
-    let before = sealed(&folder).unwrap();
+    let before = seal(&folder).unwrap();
     std::fs::remove_file(folder.join("target/debug/new")).unwrap();
-    assert_ne!(sealed(&folder).unwrap(), before);
+    assert_ne!(seal(&folder).unwrap(), before);
 }
 
 #[test]
@@ -973,34 +986,34 @@ fn a_nested_repository_s_history_is_read_with_the_rest_of_the_folder() {
         "ref: refs/heads/main\n",
     )
     .unwrap();
-    let before = sealed(&folder).unwrap();
+    let before = seal(&folder).unwrap();
     // A commit made in it writes only inside its own `.git`.
     std::fs::write(folder.join("vendor/lib/.git/objects/ab"), "a commit").unwrap();
-    assert_ne!(sealed(&folder).unwrap(), before);
+    assert_ne!(seal(&folder).unwrap(), before);
 }
 
 #[test]
 fn the_folder_s_own_git_pointer_is_not_read_and_a_link_is_read_as_what_it_points_at() {
     let (_dir, folder) = a_task_folder();
-    let before = sealed(&folder).unwrap();
+    let before = seal(&folder).unwrap();
     std::fs::write(folder.join(".git"), "gitdir: /somewhere/else\n").unwrap();
-    assert_eq!(sealed(&folder).unwrap(), before);
+    assert_eq!(seal(&folder).unwrap(), before);
 
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink("/etc", folder.join("link")).unwrap();
-        let linked = sealed(&folder).unwrap();
+        let linked = seal(&folder).unwrap();
         std::fs::remove_file(folder.join("link")).unwrap();
         std::os::unix::fs::symlink("/tmp", folder.join("link")).unwrap();
-        assert_ne!(sealed(&folder).unwrap(), linked);
+        assert_ne!(seal(&folder).unwrap(), linked);
     }
 }
 
 #[test]
 fn a_folder_that_is_not_there_or_is_a_file_has_no_fingerprint() {
     let (_dir, folder) = a_task_folder();
-    assert_eq!(sealed(&folder.join("missing")), None);
-    assert_eq!(sealed(&folder.join("notes.txt")), None);
+    assert_eq!(seal(&folder.join("missing")), None);
+    assert_eq!(seal(&folder.join("notes.txt")), None);
 }
 
 #[test]
@@ -1017,8 +1030,62 @@ fn a_new_folder_git_lists_as_one_line_is_a_repository_of_its_own() {
     .collect();
     assert_eq!(
         nested_repositories(&changes),
-        vec!["vendor/lib/".to_owned(), "\"with space/\"".to_owned()]
+        vec!["vendor/lib/".to_owned(), "with space/".to_owned()]
     );
+    // As the folder is called, git's quoting taken off.
+    assert_eq!(unquoted("\"caf\\303\\251 \\\"x\\\"/\""), "café \"x\"/");
+    assert_eq!(
+        porcelain_paths("R  old.rs -> new.rs"),
+        vec!["old.rs".to_owned(), "new.rs".to_owned()]
+    );
+    assert_eq!(
+        porcelain_paths("R  \"a b\" -> \"c d\""),
+        vec!["a b".to_owned(), "c d".to_owned()]
+    );
+}
+
+#[test]
+fn a_folder_too_big_to_walk_whole_has_no_fingerprint_and_a_big_ignored_folder_is_walked_first() {
+    // #1472 review, M1: the walk goes by name, so `node_modules/` is reached before `src/`. A
+    // fingerprint of part of the folder would let a later write in `src/` through: past the
+    // cap there is none at all, and Discard refuses.
+    let (_dir, folder) = a_task_folder();
+    std::fs::create_dir_all(folder.join("node_modules/dep")).unwrap();
+    for n in 0..40 {
+        std::fs::write(folder.join(format!("node_modules/dep/f{n}.js")), "x").unwrap();
+    }
+    std::fs::create_dir_all(folder.join("src")).unwrap();
+    std::fs::write(folder.join("src/app.ts"), "mine\n").unwrap();
+    let listed = vec![" M src/app.ts".to_owned(), "!! node_modules/".to_owned()];
+
+    assert_eq!(
+        sealed_at_most(&folder, &listed, 20),
+        Err(NotSealed::TooMany)
+    );
+    // Under the cap, the listed file written again reads as a change.
+    let before = sealed_at_most(&folder, &listed, 1_000).unwrap();
+    std::fs::write(folder.join("src/app.ts"), "theirs\n").unwrap();
+    assert_ne!(sealed_at_most(&folder, &listed, 1_000).unwrap(), before);
+}
+
+#[test]
+fn what_git_lists_is_read_first_a_deleted_one_as_absent_and_none_climbs_out() {
+    let (_dir, folder) = a_task_folder();
+    // A file git lists as deleted is not there, and that is what it holds.
+    let deleted = vec![" D gone.rs".to_owned()];
+    assert!(sealed(&folder, &deleted).is_ok());
+    assert_ne!(sealed(&folder, &deleted).ok(), seal(&folder));
+    // A path that climbs out of the folder is no path git printed for it.
+    assert_eq!(
+        sealed(&folder, &["?? ../outside".to_owned()]),
+        Err(NotSealed::Unread)
+    );
+    // A nested repository is read whole, its history too.
+    std::fs::create_dir_all(folder.join("vendor/lib/.git")).unwrap();
+    let nested = vec!["?? vendor/lib/".to_owned()];
+    let before = sealed(&folder, &nested).unwrap();
+    std::fs::write(folder.join("vendor/lib/.git/HEAD"), "x").unwrap();
+    assert_ne!(sealed(&folder, &nested).unwrap(), before);
 }
 
 // ----- a branch whose folder is gone (#1472) ------------------------------------------------

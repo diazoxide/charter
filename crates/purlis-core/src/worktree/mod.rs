@@ -33,6 +33,29 @@ fn base_key(branch: &str) -> String {
     format!("branch.{branch}.charterBase")
 }
 
+/// The branch `branch` was cut from, as the clone at `clone` recorded it: one value, a name
+/// purlis would hand git, and not a detached commit. `None` otherwise.
+pub fn recorded_base(clone: &Path, branch: &str) -> Option<String> {
+    let recorded = git::run(
+        clone,
+        &["config", "--get-all", &base_key(branch)],
+        git::READ,
+    )
+    .ok()?;
+    let values: Vec<&str> = recorded
+        .out
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect();
+    match values.as_slice() {
+        [base] if !base.starts_with(DETACHED_PREFIX) && name::branch_name_ok(base).is_ok() => {
+            Some((*base).to_owned())
+        }
+        _ => None,
+    }
+}
+
 /// What charter refused, with the sentence the operator sees.
 #[derive(Debug, thiserror::Error)]
 pub enum Refusal {
@@ -708,53 +731,97 @@ fn remove_as(
 
     let exists = path.symlink_metadata().is_ok();
     if !exists {
-        // A registration whose directory is gone has no tree to check and nothing to lose.
-        let stale = list(plane, ws, repo)?
-            .into_iter()
-            .find(|p| p.piece == piece && p.prunable.is_some());
-        let Some(stale) = stale else {
-            return Err(Refusal::NoSuchPiece {
-                ws: ws.to_string(),
-                repo: repo.to_string(),
-                piece: piece.to_string(),
-            });
-        };
-        // The path git REPORTED, re-checked: it comes from `.git/worktrees/<id>/gitdir`,
-        // which anything inside the clone can write, and it is the one git will act on.
-        let stale_path = within_workspace(plane, ws, &stale.path)?;
-        let cleared = git::run(
-            &clone,
-            &[
-                "worktree",
-                "remove",
-                "--",
-                &stale_path.display().to_string(),
-            ],
-            git::READ,
-        )?;
-        if !cleared.ok() {
-            return Err(Refusal::Stuck {
-                what: "worktree remove".into(),
-                terminal: format!(
-                    "{}\nSomething exists at that path again, so git will not clear the stale \
-                     registration. Clear it yourself: git -C {} worktree prune",
-                    cleared.err.trim(),
-                    clone.display()
-                ),
-                window: format!(
-                    "git still lists a folder for '{piece}' that was gone, and something is at \
-                     that place again, so git will not clear it. Nothing was removed."
-                ),
-            });
-        }
-        return Ok(Removed {
-            branch: stale.branch,
-            was_stale: true,
-            branch_deleted: false,
+        return clear_stale(plane, ws, repo, piece, &clone);
+    }
+    remove_present(&path, &clone, piece, force, delete_branch, branch_stays)
+}
+
+/// **Clears git's record of the folder of `piece`, where git itself finds that folder gone**,
+/// and nothing else: whether there was one. Never removes anything at that path. A folder that
+/// is there is a refusal.
+pub fn clear_gone(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<bool, Refusal> {
+    relocation_refusal(plane)?;
+    let path = path_for(plane, ws, repo, piece)?;
+    let path = within_workspace(plane, ws, &path)?;
+    let clone = clone_dir(plane, ws, repo)?;
+    if path.symlink_metadata().is_ok() {
+        return Err(Refusal::GitRefused {
+            what: "worktree remove".into(),
+            err: format!("something is at the folder of '{piece}' again, so nothing was cleared"),
         });
     }
+    match clear_stale(plane, ws, repo, piece, &clone) {
+        Ok(_) => Ok(true),
+        Err(Refusal::NoSuchPiece { .. }) => Ok(false),
+        Err(other) => Err(other),
+    }
+}
 
-    let branch = match head_of(&path) {
+/// [`remove`] of a piece whose folder is gone: git's record of it cleared, where git lists it
+/// as one it can prune.
+fn clear_stale(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    clone: &Path,
+) -> Result<Removed, Refusal> {
+    // A registration whose directory is gone has no tree to check and nothing to lose.
+    let stale = list(plane, ws, repo)?
+        .into_iter()
+        .find(|p| p.piece == piece && p.prunable.is_some());
+    let Some(stale) = stale else {
+        return Err(Refusal::NoSuchPiece {
+            ws: ws.to_string(),
+            repo: repo.to_string(),
+            piece: piece.to_string(),
+        });
+    };
+    // The path git REPORTED, re-checked: it comes from `.git/worktrees/<id>/gitdir`,
+    // which anything inside the clone can write, and it is the one git will act on.
+    let stale_path = within_workspace(plane, ws, &stale.path)?;
+    let cleared = git::run(
+        clone,
+        &[
+            "worktree",
+            "remove",
+            "--",
+            &stale_path.display().to_string(),
+        ],
+        git::READ,
+    )?;
+    if !cleared.ok() {
+        return Err(Refusal::Stuck {
+            what: "worktree remove".into(),
+            terminal: format!(
+                "{}\nSomething exists at that path again, so git will not clear the stale \
+                     registration. Clear it yourself: git -C {} worktree prune",
+                cleared.err.trim(),
+                clone.display()
+            ),
+            window: format!(
+                "git still lists a folder for '{piece}' that was gone, and something is at \
+                     that place again, so git will not clear it. Nothing was removed."
+            ),
+        });
+    }
+    Ok(Removed {
+        branch: stale.branch,
+        was_stale: true,
+        branch_deleted: false,
+    })
+}
+
+/// [`remove`] of a piece whose folder is there, at the checked `path`.
+fn remove_present(
+    path: &Path,
+    clone: &Path,
+    piece: &str,
+    force: bool,
+    delete_branch: bool,
+    branch_stays: bool,
+) -> Result<Removed, Refusal> {
+    let branch = match head_of(path) {
         Ok(Base::Branch(b)) => Some(b),
         _ => None,
     };
@@ -762,7 +829,7 @@ fn remove_as(
     if !force {
         // What would be lost is NAMED, not only counted: `--force` is the operator's call, and
         // it is an informed one only if they can see which files and which commits it takes.
-        match changes(&path) {
+        match changes(path) {
             Some(changes) if changes.is_empty() => {}
             Some(changes) => {
                 return Err(Refusal::Uncommitted {
@@ -783,7 +850,7 @@ fn remove_as(
         } else {
             branch.as_deref()
         };
-        match unique_commits(&path, not_counted)? {
+        match unique_commits(path, not_counted)? {
             None => {
                 // Its own refusal: "could not determine whether this holds uncommitted
                 // changes" is not what failed, and telling the operator the wrong thing about
@@ -797,7 +864,7 @@ fn remove_as(
                 return Err(Refusal::WouldLoseWork {
                     piece: piece.to_string(),
                     count,
-                    commits: commits_alone(&path, branch.as_deref()),
+                    commits: commits_alone(path, branch.as_deref()),
                 });
             }
         }
@@ -810,7 +877,7 @@ fn remove_as(
     argv.push("--");
     let shown = path.display().to_string();
     argv.push(&shown);
-    let done = git::run(&clone, &argv, git::READ)?;
+    let done = git::run(clone, &argv, git::READ)?;
     if !done.ok() {
         return Err(Refusal::GitRefused {
             what: "worktree remove".into(),
@@ -822,7 +889,7 @@ fn remove_as(
     if let (true, Some(b)) = (delete_branch, &branch) {
         let flag = if force { "-D" } else { "-d" };
         branch_deleted =
-            git::run(&clone, &["branch", flag, "--", b], git::READ).is_ok_and(|seen| seen.ok());
+            git::run(clone, &["branch", flag, "--", b], git::READ).is_ok_and(|seen| seen.ok());
     }
     Ok(Removed {
         branch,

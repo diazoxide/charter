@@ -4868,12 +4868,24 @@ export type LeftBranch = {
 	/**  The commit it is at, by its full id: what a delete is of. */
 	tip: string,
 	/**
-	 *  Whether the branch the repo is on holds every commit of it: the one case Delete branch
-	 *  is offered, and the one case git deletes it.
+	 *  The branch it was cut from, as the repo recorded it; `null` where none was, and then it
+	 *  is measured against the branch the repo is on.
 	 */
-	merged: boolean,
-	/**  How many of its commits the branch the repo is on does not hold. */
+	base: string | null,
+	/**
+	 *  `merged`, `squashed` (its changes are in that branch, not its commits) or `not-merged`:
+	 *  against the branch it was cut from, as its row says it.
+	 */
+	landed: string,
+	/**  How many of its commits that branch does not hold. */
 	ahead: number,
+	/**  Whether the repo is on it now: git deletes no such branch. */
+	checked_out: boolean,
+	/**
+	 *  Whether Delete branch is offered: git's own `branch -d` would delete it (the branch the
+	 *  repo is on holds every commit of it, and the repo is not on it).
+	 */
+	deletable: boolean,
 };
 
 /**
@@ -7946,8 +7958,9 @@ export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSetting
  *  Compared whole, with a fingerprint of everything in the folder beside the paths
  *  ([`WorktreeLoss::seal`]), so a listed file written again, a file added inside a folder git
  *  ignores whole and a commit made in a nested repository are each a change (#1472). The last
- *  comparison is made in the same call as the removal, just before git runs it; git's own time
- *  to remove the folder is the moment it does not cover.
+ *  comparison is made in the same call as the removal. What it does not cover: a write to an
+ *  entry after that last walk read it, through the rest of the walk, one git call and git's own
+ *  removal of the folder. A folder too big to fingerprint whole is not discarded.
  */
 export type WorktreeLoss = {
 	/**  The task, by the name its row has. */

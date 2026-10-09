@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BranchMerge } from "./bindings";
-import { mergeBlocked, mergeSays, taskChangesOf, taskChangesView } from "./taskChanges";
+import type { BranchMerge, OwnBranch } from "./bindings";
+import { leftSaid, mergeBlocked, mergeSays, taskChangesOf, taskChangesView } from "./taskChanges";
 
 const MERGE: BranchMerge = {
   task: "fix the queue",
@@ -43,5 +43,40 @@ describe("a task's Changes tab", () => {
       "fix-the-queue-0000aaaa has nothing to land in main.",
     );
     expect(mergeBlocked({ ...MERGE, into: null })).toMatch(/^purlis has no record of the branch/);
+  });
+});
+
+describe("what is left of a branch whose folder is gone (#1472)", () => {
+  const LEFT = {
+    tip: "a".repeat(40),
+    base: "main",
+    landed: "squashed",
+    ahead: 3,
+    checked_out: false,
+    deletable: false,
+  };
+  const OWN: OwnBranch = {
+    repo: "api",
+    branch: "fix-the-queue-0000aaaa",
+    standing: "merged-branch-kept",
+    acts: false,
+    left: LEFT,
+  };
+
+  it("says a squashed branch is in the branch it was cut from, as its row does", () => {
+    expect(leftSaid(OWN)).toBe(
+      "The branch fix-the-queue-0000aaaa is still in api. Its changes are in main, squashed or rebased in, but its own 3 commits are not. git does not find it merged into the branch api is on, so it stays: merge it, or delete it with git, yourself.",
+    );
+  });
+
+  it("never offers to delete a branch the repo is on", () => {
+    const on = { ...OWN, left: { ...LEFT, landed: "merged", ahead: 0, checked_out: true } };
+    expect(leftSaid(on)).toBe(
+      "The branch fix-the-queue-0000aaaa is still in api, and main holds every commit of it. api is on it now, so it is not deleted here: git deletes no branch a repo is on.",
+    );
+  });
+
+  it("says nothing where the folder is there", () => {
+    expect(leftSaid({ ...OWN, left: null })).toBeUndefined();
   });
 });

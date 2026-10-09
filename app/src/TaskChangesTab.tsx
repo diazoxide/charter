@@ -191,7 +191,7 @@ export function TaskChangesTab({
           {leftSaid(own)}
         </p>
       )}
-      {own?.left?.merged === true && !read.running && (
+      {own?.left?.deletable === true && !read.running && (
         <div className="task-changes-acts">
           <button
             type="button"

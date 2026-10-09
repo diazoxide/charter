@@ -8223,6 +8223,8 @@ mod tests {
         let _ = held.close_chat(squatter);
         // #1472: a listed file written again is the same list of paths, and is still a change
         // the person was not shown. So is a commit made in a repository nested in the folder.
+        // Asked afresh first, so the chat that stood there is not what changed it.
+        let loss = loss_of(&held, &dispatch).expect("what would be lost now");
         std::fs::write(
             folder.join("scratch.txt"),
             "not committed, and written again\n",

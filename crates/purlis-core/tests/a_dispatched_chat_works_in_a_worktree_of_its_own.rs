@@ -12,7 +12,8 @@ mod support;
 use std::path::Path;
 
 use purlis_core::dispatchplace::{
-    self, Discarded, Ground, NotDone, NotMerged, Refused, Repo, Tidied, Tree, Where,
+    self, Discarded, Ground, LeftIn, NotDeleted, NotDone, NotMerged, Refused, Repo, Tidied, Tree,
+    Where,
 };
 use purlis_core::dispatchrecord::{self, Removed};
 use purlis_core::worktree::{self, git::Isolated, standing};
@@ -825,6 +826,85 @@ fn a_squash_merged_branch_reads_as_landed_and_its_folder_goes_while_the_branch_s
         Tidied::Kept
     );
     assert!(dirty.path.join("scratch.txt").is_file());
+}
+
+#[test]
+fn a_branch_whose_folder_is_gone_is_read_against_its_base_and_deleted_only_as_shown_and_merged() {
+    purlis_core::unsteered!();
+    // #1472 review, M2: the one act that deletes a ref, against real git.
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let left = |cut: &purlis_core::chatpiece::Cut| {
+        dispatchplace::branch_left(&f.plane, &tree(cut), &iso)
+            .expect("read")
+            .expect("its branch is left")
+    };
+    let delete = |cut: &purlis_core::chatpiece::Cut, tip: &str| {
+        dispatchplace::delete_left_branch(&f.plane, &tree(cut), tip, &iso)
+    };
+
+    // Discarded with work on it: measured against main, which it was cut from, and kept.
+    let unmerged = cut(&f, "unmerged work");
+    f.commit(&unmerged.path, "pending");
+    assert_eq!(
+        dispatchplace::discard(&f.plane, &tree(&unmerged), &iso),
+        Ok(Discarded::BranchKept)
+    );
+    let read = left(&unmerged);
+    assert_eq!(read.base.as_deref(), Some("main"));
+    assert_eq!((read.landed, read.ahead), (LeftIn::NotMerged, 1));
+    assert!(!read.deletable && !read.checked_out);
+    assert_eq!(delete(&unmerged, &read.tip), Err(NotDeleted::NotMerged));
+    assert!(has_branch(&f, &unmerged.branch));
+
+    // Merged since: offered, deleted only at the commit shown.
+    support::git(&f.clone, &["merge", "-q", "--ff-only", &unmerged.branch]);
+    let read = left(&unmerged);
+    assert_eq!(read.landed, LeftIn::Merged);
+    assert!(read.deletable);
+    assert_eq!(delete(&unmerged, &"0".repeat(40)), Err(NotDeleted::Moved));
+    assert!(has_branch(&f, &unmerged.branch));
+    assert_eq!(delete(&unmerged, &read.tip), Ok(()));
+    assert!(!has_branch(&f, &unmerged.branch));
+    assert_eq!(
+        dispatchplace::branch_left(&f.plane, &tree(&unmerged), &iso),
+        Ok(None)
+    );
+
+    // A folder removed by hand leaves git's record of it: cleared, then the branch deleted.
+    let by_hand = cut(&f, "removed by hand");
+    f.commit(&by_hand.path, "handmade");
+    support::git(&f.clone, &["merge", "-q", "--ff-only", &by_hand.branch]);
+    std::fs::remove_dir_all(&by_hand.path).unwrap();
+    let read = left(&by_hand);
+    assert!(read.deletable);
+    assert_eq!(delete(&by_hand, &read.tip), Ok(()));
+    assert!(!has_branch(&f, &by_hand.branch));
+    let listed = support::git(&f.clone, &["worktree", "list", "--porcelain"]);
+    assert!(
+        !String::from_utf8_lossy(&listed.stdout).contains(&by_hand.piece),
+        "git's record of the gone folder is cleared"
+    );
+
+    // The clone on the task's branch: never offered, and refused in true words.
+    let on = cut(&f, "checked out");
+    f.commit(&on.path, "on-it");
+    assert_eq!(
+        dispatchplace::discard(&f.plane, &tree(&on), &iso),
+        Ok(Discarded::BranchKept)
+    );
+    support::git(&f.clone, &["switch", "-q", &on.branch]);
+    let read = left(&on);
+    assert!(read.checked_out && !read.deletable);
+    assert_eq!(delete(&on, &read.tip), Err(NotDeleted::CheckedOut));
+    assert!(has_branch(&f, &on.branch));
+    support::git(&f.clone, &["switch", "-q", "main"]);
+
+    // Its folder there again: never deleted from here, and nothing at that path is touched.
+    let back = cut(&f, "back again");
+    let tip = branch_at(&f, &back.branch);
+    assert_eq!(delete(&back, &tip), Err(NotDeleted::FolderThere));
+    assert!(back.path.is_dir());
 }
 
 /// The record of a worktree task whose persona chat is chat `worker`, under the id its
