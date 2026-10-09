@@ -226,6 +226,27 @@ describe("the explorer", () => {
     expect(screen.getByTestId("piece-svc-one")).toHaveTextContent("fix/login");
   });
 
+  it("reads a branch's row as its branch in its repo, with its folder kept in the tooltip (#1102)", () => {
+    // ADR 0072 §4: the row is *`fix/login` in svc*. The folder's name is where git keeps the
+    // branch, and is shown only where a path is wanted.
+    draw({ state: state({ pieces: { svc: [piece("one", { branch: "fix/login" })], tool: [] } }) });
+
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
+      name: "fix/login in svc",
+    });
+    expect(row).toHaveAttribute("title", `${CUT}/one`);
+    // Said once: the mark beside the row no longer repeats the branch.
+    expect(within(screen.getByTestId("piece-svc-one")).getAllByText("fix/login")).toHaveLength(1);
+  });
+
+  it("reads a folder with no branch checked out by the folder's name (#1102)", () => {
+    draw({ state: state({ pieces: { svc: [piece("one", { branch: null })], tool: [] } }) });
+
+    expect(
+      within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" }),
+    ).toBeInTheDocument();
+  });
+
   it("says why a clone's worktrees could not be listed rather than showing none", () => {
     draw({
       state: state({
@@ -563,7 +584,9 @@ describe("a piece row's menu", () => {
   it("opens on a right-click with the catalogue's own rows for that piece", async () => {
     draw({ offers: offers() });
 
-    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" });
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
+      name: "one in svc",
+    });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
     const menu = await screen.findByRole("menu");
@@ -583,7 +606,9 @@ describe("a piece row's menu", () => {
     const pressed: string[] = [];
     draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
 
-    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" });
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
+      name: "one in svc",
+    });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await screen.findByRole("menu");
     await userEvent.click(screen.getByRole("menuitem", { name: "Remove folder one in svc" }));
@@ -685,7 +710,7 @@ describe("the explorer is drawn as a tree", () => {
 
     // The names the rest of this file and the scenario specs press by. An icon that joined
     // an accessible name would rename every row it was put on.
-    expect(screen.getByRole("treeitem", { name: /^one$/ })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /^one in svc$/ })).toBeInTheDocument();
     for (const svg of screen.getByTestId("explorer").querySelectorAll("svg")) {
       expect(svg.getAttribute("aria-hidden")).toBe("true");
     }
@@ -866,6 +891,17 @@ describe("the explorer is a WAI-ARIA tree", () => {
     // A letter nothing starts with moves nothing.
     await userEvent.keyboard("z");
     expect(item(/^two/)).toHaveFocus();
+  });
+
+  it("a typed letter finds a branch's row by the branch it reads, not its folder (#1102)", async () => {
+    draw({ state: state({ pieces: { svc: [piece("one", { branch: "work/login" })], tool: [] } }) });
+    item(/^alpha/).focus();
+
+    await userEvent.keyboard("w");
+    expect(item(/^work\/login in svc/)).toHaveFocus();
+    // The folder's name is not what the row reads, so its letter finds nothing.
+    await userEvent.keyboard("o");
+    expect(item(/^work\/login in svc/)).toHaveFocus();
   });
 
   it("Enter does what a click does: a worktree is picked and a chat brought forward", async () => {

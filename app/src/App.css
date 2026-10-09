@@ -2988,6 +2988,11 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* A branch's row reads "<branch> in <repo>" (#1102): the repo is the quieter half. */
+.explorer .spot-in {
+  color: var(--text-muted);
+}
+
 /* **The two states that change what starting a chat in a tree would mean**, and until now
    they had no rule at all — `unwired` was the same grey as the branch beside it, on the one
    label that says a chat there would run with none of the plane's ask/deny rules. A chip, and
