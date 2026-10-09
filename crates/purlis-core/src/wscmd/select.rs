@@ -57,9 +57,6 @@ pub enum Scope {
     Locked,
 }
 
-/// Per-session pointers older than this are dropped when one is written — 30 days.
-const SESSION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 86400);
-
 /// The plane's machine-local state directory, **as [`crate::active`] reads it**.
 ///
 /// `root/.charter`, and deliberately NOT [`crate::plane::state_dir`], which honours
@@ -176,43 +173,17 @@ pub fn set_active(root: &Path, name: &str, ids: &Ids, force: bool) -> Scope {
     }
 }
 
-/// Drop every per-session and per-terminal marker past the cutoff — `workspace._prune`.
+/// Drop the per-session and per-terminal markers past the cutoff — `workspace._prune`, routed
+/// through [`crate::retention::on_select`] (#1025).
 ///
-/// **The DIRECTORY, not a list of suffixes.** Python enumerated five (`*.workspace`,
-/// `*.lock`, `*.configver`, `*.memnudge`, `*.usage`) and read as an exhaustive list of the
-/// marker family while being nothing of the kind: three families were missing by the time
-/// anyone looked. Both directories are charter's own state and hold nothing but per-session
-/// and per-terminal markers, so there is no member for which keeping it past the cutoff is
-/// the right answer. Files only: a directory in here is not a marker.
+/// It was a loop of its own that removed every file in both directories past 30 days, by
+/// path. So a chat the reopen record brings back lost its month-old pointer and lock to another
+/// chat's `workspace use`, the tool gate's `.tools` and `.gate` went outside the order
+/// [`crate::personagate::sweep_ceilings`] keeps, and nothing checked for a link on the way or
+/// looked at a file again before the unlink. Retention holds one rule for all of it, the same
+/// one the app applies when it opens the project.
 fn prune(root: &Path) {
-    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
-        return;
-    };
-    let Some(cutoff) = now.checked_sub(SESSION_MAX_AGE) else {
-        return;
-    };
-    for dir in [sessions_dir(root), terminals_dir(root)] {
-        let Ok(reader) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in reader.filter_map(Result::ok) {
-            let path = entry.path();
-            let Ok(found) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if !found.is_file() {
-                continue;
-            }
-            let stale = found
-                .modified()
-                .ok()
-                .and_then(|when| when.duration_since(std::time::UNIX_EPOCH).ok())
-                .is_some_and(|when| when < cutoff);
-            if stale {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-    }
+    crate::retention::on_select(root, std::time::SystemTime::now());
 }
 
 // ----------------------------------------------------------------------------------------
@@ -966,13 +937,54 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         let old = sessions.join("ancient.workspace");
         std::fs::write(&old, "gone\n").unwrap();
-        let long_ago =
-            std::time::SystemTime::now() - SESSION_MAX_AGE - std::time::Duration::from_secs(60);
+        let long_ago = std::time::SystemTime::now()
+            - crate::retention::KEEP_FOR
+            - std::time::Duration::from_secs(60);
         filetime_set(&old, long_ago);
 
         set_active(dir.path(), "beta", &ids(Some("s1"), None), false);
         assert!(!old.exists(), "a pointer 30 days old is not a selection");
         assert!(sessions.join("s1.workspace").exists());
+    }
+
+    #[test]
+    fn a_reopened_chats_month_old_pointer_survives_a_selection_in_another_chat() {
+        // #1025: the prune is retention's, so a chat the reopen record brings back keeps its
+        // pointer and its lock however old, and another chat's month-old pointer still goes.
+        let dir = plane();
+        workspace(dir.path(), "beta");
+        let record = crate::reopen::Record {
+            chats: vec![crate::reopen::Chat {
+                program: "claude".into(),
+                number: Some(7),
+                ..Default::default()
+            }],
+            dealt: 7,
+            ..Default::default()
+        };
+        crate::reopen::write(dir.path(), &record).unwrap();
+        let sessions = sessions_dir(dir.path());
+        std::fs::create_dir_all(&sessions).unwrap();
+        let long_ago = std::time::SystemTime::now()
+            - crate::retention::KEEP_FOR
+            - std::time::Duration::from_secs(60);
+        for name in ["7.workspace", "7.lock", "5.workspace"] {
+            std::fs::write(sessions.join(name), "beta\n").unwrap();
+            filetime_set(&sessions.join(name), long_ago);
+        }
+
+        set_active(dir.path(), "beta", &ids(Some("8"), None), false);
+
+        assert!(
+            sessions.join("7.workspace").exists(),
+            "the reopened chat's pointer"
+        );
+        assert!(sessions.join("7.lock").exists(), "and its lock");
+        assert!(
+            !sessions.join("5.workspace").exists(),
+            "a gone chat's pointer goes"
+        );
+        assert!(sessions.join("8.workspace").exists());
     }
 
     /// `utimes` on one file, so the prune test does not have to wait a month.

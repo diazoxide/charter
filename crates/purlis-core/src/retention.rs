@@ -35,8 +35,12 @@
 //! every file is aged, read and removed through that handle, so a link swapped in on the way
 //! after the sweep started cannot point it anywhere else. A file is looked at again after it
 //! is read and kept when it was written to or replaced meanwhile. The tool gate's `.tools` and `.gate`
-//! are [`crate::personagate::sweep_ceilings`]'s; the hook spool, the event log, `terminals/`
-//! and every other store under `.charter/` are left alone.
+//! are [`crate::personagate::sweep_ceilings`]'s; the hook spool, the event log and every
+//! other store under `.charter/` are left alone.
+//!
+//! **`purlis workspace use` collects through here too** ([`on_select`], #1025): the month-old
+//! markers in `sessions/` by the same live rule, and the per-terminal pointers in
+//! `terminals/`, which no reopen record names, by their age alone.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -76,13 +80,7 @@ pub fn sweep_keeping(
     chats: &[crate::dispatchrecord::Live],
 ) -> Swept {
     Swept {
-        sessions: collect(
-            plane,
-            &[crate::names::state_name(plane), "sessions"],
-            now,
-            |name| a_marker(name) && !of_a_live_session(name, live),
-            |_, written| Some(written),
-        ),
+        sessions: sweep_sessions(plane, now, live),
         traces: collect(
             plane,
             &[crate::names::state_name(plane), "persona-state", "trace"],
@@ -151,17 +149,59 @@ pub fn sweep_keeping(
 /// record (Resume) rather than reopened at this launch. And a `.charter/` copied or synced
 /// from another device carries that device's ages and that device's chats.
 pub fn on_open(plane: &Path, now: SystemTime) -> Swept {
-    let record = match crate::reopen::read_strictly(plane) {
-        Ok(None) => crate::reopen::Record::default(),
-        Ok(Some(record)) if record.chats.iter().all(|chat| chat.number.is_some()) => record,
-        _ => {
-            return Swept {
-                reports: sweep_reports(plane, now),
-                ..Swept::default()
-            };
-        }
+    let Some(record) = returning(plane) else {
+        return Swept {
+            reports: sweep_reports(plane, now),
+            ..Swept::default()
+        };
     };
-    let live: Vec<String> = record
+    sweep_keeping(
+        plane,
+        now,
+        &live_of(&record),
+        &crate::dispatchrecord::Live::of(&record),
+    )
+}
+
+/// What `purlis workspace use` collects when it writes a pointer (#1025): the month-old
+/// per-session markers in `sessions/`, by [`on_open`]'s rule of which chats are live, and the
+/// month-old per-terminal pointers in `terminals/`. How many went.
+///
+/// One rule with the sweep on open, through the same held directory: a chat the reopen
+/// record brings back keeps its month-old `<n>.workspace` and `<n>.lock`, a record that cannot
+/// say which chats come back keeps every session marker, the tool gate's `.tools` and `.gate`
+/// stay [`crate::personagate::sweep_ceilings`]'s, and nothing is followed through a link.
+///
+/// A per-terminal pointer is keyed by the pane, which no reopen record names, so it is
+/// collected by its age alone, as it always was.
+pub fn on_select(plane: &Path, now: SystemTime) -> usize {
+    let sessions =
+        returning(plane).map_or(0, |record| sweep_sessions(plane, now, &live_of(&record)));
+    let terminals = collect(
+        plane,
+        &[crate::names::state_name(plane), "terminals"],
+        now,
+        a_marker,
+        |_, written| Some(written),
+    );
+    sessions + terminals
+}
+
+/// The reopen record that says which chats come back, or `None` when it cannot: one that does
+/// not parse, is of another version, cannot be read, or was written before a chat kept its
+/// number. No record at all is a project no app has quit in, where no chat comes back.
+fn returning(plane: &Path) -> Option<crate::reopen::Record> {
+    match crate::reopen::read_strictly(plane) {
+        Ok(None) => Some(crate::reopen::Record::default()),
+        Ok(Some(record)) if record.chats.iter().all(|chat| chat.number.is_some()) => Some(record),
+        _ => None,
+    }
+}
+
+/// The keys a returning chat's session files are under: its number, which
+/// `$CHARTER_SESSION_ID` carries, and the conversation it resumes.
+fn live_of(record: &crate::reopen::Record) -> Vec<String> {
+    record
         .chats
         .iter()
         .flat_map(|chat| {
@@ -169,8 +209,18 @@ pub fn on_open(plane: &Path, now: SystemTime) -> Swept {
             let resume = chat.resume.as_ref().map(|id| id.as_str().to_owned());
             number.into_iter().chain(resume)
         })
-        .collect();
-    sweep_keeping(plane, now, &live, &crate::dispatchrecord::Live::of(&record))
+        .collect()
+}
+
+/// The month-old per-session markers in `sessions/`, but a live session's.
+fn sweep_sessions(plane: &Path, now: SystemTime, live: &[String]) -> usize {
+    collect(
+        plane,
+        &[crate::names::state_name(plane), "sessions"],
+        now,
+        |name| a_marker(name) && !of_a_live_session(name, live),
+        |_, written| Some(written),
+    )
 }
 
 /// The Python charter's report drafts, which are no session's. This plane's only, as every
