@@ -711,9 +711,7 @@ describe("the explorer", () => {
       // One app process serves the whole run: the branch and the strip are left as found.
       writeFileSync(join(branch, "README.md"), readme);
       for (const name of ["What changed · README.md · fix-login", "Files · fix-login"]) {
-        const close = await $(
-          `[role="tablist"][aria-label="Tabs"] button[aria-label="Close ${name}"]`,
-        );
+        const close = await $(`[data-strip="Tabs"] button[aria-label="Close ${name}"]`);
         if (await close.isExisting()) await close.click();
       }
     }
