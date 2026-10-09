@@ -3,6 +3,7 @@ import { afterEach } from "vitest";
 import { forgetExtensionThemes } from "./Extensions";
 import { forgetExtensionsOn } from "./extensionsOn";
 import { forgetProjectThemes } from "./projectTheme";
+import { forgetUnappliedRepos } from "./unappliedRepos";
 
 // What each project has on is kept per plane for the window's life (`extensionsOn.ts`); every
 // test's window is a new one, and most of them share a plane path.
@@ -10,6 +11,8 @@ afterEach(() => {
   forgetExtensionsOn();
   forgetExtensionThemes();
   forgetProjectThemes();
+  // Settings › Repos' unapplied ticks are held per workspace for the window's life (#1192).
+  forgetUnappliedRepos();
   // A reload keeps the window's session storage (the Chats list's folds, `chatFolds.ts`); a
   // new window, as every test's is, starts without it.
   globalThis.sessionStorage?.clear();

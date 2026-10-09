@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { commands, type PlaneId } from "./bindings";
 import { RepoPicker } from "./RepoPicker";
 import { cloneRepos, underWay, useRepoClones } from "./repoClones";
 import { dropMembershipTitle } from "./actions";
 import { RemoveFromWorkspace } from "./RemoveFromWorkspace";
 import { SettingActions, type RowIds } from "./settings/components";
+import { hearUnapplied, holdUnapplied, unappliedKey, unappliedOf } from "./unappliedRepos";
 
 /**
  * What Settings › Repos' picker changed in a workspace's membership, heard by the "Not cloned
@@ -24,7 +32,8 @@ function membershipChanged(plane: PlaneId, workspace: string) {
  *
  * Applying clones what was ticked and removes what was unticked. **It is a button and not a
  * write on each tick**: a clone and a removal are things done, with no Undo, so a tick is held
- * until it is confirmed (the rule DS-3b set for a choice that does something). A removal goes
+ * until it is confirmed (the rule DS-3b set for a choice that does something), across a switch
+ * to another group of Settings and back (`unappliedRepos.ts`, #1192). A removal goes
  * through `drop_repo`, whose guard is inside the delete: a clone holding uncommitted or unpushed
  * work, or any worktree, is refused, and the refusal is drawn here in the core's own words.
  * There is no way past it from this surface.
@@ -36,7 +45,20 @@ export function useWorkspaceRepos(
   workspace: string,
 ): { control: (ids: RowIds) => ReactNode; error: readonly string[] } {
   const [have, setHave] = useState<ReadonlySet<string>>();
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const key = unappliedKey(plane, workspace);
+  const changes = useSyncExternalStore(hearUnapplied, () => unappliedOf(key));
+  // What is ticked: what is cloned, with the unapplied ticks over it. Nothing until it is read.
+  const picked: ReadonlySet<string> =
+    have === undefined
+      ? new Set()
+      : new Set([...have, ...changes.add].filter((name) => !changes.remove.has(name)));
+  const setPicked = (next: ReadonlySet<string>) => {
+    const cloned = have ?? new Set<string>();
+    holdUnapplied(key, {
+      add: new Set([...next].filter((name) => !cloned.has(name))),
+      remove: new Set([...cloned].filter((name) => !next.has(name))),
+    });
+  };
   const [applying, setApplying] = useState(false);
   const [refusals, setRefusals] = useState<string[]>([]);
   const clones = useRepoClones(plane, workspace);
@@ -52,9 +74,14 @@ export function useWorkspaceRepos(
         if (reading.current !== mine) return;
         const now = new Set(names);
         setHave(now);
-        setPicked(now);
+        // Settled against the disk: a tick it already agrees with is no change any more.
+        const was = unappliedOf(key);
+        holdUnapplied(key, {
+          add: new Set([...was.add].filter((name) => !now.has(name))),
+          remove: new Set([...was.remove].filter((name) => now.has(name))),
+        });
       });
-  }, [plane, workspace]);
+  }, [plane, workspace, key]);
   useEffect(read, [read]);
 
   const adding = have === undefined ? [] : [...picked].filter((n) => !have.has(n)).sort();
@@ -72,6 +99,8 @@ export function useWorkspaceRepos(
     setRefusals(refused);
     if (adding.length > 0) await cloneRepos(plane, workspace, adding);
     setApplying(false);
+    // Applied: what the disk now holds is what is ticked, a refused removal included.
+    holdUnapplied(key, { add: new Set(), remove: new Set() });
     read();
     membershipChanged(plane, workspace);
   };
