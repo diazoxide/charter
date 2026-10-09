@@ -702,7 +702,8 @@ impl Tree {
 /// Whether `record` names the branch folder `piece` of `repo` in `workspace` as its worktree,
 /// by the names on the record alone. A record whose names [`Tree::of`] would not accept still
 /// names its folder here. A record file that does not parse as a record is no record at all
-/// ([`dispatchrecord::list`] skips it), so it names nothing and keeps nobody off a folder.
+/// ([`dispatchrecord::list`] skips it), so it names nothing here; [`held_in_folder`] holds the
+/// folder its text names.
 pub fn names_folder(record: &Record, workspace: &str, repo: &str, piece: &str) -> bool {
     record.place.workspace.as_deref() == Some(workspace)
         && record
@@ -717,16 +718,116 @@ pub fn names_folder(record: &Record, workspace: &str, repo: &str, piece: &str) -
 /// Remove off a task's folder: those are the person's acts on any branch folder, and a task's
 /// is merged or discarded from its Changes tab, where [`merge`] and [`discard`] hold their
 /// guards (the shown commit, the task ended, the brokered route, only the branch purlis cut).
+/// A record that does not read names nothing here: [`held_in_folder`] is the reading that
+/// fails closed on one.
 pub fn task_in_folder(root: &Path, workspace: &str, repo: &str, piece: &str) -> Option<Record> {
     dispatchrecord::list(root)
         .into_iter()
         .find(|record| names_folder(record, workspace, repo, piece))
 }
 
+/// What stands in a branch folder, as far as the project's dispatch store can tell (#1534).
+#[derive(Debug, Clone, PartialEq)]
+pub enum InFolder {
+    /// A record names it as its worktree: the folder is that task's ([`task_in_folder`]).
+    Task(Box<Record>),
+    /// A file of the store, named as record `id`, that does not read as a record and whose
+    /// text names the folder ([`dispatchrecord::unread`]). It may be a task's, so it is held as
+    /// one: a guard fails closed on it.
+    Unread(String),
+}
+
+/// **What holds the branch folder `piece` of `repo` in `workspace`**, where anything in the
+/// dispatch store of the project at `root` does: the task a record names it for, or else a
+/// record that does not read but whose text names the workspace, the repo and the folder,
+/// each as a JSON string. [`task_in_folder`] skips the second; a guard that must fail closed
+/// reads this.
+pub fn held_in_folder(root: &Path, workspace: &str, repo: &str, piece: &str) -> Option<InFolder> {
+    if let Some(record) = task_in_folder(root, workspace, repo, piece) {
+        return Some(InFolder::Task(Box::new(record)));
+    }
+    let names = |text: &str| {
+        [workspace, repo, piece].iter().all(|name| {
+            serde_json::to_string(name).is_ok_and(|quoted| text.contains(quoted.as_str()))
+        })
+    };
+    dispatchrecord::unread(root)
+        .into_iter()
+        .find(|(_, text)| names(text))
+        .map(|(id, _)| InFolder::Unread(id))
+}
+
+/// **What keeps `purlis worktree remove` off a branch folder purlis cut for a task** (#1534):
+/// the explorer's rule for its own Remove, from a terminal, where `None` lets the removal go
+/// on. A folder [`held_in_folder`] finds is refused, `--force` or not, and the person is sent
+/// to the task's Changes tab, where [`discard`] holds the guards a task's folder needs.
+///
+/// The explorer's two exceptions hold here too: a folder already gone (only git's stale
+/// registration is left, and nothing in it to lose), and the folder of a task that has ended
+/// in a repo the brokered route runs no git in (`no_discard_there`, asked only then): Discard
+/// is refused there and its sentence sends the person to a Remove of their own.
+///
+/// **`delete_branch` is refused for any such folder**, even where the removal would go on:
+/// the branch can hold commits that exist nowhere else, and a discard never deletes a branch
+/// git does not find merged.
+pub fn kept_from_removal(
+    root: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    delete_branch: bool,
+    no_discard_there: impl FnOnce() -> bool,
+) -> Option<String> {
+    let held = held_in_folder(root, workspace, repo, piece)?;
+    let there = worktree::path_for(root, workspace, repo, piece)
+        .is_ok_and(|folder| folder.symlink_metadata().is_ok());
+    let goes = match &held {
+        InFolder::Task(record) => !there || (!record.running() && no_discard_there()),
+        InFolder::Unread(_) => !there,
+    };
+    let shown_piece = crate::shown::short(piece);
+    match held {
+        InFolder::Unread(id) if !goes || delete_branch => {
+            let file = dispatchrecord::dir(root).join(format!("{id}.json"));
+            let file = file.strip_prefix(root).unwrap_or(&file);
+            Some(format!(
+                "'{shown_piece}' is named by a dispatch record purlis cannot read ({}), so it is \
+                 kept as a task's folder. If no task works there, move that file out of its \
+                 folder and run this again. Nothing was removed.",
+                crate::shown::short(&file.to_string_lossy())
+            ))
+        }
+        InFolder::Task(record) if !goes => {
+            let task = record.task.unwrap_or(record.worker.chat.name);
+            Some(left_to(
+                &task,
+                piece,
+                false,
+                "Changes tab in the purlis window",
+            ))
+        }
+        InFolder::Task(record) if delete_branch => {
+            let task = crate::shown::short(&record.task.unwrap_or(record.worker.chat.name));
+            Some(format!(
+                "'{shown_piece}' is the branch purlis cut for the task '{task}', so \
+                 --delete-branch is refused for it: that branch can hold commits nothing else \
+                 has. Run this again without --delete-branch to remove the folder and keep the \
+                 branch. Nothing was removed."
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// What the explorer's own Merge (`merging`) or Remove says of `piece`, the branch folder
 /// purlis cut for the task `task`: that it is the task's, and where the person merges or
 /// discards it instead. One line, in the window's words.
 pub fn left_to_its_task(task: &str, piece: &str, merging: bool) -> String {
+    left_to(task, piece, merging, "Changes tab")
+}
+
+/// [`left_to_its_task`], naming the task's tab as `tab`.
+fn left_to(task: &str, piece: &str, merging: bool, tab: &str) -> String {
     let (task, piece) = (crate::shown::short(task), crate::shown::short(piece));
     let (act, shows, done) = if merging {
         ("Merge", "what would land", "merged")
@@ -735,7 +836,7 @@ pub fn left_to_its_task(task: &str, piece: &str, merging: bool) -> String {
     };
     format!(
         "'{piece}' is the branch purlis cut for the task '{task}'. {act} it from that task's \
-         Changes tab, which shows {shows} and waits until the task has ended: Review changes, on \
+         {tab}, which shows {shows} and waits until the task has ended: Review changes, on \
          its row in the chats list or on the Dispatches tab. Nothing was {done}."
     )
 }

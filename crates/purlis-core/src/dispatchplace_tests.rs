@@ -634,6 +634,150 @@ fn the_explorer_is_told_where_a_task_s_folder_is_merged_or_discarded() {
     }
 }
 
+/// Writes `record` into the store of the project at `root`, as the app writes it.
+fn stored(root: &Path, record: &Record) {
+    let dir = dispatchrecord::dir(root);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{}.json", record.id)),
+        serde_json::to_string_pretty(record).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The folder of piece `piece` of `api` in `alpha`, made.
+fn a_folder(root: &Path, piece: &str) -> PathBuf {
+    let folder = root.join("workspaces/alpha/.worktrees/api").join(piece);
+    std::fs::create_dir_all(&folder).unwrap();
+    folder
+}
+
+#[test]
+fn a_record_that_does_not_read_still_holds_the_folder_its_text_names() {
+    // #1534: a record cut short in its write, or edited by hand, is no record to `list`, and
+    // the guard fails closed on it where its text names the folder.
+    let (_dir, root) = project();
+    let record = a_record(Some(a_tree("check-b5rc0def", None)), Some("alpha"));
+    let text = serde_json::to_string_pretty(&record).unwrap();
+    let dir = dispatchrecord::dir(&root);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{ID}.json")), &text[..text.len() - 40]).unwrap();
+    assert_eq!(
+        task_in_folder(&root, "alpha", "api", "check-b5rc0def"),
+        None
+    );
+
+    assert_eq!(
+        held_in_folder(&root, "alpha", "api", "check-b5rc0def"),
+        Some(InFolder::Unread(ID.to_owned()))
+    );
+    // It holds only what its text names.
+    for (ws, repo, piece) in [
+        ("beta", "api", "check-b5rc0def"),
+        ("alpha", "web", "check-b5rc0def"),
+        ("alpha", "api", "chat-1"),
+    ] {
+        assert_eq!(
+            held_in_folder(&root, ws, repo, piece),
+            None,
+            "{ws} {repo} {piece}"
+        );
+    }
+    // A record that reads is the task's.
+    stored(&root, &record);
+    assert_eq!(
+        held_in_folder(&root, "alpha", "api", "check-b5rc0def"),
+        Some(InFolder::Task(Box::new(record)))
+    );
+    // A file of the store not named as a record is nothing's.
+    std::fs::remove_file(dir.join(format!("{ID}.json"))).unwrap();
+    std::fs::write(dir.join("notes.json"), &text).unwrap();
+    assert_eq!(
+        held_in_folder(&root, "alpha", "api", "check-b5rc0def"),
+        None
+    );
+}
+
+#[test]
+fn the_command_s_remove_is_kept_off_a_task_s_folder_as_the_explorer_s_is() {
+    // #1534: `purlis worktree remove`, the explorer's rule from a terminal.
+    let (_dir, root) = project();
+    let piece = "check-b5rc0def";
+    let refused = |delete_branch: bool, no_discard: bool| {
+        kept_from_removal(&root, "alpha", "api", piece, delete_branch, || no_discard)
+    };
+    // No record names it: the person's own folder, removed as ever.
+    a_folder(&root, piece);
+    assert_eq!(refused(false, false), None);
+    assert_eq!(refused(true, false), None);
+
+    // A running task's folder: refused, `--force` or not (the command's `force` never reaches
+    // here), and pointed at its Changes tab.
+    let mut running = a_record(Some(a_tree(piece, None)), Some("alpha"));
+    running.ended = None;
+    stored(&root, &running);
+    let said = refused(false, true).expect("a running task's folder is kept");
+    assert_eq!(
+        said,
+        "'check-b5rc0def' is the branch purlis cut for the task 'check the queue'. Discard it \
+         from that task's Changes tab in the purlis window, which shows what would go with it \
+         and waits until the task has ended: Review changes, on its row in the chats list or \
+         on the Dispatches tab. Nothing was removed."
+    );
+    assert_eq!(refused(true, true), Some(said));
+
+    // An ended task's folder in a repo the brokered route runs no git in: Discard is refused
+    // there and sends the person here, so it goes, but never with its branch.
+    let ended = a_record(Some(a_tree(piece, None)), Some("alpha"));
+    stored(&root, &ended);
+    assert!(refused(false, false).is_some(), "an ended task's folder");
+    assert_eq!(refused(false, true), None);
+    let branch = refused(true, true).expect("a task's branch is not deleted from here");
+    assert_eq!(
+        branch,
+        "'check-b5rc0def' is the branch purlis cut for the task 'check the queue', so \
+         --delete-branch is refused for it: that branch can hold commits nothing else has. Run \
+         this again without --delete-branch to remove the folder and keep the branch. Nothing \
+         was removed."
+    );
+
+    // Its folder already gone: only git's stale registration is left, and nothing to lose,
+    // but the branch is still kept.
+    std::fs::remove_dir_all(root.join("workspaces/alpha/.worktrees/api").join(piece)).unwrap();
+    assert_eq!(refused(false, false), None);
+    assert_eq!(refused(true, false), Some(branch));
+}
+
+#[test]
+fn a_record_that_does_not_read_keeps_the_command_off_the_folder_its_text_names() {
+    let (_dir, root) = project();
+    let piece = "check-b5rc0def";
+    a_folder(&root, piece);
+    let dir = dispatchrecord::dir(&root);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{ID}.json")),
+        "{\"v\": 1, \"place\": {\"workspace\": \"alpha\", \"worktree\": {\"repo\": \"api\", \
+         \"piece\": \"check-b5rc0def\"",
+    )
+    .unwrap();
+    let said = kept_from_removal(&root, "alpha", "api", piece, false, || true)
+        .expect("an unread record that names the folder keeps it");
+    assert!(
+        said.starts_with("'check-b5rc0def' is named by a dispatch record purlis cannot read ("),
+        "{said}"
+    );
+    assert!(said.contains(&format!("{ID}.json")), "{said}");
+    assert!(said.ends_with("Nothing was removed."), "{said}");
+    // Gone already, it goes, without its branch.
+    std::fs::remove_dir_all(root.join("workspaces/alpha/.worktrees/api").join(piece)).unwrap();
+    assert_eq!(
+        kept_from_removal(&root, "alpha", "api", piece, false, || true),
+        None
+    );
+    assert!(kept_from_removal(&root, "alpha", "api", piece, true, || true).is_some());
+}
+
 #[test]
 fn a_chat_started_in_another_workspace_is_told_where_it_works_and_where_its_asker_does() {
     assert_eq!(
