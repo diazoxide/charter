@@ -18,7 +18,10 @@
 //!   [`MEMORY`] — nothing else kills it for that (on every platform, Windows included:
 //!   `RLIMIT_AS` cannot be set below what a macOS process has already mapped, so a limit the
 //!   kernel enforces is not available there);
-//! - **a capped answer**: at most [`OUTPUT`] bytes are read back, as JSON.
+//! - **a capped answer**: at most [`OUTPUT`] bytes are read back, as JSON;
+//! - **a few at once, app-wide**: at most [`AT_ONCE`] readers run at the same time, across every
+//!   window and branch. An ask past that waits for one to finish, within its own deadline, so
+//!   many branches built to hang their reads cost a fixed number of children, not one each.
 //!
 //! A read that is killed or capped fails: the window says so, and the watch counts the batch as
 //! one that matters.
@@ -27,6 +30,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// How every read the capped reader gives no answer to begins: past its deadline or memory
@@ -49,6 +53,69 @@ pub const OUTPUT: u64 = 64 * 1024 * 1024;
 
 /// How long after its own deadline the app kills a child that has not stopped itself.
 pub const GRACE: Duration = Duration::from_secs(2);
+
+/// The most readers running at once, across the app (#1130). Each branch already has at most one
+/// ignore check and one status read per window running (plus one queued); this bounds the sum
+/// over many branches and windows, and so how much memory their children can take together.
+pub const AT_ONCE: usize = 6;
+
+/// The readers running now, app-wide.
+static READERS: Gate = Gate::new(AT_ONCE);
+
+/// A counting gate: at most `permits` holders at once, and a wait for a place that gives up.
+#[derive(Debug)]
+struct Gate {
+    permits: usize,
+    inside: Mutex<usize>,
+    left: Condvar,
+}
+
+/// A place in a [`Gate`], given back when dropped.
+#[derive(Debug)]
+struct Permit<'g>(&'g Gate);
+
+impl Gate {
+    const fn new(permits: usize) -> Self {
+        Self {
+            permits,
+            inside: Mutex::new(0),
+            left: Condvar::new(),
+        }
+    }
+
+    /// A place, waiting at most `within` for one; nothing when none came free in time.
+    fn enter(&self, within: Duration) -> Option<Permit<'_>> {
+        // The count is a plain number, right whatever a holder did, so a poisoned lock is read.
+        let inside = self.inside.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mut inside, _) = self
+            .left
+            .wait_timeout_while(inside, within, |inside| *inside >= self.permits)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *inside >= self.permits {
+            return None;
+        }
+        *inside += 1;
+        Some(Permit(self))
+    }
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        let mut inside = self.0.inside.lock().unwrap_or_else(PoisonError::into_inner);
+        *inside = inside.saturating_sub(1);
+        drop(inside);
+        self.0.left.notify_one();
+    }
+}
+
+/// An ask that found every reader place taken for as long as its deadline.
+fn busy(deadline: Duration) -> Refused {
+    Refused::Read(format!(
+        "{READ_FAILED}purlis is busy reading other branches, and no read came free within {} \
+         seconds",
+        deadline.as_secs()
+    ))
+}
 
 /// What starts an answer on the child's standard output: a test binary prints its own lines
 /// around it.
@@ -143,7 +210,18 @@ impl Reader {
     }
 
     /// Asks the child one question about `branch`, and waits for its answer within the bounds.
+    ///
+    /// The wait for a place among the [`AT_ONCE`] readers counts against the deadline: the child
+    /// is given what is left of it.
     pub fn ask(&self, plane: &Path, branch: Branch<'_>, ask: Ask) -> Result<Answer, Refused> {
+        let queued = Instant::now();
+        let _permit = READERS
+            .enter(self.deadline)
+            .ok_or_else(|| busy(self.deadline))?;
+        let deadline = self.deadline.saturating_sub(queued.elapsed());
+        if deadline.is_zero() {
+            return Err(busy(self.deadline));
+        }
         let question = Question {
             plane: plane.to_path_buf(),
             ws: branch.ws.to_string(),
@@ -151,7 +229,7 @@ impl Reader {
             piece: branch.piece.map(str::to_string),
             ask,
             memory: self.memory,
-            deadline_ms: u64::try_from(self.deadline.as_millis()).unwrap_or(u64::MAX),
+            deadline_ms: u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
         };
         let asked = serde_json::to_vec(&question)
             .map_err(|e| Refused::Read(format!("purlis could not ask the reader: {e}")))?;
@@ -188,7 +266,7 @@ impl Reader {
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if started.elapsed() >= self.deadline + GRACE => {
+                Ok(None) if started.elapsed() >= deadline + GRACE => {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(failed(format!(
@@ -322,4 +400,60 @@ fn watch_own_bounds(cap: u64, deadline: Duration) {
             std::thread::sleep(Duration::from_millis(10));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn no_more_readers_run_at_once_than_the_gate_lets_in() {
+        let gate = Arc::new(Gate::new(3));
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let asks: Vec<_> = (0..4)
+            .map(|_| {
+                let (gate, running, most) = (gate.clone(), running.clone(), most.clone());
+                std::thread::spawn(move || {
+                    let _permit = gate.enter(Duration::from_secs(10)).expect("let in");
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(100));
+                    running.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for ask in asks {
+            ask.join().unwrap();
+        }
+        // Three at once, and the fourth went in once one had left.
+        assert_eq!(most.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_queued_ask_gives_up_within_its_own_deadline() {
+        let gate = Gate::new(1);
+        let held = gate
+            .enter(Duration::from_secs(1))
+            .expect("the first is let in");
+        let started = Instant::now();
+        assert!(gate.enter(Duration::from_millis(50)).is_none());
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_millis(50), "{waited:?}");
+        assert!(waited < Duration::from_secs(1), "{waited:?}");
+        drop(held);
+        assert!(gate.enter(Duration::from_millis(50)).is_some());
+    }
+
+    #[test]
+    fn a_busy_reader_fails_as_a_read_that_gave_no_answer() {
+        let busy = busy(Duration::from_secs(30));
+        let Refused::Read(said) = busy else {
+            panic!("{busy:?}")
+        };
+        assert!(said.starts_with(READ_FAILED), "{said}");
+        assert!(said.contains("busy"), "{said}");
+    }
 }
