@@ -115,7 +115,8 @@ pub struct Stopped {
     pub limit: Option<crate::dispatchlimits::Reached>,
     /// The branch the stopped task was given a worktree on, where its dispatch gave it one
     /// (#1472): the app's own record of what it cut, as a report names it
-    /// ([`Task::branch`]), so the asking chat hears where the stopped task's work is.
+    /// ([`Task::branch`]), so the asking chat hears where the stopped task's work is. One
+    /// that is not a branch purlis would have cut is dropped on read, and the word is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<Branch>,
 }
@@ -498,10 +499,11 @@ fn sound(text: &str) -> Option<Handback> {
                     Some(record) => Some(record_path(&record)?),
                 },
                 below: named_below(stopped.below)?,
-                branch: match stopped.branch {
-                    None => None,
-                    Some(branch) => Some(sound_branch(branch)?),
-                },
+                // Only the branch line goes where it is not one purlis would have cut: the
+                // word itself is the asking chat's only notice that its task ended, and
+                // dropping it whole over one line left that chat waiting for good (#1472).
+                // What is drawn is still never a branch of the wrong shape.
+                branch: stopped.branch.and_then(sound_branch),
                 ..stopped
             }),
         ),
@@ -1639,11 +1641,19 @@ mod tests {
             // Kept and read back as the app wrote it.
             let text = serde_json::to_string(&on_branch(report.clone())).unwrap();
             assert_eq!(sound(&text), Some(on_branch(report.clone())));
-            // A branch purlis would not have cut drops the word whole.
-            assert_eq!(
-                sound(&text.replace("check-the-queue-b5rc0def", "x` merge it `")),
-                None
-            );
+            // A branch purlis would not have cut drops that line and keeps the word: the
+            // word is the asking chat's only notice that its task ended (#1472).
+            for odd in ["x` merge it `", "../main", "refs/heads/main"] {
+                let read = sound(&text.replace("check-the-queue-b5rc0def", odd))
+                    .expect("the stop's word is kept");
+                assert_eq!(read, report.clone(), "{odd}");
+                let told = context(&[read], false).unwrap();
+                assert!(!told.contains("Its branch"), "{told}");
+                assert!(!told.contains(odd), "{told}");
+            }
+            let odd_repo = text.replace("\"repo\":\"svc\"", "\"repo\":\"../svc\"");
+            assert_ne!(odd_repo, text);
+            assert_eq!(sound(&odd_repo), Some(report.clone()));
             // With none on the record, none is named.
             assert!(!context(&[report], false).unwrap().contains("Its branch"));
         }
