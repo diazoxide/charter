@@ -13,6 +13,8 @@
 //! back into English.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use purlis_core::worktree::Note;
 use purlis_core::{chatpiece, worktree};
@@ -26,6 +28,77 @@ const LISTING: &str = "listing the branches";
 const REMOVING: &str = "removing the branch";
 const DECLARING: &str = "declaring the branch done";
 const MERGING: &str = "merging the branch";
+
+/// How long a verb waits for another one on the same repo to finish before it is refused.
+const A_TURN_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_secs(10);
+
+/// What a verb says when the repo's turn did not come in time.
+const BUSY_REPO: &str = "Another change to this repo's branches is still running. Try again \
+                         once it has finished. Nothing was changed.";
+
+/// The repos a mutating verb is working on now, each as its project, workspace and repo.
+type Key = (PathBuf, String, String);
+
+/// **One mutating branch verb per repo at a time, in this app** (#1610). Remove, Done, New
+/// branch and Merge run off the window's thread (#1007), so two of them on one repo, from two
+/// rows, two windows or a double press the window's own hold did not catch, would otherwise
+/// run at once, and the second would be refused by git's lock in git's words. Each takes its
+/// repo's turn first: a second verb waits for the first to finish, at most
+/// [`A_TURN_IS_WAITED_FOR_AT_MOST`], then is refused with [`BUSY_REPO`].
+///
+/// The names are compared without regard to ASCII case, as a file system that folds case does.
+/// The command line and a second app are outside this lock: git's own lock covers them.
+struct Turns {
+    held: Mutex<Vec<Key>>,
+    freed: Condvar,
+}
+
+static TURNS: Turns = Turns {
+    held: Mutex::new(Vec::new()),
+    freed: Condvar::new(),
+};
+
+/// A repo's turn, held until it is dropped.
+struct Turn(Key);
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let mut held = TURNS.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.retain(|key| *key != self.0);
+        drop(held);
+        TURNS.freed.notify_all();
+    }
+}
+
+/// Take `repo`'s turn in `workspace` of the project at `plane`, waiting at most `wait` for a
+/// verb that holds it.
+fn turn_of(plane: &Path, workspace: &str, repo: &str, wait: Duration) -> Result<Turn, String> {
+    let key = (
+        plane.to_path_buf(),
+        workspace.to_ascii_lowercase(),
+        repo.to_ascii_lowercase(),
+    );
+    let until = Instant::now() + wait;
+    let mut held = TURNS.held.lock().unwrap_or_else(PoisonError::into_inner);
+    while held.contains(&key) {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(BUSY_REPO.to_owned());
+        }
+        held = TURNS
+            .freed
+            .wait_timeout(held, left)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
+    }
+    held.push(key.clone());
+    Ok(Turn(key))
+}
+
+/// [`turn_of`], waiting the usual time.
+fn turn(plane: &Path, workspace: &str, repo: &str) -> Result<Turn, String> {
+    turn_of(plane, workspace, repo, A_TURN_IS_WAITED_FOR_AT_MOST)
+}
 
 /// The piece a chat's directory sits in, against a root the registry has already vouched for.
 ///
@@ -232,6 +305,7 @@ fn remove_piece(
     piece: &str,
     force: bool,
 ) -> Result<(), String> {
+    let _turn = turn(plane, workspace, repo)?;
     not_a_task_s(plane, workspace, repo, piece, false)?;
     worktree::remove(plane, workspace, repo, piece, force, false)
         .map(|_| ())
@@ -272,6 +346,7 @@ fn declare_done(
     repo: &str,
     piece: &str,
 ) -> Result<(), String> {
+    let _turn = turn(plane, workspace, repo)?;
     let who = window(config);
     purlis_core::pieces::declare(
         plane,
@@ -377,6 +452,7 @@ fn cut_branch(
     repo: &str,
     branch: Option<&str>,
 ) -> Result<NewBranch, String> {
+    let _turn = turn(plane, workspace, repo)?;
     let naming = match branch {
         Some(typed) => chatpiece::Naming::Exactly(typed.to_string()),
         None => chatpiece::Naming::After(None),
@@ -488,6 +564,7 @@ pub async fn worktree_merge(
 
 /// The merge itself, against a root the registry has already vouched for.
 fn merge_piece(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<Merged, String> {
+    let _turn = turn(plane, workspace, repo)?;
     not_a_task_s(plane, workspace, repo, piece, true)?;
     worktree::merge(plane, workspace, repo, piece)
         .map(|m| Merged {
@@ -519,6 +596,54 @@ mod tests {
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-q", "-m", "one"]);
         (dir, root, clone)
+    }
+
+    #[test]
+    fn two_verbs_on_one_repo_run_one_at_a_time() {
+        // #1610: the second waits for the first to finish, then goes.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let plane = dir.path().to_path_buf();
+        let first = turn(&plane, "alpha", "thing").unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let second = {
+            let (plane, running) = (plane.clone(), Arc::clone(&running));
+            std::thread::spawn(move || {
+                let _turn = turn(&plane, "Alpha", "THING").unwrap();
+                running.load(Ordering::SeqCst)
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        running.store(false, Ordering::SeqCst);
+        drop(first);
+        assert!(
+            !second.join().unwrap(),
+            "the second ran only once the first had finished"
+        );
+        // Another repo, workspace or project is never kept waiting.
+        let _held = turn(&plane, "alpha", "thing").unwrap();
+        let other = tempfile::tempdir().unwrap();
+        for (plane, workspace, repo) in [
+            (plane.as_path(), "alpha", "other"),
+            (plane.as_path(), "beta", "thing"),
+            (other.path(), "alpha", "thing"),
+        ] {
+            turn_of(plane, workspace, repo, Duration::ZERO).expect("not this repo's turn");
+        }
+    }
+
+    #[test]
+    fn a_verb_whose_repo_stays_busy_is_refused_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let _held = turn(dir.path(), "alpha", "thing").unwrap();
+
+        let refused = turn_of(dir.path(), "alpha", "thing", Duration::from_millis(50))
+            .err()
+            .expect("still busy");
+
+        assert_eq!(refused, BUSY_REPO);
+        in_the_windows_words(&refused);
     }
 
     #[test]
