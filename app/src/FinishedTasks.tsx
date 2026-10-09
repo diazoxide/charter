@@ -31,6 +31,10 @@ import { WaitingTaskWaysContext } from "./waitingTasks";
  * **Reopen** resumes its conversation as an ordinary chat with a tab; it is then no longer a
  * task, and the chat that asked is told nothing.
  *
+ * **Changes** opens what the task changed, and no other task's, in a tab of its own (#1511,
+ * V100-66); **Review changes** for a task that worked on its own branch, whose tab offers the
+ * person's Merge and Discard. The report's line about what changed opens the same tab.
+ *
  * Not rows of the tree: there is no chat behind one to bring forward, so the arrows stop on the
  * chats and Tab reaches these, each a button of its own.
  */
@@ -41,6 +45,7 @@ export const FinishedTasks = memo(function FinishedTasks({
   onClear,
   onReopen,
   onLook,
+  onChanges,
 }: {
   /** The chat that asked for them, by the name its row has. */
   asker: string;
@@ -54,6 +59,8 @@ export const FinishedTasks = memo(function FinishedTasks({
   /** A row was opened to read its report: a task that failed has then been looked at, and
    *  its needs-you item goes (#1491). */
   onLook?: (task: FinishedTask) => void;
+  /** Opens what a task changed, in a tab of its own; no Changes is offered without it. */
+  onChanges?: (task: FinishedTask) => void;
 }) {
   /** Whether the folded rows are drawn. This window's own, and folded to start with. */
   const [open, setOpen] = useState(false);
@@ -69,6 +76,7 @@ export const FinishedTasks = memo(function FinishedTasks({
             onClear={onClear}
             onReopen={onReopen}
             onLook={onLook}
+            onChanges={onChanges}
           />
         ))}
         {folded.length > 0 && (
@@ -96,7 +104,9 @@ export const FinishedTasks = memo(function FinishedTasks({
           </div>
         )}
         {open &&
-          folded.map((task) => <FinishedRow key={task.id} task={task} onReopen={onReopen} />)}
+          folded.map((task) => (
+            <FinishedRow key={task.id} task={task} onReopen={onReopen} onChanges={onChanges} />
+          ))}
       </div>
     </li>
   );
@@ -112,11 +122,13 @@ function FinishedRow({
   onClear,
   onReopen,
   onLook,
+  onChanges,
 }: {
   task: FinishedTask;
   onClear?: (ids: string[]) => void;
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
   onLook?: (task: FinishedTask) => void;
+  onChanges?: (task: FinishedTask) => void;
 }) {
   // A task that did not start says why at once (#1497): its report is purlis's one sentence,
   // and the reason is the whole of what there is to know about it.
@@ -292,6 +304,22 @@ function FinishedRow({
             Reopen
           </button>
         )}
+        {waits === null && onChanges !== undefined && (
+          <button
+            type="button"
+            className="finished-changes"
+            tabIndex={0}
+            aria-label={`${task.branch === null ? "Changes" : "Review changes"} of ${task.name}`}
+            title={
+              task.branch === null
+                ? "Opens the files this task's edit tools wrote that are still uncommitted. Edits made by a shell command, and what it committed, are not listed."
+                : "Opens what its own branch changed, with Merge and Discard."
+            }
+            onClick={() => onChanges(task)}
+          >
+            {task.branch === null ? "Changes" : "Review changes"}
+          </button>
+        )}
         {waits === null && onClear !== undefined && (
           <button
             type="button"
@@ -317,9 +345,25 @@ function FinishedRow({
         <div className="finished-report" role="region" aria-label={`Report of ${task.name}`}>
           {/* Text nodes, every one: a report is a chat's words, and is never markup here. */}
           <p className="report-text">{task.report}</p>
-          {task.changed !== null && (
-            <p className="report-text report-changed">Changed: {task.changed}</p>
-          )}
+          {/* The task's own words for what it changed, as text; the line opens what purlis
+              found it changed (#1511). */}
+          {task.changed !== null &&
+            (onChanges === undefined ? (
+              <p className="report-text report-changed">Changed: {task.changed}</p>
+            ) : (
+              <p className="report-text report-changed">
+                <button
+                  type="button"
+                  className="report-changed-link"
+                  tabIndex={0}
+                  title="Opens what purlis can tell this task changed"
+                  onClick={() => onChanges(task)}
+                >
+                  Changed:
+                </button>{" "}
+                {task.changed}
+              </p>
+            ))}
           {waits !== null && (
             <p className="report-text">
               It is still recorded, and will be tried again at the next launch.

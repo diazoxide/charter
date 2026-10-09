@@ -555,6 +555,7 @@ fn a_chat_touches_a_file(run: &Path) {
     let touching = Touching {
         chat: 2,
         touching: file.clone(),
+        wrote: false,
     };
 
     // What the same hook says the chat is doing (#1493): the file's base name, on a line of

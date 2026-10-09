@@ -58,7 +58,8 @@
 //! its own (`purlis_core::dispatchplace`). **The app cuts that worktree, never a chat**, by
 //! the brokered route, under a folder and a branch purlis names for the dispatch; the persona
 //! chat is started in it, on the sandbox the project compiles for its persona in that folder,
-//! and nothing is merged for it. Which branch that is, is written on the dispatch's record,
+//! and purlis merges nothing for it by itself: only the person does, from the task's Changes
+//! tab (#1511). Which branch that is, is written on the dispatch's record,
 //! and the report names it from there.
 
 use std::sync::Arc;
@@ -1866,8 +1867,8 @@ fn dispatch_noting(
     // Where the persona's own profile is not offered on this machine, the chat runs on the
     // asking chat's: it is told so under its stamp, and the asking chat in the answer.
     let note = on.chosen.as_ref().ok().and_then(|chosen| chosen.note());
-    // And a chat given a worktree is told the branch it is on and that nothing merges, in
-    // purlis's own line under its stamp. **Where it starts sandboxed it is told it cannot
+    // And a chat given a worktree is told the branch it is on and that only the person merges
+    // it, in purlis's own line under its stamp. **Where it starts sandboxed it is told it cannot
     // commit there** (#1055): a worktree's git data is outside the folder it may write. Read
     // only for a worktree task, which is the one it changes anything for.
     let sandboxed = named_for.is_some() && dispatchplace::starts_sandboxed(root);
@@ -2372,9 +2373,17 @@ fn dispatch_noting(
         }
         _ => None,
     };
+    // A second task of the asking chat in the same folder, with no branch of its own, is
+    // named beside the first (#1511, V100-68): there are no file locks. The person who chose
+    // the place in the window reads it on the asking chat's tab instead.
+    let sharing = match (&wanted.moved, wanted.by) {
+        (None, By::Chat) => crate::taskchanges::shares_a_folder(held, from, arrived.session, false),
+        _ => None,
+    };
     let noted: Vec<String> = note
         .into_iter()
         .chain(fell_back)
+        .chain(sharing)
         .chain(cut.iter().flat_map(|cut| {
             cut.notes
                 .iter()
@@ -7441,13 +7450,13 @@ mod tests {
             told.expect("the window is told").workspace.as_deref(),
             Some("alpha")
         );
-        // Both chats are told the branch, and that nothing merges.
+        // Both chats are told the branch, and that only the person merges it.
         assert_eq!(
             works,
             Some(format!(
                 "in a worktree of its own, on the branch `{branch}` in api, cut from main. \
-                 Nothing is merged for it: its report names the branch, and merging is yours \
-                 or the person's decision"
+                 Nothing is merged for it: its report names the branch, and only the person \
+                 merges it, from the task's Changes in the window (a chat may ask them to)"
             ))
         );
         let first = tasks_first_message(&plane);

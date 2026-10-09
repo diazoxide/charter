@@ -1058,6 +1058,36 @@ export const commands = {
 	 */
 	dispatchWorktreeDiscard: (plane: PlaneId, id: string, seen: WorktreeLoss) => typedError<null, string>(__TAURI_INVOKE("dispatch_worktree_discard", { plane, id, seen })),
 	/**
+	 *  What the task of dispatch `id` changed, and no other task's (#1511): for a task on a
+	 *  branch of its own, everything that branch holds against the branch it was cut from; for a
+	 *  task that worked in a folder other chats work in, the files its own edit tools wrote that
+	 *  git still finds uncommitted there, each marked where another task of the same chat wrote it
+	 *  too: not a shell command's edits, and not what the task committed there. Where purlis cannot
+	 *  say which files were the task's, it says so and lists none.
+	 */
+	taskChanges: (plane: PlaneId, id: string) => typedError<TaskChanges, string>(__TAURI_INVOKE("task_changes", { plane, id })),
+	/**
+	 *  What merging the own branch of the task of dispatch `id` would land (#1511): the branch,
+	 *  the branch it was cut from, its commit, how many commits it is ahead and behind, and what
+	 *  is not committed in its folder, for the question the window asks before it merges. Refused
+	 *  while the task still runs or a chat is open in the folder.
+	 */
+	taskBranchMergeQuestion: (plane: PlaneId, id: string) => typedError<BranchMerge, string>(__TAURI_INVOKE("task_branch_merge_question", { plane, id })),
+	/**
+	 *  **Merge** on a finished task's own branch (#1511): lands it in the branch it was cut from,
+	 *  as a fast-forward or not at all. `seen` is what the window showed the person would land,
+	 *  as `task_branch_merge_question` answered it: where the branch holds anything else by now,
+	 *  nothing is merged. A merge that does not apply cleanly changes nothing and says why. The
+	 *  person's own act: this is a command of the window alone, served on no link.
+	 */
+	taskBranchMerge: (plane: PlaneId, id: string, seen: BranchMerge) => typedError<TaskMerged, string>(__TAURI_INVOKE("task_branch_merge", { plane, id, seen })),
+	/**
+	 *  The folders two or more open tasks of chat `session` work in with no branch of their own
+	 *  (#1511, V100-68): what its tab warns about, by every task's name. There are no file
+	 *  locks between tasks, so a file two of them change cannot be told apart afterwards.
+	 */
+	tasksSharingAFolder: (plane: PlaneId, session: number) => typedError<SharedFolder[], string>(__TAURI_INVOKE("tasks_sharing_a_folder", { plane, session })),
+	/**
 	 *  The finished tasks of the project's open chats, oldest first, for the rows under each
 	 *  (#1485). On a blocking thread, as it reads every record.
 	 */
@@ -2803,6 +2833,36 @@ export type BranchFolder = {
 	folder: string,
 };
 
+/**
+ *  What merging a task's own branch would land, as the window shows it before it asks, and as
+ *  the window hands it back with the answer: **what is merged is what the person was shown,
+ *  or nothing is.**
+ */
+export type BranchMerge = {
+	/**  The task, by the name its row has. */
+	task: string,
+	/**  The repo the branch is in. */
+	repo: string,
+	/**  The branch purlis cut for the task. */
+	branch: string,
+	/**
+	 *  The branch it was cut from, which is where it lands; `null` where purlis has no record
+	 *  of one, and the merge is then refused with that reason.
+	 */
+	into: string | null,
+	/**  The commit the task's branch is at. */
+	tip: string,
+	/**  How many commits it would land. */
+	ahead: number,
+	/**
+	 *  How many commits the branch it was cut from has gained since. Above 0 the merge is
+	 *  refused: purlis fast-forwards or does nothing.
+	 */
+	behind: number,
+	/**  The uncommitted paths in the task's folder. Any, and the merge is refused. */
+	uncommitted: string[],
+};
+
 /**  What a branch changed against the branch it was cut from, committed or not. */
 export type BranchStatus = {
 	/**  Sorted by path, at most 10,000. */
@@ -2892,6 +2952,24 @@ export type ChangeMember = {
 	/**  The row's key. */
 	key: string,
 	repo: string,
+};
+
+/**  The files a task changed in one repo's folder, or in one branch's. */
+export type ChangedIn = {
+	workspace: string,
+	repo: string,
+	/**  The branch folder; `null` for the repo's own. */
+	piece: string | null,
+	/**  What the changes are counted against; `null` when against the last commit. */
+	base: string | null,
+	files: TaskFile[],
+	/**
+	 *  How many changes git found past the most it lists. Of a task in a shared folder, a file
+	 *  of its own past them is not listed.
+	 */
+	more: number,
+	/**  Why purlis could not read what changed there, where it could not. */
+	unread: string | null,
 };
 
 /**
@@ -5136,6 +5214,22 @@ export type OpenedRepo = {
 	template: string | null,
 };
 
+/**  A task's own branch, as its Changes tab says it. */
+export type OwnBranch = {
+	repo: string,
+	branch: string | null,
+	/**
+	 *  `kept`, `merged`, `merged-branch-kept`, `discarded` or `gone`
+	 *  (`purlis_core::dispatchplace::Standing::word`).
+	 */
+	standing: string,
+	/**
+	 *  Whether Merge and Discard are offered: its folder is there and the task has ended.
+	 *  Each is still refused while a chat stands in the folder.
+	 */
+	acts: boolean,
+};
+
 /**  One part of a panel's body. */
 export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string } | 
 /**
@@ -6730,6 +6824,16 @@ export type SetupTick = {
 	digest: string,
 };
 
+/**  A folder two or more tasks of one chat work in at once, as that chat's tab says it. */
+export type SharedFolder = {
+	/**  The folder, relative to the project. */
+	folder: string,
+	/**  The tasks working in it, by name, in the order they started. */
+	tasks: string[],
+	/**  The sentence the tab says. */
+	says: string,
+};
+
 /**  One ask, as its row in the needs-you list draws it. */
 export type Shown = {
 	/**  The chat that asked. */
@@ -6946,6 +7050,34 @@ export type TaskBrief = {
 	branch: string | null,
 };
 
+/**  What a task changed, as its Changes tab draws it. */
+export type TaskChanges = {
+	/**  The dispatch's id. */
+	id: string,
+	/**  The task's name. */
+	task: string,
+	/**  Whether the task is still running: what is listed is what it has changed so far. */
+	running: boolean,
+	/**
+	 *  Its own branch, where the dispatch gave it one: then `places` is everything that
+	 *  branch changed since it was cut.
+	 */
+	own: OwnBranch | null,
+	/**  The files it changed, by where they are. */
+	places: ChangedIn[],
+	/**
+	 *  Paths its edit tools wrote that lie in no repo, relative to the project: purlis has
+	 *  nothing to compare them against, so they are named and not said to have changed.
+	 */
+	elsewhere: string[],
+	/**  Whether its edit tools wrote more files than purlis kept. */
+	more: boolean,
+	/**  What its report says changed, in the task's own words. */
+	said: string | null,
+	/**  Why no file is listed, where purlis cannot say which files were this task's. */
+	unknown: string | null,
+};
+
 /**
  *  What ending a task would do, as the window asks before it does it (#1488, V100-18): what
  *  decides whether the person is asked anything, and which of the two ways is offered.
@@ -6975,6 +7107,31 @@ export type TaskEnding = {
 	 *  one. Ending it then tells the chat that asked nothing more.
 	 */
 	reported: boolean,
+};
+
+/**  One file a task changed. */
+export type TaskFile = {
+	/**  Its path inside the repo's or the branch's folder. */
+	path: string,
+	mark: ChangeMark,
+	/**  Where a renamed file came from: a name to show, never a path to open. */
+	from: string | null,
+	uncommitted: boolean,
+	/**
+	 *  The other tasks of the same chat whose edit tools wrote this file too, by name: its
+	 *  change may be theirs in part. Another chat's or the person's edits are not marked.
+	 */
+	also: string[],
+};
+
+/**  What a merge did. */
+export type TaskMerged = {
+	branch: string,
+	/**
+	 *  Whether the task's folder was taken away now that its branch is merged: it held
+	 *  nothing else. One holding an ignored file of the task's stays, with Discard.
+	 */
+	folder_removed: boolean,
 };
 
 /**  A question a task is paused on, as the window shows it to be answered (#1496). */

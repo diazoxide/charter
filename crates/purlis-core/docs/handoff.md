@@ -442,9 +442,10 @@ only under a grant that names the pair and covers the workspace it moves into; "
 does not count there, for a handoff as for a task. Refused, it is kept for the person to read
 afterwards. Such a chat still hands off to its own persona, into a workspace that exists.
 
-**Nothing is merged for a worktree task, ever.** Its report names the branch, in a line
-purlis writes from its own record of what it cut, whatever the chat says; merging is the
-asking chat's decision or yours. The chat's sandbox is the one the project gives its persona
+**purlis merges nothing for a worktree task by itself, and no chat can have purlis merge it.** Its
+report names the branch, in a line purlis writes from its own record of what it cut, whatever
+the chat says. Only you merge it, from the task's Changes tab in the window; the asking chat
+may ask you to. The chat's sandbox is the one the project gives its persona
 in that folder, as for any chat of that persona started in a worktree: it gains nothing of
 the asking chat's tree.
 
@@ -483,6 +484,38 @@ The worktree is listed on its dispatch's row in the Dispatches tab, as the task'
 - A repo whose own git settings name a program (a filter, a diff or merge driver, an
   include) gets no worktree task and no Discard: purlis runs no git there for a chat or for
   its own account. Remove such a folder from its branch's row in the explorer.
+
+**What a task changed** (#1511) is a tab of its own: **Changes** on a finished task's row
+under the chat that asked (**Review changes** for a task on its own branch), and the line of
+its report about what changed. It shows what purlis can tell of that task's own files:
+
+- **A task on its own branch** lists everything the branch changed since it was cut, and each
+  file opens its diff from where the branch started. Once the task has ended, the tab offers
+  **Merge…** and **Discard branch…**, each asked first. Merge lands the branch in the branch
+  it was cut from as a fast-forward, of the commit you were shown, and nothing else: where it
+  does not apply cleanly (the other branch moved on), where either folder holds uncommitted
+  changes, or where the folder is no longer on the branch purlis cut, nothing changes and the
+  tab says why. A merged branch whose folder holds nothing else is then taken away, as above.
+  Both are commands of the window alone: no link to the app serves them, and nothing a chat
+  sends to purlis reaches them. (A chat started without the sandbox runs as you, and could
+  run git in the clone itself; a sandboxed chat cannot write the clone's git data.)
+- **A task that worked in a folder other chats work in** lists the files its own edit tools
+  wrote while it ran (never one it only read) that git still finds uncommitted there, each
+  marked where another task of the same chat wrote it too. **It does not see everything the
+  task changed**, and the tab says so: an edit made by a shell command (a formatter, `sed`, a
+  script) and a change the task already committed there are not listed. A file it wrote that
+  another chat or you changed afterwards is listed whole, and only a sibling task's write is
+  marked. The list is kept in memory only, for
+  the last 64 tasks heard from, so after the app is started again, for an older task, or for
+  a harness that reports no file tool (Codex), the tab says it cannot tell and lists nothing.
+  Where the folder holds more than 10,000 changes, git lists the first 10,000 and a file of
+  the task's past them is not shown; the tab says so.
+
+**Two tasks of one chat in one folder are named.** There are no file locks between tasks.
+When a chat dispatches a task into a folder where another of its tasks still works, with no
+branch of its own, the dispatch's answer names both and says how to keep them apart (`--in
+worktree`), and the asking chat's tab says it to you, by every task's name, for as long as
+they share the folder.
 
 A worktree whose task was started and whose app was quit before the chat came up is not
 listed on any dispatch: it shows in the explorer as an ordinary branch folder, and is yours to

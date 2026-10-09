@@ -413,7 +413,7 @@ pub static TOOLS: [Tool; 15] = [
                         "description": "Where it works: `workspace:<name>` for another \
                                         workspace of the project, or `worktree` for a new \
                                         worktree of the repo this chat works in, on a new \
-                                        branch purlis names, which nothing merges. A \
+                                        branch purlis names, which only the person merges. A \
                                         sandboxed chat commits there with `purlis worktree \
                                         commit`. Leave it out for \
                                         this chat's folder.",

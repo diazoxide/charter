@@ -8,7 +8,7 @@
   purlis names for the dispatch, so two tasks never share either. The `dispatch` tool takes
   the same word as `in`.
 - **A worktree task's report names its branch**, from purlis's own record of what it cut.
-  Nothing is ever merged for a task: merging is the asking chat's decision or yours.
+  purlis merges nothing for a task by itself; you merge it from the task's Changes tab.
 - **In a sandboxed project a worktree task commits with `purlis worktree commit`.** A
   worktree's git data is outside the folder a sandboxed chat may write, so its own `git
   commit` is refused there and the app commits for it on the task's branch. purlis tells the
