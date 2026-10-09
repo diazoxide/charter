@@ -78,7 +78,7 @@ export function AwaySummary({
       {parts.map(({ part, says }, at) => (
         <Fragment key={part}>
           {at > 0 && ", "}
-          <AwayPart says={says} items={summary[part]} onGo={go} />
+          <AwayPart says={says} items={summary[part]} onGo={go} one={part === "refused"} />
         </Fragment>
       ))}
     </Notice>
@@ -132,27 +132,33 @@ function AwayPart({
   says,
   items,
   onGo,
+  one = false,
 }: {
   says: string;
   items: readonly AwayItem[];
   onGo: (where: AwayGo) => void;
+  /** Whether every item goes to the one place, so the part is one link whatever it counts:
+   *  the refused dispatches, all answered in the title bar's needs-you list (#1551). */
+  one?: boolean;
 }) {
   // Held here and opened on the press itself, as the title bar's list is (`NeedsYou.tsx`): a
   // link in a sentence is pressed, never opened by a pointer going down on it.
   const [open, setOpen] = useState(false);
-  if (items.length === 1)
+  if (items.length === 1 || one) {
+    const named = items.map((item) => item.says).join(", ");
     return (
       // Where it goes is in its name: a title alone is read by few screen readers.
       <button
         type="button"
         className="away-part"
-        aria-label={`${says}: ${items[0].says}`}
-        title={items[0].says}
+        aria-label={`${says}: ${named}`}
+        title={named}
         onClick={() => onGo(items[0].go)}
       >
         {says}
       </button>
     );
+  }
   return (
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger asChild>
@@ -201,7 +207,9 @@ export type TimeAway = {
 export const SETTLES_MS = 10 * 1000;
 
 type Held = { away: readonly Away[]; cameToNeed: ReadonlySet<number> };
-type Seen = { at: number; queue: Queued };
+/** A sign of the person: when, the queue then, and how many waits the window had seen begin
+ *  by then (`mark`), which orders a wait against it whatever the clock says. */
+type Seen = { at: number; queue: Queued; mark: number };
 
 const NOT_AWAY: Held = { away: [], cameToNeed: new Set() };
 
@@ -252,8 +260,28 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
   useEffect(() => {
     if (!on) return;
     const queue = (): Queued => chats.store.statesFor(chats.plane);
+    /**
+     * **When each chat last came into `waiting`, as this window saw it** (#1551): a wait that
+     * began while the person was away is new, though the chat was in the queue before. Taken
+     * from the store's own changes, and never from the board's stamp, which also moves for
+     * what only touches a chat (a task's failure, a sub-agent ending).
+     */
+    const cameIntoWaiting = new Map<number, number>();
+    /** How many waits the window has seen begin: each one's place in that order. */
+    let waits = 0;
+    let stood = chats.store.statesFor(chats.plane).bySession;
+    const stopWatching = chats.store.subscribe(() => {
+      const now = chats.store.statesFor(chats.plane).bySession;
+      if (now === stood) return;
+      for (const [key, state] of Object.entries(now)) {
+        const session = Number(key);
+        if (state === "waiting" && stood[session] !== "waiting")
+          cameIntoWaiting.set(session, (waits += 1));
+      }
+      stood = now;
+    });
     /** The last sign of the person at the window. */
-    let seen: Seen = { at: Date.now(), queue: queue() };
+    let seen: Seen = { at: Date.now(), queue: queue(), mark: waits };
     /** Where the person went away from the window, while they are away. */
     let left: Seen | null = null;
     const idle = (now: number) => now - seen.at >= AWAY_AFTER_MS;
@@ -261,16 +289,21 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
       if (left !== null) return;
       const now = Date.now();
       // Away already, with no input: the time away began at the last one.
-      left = idle(now) ? seen : { at: now, queue: queue() };
+      left = idle(now) ? seen : { at: now, queue: queue(), mark: waits };
     };
     const back = () => {
       const now = Date.now();
       const was = left ?? (idle(now) ? seen : null);
       left = null;
-      seen = { at: now, queue: queue() };
+      seen = { at: now, queue: queue(), mark: waits };
       if (was === null || now - was.at < AWAY_AFTER_MS) return;
       const time = { from: was.at, to: now };
-      const came = cameToNeedOf(was.queue, seen.queue);
+      const waited = new Set<number>();
+      for (const [session, mark] of cameIntoWaiting) {
+        if (mark > was.mark) waited.add(session);
+        else cameIntoWaiting.delete(session);
+      }
+      const came = cameToNeedOf(was.queue, seen.queue, waited);
       backAt.current = now;
       setHeld((kept) =>
         counted.current === 0
@@ -283,7 +316,7 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
       if (left !== null) return;
       const now = Date.now();
       if (idle(now)) return back();
-      seen = { at: now, queue: queue() };
+      seen = { at: now, queue: queue(), mark: waits };
       const since = backAt.current;
       if (since !== null && now - since >= SETTLES_MS) {
         backAt.current = null;
@@ -298,6 +331,7 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
     for (const kind of INPUTS)
       window.addEventListener(kind, input, { capture: true, passive: true });
     return () => {
+      stopWatching();
       window.removeEventListener("blur", leave);
       window.removeEventListener("focus", back);
       document.removeEventListener("visibilitychange", shown);

@@ -228,22 +228,21 @@ function core(open: OpenChat[], rows: FinishedTask[] = [], other?: Project) {
       moveIn(PLANE, session, state, queue, more),
     moveIn: (plane: string, session: number, state: State, queue: number[]) =>
       moveIn(plane, session, state, queue, {}),
-    /** The core keeps a dispatch of `asking`'s refused while nobody was there, last at `at`. */
-    refuse: (asking: string, at: number) =>
+    /** The core keeps a dispatch of each of `asking`'s refused while nobody was there, last
+     *  at `at`. */
+    refuse: (asking: string[], at: number) =>
       send("dispatch-away-changed", {
         plane: PLANE,
-        refused: [
-          {
-            asking,
-            target: "devops",
-            workspace: "alpha",
-            latest: at / 1000,
-            times: 1,
-            allows: "steward chats may dispatch to devops in alpha.",
-            nowhere: null,
-            shown: "steward>devops@alpha",
-          },
-        ],
+        refused: asking.map((one) => ({
+          asking: one,
+          target: "devops",
+          workspace: "alpha",
+          latest: at / 1000,
+          times: 1,
+          allows: `${one} chats may dispatch to devops in alpha.`,
+          nowhere: null,
+          shown: `${one}>devops@alpha`,
+        })),
       }),
   };
   async function finishIn(plane: string, more: FinishedTask[]) {
@@ -398,15 +397,29 @@ describe("while you were away (#1514)", () => {
     ).toBeInTheDocument();
   });
 
+  it("counts a waiting chat whose task failed while away as the failure alone", async () => {
+    // #1551 review: steward 1 waited on the person when they left; its task failed meanwhile.
+    // One event: one failure, and its question is no new wait.
+    const held = await drawn();
+    await held.move(1, "waiting", [1]);
+    await leave();
+    await held.finish(FAILED);
+    await held.move(1, "waiting", [1], { needs: [failure] });
+    await comeBack(LEFT + 30 * MINUTE);
+
+    expect(said(await theSummary())).toBe("While you were away: 1 task failed");
+  });
+
   it("counts a dispatch refused while nobody was there, and opens the list it is answered in", async () => {
     // #1551: #1507's item joins the summary as a part of its own.
     const held = await drawn();
     await leave();
-    await held.refuse("steward", LEFT + 10 * MINUTE);
+    await held.refuse(["steward"], LEFT + 10 * MINUTE);
     await comeBack(LEFT + 30 * MINUTE);
 
     const notice = await theSummary();
     expect(said(notice)).toBe("While you were away: 1 dispatch refused");
+    const reads = held.asked("dispatch_away").length;
     await userEvent.click(
       within(notice).getByRole("button", { name: "1 dispatch refused: steward wanted devops" }),
     );
@@ -414,6 +427,28 @@ describe("while you were away (#1514)", () => {
     // The title bar's needs-you list, open where its Allow, Never and Dismiss answer it.
     const listed = await screen.findByText("steward wanted devops while you were away");
     expect(listed.closest('[role="menu"]')).not.toBeNull();
+    // Read again as it opens, as a press on the hand reads it.
+    await waitFor(() => expect(held.asked("dispatch_away").length).toBeGreaterThan(reads));
+  });
+
+  it("draws several refused dispatches as one link to the list, which stays open", async () => {
+    const held = await drawn();
+    await leave();
+    await held.refuse(["steward", "lead"], LEFT + 10 * MINUTE);
+    await comeBack(LEFT + 30 * MINUTE);
+
+    const notice = await theSummary();
+    expect(said(notice)).toBe("While you were away: 2 dispatches refused");
+    const part = within(notice).getByRole("button", {
+      name: "2 dispatches refused: steward wanted devops, lead wanted devops",
+    });
+    expect(part.getAttribute("aria-haspopup")).toBeNull();
+    await userEvent.click(part);
+
+    const listed = await screen.findByText("lead wanted devops while you were away");
+    expect(listed.closest('[role="menu"]')).not.toBeNull();
+    await settle();
+    expect(screen.getByText("steward wanted devops while you were away")).toBeInTheDocument();
   });
 
   it("goes from each part to the chats it counts", async () => {

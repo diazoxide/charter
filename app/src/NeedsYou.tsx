@@ -1,7 +1,7 @@
 /** What a chat is doing, as the tab draws it, and the queue of chats asking for you. */
 import { Hand, X } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
@@ -339,7 +339,8 @@ export function NeedsYouMenu({
   };
   if (!open && frozen !== null) setFrozen(null);
   // **Asked open from elsewhere** (#1551): opened as a press opens it, on what it holds now;
-  // a list with nothing in it stays shut. Adjusted while rendering, as the rest of it is.
+  // a list with nothing in it stays shut. Adjusted while rendering, as the rest of it is; and,
+  // as a press does, what it holds is read again (`onLook`), after the render.
   const [openedFor, setOpenedFor] = useState(openAsked);
   if (openAsked !== openedFor) {
     setOpenedFor(openAsked);
@@ -348,6 +349,12 @@ export function NeedsYouMenu({
       setOpen(true);
     }
   }
+  const lookedFor = useRef(openAsked);
+  useEffect(() => {
+    if (openAsked === lookedFor.current) return;
+    lookedFor.current = openAsked;
+    onLook?.();
+  }, [openAsked, onLook]);
   const drawnAway = open && frozen !== null ? frozen : away;
   const listedNow = new Set(away.map(awayKey));
   return (
