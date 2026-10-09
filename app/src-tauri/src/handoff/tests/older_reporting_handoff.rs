@@ -259,9 +259,57 @@ fn an_open_that_asks_for_a_report_and_would_create_its_workspace_is_refused_crea
         &nobody,
     );
 
-    assert!(
-        matches!(&said, Answer::No { why } if why.contains("purlis dispatch --name")),
-        "{said:?}"
-    );
+    // #1471: the create command is named first, since a dispatch into a workspace that is not
+    // there yet is refused before it would name it.
+    let Answer::No { why } = &said else {
+        panic!("refused, not {said:?}")
+    };
+    let create = why
+        .find("purlis workspace create gamma --vision")
+        .expect("names the create command");
+    let dispatch = why
+        .find("purlis dispatch --name \"<task>\" --in workspace:gamma")
+        .expect("names the dispatch into it");
+    assert!(create < dispatch, "{why}");
+    assert!(why.contains("workspace 'gamma' was not created"), "{why}");
     assert!(!held.root().join("workspaces").join("gamma").exists());
+}
+
+/// #1471: the refusal names the persona the older line gave, and not a placeholder for one.
+#[test]
+fn an_open_that_asks_for_a_report_is_pointed_at_the_persona_it_named() {
+    let plane = a_plane_with_personas();
+    let host = Pretend::default();
+    let (planes, id, steward) = a_steward_chat(&host, &plane);
+    let held = planes.held(&id).expect("held");
+    let tickets = Tickets::default();
+    let ticket = ticket(&held, &id, &tickets, steward);
+
+    let said = answer(
+        &held,
+        &id,
+        &tickets,
+        1,
+        Ask::Open(Box::new(OpenChat {
+            chat: steward,
+            workspace: "alpha".to_owned(),
+            create_vision: None,
+            persona: Some("devops".to_owned()),
+            message: stamped(steward),
+            ticket,
+            name: None,
+            older_report: true,
+        })),
+        &nobody,
+    );
+
+    let Answer::No { why } = &said else {
+        panic!("refused, not {said:?}")
+    };
+    assert!(
+        why.ends_with("purlis dispatch --name \"<task>\" --to devops --in workspace:alpha"),
+        "{why}"
+    );
+    assert!(!why.contains("<persona>"), "{why}");
+    assert!(!why.contains("workspace create"), "{why}");
 }
