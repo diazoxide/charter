@@ -820,6 +820,17 @@ fn a_vision_or_an_entry_that_opens_a_comment_or_a_fence_and_does_not_close_it_is
         ("Ship\n~~~~\ncode\n~~~", "code fence"),
         ("Ship\n  ```rust\nfn x() {}\n", "code fence"),
         ("Ship\n```\ncode\n~~~", "code fence"),
+        // Indented four spaces, a fence neither opens nor closes (CommonMark).
+        ("Ship\n```\ncode\n    ```\nhidden", "code fence"),
+        ("Ship\n\n    ```\n```\nhidden", "code fence"),
+        // The raw HTML blocks that run to the end of the document without their end.
+        ("Ship\n<pre>\nhidden", "raw HTML block"),
+        ("Ship\n<SCRIPT type=x>\nhidden", "raw HTML block"),
+        ("Ship\n<style\nhidden", "raw HTML block"),
+        ("Ship\n<textarea>", "raw HTML block"),
+        ("Ship\n<?php\nhidden", "raw HTML block"),
+        ("Ship\n<!DOCTYPE\nhidden", "raw HTML block"),
+        ("Ship\n   <![CDATA[ x\nhidden", "raw HTML block"),
     ] {
         for write in [
             Write::WorkspaceVision {
@@ -848,6 +859,13 @@ fn a_comment_or_a_fence_closed_in_the_text_and_one_inside_code_is_written() {
         "Ship\n~~~\ncode ``` here\n~~~~",
         "Write `<!--` to open a comment",
         "Write ``a ` <!-- b`` here",
+        "Ship\n<pre>\nkept as it is\n</pre>\ndone",
+        "Ship\n<style>p {}</style>\ndone",
+        "Ship\n<!DOCTYPE html>\ndone",
+        "Ship\n<?xml version=\"1.0\"?>\ndone",
+        "Ship <script> in a line is no block",
+        "Ship\n<preview> is no pre block",
+        "Ship\n```\n<pre>\n```\ndone",
     ] {
         for write in [
             Write::WorkspaceVision {
