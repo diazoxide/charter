@@ -373,6 +373,15 @@ pub(crate) fn ended(held: &Held, session: u32) {
         return;
     }
     let Some(record) = dispatchrecord::running_for(held.root(), &me) else {
+        // It reported, and its figure was kept as its reporting turn still ran: what its
+        // harness said since is the whole (#1457).
+        if let (Some(ended), Some(usage)) = (
+            dispatchrecord::latest_for(held.root(), &me),
+            spent(held, session),
+        ) && let Err(why) = dispatchrecord::usage_settled(held.root(), &ended.id, usage)
+        {
+            tracing::warn!("purlis: a dispatch's record did not keep its final cost ({why})");
+        }
         return;
     };
     let ending = dispatchrecord::ended_unreported(&record, spent(held, session));
