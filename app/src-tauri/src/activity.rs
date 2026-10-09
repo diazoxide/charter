@@ -574,6 +574,96 @@ mod tests {
         assert_eq!(line.place, "alpha\u{0}workspaces/alpha");
     }
 
+    /// The app on Tauri's mock runtime, with a registry of windows and the two named.
+    fn two_windows() -> (
+        tauri::App<tauri::test::MockRuntime>,
+        [tauri::WebviewWindow<tauri::test::MockRuntime>; 2],
+    ) {
+        use tauri::Manager;
+        let app = tauri::test::mock_builder()
+            .build(tauri_context!(test = true))
+            .expect("the app builds");
+        app.manage(crate::planes::Showing::default());
+        let window = |label: &str| {
+            tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::default())
+                .build()
+                .expect("a window")
+        };
+        let windows = [window("main"), window("split-1")];
+        (app, windows)
+    }
+
+    fn plane(root: &str) -> PlaneId {
+        serde_json::from_value(serde_json::json!(root)).expect("a plane id")
+    }
+
+    fn heard(plane: PlaneId) -> ActivityHeard {
+        ActivityHeard {
+            plane,
+            line: drawn(&a_report(), &[], 0),
+        }
+    }
+
+    /// How many `EVENT`s each of `windows` hears, and the app as a whole.
+    fn counting(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        windows: &[tauri::WebviewWindow<tauri::test::MockRuntime>; 2],
+    ) -> [Arc<std::sync::atomic::AtomicUsize>; 3] {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tauri::Listener;
+        let counts: [Arc<AtomicUsize>; 3] = Default::default();
+        for (window, count) in windows.iter().zip(counts.iter()) {
+            let count = count.clone();
+            window.listen(EVENT, move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        let any = counts[2].clone();
+        app.listen_any(EVENT, move |_| {
+            any.fetch_add(1, Ordering::SeqCst);
+        });
+        counts
+    }
+
+    fn read(counts: &[Arc<std::sync::atomic::AtomicUsize>; 3]) -> [usize; 3] {
+        counts
+            .each_ref()
+            .map(|count| count.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[test]
+    fn a_line_goes_only_to_the_window_holding_its_project_and_nowhere_when_none_does() {
+        // #1520: what a chat said is told to the one window that holds its project, through
+        // the real registry of windows.
+        use tauri::Manager;
+        let (app, windows) = two_windows();
+        let counts = counting(&app, &windows);
+        let ours = plane("/projects/ours");
+        app.state::<crate::planes::Showing>().in_window(
+            "split-1",
+            crate::planes::Holding {
+                planes: vec![plane("/projects/other")],
+                active: Some(0),
+            },
+        );
+
+        // No window holds it yet: nothing is sent, to any window.
+        to_its_window(app.handle(), &heard(ours.clone()));
+        assert_eq!(read(&counts), [0, 0, 0]);
+
+        app.state::<crate::planes::Showing>().in_window(
+            "main",
+            crate::planes::Holding {
+                planes: vec![ours.clone()],
+                active: Some(0),
+            },
+        );
+        to_its_window(app.handle(), &heard(ours));
+
+        // The window holding it, and no other: the window holding another project hears none.
+        assert_eq!(read(&counts), [1, 0, 1]);
+    }
+
     #[test]
     fn a_line_s_chat_is_found_under_the_number_it_has_now() {
         // Restart chat gave the task's chat another number; its id is the same.
