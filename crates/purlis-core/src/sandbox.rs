@@ -1676,11 +1676,9 @@ impl Applied {
         {
             return Err(refused.placed_in(&self.root).said(&locks));
         }
-        // An adapter's own refusal, and the caches' below, ends with the policy too.
-        let under = |why: String| match &locked {
-            Some(policy) => format!("{why} {policy}"),
-            None => why,
-        };
+        // An adapter's own refusal, and the caches' below, ends with the policy too, and leads
+        // with it (#1431).
+        let under = |why: String| under_policy(&locks, why);
         let at = &At {
             no_opt_out: locked.is_some(),
             ..*at
@@ -1901,6 +1899,35 @@ fn never_with(compile: Option<Compiler>, held_back: Option<u32>, os: Os) -> Opti
     }
 }
 
+/// **The lead of a refusal to start a sandboxed chat** where the project runs its chats
+/// sandboxed: every such refusal opens with it, and [`under_policy`] says the policy instead
+/// where it is the policy that requires the sandbox.
+pub const LEAD: &str = "this project runs every chat sandboxed";
+
+/// **The lead where an administrator's policy requires the sandbox** (#1431, D-1423-1): the
+/// project's own setting is then not why the chat had to run sandboxed.
+pub const POLICY_LEAD: &str = "policy requires the sandbox for every chat on this machine";
+
+/// `why` with its [`LEAD`] said as [`POLICY_LEAD`] where `locks` require the sandbox; any other
+/// sentence as it is.
+fn led(locks: &policy::Locks, why: String) -> String {
+    match why.strip_prefix(LEAD) {
+        Some(rest) if locks.forbids_opt_out() => format!("{POLICY_LEAD}{rest}"),
+        _ => why,
+    }
+}
+
+/// **A refusal to start a sandboxed chat, `why`, as the person reads it under `locks`** (#1423,
+/// #1431): where an administrator's policy requires the sandbox, it leads with the policy rather
+/// than the project ([`POLICY_LEAD`]) and ends with the policy and who set it. Where it does not,
+/// `why` as it is.
+pub fn under_policy(locks: &policy::Locks, why: String) -> String {
+    match locks.opt_out_refused() {
+        Some(policy) => format!("{} {policy}", led(locks, why)),
+        None => why,
+    }
+}
+
 /// Why a sandboxed chat is not started when `path`, of its project's package caches, is a link
 /// purlis could not take out, as found `when` it made the folders.
 pub fn caches_linked(path: &Path, when: &str) -> String {
@@ -1952,11 +1979,10 @@ impl FolderRefusal {
     /// so no rewording can leave the opt-out named under a lock.
     pub fn said(self, locks: &policy::Locks) -> String {
         let happened = self.happened();
-        match locks.opt_out_refused() {
-            None => {
-                format!("{happened}; Start without the sandbox is yours to pick when you start it.")
-            }
-            Some(policy) => format!("{happened}. {policy}"),
+        if locks.forbids_opt_out() {
+            under_policy(locks, format!("{happened}."))
+        } else {
+            format!("{happened}; Start without the sandbox is yours to pick when you start it.")
         }
     }
 }
@@ -2391,7 +2417,7 @@ impl NotStarted {
         match (self, locks.opt_out_refused()) {
             // It names the policy itself.
             (Self::OptOutLocked(_), _) | (_, None) => self.to_string(),
-            (_, Some(policy)) => format!("{} {policy}", self.sentence(false)),
+            (_, Some(_)) => under_policy(locks, self.sentence(false)),
         }
     }
 
@@ -2399,13 +2425,13 @@ impl NotStarted {
     /// the new-chat picker draws over what locks the opt-out): [`Self::said`] without the
     /// policy's own sentence.
     fn said_beside(&self, locks: &policy::Locks) -> String {
-        self.sentence(!locks.forbids_opt_out())
+        led(locks, self.sentence(!locks.forbids_opt_out()))
     }
 
     /// The refusal in one or more sentences. `opt_out` is whether a person may start this chat
     /// without the sandbox: where they may not, no way out names it.
     fn sentence(&self, opt_out: bool) -> String {
-        let lead = "this project runs every chat sandboxed";
+        let lead = LEAD;
         match self {
             Self::NoCompiler(harness) => format!(
                 "{lead}, and purlis cannot sandbox {} {} chat yet, so it was not started. \
@@ -2550,7 +2576,7 @@ impl NotStarted {
                 // it; a resumed or relaunched chat has no opt-out, so moving the secrets is its
                 // way on.
                 Unheld::Service(Service::CredentialStore, os) => format!(
-                    "this project runs every chat sandboxed, and {} purlis cannot keep {} {} \
+                    "{lead}, and {} purlis cannot keep {} {} \
                      chat away from the system keyring, where this project's keyring vaults \
                      keep their secrets, so nothing was started. {} a plain-file or 1Password \
                      vault, which the sandbox can keep from a chat.{}",

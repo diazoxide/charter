@@ -170,10 +170,7 @@ fn added(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<S
     if let Some(why) =
         crate::sandbox::policy::Locks::of(root).refuses(&crate::sandbox::hosts::Granted {
             host: host.clone(),
-            level: match which {
-                Which::Shared => crate::sandbox::hosts::Level::Project,
-                Which::Local => crate::sandbox::hosts::Level::You,
-            },
+            level: level_of(which),
         })
     {
         return Err(field(why));
@@ -264,6 +261,35 @@ fn removed(root: &Path, which: Which, base: Option<&str>, id: &str) -> Result<St
 
 fn here_hosts(text: &str) -> Vec<Host> {
     crate::sandbox::hosts::of_table(text.parse().ok().as_ref())
+}
+
+/// The level a host in `which` is kept at: the project's in the committed file, yours in this
+/// machine's.
+fn level_of(which: Which) -> crate::sandbox::hosts::Level {
+    match which {
+        Which::Shared => crate::sandbox::hosts::Level::Project,
+        Which::Local => crate::sandbox::hosts::Level::You,
+    }
+}
+
+/// **Why each host `text` lists as `which` at `root` is locked out** by an administrator's
+/// policy ([`crate::sandbox::policy::Locks::refuses`]), one sentence each: what a whole-file
+/// save refuses for the hosts it adds (#1431), as [`add`] refuses one. Empty where no policy is
+/// in force or the text is not TOML.
+pub(crate) fn locked_out(root: &Path, which: Which, text: &str) -> Vec<String> {
+    let locks = crate::sandbox::policy::Locks::of(root);
+    if !locks.any() {
+        return Vec::new();
+    }
+    here_hosts(text)
+        .into_iter()
+        .filter_map(|host| {
+            locks.refuses(&crate::sandbox::hosts::Granted {
+                host,
+                level: level_of(which),
+            })
+        })
+        .collect()
 }
 
 /// **Confirms your own host called `id`** ([`listed`]) in `charter.local.toml` at `root`, read

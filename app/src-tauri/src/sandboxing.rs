@@ -1785,6 +1785,33 @@ mod tests {
         );
     }
 
+    /// #1431: an entry policy locks out is kept, and a person may still take it away: Revoke
+    /// works on it while the policy stands, audited as any other.
+    #[test]
+    fn a_grant_policy_locks_out_is_still_revoked() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        let chats = crate::chats::Chats::new();
+        sandbox::local::grant_write(root, std::path::Path::new("/tmp/tool-cache")).expect("kept");
+        sandbox::local::grant_vault(root, "devops", "steward").expect("kept");
+        let _under = Under::policy(
+            r#"{"owner": "IT", "sandbox": {"write-grants": false, "vault-grants": false}}"#,
+        );
+        let listed = grants_of(root, &chats);
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(listed.iter().all(|one| one.locked.is_some()), "{listed:?}");
+        let heard = std::sync::Mutex::new(0);
+        let audit = |_: Option<u32>, _: &sandbox::grant::Audited<'_>| {
+            *heard.lock().unwrap() += 1;
+            Ok(())
+        };
+        for one in &listed {
+            revoke(root, &chats, &one.id, &audit).expect("revoked");
+        }
+        assert!(grants_of(root, &chats).is_empty());
+        assert_eq!(*heard.lock().unwrap(), 2);
+    }
+
     #[test]
     fn a_folder_you_were_granted_is_listed_and_revoke_takes_it_out_audited_once() {
         let project = tempfile::tempdir().expect("a project");

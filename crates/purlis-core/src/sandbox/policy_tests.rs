@@ -689,6 +689,11 @@ fn a_refusal_names_the_policy_and_its_owner_instead_of_an_opt_out_policy_forbids
             !locked.contains("new-chat picker") && !locked.contains("tart this chat without"),
             "{locked}"
         );
+        // It is policy, not the project, that requires the sandbox here (#1431).
+        if open.starts_with(super::super::LEAD) {
+            assert!(locked.starts_with(super::super::POLICY_LEAD), "{locked}");
+        }
+        assert!(!locked.contains(super::super::LEAD), "{locked}");
         assert!(
             locked.ends_with(
                 "Policy forbids starting a chat without the sandbox. Locked by policy, set by \
@@ -758,7 +763,9 @@ fn a_folder_refusal_names_the_policy_instead_of_an_opt_out_policy_forbids() {
             open.ends_with("; Start without the sandbox is yours to pick when you start it."),
             "{open}"
         );
+        assert!(open.starts_with(super::super::LEAD), "{open}");
         let locked = why.said(&under);
+        assert!(locked.starts_with(super::super::POLICY_LEAD), "{locked}");
         assert!(!locked.contains("yours to pick"), "{locked}");
         assert!(!locked.contains("without the sandbox is"), "{locked}");
         assert!(locked.contains("nothing was started"), "{locked}");
@@ -818,8 +825,11 @@ fn line_refused(root: &Path, cwd: &Path, under: &Locks) -> String {
         .expect_err("refused")
 }
 
-/// A refusal under [`REQUIRED`] names no opt-out and ends with the policy and who set it.
+/// A refusal under [`REQUIRED`] says it is policy that requires the sandbox (#1431), names no
+/// opt-out, and ends with the policy and who set it.
 fn names_the_policy_and_no_opt_out(said: &str) {
+    assert!(said.starts_with(super::super::POLICY_LEAD), "{said}");
+    assert!(!said.contains(super::super::LEAD), "{said}");
     assert!(said.ends_with(POLICY_SENTENCE), "{said}");
     let before = said.strip_suffix(POLICY_SENTENCE).unwrap_or(said);
     assert!(!before.contains("without the sandbox"), "{said}");
@@ -988,4 +998,33 @@ fn the_hosts_changed_notice_names_no_host_policy_locks_out() {
     let off = Plane::of(Some("[sandbox]\nhosts = [\"api.example.com\"]\n"));
     assert_eq!(off.granted_hosts(&Locks::none()), Vec::<String>::new());
     assert_eq!(off.granted_hosts(&locks(REQUIRED)), ["api.example.com"]);
+}
+
+// ---- the lead says who requires the sandbox (#1431) ---------------------------------------------
+
+#[test]
+fn a_refusal_s_lead_says_policy_where_policy_requires_the_sandbox() {
+    use super::super::{LEAD, POLICY_LEAD, under_policy};
+    let why = format!("{LEAD}, and the egress proxy was not started, so nothing was started.");
+    assert_eq!(under_policy(&Locks::none(), why.clone()), why);
+    // A lock that does not require the sandbox leaves the project's lead.
+    assert_eq!(
+        under_policy(
+            &locks(r#"{"sandbox": {"write-grants": false}}"#),
+            why.clone()
+        ),
+        why
+    );
+    assert_eq!(
+        under_policy(&locks(REQUIRED), why),
+        format!(
+            "{POLICY_LEAD}, and the egress proxy was not started, so nothing was started. \
+             {POLICY_SENTENCE}"
+        )
+    );
+    // A sentence led otherwise keeps its own words, and still ends with the policy.
+    assert_eq!(
+        under_policy(&locks(REQUIRED), "purlis could not start it.".to_owned()),
+        format!("purlis could not start it. {POLICY_SENTENCE}")
+    );
 }

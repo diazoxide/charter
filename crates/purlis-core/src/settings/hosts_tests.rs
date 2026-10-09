@@ -292,3 +292,46 @@ fn a_host_policy_does_not_allow_is_refused_as_it_is_added_and_nothing_is_written
     );
     assert_eq!(text(dir.path(), "charter.local.toml"), None);
 }
+
+#[test]
+fn a_host_policy_forbids_is_refused_by_a_whole_file_save_and_one_kept_stays() {
+    use crate::sandbox::policy::{Locks, set_for_this_test};
+    let kept = format!("{ON}hosts = [\"pastebin.example\"]\n");
+    let dir = project(&kept);
+    set_for_this_test(Locks::parse(
+        r#"{"owner": "IT", "sandbox": {"hosts": ["*.corp.example"], "personal-hosts": false}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    ));
+    // Edit as TOML writes the whole file: a host it adds is judged as Settings' Add judges it.
+    let widened = format!("{ON}hosts = [\"pastebin.example\", \"paste.example\"]\n");
+    let refused = crate::settings::save(dir.path(), Which::Shared, Some(&kept), &widened);
+    // One the file already held is not this write's to answer for: another edit still saves.
+    let renoted = kept.replace("on for everyone", "on for all of us");
+    let other_edit = crate::settings::save(dir.path(), Which::Shared, Some(&kept), &renoted);
+    let yours = crate::settings::save(
+        dir.path(),
+        Which::Local,
+        None,
+        "[sandbox]\nhosts = [\"git.corp.example\"]\n",
+    );
+    set_for_this_test(Locks::none());
+
+    assert_eq!(
+        refused,
+        Err(vec![
+            "paste.example is not a host policy allows. Locked by policy, set by IT in \
+             /etc/purlis/policy.json."
+                .to_owned()
+        ])
+    );
+    other_edit.expect("saved");
+    assert_eq!(text(dir.path(), "charter.toml").unwrap(), renoted);
+    let refused = yours.expect_err("refused");
+    assert!(
+        refused.iter().any(|why| why.starts_with(
+            "git.corp.example is a host of yours, and policy forbids hosts of your own."
+        )),
+        "{refused:?}"
+    );
+    assert_eq!(text(dir.path(), "charter.local.toml"), None);
+}

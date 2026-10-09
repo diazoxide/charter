@@ -729,6 +729,14 @@ fn refused_of(root: &Path, which: Which, now: Option<&str>, text: &str) -> Vec<S
         .into_iter()
         .filter(|why| !standing.contains(why))
         .collect();
+    // A host an administrator's policy locks out, added by this write, is refused as Settings'
+    // Add refuses it (#1431). One the file already held is kept, as Granted shows it.
+    let kept = now.map_or_else(Vec::new, |now| hosts::locked_out(root, which, now));
+    refused.extend(
+        hosts::locked_out(root, which, text)
+            .into_iter()
+            .filter(|why| !kept.contains(why)),
+    );
     refused.extend(writer_refusals(root, which, text));
     refused
 }

@@ -69,7 +69,7 @@ function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
  * which audits it; a project host's revoke is a change to the committed file, which teammates
  * follow. One a policy locks out (a host it does not allow, a folder where it forbids write
  * grants) is kept and not in force: it says so, with the policy and who set it, and is drawn
- * locked.
+ * locked, with Revoke still there to take it away (#1431).
  */
 function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
   const [grants, setGrants] = useState<readonly SandboxGrant[]>();
@@ -110,7 +110,7 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
           {grants.map((one) => (
             <li key={one.id}>
               <span>{grantSaid(one)}</span>
-              {one.level === "project" && one.locked === null && (
+              {one.level === "project" && (
                 <span className="granted-note">Revoking it edits the committed {file}.</span>
               )}
               {one.waiting !== null && (
@@ -118,20 +118,19 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
                 // allowed anew, never in force again by itself.
                 <span className="granted-note"> Not in force: {one.waiting}.</span>
               )}
-              {one.locked !== null ? (
+              {one.locked !== null && (
                 // Kept, and not in force (#1423): the core's sentence ends "Locked by policy",
-                // with who set it.
+                // with who set it. Still yours to take away (#1431).
                 <span className="granted-locked"> Not in force. {one.locked}</span>
-              ) : (
-                <button
-                  type="button"
-                  tabIndex={0}
-                  aria-label={`Revoke ${revoked(one)}`}
-                  onClick={() => revoke(one)}
-                >
-                  Revoke
-                </button>
               )}
+              <button
+                type="button"
+                tabIndex={0}
+                aria-label={`Revoke ${revoked(one)}`}
+                onClick={() => revoke(one)}
+              >
+                Revoke
+              </button>
             </li>
           ))}
         </ul>
