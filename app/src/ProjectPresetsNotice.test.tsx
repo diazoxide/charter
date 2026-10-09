@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ProjectPresetsNotice } from "./ProjectPresetsNotice";
@@ -53,6 +53,45 @@ function core(state: SandboxState, after: SandboxState = QUIET) {
   return asked;
 }
 
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__: { runCallback: (id: number, payload: unknown) => void };
+  }
+}
+
+/**
+ * A core whose state is `states[0]` until the project changes on disk, then the next, and a
+ * way to say it changed: `plane-changed` for the project, as the plane watcher sends it.
+ */
+function changing(...states: SandboxState[]) {
+  const listeners = new Map<string, number[]>();
+  let at = 0;
+  mockIPC((cmd, args) => {
+    if (cmd === "plugin:event|listen") {
+      const { event, handler } = args as { event: string; handler: number };
+      listeners.set(event, [...(listeners.get(event) ?? []), handler]);
+      return 1;
+    }
+    if (cmd === "sandbox_state") return states[Math.min(at, states.length - 1)];
+    if (cmd === "acknowledge_project_presets") return QUIET;
+    return null;
+  });
+  return async (answers: { answer: string }[]) => {
+    at += 1;
+    await waitFor(() => expect(listeners.get("plane-changed") ?? []).not.toHaveLength(0));
+    const handlers = listeners.get("plane-changed") ?? [];
+    await act(async () => {
+      for (const handler of handlers)
+        window.__TAURI_INTERNALS__.runCallback(handler, {
+          event: "plane-changed",
+          id: 1,
+          payload: { plane: PLANE, changes: null, answers },
+        });
+      await Promise.resolve();
+    });
+  };
+}
+
 describe("the project's presets Notice", () => {
   it("names what was turned on and off, and what it widens", async () => {
     core(CHANGED);
@@ -98,5 +137,26 @@ describe("the project's presets Notice", () => {
 
     expect(onReview).toHaveBeenCalledOnce();
     expect(asked.map((one) => one.cmd)).not.toContain("acknowledge_project_presets");
+  });
+
+  // #1550: a pull while the window is open is told then, not at the next time it opens.
+  it("is told when the project's settings change on disk while it is open", async () => {
+    const pulled = changing(QUIET, CHANGED);
+    render(<ProjectPresetsNotice plane={PLANE} onReview={() => {}} />);
+    await waitFor(() => expect(screen.queryByRole("status", { name: LABEL })).toBeNull());
+
+    await pulled([{ answer: "settings" }]);
+
+    expect(await screen.findByRole("status", { name: LABEL })).toBeInTheDocument();
+  });
+
+  it("is not read again for a change that is not the settings'", async () => {
+    const pulled = changing(QUIET, CHANGED);
+    render(<ProjectPresetsNotice plane={PLANE} onReview={() => {}} />);
+    await waitFor(() => expect(screen.queryByRole("status", { name: LABEL })).toBeNull());
+
+    await pulled([{ answer: "sidebar" }]);
+
+    expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument();
   });
 });
