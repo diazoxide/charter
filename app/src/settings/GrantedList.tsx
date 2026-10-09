@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
 import { sandboxCommandReturned } from "../sandboxAsked";
-import { DispatchGrantsList } from "./DispatchGrants";
 import type { RowIds } from "./components";
+import { DISPATCH } from "./dispatch";
+import { linkToGroup, settingsPlace } from "./links";
 import type { SettingsGroup } from "./groups";
 
 /** The address of the Granted list (#1348): a sub-page of Sandbox. */
@@ -309,11 +310,30 @@ export function grantedGroup(
         id: `${GRANTED}.dispatch`,
         // Its own words: "Dispatch grants" is the row of the Dispatch page, and a label is one row's.
         label: "Who may dispatch to whom",
-        help: `Which personas' chats may dispatch to which, and who allowed it. Revoke makes the next dispatch ask again. Everyone in this project is kept in ${file}, which your team follows.`,
+        help: "Which personas' chats may dispatch to which is one table, with where each grant comes from and how to take it back.",
         useControl: function useDispatchGrants() {
           return {
             grouped: true,
-            control: (ids) => <DispatchGrantsList plane={plane} file={file} ids={ids} />,
+            // One place lists and changes them (#1504): this row only says where.
+            control: (ids) => (
+              <p
+                id={ids.id}
+                className="ui-setting-status"
+                aria-labelledby={ids.labelledBy}
+                aria-describedby={ids.describedBy}
+              >
+                Dispatch grants are listed, revoked and lifted on the Dispatch page.
+                <button
+                  type="button"
+                  className="ui-setting-reset"
+                  tabIndex={0}
+                  // The same Settings tab, at its Dispatch page (`links.ts`).
+                  onClick={() => linkToGroup(settingsPlace("project", plane), DISPATCH)}
+                >
+                  Open that page
+                </button>
+              </p>
+            ),
           };
         },
       },

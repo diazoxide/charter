@@ -287,6 +287,7 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
             chat: Some("steward 3".to_owned()),
             locked: None,
             waiting: false,
+            declined: false,
         }]
     );
     assert_eq!(
@@ -344,6 +345,7 @@ fn allow_for_me_on_this_machine_is_kept_in_this_machine_s_record_and_covers_ever
             chat: Some("steward 3".to_owned()),
             locked: None,
             waiting: false,
+            declined: false,
         }]
     );
     assert_eq!(world.audited().len(), 1, "one Allow, one audit");
@@ -1762,6 +1764,7 @@ fn any_persona_is_granted_from_settings_audited_and_covers_a_persona_added_later
             asking: "steward".to_owned(),
             level: GrantLevel::You,
             waiting: false,
+            declined: false,
         }]
     );
     let (store, _) = store();
@@ -1844,6 +1847,7 @@ fn a_teammate_s_any_persona_waits_in_settings_and_covers_nothing_until_it_is_all
             asking: "steward".to_owned(),
             level: GrantLevel::Project,
             waiting: true,
+            declined: false,
         }]
     );
     // Asked on a chat's tab, Allow for everyone grants that pair and no more.
@@ -2034,3 +2038,39 @@ fn a_never_stands_whatever_becomes_of_this_machine_s_other_record() {
         refused
     );
 }
+
+/// Starts a chat as a persona, then the persona is deleted under it. It opens a terminal, as
+/// [`a_held_chat`] does: CI runs it first.
+#[test]
+fn a_chat_still_running_as_a_persona_that_is_gone_is_covered_by_no_grant_and_asks_nobody() {
+    let (dir, held, session) = a_held_chat("steward");
+    let root = dir.path().join("project");
+    sandbox::local::grant_dispatch(&root, "steward", "devops").expect("a grant of mine");
+    sandbox::local::grant_dispatch_any(&root, "steward").expect("and any persona");
+    assert!(matches!(
+        request_dispatch_grant(&held, session, "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+
+    std::fs::remove_dir_all(root.join("personas/steward")).expect("removed under the chat");
+
+    for ask in [request_dispatch_grant, request_dispatch_grant_or_refuse] {
+        assert_eq!(
+            ask(&held, session, "devops", BRIEF),
+            Requested::Refused(gone_persona_said("steward"))
+        );
+    }
+    assert!(
+        held.dispatch_grants().waiting(session).is_empty(),
+        "nobody is asked"
+    );
+    // Nothing was moved: the grants are as they were, and are in force when it is back.
+    assert_eq!(
+        sandbox::local::granted_dispatch(&root),
+        [("steward".to_owned(), "devops".to_owned())]
+    );
+    assert_eq!(sandbox::local::granted_dispatch_any(&root), ["steward"]);
+}
+
+#[path = "dispatchgrants_table_tests.rs"]
+mod table;
