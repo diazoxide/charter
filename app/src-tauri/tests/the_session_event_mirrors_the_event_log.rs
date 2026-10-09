@@ -107,3 +107,22 @@ fn the_protocol_s_json_reads_as_the_log_s_and_writes_back_the_same() {
     assert_eq!(again, written);
     assert_eq!(read, filled());
 }
+
+#[test]
+fn an_event_with_no_chat_or_run_crosses_the_same_way_in_json() {
+    // The optional fields left empty, so a `skip_serializing_if` or a default on one side only
+    // writes a different line than the other reads back.
+    let bare = eventlog::Event {
+        chat: None,
+        run: None,
+        parent_run: None,
+        ..filled()
+    };
+    let from_log = serde_json::to_value(&bare).expect("the log's event as JSON");
+    let from_protocol =
+        serde_json::to_value(to_session(bare.clone())).expect("the protocol's event as JSON");
+    assert_eq!(from_log, from_protocol);
+    let read: session::Event =
+        serde_json::from_value(from_log).expect("the protocol reads the log's JSON");
+    assert_eq!(to_log(read), bare);
+}
