@@ -108,13 +108,18 @@ export function FirstRun({
     };
   }, []);
 
+  // A cancelled dialog is null and says nothing. One that could not open is said where a refused
+  // open is (#1291), until the next try.
+  const [pickTrouble, setPickTrouble] = useState<string>();
   const pick = useCallback(() => {
+    setPickTrouble(undefined);
     void commands
       .pickProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
       .then((answer) => {
-        if (answer.status === "ok" && answer.data) onOpenRepo(answer.data, choiceOf(template));
-      })
-      .catch(() => undefined);
+        if (answer.status === "error") setPickTrouble(answer.error);
+        else if (answer.data) onOpenRepo(answer.data, choiceOf(template));
+      });
   }, [onOpenRepo, template]);
 
   return (
@@ -137,6 +142,7 @@ export function FirstRun({
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          setPickTrouble(undefined);
           if (typed.trim() && !opening) onOpenRepo(typed.trim(), choiceOf(template));
         }}
       >
@@ -198,9 +204,9 @@ export function FirstRun({
       {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
 
       {/* Verbatim: the sentence names the path and what was wrong with it. */}
-      {trouble && (
+      {(pickTrouble ?? trouble) && (
         <p className="trouble said-in-full" role="alert">
-          {trouble}
+          {pickTrouble ?? trouble}
         </p>
       )}
 
