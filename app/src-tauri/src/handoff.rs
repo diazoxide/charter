@@ -451,8 +451,10 @@ fn report_under(
         ));
     };
     // **Which kind of report it is, is this app's record of how the chat was started**, never
-    // what the line says. A handed-off chat's stop report is its words alone: a handoff has no
-    // outcome of a task's (#1471).
+    // what the line says. A handed-off chat's stop report is delivered as its words alone: a
+    // handoff has no outcome of a task's (#1471). What it said of how it ended is still what
+    // its dispatch's record keeps, so the log says what the command echoed to it.
+    let said_outcome = said.outcome;
     let task = match from.mode {
         Mode::Handoff => None,
         Mode::Task => Some(said),
@@ -484,15 +486,20 @@ fn report_under(
             branch: cut_for_it,
         }),
     };
-    // The dispatch's record ends with the report (#1452). A task's says how it ended; a
-    // handoff's is a summary with no outcome word of its own, so it is recorded as done.
-    let outcome = match task.as_ref().map(|task| task.outcome) {
-        Some(handback::Outcome::Blocked) => purlis_core::dispatchrecord::Outcome::Blocked,
-        Some(handback::Outcome::Failed) => purlis_core::dispatchrecord::Outcome::Failed,
+    // The dispatch's record ends with the report (#1452), saying how it ended: a task's
+    // outcome as the app holds it, and a handed-off chat's as it said it (#1471). Nobody
+    // cancels a handoff, so a handoff that says so is recorded as done.
+    let outcome = match task.as_ref().map_or(said_outcome, |task| task.outcome) {
+        handback::Outcome::Blocked => purlis_core::dispatchrecord::Outcome::Blocked,
+        handback::Outcome::Failed => purlis_core::dispatchrecord::Outcome::Failed,
         // A task its asking chat cancelled is recorded as that, and not as a failure of the
         // work (D-1441-15, D-T59-j5).
-        Some(handback::Outcome::Cancelled) => purlis_core::dispatchrecord::Outcome::Cancelled,
-        Some(handback::Outcome::Done) | None => purlis_core::dispatchrecord::Outcome::Done,
+        handback::Outcome::Cancelled if task.is_some() => {
+            purlis_core::dispatchrecord::Outcome::Cancelled
+        }
+        handback::Outcome::Cancelled | handback::Outcome::Done => {
+            purlis_core::dispatchrecord::Outcome::Done
+        }
     };
     // What it says changed is kept on the record with the report's text (#1452).
     let changed = task.as_ref().and_then(|task| task.changed.clone());
@@ -2499,7 +2506,12 @@ fn held_handoff_todo(held: &Held, moved: &Moved) -> Option<String> {
     let target = match purlis_core::workspaces::Plane::open(held.root()).workspace(&moved.workspace)
     {
         Ok(target) => target,
-        Err(why) => return Some(format!("its todo could not be recorded ({why})")),
+        Err(why) => {
+            return Some(format!(
+                "its todo could not be recorded ({})",
+                purlis_core::personas::one_line(&why.to_string())
+            ));
+        }
     };
     if target.todo_for_the_same_work(&text).is_some() {
         return None;
@@ -2514,6 +2526,19 @@ fn held_handoff_todo(held: &Held, moved: &Moved) -> Option<String> {
                 purlis_core::rewrite::os_words(&why)
             )
         })
+}
+
+/// What a held handoff's dispatch-log row that could not be written is told as, to the
+/// asking chat (#1471), or nothing for one that was written.
+fn unlogged(row: Option<Row>) -> Option<String> {
+    match row {
+        Some(Row::Unwritten { why }) => Some(format!(
+            "its row in the dispatch log (personas/{}) could not be written ({})",
+            purlis_core::dispatch::DIR_NAME,
+            purlis_core::personas::one_line(&why)
+        )),
+        Some(Row::Written) | None => None,
+    }
 }
 
 /// **The person answered a dispatch that waited on them** (#1437): the grants store hands
@@ -2574,14 +2599,7 @@ pub fn answered(
                     .moved
                     .as_ref()
                     .and_then(|moved| held_handoff_todo(held, moved));
-                let unlogged = match logged {
-                    Some(Row::Unwritten { why }) => Some(format!(
-                        "its row in the dispatch log (personas/{}) could not be written ({})",
-                        purlis_core::dispatch::DIR_NAME,
-                        purlis_core::personas::one_line(&why)
-                    )),
-                    Some(Row::Written) | None => None,
-                };
+                let unlogged = unlogged(logged);
                 // Where it works, where that is not the asking chat's folder (#1453): the
                 // branch purlis cut is in it.
                 let detail = [
@@ -5567,6 +5585,64 @@ mod tests {
     }
 
     // ----- a report back (charter-app#259) -----
+
+    /// #1471: what a held handoff could not write at the Allow is said to the asking chat, in
+    /// one line each, and nothing is said for what was written.
+    #[test]
+    fn what_a_held_handoff_could_not_write_is_said_in_one_line() {
+        let plane = Plane::new();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let moved = |workspace: &str| Moved {
+            workspace: workspace.to_owned(),
+            create_vision: None,
+            message: stamped(1),
+        };
+        // Its todos are a file where their folder goes, so the todo cannot be written.
+        let alpha = held.root().join("workspaces").join("alpha");
+        std::fs::create_dir_all(&alpha).expect("alpha");
+        std::fs::write(alpha.join("todos"), "not a folder").expect("in the way");
+
+        let said = held_handoff_todo(&held, &moved("alpha")).expect("said");
+        assert!(
+            said.starts_with("its todo could not be recorded in 'alpha' ("),
+            "{said}"
+        );
+        assert!(!said.contains('\n'), "{said}");
+        // A name that is not a workspace's is said too, as one line.
+        let said = held_handoff_todo(&held, &moved("../out\nside")).expect("said");
+        assert!(
+            said.starts_with("its todo could not be recorded ("),
+            "{said}"
+        );
+        assert!(!said.contains('\n'), "{said}");
+        // Where it can be written, it is, once, and nothing is said.
+        std::fs::remove_file(alpha.join("todos")).expect("cleared");
+        assert_eq!(held_handoff_todo(&held, &moved("alpha")), None);
+        assert_eq!(held_handoff_todo(&held, &moved("alpha")), None, "not twice");
+        let todos = purlis_core::workspaces::Plane::open(held.root())
+            .workspace("alpha")
+            .expect("a name")
+            .todos()
+            .expect("its todos");
+        assert_eq!(todos.len(), 1, "{todos:?}");
+
+        // The dispatch-log row: said where it was not written, in one line, and not otherwise.
+        let row = unlogged(Some(Row::Unwritten {
+            why: "Permission denied\n(os error 13)".to_owned(),
+        }))
+        .expect("said");
+        assert!(
+            row.starts_with("its row in the dispatch log (personas/")
+                && row.contains("could not be written (Permission denied"),
+            "{row}"
+        );
+        assert!(!row.contains('\n'), "{row}");
+        assert_eq!(unlogged(Some(Row::Written)), None);
+        assert_eq!(unlogged(None), None);
+    }
 
     #[test]
     fn an_open_that_wants_an_answer_starts_nothing_and_names_the_task_route() {
@@ -11558,6 +11634,13 @@ mod tests {
         );
         let again = tasks_report(&held, &id, &Tickets::default(), task, blocked, None);
         assert!(matches!(again, Answer::No { .. }), "{again:?}");
+        // A line without an outcome, which only an older `purlis handoff report` sends, is
+        // refused and keeps the stop's one last report (#1471).
+        let older = report(&held, &id, &Tickets::default(), handed, "Half done.");
+        assert!(
+            matches!(&older, Answer::No { why } if why.contains("purlis dispatch report --outcome")),
+            "{older:?}"
+        );
         // `purlis dispatch report`, from the chat a handoff opened (#1471): once.
         let first = tasks_report(&held, &id, &Tickets::default(), handed, blocked, None);
         assert!(
@@ -11577,6 +11660,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(true, true), (false, false)],
             "{left:?}"
+        );
+        // The handed chat's record says how it said it ended, as the command echoed it
+        // (#1471): its words alone went to the chat that asked.
+        assert_eq!(
+            record_of(&held, handed).report.map(|report| report.outcome),
+            Some(purlis_core::dispatchrecord::Outcome::Blocked)
         );
     }
 
