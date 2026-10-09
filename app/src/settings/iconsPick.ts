@@ -23,6 +23,21 @@ const BUILT_IN = Object.keys(BUILT_IN_ICONS);
 /** The icon theme drawn when no pick can be: `purlis_core`'s `ICONS_FALLBACK`. */
 const FALLBACK = "charter-icons";
 
+/** An extension's id as the core accepts one: short, plain ASCII. */
+const EXTENSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/** The longest icon theme name said whole: the name is the extension's, or a file's. */
+const LONGEST_NAME = 64;
+
+/**
+ * `text`, which an extension or a file wrote, as one short line of plain text: no control or
+ * invisible formatting character (a bidi override among them), and cut to `most` characters.
+ */
+export function plainLine(text: string, most: number = LONGEST_NAME): string {
+  const plain = [...text.replace(/[\p{Cc}\p{Cf}]/gu, "")];
+  return plain.length > most ? `${plain.slice(0, most - 1).join("")}…` : plain.join("");
+}
+
 /** An offered icon theme as a file picks it. */
 const pickOf = (one: ExtensionTheme) => `${one.extension}/${one.name}`;
 
@@ -40,7 +55,8 @@ export function iconsControl(
   const labels: Record<string, string> = Object.fromEntries(
     BUILT_IN.map((name) => [name, `${name} (built in)`]),
   );
-  for (const one of offered ?? []) labels[pickOf(one)] = `${one.name} (${whose(one.extension)})`;
+  for (const one of offered ?? [])
+    labels[pickOf(one)] = `${plainLine(one.name)} (${plainLine(whose(one.extension))})`;
   return {
     ...textAt(ICONS, "Icons", {
       kind: "choice",
@@ -68,7 +84,7 @@ function unavailable(
       // Only once the core has said what there is: until then, nothing is said.
       if (offered === undefined || offered.some((one) => pickOf(one) === `${id}/${name}`))
         return null;
-      return `${id} contributes no icon theme called “${name}”`;
+      return `${id} contributes no icon theme called “${plainLine(name)}”`;
     case "off":
       return it.source === "workspace"
         ? `${id} is off in this workspace`
@@ -102,11 +118,14 @@ export function iconsNotes(
   if (cut <= 0 || cut === held.pick.length - 1) return [];
   const id = held.pick.slice(0, cut);
   const name = held.pick.slice(cut + 1);
+  // The file's text, said back in the window: only a pick that names an extension by an id
+  // the core could accept is said, and its theme's name as one short plain line.
+  if (!EXTENSION_ID.test(id)) return [];
   const because = unavailable(id, name, extensions, offered);
   return because === null
     ? []
     : [
-        `${held.file} picks “${name}” from ${id}, but ${because} — so the built-in ${FALLBACK} is drawn`,
+        `${held.file} picks “${plainLine(name)}” from ${id}, but ${because} — so the built-in ${FALLBACK} is drawn`,
       ];
 }
 

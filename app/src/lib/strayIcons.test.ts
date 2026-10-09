@@ -45,6 +45,15 @@ function sources(dir: string): string[] {
   });
 }
 
+/** Every stylesheet the window is drawn with: a `content: "▸"` is a glyph drawn as an icon too. */
+function styles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return styles(path);
+    return entry.name.endsWith(".css") ? [path] : [];
+  });
+}
+
 /** `source` without its comments, so a glyph named in one is not drawn. */
 const uncommented = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
@@ -80,7 +89,9 @@ describe("a stray icon", () => {
   it("is no glyph drawn as an icon", () => {
     // A reader that found nothing would pass on nothing.
     expect(files.length).toBeGreaterThan(100);
-    const found = files.flatMap((path) =>
+    const sheets = styles(SRC);
+    expect(sheets.map((path) => relative(SRC, path))).toContain("App.css");
+    const found = [...files, ...sheets].flatMap((path) =>
       strayGlyphs(read(path)).map((glyph) => `${relative(SRC, path)}: ${glyph}`),
     );
     expect(found).toEqual([]);
@@ -117,6 +128,8 @@ describe("a stray icon", () => {
     expect(strayGlyphs(`<span aria-hidden="true">\n  ▸\n</span>`)).toEqual(["▸"]);
     expect(strayGlyphs(`const MARK = { ok: "✓", fail: '✗' };`)).toEqual(["✓", "✗"]);
     expect(strayGlyphs("<b>{`★`}</b>")).toEqual(["★"]);
+    expect(strayGlyphs(`.menu-sub::after {\n  content: "▸";\n}`)).toEqual(["▸"]);
+    expect(strayGlyphs(`.sep::before {\n  content: " · ";\n}`)).toEqual([]);
     // Prose, comments and punctuation are not icons.
     expect(strayGlyphs(`said: ["✓ created personas/"]`)).toEqual([]);
     expect(strayGlyphs(`// the tab's \`×\` closes it\n/* a ▸ */`)).toEqual([]);

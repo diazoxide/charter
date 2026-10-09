@@ -9,6 +9,7 @@ import {
 } from "./bindings";
 import { extensionsChanged } from "./extensionsOn";
 import { Choice } from "./settings/components";
+import { plainLine } from "./settings/iconsPick";
 import { iconThemeComplaints, offeredIconThemes, projectThemeChanged } from "./projectTheme";
 import {
   BUILT_IN,
@@ -284,11 +285,10 @@ function iconTroubleOf(offered: readonly ExtensionTheme[]): Map<string, IconTrou
 
 /** One icon theme's complaints as a sentence, bounded: its text is the extension's. */
 export function troubleSaid({ name, complaints }: IconTrouble): string {
-  const cut = (text: string) =>
-    text.length > LONGEST_COMPLAINT ? `${text.slice(0, LONGEST_COMPLAINT - 1)}…` : text;
+  const cut = (text: string) => plainLine(text, LONGEST_COMPLAINT);
   const said = complaints.slice(0, MOST_COMPLAINTS).map(cut).join("; ");
   const more = complaints.length - MOST_COMPLAINTS;
-  return `Icon theme “${cut(name)}”, drawn as purlis’s own where it is wrong: ${said}${more > 0 ? `; and ${more} more` : ""}.`;
+  return `Icon theme “${plainLine(name)}”, drawn as purlis’s own where it is wrong: ${said}${more > 0 ? `; and ${more} more` : ""}.`;
 }
 
 /** What a standing says, in the words to put in front of the operator. */
