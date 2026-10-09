@@ -88,6 +88,47 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
   it("leaves case alone outside the window's text", () => {
     expect(copyFaults("Open Project")).toEqual([]);
   });
+
+  it("refuses an exclamation mark that ends any sentence, not only the last (#1156)", () => {
+    expect(copyFaults("Saved! Open it from the list.", "shown")).toEqual([
+      "an exclamation mark: say it plainly",
+    ]);
+    expect(copyFaults("Done!) Nothing else to do.", "shown")).toHaveLength(1);
+    // Said once however many there are.
+    expect(copyFaults("Saved! It is in the list!", "shown")).toHaveLength(1);
+    // A `!` inside a word or a code span is not a tone of voice.
+    expect(copyFaults("Run `git log -1 !main` to see it.", "shown")).toEqual([]);
+    expect(copyFaults("The value is a!=b in the file.", "shown")).toEqual([]);
+  });
+
+  it("refuses a word shouted in capitals in what the window shows (#1156)", () => {
+    expect(copyFaults("Never close this window while it saves", "shown")).toEqual([]);
+    expect(copyFaults("NEVER close this window while it saves", "shown")).toEqual([
+      "capitals: write the word in lowercase, or name it",
+    ]);
+    expect(copyFaults("WARNING", "shown")).toHaveLength(1);
+    // Acronyms, names and chords keep their capitals.
+    expect(copyFaults("Open the JSON file", "shown")).toEqual([]);
+    expect(copyFaults("Open a PR on GitHub", "shown")).toEqual([]);
+    expect(copyFaults("Read the README first.", "shown")).toEqual([]);
+    expect(copyFaults("This app's PATH", "shown")).toEqual([]);
+    // ADR 0072's labels for a workspace's save mode are written in capitals.
+    expect(copyFaults("the workspace is LIVE", "shown")).toEqual([]);
+    // A file's name is a name: `AGENTS.md` is what is on disk.
+    expect(copyFaults("Move the AGENTS.md aside", "shown")).toEqual([]);
+    expect(copyFaults("Find (Ctrl+Shift+F)", "shown")).toEqual([]);
+    // A code span or a placeholder is what the person types, not a word.
+    expect(copyFaults("Set `TMPDIR` and try again.", "shown")).toEqual([]);
+    // Outside the window, an all-caps word is a constant.
+    expect(copyFaults("NOT_FOUND")).toEqual([]);
+  });
+
+  it("finds 'please' in words a person reads, not in an id or a code span (#1156)", () => {
+    expect(copyFaults("Pick a folder, please.")).toHaveLength(1);
+    expect(copyFaults("ask.please")).toEqual([]);
+    expect(copyFaults("hooks/please-hold.sh")).toEqual([]);
+    expect(copyFaults("Run `please --now` to see it.", "shown")).toEqual([]);
+  });
 });
 
 describe("the strings the guard reads", () => {
