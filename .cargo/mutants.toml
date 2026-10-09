@@ -88,7 +88,8 @@ exclude_re = [
     'src/guest\.rs:\d+:\d+: replace != with == in wire$',
     # `machine::Store::pin` trims only after an unpin; with `||` it also trims after a pin or
     # after an unpin that changed nothing, and in both of those the store is already inside
-    # both bounds, which `trim` leaves as it is. The site says why.
+    # both bounds: the entry counted first is one of at most `MOST_RECENTS` unpinned ones
+    # either way, so nothing goes. The site says why.
     'src/machine\.rs:\d+:\d+: replace && with \|\| in Store::pin$',
     # `secret cp`'s open flags are single, distinct bits (`WRONLY`, `CREATE`, `NOFOLLOW`,
     # `NONBLOCK`), and XOR of distinct bits IS their OR: `^` for `|` builds the same flags.

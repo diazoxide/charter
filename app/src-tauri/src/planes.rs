@@ -2328,17 +2328,29 @@ impl Planes {
     /// project that is gone from the disk is forgotten the same way.
     pub fn forget(&self, root: &Path) -> Result<(), String> {
         let config = self.store_home("forget a project")?;
-        machine::forget_project(config, root)
-            .map(drop)
-            .map_err(|why| format!("purlis could not forget that project: {why}"))
+        match machine::forget_project(config, root) {
+            Ok(true) => Ok(()),
+            // Said, never dropped (#1240 F3): a row whose path the store does not hold, as
+            // one that is not UTF-8 comes back from the window, would otherwise read as done.
+            Ok(false) => Err(
+                "Nothing changed: purlis does not remember that project on this machine."
+                    .to_owned(),
+            ),
+            Err(why) => Err(format!("purlis could not forget that project: {why}")),
+        }
     }
 
     /// Revokes this machine's approval of a project (ST-2): the next open asks again.
     pub fn revoke(&self, root: &Path) -> Result<(), String> {
         let config = self.store_home("revoke an approval")?;
-        machine::revoke_approval(config, root)
-            .map(drop)
-            .map_err(|why| format!("purlis could not revoke that approval: {why}"))
+        match machine::revoke_approval(config, root) {
+            Ok(true) => Ok(()),
+            // Said, never dropped (#1240 F3), as a forget that changed nothing is.
+            Ok(false) => {
+                Err("Nothing changed: this machine holds no approval of that project.".to_owned())
+            }
+            Err(why) => Err(format!("purlis could not revoke that approval: {why}")),
+        }
     }
 
     /// The config home the machine store is in, or why there is none to `act` in.
@@ -4211,6 +4223,42 @@ mod tests {
     };
 
     /// A registry keeping its machine state in `dir`, and the config home it keeps it in.
+    #[test]
+    fn a_forget_or_a_revoke_that_changed_nothing_says_so_rather_than_nothing() {
+        // #1240 F3: a path the store does not hold (one not UTF-8 goes out lossy, and so is
+        // such a path) was answered as done.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, config) = planes_with_a_config_home(dir.path());
+        let project = dir.path().join("p");
+        purlis_core::machine::update(&config, |store| {
+            store.approve(&project, 1, purlis_core::machine::Contribution::default());
+        })
+        .expect("the store is written");
+        let elsewhere = dir.path().join("not-remembered");
+
+        let revoked = planes.revoke(&project);
+        let again = planes.revoke(&project);
+        let unknown = planes.revoke(&elsewhere);
+        let forgot = planes.forget(&project);
+        let forgot_again = planes.forget(&project);
+
+        assert_eq!(revoked, Ok(()));
+        assert!(
+            again
+                .as_ref()
+                .is_err_and(|why| why.contains("Nothing changed")),
+            "{again:?}"
+        );
+        assert!(unknown.is_err(), "{unknown:?}");
+        assert_eq!(forgot, Ok(()));
+        assert!(
+            forgot_again
+                .as_ref()
+                .is_err_and(|why| why.contains("Nothing changed")),
+            "{forgot_again:?}"
+        );
+    }
+
     fn planes_with_a_config_home(dir: &Path) -> (Planes, PathBuf) {
         let config = dir.join("config-home");
         std::fs::create_dir_all(&config).expect("a config home");
