@@ -2,7 +2,7 @@
 //!
 //! Today the host is in the app's own process: [`crate::sessions::Sessions`] runs the
 //! sessions, and [`crate::hooks::Hooks`] holds the board their hooks report to. ADR 0068
-//! (proposed, PR #745) moves both into `charterd`, behind a socket. These two traits are that
+//! (accepted 2026-09-30) moves both into `charterd`, behind a socket. These two traits are that
 //! seam, drawn first in place with nothing moved and nothing changed. The app reaches a session
 //! only through [`SessionHost`], and a chat's hook state only through [`ChatBoard`].
 //!
