@@ -396,14 +396,14 @@ impl Reader {
         let read = self.read(plane, branch, ask, deadline);
         match &read {
             Ended::Answered(_) => strikes(|struck| struck.answered(&key)),
-            Ended::PastBounds(_) if a_fair_try(deadline, self.deadline) => {
+            ended if a_strike(ended, deadline, self.deadline) => {
                 strikes(|struck| struck.struck(key, Instant::now()));
             }
-            Ended::PastBounds(_) | Ended::Failed(_) => {}
+            _ => {}
         }
         match read {
             Ended::Answered(answered) => answered,
-            Ended::PastBounds(why) | Ended::Failed(why) => Err(why),
+            Ended::PastDeadline(why) | Ended::PastMemory(why) | Ended::Failed(why) => Err(why),
         }
     }
 
@@ -468,7 +468,7 @@ impl Reader {
                 Ok(None) if started.elapsed() >= deadline + GRACE => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Ended::PastBounds(failed(format!(
+                    return Ended::PastDeadline(failed(format!(
                         "the read did not finish within {within}"
                     )));
                 }
@@ -488,10 +488,10 @@ impl Reader {
         let Some((_, framed)) = text.rsplit_once(FRAME) else {
             let stopped = "the read stopped without an answer";
             return match exited.code() {
-                Some(STOPPED_PAST_DEADLINE) => Ended::PastBounds(failed(format!(
+                Some(STOPPED_PAST_DEADLINE) => Ended::PastDeadline(failed(format!(
                     "{stopped}: it did not finish within {within}"
                 ))),
-                Some(STOPPED_PAST_MEMORY) => Ended::PastBounds(failed(format!(
+                Some(STOPPED_PAST_MEMORY) => Ended::PastMemory(failed(format!(
                     "{stopped}: it took more than {} MiB of memory",
                     self.memory / (1024 * 1024)
                 ))),
@@ -517,13 +517,28 @@ fn a_fair_try(given: Duration, deadline: Duration) -> bool {
     given >= deadline / 2
 }
 
+/// Whether a read that ended as `ended`, its child given `given` of the reader's whole
+/// `deadline`, counts against its branch ([`Strikes`]). Running past the memory cap always does:
+/// how much memory a read takes is the branch's own doing, whatever time the line left it.
+/// Running past the deadline does only on [`a_fair_try`]. An answer or another failure never
+/// does.
+fn a_strike(ended: &Ended, given: Duration, deadline: Duration) -> bool {
+    match ended {
+        Ended::PastMemory(_) => true,
+        Ended::PastDeadline(_) => a_fair_try(given, deadline),
+        Ended::Answered(_) | Ended::Failed(_) => false,
+    }
+}
+
 /// How one child's read ended.
 #[derive(Debug)]
 enum Ended {
     /// The child answered: what it read, or the refusal it read instead.
     Answered(Result<Answer, Refused>),
-    /// It ran into its deadline or its memory cap: a strike against the branch ([`Strikes`]).
-    PastBounds(Refused),
+    /// It ran into its deadline: a strike against the branch on a fair try ([`a_strike`]).
+    PastDeadline(Refused),
+    /// It ran into its memory cap: always a strike against the branch ([`a_strike`]).
+    PastMemory(Refused),
     /// It failed otherwise: it could not start, or its answer did not read.
     Failed(Refused),
 }
@@ -778,6 +793,20 @@ mod tests {
         assert!(a_fair_try(Duration::from_secs(15), whole));
         assert!(!a_fair_try(Duration::from_millis(14_999), whole));
         assert!(!a_fair_try(LEAST_LEFT, whole));
+    }
+
+    /// #1605: a memory-cap stop is the branch's own doing however little time the child had,
+    /// so it always counts; running out of time counts only on a fair try.
+    #[test]
+    fn a_memory_cap_stop_always_counts_and_a_deadline_only_on_a_fair_try() {
+        let whole = Duration::from_secs(30);
+        let why = || Refused::Read(String::new());
+        assert!(a_strike(&Ended::PastMemory(why()), LEAST_LEFT, whole));
+        assert!(a_strike(&Ended::PastMemory(why()), whole, whole));
+        assert!(a_strike(&Ended::PastDeadline(why()), whole, whole));
+        assert!(!a_strike(&Ended::PastDeadline(why()), LEAST_LEFT, whole));
+        assert!(!a_strike(&Ended::Failed(why()), whole, whole));
+        assert!(!a_strike(&Ended::Answered(Err(why())), whole, whole));
     }
 
     /// #1605: a failure names the time the child had, not the ask's whole deadline.
