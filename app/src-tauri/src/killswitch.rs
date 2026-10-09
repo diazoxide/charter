@@ -42,6 +42,15 @@ const MOST_PATHS: usize = 256;
 /// the platform has quietly lost then makes a stop slower to arrive, never lost.
 const LOOK_EVERY: Duration = Duration::from_secs(3);
 
+/// How long a test waits for the watch to say a stop was heard before calling it lost (#1006).
+///
+/// Derived from [`LOOK_EVERY`], not picked: whatever the platform's file events do — macOS's
+/// arrive late on a busy machine — the watch looks at the files once per period of quiet, so a
+/// stop is heard within a period of being written. Ten periods is a stop the watch missed, never
+/// a machine that was only slow; a test that passes still passes as soon as it hears.
+#[cfg(test)]
+pub(crate) const HEARD_WITHIN: Duration = LOOK_EVERY.saturating_mul(10);
+
 /// What a look at the files did to the switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moved {
@@ -504,7 +513,7 @@ mod tests {
         raw(EventKind::Remove(RemoveKind::File), &marker);
 
         assert_eq!(
-            heard.recv_timeout(Duration::from_secs(10)),
+            heard.recv_timeout(HEARD_WITHIN),
             Ok(Moved::Stopped),
             "the watch never looked"
         );
@@ -526,7 +535,7 @@ mod tests {
         event(notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan));
 
         assert_eq!(
-            heard.recv_timeout(Duration::from_secs(10)),
+            heard.recv_timeout(HEARD_WITHIN),
             Ok(Moved::Stopped),
             "the watch never looked"
         );
@@ -555,7 +564,7 @@ mod tests {
         halt::stop(config.path(), Actor::Cli, 1).expect("stopped from a terminal");
 
         assert_eq!(
-            heard.recv_timeout(Duration::from_secs(10)),
+            heard.recv_timeout(HEARD_WITHIN),
             Ok(Moved::Stopped),
             "a watch that heard nothing never looked"
         );
@@ -640,10 +649,11 @@ mod tests {
         })
         .expect("a directory to watch")
         .expect("watching");
-        let patience = Duration::from_secs(10);
+        // The real watcher, at the real period: on a busy macOS machine its events can arrive
+        // late or not at all, and the idle look is what still hears the stop (#1006).
         let next = |wanted: Moved| loop {
             let moved = heard
-                .recv_timeout(patience)
+                .recv_timeout(HEARD_WITHIN)
                 .expect("the watch said nothing");
             if moved == wanted {
                 break;

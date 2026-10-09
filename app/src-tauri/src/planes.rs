@@ -4441,8 +4441,10 @@ mod tests {
 
         purlis_core::halt::stop(&config, Actor::Cli, 1).expect("stopped from a terminal");
 
+        // Heard within the watch's own bound however late macOS's file events are (#1006), and
+        // then every chat ended, which a stop finishes inside its own second and a half.
         let stopped = heard
-            .recv_timeout(std::time::Duration::from_secs(10))
+            .recv_timeout(crate::killswitch::HEARD_WITHIN + std::time::Duration::from_secs(5))
             .expect("the app never heard the stop");
         assert_eq!(stopped, 4);
         assert_eq!(outlived(&programs), Vec::<u32>::new());
