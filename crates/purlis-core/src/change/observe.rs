@@ -15,6 +15,12 @@
 //! reports its request merged, and purlis's records say purlis landed it, in the landing log
 //! with the clone's default branch still holding the logged commit, or as a landing purlis
 //! started. A request merged outside purlis is merged, and not landed.
+//!
+//! **One case reads landed here and is refused by the gate, for as long as it lasts** (#1093):
+//! a landing purlis started and the forge reports merged counts here, as the gate counts it,
+//! while the gate also writes it to the landing log and refuses the blocker where that write
+//! fails. A reading never writes, so it cannot know the write will fail; the next `land` logs
+//! it, or says the log could not be written.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -66,8 +72,9 @@ impl Observed {
 }
 
 impl Observation {
-    /// How many members the forge reports merged, and how many there are.
-    pub fn landed(&self) -> (usize, usize) {
+    /// How many members the forge reports merged, and how many there are. Merged, not landed:
+    /// a member landed by the gate's definition is [`Observed::landed`] (#1093).
+    pub fn merged(&self) -> (usize, usize) {
         let merged = self.members.iter().filter(|m| m.merged()).count();
         (merged, self.members.len())
     }
