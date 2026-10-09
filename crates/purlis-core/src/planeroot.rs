@@ -403,7 +403,18 @@ pub struct RootInvocation {
     /// `env -u`, a subshell, `false &&`). An alias the two disagree on is unread ([`LineConfig`]),
     /// so a line value can only add refusals.
     pub own_env: Vec<String>,
+    /// A shell `cd` earlier on the line was joined to what follows by `;`, `||`, `&` or a
+    /// newline rather than `&&`, so the directory the shell was in stayed in play (#345). The
+    /// denial says to join it with `&&` ([`LOOSE_CD_HINT`], #1326).
+    pub after_loose_cd: bool,
 }
+
+/// What a named denial adds when a `cd` earlier on the line was not joined by `&&`: agents met
+/// that answer as "the guard ignores cd" (#1326).
+pub const LOOSE_CD_HINT: &str = "A `cd` joined to the next command by `;`, `||`, `&` or a \
+     newline leaves the shell where it was if it fails, so purlis still counts the directory \
+     the line started in: join it with `&&` (`cd <path> && git …`) and purlis reads where git \
+     runs. ";
 
 /// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
 ///
@@ -830,6 +841,8 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
     let mut here = Whereabouts::at(cwd);
     // Where the shell stays if a `cd … &&` failed: back in play once the `&&` chain ends.
     let mut left_behind = Whereabouts::default();
+    // A certain `cd` not joined by `&&` came before: what the denial's hint is for (#1326).
+    let mut loose_cd = false;
     let context = CdContext::of(cmd);
     // The root's configured aliases, read once for the whole line and only if it needs them.
     let aliases = AliasBook::of(root);
@@ -867,6 +880,10 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
             if cd.certain && !context.redefined && !piped && seg.after.as_deref() == Some("&&") {
                 left_behind.merge(std::mem::replace(&mut here, moved));
             } else {
+                // Only a `cd` that `&&` would have made certain gets the hint: one the line
+                // redefined, or one in a pipeline, stays uncertain whatever joins it.
+                let pipes = matches!(seg.after.as_deref(), Some("|" | "|&"));
+                loose_cd |= cd.certain && !context.redefined && !piped && !pipes;
                 here.merge(moved);
             }
         } else if prog.contains('$') {
@@ -882,6 +899,7 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                     unread: false,
                     env: config_env(),
                     own_env: own_env.clone(),
+                    after_loose_cd: loose_cd,
                 });
             }
         } else if let Some(at) = spliced_before_program(&seg.argv, &prog) {
@@ -901,6 +919,7 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                     unread,
                     env,
                     own_env: own_env.clone(),
+                    after_loose_cd: loose_cd,
                 });
             }
         } else if shellwrap::base_lower(&prog) == "git" {
@@ -955,6 +974,7 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                         unread,
                         env,
                         own_env: own_env.clone(),
+                        after_loose_cd: loose_cd,
                     });
                 }
             }
@@ -1975,7 +1995,12 @@ pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<Stri
                 },
             }
         };
-        return Some(format!("{opening}{}", root_tail(default.as_deref())));
+        let hint = if inv.after_loose_cd && !inv.unnamed {
+            LOOSE_CD_HINT
+        } else {
+            ""
+        };
+        return Some(format!("{opening}{hint}{}", root_tail(default.as_deref())));
     }
     None
 }
@@ -2135,7 +2160,12 @@ pub fn plane_root_reset_reason(cmd: &str, cwd: &str, root: &str) -> Option<Strin
              usually a memory commit whose push a protected branch refused, which is how \
              eleven of them were lost. See exactly what would go: \
              `git -C {root} log --oneline '@{{upstream}}..HEAD'`. Keep it: `purlis save` \
-             pushes it, and this reset stops being refused the moment it lands."
+             pushes it, and this reset stops being refused the moment it lands.{}",
+            if inv.after_loose_cd {
+                format!(" {}", LOOSE_CD_HINT.trim_end())
+            } else {
+                String::new()
+            }
         ));
     }
     None

@@ -277,6 +277,38 @@ fn a_cd_the_line_can_redirect_is_not_taken_on_trust() {
     );
 }
 
+/// A `cd` joined by `;`, `||`, `&` or a newline leaves the root in play, as before (#345), and
+/// the denial now says to join it with `&&` (#1326). A line with no such `cd`, and one whose
+/// `cd` `&&` would not make certain (the line redefines it, or it runs in a pipeline), do not
+/// get the hint.
+#[test]
+fn a_cd_not_joined_by_and_and_is_told_to_join_it() {
+    let f = fixture();
+    for cmd in [
+        "cd /nonexistent-dir; git checkout feature",
+        "cd /nonexistent-dir || git checkout feature",
+        "cd /nonexistent-dir\ngit checkout -b x",
+    ] {
+        let said = branch(&f, cmd).expect("still refused");
+        assert!(said.contains(LOOSE_CD_HINT), "{cmd:?}: {said}");
+    }
+    let said = reset(&f, "cd /nonexistent-dir; git reset --hard origin/main").expect("refused");
+    assert!(said.ends_with(LOOSE_CD_HINT.trim_end()), "{said}");
+    for cmd in [
+        "git checkout feature",
+        "cd(){ :;}; cd /nonexistent-dir; git checkout feature",
+        "cd /nonexistent-dir | cat; git checkout feature",
+    ] {
+        let said = branch(&f, cmd).expect("refused");
+        assert!(!said.contains(LOOSE_CD_HINT), "{cmd:?}: {said}");
+    }
+    assert!(
+        !reset(&f, "git reset --hard origin/main")
+            .expect("refused")
+            .contains(LOOSE_CD_HINT)
+    );
+}
+
 /// git is recognised by what runs, not how it is spelled: on APFS and NTFS `GIT` runs git (#346).
 #[test]
 fn a_git_spelled_in_capitals_is_git() {
