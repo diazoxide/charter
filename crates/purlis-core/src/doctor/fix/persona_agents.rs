@@ -28,6 +28,12 @@
 //!   names for a colour that purlis's palette spells otherwise are rewritten (`cyan` to `teal`,
 //!   `magenta` to `pink`); any other value purlis cannot draw is reported.
 //!
+//! - **What this machine kept for the retired sub-agents goes** (#1460): the in-flight records
+//!   (`<state>/dispatch-inflight/*.json`) and the map of sub-agents to personas
+//!   (`<state>/agent-personas.json`). Hooks that are gone wrote them and nothing reads them.
+//!   They are this machine's, never committed, so removing them changes no commit. Only plain
+//!   files are removed: a link, or anything else in the folder, is left and named.
+//!
 //! # What it reports and leaves
 //!
 //! The keys nothing reads now ([`retired::KEYS`]), each with what widened; `disallowed-tools`
@@ -119,9 +125,14 @@ pub fn apply_with(root: &Path, facts: &Facts<'_>) -> Fixed {
         servers(root, name, &mut work);
     }
     agent_memory(root, &mut work);
-    let summary = if work.removed == 0 && work.rewritten == 0 {
+    leftovers(root, &mut work);
+    let summary = if work.removed == 0 && work.rewritten == 0 && work.cleared == 0 {
         "✓ no generated persona sub-agent file to remove and no persona key to carry over: \
          nothing was changed."
+            .to_owned()
+    } else if work.removed == 0 && work.rewritten == 0 {
+        "✓ removed what this machine kept for the retired sub-agents. No committed file \
+         changed."
             .to_owned()
     } else {
         format!(
@@ -143,6 +154,8 @@ struct Work {
     said: Vec<String>,
     removed: usize,
     rewritten: usize,
+    /// Leftovers of this machine's state removed: changes no commit.
+    cleared: usize,
     complete: bool,
 }
 
@@ -152,6 +165,7 @@ impl Default for Work {
             said: Vec::new(),
             removed: 0,
             rewritten: 0,
+            cleared: 0,
             complete: true,
         }
     }
@@ -401,6 +415,93 @@ fn agent_memory(root: &Path, work: &mut Work) {
              persona's own memory with `purlis persona remember {name} \"<fact>\"`; the folder \
              is left as it is."
         ));
+    }
+}
+
+/// The in-flight records' folder in the state directory, as the hooks named it.
+const INFLIGHT: &str = "dispatch-inflight";
+/// The map of sub-agent ids to personas in the state directory.
+const AGENT_MAP: &str = "agent-personas.json";
+
+/// Remove what this machine kept for the retired sub-agents (see the module header): each
+/// plain `.json` file in the in-flight folder, the folder once it is empty, and the agent map.
+fn leftovers(root: &Path, work: &mut Work) {
+    let state = crate::plane::state_dir(root);
+    let shown = |name: &str, folder: bool| {
+        let path = state.join(name);
+        let rel = path.strip_prefix(root).map_or_else(
+            |_| path.display().to_string(),
+            |rel| rel.display().to_string(),
+        );
+        let rel = crate::shown::short(&rel);
+        if folder { format!("{rel}/") } else { rel }
+    };
+    let link = |name: &str| {
+        std::fs::symlink_metadata(state.join(name)).is_ok_and(|meta| meta.file_type().is_symlink())
+    };
+
+    let dir = state.join(INFLIGHT);
+    if link(INFLIGHT) {
+        work.said.push(format!(
+            "• left alone {}: it is a link, and purlis wrote no such folder.",
+            shown(INFLIGHT, true)
+        ));
+    } else if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut records = 0;
+        let mut kept = false;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let record = path.extension().is_some_and(|ext| ext == "json")
+                && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+            if record && std::fs::remove_file(&path).is_ok() {
+                records += 1;
+            } else {
+                kept = true;
+            }
+        }
+        if kept {
+            work.said.push(format!(
+                "• left alone {}: it holds something purlis did not write there. Its {records} \
+                 record file(s) were removed.",
+                shown(INFLIGHT, true)
+            ));
+        } else if std::fs::remove_dir(&dir).is_ok() {
+            work.said.push(format!(
+                "✓ removed {} ({records} file(s)): the record of sub-agents in flight, which \
+                 nothing reads now.",
+                shown(INFLIGHT, true)
+            ));
+        }
+        if records > 0 || !kept {
+            work.cleared += 1;
+        }
+    }
+
+    let map = state.join(AGENT_MAP);
+    match std::fs::symlink_metadata(&map) {
+        Ok(meta) if meta.file_type().is_symlink() => work.said.push(format!(
+            "• left alone {}: it is a link, and purlis wrote no such file.",
+            shown(AGENT_MAP, false)
+        )),
+        Ok(meta) if meta.is_file() => match std::fs::remove_file(&map) {
+            Ok(()) => {
+                work.cleared += 1;
+                work.said.push(format!(
+                    "✓ removed {}: the map of sub-agents to personas, which nothing reads now.",
+                    shown(AGENT_MAP, false)
+                ));
+            }
+            Err(why) => work.failed(format!(
+                "✗ could not remove {} ({}). Nothing reads it; remove it yourself.",
+                shown(AGENT_MAP, false),
+                crate::rewrite::os_words(&why)
+            )),
+        },
+        Ok(_) => work.said.push(format!(
+            "• left alone {}: it is not a file, and purlis wrote no such thing.",
+            shown(AGENT_MAP, false)
+        )),
+        Err(_) => {}
     }
 }
 

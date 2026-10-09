@@ -519,3 +519,87 @@ fn a_key_written_twice_is_left_for_lint_and_not_guessed_at() {
         "{said:#?}"
     );
 }
+
+#[test]
+fn what_this_machine_kept_for_the_retired_sub_agents_is_removed() {
+    // #1460: the in-flight records and the agent map were written by hooks that are gone, and
+    // nothing reads them; they are this machine's alone, so removing them changes no commit.
+    let p = project();
+    p.write("personas/ops/persona.md", "---\nrole: Ops\n---\n");
+    p.write(
+        ".charter/dispatch-inflight/ops.ab12cd.json",
+        "{\"agent\": \"ops\", \"kind\": \"dispatch\", \"ts\": 1.0}",
+    );
+    p.write(".charter/dispatch-inflight/Explore.ef34gh.json", "{}");
+    p.write(".charter/agent-personas.json", "{\"a1b2c3\": \"ops\"}");
+    p.write(".charter/guard-seen.json", "{}\n");
+
+    let said = p.fix(&[]);
+
+    assert!(!p.has(".charter/dispatch-inflight"));
+    assert!(!p.has(".charter/agent-personas.json"));
+    assert_eq!(
+        p.read(".charter/guard-seen.json"),
+        "{}\n",
+        "nothing else of the state"
+    );
+    assert_eq!(
+        said,
+        [
+            "✓ removed .charter/dispatch-inflight/ (2 file(s)): the record of sub-agents in \
+             flight, which nothing reads now.",
+            "✓ removed .charter/agent-personas.json: the map of sub-agents to personas, which \
+             nothing reads now.",
+            "✓ removed what this machine kept for the retired sub-agents. No committed file \
+             changed.",
+        ]
+    );
+    // And a second run finds nothing.
+    assert_eq!(
+        p.fix(&[]),
+        [
+            "✓ no generated persona sub-agent file to remove and no persona key to carry over: \
+          nothing was changed."
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_leftover_that_is_a_link_or_holds_something_else_is_left_and_named() {
+    let p = project();
+    p.write("elsewhere/keep.json", "KEEP\n");
+    std::fs::create_dir_all(p.root.join(".charter")).unwrap();
+    std::os::unix::fs::symlink(
+        p.root.join("elsewhere/keep.json"),
+        p.root.join(".charter/agent-personas.json"),
+    )
+    .unwrap();
+    p.write(".charter/dispatch-inflight/ops.ab12cd.json", "{}");
+    p.write(".charter/dispatch-inflight/notes/mine.txt", "MINE\n");
+
+    let said = p.fix(&[]);
+
+    assert_eq!(p.read("elsewhere/keep.json"), "KEEP\n");
+    assert!(
+        std::fs::symlink_metadata(p.root.join(".charter/agent-personas.json"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(!p.has(".charter/dispatch-inflight/ops.ab12cd.json"));
+    assert_eq!(
+        p.read(".charter/dispatch-inflight/notes/mine.txt"),
+        "MINE\n"
+    );
+    assert_eq!(
+        said[..2],
+        [
+            "• left alone .charter/dispatch-inflight/: it holds something purlis did not \
+             write there. Its 1 record file(s) were removed."
+                .to_owned(),
+            "• left alone .charter/agent-personas.json: it is a link, and purlis wrote no \
+             such file."
+                .to_owned(),
+        ]
+    );
+}
