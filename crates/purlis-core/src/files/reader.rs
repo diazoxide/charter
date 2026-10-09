@@ -396,8 +396,10 @@ impl Reader {
         let read = self.read(plane, branch, ask, deadline);
         match &read {
             Ended::Answered(_) => strikes(|struck| struck.answered(&key)),
-            Ended::PastBounds(_) => strikes(|struck| struck.struck(key, Instant::now())),
-            Ended::Failed(_) => {}
+            Ended::PastBounds(_) if a_fair_try(deadline, self.deadline) => {
+                strikes(|struck| struck.struck(key, Instant::now()));
+            }
+            Ended::PastBounds(_) | Ended::Failed(_) => {}
         }
         match read {
             Ended::Answered(answered) => answered,
@@ -504,6 +506,15 @@ impl Reader {
             Err(e) => Ended::Failed(failed(format!("the reader's answer did not read: {e}"))),
         }
     }
+}
+
+/// Whether a child given `given` of a reader's whole `deadline` had a fair try, so that its
+/// running into its bounds counts against its branch ([`Strikes`]): at least half of it. One
+/// that waited most of its deadline for a place, on a busy machine, ran out of the time the
+/// line left it and says nothing about the branch, so a healthy branch is never paused for the
+/// load around it.
+fn a_fair_try(given: Duration, deadline: Duration) -> bool {
+    given >= deadline / 2
 }
 
 /// How one child's read ended.
@@ -757,6 +768,16 @@ mod tests {
             .expect_err("no answer");
 
         assert!(was_busy(&said), "{said:?}");
+    }
+
+    /// #1605: only a child given at least half the deadline counts against its branch.
+    #[test]
+    fn a_read_the_line_left_little_time_is_no_strike() {
+        let whole = Duration::from_secs(30);
+        assert!(a_fair_try(whole, whole));
+        assert!(a_fair_try(Duration::from_secs(15), whole));
+        assert!(!a_fair_try(Duration::from_millis(14_999), whole));
+        assert!(!a_fair_try(LEAST_LEFT, whole));
     }
 
     /// #1605: a failure names the time the child had, not the ask's whole deadline.
