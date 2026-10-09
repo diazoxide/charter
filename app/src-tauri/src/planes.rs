@@ -6949,6 +6949,13 @@ mod tests {
             becomes(|| !is_open(&held, closing)),
             "the smart-closed chat stayed open"
         );
+        // The chat is closed before the window is told it closed (`smartclose::saved`), so
+        // the wait is on that word itself, as the window waits on it (#1144).
+        assert!(
+            becomes(|| phases(&told, closing).contains(&crate::smartclose::Phase::Closed)),
+            "the window was never told the chat closed: {:?}",
+            phases(&told, closing)
+        );
         assert!(is_open(&held, other));
         assert_eq!(
             phases(&told, closing),

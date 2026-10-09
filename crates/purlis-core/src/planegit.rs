@@ -119,6 +119,10 @@ pub struct PushResult {
     pub detail: String,
     /// The files a rebase onto the remote conflicted in (charter-app#295).
     pub conflicts: Vec<String>,
+    /// Why the push record of this outcome could not be written or cleared, where it could
+    /// not: what purlis shows of the plane's saving may then not match it until the next
+    /// save, and the save says so ([`said_if_unrecorded`], #1144).
+    pub unrecorded: Option<String>,
 }
 
 impl PushResult {
@@ -131,8 +135,22 @@ impl PushResult {
             number: None,
             detail: String::new(),
             conflicts: Vec::new(),
+            unrecorded: None,
         }
     }
+}
+
+/// Says, as a warning, that the push record of `res` was not written, where it was not
+/// ([`PushResult::unrecorded`]), and answers `res` as it was. What every push a save makes
+/// ends with, so a reader of the save's output knows its standing may be stale.
+pub(crate) fn said_if_unrecorded(res: PushResult, say: Sink) -> PushResult {
+    if let Some(why) = &res.unrecorded {
+        say(Say::Warn(format!(
+            "This save's outcome was not recorded ({why}), so purlis may show the plane's \
+             saving as it was before it until the next save."
+        )));
+    }
+    res
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -259,10 +277,14 @@ pub fn push_record_path(root: &Path) -> PathBuf {
 ///
 /// Never fails loudly. Every caller is a push, and a push that cannot write a note must still
 /// have pushed.
-pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
+pub fn record_push(root: &Path, mut res: PushResult, head: &str) -> PushResult {
     let path = push_record_path(root);
     if res.outcome == Outcome::Pushed {
-        let _ = std::fs::remove_file(&path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => {}
+            Err(why) => res.unrecorded = Some(why.to_string()),
+        }
         return res;
     }
     let at = SystemTime::now()
@@ -293,15 +315,19 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
     // it is the deepest thing here charter already trusts, `private_dir` has just refused it
     // as a link, and the walk then covers the temp file the bytes actually land on
     // (charter-app#113).
-    if let Some(dir) = path.parent()
-        && crate::profiletrust::private_dir(dir).is_ok()
-    {
-        let _ = crate::rewrite::replace(
-            dir,
-            &path,
-            crate::pyjson::dumps_indent2(&doc).as_bytes(),
-            crate::rewrite::Mode::Private,
-        );
+    let written = match path.parent() {
+        Some(dir) => crate::profiletrust::private_dir(dir).and_then(|()| {
+            crate::rewrite::replace(
+                dir,
+                &path,
+                crate::pyjson::dumps_indent2(&doc).as_bytes(),
+                crate::rewrite::Mode::Private,
+            )
+        }),
+        None => Err(std::io::Error::other("the record has no directory")),
+    };
+    if let Err(why) = written {
+        res.unrecorded = Some(why.to_string());
     }
     res
 }
@@ -1247,7 +1273,8 @@ fn rebase_undone(
 ///
 /// `target` is the branch to advance: `[plane] branch`, or `None` for the one HEAD is on.
 pub fn push_head(root: &Path, target: Option<&str>, sign: bool, say: Sink) -> PushResult {
-    push_head_within(root, target, sign, WRITE, say)
+    let res = push_head_within(root, target, sign, WRITE, say);
+    said_if_unrecorded(res, say)
 }
 
 /// [`push_head`], with the rebase given `deadline` rather than [`WRITE`] — so a test can drive
