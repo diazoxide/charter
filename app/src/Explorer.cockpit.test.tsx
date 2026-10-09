@@ -175,11 +175,18 @@ describe("the branch cockpit", () => {
     await within(header()).findByText("No base recorded");
   });
 
-  it("says a count the core stopped at its cap as that many or more (#1152)", async () => {
-    core({ ahead: 10_000, behind: 1234, base: "main" });
+  it("says a count the core stopped past its cap as that many or more (#1152)", async () => {
+    core({ ahead: 10_001, behind: 1234, base: "main" });
     draw();
 
     await within(header()).findByText("10,000+ ahead, 1,234 behind main");
+  });
+
+  it("says a count of exactly the cap as it is (#1152)", async () => {
+    core({ ahead: 3, behind: 10_000, base: "main" });
+    draw();
+
+    await within(header()).findByText("3 ahead, 10,000 behind main");
   });
 
   it("says why it could not read how far the branch is", async () => {

@@ -315,19 +315,29 @@ fn options() -> gix::open::Options {
 /// header.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AheadBehind {
-    /// Commits the branch has that its base does not, counted up to [`MOST_COUNTED`]: that
-    /// number means that many or more.
+    /// Commits the branch has that its base does not, counted up to one past
+    /// [`MOST_COUNTED`]: that number means more than [`MOST_COUNTED`].
     pub ahead: usize,
-    /// Commits its base gained that the branch does not have, counted up to [`MOST_COUNTED`].
+    /// Commits its base gained that the branch does not have, counted as `ahead` is.
     pub behind: usize,
     /// The base they are counted against, as recorded; `None` when the branch has no base
     /// recorded that resolves, and then both counts are `0` and mean nothing.
     pub base: Option<String>,
 }
 
-/// The most commits [`AheadBehind`] counts on either side (#1152). A branch thousands of commits
-/// off its base, or a base from another history, would otherwise walk until the reader's
-/// deadline and show a refusal instead of a number; past this the window says "10,000+".
+/// The most commits [`AheadBehind`] counts exactly on either side (#1152). A branch thousands of
+/// commits off its base would otherwise walk until the reader's deadline and show a refusal
+/// instead of a number. Each side is counted to one past this, so a count of exactly
+/// `MOST_COUNTED` is said as it is, and only one past it as "10,000+".
+///
+/// **What the cap does not bound** (#1152, measured 2026-10-09). gitoxide's walk paints both
+/// sides back to where they meet before it yields its first commit, so the work before the
+/// count is the distance to the fork point on both sides, whatever the cap: with 200,000
+/// commits on each side, 5.7 s before the first commit in a debug build, 0.75 s with a
+/// commit-graph, and 0.13 s to count to the cap after that. Finding the merge base costs the
+/// same paint again. A base from another history never reaches the count: [`recorded_base`]
+/// paints both histories whole, finds no merge base, and the branch reads as having no base.
+/// All of it is bounded by the reader's deadline and memory cap, as every read is.
 pub const MOST_COUNTED: usize = 10_000;
 
 /// How far the branch is from its recorded base, counted as `git rev-list --left-right
@@ -361,13 +371,21 @@ pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<Ahea
             .with_hidden([hidden])
             .all()
             .map_err(|e| e.to_string())?;
-        counted_up_to(walk, MOST_COUNTED)
+        counted(walk)
     };
     Ok(AheadBehind {
         ahead: count(head, at).map_err(unreadable)?,
         behind: count(at, head).map_err(unreadable)?,
         base: Some(named),
     })
+}
+
+/// How many commits `walk` yields, counted to one past [`MOST_COUNTED`]: exactly
+/// [`MOST_COUNTED`] is a count, and only more than that reads as "that many or more".
+fn counted<T, E: std::fmt::Display>(
+    walk: impl IntoIterator<Item = Result<T, E>>,
+) -> Result<usize, String> {
+    counted_up_to(walk, MOST_COUNTED + 1)
 }
 
 /// How many commits `walk` yields, stopping at `most`: the walk is not read past it.
@@ -489,6 +507,23 @@ mod tests {
 
         assert_eq!(counted, Ok(MOST_COUNTED));
         assert_eq!(walked, MOST_COUNTED);
+    }
+
+    /// #1152 review: a branch exactly [`MOST_COUNTED`] commits away is counted as that many;
+    /// only one past it is counted as more, and the walk stops there.
+    #[test]
+    fn exactly_the_cap_is_a_count_and_only_past_it_is_more() {
+        let exactly = (0..MOST_COUNTED).map(Ok::<usize, String>);
+        assert_eq!(counted(exactly), Ok(MOST_COUNTED));
+
+        let mut walked = 0;
+        let far = std::iter::repeat_with(|| {
+            walked += 1;
+            Ok::<(), String>(())
+        })
+        .take(MOST_COUNTED * 2);
+        assert_eq!(counted(far), Ok(MOST_COUNTED + 1));
+        assert_eq!(walked, MOST_COUNTED + 1);
     }
 
     /// Under the cap a count is every commit, and a commit that cannot be read is said.
