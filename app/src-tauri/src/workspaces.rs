@@ -54,6 +54,12 @@ use purlis_core::wscmd;
 
 use crate::planes::{PlaneId, Planes};
 
+// What each command was doing, for the sentence a blocking thread that did not finish is
+// answered with (`crate::off_the_window`).
+const CREATING: &str = "creating the workspace";
+const READING_RISK: &str = "reading what the workspace holds";
+const REMOVING: &str = "removing the workspace";
+
 /// One reason a workspace holds work that deleting it would discard.
 ///
 /// A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `purlis-core` never
@@ -140,7 +146,7 @@ pub(crate) fn ran(code: u8, said: Vec<Say>) -> Result<Vec<String>, String> {
 // (charter-app#127). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
-pub fn workspace_create(
+pub async fn workspace_create(
     app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
     heard: tauri::State<'_, crate::heard::Heard>,
@@ -151,13 +157,20 @@ pub fn workspace_create(
 ) -> Result<Vec<String>, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    let made = create_in(&root, &name, vision.as_deref(), live);
-    // The window reads the sidebar straight after, made or not (FD-10b).
-    held.workspaces_moved();
-    let mut said = made?;
-    if live && let Some(not_saved) = crate::live::save_after(&root, &mut said) {
-        said.push(not_saved);
-    }
+    let (at, named) = (root.clone(), name.clone());
+    // Off the window's thread (#1007): the scaffold is written, a LIVE one is saved with git,
+    // and the sidebar's model is read again under its lock.
+    let said = crate::off_the_window(CREATING, move || {
+        let made = create_in(&at, &named, vision.as_deref(), live);
+        // The window reads the sidebar straight after, made or not (FD-10b).
+        held.workspaces_moved();
+        let mut said = made?;
+        if live && let Some(not_saved) = crate::live::save_after(&at, &mut said) {
+            said.push(not_saved);
+        }
+        Ok(said)
+    })
+    .await?;
     // Told once it is made, on a thread of its own: nothing an extension answers can change
     // what this answers (charter-app#343).
     heard.tell(
@@ -236,13 +249,14 @@ fn create_in(
 // Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
 #[tauri::command]
 #[specta::specta]
-pub fn workspace_at_risk(
+pub async fn workspace_at_risk(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     workspace: String,
 ) -> Result<Vec<AtRisk>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    Ok(at_risk_in(&root, &workspace))
+    // Off the window's thread (#1007): it asks git about every clone and worktree.
+    crate::off_the_window(READING_RISK, move || Ok(at_risk_in(&root, &workspace))).await
 }
 
 /// The reading itself, against a root the registry has already vouched for.
@@ -261,7 +275,7 @@ fn at_risk_in(root: &Path, workspace: &str) -> Vec<AtRisk> {
 // Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
 #[tauri::command]
 #[specta::specta]
-pub fn workspace_remove(
+pub async fn workspace_remove(
     app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
     heard: tauri::State<'_, crate::heard::Heard>,
@@ -269,20 +283,29 @@ pub fn workspace_remove(
     workspace: String,
     force: bool,
 ) -> Result<Vec<String>, Refused> {
-    let held = planes.held(&plane).map_err(|why| Refused {
-        said: why,
+    let unread = |said: String| Refused {
+        said,
         at_risk: Vec::new(),
-    })?;
+    };
+    let held = planes.held(&plane).map_err(unread)?;
     let root = held.root().to_path_buf();
-    let removed = remove_in(&root, &workspace, force);
-    // The window reads the sidebar straight after (FD-10b).
-    held.workspaces_moved();
-    if removed.is_ok() {
-        // An open Activity tab stops showing what the removal forgot (#1556).
-        crate::activity::forgotten_in(&held, &workspace);
-        heard.tell(&app, plane, root, Event::WorkspaceRemoved { workspace });
-    }
-    removed
+    let (at, named) = (root.clone(), workspace.clone());
+    // Off the window's thread (#1007): the guard asks git about every clone, the delete walks
+    // the tree, and the sidebar's model is read again under its lock.
+    let removed = crate::off_the_window(REMOVING, move || {
+        let removed = remove_in(&at, &named, force);
+        // The window reads the sidebar straight after (FD-10b).
+        held.workspaces_moved();
+        if removed.is_ok() {
+            // An open Activity tab stops showing what the removal forgot (#1556).
+            crate::activity::forgotten_in(&held, &named);
+        }
+        Ok(removed)
+    })
+    .await
+    .map_err(unread)??;
+    heard.tell(&app, plane, root, Event::WorkspaceRemoved { workspace });
+    Ok(removed)
 }
 
 /// The removal itself, against a root the registry has already vouched for.
