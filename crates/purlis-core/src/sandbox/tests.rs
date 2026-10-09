@@ -403,24 +403,138 @@ fn the_project_roots_manifests_are_denied_under_every_name_whatever_the_chats_fo
 /// spool. A sandboxed chat neither reads nor writes any chat's, its own included, nor the keys
 /// that check them: the hooks of the harnesses charter sandboxes run outside the sandbox their
 /// tools run in (ADR 0068 §6, V63).
+///
+/// #980: asserted in what every compiler starts from **and** in each harness's compiled form,
+/// on both systems: Claude Code's own sandbox and file-tool denials, and purlis's wrap that
+/// holds a Codex or opencode chat with its Seatbelt profile. On Linux neither wrap compiles,
+/// so no such chat is started (fail closed) and there is no form of theirs to hold a spool.
+/// The hook channel's per-user fallback directory is #951's, not this test's.
 #[cfg(unix)]
 #[test]
 fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
-    let (plane, denied) = denied_with(None, Os::Linux);
-    let held = paths(&denied, Class::Integrity, Access::ReadWrite);
-    for state in [".charter", ".purlis"] {
-        let spool =
-            crate::hookwire::spool::dir_for(&plane.path().join(state).join("app/hooks.sock"));
-        for file in [
-            spool.join("6").join("0123456789abcdef.1.json"),
-            spool.join("6.jsonl"),
-            spool.join(crate::hookwire::spool::KEYS),
-        ] {
+    for os in [Os::MacOs, Os::Linux] {
+        let (plane, denied) = denied_with(None, os);
+        let files: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+            .iter()
+            .flat_map(|state| {
+                let spool = crate::hookwire::spool::dir_for(
+                    &plane.path().join(state).join("app/hooks.sock"),
+                );
+                [
+                    spool.join("6").join("0123456789abcdef.1.json"),
+                    spool.join("6.jsonl"),
+                    spool.join(crate::hookwire::spool::KEYS),
+                ]
+            })
+            .collect();
+        let under = |held: &[std::path::PathBuf], file: &std::path::Path| {
+            held.iter().any(|folder| file.starts_with(folder))
+        };
+
+        // What every compiler starts from.
+        let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+        for file in &files {
             assert!(
-                held.iter().any(|denied| file.starts_with(denied)),
-                "{} is not under {held:?}",
+                under(&held, file),
+                "{os:?}: {} is not under {held:?}",
                 file.display()
             );
+        }
+
+        // Claude Code: its own sandbox's read and write denials, and its file tools'. Its
+        // hooks run outside that sandbox.
+        let settings = claude::settings(&compiled(denied.clone(), os)).expect("compiles");
+        let listed = |key: &str| -> Vec<std::path::PathBuf> {
+            settings.sandbox["filesystem"][key]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .filter_map(|path| path.as_str().map(std::path::PathBuf::from))
+                .collect()
+        };
+        let tools_read: Vec<std::path::PathBuf> = settings
+            .deny
+            .iter()
+            .filter_map(|rule| rule.strip_prefix("Read(/")?.strip_suffix("/**)"))
+            .map(std::path::PathBuf::from)
+            .collect();
+        for file in &files {
+            // As the kernel names it, which is what the compiler hands the harness.
+            let named = super::real(file);
+            assert!(under(&listed("denyRead"), &named), "{os:?}: {named:?}");
+            assert!(under(&listed("denyWrite"), &named), "{os:?}: {named:?}");
+            assert!(
+                under(&tools_read, &named),
+                "{os:?}: {named:?}: {:?}",
+                settings.deny
+            );
+        }
+
+        // Codex and opencode run inside purlis's own wrap, which there is one of on macOS.
+        let codex = codex::wrap(&compiled(denied.clone(), os));
+        let opencode = applied_for(
+            Harness::Opencode,
+            &policy_of(&[], false),
+            &Plane::of(None),
+            plane.path(),
+            &machine(os),
+        );
+        if os == Os::Linux {
+            assert!(
+                codex.is_err(),
+                "codex compiles on Linux: check its spool denial here"
+            );
+            assert!(
+                opencode.is_err(),
+                "opencode compiles on Linux: check its spool denial here"
+            );
+            continue;
+        }
+        let read_write = |denied: &[Denial]| -> Vec<std::path::PathBuf> {
+            denied
+                .iter()
+                .filter(|it| it.access == Access::ReadWrite)
+                .map(|it| it.path.clone())
+                .collect()
+        };
+        let codex = codex.expect("compiles");
+        let applied = opencode.expect("compiles");
+        let Form::Opencode(wrap) = applied.form() else {
+            panic!("compiled for opencode");
+        };
+        let held_codex = read_write(&codex.denied);
+        for file in &files {
+            assert!(under(&held_codex, file), "codex: {}", file.display());
+            assert!(
+                under(&read_write(&wrap.denied), file),
+                "opencode: {}",
+                file.display()
+            );
+        }
+
+        // And the Seatbelt profile the wrap runs them under says so, under both firmlink
+        // names of the folder that holds each spool.
+        let profile = seatbelt::profile(
+            &codex.denied,
+            &seatbelt::Own::default(),
+            &plane.path().join("workspaces/alpha"),
+            std::path::Path::new("/private/tmp/chat"),
+            4040,
+            None,
+        )
+        .expect("a profile");
+        for file in &files {
+            let folder = held_codex
+                .iter()
+                .find(|folder| file.starts_with(folder))
+                .expect("held above");
+            for named in both_firmlink_names(super::real(folder)) {
+                let rule = format!(
+                    "(deny file-read* file-write* (subpath \"{}\"))",
+                    named.display()
+                );
+                assert!(profile.contains(&rule), "{rule} missing:\n{profile}");
+            }
         }
     }
 }
