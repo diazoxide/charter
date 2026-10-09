@@ -32,8 +32,10 @@ pub mod fix;
 // simply not there — and `charter/workspace.py` answers them once for both.
 pub(crate) mod fsx;
 mod git;
+mod harnesses;
 mod inventory;
 mod memory;
+mod news;
 mod personas;
 mod plane;
 mod plugin;
@@ -42,6 +44,7 @@ mod remote;
 mod rules;
 mod sandbox;
 pub(crate) mod session;
+mod vault_registry;
 mod vaults;
 mod work;
 
@@ -485,7 +488,7 @@ impl Doctor {
         rows.extend(budget::budgets(self));
         rows.push(session::session_root(self));
         rows.push(session::session_layer(self));
-        rows.push(deferred::row("harness", deferred::HARNESS));
+        rows.push(harnesses::harness(self));
         rows.push(deferred::row("frame", deferred::FRAME));
         rows.push(deferred::row("ended tab", deferred::FRAME));
         rows.push(deferred::row("plane-root guard", deferred::GUARD));
@@ -499,7 +502,7 @@ impl Doctor {
         rows.extend(work::work_links(self));
         rows.push(inventory::inventory(self));
         rows.push(deferred::row("vaults", deferred::VAULTS));
-        rows.push(deferred::row("vault registry", deferred::VAULTS));
+        rows.push(vault_registry::vault_registry(self));
         rows.extend(vaults::vault_files(self));
         rows.extend(vaults::provider_programs(self));
         rows.extend(vaults::identity_tokens(self));
@@ -511,12 +514,12 @@ impl Doctor {
         rows.push(personas::persona_grant(self));
         rows.push(plane::front_door(self));
         rows.extend(plane::routing(self));
-        rows.push(deferred::row("news", deferred::NEWS));
+        rows.push(news::news(self));
         rows.push(rules::ask_rules(self));
         rows.push(rules::handoff_gate(self));
         rows.push(deferred::row("shadowed docs", deferred::SHADOWED_DOCS));
         rows.push(deferred::row("credential paths", deferred::VAULTS));
-        rows.push(deferred::row("mcp", deferred::VAULTS));
+        rows.push(deferred::row("mcp", deferred::MCP));
         rows.push(plugin::plugin_install(self));
         rows.push(plugin::plugin(self));
         rows.push(plugin::plugin_files(self));

@@ -13,8 +13,15 @@
 //! says so, and sends nobody to another program to find out.
 //!
 //! The reasons are grouped by what is missing rather than by row, because that is what
-//! changes: the day vaults land, four rows stop being deferred at once, and the differential
-//! test's list of deferred names is where that has to be said.
+//! changes: the day a group's check lands, its rows stop being deferred at once, and the
+//! doctor tests' list of deferred names (`DEFERRED_ROWS`) is where that has to be said.
+//!
+//! **Checked since (#994):** `harness` (the declarations and the level each offers),
+//! `vault registry` (both halves read, every entry usable) and `news` (this build's release
+//! notes). What is still here needs a part this build does not have: the guard's own record of
+//! being seen (`plane-root guard`, `guard seen`), a read-only status of a checkout's layer
+//! (#998), a provider asked about the credentials a vault holds (`vaults`, `credential
+//! paths`), and a definition of a shadowed knowledge doc and of the MCP check.
 
 use super::Row;
 
@@ -31,8 +38,6 @@ pub(crate) fn row(name: &str, why: &str) -> Row {
 // Forge capability detection and its doctor rows: FG-2, #802.
 pub(crate) const FORGES: &str = "this version of purlis does not check forges yet";
 // The rest are OB-8, #994, one acceptance line a group.
-pub(crate) const HARNESS: &str = "this version of purlis does not check the harness \
-                                  registry's capability ceilings yet";
 // Not deferred: left out by design, because the app's window takes the tmux frame's place.
 pub(crate) const FRAME: &str = "this purlis has no tmux frame; its window takes the frame's \
                                 place";
@@ -44,8 +49,9 @@ pub(crate) const WORKSPACE_LAYER: &str = "this version of purlis does not check 
 // #994.
 pub(crate) const VAULTS: &str = "this version of purlis does not check vaults and the \
                                  credentials they hold yet";
-// #994.
-pub(crate) const NEWS: &str = "this version of purlis does not check release news";
+// #994: its own reason, no longer the vaults' one.
+pub(crate) const MCP: &str = "this version of purlis does not check the MCP servers a chat is \
+                              given yet";
 // #994.
 pub(crate) const SHADOWED_DOCS: &str = "this version of purlis does not check shadowed \
                                         knowledge docs yet";
