@@ -24,6 +24,13 @@ describe("what a chat's row says about its worktree", () => {
     expect(screen.getByText("fix-login")).toBeInTheDocument();
   });
 
+  test("leaves the branch out where the row beside it already reads it (#1102)", () => {
+    render(<WorktreeMark worktree={piece} withBranch={false} />);
+
+    expect(screen.queryByText("fix-login")).not.toBeInTheDocument();
+    expect(screen.getByText("unwired")).toBeInTheDocument();
+  });
+
   test("a worktree with no charter layer says so, because the guards are not on", () => {
     // Not decoration. A chat here runs with none of the plane's ask/deny rules and none of
     // its persona's agents, and a silent row lets the operator believe otherwise.

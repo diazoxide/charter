@@ -442,7 +442,7 @@ describe("a branch a task works in", () => {
     const onRevealChats = vi.fn();
     draw({ chats, on: board(move(2, "running", 1), move(3, "waiting", 2)), onRevealChats });
 
-    const branch = within(tree()).getByRole("treeitem", { name: "one" });
+    const branch = within(tree()).getByRole("treeitem", { name: "one in svc" });
     const line = item(/2 tasks in this branch/);
     expect(line).toHaveTextContent(/^2 tasks in this branch · 1 working · 1 waiting$/);
     // Under the branch, after its files: a child of its row.
