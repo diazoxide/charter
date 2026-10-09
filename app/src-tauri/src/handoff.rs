@@ -5014,6 +5014,22 @@ mod tests {
         assert_eq!(usage.cost_usd, Some(0.42));
         assert_eq!(usage.input_tokens, Some(15_234));
         assert_eq!(usage.output_tokens, Some(4_521));
+
+        // The reporting turn's own cost is said after the report: kept once the chat is gone
+        // (#1457).
+        assert!(purlis_core::usage::record_spend(
+            held.root(),
+            &chat_id,
+            &serde_json::json!({
+                "session_id": "11111111-2222-4333-8444-555555555555",
+                "cost": {"total_cost_usd": 0.45},
+                "context_window": {"total_input_tokens": 16000, "total_output_tokens": 4800},
+            })
+        ));
+        let _ = held.close_chat(child);
+        let usage = dispatch_records(&held)[0].usage.expect("its cost");
+        assert_eq!(usage.cost_usd, Some(0.45));
+        assert_eq!(usage.input_tokens, Some(16_000));
     }
 
     #[test]

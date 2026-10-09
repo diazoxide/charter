@@ -842,6 +842,21 @@ pub fn worked(root: &Path, id: &str, secs: u64) -> io::Result<bool> {
     })
 }
 
+/// **What dispatch `id`'s chat said it cost in all, once its chat has gone** (#1457): the figure
+/// kept at its end was read as the reporting turn was still running, so it is a little short of
+/// the whole. Kept over it where the chat's harness said more since, and only on a record that
+/// has ended, which nothing else of it changes. An empty figure keeps what was kept. `false`
+/// where nothing changed.
+pub fn usage_settled(root: &Path, id: &str, usage: Usage) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.running() || usage.is_empty() || record.usage == Some(usage) {
+            return false;
+        }
+        record.usage = Some(usage);
+        true
+    })
+}
+
 /// **purlis is stopping dispatch `id` at `reached`** (#1512): kept before its end, so its
 /// finished row says which limit. `false` for a record that is not there or has ended.
 pub fn stopped_at(
