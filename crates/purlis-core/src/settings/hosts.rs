@@ -204,7 +204,7 @@ fn added(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<S
     let pending = which == Which::Shared && crate::sandbox::local::hosts_changed(root).is_some();
     let after = with(which, text, &host)?;
     super::save(root, which, base, &after).map_err(Refusal::file)?;
-    seen_by_you(root, which, pending);
+    seen_by_you(root, which, pending, &after);
     // Added here, by you: confirmed on this machine.
     if which == Which::Local {
         crate::sandbox::local::confirm_host(root, &host.to_string()).map_err(|e| {
@@ -245,7 +245,7 @@ fn removed(root: &Path, which: Which, base: Option<&str>, id: &str) -> Result<St
     let pending = which == Which::Shared && crate::sandbox::local::hosts_changed(root).is_some();
     let after = without(which, text, at)?;
     super::save(root, which, base, &after).map_err(Refusal::file)?;
-    seen_by_you(root, which, pending);
+    seen_by_you(root, which, pending, &after);
     let written = entry
         .values
         .into_iter()
@@ -325,14 +325,12 @@ pub fn listed_at(root: &Path, which: Which, text: &str) -> Vec<Listed> {
 }
 
 /// A change to the project's hosts made here is one this machine has seen — unless another was
-/// still waiting to be told (`pending`), which the Notice then tells with it.
-fn seen_by_you(root: &Path, which: Which, pending: bool) {
-    if which != Which::Shared || pending {
-        return;
-    }
-    if let Some(change) = crate::sandbox::local::hosts_changed(root) {
-        // Best effort: a record that cannot be written leaves the Notice to say it once more.
-        let _ = crate::sandbox::local::acknowledge_hosts(root, &change.now);
+/// still waiting to be told (`pending`), which the Notice then tells with it. Recorded as
+/// `written` says them, never as a later read of the disk
+/// ([`crate::sandbox::local::hosts_seen_by_you`]).
+fn seen_by_you(root: &Path, which: Which, pending: bool, written: &str) {
+    if which == Which::Shared {
+        crate::sandbox::local::hosts_seen_by_you(root, pending, written);
     }
 }
 
