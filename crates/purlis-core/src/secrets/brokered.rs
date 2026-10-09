@@ -24,7 +24,16 @@
 //!    not;
 //! 4. **streams** stdout and stderr back as they come, redacted across chunk boundaries
 //!    ([`Redactor`]), then the exit status. A child's stdin is the asker's when that is not a
-//!    terminal.
+//!    terminal;
+//! 5. **tells the asking chat's tab** each host the run's proxy refused because the chat's
+//!    hosts do not list it, as the proxy refused it (`host:port`), as it happens ([`Told`]):
+//!    the same sandbox block a chat's own command raises, so its Notice offers Allow. A client
+//!    reports the proxy's `403` in its own words (kubectl's "Forbidden"), which name no host,
+//!    so the chat could not raise it itself. The host comes from the proxy's record
+//!    ([`crate::sandbox::egress::Refusals`]), never from what the command printed. Before the
+//!    exit status, purlis says the same in its own words on stderr ([`refused_note`]), so a chat
+//!    that sees only "Forbidden" can tell the person where to allow it. A grant reaches the
+//!    next run once the chat is started again with it, which its Allow owes it.
 //!
 //! Every run is recorded as `secret-exec` with `brokered`, the chat and its persona; every
 //! refusal is logged with the chat's number and the vault's name, never a value.
@@ -577,17 +586,66 @@ pub(crate) enum Wrap {
     Seatbelt,
     #[cfg(test)]
     Unwrapped,
+    /// Unwrapped, with the proxy refusing this `host:port` as the run starts.
+    #[cfg(test)]
+    Refusing(&'static str),
 }
+
+/// What is told each sandbox block of a brokered run, for the asking chat's Notice: a host the
+/// run's proxy refused, as [`crate::hookwire::SandboxBlocked`] carries a chat's own.
+pub type Told = Arc<dyn Fn(crate::hookwire::SandboxBlocked) + Send + Sync + 'static>;
 
 /// Answers `wanted` for `asker` on the connection `reader`/`writer`: every frame written there,
 /// the last an [`Frame::Exit`] or a [`Frame::Refused`]. Returns once the child has ended.
+/// `told` hears each host the run's proxy refused, as the asking chat's block.
 pub fn serve(
     asker: &Asker,
     wanted: Wanted,
     reader: Box<dyn BufRead + Send>,
     writer: Box<dyn Write + Send>,
+    told: Told,
 ) {
-    serve_wrapped(asker, wanted, reader, writer, Wrap::Seatbelt);
+    serve_in(asker, wanted, reader, writer, Wrap::Seatbelt, told);
+}
+
+/// [`serve`] in `wrap`, telling nothing of what its proxy refused.
+#[cfg(test)]
+pub(crate) fn serve_wrapped(
+    asker: &Asker,
+    wanted: Wanted,
+    reader: Box<dyn BufRead + Send>,
+    writer: Box<dyn Write + Send>,
+    wrap: Wrap,
+) {
+    serve_in(asker, wanted, reader, writer, wrap, Arc::new(|_| {}));
+}
+
+/// The block a host the run's proxy refused is, for chat `chat`'s Notice: a connection to a
+/// host, the chat's own, naming `target` (`host:port`) whole.
+fn refused_block(chat: u32, target: String) -> crate::hookwire::SandboxBlocked {
+    use crate::sandboxblock::{Block, Kind, Operation};
+    crate::hookwire::SandboxBlocked {
+        chat,
+        sandbox_blocked: Block {
+            operation: Operation::Connect,
+            kind: Kind::Host,
+            ours: false,
+        },
+        harness: None,
+        target: Some(target),
+    }
+}
+
+/// What purlis says on the command's stderr of a host its proxy refused (`host:port`): that the
+/// sandbox refused it, and where the person allows it. Not in the words a chat's own block hook
+/// reads (`crate::sandboxblock`), so one refusal raises one Notice, from the proxy's record.
+pub fn refused_note(target: &str) -> String {
+    format!(
+        "purlis's sandbox refused this command a connection to {target}, which this chat's \
+         hosts do not list. It is the sandbox, not the server. The person can allow it on this \
+         chat's tab (Allow for this chat, or Always allow); the chat is then started again \
+         with it, and the command can be run again."
+    )
 }
 
 /// Writes `frame` on `writer` as one line.
@@ -634,12 +692,13 @@ fn not_handed_on(key: &str) -> bool {
     })
 }
 
-pub(crate) fn serve_wrapped(
+pub(crate) fn serve_in(
     asker: &Asker,
     wanted: Wanted,
     reader: Box<dyn BufRead + Send>,
     mut writer: Box<dyn Write + Send>,
     wrap: Wrap,
+    told: Told,
 ) {
     let refuse = |writer: &mut dyn Write, code: i32, why: String| {
         tracing::warn!(
@@ -701,8 +760,17 @@ pub(crate) fn serve_wrapped(
         Err(e) => return refuse(&mut *writer, 1, e.message),
     };
     // What runs beside the child for as long as it does: the egress proxy carrying the chat's
-    // hosts, and a temp directory of its own.
-    let beside = match Beside::start(wrap, confines) {
+    // hosts, telling the chat's tab each host it refuses, and a temp directory of its own.
+    let refusals = crate::sandbox::egress::Refusals::telling({
+        let chat = asker.chat;
+        Arc::new(move |host: &str, port: u16| {
+            told(refused_block(
+                chat,
+                crate::sandbox::egress::host_and_port(host, port),
+            ));
+        })
+    });
+    let beside = match Beside::start(wrap, confines, refusals.clone()) {
         Ok(beside) => beside,
         Err(e) => {
             return refuse(
@@ -778,7 +846,7 @@ pub(crate) fn serve_wrapped(
             child
         }
         #[cfg(test)]
-        Wrap::Unwrapped => std::process::Command::new(&program),
+        Wrap::Unwrapped | Wrap::Refusing(_) => std::process::Command::new(&program),
     };
     let start_in = wanted
         .cwd
@@ -850,6 +918,9 @@ pub(crate) fn serve_wrapped(
         &mut *writer,
         &prepared.secret_values,
     );
+    for target in refusals.refused() {
+        let _ = send(&mut *writer, &Frame::Note(refused_note(&target)));
+    }
     let _ = send(&mut *writer, &Frame::Exit(code));
     drop(prepared);
     drop(beside);
@@ -864,13 +935,24 @@ enum Beside {
 }
 
 impl Beside {
-    fn start(wrap: Wrap, confines: &Confines) -> std::io::Result<Self> {
+    fn start(
+        wrap: Wrap,
+        confines: &Confines,
+        refusals: crate::sandbox::egress::Refusals,
+    ) -> std::io::Result<Self> {
         match wrap {
             Wrap::Seatbelt => {
-                crate::sandbox::Confinement::start(confines.hosts.clone()).map(Self::Confined)
+                crate::sandbox::Confinement::start_keeping(confines.hosts.clone(), refusals)
+                    .map(Self::Confined)
             }
             #[cfg(test)]
             Wrap::Unwrapped => tempfile::tempdir().map(Self::Pretend),
+            #[cfg(test)]
+            Wrap::Refusing(target) => {
+                let (host, port) = target.rsplit_once(':').expect("host:port");
+                refusals.heard(host, port.parse().expect("a port"));
+                tempfile::tempdir().map(Self::Pretend)
+            }
         }
     }
 

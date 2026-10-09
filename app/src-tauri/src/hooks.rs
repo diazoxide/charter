@@ -305,12 +305,15 @@ pub struct Hooks {
     secret_exec: Arc<Mutex<Option<SecretExecs>>>,
 }
 
-/// What runs a brokered `secret exec` (#1407): the ask, and the connection it is held on.
+/// What runs a brokered `secret exec` (#1407): the ask, the connection it is held on, and what
+/// is told each host the run's sandbox refused, as the asking chat's block (the same road a
+/// block its own hook found takes: [`heard_block`]).
 pub type SecretExecs = Arc<
     dyn Fn(
             purlis_core::secrets::brokered::Ask,
             Box<dyn std::io::BufRead + Send>,
             Box<dyn std::io::Write + Send>,
+            purlis_core::secrets::brokered::Told,
         ) + Send
         + Sync
         + 'static,
@@ -823,41 +826,48 @@ impl Hooks {
         let doings = crate::doing::Doings::new(plane.clone());
         let blocked: Arc<Mutex<Option<Blocks>>> = Arc::new(Mutex::new(None));
         let secret_exec: Arc<Mutex<Option<SecretExecs>>> = Arc::new(Mutex::new(None));
+        // A sandbox block (#1338), a chat's hook's or a brokered run's: kept for `purlis
+        // doctor`'s count, then handed on for the chat's Notice. It holds an operation and a
+        // kind only, so keeping it keeps nothing of what the chat ran. Taken out of the lock
+        // before it runs, as an answer is. One throttle for both roads.
+        let hear_block: Blocks = {
+            let blocked = Arc::clone(&blocked);
+            let plane = plane.clone();
+            let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
+            Arc::new(move |block| {
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs());
+                heard_block(
+                    plane.root(),
+                    &throttle,
+                    &blocked,
+                    block,
+                    (at, std::time::Instant::now()),
+                );
+            })
+        };
         let reading = listener.hear(Hearing {
             // A brokered `secret exec` (#1407), held on its connection while the command runs.
-            // Taken out of the lock before it runs, as an answer is.
+            // Taken out of the lock before it runs, as an answer is. A host its sandbox refused
+            // is the asking chat's block, told on the same road as one its hook found.
             secret_exec: {
                 let secret_exec = Arc::clone(&secret_exec);
+                let hear_block = Arc::clone(&hear_block);
                 Box::new(move |ask, reader, writer| {
                     let runs = secret_exec
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .clone();
                     match runs {
-                        Some(runs) => runs(ask, reader, writer),
+                        Some(runs) => runs(ask, reader, writer, Arc::clone(&hear_block)),
                         None => purlis_core::secrets::brokered::not_answered(writer),
                     }
                 })
             },
-            // A sandbox block (#1338): kept for `purlis doctor`'s count, then handed on for the
-            // chat's Notice. It holds an operation and a kind only, so keeping it keeps nothing
-            // of what the chat ran. Taken out of the lock before it runs, as an answer is.
             blocked: {
-                let blocked = Arc::clone(&blocked);
-                let plane = plane.clone();
-                let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
-                Box::new(move |block| {
-                    let at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |since| since.as_secs());
-                    heard_block(
-                        plane.root(),
-                        &throttle,
-                        &blocked,
-                        block,
-                        (at, std::time::Instant::now()),
-                    );
-                })
+                let hear_block = Arc::clone(&hear_block);
+                Box::new(move |block| hear_block(block))
             },
             permission: crate::asking::permitting(
                 plane.clone(),
@@ -2194,6 +2204,55 @@ mod tests {
         assert_eq!(
             purlis_core::sandboxblock::counts(dir.path(), 100)[0].blocks,
             1
+        );
+    }
+
+    /// A host a brokered `secret exec`'s sandbox refused reaches the asking chat's Notice as its
+    /// own block does: Allow, naming the host and port the proxy refused whole, at every level
+    /// a host may be kept at; and it is held for the chat, so that Allow answers it (#1538).
+    #[test]
+    fn a_host_a_brokered_run_was_refused_is_the_asking_chats_block_to_allow() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path().canonicalize().expect("real");
+        let plane: PlaneId =
+            serde_json::from_value(serde_json::json!(root.display().to_string())).expect("an id");
+        let told: Arc<Mutex<Vec<purlis_core::hookwire::SandboxBlocked>>> = Arc::default();
+        let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
+        let slot: Mutex<Option<Blocks>> = Mutex::new(Some({
+            let told = Arc::clone(&told);
+            Arc::new(move |block| told.lock().unwrap().push(block))
+        }));
+        // What the core tells for chat 7's run, from its proxy's record.
+        let line = purlis_core::hookwire::SandboxBlocked {
+            chat: 7,
+            sandbox_blocked: told_block(),
+            harness: None,
+            target: Some("api.cluster.example-k8s.com:6443".to_owned()),
+        };
+        heard_block(
+            &root,
+            &throttle,
+            &slot,
+            line.clone(),
+            (100, std::time::Instant::now()),
+        );
+        assert_eq!(*told.lock().unwrap(), vec![line.clone()]);
+        let said = blocked(&plane, &line);
+        assert_eq!(said.session, 7);
+        assert_eq!(said.offer, BlockOffer::Host);
+        assert_eq!(
+            said.target.as_deref(),
+            Some("api.cluster.example-k8s.com:6443")
+        );
+        assert!(
+            said.levels.contains(&crate::sandboxing::GrantLevel::Chat),
+            "{:?}",
+            said.levels
+        );
+        assert!(
+            said.levels.len() > 1,
+            "Always allow is offered too: {:?}",
+            said.levels
         );
     }
 

@@ -1787,8 +1787,13 @@ pub struct Confinement {
 impl Confinement {
     /// A proxy carrying `hosts`, and a new temp directory.
     pub fn start(hosts: Vec<String>) -> std::io::Result<Self> {
+        Self::start_keeping(hosts, egress::Refusals::default())
+    }
+
+    /// [`Self::start`], with its proxy keeping what it refuses in `refusals`.
+    pub fn start_keeping(hosts: Vec<String>, refusals: egress::Refusals) -> std::io::Result<Self> {
         Ok(Self {
-            proxy: egress::Proxy::start(hosts)?,
+            proxy: egress::Proxy::start_keeping(hosts, refusals)?,
             tmp: tempfile::Builder::new().prefix("charter-chat-").tempdir()?,
         })
     }

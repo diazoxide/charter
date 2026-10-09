@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use super::egress::{Limits, Proxy, allows, allows_on, reachable};
+use super::egress::{Limits, Proxy, REFUSALS_KEPT, Refusals, allows, allows_on, reachable};
 
 /// The listed host every carried test request goes to: the address itself, so a name that
 /// also resolves to `::1`, where another program on the machine may listen, is never asked.
@@ -537,4 +537,58 @@ fn an_aaaa_answer_carrying_this_machine_or_metadata_is_dropped() {
         reachable("api.internal.example", 443, &resolve, &[]),
         [at("fd00::7")]
     );
+}
+
+/// What it refused because nothing lists it is its own record, each host and port once, told
+/// as it happens; a request it could not read, or whose `Host` names another host, is not.
+#[test]
+fn a_host_nothing_lists_is_kept_once_and_told_as_the_proxy_refused_it() {
+    let told: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let refusals = Refusals::telling({
+        let told = std::sync::Arc::clone(&told);
+        std::sync::Arc::new(move |host: &str, port: u16| {
+            told.lock().unwrap().push(format!("{host}:{port}"));
+        })
+    });
+    let proxy = Proxy::start_keeping(vec!["example.com".to_owned()], refusals).expect("a proxy");
+    for _ in 0..3 {
+        let said = status(
+            &mut to(&proxy),
+            "CONNECT api.cluster.example-k8s.com:6443 HTTP/1.1\r\n\r\n",
+        );
+        assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    }
+    // A listed host on a port it is not listed on is refused, and kept, on that port.
+    let said = status(&mut to(&proxy), "CONNECT example.com:6443 HTTP/1.1\r\n\r\n");
+    assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    // Neither of these is a host a grant would let through.
+    let said = status(
+        &mut to(&proxy),
+        "GET http://example.com/ HTTP/1.1\r\nHost: other.example\r\n\r\n",
+    );
+    assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    let said = status(&mut to(&proxy), "NONSENSE\r\n\r\n");
+    assert_eq!(said, "HTTP/1.1 400 Bad Request");
+    assert_eq!(
+        proxy.refusals().refused(),
+        vec![
+            "api.cluster.example-k8s.com:6443".to_owned(),
+            "example.com:6443".to_owned()
+        ]
+    );
+    assert_eq!(*told.lock().unwrap(), proxy.refusals().refused());
+}
+
+#[test]
+fn a_proxys_record_keeps_a_few_hosts_and_names_an_ipv6_one_in_brackets() {
+    let refusals = Refusals::default();
+    refusals.heard("::1", 6443);
+    refusals.heard("API.example.com", 443);
+    refusals.heard("api.example.com", 443);
+    for n in 0..100 {
+        refusals.heard(&format!("h{n}.example"), 443);
+    }
+    let refused = refusals.refused();
+    assert_eq!(refused.len(), REFUSALS_KEPT);
+    assert_eq!(refused[..2], ["[::1]:6443", "API.example.com:443"]);
 }

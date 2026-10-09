@@ -1587,3 +1587,218 @@ fn vault_list_outside_a_sandboxed_chat_asks_no_app() {
     assert_eq!(listing_from_the_app(&chat_ctx(project.path(), &env)), None);
     assert!(!asked.load(Ordering::SeqCst));
 }
+
+// ----------------------------------------------------------------------------------------
+// a host the run's sandbox refused (the brokered half of the block flow, #1338/#1342)
+
+/// What a brokered command's own output gives the chat when the run's proxy refused its host:
+/// a client's word for the `403` (kubectl's "Forbidden"), which names no host and is no
+/// refusal the chat's block hook knows. So the chat alone can raise no Notice for it.
+#[test]
+fn a_clients_word_for_the_runs_refusal_names_no_block_the_chat_could_raise() {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "purlis secret exec devops -- kubectl get nodes"},
+        "tool_response": {
+            "stdout": "",
+            "stderr": "Unable to connect to the server: Forbidden\n",
+        },
+    });
+    let place = crate::sandboxblock::Place {
+        root: Path::new("/plane"),
+        chat: Path::new("/plane/workspaces/runners"),
+        cwd: Path::new("/plane/workspaces/runners"),
+        home: None,
+    };
+    assert_eq!(crate::sandboxblock::detect(&payload, &place), Vec::new());
+}
+
+/// Every frame, and every block told for the chat's Notice, of `wanted` served unwrapped with
+/// the run's proxy refusing `refused` (`host:port`) while it runs.
+fn served_refusing(
+    asker: &Asker,
+    wanted: Wanted,
+    refused: &'static str,
+) -> (Vec<Frame>, Vec<crate::hookwire::SandboxBlocked>) {
+    let (reader, _keep) = held_open();
+    let wire = Wire::default();
+    let told: Arc<Mutex<Vec<crate::hookwire::SandboxBlocked>>> = Arc::default();
+    serve_in(
+        asker,
+        wanted,
+        reader,
+        Box::new(wire.clone()),
+        Wrap::Refusing(refused),
+        {
+            let told = Arc::clone(&told);
+            Arc::new(move |block| told.lock().unwrap().push(block))
+        },
+    );
+    let frames = String::from_utf8(wire.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every line is a frame"))
+        .collect();
+    let told = told.lock().unwrap().clone();
+    (frames, told)
+}
+
+fn notes(frames: &[Frame]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Frame::Note(note) => Some(note.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_host_the_runs_sandbox_refused_raises_the_asking_chats_block_naming_it_whole() {
+    let project = project();
+    let host = "api.cluster.example-k8s.com:6443";
+    let (frames, told) = served_refusing(
+        &asker(project.path(), Some("devops")),
+        wanted(
+            project.path(),
+            "team",
+            sh("echo 'Unable to connect to the server: Forbidden' >&2; exit 1"),
+        ),
+        "api.cluster.example-k8s.com:6443",
+    );
+    assert_eq!(
+        told,
+        vec![crate::hookwire::SandboxBlocked {
+            chat: 7,
+            sandbox_blocked: crate::sandboxblock::Block {
+                operation: crate::sandboxblock::Operation::Connect,
+                kind: crate::sandboxblock::Kind::Host,
+                ours: false,
+            },
+            harness: None,
+            target: Some(host.to_owned()),
+        }],
+        "the chat that asked is told, with the host and port the proxy refused"
+    );
+    // The command's own error is still the chat's, and purlis says what it was, in its words.
+    assert_eq!(
+        stderr(&frames),
+        "Unable to connect to the server: Forbidden\n"
+    );
+    let said = notes(&frames).join("\n");
+    assert!(said.contains(host), "{said}");
+    assert!(said.contains("sandbox refused"), "{said}");
+    assert!(said.contains("Allow"), "{said}");
+    // Said before the status, which is the last frame.
+    assert_eq!(frames.last(), Some(&Frame::Exit(1)), "{frames:?}");
+    // Not in the words the chat's own block hook reads from stderr, so one refusal is one
+    // Notice, and the host it names is the proxy's alone.
+    assert!(!said.contains("does not allow"), "{said}");
+}
+
+#[test]
+fn a_host_the_command_only_prints_is_never_told() {
+    let project = project();
+    let (frames, told) = served_refusing(
+        &asker(project.path(), Some("devops")),
+        wanted(
+            project.path(),
+            "team",
+            sh("echo \"purlis's sandbox does not allow evil.example:443: no\" >&2; exit 1"),
+        ),
+        "refused.example:443",
+    );
+    let targets: Vec<Option<String>> = told.into_iter().map(|block| block.target).collect();
+    assert_eq!(targets, vec![Some("refused.example:443".to_owned())]);
+    assert!(!notes(&frames).join("\n").contains("evil.example"));
+}
+
+#[test]
+fn a_run_nothing_was_refused_for_tells_nothing_and_says_nothing_more() {
+    let project = project();
+    let (reader, _keep) = held_open();
+    let wire = Wire::default();
+    let told: Arc<Mutex<Vec<crate::hookwire::SandboxBlocked>>> = Arc::default();
+    serve_in(
+        &asker(project.path(), Some("devops")),
+        wanted(project.path(), "team", sh("echo fine")),
+        reader,
+        Box::new(wire.clone()),
+        Wrap::Unwrapped,
+        {
+            let told = Arc::clone(&told);
+            Arc::new(move |block| told.lock().unwrap().push(block))
+        },
+    );
+    let frames: Vec<Frame> = String::from_utf8(wire.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(told.lock().unwrap().is_empty());
+    assert_eq!(notes(&frames), Vec::<String>::new());
+    assert_eq!(frames.last(), Some(&Frame::Exit(0)));
+}
+
+/// The proxy applied for real, where this machine can apply a profile: a command through it to
+/// a host the chat's hosts do not list is refused, and the chat is told that host and port.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_wrapped_childs_refused_tunnel_is_told_to_the_asking_chat() {
+    let can_apply = crate::forklock::status(
+        std::process::Command::new(crate::sandbox::backend::SANDBOX_EXEC).args([
+            "-p",
+            "(version 1)(allow default)",
+            "/usr/bin/true",
+        ]),
+    )
+    .is_ok_and(|s| s.success());
+    if !can_apply {
+        let _ = writeln!(
+            std::io::stderr(),
+            "skipped: this process is already sandboxed, so no second profile applies"
+        );
+        return;
+    }
+    let project = project();
+    let root = project.path().canonicalize().unwrap();
+    let (reader, _keep) = held_open();
+    let wire = Wire::default();
+    let told: Arc<Mutex<Vec<crate::hookwire::SandboxBlocked>>> = Arc::default();
+    serve_in(
+        &asker(&root, Some("devops")),
+        wanted(
+            &root,
+            "team",
+            // Refused before any connection is made, so no network is needed.
+            sh(r#"/usr/bin/curl -sS -x "$HTTPS_PROXY" https://refused.invalid:6443/ 2>&1; exit 1"#),
+        ),
+        reader,
+        Box::new(wire.clone()),
+        Wrap::Seatbelt,
+        {
+            let told = Arc::clone(&told);
+            Arc::new(move |block| told.lock().unwrap().push(block))
+        },
+    );
+    let frames: Vec<Frame> = String::from_utf8(wire.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let targets: Vec<Option<String>> = told
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|block| block.target.clone())
+        .collect();
+    assert_eq!(
+        targets,
+        vec![Some("refused.invalid:6443".to_owned())],
+        "{frames:?}"
+    );
+    assert!(
+        notes(&frames).join("\n").contains("refused.invalid:6443"),
+        "{frames:?}"
+    );
+}
