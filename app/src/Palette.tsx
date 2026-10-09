@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   aim,
   CHAT_KEYBOARD,
+  inPalette,
   RENAMES_ON_F2,
   narrow,
   PASS_THROUGH_ID,
@@ -334,7 +335,8 @@ export function Palette({
   // A lone project is not listed beside the files: its one row could only say it is in front.
   const projectRows =
     files === undefined || (projects?.rows.length ?? 0) > 1 ? (projects?.rows ?? []) : [];
-  const listing = scope === "projects" ? projectRows : offers;
+  // A menu's own rows are left out (`menuOnly`, #1468): the palette asks from the chat in front.
+  const listing = scope === "projects" ? projectRows : inPalette(offers);
   const rows = open ? narrow(query, listing) : [];
   const ladder = files?.ladder ?? [];
   const finding = open && scope === "projects" && ladder.length > 0;

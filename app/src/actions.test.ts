@@ -50,7 +50,7 @@ import {
   ownTabId,
   besideId,
 } from "./actions";
-import { ASK_LOCKED_ID, askId, askRows } from "./actions";
+import { ASK_LOCKED_ID, askId, askRows, inPalette } from "./actions";
 import { ANSWER_SAYS, BRIEF_SAYS, answerId, answerRows, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
 import {
@@ -2607,6 +2607,27 @@ describe("Ask a persona from a chat's tab", () => {
       "Ask devops…",
       "Ask steward…",
     ]);
+  });
+
+  it("lists one row per persona in the palette, for the chat in front, and every tab's menu keeps its own (#1468)", () => {
+    // Two chat tabs; the second is in front.
+    const two = openTab(openTab(noTabs(), 7, "3", "steward"), 9, "5", "steward");
+    const [first, second] = two.order;
+    const offers = catalogue(now({ tabs: two, ask: open, askable: (s) => s === 7 || s === 9 }));
+
+    const asks = inPalette(offers).filter((offer) => offer.title.startsWith("Ask "));
+    expect(asks.map((offer) => [offer.title, offer.does])).toEqual([
+      ["Ask devops…", { verb: "askPersona", tab: second, persona: "devops" }],
+      ["Ask steward…", { verb: "askPersona", tab: second, persona: "steward" }],
+    ]);
+    // The tab behind still has its rows on its own menu.
+    expect(askRows(first, catalogued(offers)).map((offer) => offer.title)).toEqual([
+      "Ask devops…",
+      "Ask steward…",
+    ]);
+    // A shell in front: no chat to ask from, so the palette has none.
+    const shellInFront = catalogue(now({ tabs, ask: open, askable: notAShell }));
+    expect(inPalette(shellInFront).filter((offer) => offer.title.startsWith("Ask "))).toEqual([]);
   });
 
   it("has no row on a shell, and none before the core has said who can be asked", () => {

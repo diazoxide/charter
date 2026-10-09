@@ -503,6 +503,13 @@ export type Offer = {
    * title already.
    */
   group?: string;
+  /**
+   * **A row of a menu that the palette leaves out** (#1468): one of a set made per tab, where
+   * the palette lists only the in-front tab's. Twenty tabs and eight personas made 160 rows
+   * all titled alike ("Ask devops…"); the palette lists the eight of the chat in front, and
+   * each tab's menu keeps its own ({@link inPalette}).
+   */
+  menuOnly?: true;
 };
 
 /** The window as it now stands: everything an offer's availability is decided from. */
@@ -1366,7 +1373,8 @@ export function catalogue(now: Now): Offer[] {
   }
 
   // **Ask a persona from a chat's tab**: one row per chat per persona the project has
-  // finished, so the tab's menu and the palette are one surface. The words are the same on
+  // finished, so the tab's menu and the palette are one surface. The palette lists only the
+  // rows of the tab in front (#1468, `menuOnly`). The words are the same on
   // every tab, as a work link's are, so the note names the chat. It opens a dialog and starts
   // nothing until that is answered, so it sits above the line.
   //
@@ -1386,12 +1394,17 @@ export function catalogue(now: Now): Offer[] {
           (one) => one.session === chat && one.persona === persona,
         );
         if (locked !== undefined) {
-          offers.push(cannot(askId(tab, persona), `Ask ${persona}…`, locked.why, name));
+          offers.push({
+            ...cannot(askId(tab, persona), `Ask ${persona}…`, locked.why, name),
+            ...(tab === now.tabs.inFront ? {} : { menuOnly: true as const }),
+          });
           continue;
         }
         offers.push({
           ...can(askId(tab, persona), `Ask ${persona}…`, { verb: "askPersona", tab, persona }),
           note: `From chat ${name}. A chat starts as ${persona}, and its report comes back to this one.`,
+          // One set in the palette, the chat in front's; each tab's menu has its own (#1468).
+          ...(tab === now.tabs.inFront ? {} : { menuOnly: true as const }),
         });
       }
     }
@@ -3418,6 +3431,12 @@ function tabChatRows(now: Now): Offer[] {
 /** The tab holding a session, or nothing when no tab does. */
 function tabHolding(tabs: Tabs, session: number): number | undefined {
   return tabs.order.find((id) => panesOf(tabs, id).some((pane) => pane.session === session));
+}
+
+/** The rows the palette lists: the catalogue less the rows only a menu draws ({@link Offer}'s
+ *  `menuOnly`). */
+export function inPalette(offers: readonly Offer[]): Offer[] {
+  return offers.filter((offer) => offer.menuOnly !== true);
 }
 
 /**
