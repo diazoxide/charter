@@ -611,6 +611,8 @@ struct LetGo {
     from: Option<purlis_core::reopen::HandedFrom>,
     /// The task it was named for.
     label: Option<String>,
+    /// Whether it is a finished task the person reopened (#1543).
+    reopened: Option<purlis_core::reopen::ReopenedTask>,
 }
 
 impl LetGo {
@@ -619,6 +621,7 @@ impl LetGo {
             identity: chat.identity.clone(),
             from: chat.from.clone(),
             label: chat.label.clone(),
+            reopened: chat.reopened,
         }
     }
 }
@@ -984,6 +987,8 @@ impl Chats {
             // of its own, owing nobody a report.
             from: was.from.or_else(|| chat.from.clone()),
             label: was.label.or_else(|| chat.label.clone()),
+            // And a reopened task is still one, held at its next start as it was at this one.
+            reopened: was.reopened.or(chat.reopened),
             ..chat.clone()
         };
         self.start_ready_as(&again, ready, size, Why::Again)

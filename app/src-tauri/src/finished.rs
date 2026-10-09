@@ -446,9 +446,9 @@ pub(crate) fn reopening(
     // starts again is (`Chats::start_recorded_told`): a profile the project lists for its
     // persona, where it lists any, and one whose command does not switch the harness's
     // prompts off. Either may have changed since, and nobody chose the change for this
-    // conversation. Asked here because the chat a Reopen starts names no asking chat, so the
-    // check on a recorded chat does not see that a dispatch started it. Said for a Reopen:
-    // the task was not reopened, and its report is still there.
+    // conversation. Asked here, in a Reopen's words, because the chat is not open yet: the
+    // task was not reopened, and its report is still there. The chat it starts says it was a
+    // task (`reopened`), so the check on a recorded chat asks again at each later start.
     if let Some(refused) = purlis_core::dispatchprofiles::task_reopen_refusal(
         root,
         record.persona.as_deref(),
@@ -516,6 +516,12 @@ pub(crate) fn reopening(
         // An ordinary chat: nobody asked for it, and it owes nobody a report. A chat of its
         // own, which says the chat it carries on from.
         from: None,
+        // **But it was a task, on the profile its dispatch chose** (#1543): every later start
+        // of it, a relaunch or a restart, is held to what that dispatch was held to, as this
+        // Reopen is (ADR 0090 item 16).
+        reopened: Some(purlis_core::reopen::ReopenedTask {
+            by_person: record.asker.by_person,
+        }),
         identity: purlis_core::reopen::Identity {
             resumed_from: record.worker.chat.id.clone(),
             ..Default::default()
