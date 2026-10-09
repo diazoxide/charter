@@ -356,3 +356,68 @@ fn a_repos_own_include_or_credential_helper_is_refused_by_name() {
         Ok(std::fs::canonicalize(repo.join(".git")).unwrap())
     );
 }
+
+// ---- the checked clone is held to its identity (#1415) ------------------------------------
+
+/// A clone whose `.git` is renamed away while a worktree is cut from it, and another put in
+/// its place: the add says so and fails, whatever git answered.
+#[test]
+fn a_worktree_add_whose_clone_was_replaced_while_it_ran_fails_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let clone = std::fs::canonicalize(dir.path()).unwrap().join("widget");
+    let git_dir = clone.join(".git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    let found = Checked {
+        git_dir: git_dir.clone(),
+        id: git::DirId::of(&git_dir),
+    };
+    let mut lines = Vec::new();
+    let code = cut_pinned(
+        &git::Isolated::default(),
+        &clone,
+        &found,
+        &mut |line| lines.push(line),
+        |_| {
+            std::fs::rename(&git_dir, clone.join("checked.git")).unwrap();
+            std::fs::create_dir(&git_dir).unwrap();
+            0
+        },
+    );
+    assert_eq!(code, 1);
+    assert!(
+        lines
+            .iter()
+            .any(|line| matches!(line, Say::Fail(text) if text.contains("was replaced"))),
+        "{lines:?}"
+    );
+    // Untouched, the add's own answer stands.
+    let mut quiet = Vec::new();
+    let found = Checked {
+        git_dir: clone.join(".git"),
+        id: git::DirId::of(&clone.join(".git")),
+    };
+    let code = cut_pinned(
+        &git::Isolated::default(),
+        &clone,
+        &found,
+        &mut |line| quiet.push(line),
+        |_| 0,
+    );
+    assert_eq!((code, quiet.len()), (0, 0));
+}
+
+/// Work the app does in a checked clone is refused before git runs once the clone's `.git`
+/// is another directory than the one checked.
+#[test]
+fn a_clone_replaced_after_its_check_runs_no_git() {
+    let (_dir, root) = tree();
+    let (repo, _) = a_repo_asking_for_a_filter(&root);
+    let answered = in_a_checked_clone(&root, "alpha", "widget", &git::Isolated::default(), || {
+        std::fs::rename(repo.join(".git"), root.join("checked.git")).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+        git::run(&repo, &["rev-parse", "--absolute-git-dir"], git::READ).expect("answered")
+    })
+    .expect("checked");
+    assert!(!answered.ok(), "{answered:?}");
+    assert!(answered.err.contains("was replaced"), "{answered:?}");
+}
