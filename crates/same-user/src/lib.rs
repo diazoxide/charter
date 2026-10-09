@@ -17,9 +17,10 @@
 //!   below it), for `charterd`'s refusal of a person's scope to a chat's processes (FD-27).
 //!
 //! **An unmapped uid is nobody's.** Inside a user namespace, a uid the namespace does not map
-//! reads as the overflow uid, 65534 by default, whoever it really is; `(uid_t)-1` is no uid at
-//! all. Two unmapped processes would compare equal without being the same user, so a peer or
-//! an owner that is either is refused, never matched ([`Uid::is_unmapped`]).
+//! reads as the overflow uid (`/proc/sys/kernel/overflowuid` on Linux, 65534 by default),
+//! whoever it really is; `(uid_t)-1` is no uid at all. Two unmapped processes would compare
+//! equal without being the same user, so a peer or an owner that is either is refused, never
+//! matched ([`Uid::is_unmapped`]).
 //!
 //! Windows is not ported yet (ADR 0068, *Later decisions*), and nothing here is built there.
 
@@ -42,9 +43,23 @@ pub use ancestry::{
 pub struct Uid(u32);
 
 impl Uid {
-    /// The overflow uid: what a uid outside a user namespace's map reads as (Linux's default
-    /// `/proc/sys/kernel/overflowuid`, and `nobody` on most systems).
+    /// The default overflow uid: what a uid outside a user namespace's map reads as unless the
+    /// host set another (Linux's default `/proc/sys/kernel/overflowuid`, and `nobody` on most
+    /// systems). It stays unmapped on a host that set another, as [`Uid::overflow`] says.
     pub const OVERFLOW: Uid = Uid(65534);
+
+    /// This host's overflow uid: on Linux, `/proc/sys/kernel/overflowuid`, read once; elsewhere,
+    /// or when that cannot be read, [`Uid::OVERFLOW`].
+    pub fn overflow() -> Uid {
+        static OVERFLOW_UID: std::sync::OnceLock<Uid> = std::sync::OnceLock::new();
+        *OVERFLOW_UID.get_or_init(|| {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            let text = std::fs::read_to_string("/proc/sys/kernel/overflowuid").ok();
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            let text: Option<String> = None;
+            overflow_from(text.as_deref())
+        })
+    }
 
     /// This process's effective uid.
     pub fn effective() -> Uid {
@@ -61,10 +76,23 @@ impl Uid {
         self.0
     }
 
-    /// Whether this uid names nobody in particular: the overflow uid, or `(uid_t)-1`.
+    /// Whether this uid names nobody in particular: this host's overflow uid, the default one,
+    /// or `(uid_t)-1`.
     pub fn is_unmapped(self) -> bool {
-        self == Uid::OVERFLOW || self.0 == u32::MAX
+        self.is_unmapped_on(Uid::overflow())
     }
+
+    /// [`Uid::is_unmapped`] on a host whose overflow uid is `overflow`.
+    fn is_unmapped_on(self, overflow: Uid) -> bool {
+        self == overflow || self == Uid::OVERFLOW || self.0 == u32::MAX
+    }
+}
+
+/// The overflow uid `/proc/sys/kernel/overflowuid` holds, from its text, or [`Uid::OVERFLOW`]
+/// when there is no text or it is not a uid.
+fn overflow_from(text: Option<&str>) -> Uid {
+    text.and_then(|t| t.trim().parse::<u32>().ok())
+        .map_or(Uid::OVERFLOW, Uid)
 }
 
 impl std::fmt::Display for Uid {
@@ -128,11 +156,20 @@ pub enum NotThisUser {
 /// `Ok` when the peer `identified` as is `owner`, and otherwise why not. A peer that could not
 /// be identified is refused, and so is an unmapped uid on either end.
 pub fn admit_peer(identified: io::Result<Uid>, owner: Uid) -> Result<(), NotThisUser> {
+    admit_peer_on(identified, owner, Uid::overflow())
+}
+
+/// [`admit_peer`] on a host whose overflow uid is `overflow`.
+fn admit_peer_on(
+    identified: io::Result<Uid>,
+    owner: Uid,
+    overflow: Uid,
+) -> Result<(), NotThisUser> {
     let peer = identified.map_err(NotThisUser::Unidentified)?;
-    if owner.is_unmapped() {
+    if owner.is_unmapped_on(overflow) {
         return Err(NotThisUser::Unmapped { uid: owner });
     }
-    if peer.is_unmapped() {
+    if peer.is_unmapped_on(overflow) {
         return Err(NotThisUser::Unmapped { uid: peer });
     }
     if peer != owner {
@@ -372,6 +409,43 @@ mod tests {
                 Err(NotThisUser::Unmapped { .. })
             ));
         }
+    }
+
+    #[test]
+    fn a_host_whose_overflow_uid_is_not_65534_refuses_a_peer_of_that_uid() {
+        let overflow = Uid(4_000_000_000);
+        for (peer, owner) in [(overflow, overflow), (overflow, ours()), (ours(), overflow)] {
+            assert!(
+                matches!(
+                    admit_peer_on(Ok(peer), owner, overflow),
+                    Err(NotThisUser::Unmapped { uid }) if uid == overflow
+                ),
+                "peer {peer}, owner {owner}"
+            );
+        }
+        // The default and `(uid_t)-1` stay refused on that host too.
+        for unmapped in [Uid::OVERFLOW, Uid(u32::MAX)] {
+            assert!(matches!(
+                admit_peer_on(Ok(unmapped), unmapped, overflow),
+                Err(NotThisUser::Unmapped { .. })
+            ));
+        }
+        assert!(admit_peer_on(Ok(ours()), ours(), overflow).is_ok());
+    }
+
+    #[test]
+    fn the_overflow_uid_is_the_systems_and_65534_when_it_cannot_be_read() {
+        assert_eq!(overflow_from(Some("4000000000\n")), Uid(4_000_000_000));
+        assert_eq!(overflow_from(Some(" 65533 ")), Uid(65533));
+        for unreadable in [None, Some(""), Some("nobody\n"), Some("-1\n")] {
+            assert_eq!(overflow_from(unreadable), Uid::OVERFLOW, "{unreadable:?}");
+        }
+    }
+
+    #[test]
+    fn this_hosts_overflow_uid_is_unmapped() {
+        assert!(Uid::overflow().is_unmapped());
+        assert!(Uid::OVERFLOW.is_unmapped());
     }
 
     #[test]
