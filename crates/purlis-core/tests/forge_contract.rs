@@ -1357,7 +1357,7 @@ mod gitlab_user_namespace {
     use purlis_core::forge::Failure;
 
     const GROUP: &str = "groups/solo/projects?per_page=100&page=1&include_subgroups=true\
-                         &archived=false";
+                         &archived=false&with_shared=false";
     const USER: &str = "users/solo/projects?per_page=100&page=1&archived=false";
 
     fn page(path: &str, reply: Value) -> Value {
@@ -1435,6 +1435,38 @@ mod gitlab_user_namespace {
                 && err.said().contains("404 User Not Found"),
             "{err}"
         );
+        spent(&recorded);
+    }
+}
+
+/// GitLab's `owned` for a group lists the group's own projects and its subgroups', never a
+/// project another namespace shared into it (#804). `groups/:id/projects` defaults
+/// `with_shared` to `true` (GitLab 19.4 `doc/api/groups.md`); GitHub's organisation listing
+/// has no such case, so purlis asks with `with_shared=false`. The recording answers only that
+/// request, so a listing asked without it fails here.
+mod gitlab_shared_projects {
+    use super::*;
+
+    #[test]
+    fn a_project_shared_into_the_group_is_not_discovered_as_the_groups() {
+        purlis_core::unsteered!();
+        let own = json!([{"id": 1, "name": "Api", "path": "api", "path_with_namespace": "acme/api",
+            "default_branch": "main", "description": null, "web_url": "https://gitlab.com/acme/api",
+            "ssh_url_to_repo": "git@gitlab.com:acme/api.git", "topics": []}]);
+        let text = json!({"source": "GitLab 19.4 REST API docs, groups.md: List projects \
+                                     (with_shared defaults to true)",
+            "exchanges": [{"call": {"endpoint": {"rest": {"method": null,
+                "path": "groups/acme/projects?per_page=100&page=1&include_subgroups=true\
+                         &archived=false&with_shared=false"}}, "fields": []},
+                "reply": {"code": 0, "out": own.to_string()}}]});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(Kind::GitLab).backend_over(recorded.clone());
+        let owned = backend.owned(&caller(), &Owner::new("acme")).unwrap();
+        let paths: Vec<&str> = owned
+            .iter()
+            .map(|r| r.path_with_namespace.as_str())
+            .collect();
+        assert_eq!(paths, ["acme/api"], "only the group's own projects");
         spent(&recorded);
     }
 }

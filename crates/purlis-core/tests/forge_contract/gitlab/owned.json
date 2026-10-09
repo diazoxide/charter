@@ -1,12 +1,12 @@
 {
-  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), groups.md: List projects (GET /groups/:id/projects; include_subgroups defaults to false)",
+  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), groups.md: List projects (GET /groups/:id/projects; include_subgroups defaults to false, with_shared to true)",
   "exchanges": [
     {
       "call": {
         "endpoint": {
           "rest": {
             "method": null,
-            "path": "groups/acme/projects?per_page=100&page=1&include_subgroups=true&archived=false"
+            "path": "groups/acme/projects?per_page=100&page=1&include_subgroups=true&archived=false&with_shared=false"
           }
         },
         "fields": []
