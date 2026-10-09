@@ -51,6 +51,28 @@ const listeners = new Set<() => void>();
 /** The newest read out: an answer to an older one is dropped. */
 let reading = 0;
 
+/**
+ * **A recent settled here** (#1291): forgotten, or located at a new path. The window listens, so
+ * its own "project gone" line for that path goes too, as it does when the line itself settles
+ * it; otherwise Locate… on that line would ask about a path the store no longer remembers.
+ */
+const settledListeners = new Set<(path: string) => void>();
+
+/** Calls `listener` with the old path of every recent forgotten or located here; returns the
+ *  way to stop. */
+export function whenRecentSettled(listener: (path: string) => void): () => void {
+  settledListeners.add(listener);
+  return () => {
+    settledListeners.delete(listener);
+  };
+}
+
+/** `done`, having told the listeners `path` was settled when it was done. */
+function settling<T extends Done>(path: string, done: T): T {
+  if (done.status === "ok") for (const one of settledListeners) one(path);
+  return done;
+}
+
 function set(change: (was: Held) => Held) {
   held = change(held);
   for (const one of listeners) one();
@@ -266,7 +288,11 @@ const recents = list(
         }
         action="Forget"
         label={`Forget ${one.name}`}
-        onAction={() => acting("you.machine.recents", () => commands.forgetProject(one.path))}
+        onAction={() =>
+          acting("you.machine.recents", () =>
+            commands.forgetProject(one.path).then((done) => settling(one.path, done)),
+          )
+        }
       />
     )),
   }),
@@ -276,17 +302,23 @@ const recents = list(
  * **Locate…** for a recent that has moved or gone (#1291), as `GoneProjectNotice` does it (NO-5):
  * a folder is asked for, and the core re-points the entry once it has checked a project is
  * there (`locate_project`); the approval does not travel with the path. A cancelled dialog does
- * nothing, not even end another row's Undo. A refusal is said in the row. Nothing is opened
- * from Settings: the entry now lists where the project is, and opening it, through the trust
- * gate, is the opener's.
+ * nothing, not even end another row's Undo. A refusal is said in the row, and so is a dialog
+ * that could not open, which is not a cancel. Nothing is opened from Settings: the entry now
+ * lists where the project is, and opening it, through the trust gate, is the opener's.
  */
 async function locate(project: MachineProject) {
-  const picked = await commands.pickProject().catch(() => null);
-  if (picked === null || picked.status !== "ok" || !picked.data) return;
+  const picked = await commands
+    .pickProject()
+    .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+  if (picked.status === "error") {
+    acting("you.machine.recents", () => Promise.resolve(picked));
+    return;
+  }
+  if (!picked.data) return;
   const folder = picked.data;
   acting("you.machine.recents", async () => {
     const located = await commands.locateProject(project.path, folder);
-    return located.status === "ok" ? { status: "ok" } : located;
+    return settling(project.path, located.status === "ok" ? { status: "ok" } : located);
   });
 }
 

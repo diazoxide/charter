@@ -102,14 +102,19 @@ export function NewProject({
   // One picker, told where to put its answer. Both fields ask the same question of the same
   // file dialog — which directory — and two copies of it would be two places to fix the day
   // a cancelled pick stops answering null.
+  //
+  // A cancelled dialog is null and is not a failure: nothing is said and nothing moves. A dialog
+  // that could not open is said where the core's refusal is (#1291), until the next try or send.
+  const [pickTrouble, setPickTrouble] = useState<string>();
   const pick = useCallback((into: (chosen: string) => void) => {
+    setPickTrouble(undefined);
     void commands
       .pickProject()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
       .then((answer) => {
-        // A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
-        if (answer.status === "ok" && answer.data) into(answer.data);
-      })
-      .catch(() => undefined);
+        if (answer.status === "error") setPickTrouble(answer.error);
+        else if (answer.data) into(answer.data);
+      });
   }, []);
 
   return (
@@ -136,6 +141,7 @@ export function NewProject({
           <form
             onSubmit={(event) => {
               event.preventDefault();
+              setPickTrouble(undefined);
               if (repo.trim() !== "" && !opening) onOpenRepo(repo.trim());
             }}
           >
@@ -163,9 +169,9 @@ export function NewProject({
               )}
             />
             {/* The core's refusal, all of it, for whichever form was sent last. */}
-            {trouble && (
+            {(pickTrouble ?? trouble) && (
               <p className="trouble said-in-full" role="alert">
-                {trouble}
+                {pickTrouble ?? trouble}
               </p>
             )}
             {/* Asked for whichever form was sent last, as the refusal is (#839). */}
@@ -191,6 +197,7 @@ export function NewProject({
             <form
               onSubmit={(event) => {
                 event.preventDefault();
+                setPickTrouble(undefined);
                 // The box and the adopt field are two answers to one question — which
                 // repository this plane starts from — so a ticked box sends no repo, rather
                 // than sending both and letting the core rank them.
