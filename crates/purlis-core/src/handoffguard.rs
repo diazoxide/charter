@@ -775,17 +775,19 @@ fn opens_a_process_substitution(seg: &[Tok], i: usize) -> bool {
         && paren.start == lt.end
 }
 
-/// What a report back with a live substitution in it is told.
-pub const HANDOFF_REPORT_SOURCE: &str = "`purlis handoff report` sends its summary as it is written here, and this call has a \
-     live command substitution in it, which the shell would replace before purlis reads it. \
-     Write the summary out in plain words: purlis handoff report \"<summary>\"";
+/// What a report back with a live substitution in it is told. It names the one command that
+/// sends a report (#1471): `purlis handoff report` sends nothing now.
+pub const HANDOFF_REPORT_SOURCE: &str = "A report is sent as it is written here, and this call has a live command \
+     substitution in it, which the shell would replace before purlis reads it. Write the \
+     summary out in plain words, with the command that sends a report: purlis dispatch report \
+     --outcome done \"<summary>\"";
 
 /// What a report back with a live PROCESS substitution in it is told: the shell runs that
 /// command too, and hands purlis a path to its output where the words stood.
-pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "`purlis handoff report` sends its summary as it is written here, and this call has a \
-     live process substitution in it, which the shell would run and replace with a path \
-     before purlis reads it. Write the summary out in plain words: \
-     purlis handoff report \"<summary>\"";
+pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "A report is sent as it is written here, and this call has a live process \
+     substitution in it, which the shell would run and replace with a path before purlis reads \
+     it. Write the summary out in plain words, with the command that sends a report: purlis \
+     dispatch report --outcome done \"<summary>\"";
 
 /// What this call feeds the brief, for [`handoff_source`] — or `None`, which is the one way a
 /// handoff passes A7.
