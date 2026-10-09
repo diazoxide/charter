@@ -1292,30 +1292,43 @@ fn revoke_persona(root: &std::path::Path, persona: &str, audit: Audit<'_>) -> Re
 /// Every grant in force here, for Settings' Granted list (#1348).
 #[tauri::command]
 #[specta::specta]
-pub fn sandbox_grants(
+pub async fn sandbox_grants(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
 ) -> Result<Vec<SandboxGrant>, String> {
     let held = planes.held(&plane)?;
-    Ok(grants_of(held.root(), held.chats()))
+    // On a blocking thread: naming who committed the project's hosts asks git (#1543).
+    crate::off_the_window("reading the sandbox grants", move || {
+        Ok(grants_of(held.root(), held.chats()))
+    })
+    .await
 }
 
 /// **Revoke** on Settings' Granted list (#1348): the grant called `id` is taken out of every
 /// later start, and audited. Answers the list as it is now.
 #[tauri::command]
 #[specta::specta]
-pub fn revoke_sandbox_grant(
+pub async fn revoke_sandbox_grant(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     id: String,
 ) -> Result<Vec<SandboxGrant>, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    revoke(&root, held.chats(), &id, &|number, audited| {
-        held.hooks().record_grant(&root, number, audited)
-    })?;
-    Ok(grants_of(&root, held.chats()))
+    // On a blocking thread, as `sandbox_grants` is: the list it answers asks git (#1543).
+    crate::off_the_window("revoking a sandbox grant", move || {
+        let root = held.root().to_path_buf();
+        revoke(&root, held.chats(), &id, &|number, audited| {
+            held.hooks().record_grant(&root, number, audited)
+        })?;
+        Ok(grants_of(&root, held.chats()))
+    })
+    .await
 }
+
+/// The commands of Settings' Granted list that ask git, which answer off the window's thread
+/// (#1543). The thread test asks each of them.
+#[cfg(test)]
+pub(crate) const READS_HISTORY: [&str; 2] = ["sandbox_grants", "revoke_sandbox_grant"];
 
 /// The folders you listed as ones chats in this project may be granted (D-1342-10), each as it
 /// was resolved; and each one dropped from the list now because it no longer resolves to itself
