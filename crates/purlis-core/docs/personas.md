@@ -415,7 +415,7 @@ against the dispatches that followed it — advice only the Python charter gave,
 dispatch log it wrote; `routing:` is retired, and purlis gives none now.
 
 `DISP` counts dispatches, not sub-agent calls, from two places. The committed dispatch log,
-`personas/_dispatch/`, holds rows for a persona from when one was sent out as a sub-agent,
+`personas/_dispatch/`, holds rows for a persona from when one was sent out as a helper,
 which it no longer is; every machine reads the same ones. And purlis keeps a record of each
 dispatch a chat makes, a task or a handoff, on the machine it was made on: `DISP` adds one
 for every record that names the persona. Those records are never committed and are kept 30

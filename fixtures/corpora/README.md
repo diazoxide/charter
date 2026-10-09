@@ -226,6 +226,13 @@ Every row but the 111 was moved by rule from its recorded answer and then compar
 the guard answers. The 111 took the guard's answer: the 40 and the 26 were read one by one,
 and the 45 by the source each one names.
 
+**And where a harness's own sub-agent is called a helper (#1525).** purlis's word for a
+harness's sub-agent is "helper" now, so the shell-string refusal tells "a helper's handoff",
+not "a helper sub-agent's handoff", from the chat's own. That phrase is the only change, made
+by a script that replaced it and nothing else, in `hrd` alone, on the 110 rows that are refused
+for that reason: `shellseg-oracle.jsonl` rows 87, 100, 103, 105, 173, 505 to 509 and 511 to
+513, and 97 generated rows. No verdict moved.
+
 ## The session recording
 
 Re-record with:

@@ -285,8 +285,8 @@ fn sync_agents_is_retired_and_answers_with_what_replaced_it_whatever_it_is_given
     // word is still taken, with the flags a script may still pass, and answers one sentence.
     let tmp = daily();
     let retired = "✗ `purlis persona sync-agents` is retired: a persona runs as its own chat \
-                   and purlis generates no sub-agent for it. Give a persona work with `purlis \
-                   dispatch --to <persona>`, and remove the sub-agent files purlis wrote with \
+                   and purlis generates no helper for it. Give a persona work with `purlis \
+                   dispatch --to <persona>`, and remove the helper files purlis wrote with \
                    `purlis doctor --fix persona-agents`.\n";
     for args in [
         vec!["persona", "sync-agents"],

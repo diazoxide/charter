@@ -698,7 +698,7 @@ impl Refused {
             Self::TooManyRunning { limit, running } => format!(
                 "this chat already has {} running, and it may have {limit} at once. \
                  {WAIT_TO_DISPATCH}",
-                counted(*running, "persona chat", "persona chats")
+                counted(*running, "task", "tasks")
             ),
             Self::LineageFull { limit, lineage } => format!(
                 "this chat's lineage already holds {}, and it may hold {limit}. {WAIT_FOR_ONE}",
@@ -711,7 +711,7 @@ impl Refused {
             } => format!(
                 "chats as {persona} already have {} running between them, and may have {limit} \
                  at once in this project. {WAIT_FOR_ONE}",
-                counted(*running, "persona chat", "persona chats"),
+                counted(*running, "task", "tasks"),
                 persona = crate::shown::short(persona)
             ),
             Self::PersonaFull {

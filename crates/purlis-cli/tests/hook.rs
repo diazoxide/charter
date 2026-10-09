@@ -793,7 +793,7 @@ fn the_payload_field_no_command_can_see_is_read_and_the_prompts_mode_is_the_apps
 
     let (_, out, _) = guard(plane.path(), &with("agent_id", "sub-1"), &[]);
     assert!(
-        decision(&out).is_some_and(|d| d.contains("from inside a sub-agent")),
+        decision(&out).is_some_and(|d| d.contains("from inside a helper")),
         "{out:?}"
     );
     let (_, out, _) = guard(
@@ -811,7 +811,7 @@ fn the_payload_field_no_command_can_see_is_read_and_the_prompts_mode_is_the_apps
     both["permission_mode"] = serde_json::Value::String("bypassPermissions".to_owned());
     let (_, out, _) = guard(plane.path(), &both.to_string(), &[]);
     assert!(
-        decision(&out).is_some_and(|d| d.contains("from inside a sub-agent")),
+        decision(&out).is_some_and(|d| d.contains("from inside a helper")),
         "{out:?}"
     );
     // ...and on a harness nobody measured, an `agent_id` means nothing at all.

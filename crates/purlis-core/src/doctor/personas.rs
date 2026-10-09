@@ -25,7 +25,7 @@ pub(super) fn personas(d: &Doctor) -> Row {
         _ => format!("{} · {said}", row.detail),
     };
     let fix = "purlis doctor --fix persona-agents  (a persona runs as its own chat now; this \
-               removes the sub-agent files purlis wrote and says what it changed)";
+               removes the helper files purlis wrote and says what it changed)";
     let hint = if row.hint.is_empty() {
         fix.to_owned()
     } else {

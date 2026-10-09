@@ -104,8 +104,8 @@ pub const REDIRECT_READS: [&str; 2] = ["<>", "<"];
 // they are this guard's own, and the recording in `fixtures/corpora` holds them as rewritten.
 
 /// What a helper sub-agent that hands off is told.
-pub const HANDOFF_SUBAGENT: &str = "`purlis handoff` is refused from inside a sub-agent. A handoff starts a chat the person \
-     can see, open and stop, for the chat that asks, and a sub-agent is not a chat. Return \
+pub const HANDOFF_SUBAGENT: &str = "`purlis handoff` is refused from inside a helper. A handoff starts a chat the person \
+     can see, open and stop, for the chat that asks, and a helper is not a chat. Return \
      what you found to your chat, and let that chat hand it off.";
 
 /// What a handoff purlis cannot read as a command of its own is told.
@@ -119,15 +119,15 @@ pub const HANDOFF_SPELLING: &str = "`purlis handoff` is refused where purlis can
 /// What a handoff inside a string or a heredoc a shell runs is told.
 pub const HANDOFF_SHELL_STRING: &str = "`purlis handoff` is refused inside a string or a heredoc a shell runs (`eval`, \
      `bash -c '…'`, `bash <<'EOF'`). purlis looks one level in and no deeper, so it cannot \
-     read the brief there or tell a helper sub-agent's handoff from this chat's own. Run it \
+     read the brief there or tell a helper's handoff from this chat's own. Run it \
      directly instead: purlis handoff --name \"<task>\" <workspace> <<'BRIEF'";
 
 /// What a handoff inside a substitution, a `case` branch or a function body is told
 /// ([`crate::consentspelling`] finds those). `where_` is where it sits, as a refusal says it.
 pub fn handoff_placed(where_: &str) -> String {
     format!(
-        "`purlis handoff` is refused {where_}. purlis cannot read the brief there or tell a helper \
-         sub-agent's handoff from this chat's own. Run it as a command of its own: \
+        "`purlis handoff` is refused {where_}. purlis cannot read the brief there or tell a \
+         helper's handoff from this chat's own. Run it as a command of its own: \
          purlis handoff --name \"<task>\" <workspace> <<'BRIEF'"
     )
 }

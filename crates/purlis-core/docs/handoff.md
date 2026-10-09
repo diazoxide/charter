@@ -362,7 +362,7 @@ that says what to do:
 
 | Refused | Why |
 | --- | --- |
-| from inside a sub-agent, where purlis's hook can tell (see below) | a persona chat belongs to a chat you can see; the sub-agent returns what it found to its chat, which dispatches |
+| from inside a helper (a harness's sub-agent), where purlis's hook can tell (see below) | a task belongs to a chat you can see; the helper returns what it found to its chat, which dispatches |
 | with no profile to start it on: the chat is on none, the persona names none and `--profile` names none | there is no harness to start the new chat on |
 | on a profile the project does not offer on this machine, or one whose command has not been approved here | a profile is looked up, never run on a chat's word |
 | on a profile the project does not list for that persona, where it lists any (`[dispatch.profiles]` in the project's file, the persona's own list or the nearest one it `extends:`), whoever chose the profile: `--profile`, the persona's own definition, or the asking chat's own | the project said which profiles that persona's dispatched chats run on; the refusal names them and says what its reader can do |

@@ -37,7 +37,7 @@ const ADVICE: &str = "advice";
 
 /// Where `DISP` comes from, and what it cannot see.
 pub const RECORDS_COUNTED: &str = "DISP adds the committed dispatch log (personas/_dispatch/), \
-    whose rows for a persona are from when one was sent out as a sub-agent, and the record \
+    whose rows for a persona are from when one was sent out as a helper, and the record \
     purlis keeps of each dispatch on this machine. Those records are never committed and are \
     kept 30 days, so a dispatch made on another machine, or longer ago than that, is not \
     counted here.";
