@@ -5,5 +5,5 @@
   naming what was turned on and off, and what it widens past its hosts: Package registries also
   lets chats write the project's package caches, and certificate checks let the system fetch
   addresses a certificate names. "Got it" records what was shown, so a later change is told
-  again; a change you make in Settings is not told back to you. A project on the default presets
-  tells nothing (#1385).
+  again; a change you make in Settings, a move between the shared and local files included, is
+  not told back to you. A project on the default presets tells nothing (#1385, #1550).

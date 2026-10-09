@@ -268,13 +268,19 @@ pub(crate) fn move_keys(
         SettingsWhich::Shared => (local_base, shared_base),
         SettingsWhich::Local => (shared_base, local_base),
     };
+    // A move always writes the shared file, from or to: a preset it turns on or off there is
+    // yours, as a save's is (#1385, #1550), unless another change was already waiting.
+    let pending = purlis_core::sandbox::local::presets_changed(root).is_some();
     match settings::move_keys(root, to.into(), from_base, to_base, &paths) {
-        Ok(()) => Ok(SettingsMoved::Moved {
-            settings: Box::new(ProjectSettings {
-                shared: file_of(root, SettingsWhich::Shared)?,
-                local: file_of(root, SettingsWhich::Local)?,
-            }),
-        }),
+        Ok(()) => {
+            purlis_core::sandbox::local::presets_seen_by_you(root, pending);
+            Ok(SettingsMoved::Moved {
+                settings: Box::new(ProjectSettings {
+                    shared: file_of(root, SettingsWhich::Shared)?,
+                    local: file_of(root, SettingsWhich::Local)?,
+                }),
+            })
+        }
         Err(reasons) => Ok(SettingsMoved::Refused { reasons }),
     }
 }
@@ -1434,6 +1440,42 @@ mod tests {
                 ],
                 value: SettingsValue::Text("push".into()),
             }]
+        );
+    }
+
+    /// #1550: presets a move brings into the shared file are this machine's own change, as a
+    /// save's are, and are not told back to the person who moved them.
+    #[test]
+    fn presets_moved_into_the_shared_file_are_seen_by_whoever_moved_them() {
+        let shared = "[sandbox]\nmode = \"on\"\n";
+        let local = "[sandbox]\negress = [\"forge\"]\n";
+        let dir = plane_with_local(shared, local);
+        assert_eq!(
+            purlis_core::sandbox::local::presets_changed(dir.path()),
+            None,
+            "a project on the defaults tells nothing"
+        );
+        let moved = move_keys(
+            dir.path(),
+            SettingsWhich::Shared,
+            Some(shared),
+            Some(local),
+            vec![vec![
+                SettingsStep::Key("sandbox".into()),
+                SettingsStep::Key("egress".into()),
+            ]],
+        )
+        .unwrap();
+        assert!(matches!(moved, SettingsMoved::Moved { .. }), "{moved:?}");
+        assert!(
+            std::fs::read_to_string(dir.path().join("charter.toml"))
+                .unwrap()
+                .contains("egress"),
+            "the presets are in the shared file now"
+        );
+        assert_eq!(
+            purlis_core::sandbox::local::presets_changed(dir.path()),
+            None
         );
     }
 
