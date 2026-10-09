@@ -94,14 +94,22 @@ impl Touched {
 
     /// The name of every chat but `but` whose tools named `path`, in the order each was first
     /// heard from: who else may have written a file of `but`'s list.
+    ///
+    /// Each name once: two chats shown under one name are one mark.
     pub fn also(&self, but: &str, path: &str) -> Vec<String> {
-        self.heard
+        let mut names: Vec<String> = Vec::new();
+        for kept in self
+            .heard
             .iter()
             .filter(|chat| chat.as_str() != but)
             .filter_map(|chat| self.by_chat.get(chat))
             .filter(|kept| kept.paths.contains(path))
-            .map(|kept| kept.name.clone())
-            .collect()
+        {
+            if !names.contains(&kept.name) {
+                names.push(kept.name.clone());
+            }
+        }
+        names
     }
 }
 
@@ -519,6 +527,9 @@ mod tests {
             touched.also("task", "workspaces/alpha/none"),
             Vec::<String>::new()
         );
+        // Two chats shown under one name are one mark.
+        touched.note("other", "talk", file.to_owned());
+        assert_eq!(touched.also("task", file), ["steward 3 renamed", "talk"]);
     }
 
     #[test]
