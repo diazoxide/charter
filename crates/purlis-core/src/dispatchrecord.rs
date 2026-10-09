@@ -1746,6 +1746,10 @@ pub fn listed_on(root: &Path, path: &str) -> Vec<Record> {
 /// as [`ENDED_WITHOUT_A_REPORT`], failed, where it owed a report, and with none where it owed
 /// none. **A task that owed a chat its report is marked [`Undelivered`]** (#1513): that chat
 /// is not open either, and is told when it comes back. How many ended.
+///
+/// **A task whose asking chat `still_open` does not answer for either is cleared and forgotten
+/// as it ends** ([`clear_forgetting`], #1556), as one that ends after its asking chat closed
+/// is while the app runs: nobody is left to see its row, so nothing would clear it.
 pub fn settle(
     root: &Path,
     still_open: impl Fn(&ChatRef) -> bool,
@@ -1760,6 +1764,9 @@ pub fn settle(
                 .unwrap_or(false);
             if ended && record.mode == Mode::Task && record.report_owed && !record.asker.by_person {
                 let _ = kept_undelivered(root, &record.id, None);
+            }
+            if ended && record.mode == Mode::Task && !still_open(&record.asker.chat) {
+                let _ = clear_forgetting(root, &record.id);
             }
             ended
         })

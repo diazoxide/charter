@@ -5423,7 +5423,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `text` in `talk` in the write that sets `cleared` (`dispatchrecord::clear_forgetting`);
   the brief and the report stay. A task that ends after its asking chat closed (in the one
   short turn a close gives it, say) is cleared and forgotten the same way as it ends, since
-  nobody is left to clear its row; not while the app quits, when every chat is kept. A Reopen,
+  nobody is left to clear its row; not while the app quits, when every chat is kept. So is a
+  task that opening the project, or a launch, ends because its chat did not come back, where
+  its asking chat does not come back either (#1556, `dispatchrecord::settle`). A Reopen,
   which also sets `cleared`, forgets nothing.
   **Removing a workspace forgets them too** (#1520): `purlis workspace remove` and the window's
   Remove empty `talk`'s texts on every ended record whose `place.workspace` is the workspace
