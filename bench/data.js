@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791524595463,
+  "lastUpdate": 1791525808661,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4326,6 +4326,48 @@ window.BENCHMARK_DATA = {
             "value": 101.786967,
             "unit": "ms",
             "extra": "median of 5 runs: 100.973, 101.411, 101.787, 102.398, 102.723 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "65629aa1378b51556cfdb94d378925a9c0213f61",
+          "message": "Review of #1546: a report kept again after a start died in, left before it is claimed\n\n- A start the app died in, followed by a start that did not happen, now keeps\n  the report for its workspace again: give_back re-keeps wherever the record\n  is still owed and the file it names is gone, not only where this start took\n  it (handback::still_kept). Test: died in, refused, let go.\n- hand_to leaves the report for the chat first and claims the record after,\n  under the lock: the app dying between the two leaves the report with the\n  chat and still owed, never with nobody. A second claimant takes back what it\n  left.\n- A task that reports is no longer said to ask again: Talk::close clears the\n  restart mark.\n- Only chats a launch started are marked as brought back; one waiting to start\n  is marked when it starts.\n- The refusal says \"Any question it asked before the restart\", since the task\n  may have asked none.\n- A chat that resumed the asker (a Resume, or a Reopen of a finished task's\n  row) and closes before reading what it was handed keeps it owed: its close\n  matches the records by the chat it resumed too.\n- ADR 0090: the heading says the launch is also held to the profile and the\n  folder, and what \"kept again\" means after a start died in.\n\nRefs #1546\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T09:54:03+04:00",
+          "tree_id": "24e92adc1eb2bfda5bc9373e8d3d470bbe0df129",
+          "url": "https://github.com/purlis/purlis/commit/65629aa1378b51556cfdb94d378925a9c0213f61"
+        },
+        "date": 1791525802423,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5295085,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.523, 0.525, 0.530, 0.530, 0.545 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.6281215,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.365, 16.544, 16.628, 16.826, 17.149 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.7269345,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.537, 102.738, 103.727, 104.175, 104.217 ms"
           }
         ]
       }
