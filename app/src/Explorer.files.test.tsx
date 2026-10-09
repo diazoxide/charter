@@ -235,6 +235,44 @@ describe("a branch's files in the explorer", () => {
     );
   });
 
+  it("draws what a folder held once it was watched, when it changed before the watch held", async () => {
+    // #1427: a folder made in a branch while its folder was being opened. Read before the core
+    // watched it, the folder was drawn without the new one, and no event ever came for a change
+    // made before the watch: the tree stayed wrong until something else moved there.
+    const disk: Record<string, FolderEntry[]> = { "one:": [entry("README.md")] };
+    const asked: string[] = [];
+    const watches: (() => void)[] = [];
+    mockIPC(
+      (cmd, args) => {
+        const a = args as Record<string, string | null>;
+        if (cmd === "branch_tree") {
+          const key = `${a.piece ?? ""}:${a.folder}`;
+          asked.push(key);
+          return { entries: disk[key] ?? [], more: 0 };
+        }
+        // The core answers once the folder is watched, which takes a moment.
+        if (cmd === "files_watch")
+          return new Promise<null>((held) => watches.push(() => held(null)));
+        if (cmd === "project_icons_drawn") return null;
+        if (cmd === "extension_icon_themes") return [];
+        throw new Error(`unexpected ${cmd}`);
+      },
+      { shouldMockEvents: true },
+    );
+    draw();
+    await userEvent.click(row("file:svc/one:"));
+    await vi.waitFor(() => expect(watches.length).toBeGreaterThan(0));
+
+    // An agent makes a folder in the branch before the watch holds: no event will say so.
+    disk["one:"] = [entry("README.md"), entry("shell-here", { kind: "folder" })];
+    await act(async () => {
+      for (const held of watches.splice(0)) held();
+    });
+
+    expect(await named("^shell-here")).toBeInTheDocument();
+    expect(await named("^README.md")).toBeInTheDocument();
+  });
+
   it("opens a folder whose name holds a line break", async () => {
     const asked = core({
       "one:": [entry("a\nb", { kind: "folder" })],
