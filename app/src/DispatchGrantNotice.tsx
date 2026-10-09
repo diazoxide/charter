@@ -1,5 +1,6 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { commands, type GrantLevel, type PlaneId } from "./bindings";
+import { arrivedSaid, useDispatchArrival } from "./dispatchArrival";
 import { useDispatchesHeld } from "./dispatchesHeld";
 import { Notice, type NoticeAction } from "./Notice";
 import { Choice } from "./settings/components";
@@ -31,6 +32,16 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * this machine: no chat of that persona is asked or allowed for that target until it is lifted
  * in Settings. It is offered where the chat runs as a persona, since a chat on none has no pair.
  * No answer here grants "any persona": that is Settings' alone.
+ *
+ * **Where the project already grants it and the person has not answered that** (#1506), this
+ * is the fallback for the Notice that said it arrived, which the person put away or missed. It
+ * says the same thing in the same words (`arrivedSaid`), and for the pair it offers the same
+ * two answers: **Accept**, in place of allowing it for everyone, since the project's settings
+ * hold it already, and **Not on my machine**. Answering here clears that Notice, and answering
+ * that one clears this. A project's "any persona" is said here with where it is accepted,
+ * Settings: no Notice accepts it (V100-23). After Not on my machine the dispatch is still
+ * held and this says so; the project's level is then not offered for the pair, which would
+ * undo the answer by another name.
  *
  * **Where the list of nevers does not read, the Notice says so** (`never_unread`): no grant
  * counts until it does, which is why a pair already granted is asked about again.
@@ -82,6 +93,17 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
 export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
   const { waiting, read } = useDispatchesHeld(plane, session);
+  const arrival = useDispatchArrival(plane);
+  // What waits of the project's grants moved (an answer on the window's own Notice, or in
+  // Settings): what this chat has held may have started, or lost its grant.
+  const arrived = arrival.waiting;
+  const waits = arrived.map((one) => one.id).join("\n");
+  const readFor = useRef(waits);
+  useEffect(() => {
+    if (readFor.current === waits) return;
+    readFor.current = waits;
+    read();
+  }, [waits, read]);
   /** What the last Allow, or Never for this pair, answered, until it is put away. */
   const [allowed, setAllowed] = useState<{ target: string; said: string }>();
   const [said, setSaid] = useState<string>();
@@ -307,21 +329,50 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       .catch((err: unknown) => setSaid(`purlis could not keep it: ${String(err)}`))
       .finally(() => setBusy(false));
   };
+  // The project's grants that would cover this dispatch and wait for the person's answer.
+  const here = arrived.filter(
+    (one) => one.asking === first.asking && (one.any || one.target === first.target),
+  );
+  const pair = here.filter((one) => !one.any && one.undefined === null);
+  const answer = (accepted: boolean) => () => {
+    if (busy) return;
+    setBusy(true);
+    setSaid(undefined);
+    void arrival
+      .answer(accepted, pair)
+      .then(() => {
+        if (!accepted)
+          setSaid(
+            `Not followed on this machine. This dispatch to ${first.target} still waits for your answer here.`,
+          );
+        read();
+      })
+      .finally(() => setBusy(false));
+  };
   const keep: NoticeAction = { label: "Keep blocked", onPress: putAway };
   const never: NoticeAction[] =
     first.asking === null ? [] : [{ label: "Never for this pair", onPress: sayNever }];
-  const allows: NoticeAction[] = ALLOWS.filter(([level]) => first.levels.includes(level)).map(
-    ([level, label]) => ({
-      // An answer that keeps nothing is named as that, and one that holds everywhere says so.
-      label: first.works_in_missing
-        ? "Allow this one dispatch"
-        : atRoot && level !== "chat"
-          ? `${label}, in any workspace`
-          : label,
-      onPress: () => allow(level),
-    }),
-  );
-  const [one, ...others] = [...allows, keep, ...never];
+  // The project's settings hold the pair already: for everyone is the project's own grant,
+  // accepted here, and never a second write of it.
+  const allows: NoticeAction[] = ALLOWS.filter(
+    ([level]) => first.levels.includes(level) && !(level === "project" && pair.length > 0),
+  ).map(([level, label]) => ({
+    // An answer that keeps nothing is named as that, and one that holds everywhere says so.
+    label: first.works_in_missing
+      ? "Allow this one dispatch"
+      : atRoot && level !== "chat"
+        ? `${label}, in any workspace`
+        : label,
+    onPress: () => allow(level),
+  }));
+  const project: NoticeAction[] =
+    pair.length > 0
+      ? [
+          { label: "Accept", onPress: answer(true) },
+          { label: "Not on my machine", onPress: answer(false) },
+        ]
+      : [];
+  const [one, ...others] = [...allows, ...project, keep, ...never];
   const fixes: readonly [NoticeAction, ...NoticeAction[]] = [one ?? keep, ...others];
 
   return (
@@ -339,6 +390,8 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
         </>
       }
     >
+      {here.length > 0 &&
+        `${arrivedSaid(here).join(" ")}${pair.length > 0 ? " You have not answered that on this machine." : ""} `}
       {who} wants to dispatch to {first.target}. Nothing starts until you answer. Allowing it lets{" "}
       {first.asking === null ? "this chat" : `${first.asking} chats`} ask {first.target} for
       anything {first.target} can do, without asking you again. The grant covers the helpers{" "}
@@ -351,6 +404,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
         ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}
       {moved === first.id && ` ${BOXES_CHANGED}`}
+      {here.length > 0 && arrival.said !== undefined && ` ${arrival.said}`}
       {behind}
     </Notice>
   );

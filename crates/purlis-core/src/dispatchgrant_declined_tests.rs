@@ -43,7 +43,12 @@ fn not_on_my_machine_takes_a_followed_pair_out_of_force_and_leaves_the_file_to_t
     assert_eq!(file(root), PROJECT);
     assert_eq!(declined(root), ["steward -> devops"]);
     assert_eq!(unacknowledged(root), [pair("steward", "devops")]);
-    assert_eq!(changed(root), None, "declined here is no news here");
+    let waiting: Vec<String> = crate::dispatcharrival::arrival(root)
+        .waiting
+        .iter()
+        .map(crate::dispatcharrival::Arrived::said)
+        .collect();
+    assert_eq!(waiting, ["steward -> *"], "declined here is no news here");
 }
 
 #[test]
@@ -52,17 +57,30 @@ fn allowing_what_the_notice_shows_never_accepts_a_pair_declined_here() {
     let root = dir.path();
     decline(root, "steward", "devops").expect("declined before it was ever allowed");
 
-    let told = changed(root).expect("the other pair is still news");
-    assert_eq!(told.added, ["qa -> devops"]);
-    assert_eq!(told.now, ["qa -> devops"]);
-    acknowledge(root, &told.now).expect("allowed");
+    let told: Vec<String> = crate::dispatcharrival::arrival(root)
+        .waiting
+        .iter()
+        .map(crate::dispatcharrival::Arrived::said)
+        .collect();
+    // The other pair is still news, with the project's "any persona", which is not a pair.
+    assert_eq!(told, ["steward -> *", "qa -> devops"]);
+    acknowledge(root, &told).expect("allowed");
 
     assert_eq!(
         InForce::read(root, Vec::new()).project,
         [pair("qa", "devops")]
     );
     assert_eq!(declined(root), ["steward -> devops"]);
-    assert_eq!(changed(root), None);
+    let left: Vec<String> = crate::dispatcharrival::arrival(root)
+        .waiting
+        .iter()
+        .map(crate::dispatcharrival::Arrived::said)
+        .collect();
+    assert_eq!(
+        left,
+        ["steward -> *"],
+        "allowing pairs accepts no any persona"
+    );
 }
 
 #[test]
