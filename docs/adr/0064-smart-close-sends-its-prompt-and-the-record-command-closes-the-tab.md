@@ -574,7 +574,7 @@ holds. It is one bracketed paste, then Enter, in one write, as the smart-close p
   waiting and asking nothing;
 - a chat that is asking the person something (a permission prompt, a question), a chat that has
   reported no state, and a chat whose program has ended are sent nothing. The Notice then says
-  *Ask this chat to run the command again.*
+  *Ask the chat to run the command again.*
 
 **An Enter never lands on a harness's own prompt.** There it would confirm the highlighted
 choice, and a press on one control would answer another.

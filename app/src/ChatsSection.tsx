@@ -127,7 +127,7 @@ function onMemoryWords(waiting: number): string {
 
 /** The whole sentence, on the line's hover: what they wait for, and where they are named. */
 const ON_MEMORY_SAID =
-  "This machine is short on memory: they start by themselves once it frees, and the chat that asked is told if they give up. The Dispatches tab lists them under Not started.";
+  "This machine is short on memory: they start by themselves once it frees, and the chat that asked is told when each starts or gives up. The Dispatches tab lists them under Not started.";
 
 /**
  * Whether the element that took the focus took it from the keyboard. A pointer's press focuses
