@@ -323,6 +323,9 @@ pub fn history(
 
 /// `charter worktree remove <repo> <piece>`: `git worktree remove`, refused while the piece
 /// holds uncommitted changes or commits no other ref reaches — each named — unless `force`.
+///
+/// **Never a branch folder purlis cut for a task** (#1534), `force` or not, with the explorer's
+/// two exceptions, and never with `delete_branch`: [`crate::dispatchplace::kept_from_removal`].
 pub fn remove(
     plane: &Path,
     ws: &str,
@@ -333,6 +336,23 @@ pub fn remove(
     say: &mut dyn FnMut(Say),
 ) -> u8 {
     say(Say::Info(format!("workspace: {ws}")));
+    let no_discard_there = || {
+        let clone = plane.join("workspaces").join(ws).join(repo);
+        worktree::git::isolated(&worktree::git::Isolated::operators(), || {
+            crate::gitbroker::runs_a_program(&clone).is_err()
+        })
+    };
+    if let Some(refused) = crate::dispatchplace::kept_from_removal(
+        plane,
+        ws,
+        repo,
+        piece,
+        delete_branch,
+        no_discard_there,
+    ) {
+        say(Say::Fail(refused));
+        return 1;
+    }
     match worktree::remove(plane, ws, repo, piece, force, delete_branch) {
         Ok(removed) => {
             if removed.was_stale {
