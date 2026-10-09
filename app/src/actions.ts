@@ -2397,6 +2397,41 @@ export function catalogue(now: Now): Offer[] {
 }
 
 /**
+ * The pieces a Merge, Remove or Done is on its way for, and what it is doing to each (#1610).
+ *
+ * Those three run off the window's thread (#1007), so the window no longer holds a second
+ * press until the first has landed. Without this, a double press of Merge, or Merge and Remove
+ * together, ran both, and the second got git's own lock refusal, which says nothing useful.
+ * One window is one webview, so a map in this module is the window's.
+ */
+const piecesBusy = new Map<string, string>();
+
+/**
+ * Sends one of a piece's mutating verbs unless one is already on its way for that piece.
+ *
+ * A second press of the same verb sends nothing and says nothing: the first press's answer is
+ * the one to read. A different verb is refused with what the piece is busy with. The hold is
+ * let go on every way out, landed, refused or thrown, so a refused verb can be pressed again.
+ */
+function onePerPiece(cut: Cut, doingNow: string, send: () => Promise<Ran>): Ran | Promise<Ran> {
+  const key = JSON.stringify([cut.workspace, cut.repo, cut.piece]);
+  const busy = piecesBusy.get(key);
+  if (busy === doingNow) return DID;
+  if (busy !== undefined) {
+    return { ok: false, refused: `${cut.piece} is still ${busy}. Try again once that has landed.` };
+  }
+  piecesBusy.set(key, doingNow);
+  let sent: Promise<Ran>;
+  try {
+    sent = send();
+  } catch (err) {
+    piecesBusy.delete(key);
+    throw err;
+  }
+  return sent.finally(() => piecesBusy.delete(key));
+}
+
+/**
  * Carries out what a row says it does.
  *
  * **Called from an event handler and never while rendering**, which is what lets the verbs
@@ -2549,11 +2584,13 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "forgetTodo":
       return doing.forgetTodo(does.workspace, does.slug);
     case "removeWorktree":
-      return doing.removeWorktree(does.cut, does.force);
+      return onePerPiece(does.cut, "being removed", () =>
+        doing.removeWorktree(does.cut, does.force),
+      );
     case "mergeWorktree":
-      return doing.mergeWorktree(does.cut);
+      return onePerPiece(does.cut, "merging", () => doing.mergeWorktree(does.cut));
     case "declareWorktreeDone":
-      return doing.declareWorktreeDone(does.cut);
+      return onePerPiece(does.cut, "being marked done", () => doing.declareWorktreeDone(does.cut));
     case "focusBranch":
       doing.focusBranch(does.cut);
       return DID;
