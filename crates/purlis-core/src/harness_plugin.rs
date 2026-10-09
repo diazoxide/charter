@@ -139,6 +139,12 @@ pub trait Adapter: Sync {
     /// Everything it has installed on this machine, read from [`Self::record`] and never
     /// written, or why it could not be read.
     fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String>;
+    /// What the project at `root` holds of its own that the harness loads beside what this
+    /// machine installed, read and never written: listed so a reader sees it, and never
+    /// handed to a chat. Nothing, for a harness that loads nothing from a project.
+    fn in_project(&self, _root: &Path) -> Vec<Plugin> {
+        Vec::new()
+    }
     fn support(&self) -> Support;
     /// What charter fixes for it, whatever a file says.
     ///
@@ -441,30 +447,25 @@ impl Adapter for Opencode {
                 source: "npm, in opencode.json".to_owned(),
             }));
         }
-        for folder in ["plugin", "plugins"] {
-            let Ok(entries) = std::fs::read_dir(dir.join(folder)) else {
-                continue;
-            };
-            let mut files: Vec<String> = entries
-                .filter_map(Result::ok)
-                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .filter(|name| {
-                    Path::new(name)
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| OPENCODE_SCRIPTS.contains(&ext))
-                })
-                .collect();
-            files.sort();
-            out.extend(files.into_iter().map(|file| Plugin {
-                id: format!("{folder}/{file}"),
-                harness: self.harness(),
-                name: file,
-                source: "a file in the plugin directory".to_owned(),
-            }));
-        }
+        out.extend(opencode_scripts(
+            self.harness(),
+            &dir,
+            "",
+            "a file in the plugin directory",
+        ));
         Ok(out)
+    }
+
+    /// The scripts in the project's own `.opencode/plugin/` and `.opencode/plugins/`, which
+    /// opencode loads beside the global ones (ADR 0058, #1371). A chat can write there, so this
+    /// is listed for a reader to see, and never handed to anything.
+    fn in_project(&self, root: &Path) -> Vec<Plugin> {
+        opencode_scripts(
+            self.harness(),
+            &root.join(".opencode"),
+            ".opencode/",
+            "a file in this project's .opencode plugin directory",
+        )
     }
 
     fn support(&self) -> Support {
@@ -474,6 +475,37 @@ impl Adapter for Opencode {
              remove one another config named (measured, opencode 1.18.23)",
         )
     }
+}
+
+/// Every script opencode loads from `dir`'s `plugin/` and `plugins/` (its plugin docs name
+/// `plugins/`; the operator's install has `plugin/`), in name order, each id'd
+/// `<prefix><folder>/<file>`. A folder that cannot be read lists nothing.
+fn opencode_scripts(harness: &'static str, dir: &Path, prefix: &str, source: &str) -> Vec<Plugin> {
+    let mut out = Vec::new();
+    for folder in ["plugin", "plugins"] {
+        let Ok(entries) = std::fs::read_dir(dir.join(folder)) else {
+            continue;
+        };
+        let mut files: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| {
+                Path::new(name)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| OPENCODE_SCRIPTS.contains(&ext))
+            })
+            .collect();
+        files.sort();
+        out.extend(files.into_iter().map(|file| Plugin {
+            id: format!("{prefix}{folder}/{file}"),
+            harness,
+            name: file,
+            source: source.to_owned(),
+        }));
+    }
+    out
 }
 
 /// A file's text, `None` when it is not there, or why it could not be read.
@@ -520,6 +552,9 @@ pub struct Choices {
     local_left_out: Option<String>,
     /// The harnesses the left-out Local file named a plugin of: the groups that say why.
     local_unread: BTreeSet<String>,
+    /// The project these were read from ([`Self::read`]), whose own plugin files a survey
+    /// lists ([`Adapter::in_project`]); none for choices made from text.
+    project: Option<PathBuf>,
 }
 
 impl Choices {
@@ -558,10 +593,13 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self::from_layers(
-            &layer_text(root, Which::Shared),
-            &layer_text(root, Which::Local),
-        )
+        Self {
+            project: Some(root.to_path_buf()),
+            ..Self::from_layers(
+                &layer_text(root, Which::Shared),
+                &layer_text(root, Which::Local),
+            )
+        }
     }
 
     /// The two files as [`crate::settings::layer_text`] hands them — [`Self::from_text`], and,
@@ -818,13 +856,18 @@ pub struct Group {
 
 /// Every harness, with what it has installed and what `choices` — a project's, or a project's in
 /// one workspace ([`Choices::read_in`]) — have each at.
+/// What the project holds of its own that the harness loads ([`Adapter::in_project`]) is listed
+/// beside what this machine installed.
 pub fn survey(choices: &Choices, env: &Env<'_>) -> Vec<Group> {
     adapters()
         .map(|adapter| {
-            let (installed, trouble) = match adapter.installed(env) {
+            let (mut installed, trouble) = match adapter.installed(env) {
                 Ok(installed) => (installed, None),
                 Err(why) => (Vec::new(), Some(why)),
             };
+            if let Some(root) = &choices.project {
+                installed.extend(adapter.in_project(root));
+            }
             Group {
                 adapter,
                 record: adapter.record(env),
