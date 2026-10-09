@@ -4,6 +4,7 @@ import { KeyRound } from "lucide-react";
 import { PanelList } from "./PanelList";
 import { Menued } from "./Menus";
 import { HeadingOffer, PanelSection } from "./PanelSection";
+import { Notice } from "./Notice";
 import type { Catalogued, Offer } from "./actions";
 import { commands, type PanelRow, type VaultSummary } from "./bindings";
 
@@ -30,12 +31,13 @@ export function Vaults({
   offers,
   onPress,
 }: {
-  said: Pick<VaultsSaid, "vaults" | "trouble">;
+  /** `reload` is a refusal's Read again: the list is read once per project (NO-8, #1296). */
+  said: Pick<VaultsSaid, "vaults" | "trouble" | "reload">;
   /** The catalogue by id, which is what a row's verb is looked up in. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
 }) {
-  const { vaults, trouble } = said;
+  const { vaults, trouble, reload } = said;
   return (
     <PanelSection
       testid="panel-vaults"
@@ -46,9 +48,13 @@ export function Vaults({
       actions={<HeadingOffer offer={offers.get("vault.create")} onPress={onPress} />}
     >
       {trouble !== undefined ? (
-        <p className="trouble" role="alert">
+        <Notice
+          cause="vaults-unread"
+          tone="trouble"
+          fixes={[{ label: "Read again", onPress: reload }]}
+        >
           {trouble}
-        </p>
+        </Notice>
       ) : (
         vaults !== undefined && (
           <PanelList

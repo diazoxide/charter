@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
+import { Notice } from "./Notice";
 import { ExternalLink } from "./ReleaseNotes";
 import { Facts } from "./Views";
 import { NO_PERSONA_SAID } from "./dispatches";
@@ -24,6 +25,8 @@ import { commands, type PlaneId, type SessionRecordView } from "./bindings";
  */
 export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string }) {
   const [said, setSaid] = useState<{ record?: SessionRecordView | null; trouble?: string }>();
+  /** Bumped by Read again: the tab reads once when it opens (NO-8's follow-up, #1296). */
+  const [again, setAgain] = useState(0);
   useEffect(() => {
     let gone = false;
     void commands
@@ -40,7 +43,7 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
     return () => {
       gone = true;
     };
-  }, [plane, path]);
+  }, [plane, path, again]);
 
   if (said === undefined) {
     return (
@@ -52,9 +55,21 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
   }
   if (said.trouble !== undefined) {
     return (
-      <p className="trouble" role="alert">
+      <Notice
+        cause={`session-record-unread:${path}`}
+        tone="trouble"
+        fixes={[
+          {
+            label: "Read again",
+            onPress: () => {
+              setSaid(undefined);
+              setAgain((was) => was + 1);
+            },
+          },
+        ]}
+      >
         {said.trouble}
-      </p>
+      </Notice>
     );
   }
   const record = said.record;

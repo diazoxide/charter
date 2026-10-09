@@ -696,14 +696,17 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // the hole is not a mistake anybody made, it is what a modal in a WebView does by default.
     // Its command is not mocked and it does not need to be — a dialog that could not read the
     // changelog draws the refusal. Since FR-14 (#609) it is no longer a one-control surface:
-    // the three help links are drawn whatever the core answered, and each is reachable.
+    // the three help links are drawn whatever the core answered, and each is reachable. The
+    // refusal has Read again beside it (#1296).
     render(<AboutCharter />);
     await userEvent.click(screen.getByTestId("title-about"));
     await screen.findByRole("dialog");
+    await screen.findByRole("button", { name: "Read again" });
     // The notices (FM-3) are one summary that opens on Space or Enter.
     expect(await reachableByKeyboard()).toEqual([
       'summary "Notices"',
       'button "Close"',
+      'button "Read again"',
       'a "Discussions"',
       'a "report a bug"',
       'a "how to get help"',

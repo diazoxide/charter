@@ -96,7 +96,7 @@ import {
   type TaskEndWay,
 } from "./actions";
 import { yourEditor } from "./yourEditor";
-import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
+import { OPEN_SAVING, usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
 import { HARNESS_SETUP, type HarnessSetupAsk } from "./harnessSetup";
 import { curationSubjects, useCurations } from "./curations";
 import { LiveDialog, LiveMark } from "./LiveDialog";
@@ -3218,6 +3218,16 @@ export const PlaneView = memo(function PlaneView({
     savingHandled.current = savingAsked;
     showView(SAVING_VIEW, SAVING_TITLE);
   }, [savingAsked, showView]);
+
+  /** The same tab, asked by a dialog of this project (`saving.askSavingTab`, #1296). */
+  useEffect(() => {
+    const asked = (event: Event) => {
+      if ((event as CustomEvent<{ plane: string }>).detail.plane !== plane) return;
+      showView(SAVING_VIEW, SAVING_TITLE);
+    };
+    window.addEventListener(OPEN_SAVING, asked);
+    return () => window.removeEventListener(OPEN_SAVING, asked);
+  }, [plane, showView]);
 
   /** Settings at a workspace's level (SE-20; charter-app#280), on that workspace's strip: what
    *  its menu's and the palette's Workspace settings… open. */

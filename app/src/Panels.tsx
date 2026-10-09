@@ -96,7 +96,7 @@ export function Panels({
   onShowRow: (row: string | undefined) => void;
   /** The plane's vaults, drawn under the workspace's panels (`useVaults`, which the window
    *  holds). A vault is the plane's, so they are drawn with no workspace focused too. */
-  vaults?: Pick<VaultsSaid, "vaults" | "trouble">;
+  vaults?: Pick<VaultsSaid, "vaults" | "trouble" | "reload">;
   /**
    * Record a todo in the named workspace, answering the core's refusal or `undefined` (SI-3).
    * The workspace is named on every call, never implied: the box says which workspace it
