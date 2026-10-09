@@ -622,6 +622,25 @@ fn a_reflog_whose_first_line_is_not_a_creation_says_nothing() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_a_reflogs_name_says_nothing_instead_of_holding_the_listing() {
+    // The clone's git directory is written by the git a chat runs: a FIFO planted where the
+    // reflog belongs would block a plain open for good, and every listing of branches with it.
+    let (_dir, common) = a_common_dir("chat-1", &reflog_line(1_700_000_000, "commit: work"));
+    let at = common.join("logs/refs/heads/chat-2");
+    let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&at))
+        .expect("mkfifo runs");
+    assert!(made.success(), "the test needs a fifo to plant");
+
+    let (say, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || say.send(branch_created(&common, "chat-2")));
+    let answered = heard
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("reading a fifo reflog must not block");
+    assert_eq!(answered, None);
+}
+
 #[test]
 fn a_clone_with_a_git_file_keeps_its_branches_in_the_common_dir_it_names() {
     let dir = tempfile::tempdir().unwrap();
