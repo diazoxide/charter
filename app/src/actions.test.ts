@@ -1,6 +1,7 @@
 import type { MemoryScope, RowAction } from "./bindings";
 import { DRAFT, memoryKey, memoryView, type MemoryRef } from "./memories";
 import { describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import {
   aim,
   catalogue,
@@ -57,6 +58,13 @@ import {
 import { ASK_LOCKED_ID, askId, askRows, inPalette } from "./actions";
 import { ANSWER_SAYS, BRIEF_SAYS, answerId, answerRows, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
+import {
+  SETTINGS_LINK,
+  forgetGroups,
+  settingsPlace,
+  useShownGroup,
+  type SettingsLinkAsk,
+} from "./settings/links";
 import {
   noTabs,
   openTab,
@@ -298,6 +306,14 @@ const run = (offers: readonly Offer[], id: string, hands: Doing) => {
   if (!offer) throw new Error(`no row called ${id}`);
   return perform(offer, hands);
 };
+
+/** The group shown at a Settings place, read the way a Settings tab reads it. */
+function shownAt(place: string): string | undefined {
+  const { result, unmount } = renderHook(() => useShownGroup(place));
+  const group = result.current?.group;
+  unmount();
+  return group;
+}
 
 describe("the one list of actions", () => {
   it("offers every verb the window has, on an empty window", () => {
@@ -588,6 +604,63 @@ describe("the one list of actions", () => {
       expect(row?.available).toBe(true);
       await run(offers, "settings.you", hands);
       expect(hands.calls).toEqual(["openYourSettings"]);
+    }
+  });
+
+  it("offers one row per Settings group, You's with no project open too (#1201)", async () => {
+    // You's groups are the machine's, so they are there with or without a project, as Your
+    // settings… is; with none, the group is shown at You's place and Your settings… opens it.
+    forgetGroups();
+    const alone = catalogue(now());
+    expect(
+      alone.filter((one) => one.id.startsWith("settings.group:")).map((one) => one.title),
+    ).toEqual([
+      "Your settings: Text",
+      "Your settings: Editor",
+      "Your settings: Chats list",
+      "Your settings: This machine",
+    ]);
+    const hands = doing();
+    await run(alone, "settings.group:you.editor", hands);
+    expect(hands.calls).toEqual(["openYourSettings"]);
+    expect(shownAt(settingsPlace("you"))).toBe("you.editor");
+  });
+
+  it("offers the project's groups and the focused workspace's, each a link into Settings (#1201)", async () => {
+    const offers = catalogue(now({ plane: "/p/one", focused: "web", workspaces: ["web", "api"] }));
+    const rows = offers.filter((one) => one.id.startsWith("settings.group:"));
+    expect(rows.map((one) => one.title)).toEqual(
+      expect.arrayContaining([
+        "Your settings: Text",
+        "Project settings: Saving",
+        "Project settings: Granted",
+        "Workspace settings: Repos",
+      ]),
+    );
+    // Only the focused workspace's: the other one is a focus away.
+    expect(rows.filter((one) => one.title.startsWith("Workspace settings:"))).toHaveLength(6);
+    expect(by(offers, "settings.group:workspace.repos:web")?.note).toBe(
+      "web: Settings at its level, at Repos.",
+    );
+    expect(rows.every((one) => one.available)).toBe(true);
+
+    const asked: SettingsLinkAsk[] = [];
+    const hear = (event: Event) => asked.push((event as CustomEvent<SettingsLinkAsk>).detail);
+    window.addEventListener(SETTINGS_LINK, hear);
+    try {
+      const hands = doing();
+      await run(offers, "settings.group:project.saving", hands);
+      await run(offers, "settings.group:workspace.repos:web", hands);
+      await run(offers, "settings.group:you.text", hands);
+      // Every one through the window's link, which brings the tab forward and the keyboard in.
+      expect(hands.calls).toEqual([]);
+      expect(asked).toEqual([
+        { plane: "/p/one", link: { group: "project.saving" } },
+        { plane: "/p/one", link: { group: "workspace.repos", workspace: "web" } },
+        { plane: "/p/one", link: { group: "you.text" } },
+      ]);
+    } finally {
+      window.removeEventListener(SETTINGS_LINK, hear);
     }
   });
 
@@ -2100,8 +2173,10 @@ describe("the palette at fifty chats", () => {
     // its own chat. Four rows, however many tabs and tasks there are.
     // 657 since #1495: Activity, one row per chat.
     // 658 since #1137: Search in files, one row.
+    // 679 since #1201: a row per Settings group — You's 4, the project's 11 and the focused
+    // workspace's 6. A fixed number, however many workspaces there are.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(658);
+    expect(offers).toHaveLength(679);
   });
 
   /**
