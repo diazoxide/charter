@@ -212,8 +212,8 @@ mod listed {
         if !in_child() {
             return;
         }
-        // The forge work a run does with no account: an auth check and a listing through the
-        // CLI, and a listing through the native client. The updater's own check is the app's,
+        // The forge work a run does with no account: an auth check and a listing, both through
+        // the CLI (`gh`), as the two lines below expect. The updater's own check is the app's,
         // and `updates::tests::the_real_check_lists_its_read_in_the_network_log` drives it.
         let scene = Scene::new("netlog-run.example");
         scene.answers(
