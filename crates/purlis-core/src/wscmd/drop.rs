@@ -120,7 +120,10 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
 ///
 /// **A clone is refused, never deleted here.** A repo that is cloned goes through
 /// [`drop_repo`], whose work-at-risk and worktree refusals are the reason it exists; a second
-/// way to the same row that skipped them would be a way round them.
+/// way to the same row that skipped them would be a way round them. **And so is anything else
+/// at the repo's path** (#1249 U1): a folder whose `.git` is not a real one, a plain folder, a
+/// file or a link is not a clone, but dropping the row would leave it there unnamed, so the
+/// refusal says what is there and nothing is written.
 ///
 /// **The operator asked for this write**, so a manifest a hand wrote is written too, as the
 /// Workspace settings' save writes one: without charter's stamp, so it stays the hand's. One
@@ -133,9 +136,9 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
         say(Say::Fail(why));
         1
     };
-    if wscmd::workspace_dir(root, ws).is_none() {
+    let Some(dir) = wscmd::workspace_dir(root, ws) else {
         return fail(format!("invalid workspace name '{ws}'"));
-    }
+    };
     if !wscmd::workspace_dir_exists(root, ws) {
         return fail(format!("no workspace '{ws}'"));
     }
@@ -157,6 +160,14 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
         return fail(format!(
             "'{repo}' is cloned in workspace '{ws}' — remove the clone instead, which checks \
              it holds no work first."
+        ));
+    }
+    // Not a clone is not nothing there (#1249 U1): a folder whose `.git` is a link, or a plain
+    // folder, is not a clone either, and dropping the row would leave it behind unnamed.
+    if let Some(what) = something_at(&dir.join(repo)) {
+        return fail(format!(
+            "workspaces/{ws}/{repo} is {what}, not a clone, so '{repo}' was left in workspace \
+             '{ws}'. Move or remove it first."
         ));
     }
     let workspace = match crate::workspaces::Plane::open(root).workspace(ws) {
@@ -191,6 +202,26 @@ pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
         "Removed '{repo}' from workspace '{ws}'. Nothing was deleted: it was not cloned here."
     )));
     0
+}
+
+/// What is at `path`, in a sentence's words, or `None` when nothing is. Looked at without
+/// following a link, and a look the filesystem refused is something there too: what cannot be
+/// seen is never taken for nothing.
+fn something_at(path: &Path) -> Option<&'static str> {
+    let kind = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type(),
+        Err(e) if crate::memstore::is_absent(&e) => return None,
+        Err(_) => return Some("something purlis could not look at"),
+    };
+    Some(if kind.is_symlink() {
+        "a link"
+    } else if kind.is_dir() {
+        "a folder"
+    } else if kind.is_file() {
+        "a file"
+    } else {
+        "something other than a folder"
+    })
 }
 
 /// Drop `repo`'s row from a manifest charter wrote. One the operator wrote is left as it is,
@@ -437,6 +468,48 @@ mod membership {
         });
         assert_eq!(done.code, 2, "{said:?}");
         assert!(clone.join("README.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anything_at_the_repos_path_is_refused_and_named_and_the_row_stays() {
+        type Plant = fn(&Path);
+        let plant: [(&str, Plant); 4] = [
+            ("a folder", |at| {
+                std::fs::create_dir_all(at).unwrap();
+                std::fs::write(at.join("notes.txt"), "mine\n").unwrap();
+            }),
+            ("a folder", |at| {
+                std::fs::create_dir_all(at).unwrap();
+                std::os::unix::fs::symlink("../../elsewhere/.git", at.join(".git")).unwrap();
+            }),
+            ("a file", |at| std::fs::write(at, "mine\n").unwrap()),
+            ("a link", |at| {
+                std::os::unix::fs::symlink("../beta", at).unwrap()
+            }),
+        ];
+        for (what, plant) in plant {
+            let dir = plane();
+            let rows = serde_json::json!({"name": "alpha", "repos": [{"name": "svc"}]});
+            alpha(dir.path()).write_manifest(&rows).unwrap();
+            let at = dir.path().join("workspaces/alpha/svc");
+            plant(&at);
+
+            let (code, said) = run(dir.path(), "alpha", "svc");
+
+            assert_eq!(code, 1, "{what}: {said:?}");
+            assert!(
+                said.iter()
+                    .any(|line| line.contains(&format!("alpha/svc is {what}"))),
+                "{what}: {said:?}"
+            );
+            assert!(std::fs::symlink_metadata(&at).is_ok(), "{what}");
+            assert_eq!(
+                alpha(dir.path()).manifest().0.unwrap()["repos"],
+                rows["repos"],
+                "{what}"
+            );
+        }
     }
 
     #[test]
