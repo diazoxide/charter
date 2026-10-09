@@ -208,8 +208,13 @@ fn a_dispatch_the_person_allowed_that_does_not_start_is_its_asking_chat_s_failed
 
     // **The person pressed Allow and nothing started, so the chat that asked is flagged for
     // it** (#1491, V100-15): one failure, named by the record its row carries, so going to
-    // the item finds this row.
-    let failed = held.hooks().board().failed_tasks(steward);
+    // the item finds this row. The flag is raised on the thread that ended the record, a
+    // moment after the row can be read, so it is waited for as the row is.
+    let failed = eventually(|| {
+        let failed = held.hooks().board().failed_tasks(steward);
+        (!failed.is_empty()).then_some(failed)
+    })
+    .expect("its flag");
     assert_eq!(failed.len(), 1, "{failed:?}");
     assert_eq!(
         (
