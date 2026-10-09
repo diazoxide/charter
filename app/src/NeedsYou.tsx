@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import type { Offer } from "./actions";
 import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
-import { AwayRows, awayKey, type AwayItem } from "./AwayRefusals";
+import { AwayRows, GONE, awayKey, type AwayItem } from "./AwayRefusals";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
@@ -219,6 +219,33 @@ export type Quiet = {
   project: string;
 };
 
+/** What the list held when it was opened: what it draws, in that order, until it closes. */
+type Opened = {
+  items: readonly Needing[];
+  asks: readonly PermissionAsk[];
+  away: readonly AwayItem[];
+};
+
+const itemKey = (item: Needing) => `${item.plane}#${item.session}`;
+const askKey = (ask: PermissionAsk) => `${ask.plane}#${ask.ask}`;
+
+/**
+ * The rows `drawn` in their order, each as it is `now` where it is still listed, and as it was
+ * drawn — `gone` — where it is not. A row in `now` and not in `drawn` waits for the next
+ * opening.
+ */
+function inPlace<T>(
+  drawn: readonly T[],
+  now: readonly T[],
+  key: (row: T) => string,
+): { row: T; gone: boolean }[] {
+  const listed = new Map(now.map((row) => [key(row), row]));
+  return drawn.map((row) => {
+    const current = listed.get(key(row));
+    return current === undefined ? { row, gone: true } : { row: current, gone: false };
+  });
+}
+
 /** What the faint hand says, in its name and its tooltip. */
 function quietSaid(quiet: readonly Quiet[]): string {
   return quiet.length === 1
@@ -346,16 +373,17 @@ export function NeedsYouMenu({
         ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
         : `${count} things need you`;
   /**
-   * **The refusals as they were when the list was opened** (#1507). A refused chat can ask
-   * again at any moment, and the core then says the list anew; drawn at once, that would
-   * change what is under the pointer on a row whose last answer is a standing grant. So the
-   * rows drawn are the ones the list opened on, in their places, until it closes: one that
-   * went meanwhile is marked and its answers are off, and one that came is drawn at the next
-   * opening. The hand's number is not held still.
+   * **The rows as they were when the list was opened** (#1507, #1146). A chat can ask, or a
+   * refused chat ask again, at any moment, and the core then says the list anew; drawn at once,
+   * that would move what is under the pointer, and a one-click answer — a standing grant among
+   * them — would land on a row that moved. So the rows drawn are the ones the list opened on,
+   * in their places, until it closes: one that went meanwhile is marked and its answers are
+   * off, and one that came is drawn at the next opening. A row still listed is drawn as it is
+   * now. The hand's number is not held still.
    */
-  const [frozen, setFrozen] = useState<readonly AwayItem[] | null>(null);
+  const [frozen, setFrozen] = useState<Opened | null>(null);
   const show = (up: boolean) => {
-    setFrozen(up ? away : null);
+    setFrozen(up ? { items, asks, away } : null);
     onLook?.();
     setOpen(up);
   };
@@ -367,7 +395,7 @@ export function NeedsYouMenu({
   if (openAsked !== openedFor) {
     setOpenedFor(openAsked);
     if (!none) {
-      setFrozen(away);
+      setFrozen({ items, asks, away });
       setOpen(true);
     }
   }
@@ -377,8 +405,14 @@ export function NeedsYouMenu({
     lookedFor.current = openAsked;
     onLook?.();
   }, [openAsked, onLook]);
-  const drawnAway = open && frozen !== null ? frozen : away;
+  const heldRows = open ? frozen : null;
+  const drawnAway = heldRows?.away ?? away;
   const listedNow = new Set(away.map(awayKey));
+  // With nothing left to answer, nothing is held: the chats that went leave, and the keyboard
+  // goes back to the hand as it did before anything was held.
+  const heldChats = asked ? heldRows : null;
+  const drawnItems = inPlace(heldChats?.items ?? items, items, itemKey);
+  const drawnAsks = inPlace(heldChats?.asks ?? asks, asks, askKey);
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
     <span
@@ -431,15 +465,16 @@ export function NeedsYouMenu({
                 if (kept) event.preventDefault();
               }}
             >
-              {items.map((item) => {
+              {drawnItems.map(({ row: item, gone }) => {
                 const press = (offer: Offer) => onPress(item.plane, offer);
+                const go = gone ? undefined : item.go;
                 const back =
                   item.needed ?? backSaid(item.reported ?? [], item.stoppedBelow) ?? item.why;
                 const where = `${back ? `${item.name}: ${back}` : item.name} · ${item.workspace} · ${item.project}`;
                 return (
                   <Menu.Group
-                    key={`${item.plane}#${item.session}`}
-                    className="needs-you-row"
+                    key={itemKey(item)}
+                    className={`needs-you-row${gone ? " gone" : ""}`}
                     aria-label={item.name}
                   >
                     <Menu.Item
@@ -447,18 +482,20 @@ export function NeedsYouMenu({
                       aria-label={`Go to ${where}`}
                       // Not `disabled`: a disabled item is skipped by the arrows, and Delete on
                       // it is still the keyboard's way to its Ignore. It says it cannot go.
-                      aria-disabled={item.go?.available === false || undefined}
-                      aria-keyshortcuts="Delete"
-                      title={item.go?.available === false ? item.go.reason : `Go to ${where}`}
+                      aria-disabled={gone || go?.available === false || undefined}
+                      aria-keyshortcuts={gone ? undefined : "Delete"}
+                      title={gone ? GONE : go?.available === false ? go.reason : `Go to ${where}`}
                       onSelect={(event) => {
-                        if (!item.go?.available) {
+                        if (!go?.available) {
                           event.preventDefault();
                           return;
                         }
                         went.current = true;
-                        press(item.go);
+                        press(go);
                       }}
-                      onKeyDown={(event) => ignoreOnDelete(event, item.ignore, press)}
+                      onKeyDown={(event) =>
+                        ignoreOnDelete(event, gone ? undefined : item.ignore, press)
+                      }
                     >
                       {item.persona != null && (
                         <PersonaMark persona={item.persona} mark={item.mark} />
@@ -469,26 +506,28 @@ export function NeedsYouMenu({
                       </span>
                       <span className="needs-you-word">Go</span>
                     </Menu.Item>
-                    <Ignore offer={item.ignore} onPress={press} />
+                    <Ignore offer={gone ? undefined : item.ignore} onPress={press} />
                   </Menu.Group>
                 );
               })}
-              {asks.map((ask) => (
+              {drawnAsks.map(({ row: ask, gone }) => (
                 // **Answered here, not in the pane** (HP-6): each option the harness offered
                 // is an item, and choosing it sends that answer back on the chat's own hook.
                 // A press never moves the keyboard to the chat, which is the point.
                 <Menu.Group
-                  key={`${ask.plane}#${ask.ask}`}
-                  className="needs-you-row needs-you-permission"
+                  key={askKey(ask)}
+                  className={`needs-you-row needs-you-permission${gone ? " gone" : ""}`}
                   aria-label={`${ask.name}: ${ask.says} · ${ask.project}`}
                 >
                   <p className="needs-you-says">
                     <span className="needs-you-name">{`${ask.name}: ${ask.says}`}</span>
                     <span className="needs-you-where">{ask.project}</span>
                   </p>
+                  {gone && <p className="needs-you-says needs-you-allows">{GONE}</p>}
                   {ask.options.map((option) => (
                     <Menu.Item
                       key={option.id}
+                      disabled={gone}
                       className={`more-tab needs-you-answer${option.allows ? " allows" : ""}`}
                       aria-label={`${option.label}: ${ask.name}, ${ask.says}`}
                       onSelect={() => onAnswer?.(ask, option.id)}
@@ -499,6 +538,7 @@ export function NeedsYouMenu({
                   {/* The core offers Allow only where the line above IS the whole action
                       (`hooked::shown_in_full`); otherwise the pane shows it whole. */}
                   <Menu.Item
+                    disabled={gone}
                     className="more-tab needs-you-open"
                     aria-label={`Open ${ask.name} in its pane`}
                     onSelect={() => {
