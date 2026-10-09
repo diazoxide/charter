@@ -152,6 +152,10 @@ pub enum TurnFailed {
     Gone,
     #[error("the agent refused the prompt: {0}")]
     Refused(String),
+    /// Refused before it was sent: written out, it would not fit in what purlis holds for the
+    /// agent to read ([`MOST_UNWRITTEN_BYTES`]). The chat goes on.
+    #[error("the prompt is longer than purlis sends to an agent, 8 MiB")]
+    TooLong,
 }
 
 /// Why a chat did not start at level 3. Each says so in a sentence, and the chat starts at its
@@ -229,6 +233,40 @@ pub const MOST_OPEN_ASKS: usize = 32;
 /// sends, well-formed or not, can earn an answer, and an agent that stops reading its stdin lets
 /// those answers pile up; past this the chat ends rather than hold them.
 pub const MOST_UNWRITTEN_BYTES: usize = 8 * 1024 * 1024;
+
+/// What a `session/prompt` line carries besides its params: `jsonrpc`, `id` and `method`, with
+/// room to spare.
+const PROMPT_ENVELOPE_BYTES: usize = 256;
+
+/// The `session/prompt` request for `text`, or [`TurnFailed::TooLong`] when the line it is
+/// written in would be past [`MOST_UNWRITTEN_BYTES`] on its own. Sent, such a line would close
+/// the agent's stdin and end the chat; refused here, the chat goes on (#1117).
+fn prompt_request(session: &SessionId, text: &str) -> Result<PromptRequest, TurnFailed> {
+    let request = PromptRequest::new(
+        session.clone(),
+        vec![ContentBlock::Text(TextContent::new(text))],
+    );
+    let mut written = Counted(0);
+    serde_json::to_writer(&mut written, &request).map_err(|_| TurnFailed::TooLong)?;
+    if written.0 + PROMPT_ENVELOPE_BYTES > MOST_UNWRITTEN_BYTES {
+        return Err(TurnFailed::TooLong);
+    }
+    Ok(request)
+}
+
+/// A writer that keeps only how many bytes went into it.
+struct Counted(usize);
+
+impl std::io::Write for Counted {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// The most text one permission request may carry: its command, title, options and the rest, as
 /// the agent sent them. A larger one is answered `cancelled` and never raised; it is not cut
@@ -1138,25 +1176,30 @@ async fn serve(
         };
         match command {
             Command::Prompt(text, reply) => {
+                let request = match prompt_request(session, &text) {
+                    Ok(request) => request,
+                    Err(refused) => {
+                        let _ = reply.send(Err(refused));
+                        continue;
+                    }
+                };
                 shared.emit(Event::Said(Said::Turn(Turn::Began)));
                 let turn_ended = Arc::clone(shared);
-                cx.send_request(PromptRequest::new(
-                    session.clone(),
-                    vec![ContentBlock::Text(TextContent::new(text))],
-                ))
-                .on_receiving_result(async move |result| {
-                    turn_ended.emit(Event::Said(Said::Turn(Turn::Ended)));
-                    let _ = reply.send(result.map(|response| stop(response.stop_reason)).map_err(
-                        |err| {
-                            if agent_client_protocol::is_incoming_transport_closed(&err) {
-                                TurnFailed::Gone
-                            } else {
-                                TurnFailed::Refused(err.to_string())
-                            }
-                        },
-                    ));
-                    Ok(())
-                })?;
+                cx.send_request(request)
+                    .on_receiving_result(async move |result| {
+                        turn_ended.emit(Event::Said(Said::Turn(Turn::Ended)));
+                        let _ =
+                            reply.send(result.map(|response| stop(response.stop_reason)).map_err(
+                                |err| {
+                                    if agent_client_protocol::is_incoming_transport_closed(&err) {
+                                        TurnFailed::Gone
+                                    } else {
+                                        TurnFailed::Refused(err.to_string())
+                                    }
+                                },
+                            ));
+                        Ok(())
+                    })?;
             }
             Command::Cancel => {
                 // The lock first and through to the last `cancelled`: an answer racing this
