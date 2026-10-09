@@ -2021,13 +2021,21 @@ fn dispatch_noting(
     // further than it carries a task. A handoff to the chat's own persona keeps its own rule
     // (it goes into a workspace that exists). Refused, the crossing is kept for the person to
     // read afterwards, as a refusal for lack of a grant is.
+    let to_another = pair.to.is_some() && pair.to != pair.asking;
     let crosses_into = match (&wanted.moved, &ground) {
         (None, Ground::Workspace { name, .. }) => Some(name.as_str()),
-        (Some(_), _) if pair.to.is_some() && pair.to != pair.asking => moves_into.as_deref(),
+        (Some(_), _) if to_another => moves_into.as_deref(),
         _ => None,
     };
+    // **A chat this app started with no sandbox is told that first** (#1543): it dispatches
+    // to no other persona whatever the grants say (`dispatchunattended`, said in the decision
+    // below), so the crossing's sentence, which says a grant naming the pair would carry it,
+    // would send it after a grant that carries nothing. The crossing rule still answers for
+    // its own persona, which needs no sandbox.
+    let unsandboxed_to_another = to_another && held.chats().confines_of(from).is_none();
     if let (Attendance::Unattended, By::Chat, Some(name)) = (attended, wanted.by, crosses_into)
         && workspace.as_deref() != Some(name)
+        && !unsandboxed_to_another
     {
         let standing = dispatchgrant::InForce::read(root, Vec::new());
         if let Some(refused) = dispatchplace::nobody_to_ask(
@@ -4125,17 +4133,15 @@ mod tests {
 
         // It stands at the project's root and the handoff moves the work into alpha as
         // another persona: a crossing, which a chat nobody is at makes only under a grant
-        // that names the pair (the train's review, M2). None does, and the chat runs with no
-        // sandbox, so nothing is kept for the person either.
+        // that names the pair (the train's review, M2). But this project has no sandbox, so
+        // the chat has neither prompts nor a sandbox, and that is what it is told (#1543): it
+        // hands off to no other persona whatever the grants say, and a grant naming the pair
+        // would not carry it. Nothing is kept for the person either.
         assert_eq!(
             said,
             Answer::No {
-                why: purlis_core::dispatchplace::Refused::NobodyToAsk {
-                    workspace: "alpha".to_owned(),
-                    asking: Some("steward".to_owned()),
-                    target: Some("devops".to_owned()),
-                }
-                .say()
+                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
+                    .say()
             }
         );
         let now = std::time::SystemTime::now()
@@ -8017,7 +8023,10 @@ mod tests {
                 "{place:?}: {own:?}"
             );
         }
-        // To another persona it is this rule that answers first, naming the pair.
+        // To another persona, a chat started with no sandbox, as one of a project with none
+        // is, is told that first (#1543): it dispatches to no other persona whatever the
+        // grants say, so the crossing's sentence, that a grant naming the pair would carry
+        // it, is not said. With a grant that stands for the pair the answer is the same.
         let across = |held: &Held| {
             dispatch_in(
                 held,
@@ -8028,30 +8037,16 @@ mod tests {
                 "workspace:beta",
             )
         };
-        let (said, _) = across(&held);
-        let no_grant = purlis_core::dispatchplace::Refused::NobodyToAsk {
-            workspace: "beta".to_owned(),
-            asking: Some("steward".to_owned()),
-            target: Some("devops".to_owned()),
-        }
-        .say();
-        assert_eq!(refused(&said), no_grant);
-        // With a grant that already stands for the pair, the person's on this machine, this
-        // rule lets it by. What an unattended dispatch to another persona needs besides is
-        // that rule's own to say (`dispatchunattended`): a chat started with no sandbox, as
-        // one of a project with none is, is refused there, in that rule's words.
+        let unsandboxed = Answer::No {
+            why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned()).say(),
+        };
+        let (said, told) = across(&held);
+        assert_eq!(said, unsandboxed);
+        assert!(told.is_none());
         purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
             .expect("the person allowed it on this machine");
         let (said, told) = across(&held);
-        // This project has no sandbox, so that rule is the one that answers now (D-T61-6):
-        // the crossing rule has let it by, and nothing starts.
-        assert_eq!(
-            said,
-            Answer::No {
-                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
-                    .say()
-            }
-        );
+        assert_eq!(said, unsandboxed);
         assert!(told.is_none());
     }
 
