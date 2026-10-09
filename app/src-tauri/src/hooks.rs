@@ -375,7 +375,12 @@ fn heard_block(
     let let_through = throttle
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .lets(block.chat, &block.sandbox_blocked, at.1);
+        .lets_on(
+            block.chat,
+            &block.sandbox_blocked,
+            block.target.as_deref(),
+            at.1,
+        );
     if !let_through {
         return;
     }
@@ -2237,6 +2242,21 @@ mod tests {
             (100, std::time::Instant::now()),
         );
         assert_eq!(*told.lock().unwrap(), vec![line.clone()]);
+        // Another host within the minute has its own Notice; the same one again does not.
+        let other = purlis_core::hookwire::SandboxBlocked {
+            target: Some("registry.example.com:443".to_owned()),
+            ..line.clone()
+        };
+        for again in [other.clone(), line.clone()] {
+            heard_block(
+                &root,
+                &throttle,
+                &slot,
+                again,
+                (101, std::time::Instant::now()),
+            );
+        }
+        assert_eq!(*told.lock().unwrap(), vec![line.clone(), other]);
         let said = blocked(&plane, &line);
         assert_eq!(said.session, 7);
         assert_eq!(said.offer, BlockOffer::Host);

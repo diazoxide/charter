@@ -53,7 +53,9 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   for this chat**, **Always allow** and **Keep blocked**. Before the exit status, purlis says on
   stderr that its sandbox refused that host and that it can be allowed on the tab. A grant
   reaches the next run once the chat is started again with it, which Allow does once the
-  chat's turn has ended. The host is never read from what the command printed.
+  chat's turn has ended. The host is never read from what the command printed. A refused host
+  that carries a value from the vault is never named or offered: purlis says only that one was
+  withheld. Another host refused within the minute gets its own Notice.
 
   **Which vaults a chat may use.** One the vault registry tags for the persona the chat was
   opened as, or one you allowed for that persona on this machine. A vault that is neither is

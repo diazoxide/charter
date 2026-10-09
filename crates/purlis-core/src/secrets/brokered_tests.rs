@@ -1696,6 +1696,27 @@ fn a_host_the_runs_sandbox_refused_raises_the_asking_chats_block_naming_it_whole
     assert!(!said.contains("does not allow"), "{said}");
 }
 
+/// A host the command names with a vault value in it is refused like any other, and is never
+/// named, told or offered: the note says only that one was withheld, in any case of the value.
+#[test]
+fn a_refused_host_carrying_a_vault_value_is_withheld_from_the_note_and_the_notice() {
+    for refused in [
+        "s3cret-value.tenant.example:443",
+        "api.S3CRET-VALUE.example:6443",
+    ] {
+        let project = project();
+        let mut want = wanted(project.path(), "team", sh("exit 1"));
+        want.env = vec!["X=TOKEN".into()];
+        let (frames, told) = served_refusing(&asker(project.path(), Some("devops")), want, refused);
+        assert_eq!(told, Vec::new(), "{refused}: no Notice names it");
+        let said = notes(&frames).join("\n");
+        assert!(!said.to_lowercase().contains(TOKEN), "{said}");
+        assert!(!said.contains("tenant"), "nothing of the host: {said}");
+        assert!(said.contains(WITHHELD_NOTE), "{said}");
+        assert_eq!(frames.last(), Some(&Frame::Exit(1)), "{frames:?}");
+    }
+}
+
 #[test]
 fn a_host_the_command_only_prints_is_never_told() {
     let project = project();
