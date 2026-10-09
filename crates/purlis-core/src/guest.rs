@@ -420,6 +420,88 @@ fn own_text(tree: &Path, rel: &str) -> Option<String> {
     Some(text)
 }
 
+/// The file, in the project's `<state>/app/`, that lists every mirrored text the project has
+/// offered a checkout ([`note_offered`]).
+const OFFERED: &str = "mirrors-offered.json";
+
+/// The most digests [`OFFERED`] keeps for one path, newest last: every edit of an agent is a
+/// new text, and a copy older than this many edits is left for the operator.
+const MOST_OFFERED: usize = 32;
+
+/// Where [`OFFERED`] is. Under the folder the sandbox denies every chat a write to
+/// (`<state>/app`, by each spelling of the state folder), and NOT the checkout's own record,
+/// which sits in the chat's own tree: a record a chat can write cannot be what proves a file
+/// is purlis's to delete.
+fn offered_path(plane: &Path) -> PathBuf {
+    names::state(plane).join("app").join(OFFERED)
+}
+
+/// What [`OFFERED`] holds: `{path: [digest, …]}` for the mirrored paths only. Absent,
+/// unreadable, behind a link, or not that shape is nothing offered, which withdraws nothing.
+fn read_offered(plane: &Path) -> BTreeMap<String, Vec<String>> {
+    crate::contain::read_text_no_link(plane, &offered_path(plane))
+        .map(|text| parse_offered(&text))
+        .unwrap_or_default()
+}
+
+fn parse_offered(text: &str) -> BTreeMap<String, Vec<String>> {
+    let Ok(serde_json::Value::Object(doc)) = serde_json::from_str::<serde_json::Value>(text) else {
+        return BTreeMap::new();
+    };
+    doc.into_iter()
+        .filter(|(rel, _)| layer::key_ok(rel) && mirrored_path(rel))
+        .filter_map(|(rel, digests)| {
+            let digests: Vec<String> = digests
+                .as_array()?
+                .iter()
+                .filter_map(|d| d.as_str().map(str::to_owned))
+                .collect();
+            Some((rel, digests))
+        })
+        .collect()
+}
+
+/// Note each mirrored text `want` offers in [`OFFERED`], so a copy of it can be withdrawn
+/// once the project stops having it (#1583). Written only when something is new, and under
+/// the folder's lock. A write that fails (a sandboxed caller, a read-only project) notes
+/// nothing, and what is not noted is never withdrawn: the safe direction.
+fn note_offered(plane: &Path, want: &BTreeMap<String, String>) {
+    let offers: Vec<(&String, String)> = want
+        .iter()
+        .filter(|(rel, _)| mirrored_path(rel))
+        .map(|(rel, text)| (rel, digest(text)))
+        .collect();
+    let known = read_offered(plane);
+    if offers
+        .iter()
+        .all(|(rel, d)| known.get(rel.as_str()).is_some_and(|all| all.contains(d)))
+    {
+        return;
+    }
+    let path = offered_path(plane);
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if crate::rewrite::create_dir_all(dir).is_err() {
+        return;
+    }
+    let _ = crate::rewrite::update(dir, &path, |now| {
+        let mut all = now.map(parse_offered).unwrap_or_default();
+        for (rel, d) in &offers {
+            let digests = all.entry((*rel).clone()).or_default();
+            if !digests.contains(d) {
+                digests.push(d.clone());
+            }
+            let over = digests.len().saturating_sub(MOST_OFFERED);
+            digests.drain(..over);
+        }
+        Ok(Some(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&all).unwrap_or_else(|_| "{}".to_owned())
+        )))
+    });
+}
+
 /// The mirrored agents and skills purlis wrote in `tree` that the project no longer has
 /// (#1583): what [`withdraw_mirrors`] takes out.
 ///
@@ -436,6 +518,10 @@ fn own_text(tree: &Path, rel: &str) -> Option<String> {
 /// - **the copy is still exactly as written.** Its text is read with no link on the way, the
 ///   file itself included, and must match a digest the record holds. A copy edited since is
 ///   the operator's.
+/// - **the project once offered that very text at that path** (`offered`, [`OFFERED`]). The
+///   record lives in the checkout, where a chat can write it, so it alone proves nothing: a
+///   chat that cannot touch `.claude/agents` could otherwise name the operator's own file in
+///   it, with that file's digest, and have purlis delete it.
 /// - **git does not track it** (`tracked`). A copy somebody committed is that repository's
 ///   content now, and removing it would change a tracked file.
 fn retired_mirrors(
@@ -443,14 +529,22 @@ fn retired_mirrors(
     tree: &Path,
     want: &BTreeMap<String, String>,
     record: &layer::Record,
+    offered: &BTreeMap<String, Vec<String>>,
     tracked: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
     record
         .paths()
         .filter(|rel| mirrored_path(rel) && !want.contains_key(rel.as_str()))
+        .filter(|rel| offered.contains_key(rel.as_str()))
         .filter(|rel| crate::worktree::listing::exists(&plane.join(rel.as_str())) == Some(false))
         .filter(|rel| {
-            own_text(tree, rel).is_some_and(|text| record.recorded(rel).contains(&digest(&text)))
+            own_text(tree, rel).is_some_and(|text| {
+                let d = digest(&text);
+                record.recorded(rel).contains(&d)
+                    && offered
+                        .get(rel.as_str())
+                        .is_some_and(|all| all.contains(&d))
+            })
         })
         .filter(|rel| !tracked(rel))
         .cloned()
@@ -609,6 +703,8 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     // open a block: a wire asks the exclude's question twice over by construction.
     let _answers = crate::worktree::listing::answers();
     let want = want(plane);
+    // Before anything is written: a copy is withdrawn later only if this says it was offered.
+    note_offered(plane, &want);
     if want.is_empty() && !names_a_mirror(&layer::read_record(tree)) {
         // Nothing to write, nothing to hide and nothing to withdraw. Not a blocked layer and
         // not an incomplete one: a plane with no settings and no agents has no layer to carry.
@@ -822,7 +918,10 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         // What the project stopped mirroring goes after the writes and before the record is
         // published, so the publish below carries both, and the second pass takes the lines
         // of what went (#1583).
-        let retired = retired_mirrors(plane, tree, &want, &marker, &|rel| tracked(tree, rel));
+        let offered = read_offered(plane);
+        let retired = retired_mirrors(plane, tree, &want, &marker, &offered, &|rel| {
+            tracked(tree, rel)
+        });
         rows.extend(withdraw_mirrors(plane, tree, &want, &mut marker, retired));
         if marker != published {
             // Only when something changed: rewriting the record on every launch would move a
@@ -3118,12 +3217,96 @@ mod tests {
         false
     }
 
+    /// Every text `record` names, as the project's offers: the record purlis itself wrote.
+    fn offered_as(record: &layer::Record) -> BTreeMap<String, Vec<String>> {
+        record
+            .paths()
+            .map(|rel| (rel.clone(), record.recorded(rel).to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn a_record_naming_a_file_the_project_never_offered_withdraws_nothing() {
+        // The record is in the checkout, where a chat can write it: one naming the operator's
+        // own agent, with that file's digest, must not get purlis to delete it.
+        let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# mine\n");
+        let want = BTreeMap::new();
+
+        let retired = retired_mirrors(&plane, &tree, &want, &record, &BTreeMap::new(), &untracked);
+        assert!(retired.is_empty(), "{retired:?}");
+
+        // Offered at that path, but another text: still not this file.
+        let other = BTreeMap::from([(AGENT.to_owned(), vec![digest("# ops\n")])]);
+        assert!(retired_mirrors(&plane, &tree, &want, &record, &other, &untracked).is_empty());
+        withdraw_mirrors(&plane, &tree, &want, &mut record, Vec::new());
+        assert_eq!(
+            std::fs::read_to_string(tree.join(AGENT)).unwrap(),
+            "# mine\n"
+        );
+    }
+
+    #[test]
+    fn what_the_project_offers_is_noted_once_and_kept_to_the_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = dir.path();
+        let want = |text: &str| {
+            BTreeMap::from([
+                (AGENT.to_owned(), text.to_owned()),
+                (SETTINGS.to_owned(), "{}\n".to_owned()),
+            ])
+        };
+
+        note_offered(plane, &want("# ops\n"));
+        let noted = read_offered(plane);
+        assert_eq!(
+            noted,
+            BTreeMap::from([(AGENT.to_owned(), vec![digest("# ops\n")])]),
+            "the generated settings are no mirror and are not noted"
+        );
+        let written = std::fs::metadata(offered_path(plane))
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        note_offered(plane, &want("# ops\n"));
+        assert_eq!(
+            std::fs::metadata(offered_path(plane))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            written,
+            "nothing new, nothing written"
+        );
+
+        for n in 0..MOST_OFFERED + 3 {
+            note_offered(plane, &want(&format!("# ops {n}\n")));
+        }
+        let kept = &read_offered(plane)[AGENT];
+        assert_eq!(kept.len(), MOST_OFFERED);
+        assert_eq!(
+            kept.last(),
+            Some(&digest(&format!("# ops {}\n", MOST_OFFERED + 2)))
+        );
+        assert!(!kept.contains(&digest("# ops\n")), "the oldest went first");
+
+        // A file of another shape, or naming what is no mirror, offers nothing.
+        assert!(parse_offered("[1]").is_empty());
+        assert!(parse_offered(r#"{"../x": ["a"], ".claude/settings.json": ["a"]}"#).is_empty());
+    }
+
     #[test]
     fn a_mirror_the_project_no_longer_has_is_withdrawn_with_its_entry_and_its_empty_folders() {
         let (_dir, plane, tree, mut record) = mirrored_once(AGENT, "# ops\n");
         let want = BTreeMap::new();
 
-        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        let retired = retired_mirrors(
+            &plane,
+            &tree,
+            &want,
+            &record,
+            &offered_as(&record),
+            &untracked,
+        );
         assert_eq!(retired, [AGENT.to_owned()]);
         let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
 
@@ -3148,7 +3331,14 @@ mod tests {
         std::fs::write(tree.join(".claude/agents/mine.md"), "# mine\n").unwrap();
         let want = BTreeMap::new();
 
-        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        let retired = retired_mirrors(
+            &plane,
+            &tree,
+            &want,
+            &record,
+            &offered_as(&record),
+            &untracked,
+        );
         withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
 
         assert!(!tree.join(AGENT).exists());
@@ -3164,7 +3354,14 @@ mod tests {
         std::fs::write(tree.join(AGENT), "# ops, with my notes\n").unwrap();
         let want = BTreeMap::new();
 
-        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        let retired = retired_mirrors(
+            &plane,
+            &tree,
+            &want,
+            &record,
+            &offered_as(&record),
+            &untracked,
+        );
         assert!(retired.is_empty(), "{retired:?}");
         withdraw_mirrors(&plane, &tree, &want, &mut record, retired);
 
@@ -3180,10 +3377,30 @@ mod tests {
         let (_dir, plane, tree, record) = mirrored_once(AGENT, "# ops\n");
 
         let tracked = |rel: &str| rel == AGENT;
-        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &tracked).is_empty());
+        assert!(
+            retired_mirrors(
+                &plane,
+                &tree,
+                &BTreeMap::new(),
+                &record,
+                &offered_as(&record),
+                &tracked
+            )
+            .is_empty()
+        );
 
         let want = BTreeMap::from([(AGENT.to_owned(), "# ops, newer\n".to_owned())]);
-        assert!(retired_mirrors(&plane, &tree, &want, &record, &untracked).is_empty());
+        assert!(
+            retired_mirrors(
+                &plane,
+                &tree,
+                &want,
+                &record,
+                &offered_as(&record),
+                &untracked
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -3195,14 +3412,34 @@ mod tests {
         std::fs::write(plane.join(AGENT), [0xff_u8, 0xfe, 0x00]).unwrap();
         assert!(!want(&plane).contains_key(AGENT));
 
-        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &untracked).is_empty());
+        assert!(
+            retired_mirrors(
+                &plane,
+                &tree,
+                &BTreeMap::new(),
+                &record,
+                &offered_as(&record),
+                &untracked
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn the_generated_settings_are_not_a_mirror_and_are_never_withdrawn_here() {
         let (_dir, plane, tree, record) = mirrored_once(SETTINGS, "{}\n");
 
-        assert!(retired_mirrors(&plane, &tree, &BTreeMap::new(), &record, &untracked).is_empty());
+        assert!(
+            retired_mirrors(
+                &plane,
+                &tree,
+                &BTreeMap::new(),
+                &record,
+                &offered_as(&record),
+                &untracked
+            )
+            .is_empty()
+        );
         assert!(!names_a_mirror(&record));
         assert!(names_a_mirror(&{
             let mut r = layer::Record::new();
@@ -3226,7 +3463,14 @@ mod tests {
         std::os::unix::fs::symlink(&outside, tree.join(".claude")).unwrap();
         let want = BTreeMap::new();
 
-        let retired = retired_mirrors(&plane, &tree, &want, &record, &untracked);
+        let retired = retired_mirrors(
+            &plane,
+            &tree,
+            &want,
+            &record,
+            &offered_as(&record),
+            &untracked,
+        );
         assert!(retired.is_empty(), "{retired:?}");
         // And the unlink asks again, whatever it is handed.
         let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, vec![AGENT.to_owned()]);
@@ -3236,7 +3480,17 @@ mod tests {
         std::fs::remove_file(tree.join(".claude")).unwrap();
         std::fs::create_dir_all(tree.join(".claude/agents")).unwrap();
         std::os::unix::fs::symlink(outside.join("agents/ops.md"), tree.join(AGENT)).unwrap();
-        assert!(retired_mirrors(&plane, &tree, &want, &record, &untracked).is_empty());
+        assert!(
+            retired_mirrors(
+                &plane,
+                &tree,
+                &want,
+                &record,
+                &offered_as(&record),
+                &untracked
+            )
+            .is_empty()
+        );
         let rows = withdraw_mirrors(&plane, &tree, &want, &mut record, vec![AGENT.to_owned()]);
         assert!(rows.is_empty(), "{rows:?}");
         assert!(
