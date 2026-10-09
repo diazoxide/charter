@@ -21,12 +21,15 @@
  * there, in both tabs (#1189): it opens the file's comparison in a view tab of its own
  * (`PieceDiff.tsx`).
  *
+ * **Copy path** and **Reveal** (#1143) are beside the file in both, as a tree row's menu has
+ * them (FM-10): the core places the file, as it does for the row.
+ *
  * **Open in your editor** (RC-20, ADR 0081 §3) is beside the file in both: the file and the
  * line the cursor is on go to the editor chosen in Settings. The window sends the
  * branch, the path, the line and which editor; the core checks the path as it checks a read,
  * and builds the URL or the program's arguments itself.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import { FileText, LoaderCircle } from "lucide-react";
@@ -40,7 +43,7 @@ import {
   pieceFileView,
   type Place,
 } from "../pieceViews";
-import type { Offer } from "../actions";
+import { REVEAL_SAID, type Offer } from "../actions";
 import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
@@ -145,6 +148,18 @@ function useCursorLine(path: string | undefined, start?: number) {
 }
 
 /**
+ * What a header's button answered — the core's refusal, or what was done — said under the
+ * buttons as a status: *Open in your editor*'s, *Copy path*'s and Reveal's.
+ */
+function Said({ children }: { children: ReactNode }) {
+  return (
+    <p className="piece-files-trouble" role="status">
+      {children}
+    </p>
+  );
+}
+
+/**
  * *Open in your editor*: the button, and the sentence when nothing opened. With no editor
  * chosen it asks for one rather than guess.
  */
@@ -185,11 +200,57 @@ export function ToYourEditor({
       <button type="button" tabIndex={0} onClick={open}>
         {`Open in your editor at line ${line}`}
       </button>
-      {trouble !== undefined && (
-        <p className="piece-files-trouble" role="status">
-          {trouble}
-        </p>
-      )}
+      {trouble !== undefined && <Said>{trouble}</Said>}
+    </>
+  );
+}
+
+/**
+ * **Copy path and Reveal** (#1143): the file's path in the branch copied, or the file shown in
+ * the platform's file manager — the core's `copy_branch_path` and `reveal_branch_path`, the same
+ * commands a tree row's menu runs (FM-10). The core places the file and refuses what it will not
+ * place; the sentence it answers is said under the buttons, as *Open in your editor*'s is.
+ */
+function CopyAndReveal({ plane, cut, path }: { plane: PlaneId; cut: Place; path: string }) {
+  // What was said, for the file it was said about: another file says nothing until it is tried.
+  const [said, setSaid] = useState<{ about: string; sentence: string }>();
+  const sentence = said?.about === path ? said.sentence : undefined;
+  const answered = (
+    asked: Promise<{ status: "ok" } | { status: "error"; error: string }>,
+    done?: string,
+  ) => {
+    setSaid(undefined);
+    void asked
+      .then((answer) => {
+        const told = answer.status === "error" ? answer.error : done;
+        if (told !== undefined) setSaid({ about: path, sentence: told });
+      })
+      .catch((err: unknown) => setSaid({ about: path, sentence: String(err) }));
+  };
+  return (
+    <>
+      <button
+        type="button"
+        tabIndex={0}
+        onClick={() =>
+          answered(
+            commands.copyBranchPath(plane, cut.workspace, cut.repo, cut.piece, path, false),
+            `Copied the path of ${path}.`,
+          )
+        }
+      >
+        Copy path
+      </button>
+      <button
+        type="button"
+        tabIndex={0}
+        onClick={() =>
+          answered(commands.revealBranchPath(plane, cut.workspace, cut.repo, cut.piece, path))
+        }
+      >
+        {REVEAL_SAID}
+      </button>
+      {sentence !== undefined && <Said>{sentence}</Said>}
     </>
   );
 }
@@ -394,6 +455,7 @@ export function PieceFileTab({
         <span className="piece-files-actions">
           <SourceToggle path={path} read={read} source={source} onSource={setSource} />
           <ToYourEditor plane={plane} cut={cut} path={path} line={at.line} />
+          <CopyAndReveal plane={plane} cut={cut} path={path} />
           {changed !== undefined && onOpenView !== undefined && (
             <ShowWhatChanged cut={cut} path={path} onOpenView={onOpenView} />
           )}
@@ -558,6 +620,7 @@ export function PieceFilesTab({
                     onSource={(on) => setSource({ path: picked, on })}
                   />
                   <ToYourEditor plane={plane} cut={cut} path={picked} line={at.line} />
+                  <CopyAndReveal plane={plane} cut={cut} path={picked} />
                   <button
                     type="button"
                     tabIndex={0}
