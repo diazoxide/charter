@@ -52,7 +52,7 @@ const BOTH: Both = {
 };
 
 const OWN_WHY =
-  "charter@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
+  "purlis@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
 const OLD_WHY =
   "charter@charter is always off: it is the Python charter's plugin, and a chat the app starts carrying it too would have two sets of hooks and two handoff skills";
 
@@ -81,7 +81,7 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [],
       },
       {
-        id: "charter@inline",
+        id: "purlis@inline",
         name: "charter",
         origin: "",
         state: "on",
@@ -91,7 +91,7 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [
           {
             file: "charter.toml",
-            why: `charter.toml sets harness_plugins.claude."charter@inline" to false, and ${OWN_WHY}`,
+            why: `charter.toml sets harness_plugins.claude."purlis@inline" to false, and ${OWN_WHY}`,
           },
         ],
       },
@@ -229,12 +229,12 @@ describe("the Plugins group (charter-app#274)", () => {
     core();
     const group = await drawn();
 
-    expect(within(group).queryByLabelText("Claude Code: charter@inline")).toBeNull();
+    expect(within(group).queryByLabelText("Claude Code: purlis@inline")).toBeNull();
     expect(within(group).queryByLabelText("Claude Code: charter@charter")).toBeNull();
     expect(group).toHaveTextContent(OWN_WHY);
     expect(group).toHaveTextContent(OLD_WHY);
     // The value a file tried to set, said with the file that set it.
-    expect(group).toHaveTextContent('sets harness_plugins.claude."charter@inline" to false');
+    expect(group).toHaveTextContent('sets harness_plugins.claude."purlis@inline" to false');
   });
 
   it("says a harness that cannot apply is not supported yet, and offers no control for it", async () => {
