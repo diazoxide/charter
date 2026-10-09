@@ -1006,8 +1006,17 @@ task reopened as an ordinary chat names no asking chat and starts a new chain.
   above, and refuses as if any persona were: every dispatch to another persona, and one to
   its own where the person said never to any persona dispatching there. The refusal says that
   the chat's chain began under an older version, which kept no record of it. Such a chat's
-  tasks keep no chain either, and are held the same way. Recovering such a chain from the
-  dispatch records first is #1548.
+  tasks keep no chain either, and are held the same way.
+- **Before refusing, the chain is read from the dispatch records (#1548).** Who dispatched
+  whom, by each chat's id and never its number, and the persona each ran as: the app's own
+  records, held to what it writes. It is taken only where it is whole: it reaches the chat the
+  person started or one whose record keeps its chain, or, where the records stop, it is as
+  deep as the asking chat's own record says. Records that disagree, one the app would not have
+  written, a loop, and a record written before depths were kept with records that just stop
+  each leave the chain unread, refused as above.
+- **An older ancestry from before the depth key keeps its whole chain (#1548).** Where the
+  chats still open show a chain longer than the asking chat's recorded depth, the depth is
+  raised to it (deeper is the safe side), and a chat it starts keeps the whole chain.
 - **The asking chat is read under the lock the decision is made under.** One that has closed
   or ended by then is refused, so a chain read short is never written into a new chat.
 - A kept chain whose length is not the record's depth, or that names what cannot be a

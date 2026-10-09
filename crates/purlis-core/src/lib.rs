@@ -32,6 +32,7 @@ pub mod diffscan;
 pub mod dispatch;
 pub mod dispatcharrival;
 pub mod dispatchaway;
+pub mod dispatchchain;
 pub mod dispatchdecision;
 pub mod dispatchdormant;
 pub mod dispatched;

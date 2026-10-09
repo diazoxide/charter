@@ -383,7 +383,7 @@ pub fn asked_by_a_chat(
         pair.asking.as_deref(),
         pair.to.as_deref(),
     );
-    let lineage = lineage_counting(
+    let mut lineage = lineage_counting(
         number,
         moment.open,
         moment.default,
@@ -391,6 +391,21 @@ pub fn asked_by_a_chat(
         &pair,
         moment.counted,
     );
+    // **An older chain the chats still open do not show whole** (#1548): read from the
+    // dispatch records before it is refused. Only a chain they show whole is taken, and the
+    // depth is raised to it where it is longer ([`crate::dispatchchain`]).
+    if lineage.chain_unread
+        && let Some(chain) = crate::dispatchchain::recovered(
+            number,
+            moment.open,
+            moment.default,
+            &crate::dispatchrecord::list(root),
+        )
+    {
+        lineage.depth = lineage.depth.max(chain_depth(&chain));
+        lineage.chain = chain;
+        lineage.chain_unread = false;
+    }
     let locks = crate::sandbox::policy::Locks::of(root);
     // **Where the task works** (#1505): the workspace the dispatch names or moves into, else
     // the asking chat's own. Said here, from the app's record of both, so a grant limited to
@@ -728,6 +743,13 @@ pub fn lineage_counting(
         }
         (Some(None), None) => (walked, short),
     };
+    // **As deep as the chain above it** (#1548): a record written before depths were kept
+    // holds none, and the walk shows how many are above it. Deeper is the safe side, and a
+    // new chat then keeps the whole chain, one persona for each dispatch above it.
+    let depth = record(asking)
+        .and_then(|chat| chat.from.as_ref())
+        .map_or(0, |from| from.depth)
+        .max(chain_depth(&chain));
     // Every open chat of the same root, then down from the top: every open chat that descends
     // from it, itself included.
     let root = root_of(asking, open);
@@ -810,9 +832,7 @@ pub fn lineage_counting(
         .filter(|number| owes_work(*number))
         .count();
     Lineage {
-        depth: record(asking)
-            .and_then(|chat| chat.from.as_ref())
-            .map_or(0, |from| from.depth),
+        depth,
         chain,
         chain_unread,
         running: counted(running),
@@ -820,6 +840,11 @@ pub fn lineage_counting(
         as_target: counted(as_target),
         by_asking: counted(by_asking),
     }
+}
+
+/// How many dispatches a chain of personas above a chat stands for: one each.
+fn chain_depth(chain: &[Option<String>]) -> u32 {
+    u32::try_from(chain.len()).unwrap_or(u32::MAX)
 }
 
 /// Where a persona chat stands, as its asking chat sees it (#1443): what a chat's own list of
@@ -3055,6 +3080,185 @@ mod tests {
             )
             .decision,
             Decision::Start
+        );
+    }
+
+    // ----- an older chain, read from the dispatch records (#1548) ---------------------------
+
+    const STEWARD_ID: &str = "01K6CHA1N000000000000000S1";
+    const DEVOPS_ID: &str = "01K6CHA1N000000000000000D2";
+    const QA_ID: &str = "01K6CHA1N000000000000000Q3";
+
+    /// [`asked_in`], in the project at `root`.
+    fn asked_at(
+        root: &std::path::Path,
+        number: u32,
+        open: &[(u32, &Chat)],
+        named: Option<&str>,
+        grants: &InForce,
+    ) -> Asked {
+        asked_by_a_chat(
+            root,
+            number,
+            named,
+            &Moment {
+                open,
+                working: &|_| true,
+                default: None,
+                grants,
+                profile: None,
+                by: By::Chat,
+                mode: Mode::Task,
+                counted: Counted::Tasks,
+                works_in: None,
+            },
+        )
+    }
+
+    /// The app's record of a dispatch from the chat `asker` (its id and persona) to `worker`.
+    fn recorded(root: &std::path::Path, asker: (&str, &str), worker: (&str, &str)) {
+        use crate::dispatchrecord::{self, Asker, ChatRef, Worker};
+        let chat = |(id, persona): (&str, &str)| ChatRef {
+            chat: 1,
+            id: Some(id.to_owned()),
+            name: persona.to_owned(),
+            persona: Some(persona.to_owned()),
+        };
+        dispatchrecord::open(
+            root,
+            dispatchrecord::Opening {
+                mode: dispatchrecord::Mode::Task,
+                asker: Asker {
+                    chat: chat(asker),
+                    ..Default::default()
+                },
+                persona: Some(worker.1.to_owned()),
+                worker: Worker {
+                    chat: chat(worker),
+                    ..Default::default()
+                },
+                task: None,
+                place: dispatchrecord::Place::default(),
+                brief: "Do the work.".to_owned(),
+                report_owed: true,
+            },
+            chrono::Utc::now(),
+        )
+        .expect("a record");
+    }
+
+    #[test]
+    fn an_older_chain_the_dispatch_records_cover_is_read_from_them_before_refusing() {
+        // steward to devops to qa, written before the chain was kept; steward's and devops's
+        // chats have closed. The dispatch records still say who dispatched whom.
+        let root = a_project("[dispatch]\ndepth = 8\n");
+        recorded(root.path(), (STEWARD_ID, "steward"), (DEVOPS_ID, "devops"));
+        recorded(root.path(), (DEVOPS_ID, "devops"), (QA_ID, "qa"));
+        let mut three = dispatched(2, 2, Mode::Task, Owed::Due, Some("qa"));
+        three.identity.id = Some(QA_ID.to_owned());
+        let open = [(3, &three)];
+        let grants = grant(&[("qa", "steward"), ("qa", "devops"), ("qa", "ops")]);
+        // The personas above it: the loop rule refuses them, as it does a kept chain.
+        for to in ["steward", "devops"] {
+            assert_eq!(
+                asked_at(root.path(), 3, &open, Some(to), &grants).decision,
+                loop_to(to)
+            );
+        }
+        // One that is not above it starts, and the new chat keeps the chain.
+        let said = asked_at(root.path(), 3, &open, Some("ops"), &grants);
+        assert_eq!(said.decision, Decision::Start);
+        assert_eq!(
+            (said.depth, said.above),
+            (
+                3,
+                Some(vec![
+                    Some("qa".to_owned()),
+                    Some("devops".to_owned()),
+                    Some("steward".to_owned())
+                ])
+            )
+        );
+        // The person's never for steward's chats holds below it.
+        let never = InForce {
+            never: vec![("steward".to_owned(), "ops".to_owned())],
+            ..grants.clone()
+        };
+        assert_eq!(
+            asked_at(root.path(), 3, &open, Some("ops"), &never).decision,
+            Decision::Refused(Refused::Never(crate::dispatchgrant::never_above_said(
+                "steward", "ops"
+            )))
+        );
+    }
+
+    #[test]
+    fn an_older_chain_the_records_cover_only_in_part_is_still_refused() {
+        // The record of who dispatched devops is gone: one chat above is known, and the chat's
+        // own record says two. Never read as the shorter chain; refused, with the same words.
+        let root = a_project("[dispatch]\ndepth = 8\n");
+        recorded(root.path(), (DEVOPS_ID, "devops"), (QA_ID, "qa"));
+        let mut three = dispatched(2, 2, Mode::Task, Owed::Due, Some("qa"));
+        three.identity.id = Some(QA_ID.to_owned());
+        let open = [(3, &three)];
+        let grants = grant(&[("qa", "ops")]);
+        let said = asked_at(root.path(), 3, &open, Some("ops"), &grants);
+        assert_eq!(
+            said.decision,
+            Decision::Refused(Refused::Limit(dispatchlimits::Refused::ChainUnread(
+                "ops".to_owned()
+            )))
+        );
+        assert!(refusal(&said).starts_with("this chat's chain began under an older version"));
+        assert_eq!(said.above, None);
+    }
+
+    #[test]
+    fn an_older_ancestry_from_before_the_depth_key_keeps_its_whole_chain_and_is_as_deep() {
+        // steward (1) to devops (2) to qa (3), every record written before depths were kept,
+        // and every chat still open: the walk reads the chain whole. The new chat keeps all of
+        // it, and the depth is raised to match, so its own asks hold when a chat above closes.
+        let one = started(Some("steward"), ROOT_ID);
+        let two = dispatched(1, 0, Mode::Task, Owed::Due, Some("devops"));
+        let three = dispatched(2, 0, Mode::Task, Owed::Due, Some("qa"));
+        let open = [(1, &one), (2, &two), (3, &three)];
+        assert_eq!(seen(3, &open).depth, 2);
+        let grants = grant(&[("qa", "ops")]);
+        let said = asked_in(
+            "[dispatch]\ndepth = 8\n",
+            3,
+            &open,
+            Some("ops"),
+            &grants,
+            By::Chat,
+        );
+        assert_eq!(said.decision, Decision::Start);
+        assert_eq!(
+            (said.depth, said.above),
+            (
+                3,
+                Some(vec![
+                    Some("qa".to_owned()),
+                    Some("devops".to_owned()),
+                    Some("steward".to_owned())
+                ])
+            )
+        );
+        // Deeper is the safe side: the depth limit holds at the depth the walk shows.
+        assert_eq!(
+            asked_in(
+                "[dispatch]\ndepth = 2\n",
+                3,
+                &open,
+                Some("ops"),
+                &grants,
+                By::Chat
+            )
+            .decision,
+            Decision::Refused(Refused::Limit(dispatchlimits::Refused::TooDeep {
+                limit: 2,
+                depth: 2
+            }))
         );
     }
 
