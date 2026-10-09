@@ -305,6 +305,39 @@ describe("picking a persona's icon and colour, in its view", () => {
     expect(within(picker()).getByRole("radio", { name: BY_HAND })).toBeChecked();
   });
 
+  it("writes a colour typed as #rrggbb, and sends nothing for one that is not", async () => {
+    // #1454: the palette's eight are offered as swatches; any other hue is typed.
+    const asked = core();
+    among(
+      [mark("devops", { icon: "rocket", colour: "teal" })],
+      <PersonaMarkPicker plane={PLANE} persona="devops" />,
+    );
+    const field = within(picker()).getByRole("textbox", { name: "Any colour, as #rrggbb" });
+
+    await userEvent.type(field, "#12345{Enter}");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(sets(asked)).toEqual([]);
+
+    await userEvent.clear(field);
+    await userEvent.type(field, `${BY_HAND}{Enter}`);
+    await waitFor(() => expect(sets(asked)).toHaveLength(1));
+    expect(sets(asked)).toEqual([
+      { plane: PLANE, name: "devops", icon: "rocket", colour: BY_HAND },
+    ]);
+  });
+
+  it("holds a colour written by hand in the field, ready to change", () => {
+    core();
+    among(
+      [mark("devops", { colour: BY_HAND })],
+      <PersonaMarkPicker plane={PLANE} persona="devops" />,
+    );
+
+    expect(within(picker()).getByRole("textbox", { name: "Any colour, as #rrggbb" })).toHaveValue(
+      BY_HAND,
+    );
+  });
+
   it("says why an image, an icon or a colour the persona asked for is not drawn", () => {
     core();
     const oversized =

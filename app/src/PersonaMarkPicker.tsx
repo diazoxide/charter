@@ -32,6 +32,9 @@ import { inForce, tintVariables } from "./theme/theme";
  * folder holds a custom image, that is what is drawn, and the icon picked here is what it
  * falls back to.
  *
+ * Under the colours, one text box takes any other hue as `#rrggbb`, written at Enter; the
+ * core checks it as it checks a line written by hand, and its refusal is said as a Notice.
+ *
  * What the persona asked for and cannot have is said above the groups, each as a Notice.
  */
 export function PersonaMarkPicker({ plane, persona }: { plane: PlaneId; persona: string }) {
@@ -158,7 +161,55 @@ export function PersonaMarkPicker({ plane, persona }: { plane: PlaneId; persona:
           </RadioGroup.Item>
         )}
       </RadioGroup.Root>
+      <HexColour
+        key={custom ? colour : ""}
+        held={custom ? colour : ""}
+        onPick={(to) => pick(icon, to)}
+      />
     </section>
+  );
+}
+
+/** What a colour typed by hand must look like before it is sent: the core reads the same. */
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Any colour, typed as `#rrggbb` and written at Enter. Something else is marked invalid and
+ * nothing is sent. `held` is a colour the definition already has outside the palette.
+ */
+function HexColour({ held, onPick }: { held: string; onPick: (colour: string) => void }) {
+  const [typed, setTyped] = useState(held);
+  const [invalid, setInvalid] = useState(false);
+  return (
+    <form
+      className="persona-mark-hex"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const colour = typed.trim();
+        if (!HEX.test(colour)) {
+          setInvalid(true);
+          return;
+        }
+        setInvalid(false);
+        onPick(colour);
+      }}
+    >
+      <input
+        className="ui-field"
+        type="text"
+        aria-label="Any colour, as #rrggbb"
+        placeholder="#rrggbb"
+        spellCheck={false}
+        autoComplete="off"
+        maxLength={7}
+        value={typed}
+        aria-invalid={invalid}
+        onChange={(event) => {
+          setTyped(event.target.value);
+          setInvalid(false);
+        }}
+      />
+    </form>
   );
 }
 
