@@ -130,7 +130,7 @@ fn chat(session: u32, persona: Option<&str>) -> Asking {
         name: format!("{} {session}", persona.unwrap_or("claude")),
         persona: persona.map(str::to_owned),
         held: false,
-        above: Default::default(),
+        above: purlis_core::dispatchchain::Above::Known(Vec::new()),
     }
 }
 

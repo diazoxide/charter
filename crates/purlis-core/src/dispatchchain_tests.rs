@@ -22,8 +22,22 @@ fn named(persona: Option<&str>, id: &str) -> Chat {
     }
 }
 
-/// A chat chat `by` dispatched, `depth` down, written before the chain was kept.
+/// A chat chat `by` dispatched, `depth` down, written before the chain was kept, in the
+/// lineage of the person's steward chat.
 fn older(by: u32, depth: u32, persona: Option<&str>, id: &str) -> Chat {
+    rooted(older_in(by, depth, persona, id), Some(STEWARD))
+}
+
+/// `chat`, in the lineage of the chat whose id is `root` (`None`: a record that names none).
+fn rooted(mut chat: Chat, root: Option<&str>) -> Chat {
+    if let Some(from) = chat.from.as_mut() {
+        from.root = root.map(str::to_owned);
+    }
+    chat
+}
+
+/// [`older`], naming no lineage.
+fn older_in(by: u32, depth: u32, persona: Option<&str>, id: &str) -> Chat {
     Chat {
         from: Some(HandedFrom {
             chat: by,
@@ -118,9 +132,43 @@ fn a_chain_the_records_do_not_cover_down_to_its_depth_is_not_recovered() {
 fn a_chain_with_no_depth_kept_is_not_recovered_from_records_that_just_stop() {
     // Written before depths were kept: where the records stop says nothing of where the
     // chain does.
-    let three = older(2, 0, Some("qa"), QA);
+    let three = older_in(2, 0, Some("qa"), QA);
     let records = [devops_to_qa(), steward_to_devops()];
     assert_eq!(recovered(3, &[(3, &three)], None, &records), None);
+}
+
+#[test]
+fn a_chain_under_a_handoff_from_before_the_keys_is_never_recovered_short() {
+    // The person's steward chat handed off to devops before depths and roots were kept, so
+    // devops's record names no lineage and no depth, and no dispatch record says who handed
+    // it off. After the update devops dispatched qa: qa is "one down" and names no root,
+    // though steward is above devops. Both closed. The records reach devops and stop: as
+    // deep as qa's own record says, and still shorter than the truth. Not recovered.
+    let three = older_in(2, 1, Some("qa"), QA);
+    assert_eq!(recovered(3, &[(3, &three)], None, &[devops_to_qa()]), None);
+    // Where the records stop at a chat that is not the lineage's first, the same.
+    let elsewhere = rooted(older_in(2, 1, Some("qa"), QA), Some(OTHER));
+    assert_eq!(
+        recovered(3, &[(3, &elsewhere)], None, &[devops_to_qa()]),
+        None
+    );
+    // Reaching the lineage's first chat is whole only as deep as the record says, too.
+    let deeper = older(2, 3, Some("qa"), QA);
+    let records = [devops_to_qa(), steward_to_devops()];
+    assert_eq!(recovered(3, &[(3, &deeper)], None, &records), None);
+}
+
+#[test]
+fn an_open_chat_that_names_no_asker_ends_the_chain_only_if_it_is_the_lineage_s_first() {
+    // steward (1) is open and names no asking chat, but qa's lineage began at another chat:
+    // steward is not the top, whatever its record says now.
+    let one = named(Some("steward"), STEWARD);
+    let three = rooted(older_in(2, 2, Some("qa"), QA), Some(OTHER));
+    let records = [devops_to_qa(), steward_to_devops()];
+    assert_eq!(
+        recovered(3, &[(1, &one), (3, &three)], None, &records),
+        None
+    );
 }
 
 #[test]

@@ -1009,11 +1009,15 @@ task reopened as an ordinary chat names no asking chat and starts a new chain.
   tasks keep no chain either, and are held the same way.
 - **Before refusing, the chain is read from the dispatch records (#1548).** Who dispatched
   whom, by each chat's id and never its number, and the persona each ran as: the app's own
-  records, held to what it writes. It is taken only where it is whole: it reaches the chat the
-  person started or one whose record keeps its chain, or, where the records stop, it is as
-  deep as the asking chat's own record says. Records that disagree, one the app would not have
-  written, a loop, and a record written before depths were kept with records that just stop
-  each leave the chain unread, refused as above.
+  records, held to what it writes. It is taken only where it is whole: it reaches a chat
+  whose record keeps its chain, or the chat the person started, which, where the asking chat's
+  record names the lineage's first chat (`root`), must be that one by its id. Where the records
+  stop at a chat that has closed, the chain is whole only if that chat is the lineage's first
+  by the asking chat's `root`, and as deep as the asking chat's record says. **A depth alone is
+  never enough**: a chat dispatched below one from before the depth key was given a depth that
+  is short, and names no root. Records that disagree, one the app would not have written, a
+  loop, records that stop anywhere else, and an asking chat that names no root with records
+  that stop each leave the chain unread, refused as above.
 - **An older ancestry from before the depth key keeps its whole chain (#1548).** Where the
   chats still open show a chain longer than the asking chat's recorded depth, the depth is
   raised to it (deeper is the safe side), and a chat it starts keeps the whole chain.
