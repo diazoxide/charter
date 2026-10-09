@@ -751,13 +751,16 @@ fn not_written(which: Which, e: &std::io::Error) -> String {
 /// is checked as [`save`] checks it before anything is written; then `to` is written first and
 /// the other file after, so the value is never in neither file; and if that second write fails,
 /// `to` is put back as it was (taken away again when the move created it).
+///
+/// Answers the shared file's text as the move wrote it, for what is recorded as seen by the
+/// person who moved it (#1550).
 pub fn move_keys(
     root: &Path,
     to: Which,
     from_base: Option<&str>,
     to_base: Option<&str>,
     paths: &[Vec<Step>],
-) -> Result<(), Vec<String>> {
+) -> Result<String, Vec<String>> {
     let from = to.other();
     let _held = crate::rewrite::Lock::on(root);
     let (from_exists, from_now) = unchanged(root, from, from_base)?;
@@ -795,7 +798,10 @@ pub fn move_keys(
         }
         return Err(why);
     }
-    Ok(())
+    Ok(match to {
+        Which::Shared => to_text,
+        Which::Local => from_text,
+    })
 }
 
 /// The two texts once the values at `paths` have left `from_text` (the file `from`) and been

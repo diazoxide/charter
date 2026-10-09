@@ -631,3 +631,44 @@ fn a_teammate_is_told_once_of_a_preset_change() {
         Some(vec!["Certificate checks".to_owned()])
     );
 }
+
+// -------------------------------------------------------------------------------------
+// Seen by you: what this window wrote, never a later read of the disk (#1550)
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn presets_this_window_wrote_are_seen_and_not_told_back() {
+    let written = "[sandbox]\nmode = \"on\"\negress = [\"forge\"]\n";
+    let project = a_project(written);
+    presets_seen_by_you(project.path(), false, written);
+    assert_eq!(presets_changed(project.path()), None);
+}
+
+#[test]
+fn a_pull_that_lands_after_the_write_is_told_and_not_recorded_as_seen() {
+    let written = "[sandbox]\nmode = \"on\"\negress = [\"forge\"]\n";
+    // A teammate's change pulled in between the write and the record.
+    let project = a_project("[sandbox]\nmode = \"on\"\negress = [\"forge\", \"toolchains\"]\n");
+    presets_seen_by_you(project.path(), false, written);
+    let told = presets_changed(project.path()).expect("the pulled change is told");
+    assert_eq!(told.now, ["forge", "toolchains"]);
+
+    let written = "[sandbox]\nmode = \"on\"\nhosts = [\"api.example\"]\n";
+    let project = a_project("[sandbox]\nmode = \"on\"\nhosts = [\"api.example\", \"b.example\"]\n");
+    hosts_seen_by_you(project.path(), false, written);
+    let told = hosts_changed(project.path()).expect("the pulled hosts are told");
+    assert_eq!(told.now, ["api.example", "b.example"]);
+}
+
+#[test]
+fn hosts_this_window_wrote_are_seen_unless_a_change_was_waiting() {
+    let written = "[sandbox]\nmode = \"on\"\nhosts = [\"api.example\"]\n";
+    let project = a_project(written);
+    hosts_seen_by_you(project.path(), true, written);
+    assert!(
+        hosts_changed(project.path()).is_some(),
+        "a waiting change is still told"
+    );
+    hosts_seen_by_you(project.path(), false, written);
+    assert_eq!(hosts_changed(project.path()), None);
+}

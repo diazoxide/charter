@@ -644,12 +644,43 @@ pub fn acknowledge_presets(root: &Path, shown: &[String]) -> io::Result<()> {
 /// unless another was still waiting to be told (`pending`, [`presets_changed`] read before the
 /// write), which the Notice then tells with it. Best effort: a record that cannot be written
 /// leaves the Notice to say it once more.
-pub fn presets_seen_by_you(root: &Path, pending: bool) {
+///
+/// **What is recorded is what this window wrote** (`written`, the whole shared file as it was
+/// written), never a read of the disk after it (#1550): a pull that lands between the write and
+/// the record is a teammate's change, and is told. Where the file on disk no longer says what
+/// was written, nothing is recorded, and the Notice tells what is there.
+pub fn presets_seen_by_you(root: &Path, pending: bool, written: &str) {
     if pending {
         return;
     }
-    if let Some(change) = presets_changed(root) {
-        let _ = acknowledge_presets(root, &change.now);
+    let locks = super::policy::Locks::of(root);
+    let seen = read(root).presets_seen;
+    let wrote = presets_change(&Plane::of(Some(written)), &locks, seen.as_deref());
+    let disk = presets_change(&Plane::read(root), &locks, seen.as_deref());
+    if let (Some(wrote), Some(disk)) = (wrote, disk)
+        && wrote.now == disk.now
+    {
+        let _ = acknowledge_presets(root, &wrote.now);
+    }
+}
+
+/// The project's hosts made in this machine's own Settings are ones this machine has seen, as
+/// [`presets_seen_by_you`] records the presets: unless another change was waiting (`pending`,
+/// [`hosts_changed`] read before the write), and only as `written` says them, where the file
+/// on disk still says the same.
+pub fn hosts_seen_by_you(root: &Path, pending: bool, written: &str) {
+    if pending {
+        return;
+    }
+    let locks = super::policy::Locks::of(root);
+    let hosts_of = |plane: Plane| plane.in_force(&locks).map(|_| plane.granted_hosts(&locks));
+    let wrote = hosts_of(Plane::of(Some(written)));
+    if wrote.is_some()
+        && wrote == hosts_of(Plane::read(root))
+        && let Some(now) = wrote
+        && hosts_changed(root).is_some()
+    {
+        let _ = acknowledge_hosts(root, &now);
     }
 }
 

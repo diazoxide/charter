@@ -192,12 +192,14 @@ pub(crate) fn save(
         }
     };
     // A preset turned on or off here, by you, is one this machine has seen (#1385), unless
-    // another change was already waiting to be told.
+    // another change was already waiting to be told: recorded as written (#1550).
     let shared = matches!(which, SettingsWhich::Shared);
-    let pending = shared && purlis_core::sandbox::local::presets_changed(root).is_some();
+    let pending = shared.then(|| Pending::now(root));
     match settings::save(root, which.into(), base, &text) {
         Ok(()) if shared => {
-            purlis_core::sandbox::local::presets_seen_by_you(root, pending);
+            if let Some(pending) = pending {
+                pending.seen_by_you(root, &text);
+            }
             Ok(SettingsSaved::Saved {
                 file: file_of(root, which)?,
             })
@@ -206,6 +208,31 @@ pub(crate) fn save(
             file: file_of(root, which)?,
         }),
         Err(reasons) => Ok(SettingsSaved::Refused { reasons }),
+    }
+}
+
+/// Whether a change to the project's presets, and to its hosts, was waiting to be told before
+/// this window wrote the shared file: one that was is told with the window's own, and the
+/// window's own is not recorded as seen.
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    presets: bool,
+    hosts: bool,
+}
+
+impl Pending {
+    fn now(root: &std::path::Path) -> Self {
+        Self {
+            presets: purlis_core::sandbox::local::presets_changed(root).is_some(),
+            hosts: purlis_core::sandbox::local::hosts_changed(root).is_some(),
+        }
+    }
+
+    /// Records the presets and the hosts `written`, the shared file as this window wrote it,
+    /// as seen by the person who wrote it.
+    fn seen_by_you(self, root: &std::path::Path, written: &str) {
+        purlis_core::sandbox::local::presets_seen_by_you(root, self.presets, written);
+        purlis_core::sandbox::local::hosts_seen_by_you(root, self.hosts, written);
     }
 }
 
@@ -268,12 +295,12 @@ pub(crate) fn move_keys(
         SettingsWhich::Shared => (local_base, shared_base),
         SettingsWhich::Local => (shared_base, local_base),
     };
-    // A move always writes the shared file, from or to: a preset it turns on or off there is
+    // A move always writes the shared file, from or to: a preset or a host it changes there is
     // yours, as a save's is (#1385, #1550), unless another change was already waiting.
-    let pending = purlis_core::sandbox::local::presets_changed(root).is_some();
+    let pending = Pending::now(root);
     match settings::move_keys(root, to.into(), from_base, to_base, &paths) {
-        Ok(()) => {
-            purlis_core::sandbox::local::presets_seen_by_you(root, pending);
+        Ok(shared) => {
+            pending.seen_by_you(root, &shared);
             Ok(SettingsMoved::Moved {
                 settings: Box::new(ProjectSettings {
                     shared: file_of(root, SettingsWhich::Shared)?,
@@ -1441,6 +1468,35 @@ mod tests {
                 value: SettingsValue::Text("push".into()),
             }]
         );
+    }
+
+    /// #1550: the project's hosts a move brings into the shared file are the mover's own change
+    /// too, and the hosts Notice does not tell them back.
+    #[test]
+    fn hosts_moved_into_the_shared_file_are_seen_by_whoever_moved_them() {
+        let shared = "[sandbox]\nmode = \"on\"\n";
+        let local = "[sandbox]\nhosts = [\"api.example.com\"]\n";
+        let dir = plane_with_local(shared, local);
+        assert_eq!(purlis_core::sandbox::local::hosts_changed(dir.path()), None);
+        let moved = move_keys(
+            dir.path(),
+            SettingsWhich::Shared,
+            Some(shared),
+            Some(local),
+            vec![vec![
+                SettingsStep::Key("sandbox".into()),
+                SettingsStep::Key("hosts".into()),
+            ]],
+        )
+        .unwrap();
+        assert!(matches!(moved, SettingsMoved::Moved { .. }), "{moved:?}");
+        assert!(
+            std::fs::read_to_string(dir.path().join("charter.toml"))
+                .unwrap()
+                .contains("api.example.com"),
+            "the host is in the shared file now"
+        );
+        assert_eq!(purlis_core::sandbox::local::hosts_changed(dir.path()), None);
     }
 
     /// #1550: presets a move brings into the shared file are this machine's own change, as a
