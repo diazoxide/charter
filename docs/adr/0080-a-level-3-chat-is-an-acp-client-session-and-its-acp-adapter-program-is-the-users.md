@@ -128,6 +128,15 @@ At `initialize` the client says which client methods it serves. **purlis serves
 - **Elicitation waits for HP-5's `elicits_secret`.** A request for a value from the human is the
   class of ask where a secret could reach the transcript. purlis offers it once HP-5 can mark
   and route such an ask, and not before.
+- **Offered since #1377 (2026-10-09), as the bullet above foresaw.** HP-5 marks and routes such
+  an ask, so `initialize` now offers `elicitation.form`, and never `elicitation.url`: a URL sends
+  the person to a page the agent chose, not a value through a dialog the app owns. Every
+  elicitation is raised as an ask with `elicits_secret`, since nothing the agent says about a
+  field can show it is not a secret, so it is answered from the window alone and never on a
+  timer. Its message and fields are shown as plain text, each piece bounded, and a request past
+  a bound is answered `cancel` and never raised; one naming another session, or a request rather
+  than the session, is refused. The values go back to the agent on its stdio and are kept in no
+  event, ask record or log (`purlis_core::acp::elicit`).
 
 ### 3. Which ACP adapter programs, and what happens without one
 

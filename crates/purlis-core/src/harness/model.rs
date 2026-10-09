@@ -109,6 +109,9 @@ pub enum Action {
     Edit { path: String },
     /// Call any other tool, with its input as the source gave it (compact JSON).
     Tool { name: String, input: String },
+    /// Hand over values the agent asks for: an ACP elicitation's form, by its fields' labels.
+    /// The form itself goes to the window with the ask (`crate::acp::Event::Elicited`).
+    Elicit { fields: Vec<String> },
 }
 
 /// One answer a source offers.

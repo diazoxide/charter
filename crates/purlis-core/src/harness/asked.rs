@@ -331,6 +331,7 @@ fn asking(action: Action, options: Vec<Choice>) -> Ask {
         Action::Command { line } => format!("Run a command: {line}"),
         Action::Edit { path } => format!("Change {path}"),
         Action::Tool { name, input } => format!("Use {name}: {input}"),
+        Action::Elicit { fields } => format!("Give values for: {}", fields.join(", ")),
     });
     Ask {
         action,
