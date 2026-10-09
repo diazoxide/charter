@@ -1663,8 +1663,8 @@ export function catalogue(now: Now): Offer[] {
         workspace,
       ),
       note: live
-        ? "Stop publishing its charter, memory and todos with the plane."
-        : "Publish its charter, memory and todos with the plane.",
+        ? "Stop publishing its charter, memory and todos with the project."
+        : "Publish its charter, memory and todos with the project.",
     });
     // A new name (charter#367). It asks first, in a dialog that takes the name; the core
     // refuses a taken or invalid one, and a chat running in it, in its own words.
