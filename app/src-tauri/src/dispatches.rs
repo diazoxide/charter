@@ -760,11 +760,76 @@ pub(crate) fn counted(input: Option<u64>, output: Option<u64>) -> Option<String>
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
+/// **A dispatch that never started, and so has no record** (#1456): one held on the person's
+/// answer to its grant Notice, or one they kept blocked. Listed from what the app holds in
+/// memory, and gone with the app.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct NotStartedRow {
+    /// `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked.
+    pub state: String,
+    /// `task` or `handoff`.
+    pub mode: String,
+    /// The persona asked for; `null` for the asking chat's own.
+    pub persona: Option<String>,
+    /// The task's name, or where a handoff's work was to go; `null` for one purlis will not
+    /// draw.
+    pub task: Option<String>,
+    /// The asking chat, by the name its tab has; `null` for one that is not open.
+    pub asker: Option<String>,
+    /// Whether the person asked from the chat's tab, not the chat.
+    pub by_person: bool,
+    /// When it was held, or kept blocked (RFC 3339, UTC).
+    pub at: Option<String>,
+}
+
+/// `wanted`, as a row of a dispatch that never started.
+fn not_started(
+    held: &Held,
+    wanted: &crate::handoff::Wanted,
+    state: &str,
+    at: Option<String>,
+) -> NotStartedRow {
+    NotStartedRow {
+        state: state.to_owned(),
+        mode: if wanted.moved.is_some() {
+            "handoff"
+        } else {
+            "task"
+        }
+        .to_owned(),
+        persona: wanted.to.clone(),
+        task: wanted.shown(),
+        asker: held.chats().shown_name(wanted.chat),
+        by_person: wanted.by == purlis_core::dispatchdecision::By::Person,
+        at,
+    }
+}
+
+/// The dispatches of `held`'s project that never started: those held on the person now, then
+/// those they kept blocked, newest first each.
+pub(crate) fn not_started_rows(held: &Held) -> Vec<NotStartedRow> {
+    let dispatches = held.held_dispatches();
+    let waiting = dispatches
+        .listed()
+        .into_iter()
+        .rev()
+        .map(|(wanted, at)| not_started(held, &wanted, "held", at));
+    let blocked = dispatches
+        .kept_blocked_listed()
+        .into_iter()
+        .rev()
+        .map(|(wanted, at)| not_started(held, &wanted, "kept-blocked", Some(at)));
+    waiting.chain(blocked).collect()
+}
+
 /// What the Dispatches tab is handed.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct Dispatches {
     /// Newest first.
     pub rows: Vec<DispatchRow>,
+    /// The dispatches that never started (#1456): held on the person, or kept blocked by
+    /// them. In memory only: none is listed after the app is started again.
+    pub not_started: Vec<NotStartedRow>,
     /// How many records in the store purlis will not draw (`dispatchrecord::sound`): text it
     /// refuses to put on the screen, or more of it than the store ever writes.
     pub undrawn: u32,
@@ -797,6 +862,7 @@ pub(crate) fn rows(held: &Held) -> Dispatches {
                 ..row(record, &open, now)
             })
             .collect(),
+        not_started: not_started_rows(held),
         undrawn: u32::try_from(drawn.refused).unwrap_or(u32::MAX),
     }
 }

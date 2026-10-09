@@ -3172,6 +3172,11 @@ export type Dispatches = {
 	/**  Newest first. */
 	rows: DispatchRow[],
 	/**
+	 *  The dispatches that never started (#1456): held on the person, or kept blocked by
+	 *  them. In memory only: none is listed after the app is started again.
+	 */
+	not_started: NotStartedRow[],
+	/**
 	 *  How many records in the store purlis will not draw (`dispatchrecord::sound`): text it
 	 *  refuses to put on the screen, or more of it than the store ever writes.
 	 */
@@ -4554,6 +4559,31 @@ export type NotStarted = {
 	 *  a profile not declared, or one with nothing to approve.
 	 */
 	approval: NeedsApproval | null,
+};
+
+/**
+ *  **A dispatch that never started, and so has no record** (#1456): one held on the person's
+ *  answer to its grant Notice, or one they kept blocked. Listed from what the app holds in
+ *  memory, and gone with the app.
+ */
+export type NotStartedRow = {
+	/**  `held` while it waits on the person's answer; `kept-blocked` once they kept it blocked. */
+	state: string,
+	/**  `task` or `handoff`. */
+	mode: string,
+	/**  The persona asked for; `null` for the asking chat's own. */
+	persona: string | null,
+	/**
+	 *  The task's name, or where a handoff's work was to go; `null` for one purlis will not
+	 *  draw.
+	 */
+	task: string | null,
+	/**  The asking chat, by the name its tab has; `null` for one that is not open. */
+	asker: string | null,
+	/**  Whether the person asked from the chat's tab, not the chat. */
+	by_person: boolean,
+	/**  When it was held, or kept blocked (RFC 3339, UTC). */
+	at: string | null,
 };
 
 /**  One section of the changelog, as the dialog draws it. */

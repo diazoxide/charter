@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DispatchRow, WorktreeLoss } from "./bindings";
+import type { DispatchRow, NotStartedRow, WorktreeLoss } from "./bindings";
 import {
   askersOf,
   branchSaid,
@@ -10,6 +10,7 @@ import {
   losesNothing,
   lostSaid,
   nestedSaid,
+  notStartedSaid,
   NO_PERSONA,
   personasOf,
   saidAt,
@@ -215,6 +216,26 @@ describe("the Dispatches tab's filters", () => {
       "The folder is on the branch somewhere-else, which stays. The branch check-the-queue-b5rc0def, which purlis cut, is removed only if it is already merged.",
     );
     expect(lostSaid(moved)).toBeUndefined();
+  });
+
+  it("says of a dispatch that never started what it was, who asked and how it stands (#1456)", () => {
+    const row: NotStartedRow = {
+      state: "held",
+      mode: "handoff",
+      persona: null,
+      task: null,
+      asker: null,
+      by_person: false,
+      at: null,
+    };
+    expect(notStartedSaid(row)).toBe(
+      "A handoff for the asking chat's own persona, asked by a chat that has closed: waiting for your answer on its Notice.",
+    );
+    expect(
+      notStartedSaid({ ...row, state: "kept-blocked", by_person: true, asker: "steward 3" }),
+    ).toBe(
+      "A handoff for the asking chat's own persona, asked by you, from steward 3: kept blocked by you. Nothing was started.",
+    );
   });
 
   it("is one view per project, which no extension's view of the same name is", () => {
