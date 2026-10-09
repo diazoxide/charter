@@ -1,6 +1,6 @@
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FinishedTask } from "./bindings";
+import type { AwayRefusal, FinishedTask } from "./bindings";
 import { useChatsSelect, type Chats } from "./chatState";
 import { Notice } from "./Notice";
 import {
@@ -8,6 +8,7 @@ import {
   awayPartsSaid,
   awaySaid,
   awaySummaryOf,
+  cameToNeedOf,
   countedAway,
   NOTHING_READ,
   type AwaySummaryOf,
@@ -16,6 +17,7 @@ import {
   type Away,
   type AwayGo,
   type AwayItem,
+  type Queued,
 } from "./awayCounts";
 
 /**
@@ -32,7 +34,9 @@ import {
  * several opens a list of them, each of which goes to its own. A chat waiting on you is shown
  * where it lives (its question, its Notice, its prompt are there, answerable as they always
  * are); a finished task goes where a needs-you item's Go takes it: its chat while that is
- * open, else its finished row under the session that asked, where its report is. Every line
+ * open, else its finished row under the session that asked, where its report is. A dispatch
+ * refused while nobody was at its chat (#1507) opens the title bar's needs-you list, where it
+ * is answered (#1551). Every line
  * the tasks and their sessions said stays in each session's Activity.
  *
  * **It answers nothing and hides nothing.** Going to a failed task marks that failure looked
@@ -48,6 +52,7 @@ export function AwaySummary({
   away,
   onShowChat,
   onShowFinished,
+  onShowNeedsYou,
 }: {
   /** What the project's summary counts now ({@link useAwaySummary}). */
   away: AwayNow;
@@ -55,11 +60,17 @@ export function AwaySummary({
   onShowChat: (session: number) => void;
   /** Goes to a finished task, as a needs-you item's Go does. */
   onShowFinished: (task: FinishedTask) => void;
+  /** Opens the title bar's needs-you list, where a refused dispatch is answered. */
+  onShowNeedsYou?: () => void;
 }) {
   const { summary, dismiss } = away;
   if (countedAway(summary) === 0) return null;
   const go = (where: AwayGo) =>
-    where.to === "chat" ? onShowChat(where.session) : onShowFinished(where.task);
+    where.to === "chat"
+      ? onShowChat(where.session)
+      : where.to === "finished"
+        ? onShowFinished(where.task)
+        : onShowNeedsYou?.();
   const parts = awayPartsSaid(summary);
   return (
     <Notice cause="away-summary" label={awaySaid(summary)} onDismiss={dismiss}>
@@ -88,6 +99,7 @@ export function useAwaySummary({
   on,
   finished,
   nameOf,
+  refusedAway,
 }: {
   /** The project's chats, which the queue is read from. */
   chats: Chats;
@@ -97,6 +109,8 @@ export function useAwaySummary({
   finished: ReadonlyMap<number, readonly FinishedTask[]>;
   /** What a chat is called here. */
   nameOf: (session: number) => string;
+  /** The project's dispatches refused while nobody was at their chat (#1507, #1551). */
+  refusedAway?: readonly AwayRefusal[];
 }): AwayNow {
   const { away, cameToNeed, dismiss, counts } = useTimeAway(chats, on);
   // Read only while there is a time away to count, and only the shares counted: otherwise no
@@ -105,8 +119,8 @@ export function useAwaySummary({
   const states = useChatsSelect(chats, (now) => (none ? NOTHING_READ : readOf(now)), sameRead);
   const tasks = useMemo(() => [...finished.values()].flat(), [finished]);
   const summary = useMemo(
-    () => awaySummaryOf({ away, finished: tasks, cameToNeed, states, nameOf }),
-    [away, tasks, cameToNeed, states, nameOf],
+    () => awaySummaryOf({ away, finished: tasks, cameToNeed, states, nameOf, refusedAway }),
+    [away, tasks, cameToNeed, states, nameOf, refusedAway],
   );
   const counted = countedAway(summary);
   useEffect(() => counts(counted), [counts, counted]);
@@ -187,7 +201,7 @@ export type TimeAway = {
 export const SETTLES_MS = 10 * 1000;
 
 type Held = { away: readonly Away[]; cameToNeed: ReadonlySet<number> };
-type Seen = { at: number; queue: readonly number[] };
+type Seen = { at: number; queue: Queued };
 
 const NOT_AWAY: Held = { away: [], cameToNeed: new Set() };
 
@@ -212,7 +226,8 @@ const INPUTS = ["pointerdown", "pointermove", "keydown", "wheel"] as const;
  * A window that starts without the focus is away from its start.
  *
  * The queue is read at the last sign of the person and again at the return: a chat in it on the
- * way back that was not on the way out came to need them while they were away.
+ * way back that was not on the way out, or that was and has something new for them since,
+ * came to need them while they were away ({@link cameToNeedOf}).
  *
  * **Only the current time away is ever counted with what is still standing.** Another time
  * away adds to a summary that still says something; a summary that says nothing any more (its
@@ -236,7 +251,7 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
   }, []);
   useEffect(() => {
     if (!on) return;
-    const queue = () => chats.store.statesFor(chats.plane).needsYou;
+    const queue = (): Queued => chats.store.statesFor(chats.plane);
     /** The last sign of the person at the window. */
     let seen: Seen = { at: Date.now(), queue: queue() };
     /** Where the person went away from the window, while they are away. */
@@ -255,7 +270,7 @@ export function useTimeAway(chats: Chats, on: boolean): TimeAway {
       seen = { at: now, queue: queue() };
       if (was === null || now - was.at < AWAY_AFTER_MS) return;
       const time = { from: was.at, to: now };
-      const came = seen.queue.filter((session) => !was.queue.includes(session));
+      const came = cameToNeedOf(was.queue, seen.queue);
       backAt.current = now;
       setHeld((kept) =>
         counted.current === 0

@@ -1614,6 +1614,9 @@ function App() {
    * Dismiss says nothing.
    */
   const awayRefusals = useAwayRefusals(planes);
+  /** Goes up each time a project's away summary asks the needs-you list open (#1551). */
+  const [needsYouAsked, setNeedsYouAsked] = useState(0);
+  const showNeedsYou = useCallback(() => setNeedsYouAsked((was) => was + 1), []);
   const away = useMemo<AwayItem[]>(
     () =>
       planes.flatMap((plane) =>
@@ -1886,6 +1889,7 @@ function App() {
           onDismissAway: (item: AwayItem) => answerAway(item, "dismiss"),
           onNeverAway: (item: AwayItem) => answerAway(item, "never"),
           onLook: awayRefusals.read,
+          openAsked: needsYouAsked,
           onOpen: (ask: PermissionAsk) =>
             pressNeeding(ask.plane, {
               id: `needs.show:${ask.session}`,
@@ -2008,6 +2012,8 @@ function App() {
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
+          awayRefused={awayRefusals.held[plane]}
+          onShowNeedsYou={showNeedsYou}
         />
       ))}
 

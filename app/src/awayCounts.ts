@@ -17,9 +17,11 @@
  * - a finished task counts when it ended inside a time away, by the time its record keeps
  *   (`FinishedTask.ended`), in the count `taskBuckets.finishedBucketOf` gives it, the same
  *   count every surface puts it in;
- * - a chat counts as waiting on you when it came into the needs-you queue while the person was
- *   away and is still in it: one already waiting when they left is not news, and one they
- *   have since answered is not waiting. A chat that is in the queue only for tasks that came
+ * - a chat counts as waiting on you when it came to need the person while they were away and
+ *   still does: it came into the needs-you queue, **or it was in it already and has something
+ *   new for them** (it asked again, or another reason was added to its item:
+ *   {@link cameToNeedOf}). What was already waiting when they left, and nothing more, is not
+ *   news, and one they have since answered is not waiting. A chat that is in the queue only for tasks that came
  *   to nothing is counted once, as those failures, and not again as waiting. A task that
  *   reported blocked and whose chat stays open waiting on the person is both: a failure by its
  *   finished row, and a chat waiting on you with a question to answer.
@@ -28,12 +30,17 @@
  * and every question keeps its Notice where it was asked. The summary only says where to look;
  * Dismiss puts the summary away and nothing else.
  *
+ * - a dispatch refused while nobody was at its chat (#1507) counts when it was last refused
+ *   inside a time away, by the time its item keeps (`AwayRefusal.latest`), for as long as its
+ *   item stands in the title bar's needs-you list, which is where it is answered (#1551).
+ *
  * **The seam for what else happened while away.** A part is a kind, a count's words and the
- * places it goes to. Another source (the dispatches refused while nobody was at a chat, #1507)
- * joins as another {@link AwayPartKind} with its own items and words, counted here by its own
- * time, and links to where it is answered; nothing here changes for the parts already said.
+ * places it goes to. Another source joins as another {@link AwayPartKind} with its own items
+ * and words, counted here by its own time, and links to where it is answered; nothing here
+ * changes for the parts already said.
  */
-import type { FinishedTask } from "./bindings";
+import { clipped } from "./AwayRefusals";
+import type { AwayRefusal, FinishedTask } from "./bindings";
 import { taskFailedSaid, type ChatStates } from "./chatState";
 import { finishedBucketOf } from "./taskBuckets";
 
@@ -49,17 +56,21 @@ export function whileAway(away: readonly Away[], at: number): boolean {
   return away.some((one) => one.from <= at && at <= one.to);
 }
 
-/** The parts a summary says, in the order it says them: the spec's own. */
-export type AwayPartKind = "done" | "failed" | "waiting";
+/** The parts a summary says, in the order it says them: the spec's own, then the dispatches
+ *  refused while nobody was at their chat (#1507, #1551). */
+export type AwayPartKind = "done" | "failed" | "waiting" | "refused";
 
-export const AWAY_PARTS: readonly AwayPartKind[] = ["done", "failed", "waiting"];
+export const AWAY_PARTS: readonly AwayPartKind[] = ["done", "failed", "waiting", "refused"];
 
 /** Where one counted thing goes on a press. */
 export type AwayGo =
   /** A chat that is open: shown where it lives. */
   | { to: "chat"; session: number }
   /** A task that has finished: its finished row, under the session that asked for it. */
-  | { to: "finished"; task: FinishedTask };
+  | { to: "finished"; task: FinishedTask }
+  /** A dispatch refused while nobody was there: the title bar's needs-you list, where it is
+   *  answered. */
+  | { to: "needs-you" };
 
 /** One thing a part counts, and what its line in the part's list says. */
 export type AwayItem = { key: string; says: string; go: AwayGo };
@@ -67,7 +78,7 @@ export type AwayItem = { key: string; says: string; go: AwayGo };
 /** What the summary counts, part by part. A part with nothing in it is not said. */
 export type AwaySummaryOf = Readonly<Record<AwayPartKind, readonly AwayItem[]>>;
 
-export const NOTHING_AWAY: AwaySummaryOf = { done: [], failed: [], waiting: [] };
+export const NOTHING_AWAY: AwaySummaryOf = { done: [], failed: [], waiting: [], refused: [] };
 
 /** How many things a summary counts. */
 export function countedAway(summary: AwaySummaryOf): number {
@@ -146,6 +157,46 @@ function onlyForFailures(states: AwayRead, session: number): boolean {
   );
 }
 
+/** The shares of what the chats are doing that tell what each chat in the queue waits on. */
+export type Queued = Pick<
+  ChatStates,
+  "needsYou" | "bySession" | "movedAt" | "needs" | "reports" | "refusals" | "stoppedBelow"
+>;
+
+/**
+ * What chat `session` waits on the person for, one entry each: its own wait (a turn that ended
+ * waiting on them, by when it began), and each reason its needs-you item says. Two reasons in
+ * the same words are two entries.
+ */
+function waitsOf(states: Queued, session: number): string[] {
+  return [
+    ...(states.bySession[session] === "waiting" ? [`waits:${states.movedAt[session] ?? ""}`] : []),
+    ...(states.needs[session] ?? []).map((one) => `need:${one}`),
+    ...(states.reports[session] ?? []).map((one) => `report:${one}`),
+    ...(states.refusals[session] ?? []).map((one) => `refused:${one}`),
+    ...(states.stoppedBelow[session] ?? []).map((one) => `stopped:${one}`),
+  ];
+}
+
+/**
+ * **The chats that came to need the person between `was` and `now`**, oldest in the queue
+ * first: each in the queue now that was not in it then, and each that was and **has something
+ * new** (#1551), by item and not by chat: a wait that began since, or a reason its item says
+ * that it did not say then. One that only kept what it had, or lost some of it, is not new.
+ */
+export function cameToNeedOf(was: Queued, now: Queued): number[] {
+  return now.needsYou.filter((session) => {
+    if (!was.needsYou.includes(session)) return true;
+    const before = waitsOf(was, session);
+    return waitsOf(now, session).some((one) => {
+      const at = before.indexOf(one);
+      if (at < 0) return true;
+      before.splice(at, 1);
+      return false;
+    });
+  });
+}
+
 /**
  * **What a summary counts**: the finished tasks that ended while the person was away, by how
  * each ended, and the chats that came to need them while away and still do, oldest in the
@@ -158,6 +209,7 @@ export function awaySummaryOf({
   cameToNeed,
   states,
   nameOf,
+  refusedAway = [],
 }: {
   away: readonly Away[];
   /** Every finished task of the project's open chats. */
@@ -168,6 +220,9 @@ export function awaySummaryOf({
   states: AwayRead;
   /** What a chat is called here. */
   nameOf: (session: number) => string;
+  /** The project's dispatches refused while nobody was at their chat, as the title bar's
+   *  needs-you list holds them now (#1507). */
+  refusedAway?: readonly AwayRefusal[];
 }): AwaySummaryOf {
   if (away.length === 0) return NOTHING_AWAY;
   const done: AwayItem[] = [];
@@ -189,13 +244,23 @@ export function awaySummaryOf({
       says: nameOf(session),
       go: { to: "chat", session },
     }));
-  return { done, failed, waiting };
+  // Said as the needs-you list says it, from what the item holds: two personas, and never a
+  // word a chat wrote.
+  const refused = refusedAway
+    .filter((item) => whileAway(away, item.latest * 1000))
+    .map((item): AwayItem => ({
+      key: `refused:${item.asking}:${item.target}:${item.workspace ?? ""}`,
+      says: `${clipped(item.asking)} wanted ${clipped(item.target)}`,
+      go: { to: "needs-you" },
+    }));
+  return { done, failed, waiting, refused };
 }
 
 /**
  * **What each part says**, in the spec's words and order: `7 tasks done`, `1 failed`,
  * `2 waiting on you`. The first part about tasks names them; a part after it does not say
- * "tasks" again. A summary of chats waiting alone says they are chats.
+ * "tasks" again. A summary of chats waiting alone says they are chats. Refused dispatches
+ * always say what they are: `1 dispatch refused`.
  */
 export function awayPartsSaid(summary: AwaySummaryOf): { part: AwayPartKind; says: string }[] {
   const said: { part: AwayPartKind; says: string }[] = [];
@@ -203,6 +268,10 @@ export function awayPartsSaid(summary: AwaySummaryOf): { part: AwayPartKind; say
   for (const part of AWAY_PARTS) {
     const n = summary[part].length;
     if (n === 0) continue;
+    if (part === "refused") {
+      said.push({ part, says: `${n} ${n === 1 ? "dispatch" : "dispatches"} refused` });
+      continue;
+    }
     const noun = part === "waiting" ? (n === 1 ? "chat" : "chats") : n === 1 ? "task" : "tasks";
     const words = part === "waiting" ? "waiting on you" : part;
     said.push({ part, says: named ? `${n} ${words}` : `${n} ${noun} ${words}` });

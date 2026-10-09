@@ -212,6 +212,8 @@ export function Notice(props: NoticeProps) {
  *
  * - an Undo that lasts a few seconds, before anything that waits;
  * - what the operator just did, before what charter found;
+ * - what happened while the person was away (#1514, #1551), before everything else that waits:
+ *   it is what they read first on coming back, and is not left behind "+N more";
  * - an offer, before news about how things came back;
  * - a chat that lost its conversation, before one charter had to guess about, before one that
  *   came back as it was.
@@ -222,6 +224,7 @@ export const IMPORTANCE: readonly string[] = [
   "memory-deleted",
   "pin-forgotten",
   "session-saved",
+  "away-summary",
   "sandbox-offer",
   "sandbox-hosts",
   "sandbox-presets",

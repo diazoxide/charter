@@ -137,6 +137,8 @@ export function TitleBar({
     onDismissAway?: (item: AwayItem) => void;
     onNeverAway?: (item: AwayItem) => void;
     onLook?: () => void;
+    /** Goes up each time the list is asked open from elsewhere (an away summary, #1551). */
+    openAsked?: number;
   };
   /**
    * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons
