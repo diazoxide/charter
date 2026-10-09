@@ -65,6 +65,7 @@ const stands = (over: Partial<DispatchStanding> = {}): DispatchStanding => ({
   nevers: [],
   any: [],
   nevers_unread: null,
+  project_unsettled: false,
   personas: ["devops", "qa", "steward"],
   kept_blocked: [],
   dormant: [],
@@ -645,6 +646,66 @@ describe("where the list of nevers does not read", () => {
       await screen.findByRole("button", { name: "Lift: never for steward dispatching to qa" }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^purlis could not read the list/)).toBeNull();
+  });
+});
+
+describe("while purlis cannot read the project's history", () => {
+  it("says so at the top, and no grant of the project's accepted here says it counts", async () => {
+    // #1543: the first moments after a launch, and a history git cannot be asked of.
+    const fake = core({
+      grants: [MINE, OURS, THEIRS],
+      standing: {
+        project_unsettled: true,
+        any: [{ asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE }],
+      },
+    });
+    render(<Table />);
+
+    const notice = (
+      await screen.findByText(/^purlis has not read this project's git history/)
+    ).closest("[data-cause]") as HTMLElement;
+    expect(notice).toHaveAttribute("data-cause", "dispatch-project-unsettled");
+    expect(notice).toHaveTextContent(
+      "Until it can, no grant of the project's that you accepted counts on this machine",
+    );
+    const whole = await table();
+    expect(notice.compareDocumentPosition(whole) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const accepted = "Accepted, but does not count until purlis can read this project's history.";
+    expect(
+      rowOf(
+        screen.getByRole("button", {
+          name: "Remove for everyone: the project's grant for steward to devops",
+        }),
+      ),
+    ).toHaveTextContent(accepted);
+    expect(
+      rowOf(
+        screen.getByRole("button", {
+          name: "Remove for everyone: any persona for qa, in this project",
+        }),
+      ),
+    ).toHaveTextContent(accepted);
+    // Mine counts as it did, and a teammate's that waits says it waits.
+    expect(
+      rowOf(screen.getByRole("button", { name: "Revoke: my grant for steward to devops" })),
+    ).not.toHaveTextContent(accepted);
+    expect(
+      rowOf(
+        screen.getByRole("button", {
+          name: "Accept: the project's grant for qa to devops, on this machine",
+        }),
+      ),
+    ).not.toHaveTextContent(accepted);
+
+    // Once a settling lands, Read again draws it as counting.
+    fake.held.standing = stands({
+      any: [{ asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE }],
+    });
+    await userEvent.setup().click(within(notice).getByRole("button", { name: "Read again" }));
+    await waitFor(() =>
+      expect(screen.queryByText(/^purlis has not read this project's git history/)).toBeNull(),
+    );
+    expect(screen.queryByText(accepted)).toBeNull();
   });
 });
 
@@ -1256,6 +1317,28 @@ describe("which workspace a grant holds in", () => {
       ]),
     );
     expect(fake.sent("accept_project_dispatch")).toEqual([]);
+  });
+
+  it("offers no Not on my machine for a teammate's grant for one workspace nobody here accepted", async () => {
+    // #1543: it already allows nothing here, and there is nothing of this machine's to stop.
+    const theirs = grant({
+      id: "in\u001fproject\u001fqa\u001fdevops\u001fweb",
+      asking: "qa",
+      level: "project",
+      by: "Dana",
+      waiting: true,
+      workspace: "web",
+    });
+    core({ grants: [theirs], standing: { workspaces: WORKSPACES } });
+    render(<Table />);
+
+    const accept = await screen.findByRole("button", {
+      name: "Accept: the project's grant for qa to devops in web, on this machine",
+    });
+    expect(within(rowOf(accept)).queryByRole("button", { name: /^Not on my machine/ })).toBeNull();
+    expect(
+      within(rowOf(accept)).getByRole("button", { name: /^Remove for everyone/ }),
+    ).toBeInTheDocument();
   });
 
   it("draws any persona limited to a workspace as a line of its own, cleared by its id", async () => {

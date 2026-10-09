@@ -2049,6 +2049,13 @@ pub const SETTLES: [&str; 10] = [
     "give_back_dispatch",
 ];
 
+/// **The window commands that ask git's history without settling anything** (#1543): Settings'
+/// list of grants names who committed each of the project's, and asks git once per pair. Each
+/// is `async` and asks on a blocking thread, as [`SETTLES`] do. `off_the_main_thread`'s test
+/// holds them to it.
+#[cfg(test)]
+pub const READS_HISTORY: [&str; 2] = ["dispatch_grants", "revoke_dispatch_grant"];
+
 /// The ground a window command of `held`'s project stands on.
 fn with_ground<T>(held: &crate::planes::Held, with: impl FnOnce(&Ground<'_>) -> T) -> T {
     let root = held.root();
@@ -2126,6 +2133,12 @@ pub struct DispatchStanding {
     /// Where the list of nevers is there and does not read: the sentence saying so, and how
     /// the person mends it. `nevers` is then empty, and no dispatch grant counts.
     pub nevers_unread: Option<String>,
+    /// Whether **no grant of the project's that was accepted on this machine counts just now**
+    /// (#1543): the last settling of this machine's acceptances against the project's history
+    /// did not answer, or none has landed since purlis started
+    /// ([`purlis_core::dispatcharrival::for_read`]). The table says so beside each, as the
+    /// arrival Notice does. False where nothing of the project's is accepted here.
+    pub project_unsettled: bool,
     /// The project's personas now, sorted: the table has a row for each, and anything that
     /// names another is drawn as naming no persona (#1504). Null where they could not be
     /// listed, and then no name is called unknown.
@@ -2248,6 +2261,8 @@ fn standing_of(root: &Path) -> DispatchStanding {
             .collect(),
         any,
         nevers_unread: dispatchgrant::nevers_unread(root),
+        // The verdict a dispatch is read by, with no git run here.
+        project_unsettled: !purlis_core::dispatcharrival::for_read(root).read,
         dormant: purlis_core::dispatchdormant::list(root)
             .into_iter()
             .map(|one| DispatchDormant {
@@ -2965,9 +2980,19 @@ pub(crate) fn accept_in(
 /// **Not on my machine**, for the project's limited grant `one`: audited, then this machine's
 /// acceptance of it is taken away. The committed file is not changed, and the grant waits in
 /// Settings for Accept.
+///
+/// **Only for one this machine accepted** (#1543): a limited grant nobody here accepted
+/// already allows nothing here, and has no decline of its own to keep (the project's Notice
+/// never tells of it), so nothing is audited for it and nothing changes.
 fn decline_in(root: &Path, one: &dispatchwithin::Limited, audit: Audit<'_>) -> Result<(), String> {
     if !dispatchwithin::committed_at(root).contains(one) {
         return Err("purlis changed nothing: the project no longer has that grant.".to_owned());
+    }
+    if !dispatchwithin::accepted(root)
+        .iter()
+        .any(|(accepted, _)| accepted == one)
+    {
+        return Err(NOT_ACCEPTED_IN.to_owned());
     }
     audit(
         None,
@@ -2983,6 +3008,10 @@ fn decline_in(root: &Path, one: &dispatchwithin::Limited, audit: Audit<'_>) -> R
         .map(|_| ())
         .map_err(|why| format!("purlis could not record it: {why}"))
 }
+
+/// What Not on my machine is refused with for a limited grant this machine never accepted.
+const NOT_ACCEPTED_IN: &str = "purlis changed nothing: this machine never accepted that \
+     grant, so it already allows nothing here.";
 
 /// **Changes which workspace a grant holds in**, on Settings' table (#1505): the grant of
 /// `asking` to `target` (`*`: any persona) at `level` (`you` or `project`), which holds in
@@ -3443,38 +3472,48 @@ fn open_ids(held: &crate::planes::Held) -> std::collections::HashSet<String> {
 }
 
 /// Every dispatch grant in force here, and what policy locks: for Settings' list.
+// On a blocking thread ([`READS_HISTORY`]): who committed each of the project's grants is
+// asked of git, once per pair.
 #[tauri::command]
 #[specta::specta]
-pub fn dispatch_grants(
+pub async fn dispatch_grants(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
 ) -> Result<DispatchGrants, String> {
     let held = planes.held(&plane)?;
-    let open = open_ids(&held);
-    Ok(state_of(held.root(), held.dispatch_grants(), &|id| {
-        open.contains(id)
-    }))
+    crate::off_the_window("reading the dispatch grants", move || {
+        let open = open_ids(&held);
+        Ok(state_of(held.root(), held.dispatch_grants(), &|id| {
+            open.contains(id)
+        }))
+    })
+    .await
 }
 
 /// **Revoke** on Settings' list of dispatch grants: the grant called `id` is audited and taken
 /// out, so the next dispatch across its pair asks again. Answers the list as it is now.
+// On a blocking thread ([`READS_HISTORY`]): the list it answers asks git who committed each of
+// the project's grants.
 #[tauri::command]
 #[specta::specta]
-pub fn revoke_dispatch_grant(
+pub async fn revoke_dispatch_grant(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     id: String,
 ) -> Result<DispatchGrants, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    revoke(root, held.dispatch_grants(), &id, &|number, audited| {
-        held.hooks().record_dispatch_grant(root, number, audited)
-    })?;
-    arrival_moved(&plane);
-    let open = open_ids(&held);
-    Ok(state_of(root, held.dispatch_grants(), &|id| {
-        open.contains(id)
-    }))
+    crate::off_the_window("revoking the dispatch grant", move || {
+        let root = held.root();
+        revoke(root, held.dispatch_grants(), &id, &|number, audited| {
+            held.hooks().record_dispatch_grant(root, number, audited)
+        })?;
+        arrival_moved(&plane);
+        let open = open_ids(&held);
+        Ok(state_of(root, held.dispatch_grants(), &|id| {
+            open.contains(id)
+        }))
+    })
+    .await
 }
 
 // ---- a teammate's grant, when it arrives (#1506) ---------------------------------------------

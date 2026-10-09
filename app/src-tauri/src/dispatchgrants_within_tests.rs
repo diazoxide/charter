@@ -1321,6 +1321,14 @@ fn a_project_grant_s_workspace_is_changed_for_everyone_and_a_teammate_s_waits_fo
         Some("web")
     )));
     let theirs = limited("qa", "devops", "web");
+    // Not on my machine for it while nobody here accepted it changes nothing, and records no
+    // decline for a grant this machine never followed (#1543).
+    let audits = said(&world).len();
+    assert_eq!(
+        world.on(|ground| decline_in(root, &theirs, ground.audit)),
+        Err(NOT_ACCEPTED_IN.to_owned())
+    );
+    assert_eq!(said(&world).len(), audits, "nothing audited");
     world
         .on(|ground| accept_in(&store, ground, &known(&world), &theirs))
         .expect("accepted");

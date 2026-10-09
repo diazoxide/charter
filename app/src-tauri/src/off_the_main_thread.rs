@@ -359,6 +359,60 @@ mod tests {
     }
 
     #[test]
+    fn settings_reads_of_the_dispatch_grants_ask_git_off_the_thread_that_asked() {
+        // #1543: Settings' list names who committed each of the project's grants, which asks
+        // git once per pair. A revoke answers the same list. Here neither has a grant to
+        // read, and the second refuses an id that names none: where each answers is the
+        // point.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let planes = Planes::telling(std::sync::Arc::new(|_| {}), crate::Shipped::default(), None);
+        let plane = planes.open(dir.path());
+        let app = mock_builder()
+            .manage(planes)
+            .invoke_handler(tauri::generate_handler![
+                crate::dispatchgrants::dispatch_grants,
+                crate::dispatchgrants::revoke_dispatch_grant,
+                crate::dispatchgrants::keep_dispatch_blocked,
+            ])
+            .build(tauri_context!(test = true))
+            .expect("the app builds");
+        tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::default())
+            .build()
+            .expect("the main window");
+        let asking = std::thread::current().id();
+        let asked = [
+            ("dispatch_grants", json!({ "plane": plane })),
+            (
+                "revoke_dispatch_grant",
+                json!({ "plane": plane, "id": "no such grant" }),
+            ),
+        ];
+        assert_eq!(
+            asked
+                .iter()
+                .map(|(command, _)| *command)
+                .collect::<Vec<_>>(),
+            crate::dispatchgrants::READS_HISTORY
+        );
+        let on_the_asking_thread: Vec<&str> = asked
+            .into_iter()
+            .filter(|(command, args)| ask(&app, command, args.clone()).answered_on == asking)
+            .map(|(command, _)| command)
+            .collect();
+        assert!(
+            on_the_asking_thread.is_empty(),
+            "answered on the thread that asked, which in the app is the window's: \
+             {on_the_asking_thread:?}"
+        );
+        let kept = ask(
+            &app,
+            "keep_dispatch_blocked",
+            json!({ "plane": plane, "id": 7 }),
+        );
+        assert_eq!(kept.answered_on, asking);
+    }
+
+    #[test]
     fn a_terminals_resize_and_unwatch_answer_on_the_thread_that_asked_so_they_keep_their_order() {
         // #891: a pane's resize must land before the watch after it, and Tauri keeps that order
         // only for synchronous commands. Both refuse here, as there is no session 7; where the

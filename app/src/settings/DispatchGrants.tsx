@@ -26,6 +26,7 @@ const NOTHING_STANDS: DispatchStanding = {
   nevers: [],
   any: [],
   nevers_unread: null,
+  project_unsettled: false,
   personas: null,
   kept_blocked: [],
   dormant: [],
@@ -174,6 +175,9 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  *   persona. A pair kept blocked for one chat's life is drawn read-only, with the chat.
  * - **Where the list of nevers does not read**, the core's sentence is at the top, no never is
  *   drawn, and every grant says it does not count.
+ * - **Where purlis has not read the project's history yet, or cannot** (#1543), it says so at
+ *   the top, and each grant of the project's accepted here says it does not count: in the
+ *   first moments after a launch, and while git cannot be asked, it is in force for nobody.
  * - **Each grant says which workspace it holds in** (#1505), and the person changes it there
  *   for a grant of their own or of the project's: narrowing and widening are each asked first,
  *   and a project grant's change says it edits the committed file. A grant whose workspace is
@@ -357,6 +361,14 @@ export function DispatchGrantsList({
   const countsNote = (names: readonly string[]): string | undefined =>
     notInForce(names) ??
     (unread === null ? undefined : "Does not count until the list above reads.");
+
+  /** {@link countsNote}, for a grant of the project's accepted on this machine: it counts
+   *  only while purlis can read the project's history (#1543), which the core says. */
+  const acceptedNote = (names: readonly string[]): string | undefined =>
+    countsNote(names) ??
+    (standing.project_unsettled
+      ? "Accepted, but does not count until purlis can read this project's history."
+      : undefined);
 
   /** Who a grant lets dispatch to whom, as a sentence says it. */
   const pairSaid = (changes: Changes) =>
@@ -583,12 +595,20 @@ export function DispatchGrantsList({
           "Waiting for you: it is the project's, and it allows nothing on this machine until you accept it.",
         workspace,
         dormant: one.nowhere !== null,
-        offers: one.nowhere === null ? [accept, decline, remove] : [remove],
+        // A grant limited to one workspace that nobody here accepted has nothing to stop
+        // following: it already allows nothing here, and the project's Notice never tells of
+        // it, so it offers no Not on my machine (#1543).
+        offers:
+          one.nowhere !== null
+            ? [remove]
+            : workspace === null
+              ? [accept, decline, remove]
+              : [accept, remove],
       };
     return {
       key,
       says: dispatchSourceSaid(one),
-      note: one.nowhere ?? countsNote(names),
+      note: one.nowhere ?? acceptedNote(names),
       workspace,
       changes,
       dormant: stalled !== undefined,
@@ -694,7 +714,7 @@ export function DispatchGrantsList({
       return {
         key,
         says: "The project: allowed",
-        note: countsNote([persona]),
+        note: acceptedNote([persona]),
         workspace,
         changes: { level: "project", asking: persona, target: ANY },
         dormant: notInForce([persona]) !== undefined,
@@ -757,7 +777,7 @@ export function DispatchGrantsList({
       return {
         key,
         says: `${whose}: allowed`,
-        note: one.nowhere ?? countsNote([persona]),
+        note: one.nowhere ?? (level === "project" ? acceptedNote : countsNote)([persona]),
         workspace: at,
         changes,
         dormant: one.nowhere !== null || notInForce([persona]) !== undefined,
@@ -1009,6 +1029,19 @@ export function DispatchGrantsList({
           purlis could not read what stands of dispatch here: the pairs you said never to, any
           persona, and which personas this project has ({unknown}). The table is not drawn, since it
           could not say which grants count. Nothing was changed.
+        </Notice>
+      )}
+      {unknown === undefined && standing.project_unsettled && (
+        <Notice
+          cause="dispatch-project-unsettled"
+          at="pane"
+          // Read again once purlis has read the project's history: a settling lands on its own.
+          fixes={[{ label: "Read again", onPress: () => void read() }]}
+        >
+          purlis has not read this project&apos;s git history since it started, or could not read it
+          just now. Until it can, no grant of the project&apos;s that you accepted counts on this
+          machine, and a chat that needs one asks you on its own tab. Your own grants are as they
+          were.
         </Notice>
       )}
       {unknown === undefined && unread !== null && (
