@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
 import { commands, type GrantLevel, type PlaneId } from "./bindings";
 import { arrivedSaid, useDispatchArrival } from "./dispatchArrival";
 import { useDispatchesHeld } from "./dispatchesHeld";
-import { Notice, type NoticeAction } from "./Notice";
+import { Notice, NoticeOf, type NoticeAction } from "./Notice";
 import { Choice } from "./settings/components";
 
 /** About how many lines the brief's box shows before it scrolls (`App.css`,
@@ -92,6 +92,10 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  */
 export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
+  /** Drawn for a chat that is not on screen (#1538): its path is said first (`NoticeOf`), so
+   *  the sentence says "it", and never "this chat", which would read as the chat on screen. */
+  const self = useContext(NoticeOf) === null ? "this chat" : "it";
+  const Self = self === "it" ? "It" : "This chat";
   const { waiting, read } = useDispatchesHeld(plane, session);
   const arrival = useDispatchArrival(plane);
   // What waits of the project's grants moved (an answer on the window's own Notice, or in
@@ -154,7 +158,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     rest.length > 0
       ? ` ${rest.length} more ${rest.length === 1 ? "dispatch is" : "dispatches are"} waiting behind this one.`
       : "";
-  const who = first.asking === null ? "This chat" : `This chat runs as ${first.asking} and`;
+  const who = first.asking === null ? Self : `${Self} runs as ${first.asking} and`;
 
   const putAway = () => {
     setSaid(undefined);
@@ -225,7 +229,7 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     else names.delete(name);
     setTicks({ on: first.id, shown: first.shown, names });
   };
-  const asker = first.asking ?? "this chat";
+  const asker = first.asking ?? self;
 
   /** What the answer covers besides the asked pair, and what it does not. */
   const besides = first.locked === null && (
@@ -393,9 +397,9 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       {here.length > 0 &&
         `${arrivedSaid(here).join(" ")}${pair.length > 0 ? " You have not answered that on this machine." : ""} `}
       {who} wants to dispatch to {first.target}. Nothing starts until you answer. Allowing it lets{" "}
-      {first.asking === null ? "this chat" : `${first.asking} chats`} ask {first.target} for
-      anything {first.target} can do, without asking you again. The grant covers the helpers{" "}
-      {first.asking === null ? "this chat runs" : "those chats run"} too: what one of them asks is
+      {first.asking === null ? self : `${first.asking} chats`} ask {first.target} for anything{" "}
+      {first.target} can do, without asking you again. The grant covers the helpers{" "}
+      {first.asking === null ? `${self} runs` : "those chats run"} too: what one of them asks is
       asked as its chat.
       {holds}
       {first.also.length > 0 &&

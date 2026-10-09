@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
+import { NoticeOf } from "./Notice";
 import type { DispatchArrived, DispatchPending, GrantLevel } from "./bindings";
 
 /**
@@ -637,6 +638,54 @@ describe("the dispatch grant Notice", () => {
 
     await waitFor(() => expect(sent(asked, "dispatch_grants_needed")).toHaveLength(1));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **Drawn for a chat that is not on screen** (#1538): on its session's tab a task's question
+ * starts with the task's whole path (`NoticeOf`), so its own sentence says "it", never "this
+ * chat", which would read as the chat on screen.
+ */
+describe("the dispatch grant Notice, for a chat that is not on screen", () => {
+  const WHOSE = "deep (a task of “steward 3” › “talk”)";
+  const drawnOff = () =>
+    render(
+      <NoticeOf.Provider value={{ whose: WHOSE, onGo: () => {} }}>
+        <DispatchGrantNotice plane={PLANE} session={SESSION} />
+      </NoticeOf.Provider>,
+    );
+
+  it("says the path, then it: never this chat", async () => {
+    core([WANTING]);
+    drawnOff();
+
+    const notice = await screen.findByRole("status", { name: `${WHOSE}: Dispatch to devops` });
+    expect(notice).toHaveTextContent(
+      `${WHOSE}: It runs as steward and wants to dispatch to devops.`,
+    );
+    expect(screen.getByText("Also let steward dispatch to:")).toBeInTheDocument();
+    expect(notice).not.toHaveTextContent(/this chat (runs as|wants|asked)/i);
+  });
+
+  it("says it of a chat on no persona", async () => {
+    core([{ ...WAITING, asking: null }]);
+    drawnOff();
+
+    const notice = await screen.findByRole("status", { name: `${WHOSE}: Dispatch to devops` });
+    expect(notice).toHaveTextContent(`${WHOSE}: It wants to dispatch to devops.`);
+    expect(notice).toHaveTextContent("Allowing it lets it ask devops for anything");
+    expect(notice).toHaveTextContent("The grant covers the helpers it runs too");
+    expect(notice).not.toHaveTextContent(/this chat (runs|wants|asked|ask )/i);
+  });
+
+  it("says it on a pair policy locks", async () => {
+    core([{ ...WAITING, locked: "Your administrator's policy forbids it (set by it-ops)." }]);
+    drawnOff();
+
+    const notice = await screen.findByRole("status", { name: `${WHOSE}: Dispatch to devops` });
+    expect(notice).toHaveTextContent(
+      `${WHOSE}: It runs as steward and asked to dispatch to devops.`,
+    );
   });
 });
 

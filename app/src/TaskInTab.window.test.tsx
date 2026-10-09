@@ -1218,7 +1218,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     await holdDispatch(1);
 
     const held = await screen.findByRole("status", { name: "steward 1: Dispatch to devops" });
-    expect(held.textContent).toMatch(/^steward 1: This chat runs as steward and wants to dispatch/);
+    expect(held.textContent).toMatch(/^steward 1: It runs as steward and wants to dispatch/);
     // The pane still shows talk: nothing was switched to show the question.
     expect(onScreen()).toEqual([4]);
 
