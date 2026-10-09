@@ -879,3 +879,31 @@ fn a_file_renamed_over_the_name_while_it_is_read_is_kept() {
     assert_eq!(swept, 0);
     assert!(path.exists(), "the file renamed over the name stands");
 }
+
+/// #1027: a link swapped in at the name while the sweep read the file is neither followed nor
+/// removed: the look again opens the name without following a link, and finds no file.
+#[cfg(unix)]
+#[test]
+fn a_link_swapped_in_while_the_file_is_read_is_kept_and_not_followed() {
+    let (_d, root) = plane();
+    let path = root.join(".charter/sessions/3.workspace");
+    aged(&path, OLD);
+    let elsewhere = root.join("kept-elsewhere");
+    aged(&elsewhere, OLD);
+
+    let swept = collect(
+        &root,
+        &[".charter", "sessions"],
+        SystemTime::now(),
+        |name| name == "3.workspace",
+        |_, written| {
+            std::fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            Some(written)
+        },
+    );
+
+    assert_eq!(swept, 0);
+    assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(elsewhere.is_file());
+}
