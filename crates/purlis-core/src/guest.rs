@@ -170,6 +170,15 @@ pub enum Status {
     /// project no longer has: taken out, with its record entry and its line
     /// (`withdraw_mirrors`).
     Removed,
+    /// The project has newer text for this path, and the file there is one the checkout's
+    /// record names but the project's own note of what it offered does not (`vouched`).
+    /// purlis cannot confirm it wrote that text, so it is left exactly as it is.
+    ///
+    /// Never [`Status::Refreshed`]: the record sits in the checkout, where a chat can write
+    /// it, and on its own it would let a chat have purlis overwrite a file of the operator's
+    /// that the chat itself may not touch. Never [`Status::Foreign`] either: it may well be
+    /// purlis's own older copy, written before the project noted what it offered.
+    Unconfirmed,
 }
 
 /// One generated path and what happened to it.
@@ -243,7 +252,7 @@ pub struct Wired {
 fn failed(status: Status) -> bool {
     matches!(
         status,
-        Status::Foreign | Status::Blocked | Status::Unrecorded
+        Status::Foreign | Status::Blocked | Status::Unrecorded | Status::Unconfirmed
     )
 }
 
@@ -289,6 +298,12 @@ impl Wired {
                 "{rel} in {shown} is a file purlis did not write, so the plane's layer is not \
                  in force there and purlis will not overwrite it. Move it aside and start the \
                  chat again, or start this chat in the clone."
+            ),
+            Status::Unconfirmed => format!(
+                "the project has newer text for {rel} in {shown}, but purlis cannot confirm it \
+                 wrote the file there now, so it is left as is and the plane's layer is not in \
+                 force there. If it is purlis's own older copy, move it aside and start the \
+                 chat again."
             ),
             Status::Unrecorded => format!(
                 "purlis could not publish its record in {shown} first ({}), so it wrote \
@@ -421,8 +436,9 @@ fn own_text(tree: &Path, rel: &str) -> Option<String> {
 }
 
 /// The file, in the project's `<state>/app/`, that lists every text the project has offered
-/// at a path it may later withdraw ([`note_offered`]): the mirrored agents and skills a
-/// checkout gets, and the generated settings a workspace folder gets ([`crate::wslayer`]).
+/// at a path it may later refresh or withdraw ([`note_offered`]): the mirrored agents and
+/// skills and the generated settings a checkout gets, and the generated settings a workspace
+/// folder gets ([`crate::wslayer`]).
 const OFFERED: &str = "mirrors-offered.json";
 
 /// The most digests [`OFFERED`] keeps for one path, newest last: every edit of an agent is a
@@ -437,10 +453,25 @@ pub(crate) fn offered_path(plane: &Path) -> PathBuf {
     names::state(plane).join("app").join(OFFERED)
 }
 
-/// The paths [`OFFERED`] notes: every one purlis may withdraw a copy at, in a checkout or in a
-/// workspace folder. The machine-local settings are left out: the harness writes there too.
+/// The paths [`OFFERED`] notes: every one purlis may refresh or withdraw a copy at, in a
+/// checkout or in a workspace folder. The machine-local settings are noted for the refresh
+/// alone; nothing withdraws them, since the harness writes there too.
 fn offerable(rel: &str) -> bool {
-    mirrored_path(rel) || rel == SETTINGS
+    mirrored_path(rel) || rel == SETTINGS || rel == LOCAL_SETTINGS
+}
+
+/// Whether the project's own note of what it offered (`offered`, [`read_offered`]) holds the
+/// text with digest `have` at exactly `rel`.
+///
+/// The one test behind both verbs that act on a file a record names — a refresh that
+/// overwrites it and a withdraw that removes it — and asked alongside the record, never
+/// instead of it. The record sits in the tree, where a chat may be able to write it, so on its
+/// own it proves nothing; [`OFFERED`] sits where no chat can write. The key match is exact, so
+/// a key spelled another way is never vouched for (#1583).
+pub(crate) fn vouched(offered: &BTreeMap<String, Vec<String>>, rel: &str, have: &str) -> bool {
+    offered
+        .get(rel)
+        .is_some_and(|all| all.iter().any(|d| d == have))
 }
 
 /// What [`OFFERED`] holds: `{path: [digest, …]}` for the [`offerable`] paths only. Absent,
@@ -468,10 +499,14 @@ fn parse_offered(text: &str) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-/// Note each [`offerable`] text `want` offers in [`OFFERED`], so a copy of it can be withdrawn
-/// once the project stops having it (#1583). Written only when something is new, and under
-/// the folder's lock. A write that fails (a sandboxed caller, a read-only project) notes
-/// nothing, and what is not noted is never withdrawn: the safe direction.
+/// Note each [`offerable`] text `want` offers in [`OFFERED`], so a copy of it can be refreshed
+/// once the project moves on, or withdrawn once it stops having it (#1583). Noted before
+/// anything is written, which is what makes every text purlis writes one it can later confirm
+/// ([`vouched`]); never seeded from a tree's record, which a chat may have written.
+///
+/// Written only when something is new, and under the folder's lock. A write that fails (a
+/// sandboxed caller, a read-only project) notes nothing, and what is not noted is never
+/// overwritten or withdrawn: the safe direction.
 pub(crate) fn note_offered(plane: &Path, want: &BTreeMap<String, String>) {
     let offers: Vec<(&String, String)> = want
         .iter()
@@ -547,10 +582,7 @@ fn retired_mirrors(
         .filter(|rel| {
             own_text(tree, rel).is_some_and(|text| {
                 let d = digest(&text);
-                record.recorded(rel).contains(&d)
-                    && offered
-                        .get(rel.as_str())
-                        .is_some_and(|all| all.contains(&d))
+                record.recorded(rel).contains(&d) && vouched(offered, rel, &d)
             })
         })
         .filter(|rel| !tracked(rel))
@@ -745,9 +777,12 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         };
     }
     let record = layer::read_record(tree);
+    // What the project noted offering, read once: a stale copy is refreshed only when this
+    // vouches for it as well as the record, and a retired one withdrawn on the same terms.
+    let offered = read_offered(plane);
     let plan: Vec<(String, Plan)> = want
         .iter()
-        .map(|(rel, text)| (rel.clone(), planned(tree, rel, text, &record)))
+        .map(|(rel, text)| (rel.clone(), planned(tree, rel, text, &record, &offered)))
         .collect();
 
     // What the FIRST pass names: what is missing, what charter still recognises as its own,
@@ -823,6 +858,13 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
                 why: String::new(),
             }),
             Plan::Foreign => rows.push(row(rel)),
+            // Left exactly as it is. Its exclude line is what the record already gave it
+            // (`charter_owned`), as before.
+            Plan::Unconfirmed => rows.push(Row {
+                rel,
+                status: Status::Unconfirmed,
+                why: String::new(),
+            }),
             Plan::Current | Plan::HarnessEdited => {
                 // A record that does not say what a current file holds is SETTLED on it:
                 // pending over a write that finished, or settled by a launch that lost a race
@@ -925,7 +967,6 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         // What the project stopped mirroring goes after the writes and before the record is
         // published, so the publish below carries both, and the second pass takes the lines
         // of what went (#1583).
-        let offered = read_offered(plane);
         let retired = retired_mirrors(plane, tree, &want, &marker, &offered, &|rel| {
             tracked(tree, rel)
         });
@@ -1084,9 +1125,14 @@ fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
         ));
     }
     let record = layer::read_record(tree);
-    let plan = planned(tree, AGENTS_MD, text, &record);
+    // No offers: `planned` goes by the record alone for this one file.
+    let plan = planned(tree, AGENTS_MD, text, &record, &BTreeMap::new());
     match plan {
-        Plan::Foreign | Plan::Unreadable | Plan::Theirs | Plan::HarnessEdited => {
+        Plan::Foreign
+        | Plan::Unreadable
+        | Plan::Theirs
+        | Plan::HarnessEdited
+        | Plan::Unconfirmed => {
             return Guidance::Theirs;
         }
         Plan::Current | Plan::Create | Plan::Refresh => {}
@@ -1559,9 +1605,25 @@ enum Plan {
     Unreadable,
     /// Somebody else's file.
     Foreign,
+    /// What [`Plan::Refresh`] would be on the record's word alone, where the project's own
+    /// note of what it offered does not vouch for the text there ([`vouched`]): left as is.
+    Unconfirmed,
 }
 
-fn planned(tree: &Path, rel: &str, text: &str, record: &layer::Record) -> Plan {
+/// `offered` is the project's note of what it offered ([`read_offered`]). A file the record
+/// vouches for is [`Plan::Refresh`] only when this vouches for the same text at the same path;
+/// otherwise it is [`Plan::Unconfirmed`] and stays as it is.
+///
+/// **Except [`AGENTS_MD`]**, a chat's own guidance, which goes by the record alone: a chat can
+/// write that file in its own worktree itself, so a record naming it gives a chat nothing it
+/// does not already have, and its per-chat texts are not ones the project notes.
+fn planned(
+    tree: &Path,
+    rel: &str,
+    text: &str,
+    record: &layer::Record,
+    offered: &BTreeMap<String, Vec<String>>,
+) -> Plan {
     let path = tree.join(rel);
     // `listing::exists`, never a bare `symlink_metadata().is_err()`: that reads EACCES as
     // "not there", and charter would then WRITE over a path it was not allowed to look at.
@@ -1582,9 +1644,16 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &layer::Record) -> Plan {
     if on_disk == text {
         return Plan::Current;
     }
-    // Only content a record LISTS is charter's to overwrite, pending or settled.
-    if record.recorded(rel).contains(&digest(&on_disk)) {
-        return Plan::Refresh;
+    // Only content a record LISTS is charter's to overwrite, pending or settled — and only
+    // when the project noted offering that very text here too, because the record alone sits
+    // where a chat can write it (#1583).
+    let have = digest(&on_disk);
+    if record.recorded(rel).contains(&have) {
+        return if rel == AGENTS_MD || vouched(offered, rel, &have) {
+            Plan::Refresh
+        } else {
+            Plan::Unconfirmed
+        };
     }
     if COWRITTEN.contains(&rel) {
         // `harness-edited` only over a SETTLED record of exactly what the plane wants now. A
@@ -1685,7 +1754,10 @@ pub fn unhidden(plane: &Path, tree: &Path) -> Vec<String> {
     let want = want(plane);
     let mut rels = charter_owned(tree, &record);
     for (rel, body) in &want {
-        if COWRITTEN.contains(&rel.as_str()) && planned(tree, rel, body, &record) == Plan::Create {
+        // Only `Create` is asked, which no offer changes.
+        if COWRITTEN.contains(&rel.as_str())
+            && planned(tree, rel, body, &record, &BTreeMap::new()) == Plan::Create
+        {
             rels.push(rel.clone());
         }
     }
@@ -2885,7 +2957,7 @@ mod tests {
         let mut current = layer::Record::new();
         current.settle(LOCAL_SETTINGS, digest(want));
         assert_eq!(
-            planned(&tree, LOCAL_SETTINGS, want, &current),
+            planned(&tree, LOCAL_SETTINGS, want, &current, &BTreeMap::new()),
             Plan::HarnessEdited
         );
 
@@ -2893,13 +2965,69 @@ mod tests {
         // keeps, so the plane's newer rules are NOT in force there and the row says so.
         let mut behind = layer::Record::new();
         behind.settle(LOCAL_SETTINGS, digest("something older"));
-        assert_eq!(planned(&tree, LOCAL_SETTINGS, want, &behind), Plan::Theirs);
+        assert_eq!(
+            planned(&tree, LOCAL_SETTINGS, want, &behind, &BTreeMap::new()),
+            Plan::Theirs
+        );
 
         // A pending entry is not a settled one: an approval saved over an interrupted write
         // must not settle a file that never received the plane's new `deny`.
         let mut pending = layer::Record::new();
         pending.pend(LOCAL_SETTINGS, digest(want));
-        assert_eq!(planned(&tree, LOCAL_SETTINGS, want, &pending), Plan::Theirs);
+        assert_eq!(
+            planned(&tree, LOCAL_SETTINGS, want, &pending, &BTreeMap::new()),
+            Plan::Theirs
+        );
+    }
+
+    #[test]
+    fn a_file_only_the_checkouts_record_vouches_for_is_never_refreshed() {
+        // The record sits in the checkout, where a chat can write it. One naming the
+        // operator's own file, with that file's digest, must not make it purlis's to
+        // overwrite: the project's ledger must have noted that very text at that path too.
+        let (_dir, _plane, tree) = plane_with("svc");
+        std::fs::create_dir_all(tree.join(".claude/agents")).unwrap();
+        let want = "{\"permissions\":{\"ask\":[]}}\n";
+        for (rel, mine) in [
+            (
+                SETTINGS,
+                "{\"permissions\":{\"deny\":[\"Bash(curl *)\"]}}\n",
+            ),
+            (
+                LOCAL_SETTINGS,
+                "{\"permissions\":{\"deny\":[\"Bash(ssh *)\"]}}\n",
+            ),
+            (AGENT, "# my own\n"),
+        ] {
+            std::fs::write(tree.join(rel), mine).unwrap();
+            let mut forged = layer::Record::new();
+            forged.settle(rel, digest(mine));
+
+            assert_eq!(
+                planned(&tree, rel, want, &forged, &BTreeMap::new()),
+                Plan::Unconfirmed,
+                "{rel}"
+            );
+            // Noted at another path, or another text at this one: still not this file.
+            let elsewhere = BTreeMap::from([("x".to_owned(), vec![digest(mine)])]);
+            assert_eq!(
+                planned(&tree, rel, want, &forged, &elsewhere),
+                Plan::Unconfirmed
+            );
+            let other = BTreeMap::from([(rel.to_owned(), vec![digest("older\n")])]);
+            assert_eq!(
+                planned(&tree, rel, want, &forged, &other),
+                Plan::Unconfirmed
+            );
+
+            // The genuine case: both vouch, so purlis's own stale copy is brought up to date.
+            let noted = BTreeMap::from([(rel.to_owned(), vec![digest(mine)])]);
+            assert_eq!(planned(&tree, rel, want, &forged, &noted), Plan::Refresh);
+        }
+        assert!(
+            failed(Status::Unconfirmed),
+            "the newer layer is not in force there"
+        );
     }
 
     #[test]
@@ -2912,7 +3040,13 @@ mod tests {
         std::fs::write(tree.join(SETTINGS), "theirs\n").unwrap();
         std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let what = planned(&tree, SETTINGS, "{}\n", &layer::Record::new());
+        let what = planned(
+            &tree,
+            SETTINGS,
+            "{}\n",
+            &layer::Record::new(),
+            &BTreeMap::new(),
+        );
         std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         // NOT `Create`: reading EACCES as "not there" is how charter would come to write over
@@ -2933,7 +3067,13 @@ mod tests {
         // followed the link would call it `current` and report the plane's rules in force
         // through a link charter will not write through.
         assert_eq!(
-            planned(&tree, SETTINGS, "{}\n", &layer::Record::new()),
+            planned(
+                &tree,
+                SETTINGS,
+                "{}\n",
+                &layer::Record::new(),
+                &BTreeMap::new()
+            ),
             Plan::Foreign
         );
     }
@@ -3271,9 +3411,9 @@ mod tests {
             BTreeMap::from([
                 (AGENT.to_owned(), vec![digest("# ops\n")]),
                 (SETTINGS.to_owned(), vec![digest("{}\n")]),
+                (LOCAL_SETTINGS.to_owned(), vec![digest("{}\n")]),
             ]),
-            "the generated settings are noted for a workspace folder's withdraw; the \
-             machine-local ones, which the harness writes too, are not"
+            "every generated and mirrored text is noted, so a refresh can be confirmed"
         );
         let written = std::fs::metadata(offered_path(plane))
             .unwrap()
@@ -3303,9 +3443,7 @@ mod tests {
 
         // A file of another shape, or naming what is no mirror, offers nothing.
         assert!(parse_offered("[1]").is_empty());
-        assert!(
-            parse_offered(r#"{"../x": ["a"], ".claude/settings.local.json": ["a"]}"#).is_empty()
-        );
+        assert!(parse_offered(r#"{"../x": ["a"], ".claude/notes/x.md": ["a"]}"#).is_empty());
     }
 
     #[test]

@@ -130,8 +130,8 @@ pub enum Found {
     Ok,
     /// Not there at all.
     Missing,
-    /// Charter's own file, holding content charter's record vouches for, that the plane has
-    /// moved on from.
+    /// Charter's own file, holding content charter's record vouches for — and the project's
+    /// note of what it offered too (`found`) — that the plane has moved on from.
     Stale,
     /// Somebody else's file — content charter cannot vouch for against the record, or a path
     /// reached through a symlink. Never repaired and never overwritten.
@@ -146,6 +146,11 @@ pub enum Found {
     Unreadable,
     /// A file charter generated, still exactly as written, that nothing generates any more.
     Unwanted,
+    /// What [`Found::Stale`] would be on the record's word alone: the plane has newer text,
+    /// and the record names the file there, but the project's own note of what it offered
+    /// does not (`guest::vouched`). purlis cannot confirm it wrote that file, so it
+    /// is never overwritten.
+    Unconfirmed,
 }
 
 /// What charter DID at one path. The Python's `wire_harnesses`.
@@ -190,6 +195,10 @@ pub enum Did {
     /// reading the same file. [`crate::guest::unhidden`] says which, whose, and what clears
     /// it.
     Unhidden,
+    /// The plane has newer text for this path, and purlis cannot confirm it wrote the file
+    /// there now ([`Found::Unconfirmed`]), so it was left exactly as it is. Not a repair, and
+    /// not one `reinit` makes either: the same gate stands at every wire.
+    Unconfirmed,
     /// git could not list the worktrees of a checkout's repository, so none of them was
     /// checked or given charter's layer (charter#1072).
     ///
@@ -223,6 +232,7 @@ impl Did {
                 | Did::Unrecorded
                 | Did::Unhidden
                 | Did::Unlisted
+                | Did::Unconfirmed
         )
     }
 }
@@ -248,7 +258,7 @@ pub fn want(plane: &Path) -> BTreeMap<String, String> {
 }
 
 /// Whether [`want`] can ever offer a workspace folder `rel`: the paths whose offers, noted in
-/// the project's ledger, may vouch for a withdraw here ([`unwanted`]).
+/// the project's ledger, may vouch for a refresh ([`found`]) or a withdraw ([`unwanted`]) here.
 fn offered_here(rel: &str) -> bool {
     rel == layer::SETTINGS
 }
@@ -310,27 +320,29 @@ pub fn status(
         return vec![(layer::MARKER.to_owned(), Found::Foreign)];
     }
     let record = layer::read_record(dir);
-    let mut rows = found(plane, dir, want_all, &record);
+    let offered = crate::guest::read_offered(plane);
+    let mut rows = found(plane, dir, want_all, &record, &offered);
     rows.extend(
-        unwanted(
-            plane,
-            dir,
-            want_all,
-            &record,
-            &crate::guest::read_offered(plane),
-        )
-        .into_iter()
-        .map(|rel| (rel, Found::Unwanted)),
+        unwanted(plane, dir, want_all, &record, &offered)
+            .into_iter()
+            .map(|rel| (rel, Found::Unwanted)),
     );
     rows
 }
 
 /// [`status`]'s comparison for the wanted paths alone, against a record already in hand.
+///
+/// **Stale only when the record AND the project's note of what it offered (`offered`) vouch
+/// for the text there**, at that very path, for a path this layer offers ([`offered_here`]).
+/// The record sits in the workspace folder, where a chat may be able to write it: on its own,
+/// a forged entry naming the operator's own settings would have the next launch overwrite
+/// them. One the record alone vouches for is [`Found::Unconfirmed`] (#1583).
 fn found(
     _plane: &Path,
     dir: &Path,
     want_all: &BTreeMap<String, String>,
     record: &Record,
+    offered: &BTreeMap<String, Vec<String>>,
 ) -> Vec<(String, Found)> {
     let mut rows = Vec::new();
     for (rel, want) in want_all {
@@ -352,11 +364,21 @@ fn found(
             rows.push((rel.clone(), Found::Unreadable));
             continue;
         };
+        let on_disk = layer::digest(&have);
         if &have == want {
             rows.push((rel.clone(), Found::Ok));
-        } else if record.recorded(rel).contains(&layer::digest(&have)) {
-            // Only content a record LISTS is charter's to overwrite, pending or settled.
-            rows.push((rel.clone(), Found::Stale));
+        } else if record.recorded(rel).contains(&on_disk) {
+            // Only content a record LISTS is charter's to overwrite, pending or settled, and
+            // only once the project's own note confirms purlis offered that text here.
+            let confirmed = offered_here(rel) && crate::guest::vouched(offered, rel, &on_disk);
+            rows.push((
+                rel.clone(),
+                if confirmed {
+                    Found::Stale
+                } else {
+                    Found::Unconfirmed
+                },
+            ));
         } else {
             rows.push((rel.clone(), Found::Foreign));
         }
@@ -425,7 +447,7 @@ fn unwanted(
         // offer made to a checkout vouches for nothing in a workspace folder.
         if record.recorded(rel).contains(&have)
             && offered_here(rel)
-            && offered.get(rel).is_some_and(|all| all.contains(&have))
+            && crate::guest::vouched(offered, rel, &have)
         {
             out.push(rel.clone());
         }
@@ -478,10 +500,10 @@ fn withdraw(
     dir: &Path,
     want_all: &BTreeMap<String, String>,
     record: &mut Record,
+    offered: &BTreeMap<String, Vec<String>>,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
-    let offered = crate::guest::read_offered(plane);
-    for rel in unwanted(plane, dir, want_all, record, &offered) {
+    for rel in unwanted(plane, dir, want_all, record, offered) {
         let path = dir.join(rel.as_str());
         // Re-checked at the moment of the unlink, not carried from the classification: this
         // is the destructive verb, and it is the one that must not act on a stale answer.
@@ -522,7 +544,9 @@ fn withdraw(
 ///
 /// **Refresh, not create-once.** A file whose digest is in the record is charter's, and
 /// charter brings its own files up to date; a file whose digest is not is the operator's and
-/// is left exactly as found. Create-once was right about the operator's files and wrong about
+/// is left exactly as found. Since #1583 the record is not enough alone: the project must
+/// have noted offering that text here too ([`found`]), or the file is left as it is and
+/// reported [`Did::Unconfirmed`]. Create-once was right about the operator's files and wrong about
 /// charter's: a document generated by an old version survived every upgrade afterwards while
 /// `doctor` reported the tree wired (ADR 0015).
 ///
@@ -568,12 +592,13 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     // Before anything is written or withdrawn: a copy goes later only if this says purlis
     // offered that text here.
     crate::guest::note_offered(plane, &want_all);
+    let offered = crate::guest::read_offered(plane);
     let mut record = layer::read_record(dir);
     let before = record.clone();
-    let mut rows = withdraw(plane, dir, &want_all, &mut record);
+    let mut rows = withdraw(plane, dir, &want_all, &mut record, &offered);
     let mut writes: Vec<(String, Found)> = Vec::new();
     let mut published = before;
-    for (rel, what) in found(plane, dir, &want_all, &record) {
+    for (rel, what) in found(plane, dir, &want_all, &record, &offered) {
         match what {
             Found::Unreadable => rows.push(Row {
                 rel,
@@ -582,6 +607,11 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
             Found::Foreign => rows.push(Row {
                 rel,
                 did: Did::Foreign,
+            }),
+            // Never written over: purlis cannot confirm the text there is its own.
+            Found::Unconfirmed => rows.push(Row {
+                rel,
+                did: Did::Unconfirmed,
             }),
             Found::Ok => {
                 // A record that does not say what an `ok` file holds is SETTLED on it:
@@ -725,6 +755,7 @@ fn guest_rows(plane: &Path, dir: &Path, tree: &Path) -> Vec<Row> {
                 crate::guest::Status::Withheld => Did::Withheld,
                 crate::guest::Status::Unrecorded => Did::Unrecorded,
                 crate::guest::Status::Removed => Did::Removed,
+                crate::guest::Status::Unconfirmed => Did::Unconfirmed,
             },
         })
         .collect();
@@ -1571,6 +1602,76 @@ mod tests {
     }
 
     #[test]
+    fn a_forged_record_naming_the_operators_own_settings_never_gets_it_overwritten() {
+        // The plane declares settings, and the operator keeps settings of their own in the
+        // workspace folder. A record naming that file, with its digest, reads it as purlis's
+        // older copy: alone, it would have the next launch overwrite it with the plane's text.
+        let (plane, ws) = plane();
+        let mine = "{\"permissions\":{\"deny\":[\"Bash(curl *)\"]}}\n";
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
+        std::fs::write(ws.join(layer::SETTINGS), mine).unwrap();
+        forge_record(&ws, &[(layer::SETTINGS, mine)]);
+
+        assert_eq!(
+            status(plane.path(), &ws, &want(plane.path())),
+            [(layer::SETTINGS.to_string(), Found::Unconfirmed)]
+        );
+        assert_eq!(
+            rows(&wire(plane.path(), &ws)),
+            [(layer::SETTINGS, Did::Unconfirmed)]
+        );
+        assert_eq!(
+            std::fs::read(ws.join(layer::SETTINGS)).unwrap(),
+            mine.as_bytes(),
+            "left byte for byte as it was"
+        );
+        assert!(Did::Unconfirmed.is_unresolved() && !Did::Unconfirmed.is_repair());
+
+        // Noted for a checkout's agents at the same path is not noted here: still left as is.
+        let agent = ".claude/agents/ops.md";
+        crate::guest::note_offered(
+            plane.path(),
+            &BTreeMap::from([(agent.to_owned(), mine.to_owned())]),
+        );
+        assert_eq!(
+            rows(&wire(plane.path(), &ws)),
+            [(layer::SETTINGS, Did::Unconfirmed)]
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
+            mine
+        );
+    }
+
+    #[test]
+    fn a_stale_copy_whose_text_purlis_noted_offering_is_still_refreshed() {
+        // The genuine case: the text on disk is one the plane offered here before, so both the
+        // record and the project's own note vouch for it.
+        let (plane, ws) = plane();
+        let old = want(plane.path())[layer::SETTINGS].clone();
+        crate::guest::note_offered(plane.path(), &want(plane.path()));
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
+        std::fs::write(ws.join(layer::SETTINGS), &old).unwrap();
+        forge_record(&ws, &[(layer::SETTINGS, &old)]);
+        std::fs::write(
+            plane.path().join(layer::SETTINGS),
+            r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            status(plane.path(), &ws, &want(plane.path())),
+            [(layer::SETTINGS.to_string(), Found::Stale)]
+        );
+        assert_eq!(
+            rows(&wire(plane.path(), &ws)),
+            [(layer::SETTINGS, Did::Refreshed)]
+        );
+        let text = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
+        assert!(text.contains("rm -rf"), "{text}");
+    }
+
+    #[test]
     fn an_offer_made_to_a_checkout_vouches_for_nothing_in_a_workspace_folder() {
         // The ledger notes the agents a checkout is offered, at the same relative path a
         // workspace folder could hold a file of the operator's. A record naming that file,
@@ -1908,10 +2009,11 @@ mod tests {
             // co-written path is `.claude/settings.local.json`, which a workspace directory
             // never wants.
             Did::HarnessBehind,
+            Did::Unconfirmed,
         ];
-        assert_eq!(reachable.len(), 8);
+        assert_eq!(reachable.len(), 9);
         assert_eq!(reachable.iter().filter(|d| d.is_repair()).count(), 3);
-        assert_eq!(reachable.iter().filter(|d| d.is_unresolved()).count(), 4);
+        assert_eq!(reachable.iter().filter(|d| d.is_unresolved()).count(), 5);
     }
 
     #[test]

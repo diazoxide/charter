@@ -2136,7 +2136,12 @@ beside a purlis one is removed when the record is published (V93i).
   process (a later launch, `doctor`, `reinit`) reads it to decide what is purlis's to
   rewrite, withdraw or hide. Delete it and purlis loses its claim: every generated file
   reads as `foreign` and is never rewritten again, which is the failure mode this file
-  exists to avoid, so it is not "safe to delete".
+  exists to avoid, so it is not "safe to delete". **It is never enough on its own** (#1583):
+  it sits where a chat may be able to write it, so purlis overwrites or removes a file it
+  names only when the project's app state also notes offering that very text at that path
+  (`mirrors-offered.json`, which no chat can write). A file only the record vouches for is
+  left as it is: `reinit` names it, and a chat in a piece holding one is not started. The
+  note is never filled in from a record.
 - **Tier:** Clone state — the record of which files purlis owns. It is not rebuildable: without it, every file it vouched for reads as the operator's.
 - **Written by:** `workspace._publish_marker` (`charter/workspace.py:2943`) from
   `_materialise` (`charter/workspace.py:2807`, `charter/workspace.py:2837`); removed
