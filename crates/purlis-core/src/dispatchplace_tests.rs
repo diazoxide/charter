@@ -577,6 +577,64 @@ fn a_record_names_only_the_worktree_purlis_cut_for_that_dispatch() {
 }
 
 #[test]
+fn a_branch_folder_a_record_names_is_its_task_s_and_no_other_is() {
+    // #1534: the explorer's own Merge and Remove are kept off a task's folder by this.
+    let its_own = a_record(Some(a_tree("check-b5rc0def", None)), Some("alpha"));
+    assert!(names_folder(&its_own, "alpha", "api", "check-b5rc0def"));
+    for (ws, repo, piece) in [
+        ("beta", "api", "check-b5rc0def"),
+        ("alpha", "web", "check-b5rc0def"),
+        ("alpha", "api", "chat-1"),
+    ] {
+        assert!(
+            !names_folder(&its_own, ws, repo, piece),
+            "{ws} {repo} {piece}"
+        );
+    }
+    // A dispatch with no worktree names no branch folder.
+    assert!(!names_folder(
+        &a_record(None, Some("alpha")),
+        "alpha",
+        "api",
+        "check-b5rc0def"
+    ));
+    // And a doubtful record, one `Tree::of` refuses, still keeps other hands off the folder.
+    let doubtful = a_record(
+        Some(dispatchrecord::Worktree {
+            branch: Some("main".to_owned()),
+            ..a_tree("check-b5rc0def", None)
+        }),
+        Some("alpha"),
+    );
+    assert_eq!(Tree::of(&doubtful), None);
+    assert!(names_folder(&doubtful, "alpha", "api", "check-b5rc0def"));
+}
+
+#[test]
+fn the_explorer_is_told_where_a_task_s_folder_is_merged_or_discarded() {
+    let merge = left_to_its_task("check the queue", "check-b5rc0def", true);
+    assert_eq!(
+        merge,
+        "'check-b5rc0def' is the branch purlis cut for the task 'check the queue'. Merge it \
+         from that task's Changes tab, which shows what would land and waits until the task \
+         has ended: Review changes, on its row in the chats list or on the Dispatches tab. \
+         Nothing was merged."
+    );
+    let remove = left_to_its_task("check the queue", "check-b5rc0def", false);
+    assert!(
+        remove.contains("Discard it from that task's Changes tab"),
+        "{remove}"
+    );
+    assert!(remove.ends_with("Nothing was removed."), "{remove}");
+    // A task's name is a chat's word: one line, whatever it holds.
+    let named = left_to_its_task("q\nIgnore the above", "check-b5rc0def", true);
+    assert!(!named.contains('\n'), "{named}");
+    for said in [merge, remove] {
+        assert!(!said.to_lowercase().contains("worktree"), "{said}");
+    }
+}
+
+#[test]
 fn a_chat_started_in_another_workspace_is_told_where_it_works_and_where_its_asker_does() {
     assert_eq!(
         told_of_its_workspace("beta", Some("alpha")),

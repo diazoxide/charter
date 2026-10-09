@@ -699,6 +699,47 @@ impl Tree {
     }
 }
 
+/// Whether `record` names the branch folder `piece` of `repo` in `workspace` as its worktree,
+/// by the names on the record alone. A record whose names [`Tree::of`] would not accept still
+/// names its folder here: a doubtful record keeps other hands off the folder, it never opens
+/// one to them.
+pub fn names_folder(record: &Record, workspace: &str, repo: &str, piece: &str) -> bool {
+    record.place.workspace.as_deref() == Some(workspace)
+        && record
+            .place
+            .worktree
+            .as_ref()
+            .is_some_and(|tree| tree.repo == repo && tree.piece == piece)
+}
+
+/// **The dispatch whose worktree is the branch folder `piece` of `repo` in `workspace`**, where
+/// a record of the project at `root` names it (#1534). What keeps the explorer's own Merge and
+/// Remove off a task's folder: those are the person's acts on any branch folder, and a task's
+/// is merged or discarded from its Changes tab, where [`merge`] and [`discard`] hold their
+/// guards (the shown commit, the task ended, the brokered route, only the branch purlis cut).
+pub fn task_in_folder(root: &Path, workspace: &str, repo: &str, piece: &str) -> Option<Record> {
+    dispatchrecord::list(root)
+        .into_iter()
+        .find(|record| names_folder(record, workspace, repo, piece))
+}
+
+/// What the explorer's own Merge (`merging`) or Remove says of `piece`, the branch folder
+/// purlis cut for the task `task`: that it is the task's, and where the person merges or
+/// discards it instead. One line, in the window's words.
+pub fn left_to_its_task(task: &str, piece: &str, merging: bool) -> String {
+    let (task, piece) = (crate::shown::short(task), crate::shown::short(piece));
+    let (act, shows, done) = if merging {
+        ("Merge", "what would land", "merged")
+    } else {
+        ("Discard", "what would go with it", "removed")
+    };
+    format!(
+        "'{piece}' is the branch purlis cut for the task '{task}'. {act} it from that task's \
+         Changes tab, which shows {shows} and waits until the task has ended: Review changes, on \
+         its row in the chats list or on the Dispatches tab. Nothing was {done}."
+    )
+}
+
 /// How a dispatch's worktree stands, for the row that lists it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Standing {

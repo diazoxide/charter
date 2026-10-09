@@ -174,6 +174,51 @@ pub fn worktree_remove(
     )
 }
 
+/// **The explorer's own Merge and Remove never act on a branch folder purlis cut for a task**
+/// (#1534). A task's folder is merged or discarded from its Changes tab, where the guards a
+/// task's folder needs hold (`purlis_core::dispatchplace::merge` and `discard`): the commit the
+/// person was shown, the task ended and no chat standing in the folder, the brokered route, and
+/// only the branch purlis cut. These two have none of them, so a folder a dispatch record
+/// names is refused here with where to go instead, `force` or not.
+///
+/// Two Removes are let through. One whose folder is already gone: it only takes git's stale
+/// registration, and nothing is in it to lose. And one of an ended task in a repo the brokered
+/// route runs no git in (its own git settings name a program): Discard is refused there, and
+/// its sentence sends the person to this row, which is theirs to use on their own repo.
+fn not_a_task_s(
+    plane: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    merging: bool,
+) -> Result<(), String> {
+    let Some(record) = purlis_core::dispatchplace::task_in_folder(plane, workspace, repo, piece)
+    else {
+        return Ok(());
+    };
+    let there = worktree::path_for(plane, workspace, repo, piece)
+        .is_ok_and(|folder| folder.symlink_metadata().is_ok());
+    if !merging && !there {
+        return Ok(());
+    }
+    if !merging && !record.running() && no_discard_there(plane, workspace, repo) {
+        return Ok(());
+    }
+    let task = record.task.unwrap_or(record.worker.chat.name);
+    Err(purlis_core::dispatchplace::left_to_its_task(
+        &task, piece, merging,
+    ))
+}
+
+/// Whether the brokered route refuses to run git in `repo`'s clone, so a task's Discard there
+/// is refused too (`purlis_core::gitbroker::runs_a_program`).
+fn no_discard_there(plane: &Path, workspace: &str, repo: &str) -> bool {
+    let clone = plane.join("workspaces").join(workspace).join(repo);
+    purlis_core::worktree::git::isolated(&crate::gitbroker::isolation(), || {
+        purlis_core::gitbroker::runs_a_program(&clone).is_err()
+    })
+}
+
 /// The removal itself, against a root the registry has already vouched for.
 fn remove_piece(
     plane: &Path,
@@ -182,6 +227,7 @@ fn remove_piece(
     piece: &str,
     force: bool,
 ) -> Result<(), String> {
+    not_a_task_s(plane, workspace, repo, piece, false)?;
     worktree::remove(plane, workspace, repo, piece, force, false)
         .map(|_| ())
         .map_err(|refusal| refusal.in_window())
@@ -433,6 +479,7 @@ pub fn worktree_merge(
 
 /// The merge itself, against a root the registry has already vouched for.
 fn merge_piece(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<Merged, String> {
+    not_a_task_s(plane, workspace, repo, piece, true)?;
     worktree::merge(plane, workspace, repo, piece)
         .map(|m| Merged {
             branch: m.branch,
@@ -598,6 +645,135 @@ mod tests {
             "{missing}"
         );
         in_the_windows_words(&missing);
+    }
+
+    /// A dispatch record that names branch folder `piece` of `thing` in `alpha` as its
+    /// worktree, for a task called `check the queue` that is still running. Answers its id.
+    fn a_task_in(root: &Path, piece: &str) -> String {
+        use purlis_core::dispatchrecord::{self, Asker, ChatRef, Mode, Opening, Place, Worker};
+        let chat = |n: u32, name: &str| ChatRef {
+            chat: n,
+            id: None,
+            name: name.to_owned(),
+            persona: None,
+        };
+        let opening = Opening {
+            mode: Mode::Task,
+            asker: Asker {
+                chat: chat(3, "steward 3"),
+                ..Default::default()
+            },
+            persona: None,
+            worker: Worker {
+                chat: chat(7, "devops 7"),
+                ..Default::default()
+            },
+            task: Some("check the queue".to_owned()),
+            place: Place {
+                workspace: Some("alpha".to_owned()),
+                folder: None,
+                worktree: Some(dispatchrecord::Worktree {
+                    repo: "thing".to_owned(),
+                    piece: piece.to_owned(),
+                    branch: Some(piece.to_owned()),
+                    removed: None,
+                }),
+            },
+            brief: "b".to_owned(),
+            report_owed: true,
+        };
+        dispatchrecord::open(root, opening, chrono::Utc::now())
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn a_task_s_branch_folder_is_merged_and_discarded_from_its_changes_and_not_here() {
+        // #1534: the explorer's own Merge and Remove have none of the guards a task's folder
+        // needs, so a folder a dispatch record names is refused with where to go instead.
+        let (_dir, root, clone) = plane();
+        let added = worktree::add(&root, "alpha", "thing", "check", None).unwrap();
+        std::fs::write(added.path.join("work.txt"), "work\n").unwrap();
+        git(&added.path, &["add", "-A"]);
+        git(&added.path, &["commit", "-q", "-m", "work"]);
+        a_task_in(&root, "check");
+
+        let merged = merge_piece(&root, "alpha", "thing", "check").unwrap_err();
+        assert_eq!(
+            merged,
+            purlis_core::dispatchplace::left_to_its_task("check the queue", "check", true)
+        );
+        in_the_windows_words(&merged);
+        for force in [false, true] {
+            let removed = remove_piece(&root, "alpha", "thing", "check", force).unwrap_err();
+            assert_eq!(
+                removed,
+                purlis_core::dispatchplace::left_to_its_task("check the queue", "check", false)
+            );
+            in_the_windows_words(&removed);
+        }
+        assert!(added.path.is_dir(), "nothing was removed");
+        assert!(!clone.join("work.txt").exists(), "nothing was merged");
+
+        // A branch folder no record names is the explorer's, as before.
+        worktree::add(&root, "alpha", "thing", "mine", None).unwrap();
+        remove_piece(&root, "alpha", "thing", "mine", false).expect("not a task's");
+    }
+
+    #[test]
+    fn a_task_s_folder_that_is_already_gone_can_still_be_cleared_from_the_explorer() {
+        let (_dir, root, _clone) = plane();
+        let added = worktree::add(&root, "alpha", "thing", "check", None).unwrap();
+        a_task_in(&root, "check");
+        std::fs::remove_dir_all(&added.path).unwrap();
+
+        let removed = remove_piece(&root, "alpha", "thing", "check", false);
+
+        assert!(
+            !removed
+                .as_ref()
+                .is_err_and(|why| why.contains("Changes tab")),
+            "a stale registration is the core's to answer: {removed:?}"
+        );
+        assert!(
+            merge_piece(&root, "alpha", "thing", "check")
+                .unwrap_err()
+                .contains("Changes tab")
+        );
+    }
+
+    #[test]
+    fn an_ended_task_s_folder_in_a_repo_purlis_runs_no_git_in_is_removed_from_here() {
+        // Discard is refused where the repo's own git settings name a program, and its sentence
+        // sends the person to this row: not a dead end once the task has ended.
+        let (_dir, root, clone) = plane();
+        let added = worktree::add(&root, "alpha", "thing", "check", None).unwrap();
+        let id = a_task_in(&root, "check");
+        git(&clone, &["config", "filter.lfs.clean", "cat"]);
+        assert!(
+            remove_piece(&root, "alpha", "thing", "check", false)
+                .unwrap_err()
+                .contains("Changes tab"),
+            "a running task's folder stays the task's"
+        );
+
+        purlis_core::dispatchrecord::close(
+            &root,
+            &id,
+            purlis_core::dispatchrecord::Ending {
+                report: None,
+                usage: None,
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+
+        remove_piece(&root, "alpha", "thing", "check", false).expect("the way out Discard names");
+        assert!(!added.path.exists());
+        assert!(
+            merge_piece(&root, "alpha", "thing", "check").is_err(),
+            "and a merge is still never the explorer's"
+        );
     }
 
     #[test]
