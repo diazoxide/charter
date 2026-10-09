@@ -441,6 +441,9 @@ moves into, where a limit set to 0 switches it off whatever a persona's own limi
 only under a grant that names the pair and covers the workspace it moves into; "any persona"
 does not count there, for a handoff as for a task. Refused, it is kept for the person to read
 afterwards. Such a chat still hands off to its own persona, into a workspace that exists.
+**One this app started with no sandbox is told that first** (#1543), for a handoff as for a
+task: it hands off and dispatches to no other persona whatever the grants say, so it is never
+told that a grant naming the pair would carry it.
 
 **purlis merges nothing for a worktree task by itself, and no chat can have purlis merge it.** Its
 report names the branch, in a line purlis writes from its own record of what it cut, whatever
