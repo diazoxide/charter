@@ -101,7 +101,7 @@ const NO_THEME: ProjectTheme = {
 };
 
 const OWN_WHY =
-  "charter@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
+  "purlis@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
 
 /** What the core says is in force for each harness in this workspace (charter-app#282). */
 const HARNESSES: HarnessPlugins[] = [
@@ -114,7 +114,7 @@ const HARNESSES: HarnessPlugins[] = [
     local_left_out: null,
     plugins: [
       {
-        id: "charter@inline",
+        id: "purlis@inline",
         name: "charter",
         origin: "",
         state: "on",
@@ -124,7 +124,7 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [
           {
             file: "workspaces/alpha/workspace.json",
-            why: `workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter@inline" to false, and ${OWN_WHY}`,
+            why: `workspaces/alpha/workspace.json sets settings.harness_plugins.claude."purlis@inline" to false, and ${OWN_WHY}`,
           },
           { file: "charter.toml", why: "a Shared sentence that is not this section's" },
         ],
@@ -902,9 +902,9 @@ describe("Plugins (charter-app#282)", () => {
     expect(within(group).getByLabelText("Claude Code: figma@official")).toHaveValue("");
     // purlis's own plugin is a line, never a control.
     expect(group).toHaveTextContent(OWN_WHY);
-    expect(within(group).queryByLabelText("Claude Code: charter@inline")).toBeNull();
+    expect(within(group).queryByLabelText("Claude Code: purlis@inline")).toBeNull();
     expect(group).toHaveTextContent(
-      'workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter@inline" to false',
+      'workspaces/alpha/workspace.json sets settings.harness_plugins.claude."purlis@inline" to false',
     );
     expect(group).not.toHaveTextContent("a Shared sentence");
     for (const title of ["opencode", "Codex"])
