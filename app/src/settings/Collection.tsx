@@ -17,7 +17,8 @@ import type { Collection, CollectionEntry, EntryField, Setting } from "./groups"
  * collection's group as a heading that opens the page, with its Remove; the page draws that entry
  * alone, its rows and its Rename, with no Add. **Rename** (V91k) opens a one-field form in place;
  * a name the core refuses is said under it, and what uses the entry under the entry, as for a
- * Remove.
+ * Remove. When every user follows a rename (#1380), that is said as what a rename everywhere
+ * would change, before anything is written, and the form offers Rename everywhere: one write.
  */
 export function CollectionView({
   id,
@@ -208,8 +209,20 @@ export function CollectionView({
 /** A picker's New… asking for the Add form (ST-4): `then` is handed the added entry's name. */
 export type Asked = { ask: number; then: (name: string) => void };
 
+/** Whether `refusal` is a Rename's whose every user follows a rename everywhere (#1380): what
+ *  that would change, rather than why nothing can be. */
+function followsEverywhere(refusal: EntryRefusal | undefined): boolean {
+  return (
+    refusal !== undefined &&
+    refusal.reasons.length === 0 &&
+    refusal.referrers.length > 0 &&
+    refusal.referrers.every((one) => one.follows)
+  );
+}
+
 /** What a Remove, a Rename or an Undo was refused for: who uses the entry, each with its link,
- *  and why. A Rename refused only by field says so under its field, and nothing here. */
+ *  and why. A Rename refused only by field says so under its field, and nothing here. A Rename
+ *  whose every user follows says what a rename everywhere changes (#1380). */
 function Refused({
   noun,
   refused,
@@ -224,10 +237,18 @@ function Refused({
   const { refusal } = refused;
   const users = refusal.referrers.length;
   if (users + refusal.reasons.length === 0) return null;
+  const preview = refused.verb === "renamed" && followsEverywhere(refusal);
   return (
-    <div className="ui-setting-error" role="alert">
-      {users > 0 && (
-        <p>{`This ${noun} is not ${refused.verb ?? "removed"} while ${users === 1 ? "this uses" : "these use"} it:`}</p>
+    <div
+      className={preview ? "ui-setting-help" : "ui-setting-error"}
+      role={preview ? "status" : "alert"}
+    >
+      {preview ? (
+        <p>{`Renaming this ${noun} also changes ${users} ${users === 1 ? "setting that uses" : "settings that use"} it:`}</p>
+      ) : (
+        users > 0 && (
+          <p>{`This ${noun} is not ${refused.verb ?? "removed"} while ${users === 1 ? "this uses" : "these use"} it:`}</p>
+        )
       )}
       {refusal.referrers.map((one, at) => (
         <p key={at}>
@@ -440,7 +461,8 @@ function AddForm({
 /**
  * **Rename** (ST-4, V91k): the entry's name in one field, with Rename and Cancel under it. The
  * core decides: a name it refuses is said under the field and the form stays open; what uses
- * the entry is said under the entry. Once renamed the form closes, handing `onDone` the name.
+ * the entry is said under the entry. When every user follows (#1380), Rename everywhere renames
+ * the entry and them in one write. Once renamed the form closes, handing `onDone` the name.
  */
 function RenameForm({
   id,
@@ -462,13 +484,14 @@ function RenameForm({
   useEffect(() => {
     document.getElementById(form)?.querySelector<HTMLElement>("input")?.focus();
   }, [form]);
-  const send = async () => {
+  const send = async (everywhere: boolean) => {
     setSending(true);
     const said = await driver.entry(id, {
       collection: collection.name,
       base: collection.base,
       rename: entry.id,
       to,
+      ...(everywhere ? { everywhere } : {}),
     });
     setSending(false);
     if (said) setRefusal(said);
@@ -481,7 +504,7 @@ function RenameForm({
       aria-label={`Rename ${entry.label}`}
       onSubmit={(event) => {
         event.preventDefault();
-        void send();
+        void send(false);
       }}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -492,7 +515,7 @@ function RenameForm({
     >
       <SettingRow
         label="New name"
-        help={`What ${entry.label} is called from now on. Nothing may be using it.`}
+        help={`What ${entry.label} is called from now on. What uses it is said before anything changes.`}
         error={refusal?.fields.name}
         control={(ids) => <Field kind="text" ids={ids} value={to} onChange={setTo} />}
       />
@@ -500,6 +523,11 @@ function RenameForm({
         <button type="submit" tabIndex={0} disabled={sending}>
           Rename
         </button>
+        {followsEverywhere(refusal) && (
+          <button type="button" tabIndex={0} disabled={sending} onClick={() => void send(true)}>
+            Rename everywhere
+          </button>
+        )}
         <button type="button" tabIndex={0} onClick={() => onDone(undefined)}>
           Cancel
         </button>

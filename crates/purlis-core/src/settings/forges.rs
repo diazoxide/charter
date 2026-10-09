@@ -412,6 +412,7 @@ fn referrers(root: &Path, before: &str, after: &str) -> Vec<Referrer> {
         out.push(Referrer {
             what: format!("The repo {name} (inventory/repos.json) is on {host}."),
             group: None,
+            follows: false,
         });
         let mode = settings.repo(name).mode;
         if mode.value.opens_a_pr() {
@@ -424,6 +425,7 @@ fn referrers(root: &Path, before: &str, after: &str) -> Vec<Referrer> {
                         .unwrap_or(crate::profiles::COMMITTED_FILE),
                 ),
                 group: Some(SAVING),
+                follows: false,
             });
         }
     }
@@ -445,6 +447,7 @@ fn referrers(root: &Path, before: &str, after: &str) -> Vec<Referrer> {
                         .unwrap_or(crate::profiles::COMMITTED_FILE),
                 ),
                 group: Some(SAVING),
+                follows: false,
             });
         }
     }

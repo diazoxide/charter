@@ -19,7 +19,12 @@
 //! profile is gone is skipped by name (ADR 0022), never started on another.
 //!
 //! **Rename** (V91k) is allowed only while nothing uses the profile, and is refused naming who
-//! does, as a remove is; renaming everywhere at once is a follow-up. A renamed profile is one no
+//! does, as a remove is — each user saying whether it [`Referrer::follows`] a rename everywhere,
+//! so the refusal is what the window shows before anything changes. **A rename everywhere**
+//! ([`rename_everywhere`], #1380) renames the profile and the local file's own default that names
+//! it in one write of that one file, so a failure leaves nothing half-renamed. The project's
+//! default does not follow: it is every teammate's, and a rename on this machine never rewrites
+//! it — while it names the profile, the rename is refused either way. A renamed profile is one no
 //! approval names, so its first run asks again, as a new one's does ([`crate::profiletrust`]).
 
 use std::path::Path;
@@ -357,6 +362,43 @@ fn renamed(root: &Path, text: &str, from: &str, to: &str) -> Result<String, Refu
     Ok(doc.to_string())
 }
 
+/// `text` with its `[harness] default` naming `to` where it named `from`, written as it was:
+/// quoted the same way, with the same space and comment around it — or the refusal of the
+/// whole write when it names something else, so a rename never leaves its user behind.
+fn defaulted(root: &Path, text: &str, from: &str, to: &str) -> Result<String, Refusal> {
+    let mut doc = document(root, text)?;
+    let harness = harness_of(root, &mut doc, "rename")?;
+    let Some(toml_edit::Item::Value(was)) = harness.get_mut(DEFAULT) else {
+        return Err(not_defaulted(root));
+    };
+    let toml_edit::Value::String(named) = &*was else {
+        return Err(not_defaulted(root));
+    };
+    if named.value() != from {
+        return Err(not_defaulted(root));
+    }
+    let raw = named
+        .as_repr()
+        .and_then(|repr| repr.as_raw().as_str())
+        .unwrap_or_default();
+    // `to` passed the name rules (letters, digits, '_' and '-'), so quoting it is wrapping it.
+    let quote = if raw.starts_with('\'') { '\'' } else { '"' };
+    let mut now: toml_edit::Value = format!("{quote}{to}{quote}")
+        .parse()
+        .unwrap_or_else(|_| toml_edit::Value::from(to));
+    *now.decor_mut() = was.decor().clone();
+    *was = now;
+    Ok(doc.to_string())
+}
+
+fn not_defaulted(root: &Path) -> Refusal {
+    Refusal::file(vec![format!(
+        "[harness] default in {} is not written as a name a form can change, so nothing was \
+         renamed — change it under Edit as TOML",
+        local_name(root)
+    )])
+}
+
 /// `to` as a key spelled as `was` is: quoted the same way, with the same space around it.
 fn spelled_as(was: &toml_edit::Key, to: &str) -> toml_edit::Key {
     let raw = was
@@ -461,6 +503,30 @@ pub fn remove(root: &Path, base: Option<&str>, id: &str) -> Result<Entry, Refusa
 /// by field for a name the rules refuse, and naming each user while something uses it.
 /// Answers the renamed entry's identity, which is what its Undo renames back.
 pub fn rename(root: &Path, base: Option<&str>, id: &str, to: &str) -> Result<String, Refusal> {
+    renaming(root, base, id, to, false)
+}
+
+/// **Renames the profile called `id` and what uses it** (#1380): as [`rename`], with each
+/// `[harness] default` in the same file that names it now naming `to`, written as it was
+/// (quoted the same way, its comment kept) — the whole in one write. Refused, naming every
+/// user, while one does not [`Referrer::follows`]: then nothing is written at all. Its Undo is
+/// the rename back everywhere, which gives the text it started from.
+pub fn rename_everywhere(
+    root: &Path,
+    base: Option<&str>,
+    id: &str,
+    to: &str,
+) -> Result<String, Refusal> {
+    renaming(root, base, id, to, true)
+}
+
+fn renaming(
+    root: &Path,
+    base: Option<&str>,
+    id: &str,
+    to: &str,
+    everywhere: bool,
+) -> Result<String, Refusal> {
     super::unchanged(root, Which::Local, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let (name, _) = found(text, id)?;
@@ -473,13 +539,16 @@ pub fn rename(root: &Path, base: Option<&str>, id: &str, to: &str) -> Result<Str
             ..Refusal::default()
         });
     }
-    let after = renamed(root, text, &name, to)?;
+    let mut after = renamed(root, text, &name, to)?;
     let users = referrers(root, &name, text, &after);
     if !users.is_empty() {
-        return Err(Refusal {
-            referrers: users,
-            ..Refusal::default()
-        });
+        if !everywhere || users.iter().any(|one| !one.follows) {
+            return Err(Refusal {
+                referrers: users,
+                ..Refusal::default()
+            });
+        }
+        after = defaulted(root, &after, &name, to)?;
     }
     super::save(root, Which::Local, base, &after).map_err(Refusal::file)?;
     listed(&after)
@@ -524,6 +593,9 @@ fn referrers(root: &Path, name: &str, before: &str, after: &str) -> Vec<Referrer
                     which.file_at(root)
                 ),
                 group: Some(SettingsGroup::Harness),
+                // This file's own default is written with the rename; the project's is every
+                // teammate's, and a rename on this machine never rewrites it.
+                follows: which == Which::Local,
             });
         }
     }

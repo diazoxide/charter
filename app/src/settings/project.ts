@@ -808,7 +808,13 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
           : "remove" in op
             ? commands.removeProjectProfile(plane, op.base, op.remove)
             : "rename" in op
-              ? commands.renameProjectProfile(plane, op.base, op.rename, op.to)
+              ? commands.renameProjectProfile(
+                  plane,
+                  op.base,
+                  op.rename,
+                  op.to,
+                  op.everywhere ?? false,
+                )
               : undefined;
     if (asked === undefined)
       return Promise.resolve(refused([`A ${home.noun} is not changed that way here.`]));
@@ -853,8 +859,15 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
         return {
           saved,
           file: which,
-          said: `Renamed ${was?.label ?? `the ${home.noun}`} to ${labelOf(answer.added ?? "", file)}.`,
-          undo: { collection: op.collection, base: after, rename: answer.added ?? "", to: name },
+          said: `Renamed ${was?.label ?? `the ${home.noun}`} to ${labelOf(answer.added ?? "", file)}${op.everywhere ? " and what used it" : ""}.`,
+          // A rename everywhere is undone everywhere: what followed it follows it back.
+          undo: {
+            collection: op.collection,
+            base: after,
+            rename: answer.added ?? "",
+            to: name,
+            ...(op.everywhere ? { everywhere: true } : {}),
+          },
         };
       }
       return {

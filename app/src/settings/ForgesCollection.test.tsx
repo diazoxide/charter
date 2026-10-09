@@ -362,7 +362,11 @@ describe("Settings › Forges", () => {
         id === idOf([ACME, { kind: "gitlab", owner: "ops", host: "" }], 1)
           ? refusal({
               referrers: [
-                { what: "The repo tools (inventory/repos.json) is on gitlab.com.", group: null },
+                {
+                  what: "The repo tools (inventory/repos.json) is on gitlab.com.",
+                  group: null,
+                  follows: false,
+                },
               ],
             })
           : undefined,
@@ -417,10 +421,15 @@ describe("Settings › Forges", () => {
       refuseRemove: () =>
         refusal({
           referrers: [
-            { what: "The repo billing (inventory/repos.json) is on github.com.", group: null },
+            {
+              what: "The repo billing (inventory/repos.json) is on github.com.",
+              group: null,
+              follows: false,
+            },
             {
               what: '[repos.billing] mode = "pr" in charter.toml opens a request on github.com.',
               group: "project.saving",
+              follows: false,
             },
           ],
         }),
@@ -448,7 +457,11 @@ describe("Settings › Forges", () => {
       refuseRemove: () =>
         refusal({
           referrers: [
-            { what: "The workspace ide saves billing as a request.", group: "workspace.saving" },
+            {
+              what: "The workspace ide saves billing as a request.",
+              group: "workspace.saving",
+              follows: false,
+            },
           ],
         }),
     });
@@ -463,7 +476,9 @@ describe("Settings › Forges", () => {
   it("clears a refused Remove once anything else is written", async () => {
     core({
       refuseRemove: () =>
-        refusal({ referrers: [{ what: "The repo billing is on github.com.", group: null }] }),
+        refusal({
+          referrers: [{ what: "The repo billing is on github.com.", group: null, follows: false }],
+        }),
     });
     await atForges();
     await userEvent.click(removeOf("Forge 1: github acme at github.com"));

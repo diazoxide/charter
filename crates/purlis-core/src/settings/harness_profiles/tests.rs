@@ -433,3 +433,73 @@ fn a_quoted_name_keeps_its_spelling_on_a_rename_and_on_the_rename_back() {
     rename(dir.path(), Some(&now), &renamed, "alt").unwrap();
     assert_eq!(local(dir.path()), text);
 }
+
+#[test]
+fn a_refused_rename_says_which_users_a_rename_everywhere_changes_too() {
+    // The refusal is the preview (#1380): each user, and whether renaming everywhere takes it
+    // along — a default in this machine's own file does; the project's, every teammate's, not.
+    let shared = "schema = 1\n[harness]\ndefault = \"claude-work\"\n";
+    let text = format!("[harness]\ndefault = \"claude-work\"\n\n{LOCAL}");
+    let dir = plane_named(OLD, shared, Some(&text));
+    let refusal = rename(dir.path(), Some(&text), &id(&text, "claude-work"), "work").unwrap_err();
+    let follows: Vec<bool> = refusal.referrers.iter().map(|one| one.follows).collect();
+    assert_eq!(follows, [false, true], "{refusal:?}");
+    assert_eq!(local(dir.path()), text);
+}
+
+#[test]
+fn a_rename_everywhere_renames_the_profile_and_this_files_default_in_one_write() {
+    let text = format!("[harness]\ndefault = 'claude-work'  # mine\n\n{LOCAL}");
+    let dir = plane(Some(&text));
+    let renamed =
+        rename_everywhere(dir.path(), Some(&text), &id(&text, "claude-work"), "work").unwrap();
+    let now = local(dir.path());
+    assert_eq!(
+        now,
+        text.replace("'claude-work'", "'work'")
+            .replace("[harness.claude-work]", "[harness.work]")
+    );
+    assert_eq!(renamed, id(&now, "work"));
+    // Its Undo, the rename back everywhere, gives the text it started from.
+    rename_everywhere(dir.path(), Some(&now), &renamed, "claude-work").unwrap();
+    assert_eq!(local(dir.path()), text);
+}
+
+#[test]
+fn a_rename_everywhere_of_a_profile_nothing_uses_is_a_rename() {
+    let dir = plane(Some(LOCAL));
+    rename_everywhere(dir.path(), Some(LOCAL), &id(LOCAL, "claude-work"), "work").unwrap();
+    assert_eq!(
+        local(dir.path()),
+        LOCAL.replace("[harness.claude-work]", "[harness.work]")
+    );
+}
+
+#[test]
+fn a_rename_everywhere_the_projects_default_names_writes_nothing_and_names_it() {
+    // charter.toml is every teammate's: a rename on this machine never rewrites it, so the
+    // profile stays as it was, this file's default with it — nothing half-renamed.
+    let shared = "schema = 1\n[harness]\ndefault = \"claude-work\"\n";
+    let text = format!("[harness]\ndefault = \"claude-work\"\n\n{LOCAL}");
+    let dir = plane_named(OLD, shared, Some(&text));
+    let refusal =
+        rename_everywhere(dir.path(), Some(&text), &id(&text, "claude-work"), "work").unwrap_err();
+    assert_eq!(refusal.referrers.len(), 2, "{refusal:?}");
+    assert!(!refusal.referrers[0].follows);
+    assert!(
+        refusal.referrers[0]
+            .what
+            .contains(PLANE_MANIFEST.newest_old())
+    );
+    assert_eq!(local(dir.path()), text);
+}
+
+#[test]
+fn a_rename_everywhere_still_refuses_a_name_the_rules_refuse() {
+    let text = format!("[harness]\ndefault = \"claude-work\"\n\n{LOCAL}");
+    let dir = plane(Some(&text));
+    let refusal =
+        rename_everywhere(dir.path(), Some(&text), &id(&text, "claude-work"), "a.b").unwrap_err();
+    assert_eq!(fields(&refusal), ["name"]);
+    assert_eq!(local(dir.path()), text);
+}
