@@ -573,3 +573,101 @@ fn a_stamp_that_is_not_an_instant_is_no_evidence_either_way() {
         Some("1d")
     );
 }
+
+// ---- when a branch was cut, from its reflog (#835) ----
+
+const ZERO: &str = "0000000000000000000000000000000000000000";
+const SHA: &str = "1111111111111111111111111111111111111111";
+
+fn reflog_line(seconds: i64, message: &str) -> String {
+    format!("{ZERO} {SHA} Jo Q. Writer <jo@example.invalid> {seconds} +0200\t{message}\n")
+}
+
+fn a_common_dir(branch: &str, reflog: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let common = dir.path().join("clone").join(".git");
+    let at = common.join("logs").join("refs").join("heads").join(branch);
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    std::fs::write(at, reflog).unwrap();
+    (dir, common)
+}
+
+#[test]
+fn a_branch_was_cut_when_its_reflog_says_it_was_created() {
+    let created = now().timestamp() - 3 * 86400;
+    let reflog = reflog_line(created, "branch: Created from HEAD")
+        + &reflog_line(now().timestamp() - 60, "commit: later work");
+    let (_dir, common) = a_common_dir("feature/chat-1", &reflog);
+
+    assert_eq!(
+        branch_created(&common, "feature/chat-1"),
+        DateTime::<Utc>::from_timestamp(created, 0)
+    );
+}
+
+#[test]
+fn a_reflog_whose_first_line_is_not_a_creation_says_nothing() {
+    // `git reflog expire` dropped the creation: the oldest line left is not when it was cut.
+    let (_dir, common) = a_common_dir("chat-1", &reflog_line(1_700_000_000, "commit: work"));
+    assert_eq!(branch_created(&common, "chat-1"), None);
+    // No reflog at all, as with `core.logAllRefUpdates` off.
+    assert_eq!(branch_created(&common, "chat-2"), None);
+    for junk in [
+        "",
+        "no tab here",
+        "a b c\tbranch: Created from HEAD",
+        "a b c d notanumber +0000\tbranch: Created from HEAD",
+    ] {
+        assert_eq!(created_in(junk), None, "{junk:?}");
+    }
+}
+
+#[test]
+fn a_clone_with_a_git_file_keeps_its_branches_in_the_common_dir_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(plain.join(".git")).unwrap();
+    assert_eq!(common_git_dir(&plain), Some(plain.join(".git")));
+
+    // `--separate-git-dir`: the `.git` file names the git directory itself.
+    let separate = dir.path().join("separate");
+    std::fs::create_dir_all(&separate).unwrap();
+    std::fs::write(separate.join(".git"), "gitdir: ../separate.git\n").unwrap();
+    assert_eq!(
+        common_git_dir(&separate),
+        Some(separate.join("../separate.git"))
+    );
+
+    // A linked tree: its git directory names the common one in `commondir`.
+    let linked = dir.path().join("linked");
+    let admin = dir.path().join("main.git").join("worktrees").join("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    assert_eq!(common_git_dir(&linked), Some(admin.join("../..")));
+
+    assert_eq!(common_git_dir(&dir.path().join("none")), None);
+}
+
+#[test]
+fn a_claim_mark_is_read_per_branch_from_gits_config_listing() {
+    let out = "branch.chat-1.charterclaimed\n2026-10-09T12:00:00+00:00\0\
+               branch.Feature/X.charterclaimed\n2026-10-08T00:00:00+00:00\0\
+               branch..charterclaimed\nnobody\0\
+               branch.chat-1.charterbase\nmain\0";
+    let marks = claim_marks_in(out);
+    assert_eq!(
+        marks.get("chat-1").map(String::as_str),
+        Some("2026-10-09T12:00:00+00:00")
+    );
+    assert_eq!(
+        marks.get("Feature/X").map(String::as_str),
+        Some("2026-10-08T00:00:00+00:00")
+    );
+    assert_eq!(marks.len(), 2);
+}
