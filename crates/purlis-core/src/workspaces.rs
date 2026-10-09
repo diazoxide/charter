@@ -559,8 +559,43 @@ impl Workspace {
     /// manifest's replace (and a rename of the folder). Best effort, as that lock is. **Never
     /// take it while holding it**, nor call a writer that takes it: a second lock on the same
     /// directory in one process waits for the first.
-    pub fn manifest_lock(&self) -> crate::rewrite::Lock {
-        crate::rewrite::Lock::on(&self.dir)
+    ///
+    /// **Refused once held if the folder is no longer the one it waited on** (#1292): a
+    /// `workspace rename` or a removal that ran while this waited took the folder away, and a
+    /// writer going on would write to the old path — re-creating `workspaces/<old>` with a
+    /// manifest of its own. Where the lock could be taken, the folder at the path must be the
+    /// very directory locked; where it could not, the folder must at least be there.
+    pub fn manifest_lock(&self) -> io::Result<crate::rewrite::Lock> {
+        let held = crate::rewrite::Lock::on(&self.dir);
+        if self.is_the_folder_locked(&held) {
+            return Ok(held);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "workspace '{}' was renamed or removed while this waited for its \
+                 workspace.json",
+                self.name
+            ),
+        ))
+    }
+
+    /// Whether the folder at this workspace's path is the directory `held` locks.
+    fn is_the_folder_locked(&self, held: &crate::rewrite::Lock) -> bool {
+        let Ok(now) = std::fs::symlink_metadata(&self.dir) else {
+            return false;
+        };
+        if !now.is_dir() {
+            return false;
+        }
+        #[cfg(unix)]
+        if let Some(locked) = held.held().and_then(|dir| dir.metadata().ok()) {
+            use std::os::unix::fs::MetadataExt;
+            return (locked.dev(), locked.ino()) == (now.dev(), now.ino());
+        }
+        #[cfg(not(unix))]
+        let _ = held;
+        true
     }
 
     /// Write `workspace.json`, stamping the digest last and replacing the file atomically.
@@ -670,7 +705,7 @@ impl Workspace {
     ) -> io::Result<()> {
         // The look and the write under one lock: a clone recording its first repo in between
         // would otherwise be written over by a manifest that does not name it.
-        let _held = self.manifest_lock();
+        let _held = self.manifest_lock()?;
         if self.manifest().1 != manifest::Ownership::Absent {
             return Ok(());
         }
@@ -1104,7 +1139,7 @@ mod manifest_lock_tests {
         let root = tmp.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("workspaces/demo")).unwrap();
         let ws = Plane::open(&root).workspace("demo").unwrap();
-        let held = ws.manifest_lock();
+        let held = ws.manifest_lock().unwrap();
         let scaffolding = {
             let root = root.clone();
             std::thread::spawn(move || {
@@ -1128,6 +1163,69 @@ mod manifest_lock_tests {
             ws.manifest().0.unwrap()["repos"],
             serde_json::json!([{"name": "widget"}])
         );
+    }
+
+    /// #1292: a writer that waited while `workspace rename` moved the folder refuses once it
+    /// holds the lock, rather than write at the old path and make `workspaces/<old>` again.
+    #[test]
+    fn a_writer_that_waited_while_the_folder_was_renamed_refuses_and_makes_no_old_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/demo")).unwrap();
+        let ws = Plane::open(&root).workspace("demo").unwrap();
+        let held = ws.manifest_lock().unwrap();
+        let scaffolding = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                Plane::open(&root)
+                    .workspace("demo")
+                    .unwrap()
+                    .scaffold_manifest(chrono::Utc::now(), "t")
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::rename(
+            root.join("workspaces/demo"),
+            root.join("workspaces/renamed"),
+        )
+        .unwrap();
+        drop(held);
+        let why = scaffolding.join().unwrap().unwrap_err();
+        assert!(
+            why.to_string()
+                .contains("workspace 'demo' was renamed or removed while this waited"),
+            "{why}"
+        );
+        assert!(!root.join("workspaces/demo").exists());
+        assert!(!root.join("workspaces/renamed/workspace.json").exists());
+    }
+
+    /// #1292: a folder made again at the path while the writer waited is not the one it
+    /// locked, so it refuses there too.
+    #[test]
+    fn a_folder_made_again_at_the_path_is_not_the_one_locked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/demo")).unwrap();
+        let ws = Plane::open(&root).workspace("demo").unwrap();
+        let held = ws.manifest_lock().unwrap();
+        let waiting = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                Plane::open(&root)
+                    .workspace("demo")
+                    .unwrap()
+                    .manifest_lock()
+                    .map(drop)
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::rename(root.join("workspaces/demo"), root.join("workspaces/moved")).unwrap();
+        std::fs::create_dir(root.join("workspaces/demo")).unwrap();
+        drop(held);
+        assert!(waiting.join().unwrap().is_err());
+        // The folder there now is lockable on its own.
+        assert!(ws.manifest_lock().is_ok());
     }
 }
 

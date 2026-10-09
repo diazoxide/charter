@@ -558,7 +558,15 @@ fn record_membership(request: &Request, members: &[String], say: Sink) {
     let now = request.now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
     // From the first look to the last write, one lock (#1249 U2): a removal or another clone
     // writing in between would lose its change to the manifest read here.
-    let _held = ws.manifest_lock();
+    let _held = match ws.manifest_lock() {
+        Ok(held) => held,
+        Err(why) => {
+            say(Say::Warn(format!(
+                "{why}, so it does not record what was just cloned."
+            )));
+            return;
+        }
+    };
     let (_, owner) = ws.manifest();
     if owner == Ownership::Absent {
         let rows: Vec<Value> = repos::clones(request.root, request.ws)
@@ -656,7 +664,7 @@ mod tests {
         let ws = Plane::open(&root).workspace("alpha").unwrap();
         ws.write_manifest(&json!({"name": "alpha", "repos": [{"name": "gone"}]}))
             .unwrap();
-        let held = ws.manifest_lock();
+        let held = ws.manifest_lock().unwrap();
         let recording = {
             let root = root.clone();
             std::thread::spawn(move || {

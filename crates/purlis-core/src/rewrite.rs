@@ -32,9 +32,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Held for one read-modify-write of a file in `dir`.
-pub struct Lock(#[allow(dead_code)] Option<std::fs::File>);
+pub struct Lock(Option<std::fs::File>);
 
 impl Lock {
+    /// The directory this lock is held on, open: `None` where it could not be taken (see the
+    /// module header). A holder that must know the path still names the directory it locked,
+    /// which a rename may have moved, compares the two (#1292).
+    pub fn held(&self) -> Option<&std::fs::File> {
+        self.0.as_ref()
+    }
+
     /// Lock `dir`, blocking until any other holder lets go. Never fails; see the module header.
     pub fn on(dir: &Path) -> Self {
         #[cfg(unix)]
