@@ -231,6 +231,35 @@ fn a_harness_that_reports_only_tokens_has_no_cost() {
 }
 
 #[test]
+fn what_a_chat_said_it_cost_after_its_report_is_kept_once_it_has_gone() {
+    // #1457: the figure at the report was read while the reporting turn still ran.
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let said = |input| Usage {
+        input_tokens: Some(input),
+        ..Usage::default()
+    };
+    // Nothing is kept over a record still running: its end keeps its figure.
+    assert!(!usage_settled(&root, &opened.id, said(5)).unwrap());
+    assert_eq!(read(&root, &opened.id).unwrap().usage, None);
+    let ending = Ending {
+        report: Some(done("ok")),
+        usage: Some(said(10)),
+    };
+    assert!(close(&root, &opened.id, ending, at("2026-10-07T12:01:00Z")).unwrap());
+
+    assert!(usage_settled(&root, &opened.id, said(12)).unwrap());
+    assert!(
+        !usage_settled(&root, &opened.id, said(12)).unwrap(),
+        "unchanged"
+    );
+    assert!(!usage_settled(&root, &opened.id, Usage::default()).unwrap());
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(record.usage, Some(said(12)));
+    assert_eq!(record.report, Some(done("ok")), "nothing else of it moves");
+}
+
+#[test]
 fn a_dispatch_ends_once_and_its_first_ending_is_kept() {
     let (_d, root) = project();
     let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();

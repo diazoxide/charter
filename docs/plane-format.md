@@ -5206,7 +5206,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   session cost (`app/spend/<chat>.json`). **`usage` is absent for a harness that reports none,
   and each part of it is absent where the harness did not say it: never a zero.** It is the
   one figure in the record that is not the app's own: what the chat's harness reported,
-  relayed where no sandboxed chat can write (#1457, D-1452-12). Every text is
+  relayed where no sandboxed chat can write (#1457, D-1452-12). Read as the dispatch ends,
+  while a reporting turn may still run, and kept again once its chat has gone, where its
+  harness said more since: the whole, the reporting turn included. Every text is
   held to a cap as it is written, so a record is never written larger than it is read back:
   a brief to 16 KiB, a report's text and what it says changed to 8 KiB each, a name to 512 bytes, a path to 1 KiB, and a
   report's files and commits to 100 each. A text over its cap is cut at a character and ends
