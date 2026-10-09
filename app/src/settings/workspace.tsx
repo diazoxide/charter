@@ -4,6 +4,7 @@ import { useProjectThemeAnswers } from "../projectTheme";
 import { useNotClonedHere, useWorkspaceRepos } from "../WorkspaceRepos";
 import {
   commands,
+  type ExtensionTheme,
   type HarnessPlugins,
   type PlaneId,
   type ProjectExtensions,
@@ -14,14 +15,13 @@ import {
 import {
   EXTENSIONS,
   harnessPluginGroups,
-  key,
   NO_EXTENSIONS,
-  textAt,
   themeGroup,
   type Control,
   type Shown,
 } from "./fileControls";
 import { EXTENSIONS_LINK } from "./links";
+import { askIconThemes, iconsControl, iconsHeld, iconsNotes } from "./iconsPick";
 import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
 import type { FileSetting, LiveSetting, SettingsGroup } from "./groups";
 import { workspaceDispatchGroup } from "./dispatch";
@@ -53,6 +53,10 @@ export type WorkspaceRead = {
   extensions: ProjectExtensions;
   harnesses: readonly HarnessPlugins[];
   theme: ProjectTheme | undefined;
+  /** Every icon theme an approved extension contributes (#1145): what Icons offers. */
+  iconThemes?: readonly ExtensionTheme[];
+  /** The icon theme the core says the trees draw here, as a file picks it (#1145). */
+  iconsDrawn?: string | null;
 };
 
 /** What the driver answers at the Workspace level. */
@@ -184,11 +188,17 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
       help: "The theme and the icons the window draws while this workspace is in front, and the colour it is tinted with.",
       settings: fromFile("workspace.appearance", [
         ...theme.controls,
-        textAt(key("theme", "icons"), "Icons", {
-          hint: "The file trees' icons while this workspace is in front: charter-icons, or an extension's as <extension>/<icon theme>. Empty is the project's.",
-        }),
+        iconsControl("workspace", read.iconThemes, read.extensions.extensions),
       ]),
-      notes: theme.notes,
+      notes: [
+        ...theme.notes,
+        ...iconsNotes(
+          iconsHeld(file),
+          read.extensions.extensions,
+          read.iconThemes,
+          read.iconsDrawn,
+        ),
+      ],
     },
     {
       id: "workspace.plugins",
@@ -230,6 +240,8 @@ export function useWorkspaceLevel(plane: PlaneId, workspace: string): WorkspaceL
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
+  const [iconThemes, setIconThemes] = useState<ExtensionTheme[]>();
+  const [iconsDrawn, setIconsDrawn] = useState<string | null>();
   /** The newest asking of what is in force: an answer to an older one is dropped. */
   const asking = useRef(0);
   const themeAsking = useRef(0);
@@ -243,6 +255,16 @@ export function useWorkspaceLevel(plane: PlaneId, workspace: string): WorkspaceL
         if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
       })
       .catch(() => newest() && setTheme(undefined));
+    // What Icons offers changes with what the theme does: an approval, a removal.
+    void askIconThemes().then((offered) => {
+      if (newest()) setIconThemes(offered);
+    });
+    void commands
+      .projectIconsDrawn(plane, workspace)
+      .then((said) => {
+        if (newest()) setIconsDrawn(said.status === "ok" ? (said.data ?? null) : undefined);
+      })
+      .catch(() => newest() && setIconsDrawn(undefined));
   }, [plane, workspace]);
 
   const readInForce = useCallback(() => {
@@ -287,6 +309,15 @@ export function useWorkspaceLevel(plane: PlaneId, workspace: string): WorkspaceL
   if (driver.state !== "read") return driver;
   return {
     ...driver,
-    read: { plane, workspace, settings: driver.now, extensions, harnesses, theme },
+    read: {
+      plane,
+      workspace,
+      settings: driver.now,
+      extensions,
+      harnesses,
+      theme,
+      iconThemes,
+      iconsDrawn,
+    },
   };
 }

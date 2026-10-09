@@ -1,6 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { commands, type ExtensionTheme, type PlaneId } from "./bindings";
-import { BUILT_IN_ICONS, DEFAULT_ICONS, loadIcons, type IconTheme } from "./theme/icons";
+import {
+  BUILT_IN_ICONS,
+  DEFAULT_ICONS,
+  loadIcons,
+  type IconTheme,
+  type LoadedIcons,
+} from "./theme/icons";
 
 /**
  * **The theme each project this window holds draws** (charter-app#273, ADR 0048) — **in each of
@@ -167,21 +173,44 @@ export function useProjectThemeAnswers(plane: PlaneId, workspace?: string): numb
 
 /** Every icon theme an approved extension contributes, asked once and again after a change. */
 let iconThemes: Promise<ExtensionTheme[]> | undefined;
-/** Each contributed icon theme's text, loaded once. */
-const loadedIcons = new Map<string, IconTheme>();
+/** Each contributed icon theme's text, loaded once, with what it got wrong. */
+const loadedIcons = new Map<string, LoadedIcons>();
 
-/** A contributed icon theme's text as icons: charter's own for text that is not JSON. */
-function iconsOf(text: string): IconTheme {
+/** A contributed icon theme's text as icons, and what was wrong with it: charter's own for text
+ *  that is not JSON. */
+function loaded(text: string): LoadedIcons {
   let icons = loadedIcons.get(text);
   if (icons === undefined) {
     try {
-      icons = loadIcons(JSON.parse(text) as unknown).icons;
+      icons = loadIcons(JSON.parse(text) as unknown);
     } catch {
-      icons = DEFAULT_ICONS;
+      icons = { icons: DEFAULT_ICONS, complaints: ["an icon theme is JSON, and this is not"] };
     }
     loadedIcons.set(text, icons);
   }
   return icons;
+}
+
+const iconsOf = (text: string): IconTheme => loaded(text).icons;
+
+/** Every icon theme an approved extension contributes, asked once and again after a change
+ *  (`projectThemeChanged`). Nothing, when the core could not say. */
+export function offeredIconThemes(): Promise<ExtensionTheme[]> {
+  iconThemes ??= commands
+    .extensionIconThemes()
+    .then((said) => (said.status === "ok" ? (said.data ?? []) : []))
+    .catch((): ExtensionTheme[] => []);
+  return iconThemes;
+}
+
+/**
+ * **What a contributed icon theme got wrong** (#1145): `loadIcons`' complaints about its text —
+ * a path that is not path data, a tone that is not an `icon.*` token, a name mapped to no
+ * symbol. What it could not read is drawn as charter's own, so the trees never stop; this is
+ * what says so, on the extension's row in the Extensions dialog.
+ */
+export function iconThemeComplaints(text: string): readonly string[] {
+  return loaded(text).complaints;
 }
 
 /**
@@ -205,11 +234,7 @@ export function useFileIcons(plane: PlaneId | undefined, workspace?: string): Ic
   useEffect(() => {
     if (pick == null || builtIn !== undefined) return;
     let live = true;
-    iconThemes ??= commands
-      .extensionIconThemes()
-      .then((said) => (said.status === "ok" ? said.data : []))
-      .catch((): ExtensionTheme[] => []);
-    void iconThemes.then((offered) => {
+    void offeredIconThemes().then((offered) => {
       const found = offered.find((one) => `${one.extension}/${one.name}` === pick);
       if (live)
         setTheirs({ pick, icons: found === undefined ? DEFAULT_ICONS : iconsOf(found.text) });

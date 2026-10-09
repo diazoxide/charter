@@ -6,6 +6,7 @@ import { emit } from "@tauri-apps/api/event";
 import { SearchTab } from "./SearchTab";
 import type { FilesSearched, PlaneId, SearchedFile } from "./bindings";
 import { searchFromFocus, searchView } from "./contentSearch";
+import { forgetProjectThemes } from "./projectTheme";
 
 /**
  * **The Search tab's render states** (FM-8): what the real-app scenario
@@ -17,6 +18,7 @@ import { searchFromFocus, searchView } from "./contentSearch";
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetProjectThemes();
 });
 
 const PLANE = "/projects/alpha" as unknown as PlaneId;
@@ -43,7 +45,10 @@ type Asked = { cmd: string; args: Record<string, unknown> };
 
 /** The core: `search_files` answers `answer(query)` — a branch count, or a refusal — and every
  *  command is recorded. */
-function core(answer: (query: string) => number | string) {
+function core(
+  answer: (query: string) => number | string,
+  icons: { picks?: Record<string, string>; themes?: unknown[] } = {},
+) {
   const asked: Asked[] = [];
   mockIPC(
     (cmd, args) => {
@@ -53,6 +58,9 @@ function core(answer: (query: string) => number | string) {
         if (typeof said === "string") throw said;
         return said;
       }
+      if (cmd === "project_icons_drawn")
+        return icons.picks?.[String((args as { plane: string }).plane)] ?? null;
+      if (cmd === "extension_icon_themes") return icons.themes ?? [];
       return null;
     },
     { shouldMockEvents: true },
@@ -149,6 +157,42 @@ describe("the Search tab", () => {
     expect(within(lines[0]).getByText("needle").tagName).toBe("MARK");
     expect(status()).toHaveTextContent("3 matching lines in 2 files");
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("draws each hit's file in its own project's icon theme (#1145)", async () => {
+    // beta picks an extension's icon theme that draws Markdown as its own `leaf`.
+    const LEAVES = JSON.stringify({
+      symbols: {
+        leaf: { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0z", tone: "icon.green" }] },
+      },
+      extensions: { md: "leaf" },
+    });
+    const asked = core(() => 2, {
+      picks: { [OTHER as unknown as string]: "solarized/Leaves" },
+      themes: [{ extension: "solarized", name: "Leaves", text: LEAVES }],
+    });
+    draw();
+    await userEvent.type(box(), "needle");
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "search_files")).toBe(true));
+    await told(
+      {
+        files: [hit("src/a.rs", [3]), hit("docs/b.md", [1]), hit("docs/c.md", [1], OTHER)],
+        refused: [],
+        ended: "done",
+      },
+      asked,
+    );
+
+    const groups = within(screen.getByRole("listbox", { name: "Search results" })).getAllByRole(
+      "group",
+    );
+    const icon = (group: HTMLElement) =>
+      group.querySelector("svg.file-icon")?.getAttribute("data-icon");
+    await vi.waitFor(() => expect(groups.map(icon)).toEqual(["rust", "markdown", "leaf"]));
+    expect(groups[0].querySelector("svg.file-icon")).toHaveAttribute("aria-hidden", "true");
+    const drawn = asked.filter((one) => one.cmd === "project_icons_drawn").map((one) => one.args);
+    expect(drawn).toContainEqual({ plane: PLANE, workspace: "web" });
+    expect(drawn).toContainEqual({ plane: OTHER, workspace: "web" });
   });
 
   it("offers Show more when a page stops short, and asks for the same run's next page", async () => {

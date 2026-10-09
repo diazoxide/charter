@@ -191,6 +191,8 @@ function core(
     harnesses = HARNESSES,
     // `drop_repo` takes the clone, and the manifest — a hand's — keeps its row (#1228).
     dropsClean = false,
+    iconThemes = [{ extension: "solarized", name: "Seti", text: "{}" }],
+    iconsDrawn = null as string | null,
   } = {},
 ) {
   let file = settings;
@@ -224,6 +226,8 @@ function core(
       if (cmd === "project_harness_plugins")
         return harnesses.map((one) => ({ ...one, local_left_out: leftOut }));
       if (cmd === "extensions_on") return [];
+      if (cmd === "extension_icon_themes") return iconThemes;
+      if (cmd === "project_icons_drawn") return iconsDrawn;
       if (cmd === "project_theme") return { ...theme, local_left_out: leftOut };
       if (cmd === "project_theme_drawn") return theme.draws;
       if (cmd === "reachable_repos")
@@ -441,18 +445,69 @@ describe("every workspace setting there is, at the Workspace level", () => {
     );
   });
 
-  it("writes the icons a workspace's file trees draw once typed, as settings.theme.icons", async () => {
+  it("writes the icons a workspace's file trees draw once picked, as settings.theme.icons", async () => {
     const { sent } = core();
     const group = await at("Appearance");
 
-    await userEvent.type(within(group).getByLabelText("Icons"), "seti/seti");
-    expect(sent).toHaveLength(0);
-    await userEvent.tab();
+    const pick = within(group).getByLabelText("Icons");
+    await waitFor(() =>
+      expect(
+        within(pick)
+          .getAllByRole("option")
+          .map((option) => option.textContent),
+      ).toEqual(["not set — the project's pick", "charter-icons (built in)", "Seti (Solarized)"]),
+    );
+    await userEvent.selectOptions(pick, "solarized/Seti");
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(editsOf(sent[0])).toEqual([
-      { path: [{ key: "theme" }, { key: "icons" }], value: { kind: "text", value: "seti/seti" } },
+      {
+        path: [{ key: "theme" }, { key: "icons" }],
+        value: { kind: "text", value: "solarized/Seti" },
+      },
     ]);
+  });
+
+  it("says why the icons this workspace picks are not drawn here", async () => {
+    core({
+      ...ALPHA,
+      fields: [
+        ...ALPHA.fields,
+        {
+          path: [{ key: "theme" }, { key: "icons" }],
+          value: { kind: "text", value: "stats/Bars" },
+        },
+      ],
+    });
+    const group = await at("Appearance");
+
+    expect(within(group).getByLabelText("Icons")).toHaveValue("stats/Bars");
+    await waitFor(() =>
+      expect(group).toHaveTextContent(
+        "workspaces/alpha/workspace.json picks “Bars” from stats, but stats is off in this workspace — so the built-in charter-icons is drawn",
+      ),
+    );
+  });
+
+  it("says nothing of its pick while charter.local.toml's wins over it", async () => {
+    const picksBars: Settings = {
+      ...ALPHA,
+      fields: [
+        ...ALPHA.fields,
+        {
+          path: [{ key: "theme" }, { key: "icons" }],
+          value: { kind: "text", value: "stats/Bars" },
+        },
+      ],
+    };
+    const { asked } = core(picksBars, undefined, NO_THEME, null, {
+      iconsDrawn: "solarized/Seti",
+    });
+    const group = await at("Appearance");
+
+    await waitFor(() => expect(asked("project_icons_drawn").length).toBeGreaterThan(0));
+    await waitFor(() => expect(within(group).getByLabelText("Icons")).toHaveValue("stats/Bars"));
+    expect(group).not.toHaveTextContent("picks “Bars”");
   });
 });
 

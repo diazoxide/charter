@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useProjectThemeAnswers } from "../projectTheme";
 import {
   commands,
+  type ExtensionTheme,
   type HarnessPlugins,
   type PlaneId,
   type ProjectExtensions,
@@ -45,6 +46,7 @@ import {
 } from "./driver";
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { EXTENSIONS_LINK } from "./links";
+import { askIconThemes, iconsControl, iconsHeld, iconsNotes } from "./iconsPick";
 import { discoverRow } from "./discover";
 import { settled } from "../PlaneEdits";
 import { GRANTED, grantedGroup } from "./GrantedList";
@@ -93,6 +95,8 @@ export type ProjectRead = {
   entries: Partial<Entries>;
   /** The project itself, for the Granted list (#1348), which reads the core on its own. */
   plane?: PlaneId;
+  /** Every icon theme an approved extension contributes (#1145): what Icons offers. */
+  iconThemes?: readonly ExtensionTheme[];
 };
 
 /**
@@ -623,11 +627,17 @@ function declaredGroups(read: ProjectRead, reread?: () => void): SettingsGroup[]
       help: "The theme and the icons the window draws while this project is in front.",
       settings: fromShared("project.appearance", [
         ...theme.controls,
-        textAt(key("theme", "icons"), "Icons", {
-          hint: "The file trees' icons: charter-icons, or an extension's as <extension>/<icon theme>. Empty is charter-icons.",
-        }),
+        iconsControl("project", read.iconThemes, read.extensions.extensions),
       ]),
-      notes: theme.notes,
+      notes: [
+        ...theme.notes,
+        // Local's pick wins over Shared's, while Local has its say at all.
+        ...iconsNotes(
+          (read.theme?.local_left_out == null ? iconsHeld(local) : undefined) ?? iconsHeld(shared),
+          read.extensions.extensions,
+          read.iconThemes,
+        ),
+      ],
     },
     {
       id: "project.plugins",
@@ -671,6 +681,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
+  const [iconThemes, setIconThemes] = useState<ExtensionTheme[]>();
   const [saving, setSaving] = useState<Saving>();
   const [sandbox, setSandbox] = useState<SandboxState>();
   const [picked, setPicked] = useState<Partial<Entries>>({});
@@ -682,6 +693,8 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       .projectTheme(plane, null)
       .then((said) => setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined))
       .catch(() => setTheme(undefined));
+    // What Icons offers changes with what the theme does: an approval, a removal.
+    void askIconThemes().then(setIconThemes);
   }, [plane]);
 
   /**
@@ -915,7 +928,17 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   if (driver.state !== "read") return driver;
   return {
     ...driver,
-    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries: picked, plane },
+    read: {
+      ...driver.now,
+      extensions,
+      harnesses,
+      theme,
+      saving,
+      sandbox,
+      entries: picked,
+      plane,
+      iconThemes,
+    },
     readEntries,
   };
 }
