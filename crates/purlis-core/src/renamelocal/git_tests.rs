@@ -32,3 +32,20 @@ fn a_folder_whose_git_link_purlis_will_not_follow_is_said_never_skipped() {
         Err(crate::worktree::link::GONE.to_owned())
     );
 }
+
+#[test]
+fn a_project_path_holding_pattern_characters_is_excluded_as_written() {
+    // #1285: a folder named with a glob character would otherwise make the line match other
+    // folders, or none.
+    assert_eq!(exclude_line("", ".purlis/"), "/.purlis/");
+    assert_eq!(exclude_line("sub/", ".purlis/"), "/sub/.purlis/");
+    assert_eq!(
+        exclude_line("a*b/c?d/[x]/e\\f/", "purlis.local.toml"),
+        "/a\\*b/c\\?d/\\[x]/e\\\\f/purlis.local.toml"
+    );
+    // Never at the start of the line, so neither is read as a negation or a comment.
+    assert_eq!(
+        exclude_line("!keep/#note/", ".purlis/"),
+        "/!keep/#note/.purlis/"
+    );
+}
