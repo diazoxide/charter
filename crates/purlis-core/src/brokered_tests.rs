@@ -806,3 +806,120 @@ fn two_texts_differ_in_what_a_chat_runs_under_only_where_those_tables_do() {
         Some("[[not toml either")
     ));
 }
+
+// ---- workspace.md: what would hide later sections, and its budget (#1598) ------------------
+
+#[test]
+fn a_vision_or_an_entry_that_opens_a_comment_or_a_fence_and_does_not_close_it_is_refused() {
+    let (_dir, root) = a_project();
+    for (text, said) in [
+        ("Ship <!-- the rest is hidden", "HTML comment"),
+        ("Ship\n<!--\nhidden", "HTML comment"),
+        ("Ship <!-- one --> and <!-- two", "HTML comment"),
+        ("Ship\n```\ncode", "code fence"),
+        ("Ship\n~~~~\ncode\n~~~", "code fence"),
+        ("Ship\n  ```rust\nfn x() {}\n", "code fence"),
+        ("Ship\n```\ncode\n~~~", "code fence"),
+    ] {
+        for write in [
+            Write::WorkspaceVision {
+                text: text.to_owned(),
+            },
+            Write::WorkspaceSection {
+                section: Section::Decisions,
+                text: text.to_owned(),
+            },
+        ] {
+            let why = perform(&root, &in_alpha_as(None), &write, now()).expect_err(text);
+            assert!(why.contains(said), "{text}: {why}");
+            assert!(why.contains("nothing was written"), "{why}");
+        }
+    }
+    assert!(!root.join("workspaces/alpha/workspace.md").exists());
+}
+
+#[test]
+fn a_comment_or_a_fence_closed_in_the_text_and_one_inside_code_is_written() {
+    let (_dir, root) = a_project();
+    for text in [
+        "Ship <!-- a note --> the docs",
+        "Ship\n<!--\na note\n-->\ndone",
+        "Ship\n```\n<!-- inside a fence\n```",
+        "Ship\n~~~\ncode ``` here\n~~~~",
+        "Write `<!--` to open a comment",
+        "Write ``a ` <!-- b`` here",
+    ] {
+        for write in [
+            Write::WorkspaceVision {
+                text: text.to_owned(),
+            },
+            Write::WorkspaceSection {
+                section: Section::Glossary,
+                text: text.to_owned(),
+            },
+        ] {
+            perform(&root, &in_alpha_as(None), &write, now()).expect(text);
+        }
+    }
+}
+
+/// The text of a `workspace.md` `bytes` long, in alpha, whose vision is set: what a person who
+/// writes a lot by hand leaves.
+fn a_charter_of(root: &Path, bytes: usize) -> String {
+    let ws = crate::workspaces::Plane::open(root)
+        .workspace("alpha")
+        .unwrap();
+    ws.set_vision("Ship").unwrap();
+    let path = root.join("workspaces/alpha/workspace.md");
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    let room = bytes - text.len() - 2;
+    text.push_str(&format!("\n{}\n", "x".repeat(room)));
+    std::fs::write(&path, &text).unwrap();
+    text
+}
+
+#[test]
+fn a_chats_write_that_would_grow_workspace_md_past_its_budget_is_refused_saying_how() {
+    let (_dir, root) = a_project();
+    let before = a_charter_of(&root, WORKSPACE_MD_GROWS_TO_AT_MOST - 100);
+
+    for write in [
+        Write::WorkspaceSection {
+            section: Section::Decisions,
+            text: "y".repeat(200),
+        },
+        Write::WorkspaceVision {
+            text: "z".repeat(200),
+        },
+    ] {
+        let why = perform(&root, &in_alpha_as(None), &write, now()).expect_err("refused");
+        assert!(why.contains("64 KiB"), "{why}");
+        assert!(why.contains("purlis workspace remember"), "{why}");
+        assert!(why.contains("nothing was written"), "{why}");
+    }
+    assert_eq!(charter_of(&root), before);
+
+    // A short entry still fits.
+    let write = Write::WorkspaceSection {
+        section: Section::Decisions,
+        text: "fits".to_owned(),
+    };
+    perform(&root, &in_alpha_as(None), &write, now()).expect("written");
+}
+
+#[test]
+fn a_workspace_md_already_past_its_budget_is_refused_only_what_grows_it() {
+    let (_dir, root) = a_project();
+    a_charter_of(&root, WORKSPACE_MD_GROWS_TO_AT_MOST + 1000);
+
+    let grows = Write::WorkspaceSection {
+        section: Section::Glossary,
+        text: "term".to_owned(),
+    };
+    perform(&root, &in_alpha_as(None), &grows, now()).expect_err("it grows the file");
+    // A shorter vision than the one there shrinks it, and is written.
+    let shrinks = Write::WorkspaceVision {
+        text: "S".to_owned(),
+    };
+    perform(&root, &in_alpha_as(None), &shrinks, now()).expect("it shrinks the file");
+}
