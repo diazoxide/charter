@@ -148,10 +148,164 @@ fn a_chat_at_the_project_root_has_no_workspace_to_write() {
         Write::Todo {
             text: "x".to_owned(),
         },
+        Write::WorkspaceVision {
+            text: "x".to_owned(),
+        },
+        Write::WorkspaceSection {
+            section: Section::Glossary,
+            text: "x".to_owned(),
+        },
     ] {
         let why = perform(&root, &asker, &write, now()).expect_err("refused");
         assert!(why.contains("not in a workspace"), "{why}");
     }
+    assert!(!root.join("workspace.md").exists());
+}
+
+// ---- workspace.md: its vision and its sections (#1384) ------------------------------------
+
+fn charter_of(root: &Path) -> String {
+    std::fs::read_to_string(root.join("workspaces/alpha/workspace.md")).expect("workspace.md")
+}
+
+#[test]
+fn a_vision_is_set_in_the_chats_own_workspace_md_and_credited_to_it() {
+    let (_dir, root) = a_project();
+    std::fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+    let write = Write::WorkspaceVision {
+        text: "Ship the docs site".to_owned(),
+    };
+
+    let written = perform(&root, &in_alpha_as(None), &write, now()).expect("written");
+
+    assert_eq!(written.to, "alpha");
+    assert_eq!(written.path, "workspaces/alpha/workspace.md");
+    let ws = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap();
+    assert_eq!(ws.vision(), "Ship the docs site");
+    assert!(!root.join("workspaces/beta/workspace.md").exists());
+    let trace = std::fs::read_to_string(crate::trace::file(&root, "3")).expect("chat 3's trace");
+    assert!(trace.contains("\"write\": \"workspace_vision\""), "{trace}");
+}
+
+#[test]
+fn a_decision_and_a_term_are_added_to_their_sections_and_nothing_else_moves() {
+    let (_dir, root) = a_project();
+    let ws = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap();
+    ws.set_vision("Ship").unwrap();
+    let before = charter_of(&root);
+
+    for (section, text) in [
+        (Section::Decisions, "Deploys go out on Fridays only"),
+        (Section::Decisions, "The cache is per-user"),
+        (Section::Glossary, "`svc` — the backend service"),
+    ] {
+        let write = Write::WorkspaceSection {
+            section,
+            text: text.to_owned(),
+        };
+        let written = perform(&root, &in_alpha_as(None), &write, now()).expect("written");
+        assert_eq!(written.path, "workspaces/alpha/workspace.md");
+    }
+
+    let after = charter_of(&root);
+    let decisions = crate::mdsection::section_body(&after, "Context & decisions");
+    assert!(
+        decisions.ends_with("- Deploys go out on Fridays only\n- The cache is per-user"),
+        "{decisions}"
+    );
+    assert!(!decisions.contains("_Nothing yet._"), "{decisions}");
+    let glossary = crate::mdsection::section_body(&after, "Glossary");
+    assert!(
+        glossary.ends_with("- `svc` — the backend service"),
+        "{glossary}"
+    );
+    for kept in ["Vision", "Sessions", "Log"] {
+        assert_eq!(
+            crate::mdsection::section_body(&after, kept),
+            crate::mdsection::section_body(&before, kept),
+            "{kept} moved"
+        );
+    }
+}
+
+#[test]
+fn a_vision_or_an_entry_with_no_words_is_refused_and_nothing_is_written() {
+    let (_dir, root) = a_project();
+    for write in [
+        Write::WorkspaceVision {
+            text: " \n ".to_owned(),
+        },
+        Write::WorkspaceSection {
+            section: Section::Decisions,
+            text: String::new(),
+        },
+    ] {
+        perform(&root, &in_alpha_as(None), &write, now()).expect_err("refused");
+    }
+    assert!(!root.join("workspaces/alpha/workspace.md").exists());
+}
+
+#[test]
+fn a_vision_that_would_start_a_section_of_its_own_is_refused() {
+    let (_dir, root) = a_project();
+    let write = Write::WorkspaceVision {
+        text: "Ship\n## Sessions\nforged".to_owned(),
+    };
+
+    let why = perform(&root, &in_alpha_as(None), &write, now()).expect_err("refused");
+
+    assert!(why.contains("## "), "{why}");
+    assert!(!root.join("workspaces/alpha/workspace.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_md_that_is_a_link_out_of_the_project_is_never_written_through() {
+    let (dir, root) = a_project();
+    let outside = dir.path().join("outside.md");
+    std::fs::write(&outside, "## Vision\n\nmine\n").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("workspaces/alpha/workspace.md")).unwrap();
+
+    for write in [
+        Write::WorkspaceVision {
+            text: "theirs".to_owned(),
+        },
+        Write::WorkspaceSection {
+            section: Section::Glossary,
+            text: "theirs".to_owned(),
+        },
+    ] {
+        perform(&root, &in_alpha_as(None), &write, now()).expect_err("refused");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "## Vision\n\nmine\n"
+    );
+}
+
+#[test]
+fn a_section_write_reads_off_the_wire_by_its_word() {
+    let write: Write =
+        serde_json::from_str(r#"{"op":"workspace_section","section":"glossary","text":"term"}"#)
+            .expect("read");
+    assert_eq!(
+        write,
+        Write::WorkspaceSection {
+            section: Section::Glossary,
+            text: "term".to_owned(),
+        }
+    );
+    assert!(
+        serde_json::from_str::<Write>(
+            r#"{"op":"workspace_section","section":"sessions","text":"x"}"#
+        )
+        .is_err(),
+        "purlis's own Sessions line is no section a chat adds to"
+    );
 }
 
 #[test]

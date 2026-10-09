@@ -91,6 +91,10 @@ impl ServerHandler for Server {
         if name == chattools::PERSONA_REMEMBER {
             return Ok(done(blocking(move || persona_remember(&args)).await));
         }
+        if name == chattools::WORKSPACE_VISION || name == chattools::WORKSPACE_SECTION {
+            let name = name.to_owned();
+            return Ok(done(blocking(move || workspace_write(&name, &args)).await));
+        }
         if name == chattools::PERSONA_WHERE {
             return Ok(done(blocking(crate::whereworking::tool).await));
         }
@@ -214,6 +218,61 @@ fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result
                 chrono::Local::now().naive_local(),
             )?;
             Ok(said(&crate::voice::rel(root, &path)))
+        }
+    }
+}
+
+/// `workspace_vision` and `workspace_section`: the vision, or one entry of a section, of this
+/// chat's workspace's `workspace.md`, which the app that started the chat writes (a brokered
+/// write, #1384), as it does [`persona_remember`]'s, on the same terms: this server writes it
+/// itself only where no app could have.
+fn workspace_write(
+    tool: &str,
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String, String> {
+    use crate::brokered::Forwarded;
+    use purlis_core::brokered::Write;
+    let write = chattools::workspace_write(tool, args)?;
+    write.check()?;
+    let said = |to: &str, path: &str| match &write {
+        Write::WorkspaceSection { section, .. } => {
+            format!("Added to ## {} of '{to}' → {path}", section.header())
+        }
+        _ => format!("Vision set for '{to}' → {path}"),
+    };
+    match crate::brokered::forwarded(write.clone()) {
+        Forwarded::Written { to, path } => Ok(said(&to, &path)),
+        Forwarded::Refused(why) | Forwarded::Unsure(why) => {
+            Err(format!("nothing was written: {why}"))
+        }
+        Forwarded::NotTaken(not) if !not.may_write_outside() => {
+            let instead = match &write {
+                Write::WorkspaceVision { .. } => not.refusal("purlis workspace vision \"<text>\""),
+                _ => format!("{}: add it to workspace.md in the chat instead", not.why()),
+            };
+            Err(format!("nothing was written: {instead}"))
+        }
+        Forwarded::NotTaken(_) => {
+            let here = crate::Here::read()?;
+            let root = here.plane.root();
+            if let purlis_core::compat::Compat::ReadOnly(why) = purlis_core::compat::read(root) {
+                return Err(format!("nothing was written: {why}"));
+            }
+            let place = here.place(None);
+            let written = match &write {
+                Write::WorkspaceVision { text } => {
+                    purlis_core::brokered::set_vision(root, &place, "this chat", text)?
+                }
+                Write::WorkspaceSection { section, text } => purlis_core::brokered::add_to_section(
+                    root,
+                    &place,
+                    "this chat",
+                    *section,
+                    text,
+                )?,
+                _ => return Err(format!("{tool} is not a workspace.md tool")),
+            };
+            Ok(said(&written.to, &written.path))
         }
     }
 }

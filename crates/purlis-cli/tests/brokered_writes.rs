@@ -531,6 +531,120 @@ fn the_persona_remember_tool_whose_app_has_gone_writes_the_persona_itself() {
     );
 }
 
+// ---- workspace.md: the vision and the decisions and glossary sections (#1384) --------------
+
+fn alpha_charter(tmp: &tempfile::TempDir) -> String {
+    std::fs::read_to_string(root(tmp).join("workspaces/alpha/workspace.md")).unwrap_or_default()
+}
+
+#[test]
+fn workspace_vision_in_a_chat_is_written_by_the_app_in_the_chat_s_workspace() {
+    let tmp = a_project();
+    let app = an_app(&tmp, None);
+
+    let ran = purlis(
+        &tmp,
+        &["ws", "vision", "Ship the docs site"],
+        &app.chat_env(),
+    );
+
+    assert!(ran.status.success(), "{}", said(&ran));
+    assert_eq!(
+        app.write_asked(),
+        Write::WorkspaceVision {
+            text: "Ship the docs site".to_owned(),
+        }
+    );
+    assert_eq!(
+        purlis_core::mdsection::section_body(&alpha_charter(&tmp), "Vision"),
+        "Ship the docs site"
+    );
+    assert_eq!(brokered_for_chat_3(&tmp).len(), 1);
+}
+
+#[test]
+fn the_workspace_section_tool_in_a_chat_is_written_by_the_app() {
+    let tmp = a_project();
+    let app = an_app(&tmp, None);
+
+    let result = tool_over_mcp(
+        &tmp,
+        &app.chat_env(),
+        "workspace_section",
+        serde_json::json!({ "section": "decisions", "text": "Deploys go out on Fridays" }),
+    );
+
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(
+        app.write_asked(),
+        Write::WorkspaceSection {
+            section: purlis_core::brokered::Section::Decisions,
+            text: "Deploys go out on Fridays".to_owned(),
+        }
+    );
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("Added to ## Context & decisions of 'alpha' → workspaces/alpha/workspace.md"),
+        "{result}"
+    );
+    assert!(
+        purlis_core::mdsection::section_body(&alpha_charter(&tmp), "Context & decisions")
+            .ends_with("- Deploys go out on Fridays"),
+        "{}",
+        alpha_charter(&tmp)
+    );
+    assert_eq!(brokered_for_chat_3(&tmp).len(), 1);
+}
+
+#[test]
+fn the_workspace_vision_tool_outside_any_chat_the_app_started_writes_it_itself() {
+    // No chat number: no app could have written it, so the server does, in the workspace a
+    // `purlis` command run here would act on.
+    let tmp = a_project();
+
+    let result = tool_over_mcp(
+        &tmp,
+        &[],
+        "workspace_vision",
+        serde_json::json!({ "text": "Written by the server" }),
+    );
+
+    assert_ne!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("Vision set for 'alpha' → workspaces/alpha/workspace.md"),
+        "{result}"
+    );
+    assert_eq!(
+        purlis_core::mdsection::section_body(&alpha_charter(&tmp), "Vision"),
+        "Written by the server"
+    );
+}
+
+#[test]
+fn the_workspace_md_tools_in_a_chat_whose_harness_gave_it_no_connection_write_nothing() {
+    let tmp = a_project();
+    let codex = [(
+        purlis_core::active::SESSION_ID_ENV.to_owned(),
+        "3".to_owned(),
+    )];
+
+    for (tool, arguments) in [
+        (
+            "workspace_vision",
+            serde_json::json!({ "text": "Never written" }),
+        ),
+        (
+            "workspace_section",
+            serde_json::json!({ "section": "glossary", "text": "Never written" }),
+        ),
+    ] {
+        let result = tool_over_mcp(&tmp, &codex, tool, arguments);
+        assert_eq!(result["isError"], true, "{result}");
+    }
+    assert!(!root(&tmp).join("workspaces/alpha/workspace.md").exists());
+}
+
 // ---- the MCP server's session_record (#1332), under the same rule (#1408) ------------------
 
 const RECORD_BODY: &str = "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\

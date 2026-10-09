@@ -53,6 +53,15 @@ pub const SESSION_RECORD: &str = "session_record";
 /// the app (#1333), the one operation `purlis persona remember` run in the chat performs.
 pub const PERSONA_REMEMBER: &str = "persona_remember";
 
+/// The tool that sets the `## Vision` of this chat's workspace, which [`call`] does not answer
+/// either: a brokered write the server hands to the app (#1384), the one operation `purlis
+/// workspace vision "<text>"` run in the chat performs.
+pub const WORKSPACE_VISION: &str = "workspace_vision";
+
+/// The tool that adds one entry to the decisions or the glossary section of this chat's
+/// workspace's `workspace.md`, handed to the app as [`WORKSPACE_VISION`] is (#1384).
+pub const WORKSPACE_SECTION: &str = "workspace_section";
+
 /// The tool that says where this chat is working: who asked for it, its sibling tasks and the
 /// other chats running as its persona (#1450). [`call`] does not answer it: only the app that
 /// started the chat knows, so the server asks it over the chat's hook socket, as
@@ -229,7 +238,7 @@ fn one_string(key: &str, description: &str) -> Value {
 pub const DISPATCH_TOOLS: [&str; 2] = [DISPATCH, DISPATCH_REPORT];
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 15] = [
+pub static TOOLS: [Tool; 17] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -359,6 +368,42 @@ pub static TOOLS: [Tool; 15] = [
                     },
                 },
                 "required": ["title", "body"],
+                "additionalProperties": false,
+            })
+        },
+        read_only: false,
+    },
+    Tool {
+        name: WORKSPACE_VISION,
+        description: "Set the vision of the workspace this chat works in: one or a few lines \
+                      saying what the work is for, which every later chat here reads first. \
+                      It replaces the vision there was. Use it when the goal has changed. \
+                      Never a secret.",
+        schema: || one_string("text", "The vision. No line of it starts with `## `."),
+        read_only: false,
+    },
+    Tool {
+        name: WORKSPACE_SECTION,
+        description: "Add one entry to the workspace.md of the workspace this chat works in, \
+                      keeping what is there: a decision every later chat should act on, to \
+                      decisions (## Context & decisions), or a term this work coined, to \
+                      glossary (## Glossary). Never a secret.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "section": {
+                        "type": "string",
+                        "enum": crate::brokered::Section::ALL.map(crate::brokered::Section::word),
+                        "description": "decisions or glossary.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The entry: the decision and why, or `term` — what it \
+                                        means. It is added as one list item.",
+                    },
+                },
+                "required": ["section", "text"],
                 "additionalProperties": false,
             })
         },
@@ -513,6 +558,8 @@ pub fn call(
     if [
         SESSION_RECORD,
         PERSONA_REMEMBER,
+        WORKSPACE_VISION,
+        WORKSPACE_SECTION,
         DISPATCH,
         DISPATCH_LIST,
         DISPATCH_REPORT,
@@ -724,6 +771,32 @@ pub fn persona_remember_args(
         shared,
     ))
 }
+/// What a `workspace_vision` or `workspace_section` call hands the app: the brokered write, or
+/// why it hands over nothing.
+pub fn workspace_write(
+    tool: &str,
+    args: &Map<String, Value>,
+) -> Result<crate::brokered::Write, String> {
+    let text = string(args, "text")?.to_owned();
+    match tool {
+        WORKSPACE_VISION => Ok(crate::brokered::Write::WorkspaceVision { text }),
+        WORKSPACE_SECTION => {
+            let word = string(args, "section")?;
+            let section = crate::brokered::Section::named(word).ok_or_else(|| {
+                format!(
+                    "{} is not a section a chat adds to: decisions or glossary",
+                    crate::shown::short(word)
+                )
+            })?;
+            Ok(crate::brokered::Write::WorkspaceSection { section, text })
+        }
+        other => Err(format!(
+            "{} is not a workspace.md tool",
+            crate::shown::short(other)
+        )),
+    }
+}
+
 /// How long the `dispatch` tool waits for the task's report, in seconds, where its arguments
 /// say to wait: `wait_seconds`, or [`crate::dispatched::WAITS_BY_DEFAULT`].
 pub fn dispatch_waits(args: &Map<String, Value>) -> Result<Option<u32>, String> {

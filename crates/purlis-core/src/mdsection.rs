@@ -87,6 +87,68 @@ pub fn replace(text: &str, header: &str, body: &str) -> String {
     result
 }
 
+/// Add one entry to the end of the body under `## <header>`, keeping everything already
+/// there: the typed `workspace_section` write (#1384). A line that is exactly `placeholder`
+/// (the template's `_Nothing yet._`) goes, since the section now has something in it; a
+/// guidance comment stays. A section that is not there is appended, as [`replace`] appends one.
+///
+/// The section is found as [`replace`] finds it, header case-insensitive and ended by the next
+/// `"## "` line, so the two never disagree about what is in it. The entry is one list item:
+/// `- ` before its first line unless it is already one, and every further line indented under
+/// it, so nothing in it can start a section of its own.
+pub fn add_entry(text: &str, header: &str, entry: &str, placeholder: &str) -> String {
+    let item = list_item(entry);
+    let lines = split_lines(text);
+    let Some(at) = lines.iter().position(|line| matches_header(line, header)) else {
+        return replace(text, header, &item.join("\n"));
+    };
+    let end = (at + 1..lines.len())
+        .find(|&i| lines[i].starts_with("## "))
+        .unwrap_or(lines.len());
+    let mut body: Vec<&str> = lines[at + 1..end]
+        .iter()
+        .copied()
+        .filter(|line| crate::memstore::py_strip(line) != placeholder)
+        .collect();
+    while body.last().is_some_and(|line| line.trim().is_empty()) {
+        body.pop();
+    }
+    let in_a_list = body.last().is_some_and(|line| {
+        line.starts_with("- ") || line.starts_with("* ") || line.starts_with("  ")
+    });
+    if !in_a_list {
+        body.push("");
+    }
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len() + item.len() + 2);
+    out.extend_from_slice(&lines[..=at]);
+    out.extend(body);
+    out.extend(item.iter().map(String::as_str));
+    if end < lines.len() {
+        out.push("");
+        out.extend_from_slice(&lines[end..]);
+    }
+    let mut result = out
+        .join("\n")
+        .trim_end_matches(crate::memstore::is_python_space)
+        .to_string();
+    result.push('\n');
+    result
+}
+
+/// `entry` as the lines of one Markdown list item.
+fn list_item(entry: &str) -> Vec<String> {
+    split_lines(crate::memstore::py_strip(entry))
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| match i {
+            0 if line.starts_with("- ") || line.starts_with("* ") => line.to_owned(),
+            0 => format!("- {line}"),
+            _ if line.trim().is_empty() => String::new(),
+            _ => format!("  {line}"),
+        })
+        .collect()
+}
+
 /// `^##\s+<header>\s*$`, case-insensitive.
 fn matches_header(line: &str, header: &str) -> bool {
     let Some(rest) = line.strip_prefix("##") else {
@@ -314,6 +376,100 @@ mod eof_tests {
         assert_eq!(
             replace("##Vision\nold\n", "Vision", "new"),
             "##Vision\nold\n\n## Vision\n\nnew\n"
+        );
+    }
+
+    // ---- add_entry: one more entry under a section (#1384) ------------------------------------
+
+    const NOTHING: &str = "_Nothing yet._";
+
+    #[test]
+    fn an_entry_takes_the_place_of_the_placeholder_and_keeps_the_guidance_comment() {
+        let text = "# a\n\n## Glossary\n\n<!-- `term` — definition -->\n\n_Nothing yet._\n\n## Log\n\nkept\n";
+        assert_eq!(
+            add_entry(text, "Glossary", "`svc` — the service", NOTHING),
+            "# a\n\n## Glossary\n\n<!-- `term` — definition -->\n\n- `svc` — the service\n\n## Log\n\nkept\n"
+        );
+    }
+
+    #[test]
+    fn a_second_entry_follows_the_first_in_the_same_list() {
+        let once = add_entry(
+            "## Glossary\n\n_Nothing yet._\n",
+            "Glossary",
+            "one",
+            NOTHING,
+        );
+        assert_eq!(
+            add_entry(&once, "Glossary", "two", NOTHING),
+            "## Glossary\n\n- one\n- two\n"
+        );
+    }
+
+    #[test]
+    fn an_entry_under_prose_is_set_apart_from_it_by_a_blank_line() {
+        assert_eq!(
+            add_entry(
+                "## Context & decisions\n\nWe ship on Fridays.\n",
+                "Context & decisions",
+                "No deploys on Mondays",
+                NOTHING
+            ),
+            "## Context & decisions\n\nWe ship on Fridays.\n\n- No deploys on Mondays\n"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_entry_is_one_list_item_and_never_starts_a_section() {
+        assert_eq!(
+            add_entry(
+                "## Glossary\n",
+                "Glossary",
+                "term\n## Vision\nnot a heading",
+                NOTHING
+            ),
+            "## Glossary\n\n- term\n  ## Vision\n  not a heading\n"
+        );
+        // A break Python splits on, which `replace` would turn into a newline, is indented too.
+        assert_eq!(
+            add_entry(
+                "## Glossary\n",
+                "Glossary",
+                "term\u{2028}## Vision",
+                NOTHING
+            ),
+            "## Glossary\n\n- term\n  ## Vision\n"
+        );
+    }
+
+    #[test]
+    fn an_entry_already_written_as_a_list_item_is_not_bulleted_twice() {
+        assert_eq!(
+            add_entry(
+                "## Glossary\n",
+                "Glossary",
+                "- `api` — the service",
+                NOTHING
+            ),
+            "## Glossary\n\n- `api` — the service\n"
+        );
+    }
+
+    #[test]
+    fn an_entry_finds_the_section_the_writer_finds_whatever_its_case() {
+        // `replace` matches the header case-insensitively, so must this: a reader that did not
+        // would hand back an empty body, and the hand-written one would be lost.
+        assert_eq!(
+            add_entry("## glossary\n\n- old\n", "Glossary", "new", NOTHING),
+            "## glossary\n\n- old\n- new\n"
+        );
+    }
+
+    #[test]
+    fn a_section_that_is_not_there_is_appended_with_the_entry() {
+        assert_eq!(
+            add_entry("# a\n\n## Vision\n\nShip.\n", "Glossary", "term", NOTHING),
+            "# a\n\n## Vision\n\nShip.\n\n## Glossary\n\n- term\n"
         );
     }
 }
