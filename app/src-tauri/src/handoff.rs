@@ -2487,6 +2487,35 @@ fn dispatch_noting(
     })
 }
 
+/// The todo a handoff the person allowed records in the workspace it moved to (#1471), as the
+/// command records one for a handoff that opened at once (`purlis_core::handoff::todo_text`):
+/// the brief's title and where it came from, read off the stamp this app checked, never the
+/// brief itself. One already open about the same work is not written twice. Answers what went
+/// wrong, in a sentence for the asking chat, or nothing.
+fn held_handoff_todo(held: &Held, moved: &Moved) -> Option<String> {
+    let read = purlis_core::handoff::stamped(&moved.message)?;
+    let source = read.place()?;
+    let text = purlis_core::handoff::todo_text(read.brief, read.chat, &source);
+    let target = match purlis_core::workspaces::Plane::open(held.root()).workspace(&moved.workspace)
+    {
+        Ok(target) => target,
+        Err(why) => return Some(format!("its todo could not be recorded ({why})")),
+    };
+    if target.todo_for_the_same_work(&text).is_some() {
+        return None;
+    }
+    target
+        .add_todo(&text, chrono::Local::now().naive_local())
+        .err()
+        .map(|why| {
+            format!(
+                "its todo could not be recorded in '{}' ({})",
+                moved.workspace,
+                purlis_core::rewrite::os_words(&why)
+            )
+        })
+}
+
 /// **The person answered a dispatch that waited on them** (#1437): the grants store hands
 /// each answer here ([`crate::dispatchgrants::Store::answers_with`]).
 ///
@@ -2528,11 +2557,30 @@ pub fn answered(
     } else {
         match dispatch_noting(held, plane, &wanted, STARTING) {
             Ok(Dispatched::Started {
-                it, note, works, ..
+                it,
+                note,
+                works,
+                row: logged,
             }) => {
                 let running = match &it.persona {
                     Some(persona) => format!("running as {persona}"),
                     None => "running".to_owned(),
+                };
+                // **A held handoff leaves what one that opened at once leaves** (#1471): its
+                // todo in the workspace it moved to, which the command writes only after an
+                // open it saw, and its row in the dispatch log. The command returned long
+                // ago, so what could not be written is said here, to the asking chat.
+                let todo = wanted
+                    .moved
+                    .as_ref()
+                    .and_then(|moved| held_handoff_todo(held, moved));
+                let unlogged = match logged {
+                    Some(Row::Unwritten { why }) => Some(format!(
+                        "its row in the dispatch log (personas/{}) could not be written ({})",
+                        purlis_core::dispatch::DIR_NAME,
+                        purlis_core::personas::one_line(&why)
+                    )),
+                    Some(Row::Written) | None => None,
                 };
                 // Where it works, where that is not the asking chat's folder (#1453): the
                 // branch purlis cut is in it.
@@ -2540,6 +2588,8 @@ pub fn answered(
                     Some(running),
                     works.map(|works| format!("it works {works}")),
                     note,
+                    todo,
+                    unlogged,
                 ]
                 .into_iter()
                 .flatten()
@@ -4027,6 +4077,20 @@ mod tests {
             "one chat, and only one"
         );
         assert!(plane.root.join("workspaces/beta").is_dir());
+        // **And it leaves its todo there** (#1471), as a handoff that opened at once does: the
+        // brief's title, and never the brief.
+        let todos = purlis_core::workspaces::Plane::open(&plane.root)
+            .workspace("beta")
+            .expect("a name")
+            .todos()
+            .expect("its todos");
+        assert_eq!(
+            todos
+                .iter()
+                .map(|todo| todo.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Ship it"]
+        );
         let message = first_message_of(&plane);
         assert!(message.ends_with("\n\n# Ship it\nnow"), "{message:?}");
         let child = held
