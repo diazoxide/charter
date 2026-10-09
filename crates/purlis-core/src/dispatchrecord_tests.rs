@@ -1717,3 +1717,132 @@ fn a_record_is_read_for_its_brief_whatever_the_brief_holds_and_never_for_a_name_
     };
     assert!(!sound_but_for_its_brief(&huge));
 }
+
+// ----- times that do not read as times (#1520) ---------------------------------------------
+
+#[test]
+fn a_record_whose_times_do_not_read_as_times_is_counted_and_never_shown() {
+    let (_d, root) = project();
+    let good = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let said = |at: &str| Said {
+        at: at.to_owned(),
+        kind: crate::dispatchtalk::Kind::Note,
+        text: "Still up.".to_owned(),
+        by: None,
+        unread: false,
+    };
+    let bad = [
+        planted(&root, |record| record.started = "yesterday".to_owned()),
+        planted(&root, |record| record.ended = Some("soon".to_owned())),
+        // An end before its start.
+        planted(&root, |record| {
+            record.ended = Some("2026-10-07T11:00:00+00:00".to_owned());
+        }),
+        planted(&root, |record| {
+            record.messages = 1;
+            record.talk = vec![said("2026-13-45T99:00:00+00:00")];
+        }),
+    ];
+
+    let drawn = drawn(&root);
+
+    assert_eq!(drawn.refused, bad.len());
+    let shown: Vec<&str> = drawn.records.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(shown, [good.id.as_str()]);
+}
+
+#[test]
+fn what_a_record_kept_is_taken_out_where_its_end_does_not_read_as_a_time() {
+    // When it ended cannot be told, so the 30 days cannot be counted: its words are not kept
+    // on without end.
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    said(
+        &root,
+        &opened.id,
+        crate::dispatchtalk::Kind::Note,
+        "Still up.",
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+    let mut record = read(&root, &opened.id).unwrap();
+    record.ended = Some("whenever".to_owned());
+    std::fs::write(
+        dir(&root).join(format!("{}.json", record.id)),
+        serde_json::to_string_pretty(&record).unwrap(),
+    )
+    .unwrap();
+    // A running record keeps its words, however its start reads.
+    let running = planted(&root, |record| {
+        record.mode = Mode::Task;
+        record.started = "long ago".to_owned();
+        record.messages = 1;
+        record.talk = vec![Said {
+            at: "2026-10-07T12:01:00+00:00".to_owned(),
+            kind: crate::dispatchtalk::Kind::Note,
+            text: "Still up.".to_owned(),
+            by: None,
+            unread: false,
+        }];
+    });
+
+    assert_eq!(expire_talk(&root, at("2026-10-07T12:02:00Z")), 1);
+
+    let kept = read(&root, &opened.id).expect("the record stays");
+    assert_eq!(kept.messages, 1);
+    assert_eq!(kept.talk[0].text, "");
+    assert_eq!(read(&root, &running).unwrap().talk[0].text, "Still up.");
+}
+
+/// A task in `beta` that kept one message, with its end planted as `ended`.
+fn talked_and_ended_at(root: &Path, ended: &str) -> String {
+    let opened = open(
+        root,
+        Opening {
+            mode: Mode::Task,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    said(
+        root,
+        &opened.id,
+        crate::dispatchtalk::Kind::Note,
+        "Still up.",
+        at("2026-10-07T12:00:10Z"),
+    )
+    .unwrap();
+    let mut record = read(root, &opened.id).unwrap();
+    record.ended = Some(ended.to_owned());
+    std::fs::write(
+        dir(root).join(format!("{}.json", opened.id)),
+        serde_json::to_string_pretty(&record).unwrap(),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    opened.id
+}
+
+#[test]
+fn what_a_record_kept_is_taken_out_where_its_end_stands_in_the_future() {
+    // A clock stepped forward, or a record written so: its 30 days would never be counted.
+    let (_d, root) = project();
+    let far = talked_and_ended_at(&root, "9999-12-31T00:00:00+00:00");
+    // A minute ahead of this clock is a clock a little ahead, and not yet due.
+    let near = talked_and_ended_at(&root, "2026-10-07T12:03:00+00:00");
+
+    assert_eq!(expire_talk(&root, at("2026-10-07T12:02:00Z")), 1);
+
+    assert_eq!(read(&root, &far).unwrap().talk[0].text, "");
+    assert_eq!(read(&root, &near).unwrap().talk[0].text, "Still up.");
+}
