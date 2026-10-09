@@ -189,6 +189,11 @@ pub const WORDS: &[&str] = &[
     "notes",
     "discussions",
     "subgroups",
+    // GitHub's issue relations (FW-6b, #1202): sub-issues and blocker links.
+    "sub_issues",
+    "dependencies",
+    "blocked_by",
+    "blocking",
 ];
 
 /// The words a forge's API puts before names, and how many name segments follow each: an owner
@@ -241,6 +246,11 @@ const GITLAB_UNDER: &[&str] = &[
     "iterations",
     "projects",
     "subgroups",
+    // GitHub's issue relations (FW-6b, #1202): sub-issues and blocker links.
+    "sub_issues",
+    "dependencies",
+    "blocked_by",
+    "blocking",
 ];
 
 /// The words after which the rest of a path is a name or a file path: a branch, a ref, a file,
@@ -560,6 +570,23 @@ mod tests {
             "projects/{}/merge_requests"
         );
         assert_eq!(template("graphql"), "graphql");
+    }
+
+    #[test]
+    fn an_issue_s_relations_keep_their_words() {
+        // #1202: sub-issues and blocker links are API words, kept as the log's shape.
+        assert_eq!(
+            template("repos/acme/widget/issues/7/sub_issues"),
+            "repos/{}/{}/issues/{}/sub_issues"
+        );
+        assert_eq!(
+            template("repos/acme/widget/issues/7/dependencies/blocked_by"),
+            "repos/{}/{}/issues/{}/dependencies/blocked_by"
+        );
+        assert_eq!(
+            template("repos/acme/widget/issues/7/dependencies/blocking"),
+            "repos/{}/{}/issues/{}/dependencies/blocking"
+        );
     }
 
     #[test]
