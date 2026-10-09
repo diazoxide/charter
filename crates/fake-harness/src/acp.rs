@@ -20,6 +20,10 @@
 //! - `long <n>`: writes one line of `n` bytes;
 //! - `fs`: calls the client's `fs/read_text_file`, which charter does not offer, and says what
 //!   it was answered;
+//! - `elicit <shape>`: asks the client for values with `elicitation/create`, then says what it
+//!   was answered: `accept {content}`, `decline`, `cancel`, or `refused <code>`. The shape is
+//!   `form` (a token, required, and a region to pick), `url` (URL mode), `foreign` (a form for
+//!   another session) or `big` (a form whose message is past every bound);
 //! - `wait`: works until the turn is cancelled;
 //! - anything else: reports a plan, its usage and a tool call, then echoes the text.
 //!
@@ -192,6 +196,17 @@ fn prompt(
                 out,
                 &format!("foreign answered {}", answer["error"]["code"]),
             )?;
+            Ok("end_turn")
+        }
+        _ if text.starts_with("elicit ") => {
+            send(out, &elicitation(950, &text["elicit ".len()..]))?;
+            let answer = response_to(lines, script, 950)?;
+            let said = match answer["result"]["action"].as_str() {
+                Some("accept") => format!("accept {}", answer["result"]["content"]),
+                Some(action) => action.to_owned(),
+                None => format!("refused {}", answer["error"]["code"]),
+            };
+            chunk(out, &said)?;
             Ok("end_turn")
         }
         "die" => std::process::exit(0),
@@ -407,6 +422,28 @@ fn permission(id: u64, session: &str) -> Value {
             {"optionId": "no", "name": "Reject", "kind": "reject_once"},
         ],
     }})
+}
+
+/// An `elicitation/create` request as `id`, of `shape` (see `elicit <shape>`).
+fn elicitation(id: u64, shape: &str) -> Value {
+    let form = |session: &str, message: String| {
+        json!({"mode": "form", "sessionId": session, "message": message, "requestedSchema": {
+            "type": "object",
+            "properties": {
+                "token": {"type": "string", "title": "Registry token", "minLength": 4},
+                "region": {"type": "string", "enum": ["eu", "us"]},
+            },
+            "required": ["token"],
+        }})
+    };
+    let params = match shape {
+        "url" => json!({"mode": "url", "sessionId": SESSION, "elicitationId": "e-1",
+                        "url": "https://example.invalid/login", "message": "Log in there"}),
+        "foreign" => form("OTHER", "Your token".to_owned()),
+        "big" => form(SESSION, "m".repeat(70 * 1024)),
+        _ => form(SESSION, "Your registry token, please".to_owned()),
+    };
+    json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params})
 }
 
 /// The client's response to request `id`, skipping anything else it sends meanwhile.

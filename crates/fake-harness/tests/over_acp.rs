@@ -93,7 +93,7 @@ fn sent<'a>(record: &'a [serde_json::Value], method: &str) -> Option<&'a serde_j
 }
 
 #[test]
-fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_charter_s_server() {
+fn the_handshake_offers_forms_only_and_hands_the_session_charter_s_server() {
     let dir = tempfile::tempdir().expect("a worktree");
     let record: PathBuf = dir.path().join("record.jsonl");
     let mut launch = launch(
@@ -112,9 +112,15 @@ fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_cha
     assert_eq!(offered["fs"]["readTextFile"], false, "{offered}");
     assert_eq!(offered["fs"]["writeTextFile"], false, "{offered}");
     assert_eq!(offered["terminal"], false, "{offered}");
+    // Elicitation in form mode only, now that an ask can elicit a secret (#1377).
+    assert_eq!(
+        offered["elicitation"]["form"],
+        serde_json::json!({}),
+        "{offered}"
+    );
     assert!(
-        offered
-            .get("elicitation")
+        offered["elicitation"]
+            .get("url")
             .is_none_or(serde_json::Value::is_null),
         "{offered}"
     );

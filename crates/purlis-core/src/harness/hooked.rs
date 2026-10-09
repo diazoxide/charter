@@ -129,7 +129,7 @@ pub fn shown_in_full(ask: &Ask) -> bool {
     let whole = match &ask.action {
         Action::Command { line } => format!("Run a command: {line}"),
         Action::Tool { name, input } => format!("Use {name}: {input}"),
-        Action::Edit { .. } | Action::Unsaid => return false,
+        Action::Edit { .. } | Action::Elicit { .. } | Action::Unsaid => return false,
     };
     ask.summary.as_str() == whole && !whole.chars().any(drawn_otherwise)
 }

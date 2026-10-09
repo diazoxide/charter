@@ -160,6 +160,10 @@ pub enum Refused {
     NotYours,
     #[error("this ask offers no answers here; answer it in the chat's pane")]
     InThePane,
+    /// An answer to a form that does not fit it, which leaves the ask open. It names the field,
+    /// never the value given.
+    #[error("the answer does not fit the form: {0}")]
+    Unfit(String),
 }
 
 /// How many closed asks are remembered, so a late answer to one hears why. Older ones read as
