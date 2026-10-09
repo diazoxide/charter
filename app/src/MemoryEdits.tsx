@@ -83,6 +83,8 @@ export function useMemoryEdits({
   const [changed, setChanged] = useState(0);
   const [undoing, setUndoing] = useState<Undoable>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** The line whose Undo is on its way: a second press on it sends nothing (#1190). */
+  const sending = useRef<Undoable>(undefined);
 
   const wrote = useCallback(() => {
     setChanged((was) => was + 1);
@@ -160,34 +162,44 @@ export function useMemoryEdits({
   );
 
   const undo = useCallback(async () => {
-    if (undoing === undefined) return;
+    // A second press while this line's Undo is on its way sends nothing: the core would refuse
+    // it, the memory having moved already.
+    if (undoing === undefined || sending.current === undoing) return;
     clearTimeout(timer.current);
     // What this press undoes. An act made while it was on its way has its own line by the time
     // it lands, and neither its refusal nor its end may say anything over that line.
     const pressed = undoing;
-    const refused = (why: string) =>
-      setUndoing((now) => (now === pressed ? { ...now, trouble: why } : now));
-    if (pressed.kind === "deleted") {
-      const { ref, archived } = pressed;
-      // Back under its own slug, which archiving may have had to number (`restore_as`).
-      const answer = await settled(commands.memoryUnarchive(plane, ref.scope, archived, ref.slug));
-      if (answer.status === "error") {
-        refused(answer.error);
-        return;
+    sending.current = pressed;
+    try {
+      const refused = (why: string) =>
+        setUndoing((now) => (now === pressed ? { ...now, trouble: why } : now));
+      if (pressed.kind === "deleted") {
+        const { ref, archived } = pressed;
+        // Back under its own slug, which archiving may have had to number (`restore_as`).
+        const answer = await settled(
+          commands.memoryUnarchive(plane, ref.scope, archived, ref.slug),
+        );
+        if (answer.status === "error") {
+          refused(answer.error);
+          return;
+        }
+      } else {
+        // Moved back the way it came, whole, by the same core move: a memory written under its
+        // name in the old store since is refused there, and said here.
+        const { from, at } = pressed;
+        const answer = await settled(commands.memoryMove(plane, at.scope, at.slug, from.scope));
+        if (answer.status === "error") {
+          refused(answer.error);
+          return;
+        }
+        follow(memoryView(at), answer.data);
       }
-    } else {
-      // Moved back the way it came, whole, by the same core move: a memory written under its
-      // name in the old store since is refused there, and said here.
-      const { from, at } = pressed;
-      const answer = await settled(commands.memoryMove(plane, at.scope, at.slug, from.scope));
-      if (answer.status === "error") {
-        refused(answer.error);
-        return;
-      }
-      follow(memoryView(at), answer.data);
+      setUndoing((now) => (now === pressed ? undefined : now));
+      wrote();
+    } finally {
+      // Cleared on every way out, so a refused Undo can be pressed again.
+      if (sending.current === pressed) sending.current = undefined;
     }
-    setUndoing((now) => (now === pressed ? undefined : now));
-    wrote();
   }, [follow, plane, undoing, wrote]);
 
   /**
