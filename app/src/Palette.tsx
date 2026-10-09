@@ -8,10 +8,11 @@ import {
   narrow,
   PASS_THROUGH_ID,
   PASS_THROUGH_KEY,
+  revealSaid,
   type Offer,
   type Ran,
 } from "./actions";
-import type { FileScope, FoundFile, PlaneId } from "./bindings";
+import { commands, type FileScope, type FoundFile, type PlaneId } from "./bindings";
 import { hitSaid, scopeSaid, useFileFind, type Part } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
@@ -136,6 +137,8 @@ export function Palette({
   const up = useRef(false);
   /** Which rung of `files.ladder` the files are found in: Tab widens it (FM-7). */
   const [rung, setRung] = useState(0);
+  /** What the aimed file's Copy path or Reveal answered (#1143), said on the palette's line. */
+  const [fileSaid, setFileSaid] = useState<{ refused: boolean; words: string }>();
 
   /** The rows and the dispatcher as they are right now, for the ONE keydown listener: it is
    *  registered once and must not be rebuilt on every render, so it cannot close over
@@ -149,6 +152,7 @@ export function Palette({
     setQuery("");
     setAt(undefined);
     setHeld(undefined);
+    setFileSaid(undefined);
     onOpened?.(false);
     // The keyboard goes back in `giveTheKeyboardBack` and not here: this runs while the
     // surface is still up and still trapping focus, so a `focus()` from here is pulled
@@ -208,6 +212,7 @@ export function Palette({
         return;
       }
       setHeld(undefined);
+      setFileSaid(undefined);
       // **A project switch closes the palette in the same commit as the switch** (FR-27): it
       // cannot be refused, and closing after the switch's own answer was a second redraw of the
       // whole window, after the project in front had been drawn once already.
@@ -398,6 +403,37 @@ export function Palette({
     files?.onOpen(file);
   };
 
+  /**
+   * The aimed file's path copied, or the file revealed in the file manager (#1143): the two
+   * commands the explorer's row menu runs (FM-10), so the core places the path inside the branch
+   * and through no link here as there. The palette stays, so the person goes on finding; Copy
+   * path says what it put on the clipboard, and Reveal says nothing when the file manager has
+   * come forward with it, as the row menu does. A refusal is said on the palette's line.
+   */
+  const onFile = (file: FoundFile, does: FileKey) => {
+    setFileSaid(undefined);
+    const asked =
+      does === "copy"
+        ? commands.copyBranchPath(
+            file.plane,
+            file.workspace,
+            file.repo,
+            file.piece,
+            file.path,
+            false,
+          )
+        : commands.revealBranchPath(file.plane, file.workspace, file.repo, file.piece, file.path);
+    void asked
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }))
+      .then((answer) => {
+        // An answer that comes after the palette went is about nothing on screen.
+        if (!up.current) return;
+        if (answer.status === "error") setFileSaid({ refused: true, words: answer.error });
+        else if (does === "copy")
+          setFileSaid({ refused: false, words: `Copied the path of ${file.path}.` });
+      });
+  };
+
   /** Enter, or a click, on the row at `index` of either group. */
   const runRow = (index: number) => {
     if (index < 0) return;
@@ -408,7 +444,11 @@ export function Palette({
     }
   };
 
-  const showing = said && said.words !== "" ? said : undefined;
+  // The aimed file's own answer is the newer one: it is cleared whenever a row runs.
+  const showing = fileSaid ?? (said && said.words !== "" ? said : undefined);
+  /** The file the arrows or the query aimed at, which Copy path and Reveal act on. */
+  const aimedFile = aimed >= rows.length ? fileRows[aimed - rows.length] : undefined;
+  const mac = onAMac();
   // The way out of the key this palette claimed, said where the person who needs it is
   // standing: they pressed `F2` meaning to send `F2`, and this is on screen the instant it
   // opened. Only while there is somewhere to send it — otherwise the row below says why, and
@@ -491,10 +531,15 @@ export function Palette({
               // the last query is not the row that survived this one.
               setAt(undefined);
               setHeld(undefined);
+              setFileSaid(undefined);
             }}
             onKeyDown={(e) => {
               // Escape is not here: it is on the window, so it leaves from anywhere.
-              if (e.key === "ArrowDown") {
+              const fileKey = aimedFile && fileKeyOf(e.nativeEvent, mac);
+              if (aimedFile && fileKey) {
+                e.preventDefault();
+                if (!e.repeat) onFile(aimedFile, fileKey);
+              } else if (e.key === "ArrowDown") {
                 e.preventDefault();
                 move(1);
               } else if (e.key === "ArrowUp") {
@@ -632,6 +677,13 @@ export function Palette({
                   })}
                 </ul>
               )}
+              {/* The aimed file's two keys, said while there is a file to act on (#1143). */}
+              {aimedFile && (
+                <p className="palette-through">
+                  Copy path ({fileKeySaid("copy", mac)}) · {revealSaid(navigator.platform)} (
+                  {fileKeySaid("reveal", mac)})
+                </p>
+              )}
             </section>
           )}
         </Dialog.Content>
@@ -664,6 +716,36 @@ function Marked({ parts }: { parts: readonly Part[] }) {
       part.text
     ),
   );
+}
+
+/** What the aimed file of ⌘P can have done to it from the keyboard (#1143). */
+export type FileKey = "copy" | "reveal";
+
+/**
+ * Which of the aimed file's keys this keystroke is, if any (#1143): **⌥⌘C and ⌥⌘R on a Mac,
+ * Shift+Alt+C and Shift+Alt+R everywhere else** — Copy Path and Reveal in Finder's keys in VS
+ * Code's explorer, so the fingers that know an editor know these.
+ *
+ * They are read only in the palette's box, so no chat or tab ever loses them. ⌘C is the box's
+ * own copy, which is why the Mac's has Option in it. Off a Mac, Ctrl is never part of it: Ctrl
+ * with Alt is AltGr on Windows, which types a character. A letter is matched by what the key
+ * types; on a Mac, Option makes C and R type `ç` and `®`, so a key that types no letter at all
+ * is read by its place instead, and a key that types another letter is never this one.
+ */
+export function fileKeyOf(e: KeyboardEvent, mac: boolean): FileKey | undefined {
+  if (!e.altKey || e.ctrlKey) return undefined;
+  if (mac ? !e.metaKey || e.shiftKey : !e.shiftKey || e.metaKey) return undefined;
+  const typed = e.key.length === 1 && /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : undefined;
+  const letter = typed ?? (e.code === "KeyC" ? "c" : e.code === "KeyR" ? "r" : undefined);
+  if (letter === "c") return "copy";
+  if (letter === "r") return "reveal";
+  return undefined;
+}
+
+/** How the palette spells that key, on this platform. */
+export function fileKeySaid(does: FileKey, mac: boolean): string {
+  const letter = does === "copy" ? "C" : "R";
+  return mac ? `⌥⌘${letter}` : `Shift+Alt+${letter}`;
 }
 
 /**

@@ -989,7 +989,12 @@ is no byte for the new-shell key's reason, so plain `Ctrl+P` still reaches the s
 previous-history. It is the palette's own capture listener on the window, because the switcher
 is the palette listing only the projects; a further press while it is up moves down one row.
 It finds files too (FM-7): a _Files_ group after the projects, where Tab widens the scope rather
-than moving the focus, which the dialog's trap would only send round to the box again.
+than moving the focus, which the dialog's trap would only send round to the box again. The
+aimed file's path is copied with `⌥⌘C` on a Mac and `Shift+Alt+C` elsewhere, and the file is
+revealed with `⌥⌘R` and `Shift+Alt+R` (#1143, `Palette.fileKeyOf`), VS Code's keys for the
+same two rows. They are read only in the palette's box, so they take nothing from a chat or a
+tab; the line under the files says them while a file is aimed. Keys and not buttons, because a
+listbox option's contents are presentational and a button inside one is not reachable.
 
 **Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
 `SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for
