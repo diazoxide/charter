@@ -3195,6 +3195,77 @@ pub(crate) mod tests {
         chats.close(other).ok();
     }
 
+    /// Needs a terminal (#1538, V100-57). What a start compiles into a chat's sandbox: a task
+    /// started from a session that holds a grant is compiled without it, and the session's own
+    /// next start with it.
+    #[test]
+    fn a_task_started_from_a_session_holding_a_grant_compiles_its_sandbox_without_it() {
+        use purlis_core::reopen::{HandedFrom, Mode, Owed};
+        use purlis_core::sandbox::grant::{Grants, What};
+        let compiled: std::sync::Arc<Mutex<Vec<(String, Grants)>>> = std::sync::Arc::default();
+        let seen = std::sync::Arc::clone(&compiled);
+        let chats = Chats::new().deciding_by(Box::new(move |chat, grants, _| {
+            lock(&seen).push((chat.name.clone(), grants.clone()));
+            Ok((None, None))
+        }));
+        let size = Size {
+            columns: 80,
+            rows: 24,
+        };
+        let plain = Chat {
+            program: "/bin/sleep".to_owned(),
+            args: vec!["5".to_owned()],
+            name: "steward 1".to_owned(),
+            ..Default::default()
+        };
+        let session = chats.start(&plain, size).expect("started");
+        let host = What::Host(purlis_core::sandbox::hosts::Host::parse("a.example").unwrap());
+        chats
+            .grant(session, host.clone(), 1, "allowed".to_owned())
+            .expect("granted to the session");
+
+        let task = Chat {
+            name: "talk".to_owned(),
+            from: Some(HandedFrom {
+                chat: session,
+                name: "steward 1".to_owned(),
+                workspace: purlis_core::active::Place::Workspace("alpha".to_owned()),
+                report: Owed::Due,
+                mode: Mode::Task,
+                depth: 1,
+                root: None,
+                above: None,
+                by_person: false,
+            }),
+            ..plain.clone()
+        };
+        let talk = chats.start(&task, size).expect("started");
+        let of = |name: &str| {
+            lock(&compiled)
+                .iter()
+                .filter(|(chat, _)| chat == name)
+                .map(|(_, grants)| grants.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of("talk"),
+            [Grants::default()],
+            "the task starts with none of it"
+        );
+        // The session's own next start is compiled with it: the same seam, on its record.
+        let again = lock(&chats.open)[&session].chat.clone();
+        let mut held = Grants::default();
+        held.add(&host);
+        assert_eq!(chats.grants_of(&again), held);
+        assert_eq!(
+            chats.grants_of(&lock(&chats.open)[&talk].chat),
+            Grants::default()
+        );
+        for chat in [talk, session] {
+            chats.close(chat).ok();
+        }
+    }
+
     #[test]
     fn a_chat_is_announced_before_its_program_starts() {
         // A harness fires `SessionStart` at its own exec, so anything that learned the chat's
