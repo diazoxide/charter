@@ -3827,3 +3827,47 @@ fn the_standing_reads_an_unchanged_file_once_and_a_changed_one_again() {
     assert!(remembered(&gone, || ask(true)));
     assert_eq!(asked.get(), 7);
 }
+
+// --------------------------------------------------------------------------------------- //
+// a push record that cannot be written is said (#1144)                                      //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_push_record_that_cannot_be_written_is_carried_on_the_result_and_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // A directory where the record goes: no write lands there, as on a full disk.
+    std::fs::create_dir_all(push_record_path(root)).unwrap();
+
+    let blocked = record_push(root, PushResult::of(Outcome::Blocked, "main"), "abc");
+    let pushed = record_push(root, PushResult::of(Outcome::Pushed, "main"), "abc");
+    let mut said = Vec::new();
+    let told = said_if_unrecorded(blocked.clone(), &mut |line| said.push(line));
+
+    assert!(blocked.unrecorded.is_some(), "{blocked:?}");
+    assert!(
+        pushed.unrecorded.is_some(),
+        "a stale record left in place is as wrong as one never written: {pushed:?}"
+    );
+    assert_eq!(told, blocked, "saying it changes nothing of the result");
+    assert!(
+        matches!(said.as_slice(), [Say::Warn(line)] if line.contains("not recorded")),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn a_push_record_written_or_cleared_says_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let blocked = record_push(root, PushResult::of(Outcome::Blocked, "main"), "abc");
+    let pushed = record_push(root, PushResult::of(Outcome::Pushed, "main"), "abc");
+    let mut said = Vec::new();
+    said_if_unrecorded(blocked.clone(), &mut |line| said.push(line));
+
+    assert_eq!(blocked.unrecorded, None);
+    assert_eq!(pushed.unrecorded, None);
+    assert!(!push_record_path(root).exists(), "a clean push clears it");
+    assert!(said.is_empty(), "{said:?}");
+}

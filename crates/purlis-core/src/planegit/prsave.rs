@@ -282,8 +282,14 @@ pub(super) fn knows_a_pr(root: &Path) -> bool {
 }
 
 /// Push the plane's HEAD to the save branch and open or update its pull request — the PR
-/// modes' half of a save, once the commit is made.
+/// modes' half of a save, once the commit is made. A push record it could not write is said.
 pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushResult {
+    let res = push_unsaid(root, plane, sign, say);
+    super::said_if_unrecorded(res, say)
+}
+
+/// [`push`], before what it could not record is said.
+fn push_unsaid(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushResult {
     let mode = plane.mode.value.unwrap_or(Mode::Pr);
     let refused = |why: String, say: Sink| {
         say(Say::Warn(format!("Not pushed: {why}.")));
