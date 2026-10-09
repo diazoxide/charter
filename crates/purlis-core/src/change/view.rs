@@ -200,15 +200,13 @@ fn row(record: &Record, m: &Observed) -> Row {
         .unwrap_or_default();
     if !m.waiting_on.is_empty() {
         let names: Vec<String> = m.waiting_on.iter().map(|n| shown::line(n)).collect();
-        text.push_str(&format!(
-            " · {} {}",
-            if m.merged() {
-                "merged ahead of"
-            } else {
-                "blocked by"
-            },
-            names.join(", ")
-        ));
+        // Merged and still waiting: it went in before its blocker landed, whether that blocker
+        // has merged since (outside purlis, #877) or not.
+        text.push_str(&if m.merged() {
+            format!(" · merged before {} landed", names.join(", "))
+        } else {
+            format!(" · blocked by {}", names.join(", "))
+        });
     }
     let mut detail = vec![format!("branch: {}", shown::line(&m.branch))];
     if !needs.is_empty() {
