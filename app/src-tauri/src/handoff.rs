@@ -4119,7 +4119,9 @@ mod tests {
         );
         assert!(plane.root.join("workspaces/beta").is_dir());
         // **And it leaves its todo there** (#1471), as a handoff that opened at once does: the
-        // brief's title, and never the brief.
+        // brief's first line as it is written, heading marker and all, as the command's
+        // recorded todo has it (`handoff-inside-the-app-opens-the-chat-there-and-records-its-
+        // todo`), and never the brief.
         let todos = purlis_core::workspaces::Plane::open(&plane.root)
             .workspace("beta")
             .expect("a name")
@@ -4130,7 +4132,7 @@ mod tests {
                 .iter()
                 .map(|todo| todo.title.as_str())
                 .collect::<Vec<_>>(),
-            ["Ship it"]
+            ["# Ship it"]
         );
         let message = first_message_of(&plane);
         assert!(message.ends_with("\n\n# Ship it\nnow"), "{message:?}");
@@ -5651,6 +5653,21 @@ mod tests {
             .todos()
             .expect("its todos");
         assert_eq!(todos.len(), 1, "{todos:?}");
+        // **The todo the command writes**, from the one function both write it with
+        // (`handoff::todo_text`): the brief's first line as it is written, as the recorded
+        // command's todo keeps it, and where it came from.
+        assert_eq!(todos[0].title, "# Ship it", "{todos:?}");
+        let wanted = purlis_core::handoff::todo_text(
+            "# Ship it\nnow",
+            "1",
+            &purlis_core::active::Place::Workspace("default".to_owned()),
+        );
+        let provenance = wanted.lines().last().expect("a line");
+        assert!(todos[0].body.contains(provenance), "{todos:?}");
+        assert!(
+            !todos[0].body.contains("now\n"),
+            "never the brief: {todos:?}"
+        );
 
         // The dispatch-log row: said where it was not written, in one line, and not otherwise.
         let row = unlogged(Some(Row::Unwritten {
