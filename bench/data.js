@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791539280840,
+  "lastUpdate": 1791542314942,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4746,6 +4746,48 @@ window.BENCHMARK_DATA = {
             "value": 101.38734149999999,
             "unit": "ms",
             "extra": "median of 5 runs: 99.810, 100.967, 101.387, 101.642, 102.096 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a2a5758912ee377fc3a207a56c76db4a1a85d5e1",
+          "message": "Test the clone that makes its workspace, not the old refusal\n\nrepo_commands.rs pinned the refusal issue 1382 removed: a clone into a\nmissing workspace exited 1. It now checks the new rule end to end: the\nworkspace is made and scaffolded, the clone lands in it, and one line\nsays so; a bad name or a linked workspace is still refused with nothing\nmade or written through the link.\n\nRefs #1382\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T14:09:05+04:00",
+          "tree_id": "7b7258cc2ca02397e9fcd4b97db308ccf3387edc",
+          "url": "https://github.com/purlis/purlis/commit/a2a5758912ee377fc3a207a56c76db4a1a85d5e1"
+        },
+        "date": 1791542314251,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4185065,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.398, 0.418, 0.419, 0.436, 0.458 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.499956499999996,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.283, 16.397, 16.500, 16.596, 16.938 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.74356350000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.370, 101.523, 101.744, 101.771, 101.805 ms"
           }
         ]
       }
