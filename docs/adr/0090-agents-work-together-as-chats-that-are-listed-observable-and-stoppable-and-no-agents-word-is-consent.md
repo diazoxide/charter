@@ -921,3 +921,30 @@ Still open, and not decided here: telling a teammate's "any persona" on the one-
   repository has no history to read. An acceptance kept by a build from before this is bound
   at its first check and not asked again; an older build that rewrites the record strips the
   binding, and the next check binds afresh.
+
+### Added 2026-10-08 (#1507): a refusal with nobody there reaches the person afterwards (V100-29)
+
+A chat nobody is at still dispatches under standing grants only, and is still refused at once
+where none covers the pair: no question is put to it, nothing is held, and no Notice is raised.
+What is new is after the fact. A refusal that was only for lack of a grant between two personas
+is kept (one entry a pair and workspace, with a count; capped; 30 days), and the title bar's
+needs-you list says "`<persona>` wanted `<persona>` while you were away", with **Dismiss**,
+**Never for this pair** and **Allow from now on**.
+
+- **Allow from now on is the person's own standing grant for that one pair**, for them on this
+  machine, audited as theirs with where it came from. It is the only level offered there:
+  never the project's, never "any persona". It starts nothing; the dispatch that was refused
+  is gone. Its reach is that grant's, and the item says it before the press: every workspace,
+  a chat nobody is at, and onward through the target's own grants.
+- **Dismiss holds.** The entry is kept and marked; a chat asking on is counted and not
+  listed, and is not told whether its refusal was listed. It is listed again only by a refusal
+  seven days or more later. **Never for this pair** is the store's never.
+- The item is attached to no chat. The asking chat does not count as needing the person.
+- A never, a policy lock, a limit, the loop rule and every other refusal no grant mends are
+  not kept. A pair the person said never to by the time they look is dropped without a word.
+- **Nothing a chat wrote is kept or drawn**: not the brief, and not the task's name. The item
+  is two personas, a workspace, a count and a time, all the app's own.
+- **A refused chat cannot move a row under the pointer.** The list is in the order pairs were
+  first refused, the window draws the list it was opened on until it closes, and the keyboard
+  arrives on Dismiss.
+- The list and its answers are the window's alone: served on no link, named by no hook line.

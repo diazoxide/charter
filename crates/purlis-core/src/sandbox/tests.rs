@@ -466,6 +466,108 @@ fn every_harness_denies_a_chat_reading_or_writing_the_dispatch_records() {
     }
 }
 
+/// #1507: the record of what was refused while nobody was there is in the dispatch store, and
+/// is what a standing grant is offered from. **Its own path** is denied for reading and
+/// writing in what each harness is compiled, on both systems, under both names of the state
+/// folder, **in a project where neither the file nor its folder is there yet**: the denial is
+/// compiled from the project's root, not from what a chat finds on the disk.
+#[test]
+fn every_harness_denies_a_chat_the_record_of_what_was_refused_while_nobody_was_there() {
+    for os in [Os::MacOs, Os::Linux] {
+        let (plane, denied) = denied_with(None, os);
+        let files: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+            .iter()
+            .map(|state| {
+                plane
+                    .path()
+                    .join(state)
+                    .join("app")
+                    .join(crate::dispatchrecord::DIR_NAME)
+                    .join(crate::dispatchaway::FILE_NAME)
+            })
+            .collect();
+        for file in &files {
+            assert!(!file.parent().expect("a folder").exists(), "not made yet");
+        }
+        // The file the app writes is one of them.
+        assert!(files.contains(&crate::dispatchaway::path(plane.path())));
+        let under = |held: &[std::path::PathBuf], file: &std::path::Path| {
+            held.iter().any(|folder| file.starts_with(folder))
+        };
+
+        // What every compiler starts from.
+        let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+        for file in &files {
+            assert!(under(&held, file), "{os:?}: {}", file.display());
+        }
+
+        // Claude Code: its own sandbox's read and write denials, and its file tools'.
+        let settings = claude::settings(&compiled(denied.clone(), os)).expect("compiles");
+        let listed = |key: &str| -> Vec<std::path::PathBuf> {
+            settings.sandbox["filesystem"][key]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .filter_map(|path| path.as_str().map(std::path::PathBuf::from))
+                .collect()
+        };
+        for file in &files {
+            // As the kernel names the folder, which is what the compiler hands the harness.
+            let folder = super::real(file.parent().expect("a folder"));
+            let named = folder.join(crate::dispatchaway::FILE_NAME);
+            assert!(under(&listed("denyRead"), &named), "{os:?}: {named:?}");
+            assert!(under(&listed("denyWrite"), &named), "{os:?}: {named:?}");
+            assert!(
+                settings
+                    .deny
+                    .contains(&format!("Read(/{}/**)", folder.display())),
+                "{os:?}: {named:?}: {:?}",
+                settings.deny
+            );
+        }
+
+        // Codex and opencode run inside purlis's own wrap, which there is one of on macOS.
+        // **On Linux neither compiles, so no such chat is started** (fail closed): there is
+        // no chat of theirs to read the record.
+        let codex = codex::wrap(&compiled(denied.clone(), os));
+        let opencode = applied_for(
+            Harness::Opencode,
+            &policy_of(&[], false),
+            &Plane::of(None),
+            plane.path(),
+            &machine(os),
+        );
+        if os == Os::Linux {
+            assert!(
+                codex.is_err(),
+                "codex compiles on Linux: check its denials here"
+            );
+            assert!(
+                opencode.is_err(),
+                "opencode compiles on Linux: check its denials here"
+            );
+            continue;
+        }
+        let read_write = |denied: &[Denial]| -> Vec<std::path::PathBuf> {
+            denied
+                .iter()
+                .filter(|it| it.access == Access::ReadWrite)
+                .map(|it| it.path.clone())
+                .collect()
+        };
+        let codex = read_write(&codex.expect("compiles").denied);
+        let applied = opencode.expect("compiles");
+        let Form::Opencode(wrap) = applied.form() else {
+            panic!("compiled for opencode");
+        };
+        let opencode = read_write(&wrap.denied);
+        for file in &files {
+            assert!(under(&codex, file), "codex: {}", file.display());
+            assert!(under(&opencode, file), "opencode: {}", file.display());
+        }
+    }
+}
+
 /// The same, in a wrapped opencode chat's own compiled form.
 #[test]
 fn an_opencode_chat_is_handed_the_dispatch_records_denied_for_reading() {

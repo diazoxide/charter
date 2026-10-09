@@ -183,7 +183,52 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     // And the list is exactly that rule's, with Stop all tasks and its question (#1498), the
     // three reads of what chats said or were sent (#1494, #1495, #1496) and the person's
     // answer to a task (#1496): nothing else is kept from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 35);
+    // And the dispatch commands' (#1507): nothing else is kept from a link by it.
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 4);
+}
+
+#[tokio::test]
+async fn a_refusal_kept_while_nobody_was_there_is_read_and_answered_on_no_link() {
+    // #1507: the list and its three answers (one a standing grant in one press) are the
+    // window's over Tauri's IPC alone, even when a host is built with every command.
+    const AWAY: [&str; 4] = [
+        "dispatch_away",
+        "allow_dispatch_away",
+        "dismiss_dispatch_away",
+        "never_dispatch_away",
+    ];
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(
+        BUILD,
+        AWAY.into_iter().chain(["rename_chat"]),
+        commands.clone(),
+    );
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    for command in AWAY {
+        let refused = ui
+            .call(
+                command,
+                json!({"plane": 1, "asking": "steward", "target": "devops", "workspace": null}),
+            )
+            .await
+            .unwrap();
+        assert!(refused.is_err(), "{command}: {refused:?}");
+        assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
+    }
+    assert!(commands.asked.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -5211,6 +5211,13 @@ mod tests {
             r#"{"dispatch_seen_at":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
             r#"{"dispatch_gone":[{"said":"steward -> devops","why":"removed"}]}"#,
             r#"{"answer_dispatch_arrival":{"chat":4,"accepted":true,"shown":["steward -> devops"],"listed":["steward -> devops"]}}"#,
+            // #1507: the refusals kept while nobody was there, and their two answers.
+            r#"{"allow_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"chat":4,"allow_dispatch_away":{"asking":"steward","target":"devops"},"token":"t"}"#,
+            r#"{"dismiss_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"never_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"dispatch_away":{"chat":4}}"#,
+            r#"{"refused":[{"asking":"steward","target":"devops","first":1,"latest":1,"times":1}]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
             // #1505: a grant limited to one workspace. The wider Allow, the change of a
             // grant's workspace, Accept and Not on my machine for a limited grant, by each
