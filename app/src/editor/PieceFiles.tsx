@@ -7,7 +7,8 @@
  *   record keeps it for a tab open at a quit (`reopen::View::split`). One tab for a whole
  *   branch, so reading through it does not leave a tab per file behind.
  *   A jump to a file at a line (a search hit, FM-8; `fileJump.ts`) lands here: the preview picks
- *   the file and brings the line into view.
+ *   the file and brings the line into view, and the tree opens the folders above the file and
+ *   scrolls to its row (#1137).
  * - **\<file\> · \<branch\>** is one file in a tab of its own: what the preview's *Open in a
  *   tab of its own* opens, and what a jump from a diff, a record or the knowledge graph opens.
  *
@@ -498,6 +499,7 @@ export function PieceFilesTab({
           plane={plane}
           place={cut}
           picked={picked}
+          reveal={landed?.at}
           onPick={setPicked}
           onPress={onPress}
         />
