@@ -5274,10 +5274,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
     kept in, as `workspace-<ws>/<file>.json` or `plane-root/<file>.json` under
     `<state>/handbacks/`, and nothing else is read as one: absent where it was kept in no file
     (a task that ended at a launch with its asking chat not open). **When the chat that asked
-    comes back** (a launch that puts it back, **Retry now** on it, or **Resume** from a
-    session record that `asker.session_record` or `asker_last_record` names) the report is
-    taken back from that file before the chat starts and left for its next turn once it has,
-    and the key is removed in the same write that claims it, so one report reaches it once. A
+    comes back** (a launch that puts it back, **Retry now** on it, **Resume** from a session
+    record that `asker.session_record` or `asker_last_record` names, or **Reopen** on its
+    finished row where it was a task itself) the report is taken back from that file before
+    the chat starts and left for its next turn once it has. The key stays until then: it is
+    removed in the same write that claims the report as it is left, so one report reaches it
+    once, and a start that never finishes, or a report that cannot be left, leaves it owed (and
+    kept in a file again where it was). A
     chat a Resume started knows the chat it resumed (`identity.resumed_from` in
     `app/reopen.json`), so **a report that lands after the Resume** goes to it as its record
     ends. Written by the app, as the report is kept, and by the settle that ends a dispatch

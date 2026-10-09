@@ -1087,6 +1087,29 @@ The operator's rulings V100-63 and V100-64 (spec #1483, built in #1513).
   the chat that resumed it. A report it never read before it closed is handled the same way.
   A task the person started from a tab is not: its report is theirs.
 
+**The follow-ups of #1513 (#1546), 2026-10-09:**
+
+- **A report kept for an asking chat is owed until it has been left for that chat.** Taken
+  from the workspace as the chat starts, it is claimed only once the chat has started and as
+  it is left for it; a start the app dies in, or a report that cannot be written, leaves it
+  owed on its record and kept for its workspace again. Reopen on a finished task's row hands
+  the reopened chat what was kept for the tasks it had asked, as Resume does.
+- **What a launch believes is held to the dispatch record whole.** A task is told to carry on
+  only where its entry runs on the profile, and in the folder, the dispatch started it on, as
+  well as by the ids and persona; and **Try to start again** tells it to carry on only while
+  its dispatch is still running.
+- **A question a task asked its asking chat before a restart is not kept.** The task is told
+  to ask again if its work waits on the answer; the asking chat, answering the question it
+  still reads, is told it was not kept, and that it can answer when it is asked again.
+- **Decided not to, for now:** a line on the asking chat's next turn listing its tasks brought
+  back (a second dispatch of one is refused with its number, `purlis dispatch list` lists
+  them, and each report is announced as any report is); a line typed into a chat that came
+  back when a kept report is handed to it (purlis's line names the task by a number its asking
+  chat may wait on, and a chat that came back is not that chat: the report reaches its next
+  turn); and writing a restored entry's lineage over from the dispatch record (an
+  entry the record contradicts is told and reported for in nothing already, and the record of
+  open chats is out of a sandboxed chat's reach).
+
 **Interim, owned by #1510** (accepted by the operator, 2026-10-09): a task whose asker has gone
 does not yet end at its report as other tasks do. It stays open and asks for the person, as
 #1448 had it, until Past tasks (#1510) gives its report a place in the window; "an orphaned
