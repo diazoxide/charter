@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791505727137,
+  "lastUpdate": 1791507460924,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3864,6 +3864,48 @@ window.BENCHMARK_DATA = {
             "value": 103.66681500000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.357, 103.438, 103.667, 103.675, 103.947 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "1d7cb8d09317f717972e0c3405f49a81aecfb27b",
+          "message": "While you were away: one summary of what happened\n\nWhen the person comes back after five minutes or more away from the\nwindow, one Notice under each project's strip sums up what happened\nmeanwhile: \"While you were away: 7 tasks done, 1 failed, 2 waiting on\nyou\". Away is any of three signals: the window not in use (blur to\nfocus), hidden (visibilitychange), or left in front with no key, pointer\nor wheel input, from the last input to the first one after. A window that\nstarts without the focus is away from its start.\n\nEach project keeps its own times away whether or not it is in front: the\nproject's view holds them above where it stops drawing a project behind\nanother, so switching to it shows its summary, and switching back is no\nDismiss.\n\nOnly what happened while away is counted: a finished task by the time\nits record says it ended, in the count every surface puts it in\n(finishedBucketOf); a chat as waiting when it came into the needs-you\nqueue while away and is still there. A chat there only for tasks that\ncame to nothing (every reason it has is one failure's sentence) is\ncounted once, as the failure.\n\nEach part is a link. One item goes straight to it, named in the link's\naccessible name; several open a list. A chat waiting on you is shown\nwhere it lives, where its question or Notice is answered as before. A\nfinished task goes where a needs-you item's Go takes it, through the one\nhelper both now share: its chat if open, else its finished row, else the\nsession that asked, saying why. Going to a failed task marks that\nfailure looked at, as the Go does; that is the one thing a press writes.\nDismiss puts the summary away and nothing else: needs-you items,\nquestion Notices, failed rows and Activity lines all stay.\n\nA summary whose parts have all gone lets its times go, and so does one\nthat still counts nothing ten seconds after the return, so no record\nread later brings an old time back; a reload starts with none.\n\nSettings, You, Chats list: \"Away summary\", on by default, kept as\n`chats.away` in the layout file beside the other Chats list choices;\n`chats` is now described as how chats are listed and summed up. Off,\nnothing is watched and the window is as before.\n\napp/src/awayCounts.ts holds what is counted and said (plain inputs);\napp/src/AwaySummary.tsx watches the window (useTimeAway), keeps each\nproject's summary (useAwaySummary) and draws the Notice. A later source\nof things that happened while away joins as another part there.\n\nDocs: CONTEXT.md (Away summary), docs/plane-format.md and\ndocs/design-system.md (`chats.away`), changes/while-you-were-away.md.\n\nCloses #1514\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T04:56:23+04:00",
+          "tree_id": "0b5fa39584503b86eea39c8d9ee5eed6f4ac7e92",
+          "url": "https://github.com/purlis/purlis/commit/1d7cb8d09317f717972e0c3405f49a81aecfb27b"
+        },
+        "date": 1791507460210,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.28124299999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.272, 0.275, 0.281, 0.295, 0.301 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.563947,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.535, 16.537, 16.564, 16.605, 16.686 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.3495805,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.568, 102.200, 102.350, 102.574, 102.689 ms"
           }
         ]
       }
