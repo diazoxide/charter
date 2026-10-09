@@ -589,7 +589,9 @@ persona was seen gone and another has its name, the grants for the name are **se
 they allow nothing until the person gives them back or removes them. What a persona **wants**
 (the `wants` line of its definition) is not a grant and makes none: it only puts unticked
 boxes under the question, so the person can allow several pairs in one answer, each with the
-workspace condition of that answer.
+workspace condition of that answer. A project grant a teammate committed **arrives**: it
+allows nothing on a machine until the person there accepts it, and their yes holds only until
+a commit takes the grant out.
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
 **Headless chat**:

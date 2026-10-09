@@ -355,28 +355,6 @@ fn a_pair_is_written_and_read_back_as_asking_arrow_target() {
     assert_eq!(Pair::parse("steward -> steward"), None);
 }
 
-// ---- the teammate's one-time Notice -------------------------------------------------------------
-
-#[test]
-fn a_change_names_what_was_added_and_taken_away_and_order_is_no_change() {
-    let seen = ["steward -> devops".to_owned(), "qa -> devops".to_owned()];
-    assert_eq!(
-        change_between(&seen, &[pair("qa", "devops"), pair("steward", "devops")]),
-        None
-    );
-    assert_eq!(
-        change_between(&seen, &[pair("steward", "devops"), pair("steward", "qa")]),
-        Some(Change {
-            added: vec!["steward -> qa".to_owned()],
-            removed: vec!["qa -> devops".to_owned()],
-            now: vec!["steward -> devops".to_owned(), "steward -> qa".to_owned()],
-        })
-    );
-    // A project first seen on this machine with grants is a change; one with none is not.
-    assert!(change_between(&[], &[pair("steward", "devops")]).is_some());
-    assert_eq!(change_between(&[], &[]), None);
-}
-
 // ---- the audit ----------------------------------------------------------------------------------
 
 #[test]
@@ -605,23 +583,27 @@ fn a_name_in_this_machine_s_record_that_is_no_persona_s_grants_nothing() {
 }
 
 #[test]
-fn what_the_person_was_told_of_is_kept_as_it_was_shown() {
+fn only_a_pair_the_project_s_file_holds_is_ever_recorded_as_accepted() {
     let project = tempfile::tempdir().expect("a project");
     let root = project.path();
     assert_eq!(crate::sandbox::local::dispatch_seen(root), None);
-    acknowledge(root, &["steward -> devops".to_owned()]).expect("kept");
+    // No project file here grants nothing, so there is nothing to accept.
+    acknowledge(root, &["steward -> devops".to_owned()]).expect("nothing to keep");
+    assert_eq!(crate::sandbox::local::dispatch_seen(root), None);
+
+    std::fs::write(
+        crate::names::manifest(root),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n",
+    )
+    .expect("a teammate's push");
+    acknowledge(
+        root,
+        &["steward -> devops".to_owned(), "qa -> prod".to_owned()],
+    )
+    .expect("kept");
     assert_eq!(
         crate::sandbox::local::dispatch_seen(root),
         Some(vec!["steward -> devops".to_owned()])
-    );
-    // No project file here grants nothing, so what was seen has been taken away.
-    assert_eq!(
-        changed(root),
-        Some(Change {
-            added: vec![],
-            removed: vec!["steward -> devops".to_owned()],
-            now: vec![],
-        })
     );
 }
 
@@ -691,7 +673,12 @@ fn a_committed_pair_this_machine_has_not_acknowledged_covers_nothing_until_it_is
         Covers::NeedsGrant
     );
     assert_eq!(unacknowledged(root), [pair("steward", "qa")]);
-    assert_eq!(changed(root).expect("still told").added, ["steward -> qa"]);
+    let waiting: Vec<String> = crate::dispatcharrival::arrival(root)
+        .waiting
+        .iter()
+        .map(crate::dispatcharrival::Arrived::said)
+        .collect();
+    assert_eq!(waiting, ["steward -> qa"], "still told");
 
     // An acknowledgement of a pair the file does not hold puts nothing in force.
     acknowledge(

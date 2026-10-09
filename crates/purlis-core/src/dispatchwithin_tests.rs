@@ -1196,11 +1196,13 @@ fn accepting_a_pair_for_every_workspace_does_not_accept_it_for_one_nor_the_rever
         Covers::NeedsGrant
     );
     assert_eq!(asked(root, "steward", "devops", None), Covers::NeedsGrant);
-    // The widening is news: the project's one-time Notice tells it.
-    assert_eq!(
-        crate::dispatchgrant::changed(root).expect("a change").added,
-        ["steward -> devops"]
-    );
+    // The widening is news: the Notice that says a grant arrived tells it (#1506).
+    let waiting: Vec<String> = crate::dispatcharrival::arrival(root)
+        .waiting
+        .iter()
+        .map(crate::dispatcharrival::Arrived::said)
+        .collect();
+    assert_eq!(waiting, ["steward -> devops"]);
 }
 
 #[test]
@@ -1248,8 +1250,8 @@ fn a_project_grant_s_workspace_is_changed_for_everyone_and_this_machine_follows_
     );
     assert!(project_holds(root, "steward", "devops", &any));
     assert!(!project_holds(root, "steward", "devops", &runners));
-    // No news on this machine: the person here wrote it.
-    assert_eq!(crate::dispatchgrant::changed(root), None);
+    // No news on this machine: the person here wrote it, so nothing waits as arrived.
+    assert!(crate::dispatcharrival::arrival(root).waiting.is_empty());
 
     set_within(root, "steward", "devops", &any, &runners).expect("narrowed");
     assert_eq!(
@@ -1260,7 +1262,7 @@ fn a_project_grant_s_workspace_is_changed_for_everyone_and_this_machine_follows_
         asked(root, "steward", "devops", Some("web")),
         Covers::NeedsGrant
     );
-    assert_eq!(crate::dispatchgrant::changed(root), None);
+    assert!(crate::dispatcharrival::arrival(root).waiting.is_empty());
 
     revoke_in(root, &one).expect("revoked");
     assert_eq!(

@@ -324,8 +324,8 @@ fn another_persona_under_a_name_seen_gone_gets_nothing_until_the_person_gives_it
     assert_eq!(list(root), Vec::<Dormant>::new());
     assert_eq!(state(root, &[]), Some(State::default()));
     assert_eq!(
-        dispatchgrant::changed(root),
-        None,
+        crate::dispatcharrival::arrival(root),
+        crate::dispatcharrival::Arrival::default(),
         "no news of the project's"
     );
     assert_eq!(

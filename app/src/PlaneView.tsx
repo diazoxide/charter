@@ -6991,7 +6991,8 @@ export const PlaneView = memo(function PlaneView({
           plane={plane}
           onReview={() => openSettingsAt({ group: "project.sandbox" })}
         />
-        {/* **The project's dispatch grants changed** (#1437): told once to each teammate. */}
+        {/* **A teammate's dispatch grant arrived** (#1506): said here, at the window's level,
+          when the project's settings gain one this person has not answered. */}
         <ProjectDispatchNotice
           plane={plane}
           onReview={() => openSettingsAt({ group: "project.dispatch" })}

@@ -210,7 +210,7 @@ pub fn can_grant_any(root: &Path, asking: &str) -> Result<(), String> {
 /// is written. Either way it is accepted on this machine, so it is in force here.
 pub fn grant_any(root: &Path, asking: &str) -> Result<(), String> {
     write(root, |text| with_any(text, asking))?;
-    crate::sandbox::local::acknowledge_dispatch_any(root, asking).map_err(|why| {
+    crate::dispatchgrant::acknowledge_any(root, asking).map_err(|why| {
         format!(
             "The grant is in {}, and purlis could not record it as allowed on this machine \
              ({}), so it covers nothing here yet. Allow it again.",

@@ -447,7 +447,9 @@ fn an_allow_for_everyone_writes_the_limited_spelling_and_covers_that_workspace_o
         Some("web")
     )));
     // No news on this machine, and nothing accepted for every workspace.
-    assert_eq!(dispatchgrant::changed(world.root()), None);
+    let arrival = purlis_core::dispatcharrival::arrival(world.root());
+    assert!(arrival.waiting.is_empty(), "{:?}", arrival.waiting);
+    assert!(arrival.gone.is_empty(), "{:?}", arrival.gone);
     assert_eq!(record(&world).get("dispatch_seen"), None);
 }
 

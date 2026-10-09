@@ -911,6 +911,24 @@ pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnava
     })
 }
 
+/// [`run`]'s hardening for a git the caller feeds and reads itself, a request at a time
+/// (`cat-file --batch`): the child, with its three streams piped, or the sentence that refuses
+/// the call. **The caller owns the deadline**: it stops the child with [`stop`] and waits for
+/// it.
+pub(crate) fn spawn_fed(
+    dir: &Path,
+    args: &[&str],
+) -> Result<Result<Child, &'static str>, GitUnavailable> {
+    let extra = Extra {
+        stdin: true,
+        ..Extra::default()
+    };
+    match held(dir, args, extra) {
+        Ok(extra) => Ok(Ok(spawn_with(dir, args, &extra)?)),
+        Err(why) => Ok(Err(why)),
+    }
+}
+
 /// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
 ///
 /// For a caller that must tell "git wrote something that is not UTF-8" from "git wrote U+FFFD",
@@ -1063,7 +1081,7 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// and left the plane mid-rebase. `SIGTERM` is the signal git's own lockfile cleanup is wired
 /// to, so a git asked to stop removes its locks and exits; `SIGKILL` follows for one that has
 /// not within [`STOP_GRACE`].
-fn stop(child: &mut Child) {
+pub(crate) fn stop(child: &mut Child) {
     let asked = rustix::process::Pid::from_raw(child.id().cast_signed())
         .map(|pid| rustix::process::kill_process(pid, rustix::process::Signal::TERM).is_ok());
     if asked == Some(true) {

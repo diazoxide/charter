@@ -118,6 +118,18 @@ struct OnDisk {
     /// ([`crate::dispatchwithin`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_workspaces: Vec<KnownWorkspace>,
+    /// **What the acceptances and declines above are bound to** (#1506): the commit of the
+    /// project's history through which this machine has checked that no commit took any of
+    /// them out of the project's file ([`crate::dispatcharrival::settle`]). Absent where
+    /// nothing is accepted or declined, or the project is in no git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dispatch_seen_at: Option<String>,
+    /// The project's grants you accepted here whose acceptance was dropped (#1506), each with
+    /// why: a commit took it out, or the history could not be read. One a commit took out is
+    /// told once as taken away. One the file holds waits for a new yes, and is said to have
+    /// been accepted before, with the reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_gone: Vec<Gone>,
 }
 
 /// One dispatch grant that holds in one workspace only (#1505), as this file keeps it.
@@ -176,6 +188,24 @@ pub struct Dormant {
     /// Empty where a hand-edit dropped it: the entry is then nobody's to be given back.
     #[serde(default)]
     pub was: String,
+}
+
+/// One of the project's grants whose acceptance on this machine was dropped (#1506).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Gone {
+    /// The grant, as `dispatch_declined` spells one.
+    pub said: String,
+    /// [`Gone::REMOVED`] or [`Gone::UNREAD`]. Any other word is read as the second: nothing
+    /// is said to have been taken away that purlis did not see taken away.
+    #[serde(default)]
+    pub why: String,
+}
+
+impl Gone {
+    /// A commit of the project's history took the grant out of its file.
+    pub const REMOVED: &'static str = "removed";
+    /// The project's history since the acceptance could not be read.
+    pub const UNREAD: &'static str = "unread";
 }
 
 /// One of the project's grants this machine had accepted, set aside with the grants of the
@@ -647,8 +677,10 @@ pub fn dispatch_seen(root: &Path) -> Option<Vec<String>> {
 pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
     change(root, |held| {
         held.dispatch_seen = Some(shown.to_vec());
-        // A yes is the newer answer: what is allowed here is no longer declined here.
+        // A yes is the newer answer: what is allowed here is no longer declined here, and is
+        // no longer one that was taken away.
         held.dispatch_declined.retain(|one| !shown.contains(one));
+        held.dispatch_gone.retain(|one| !shown.contains(&one.said));
     })
 }
 
@@ -736,6 +768,7 @@ pub fn acknowledge_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
         }
         let said = format!("{asking} -> {}", crate::dispatchgrant::ANY);
         held.dispatch_declined.retain(|one| *one != said);
+        held.dispatch_gone.retain(|one| one.said != said);
     })
 }
 
@@ -1106,6 +1139,127 @@ pub fn decline_dispatch(root: &Path, said: &str) -> io::Result<()> {
         if !held.dispatch_declined.iter().any(|one| one == said) {
             held.dispatch_declined.push(said.to_owned());
         }
+        // Answered: it is no longer one to say was accepted before.
+        held.dispatch_gone.retain(|one| one.said != said);
+    })
+}
+
+// ---- what an acceptance is bound to (#1506) --------------------------------------------------
+
+/// What this machine keeps of the project's grants, as [`crate::dispatcharrival`] reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DispatchBound {
+    /// The pairs accepted here, each as [`crate::dispatchgrant::Pair`] is displayed.
+    pub seen: Vec<String>,
+    /// The asking personas whose "any persona" grant was accepted here.
+    pub any_seen: Vec<String>,
+    /// The grants declined here, a pair as it is displayed or `<asking> -> *`.
+    pub declined: Vec<String>,
+    /// The commit the acceptances and declines were last checked through.
+    pub at: Option<String>,
+    /// The grants whose acceptance was dropped, with why.
+    pub gone: Vec<Gone>,
+}
+
+/// What this machine keeps of the project's grants in the project at `root`.
+pub fn dispatch_bound(root: &Path) -> DispatchBound {
+    let held = read(root);
+    DispatchBound {
+        seen: held.dispatch_seen.unwrap_or_default(),
+        any_seen: held.dispatch_any_seen,
+        declined: held.dispatch_declined,
+        at: held.dispatch_seen_at,
+        gone: held.dispatch_gone,
+    }
+}
+
+/// **Records that the person accepted the project's grant `said`** (a pair as it is displayed,
+/// or `<asking> -> *`), in one write: it is added to what was accepted, and is no longer
+/// declined, dropped, or set aside. `holds` is asked **inside the write** whether the
+/// project's file holds the grant now; where it does not, nothing is written and the answer is
+/// `false`. Nothing is read first and written back whole, so a drop made meanwhile stays made.
+pub fn accept_dispatch(root: &Path, said: &str, holds: &dyn Fn() -> bool) -> io::Result<bool> {
+    let mut kept = false;
+    change(root, |held| {
+        if !holds() {
+            return;
+        }
+        kept = true;
+        match sides(said) {
+            Some((asking, target)) if target == crate::dispatchgrant::ANY => {
+                if !held.dispatch_any_seen.iter().any(|one| one == asking) {
+                    held.dispatch_any_seen.push(asking.to_owned());
+                }
+            }
+            _ => {
+                let seen = held.dispatch_seen.get_or_insert_with(Vec::new);
+                if !seen.iter().any(|one| one == said) {
+                    seen.push(said.to_owned());
+                }
+            }
+        }
+        held.dispatch_declined.retain(|one| one != said);
+        held.dispatch_gone.retain(|one| one.said != said);
+        held.dispatch_accepted_aside.retain(|one| one.said != said);
+    })?;
+    Ok(kept)
+}
+
+/// One settling of what this machine keeps of the project's grants
+/// ([`crate::dispatcharrival::settle`]), written at once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DispatchSettled {
+    /// The acceptances that no longer hold, each with why: each leaves `dispatch_seen` or
+    /// `dispatch_any_seen` and is remembered in `dispatch_gone`.
+    pub dropped: Vec<Gone>,
+    /// The declines whose grant a commit took out of the project's file: forgotten.
+    pub undeclined: Vec<String>,
+    /// The commit the acceptances are checked through now; none where no commit could be
+    /// read.
+    pub at: Option<String>,
+}
+
+/// Writes `settled`, in one write. Only ever narrows what is in force.
+pub fn settle_dispatch(root: &Path, settled: &DispatchSettled) -> io::Result<()> {
+    change(root, |held| {
+        for gone in &settled.dropped {
+            let said = &gone.said;
+            let mut was = false;
+            match sides(said) {
+                Some((asking, target)) if target == crate::dispatchgrant::ANY => {
+                    let before = held.dispatch_any_seen.len();
+                    held.dispatch_any_seen.retain(|one| one != asking);
+                    was = held.dispatch_any_seen.len() != before;
+                }
+                _ => {
+                    if let Some(seen) = held.dispatch_seen.as_mut() {
+                        let before = seen.len();
+                        seen.retain(|one| one != said);
+                        was = seen.len() != before;
+                    }
+                }
+            }
+            if was {
+                held.dispatch_gone.retain(|one| one.said != *said);
+                held.dispatch_gone.push(gone.clone());
+            }
+        }
+        held.dispatch_declined
+            .retain(|one| !settled.undeclined.contains(one));
+        let bound = held
+            .dispatch_seen
+            .as_ref()
+            .is_some_and(|seen| !seen.is_empty())
+            || !held.dispatch_any_seen.is_empty()
+            || !held.dispatch_declined.is_empty();
+        held.dispatch_seen_at = settled.at.clone().filter(|_| bound);
+    })
+}
+
+/// Forgets that `said`, grants accepted here, were taken away: the person was told.
+pub fn forget_dispatch_gone(root: &Path, said: &[String]) -> io::Result<()> {
+    change(root, |held| {
+        held.dispatch_gone.retain(|one| !said.contains(&one.said))
     })
 }
 
