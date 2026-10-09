@@ -168,6 +168,10 @@ function modeStatus(sandbox: SandboxState | undefined): Control {
  * **Internet access** (#1340, `CONTEXT.md`): one box per preset, named as the core names it, each
  * opening to the hosts the core lists for it. Unticking every box writes `[]`, which reaches no
  * host, rather than taking the key out, which would reach every preset.
+ *
+ * Taking the key out — the row's reset, or an Undo of the change that first wrote it — is
+ * allowed, since it is the same as ticking every box, but it widens what a chat may reach. So
+ * the reset says so on its face, and the line under the row says it of both (#1197).
  */
 function internetAccess(table: readonly SandboxPreset[], policy: SandboxPolicy | null): Control {
   const allowed = policy?.presets ?? null;
@@ -194,8 +198,9 @@ function internetAccess(table: readonly SandboxPreset[], policy: SandboxPolicy |
   return {
     id: JSON.stringify(EGRESS),
     label: "Internet access",
-    hint: "The hosts every chat here may reach, besides the project's own below. A host nothing allows is blocked, and the chat's tab says so.",
+    hint: "The hosts every chat here may reach, besides the project's own below. A host nothing allows is blocked, and the chat's tab says so. Reset, or an Undo that takes this out of the file, turns every preset on.",
     kind: "checks",
+    resets: "Reset: reach every preset",
     options: table.map((preset) => ({
       value: preset.word,
       label: preset.title,

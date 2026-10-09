@@ -788,7 +788,11 @@ function FileRow({
       badge={overridden !== undefined ? `Overrides ${namesIn(project.files).shared}` : undefined}
       reset={
         mayTakeOut
-          ? { label: "Reset", disabled: writing, onReset: () => project.reset(setting) }
+          ? {
+              label: setting.resets ?? "Reset",
+              disabled: writing,
+              onReset: () => project.reset(setting),
+            }
           : undefined
       }
       place={

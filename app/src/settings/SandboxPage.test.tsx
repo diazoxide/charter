@@ -321,6 +321,25 @@ describe("Settings › Project › Sandbox", () => {
     expect(sent[0].edits[0].value).toEqual({ kind: "list", value: [] });
   });
 
+  it("says a reset of Internet access reaches every preset, before it is pressed (#1197)", async () => {
+    const { sent } = core({
+      shared: [MODE_ON, field(["sandbox", "egress"], { kind: "list", value: ["forge"] })],
+    });
+    const page = await atSandbox();
+    const access = await within(page).findByRole("group", { name: "Internet access" });
+    expect(access).toHaveAccessibleDescription(
+      expect.stringContaining(
+        "Reset, or an Undo that takes this out of the file, turns every preset on.",
+      ),
+    );
+
+    await userEvent.click(within(page).getByRole("button", { name: "Reset: reach every preset" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].edits[0].path).toEqual([{ key: "sandbox" }, { key: "egress" }]);
+    expect(sent[0].edits[0].value ?? null).toBeNull();
+  });
+
   it("lists each preset's hosts as the core gives them, behind a disclosure", async () => {
     core();
     const page = await atSandbox();

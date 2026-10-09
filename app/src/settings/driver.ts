@@ -601,5 +601,6 @@ export function fileSetting(
     read: control.read,
     edits: control.edits,
     names: control.names,
+    resets: control.resets,
   };
 }
