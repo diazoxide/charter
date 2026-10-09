@@ -67,6 +67,20 @@ struct OnDisk {
     /// each as [`crate::dispatchgrant::Pair`] is displayed; absent before the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dispatch_seen: Option<Vec<String>>,
+    /// **Not this file's any more**: the nevers one dev build kept here, before they moved to
+    /// `app/dispatch-never.json` ([`crate::dispatchnever`]). Carried as it was written until
+    /// that module moves it ([`legacy_dispatch_nevers`], [`drop_legacy_dispatch_nevers`]), so
+    /// no write of this file drops a never on the way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dispatch_never: Option<serde_json::Value>,
+    /// The personas whose chats you let dispatch to **any** persona, on this machine (#1503).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_any: Vec<String>,
+    /// The personas whose "any persona" grant in the project's file you accepted on this
+    /// machine (#1503). Kept apart from `dispatch_seen`, so nothing that acknowledges a pair
+    /// puts one in force.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_any_seen: Vec<String>,
 }
 
 /// One dispatch grant of yours, as the file keeps it: chats running as `asking` may dispatch
@@ -131,7 +145,11 @@ fn change(root: &Path, how: impl FnOnce(&mut OnDisk)) -> io::Result<()> {
         // starts again rather than refusing every chat start that would add to it.
         let mut held: OnDisk = now
             .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
+            .unwrap_or_else(|| OnDisk {
+                // What starts again never takes a never an earlier build left here with it.
+                dispatch_never: now.and_then(legacy_nevers_in),
+                ..OnDisk::default()
+            });
         how(&mut held);
         serde_json::to_string_pretty(&held)
             .map(|text| Some(format!("{text}\n")))
@@ -507,6 +525,98 @@ pub fn dispatch_seen(root: &Path) -> Option<Vec<String>> {
 /// showed them.
 pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
     change(root, |held| held.dispatch_seen = Some(shown.to_vec()))
+}
+
+// ---- any persona, and what an earlier build left of nevers (#1503) -----------------------
+
+/// What `text`, this file, holds under the key one dev build kept nevers in, whatever else in
+/// the file reads or does not.
+fn legacy_nevers_in(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()?
+        .get("dispatch_never")
+        .cloned()
+}
+
+/// **The nevers an earlier build left in this file**, for [`crate::dispatchnever`] to move:
+/// each as asking persona and target persona. Empty where there are none; `None` where the
+/// key is there and is not a list of pairs, so what it refused is unknown.
+pub fn legacy_dispatch_nevers(root: &Path) -> Option<Vec<(String, String)>> {
+    let Some(left) = std::fs::read_to_string(path(root))
+        .ok()
+        .as_deref()
+        .and_then(legacy_nevers_in)
+    else {
+        return Some(Vec::new());
+    };
+    crate::dispatchnever::pairs_of(&left)
+}
+
+/// Takes that key out of this file, once what it held is kept where it belongs. Every other
+/// key stays as it is written, read by this build or not.
+pub fn drop_legacy_dispatch_nevers(root: &Path) -> io::Result<()> {
+    crate::rewrite::update(root, &path(root), |now| {
+        let Some(serde_json::Value::Object(mut whole)) =
+            now.and_then(|text| serde_json::from_str(text).ok())
+        else {
+            return Ok(None);
+        };
+        if whole.remove("dispatch_never").is_none() {
+            return Ok(None);
+        }
+        serde_json::to_string_pretty(&whole)
+            .map(|text| Some(format!("{text}\n")))
+            .map_err(io::Error::other)
+    })
+    .map(|_| ())
+}
+
+/// The personas whose chats you let dispatch to any persona in the project at `root`, on this
+/// machine, as the file spells them. [`crate::dispatchgrant::any_yours`] keeps the names.
+pub fn granted_dispatch_any(root: &Path) -> Vec<String> {
+    read(root).dispatch_any
+}
+
+/// Lets every chat of the project at `root` that runs as `asking` dispatch to any persona, on
+/// this machine: Settings, never a Notice's answer and never a chat.
+pub fn grant_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        if !held.dispatch_any.iter().any(|one| one == asking) {
+            held.dispatch_any.push(asking.to_owned());
+        }
+    })
+}
+
+/// Takes that back: Settings' Revoke. Answers whether there was one.
+pub fn revoke_dispatch_any(root: &Path, asking: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_any.len();
+        held.dispatch_any.retain(|one| one != asking);
+        was = held.dispatch_any.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// The personas whose "any persona" grant in the project's file you accepted on this machine.
+pub fn dispatch_any_seen(root: &Path) -> Vec<String> {
+    read(root).dispatch_any_seen
+}
+
+/// Records that you accepted the project's "any persona" grant for `asking` on this machine.
+pub fn acknowledge_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        if !held.dispatch_any_seen.iter().any(|one| one == asking) {
+            held.dispatch_any_seen.push(asking.to_owned());
+        }
+    })
+}
+
+/// Takes `asking` off what you accepted of the project's "any persona" grants.
+pub fn forget_dispatch_any(root: &Path, asking: &str) -> io::Result<()> {
+    change(root, |held| {
+        held.dispatch_any_seen.retain(|one| one != asking)
+    })
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------

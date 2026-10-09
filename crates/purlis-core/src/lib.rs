@@ -35,6 +35,7 @@ pub mod dispatched;
 pub mod dispatchgrant;
 pub mod dispatchguard;
 pub mod dispatchlimits;
+pub mod dispatchnever;
 pub mod dispatchplace;
 pub mod dispatchrecord;
 pub mod dispatchtalk;

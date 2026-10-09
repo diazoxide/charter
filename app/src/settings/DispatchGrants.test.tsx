@@ -66,6 +66,97 @@ const List = () => (
   <DispatchGrantsList plane={PLANE} file="purlis.toml" ids={{ id: "d", labelledBy: "d-label" }} />
 );
 
+describe("the pairs you said never to, in Settings", () => {
+  const NEVER = { asking: "steward", target: "devops" };
+
+  it("lists each under the grants, and Lift takes it out through the core", async () => {
+    const asked: { cmd: string; args: unknown }[] = [];
+    let nevers = [NEVER, { asking: "qa", target: "prod" }];
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "dispatch_grants") return state({ grants: [MINE] });
+      if (cmd === "dispatch_standing") return { nevers, any: [], nevers_unread: null };
+      if (cmd === "lift_dispatch_never") {
+        const { asking, target } = args as { asking: string; target: string };
+        nevers = nevers.filter((one) => !(one.asking === asking && one.target === target));
+        return { nevers, any: [], nevers_unread: null };
+      }
+      return null;
+    });
+    render(<List />);
+
+    const list = await screen.findByRole("list", { name: "Never" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(list).toHaveTextContent(
+      "steward chats never dispatch to devops · Me on this machine · said by you",
+    );
+    expect(list).toHaveTextContent(
+      "No grant covers it, and no steward chat is asked, until you lift it.",
+    );
+
+    await userEvent
+      .setup()
+      .click(
+        within(list).getByRole("button", { name: "Lift never for steward dispatching to devops" }),
+      );
+
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
+    expect(asked.filter((one) => one.cmd === "lift_dispatch_never").map((one) => one.args)).toEqual(
+      [{ plane: PLANE, asking: "steward", target: "devops" }],
+    );
+    expect(list).not.toHaveTextContent("steward chats never dispatch to devops");
+    // The grant it was beating is still listed, and was not touched.
+    expect(asked.some((one) => one.cmd === "revoke_dispatch_grant")).toBe(false);
+    expect(screen.getByRole("list", { name: "Dispatch grants" })).toHaveTextContent(
+      "steward chats may dispatch to devops",
+    );
+  });
+
+  it("says the core's refusal of a Lift and keeps the never listed", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "dispatch_grants") return state();
+      if (cmd === "dispatch_standing") return { nevers: [NEVER], any: [], nevers_unread: null };
+      if (cmd === "lift_dispatch_never")
+        throw "purlis's event log is not open on this machine, so nothing was changed";
+      return null;
+    });
+    render(<List />);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: /^Lift never/ }));
+
+    expect(
+      await screen.findByText(
+        "purlis's event log is not open on this machine, so nothing was changed",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Never" })).toHaveTextContent(
+      "steward chats never dispatch to devops",
+    );
+  });
+
+  it("says so where the list of nevers does not read, and lists none as if that were all", async () => {
+    const unread =
+      "purlis could not read the list of pairs you said never to (.purlis/app/dispatch-never.json in this project), so it changed nothing there and no dispatch grant counts until it reads. Fix that file, or delete it to say never to nothing.";
+    mockIPC((cmd) => {
+      if (cmd === "dispatch_grants") return state({ grants: [MINE] });
+      if (cmd === "dispatch_standing") return { nevers: [], any: [], nevers_unread: unread };
+      return null;
+    });
+    render(<List />);
+
+    expect(await screen.findByText(unread)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Never" })).toBeNull();
+  });
+
+  it("draws no Never list where nothing was said never to", async () => {
+    mockIPC((cmd) => (cmd === "dispatch_grants" ? state({ grants: [MINE] }) : null));
+    render(<List />);
+
+    await screen.findByRole("list", { name: "Dispatch grants" });
+    expect(screen.queryByRole("list", { name: "Never" })).toBeNull();
+  });
+});
+
 describe("the dispatch grants list", () => {
   it("lists every level with who granted it and when, and Revoke takes one out", async () => {
     const asked: Record<string, unknown>[] = [];

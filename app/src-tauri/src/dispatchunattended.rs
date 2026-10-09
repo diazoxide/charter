@@ -92,7 +92,10 @@ pub const HOLDS_ANOTHERS: &str = "this chat still runs on the grants of the chat
 /// **What an unattended chat, `asking`, is answered when it asks to dispatch to `target`** in
 /// the project at `root` under `locks`. `runs` is how this app started and records the chat.
 ///
-/// Read-only, and of standing grants alone: the person's on this machine and the project's.
+/// Of standing grants alone: the person's on this machine and the project's. It makes and
+/// widens nothing; reading the grants in force may drop this machine's acceptance of an "any
+/// persona" grant the project's file no longer holds
+/// ([`dispatchgrant::forget_any_the_file_dropped`]), which only ever narrows.
 pub fn unattended(
     root: &Path,
     locks: &Locks,

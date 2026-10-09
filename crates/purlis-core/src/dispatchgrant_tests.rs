@@ -113,6 +113,7 @@ fn the_widest_level_a_pair_is_held_at_is_the_one_named() {
         chat: vec![chat(Some("steward"), "devops")],
         you: vec![pair("steward", "devops"), pair("steward", "qa")],
         project: vec![pair("steward", "devops")],
+        ..InForce::default()
     };
     assert_eq!(
         grants.level_of(Some("steward"), "devops"),
@@ -300,6 +301,7 @@ fn the_committed_file_s_grants_are_read_pair_by_pair_in_file_order() {
                 pair("steward", "qa"),
                 pair("qa", "devops")
             ],
+            any: vec![],
             refused: vec![],
         }
     );
@@ -379,7 +381,7 @@ fn a_change_names_what_was_added_and_taken_away_and_order_is_no_change() {
 #[test]
 fn a_grant_and_a_revoke_are_trust_events_naming_the_pair_and_the_level() {
     let made = Audited {
-        granted: true,
+        act: crate::dispatchgrant::Act::Grant,
         asking: Some("steward"),
         target: "devops",
         level: Level::Project,
@@ -397,7 +399,7 @@ fn a_grant_and_a_revoke_are_trust_events_naming_the_pair_and_the_level() {
         })
     );
     let taken = Audited {
-        granted: false,
+        act: crate::dispatchgrant::Act::Revoke,
         asking: None,
         level: Level::Chat,
         ..made
