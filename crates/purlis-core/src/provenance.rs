@@ -462,9 +462,9 @@ pub enum Claim {
     /// The lines name more than one value, in the order they stand. **The commit's provenance
     /// for this key is not known**: a reader shows that several are claimed and attributes the
     /// commit to none of them. A value that could not stand on a trailer line is one of them,
-    /// shown as [`crate::shown::readable`] makes it. The last is not purlis's: purlis appends its own only where the
-    /// same line is not already there, and an agent can type any line after it as well as
-    /// before it, so no position says who wrote a line.
+    /// shown as [`crate::shown::readable`] makes it. The last is not purlis's: purlis appends
+    /// its own only where the same line is not already there, and an agent can type any line
+    /// after it as well as before it, so no position says who wrote a line.
     Several(Vec<String>),
 }
 
