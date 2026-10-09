@@ -347,6 +347,12 @@ jobs:
         working-directory: app
       - run: npx tauri build --debug --no-bundle
         working-directory: app
+      # The window's main bundle carries no CodeMirror (#987): the light editor is a lazy chunk
+      # (ADR 0086 rows M2 and L6), and a static import would quietly undo that. It reads the
+      # `app/dist` this build left. Not on the evidence images, which only report.
+      - name: The window's main bundle carries no CodeMirror
+        if: ${{ !matrix.evidence }}
+        run: node tools/main-chunk-has-no-codemirror.mjs
       # Cold start against the spec's 2 s limit on Linux (charter-app#24, program map FR-8).
       # This runner IS the issue's machine: its session bus is up and can activate a desktop
       # portal that cannot start, which cost 26-31 s before the app asked the portal first
