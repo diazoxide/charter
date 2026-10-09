@@ -1397,6 +1397,19 @@ button.show-more:focus-visible {
   color: var(--text-secondary);
 }
 
+/* **What a restart asked for from a row says** (#1462): why it was refused, or why it waits,
+   on one line under the row of a chat with no pane to say it on, as a task limit is. */
+.chats-section li:has(> .restart-said) {
+  flex-wrap: wrap;
+}
+
+.chats-section li > .restart-said {
+  flex-basis: 100%;
+  padding: 0 0.5rem 0.25rem 1.6rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
 .at-limit .at-limit-settings {
   padding: 0;
   font: inherit;

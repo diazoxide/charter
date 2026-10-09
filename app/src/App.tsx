@@ -1216,6 +1216,7 @@ function App() {
       linkWorkItem: () => undefined,
       startFresh: () => undefined,
       restartChat: () => undefined,
+      restartListed: () => undefined,
       askPersona: () => undefined,
       unlinkWorkItem: async () => nowhere(),
       focusWorkspace: () => undefined,

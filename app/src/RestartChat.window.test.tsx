@@ -61,6 +61,25 @@ const CHAT = {
   from: null,
 };
 
+/** A task chat 4 dispatched, with no tab. */
+const TASK = {
+  ...CHAT,
+  session: 6,
+  name: "devops 6",
+  in_front: false,
+  persona: "devops",
+  label: "talk",
+  from: {
+    chat: 4,
+    name: "claude 4",
+    workspace: "alpha",
+    task: true,
+    tab: false,
+    reported: false,
+    unreported: false,
+  },
+} as unknown as typeof CHAT;
+
 /** Chat 4 mid-turn, then waiting for you: what the board says as its turn runs and ends. */
 const RUNNING: Moved = {
   plane: PLANE,
@@ -90,6 +109,8 @@ type Core = {
   notYet?: string;
   /** What the restart waits for before it answers, where a test holds it open. */
   held?: Promise<void>;
+  /** Chat 4's tasks, which the sidebar lists beside it. */
+  tasks?: (typeof CHAT)[];
 };
 
 function core(now: Core) {
@@ -105,7 +126,15 @@ function core(now: Core) {
           personas: [],
           persona: null,
           unfiled: [],
-          workspaces: [{ name: "alpha", path: ALPHA, vision: "", todos: [], chats: [CHAT] }],
+          workspaces: [
+            {
+              name: "alpha",
+              path: ALPHA,
+              vision: "",
+              todos: [],
+              chats: [CHAT, ...(now.tasks ?? [])],
+            },
+          ],
         };
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
@@ -322,6 +351,71 @@ describe("Restart chat on a chat's tab", () => {
   });
 });
 
+describe("Restart chat on a task's row in the Chats list, for a task with no tab (#1462)", () => {
+  const section = () => screen.findByRole("tree", { name: "Chats of this project" });
+  const row = async (name: string) => {
+    const tree = await section();
+    await waitFor(() =>
+      expect(
+        within(tree)
+          .getAllByRole("treeitem")
+          .some((one) => one.querySelector(".session")?.textContent === name),
+      ).toBe(true),
+    );
+    const found = within(tree)
+      .getAllByRole("treeitem")
+      .find((one) => one.querySelector(".session")?.textContent === name);
+    if (found === undefined) throw new Error(`no row is named ${name}`);
+    return found;
+  };
+
+  it("restarts it from its row, asked once on the row as its tab's menu asks", async () => {
+    const { asked } = await aChat({ tasks: [TASK] });
+
+    fireEvent.contextMenu(await row("talk"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restart chat talk" }));
+
+    // A task's program ends to start again: asked on its row first, and nothing restarts yet.
+    const question = await screen.findByRole("group", { name: /^Restart talk\?/ });
+    expect(asked("ask_chat_restart")).toEqual([]);
+    await userEvent.click(within(question).getByRole("button", { name: "Restart it" }));
+
+    await waitFor(() => expect(asked("ask_chat_restart")).toEqual([{ plane: PLANE, session: 6 }]));
+    // It reports no state here, so it restarts at once: the person pressed for it.
+    await waitFor(() =>
+      expect(asked("restart_chat")).toEqual([{ plane: PLANE, session: 6, columns: 80, rows: 24 }]),
+    );
+  });
+
+  it("says a refusal on the row, without opening the task", async () => {
+    const refused = "purlis did not restart chat 6: it has no conversation to resume.";
+    const { asked } = await aChat({ tasks: [TASK], refused });
+
+    fireEvent.contextMenu(await row("talk"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restart chat talk" }));
+    await userEvent.click(
+      within(await screen.findByRole("group", { name: /^Restart talk\?/ })).getByRole("button", {
+        name: "Restart it",
+      }),
+    );
+
+    await waitFor(() => expect(asked("restart_chat")).toHaveLength(1));
+    expect(await screen.findByRole("status", { name: "Restart of talk" })).toHaveTextContent(
+      refused,
+    );
+    // Not opened: the tab in front still shows chat 4, and no pane draws the task.
+    expect(screen.getAllByTestId("pane").map((pane) => pane.textContent)).toEqual(["session 4"]);
+  });
+
+  it("has no such row for a chat that has a tab: its tab's menu has it", async () => {
+    await aChat({ tasks: [TASK] });
+
+    fireEvent.contextMenu(await row("claude claude 4"));
+    await screen.findAllByRole("menuitem");
+    expect(screen.queryByRole("menuitem", { name: /^Restart chat/ })).toBeNull();
+  });
+});
+
 describe("the Notice after a sandbox setting changes", () => {
   const BEHIND: OlderSandbox = { chats: [{ session: 4, change: "c1" }] };
 
@@ -412,6 +506,41 @@ describe("the Notice after a sandbox setting changes", () => {
 
     expect(await screen.findByRole("status", { name: "Sandbox changed" })).toBeInTheDocument();
     expect(held.asked("chats_on_older_sandbox").length).toBeGreaterThan(before);
+  });
+
+  it("asks again when the window comes back into focus (#1462)", async () => {
+    // What no watcher reports, such as a sandbox file another window or a hand wrote, or the
+    // administrator's policy, is caught when the person comes back to the window.
+    const held = await aChat({ older: null });
+    await act(() => emit("chat-moved", WAITING));
+    const before = held.asked("chats_on_older_sandbox").length;
+
+    held.core.older = BEHIND;
+    act(() => {
+      window.dispatchEvent(new FocusEvent("focus"));
+    });
+
+    expect(await screen.findByRole("status", { name: "Sandbox changed" })).toBeInTheDocument();
+    expect(held.asked("chats_on_older_sandbox").length).toBeGreaterThan(before);
+  });
+
+  it("asks again when a task with no tab starts or ends, as the Chats list hears it (#1462)", async () => {
+    const held = await aChat({ older: null });
+    await act(() => emit("chat-moved", WAITING));
+    const before = held.asked("chats_on_older_sandbox").length;
+
+    // Chat 4 dispatched a task, which has no tab, and is behind. Only the sidebar's read says
+    // it is there: nothing on the strip moves.
+    held.core.older = { chats: [{ session: 6, change: "c1" }] };
+    held.core.tasks = [TASK];
+    await act(() =>
+      emit("plane-changed", { plane: PLANE, changes: null, answers: [{ answer: "sidebar" }] }),
+    );
+
+    await waitFor(() =>
+      expect(held.asked("chats_on_older_sandbox").length).toBeGreaterThan(before),
+    );
+    expect(await screen.findByRole("status", { name: "Sandbox changed" })).toBeInTheDocument();
   });
 
   it("promises no wait for a chat that reports no state, and says why", async () => {

@@ -14,13 +14,21 @@ export const SANDBOX_CHANGED = "sandbox-changed";
  *
  * Asked at the mount and again whenever `asked` moves: the caller makes it of what can change
  * the answer, which is the project's settings on disk, the chats that are open, and the
- * window's own sandbox commands. A window that cannot ask says nothing.
+ * window's own sandbox commands. **And again each time the window comes back into focus**
+ * (#1462): the cover for what no watcher reports, such as a sandbox file another window or a
+ * hand wrote, or the policy an administrator sets. A window that cannot ask says nothing.
  *
  * `undefined` until the core has answered, and `null` once it answers that no chat is behind:
  * only an answer lets a dismissal go.
  */
 export function useOlderSandbox(plane: PlaneId, asked: string): OlderSandbox | null | undefined {
   const [older, setOlder] = useState<OlderSandbox | null>();
+  const [focused, setFocused] = useState(0);
+  useEffect(() => {
+    const again = () => setFocused((n) => n + 1);
+    window.addEventListener("focus", again);
+    return () => window.removeEventListener("focus", again);
+  }, []);
   useEffect(() => {
     let gone = false;
     void commands
@@ -32,7 +40,7 @@ export function useOlderSandbox(plane: PlaneId, asked: string): OlderSandbox | n
     return () => {
       gone = true;
     };
-  }, [plane, asked]);
+  }, [plane, asked, focused]);
   return older;
 }
 
