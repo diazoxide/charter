@@ -362,7 +362,7 @@ function MoveMemory({
     setMoving(true);
     setRefused(undefined);
     try {
-      const answer = await commands.memoryMove(plane, at.scope, at.slug, target);
+      const answer = await commands.memoryMove(plane, at.scope, at.slug, target, null);
       if (answer.status === "error") setRefused(answer.error);
       else {
         setPicked("");

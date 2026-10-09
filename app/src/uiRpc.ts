@@ -1385,8 +1385,12 @@ export const commands = {
 	 *  copied, its title and stamp kept, its index line moved with it — and is answered where it is
 	 *  now, so its tab follows it. A target holding a memory of that name, a store the plane does
 	 *  not have and one charter may not write are refused, and nothing moves.
+	 * 
+	 *  `restore_as` is the name the memory had in `to`, which Undo passes so a journal memory comes
+	 *  back under its first name to the second, not only to the minute. It may differ from the
+	 *  name the move would give only in a journal's prefix; any other name is refused.
 	 */
-	memoryMove: (plane: PlaneId, scope: MemoryScope, slug: string, to: MemoryScope) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_move", { plane, scope, slug, to })),
+	memoryMove: (plane: PlaneId, scope: MemoryScope, slug: string, to: MemoryScope, restoreAs: string | null) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_move", { plane, scope, slug, to, restoreAs })),
 	/**
 	 *  The stores a memory can be moved to, in the order the Move choice lists them: every
 	 *  workspace, every persona, then shared memory. The tab leaves out the one it is in.

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use purlis_core::memscope::{Scope, move_memory};
+use purlis_core::memscope::{Scope, move_memory, move_memory_as};
 use purlis_core::workspaces::Plane;
 
 fn plane(tmp: &tempfile::TempDir) -> Plane {
@@ -458,6 +458,123 @@ fn a_journal_memory_moved_away_and_back_has_its_first_name_again_to_the_minute()
     // The guarantee is to the minute: the seconds come back as `00`, the text byte for byte.
     assert_eq!(stem(&back), "20260302-091400-a-fact");
     assert_eq!(read(&back), text);
+}
+
+/// A journal memory recorded at 09:14:37 and moved to `_shared`: the plane, and the path it had
+/// in the journal.
+fn moved_to_shared(tmp: &tempfile::TempDir) -> (Plane, PathBuf) {
+    let plane = plane(tmp);
+    let path = plane
+        .workspace("alpha")
+        .unwrap()
+        .remember("A fact", at())
+        .unwrap();
+    move_memory(&plane, &ws("alpha"), &stem(&path), &Scope::Shared, later()).unwrap();
+    (plane, path)
+}
+
+#[test]
+fn an_undo_puts_a_journal_memory_back_under_its_first_name_to_the_second() {
+    purlis_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (plane, path) = moved_to_shared(&tmp);
+    let text =
+        std::fs::read_to_string(tmp.path().join("personas/_shared/memory/a-fact.md")).unwrap();
+
+    let back = move_memory_as(
+        &plane,
+        &Scope::Shared,
+        "a-fact",
+        &ws("alpha"),
+        later(),
+        Some("20260302-091437-a-fact"),
+    )
+    .unwrap();
+
+    assert_eq!(back, path, "the seconds come back too");
+    assert_eq!(read(&back), text);
+    assert!(
+        lines(&tmp.path().join("workspaces/alpha/memory/MEMORY.md"))
+            .iter()
+            .any(|l| l.ends_with("(20260302-091437-a-fact.md)")),
+        "its index line names it"
+    );
+}
+
+#[test]
+fn an_undo_name_that_is_not_the_same_memory_in_the_stores_form_is_refused() {
+    purlis_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (plane, _path) = moved_to_shared(&tmp);
+    let before = tree(tmp.path());
+
+    for (to, name) in [
+        // Another memory's name: an undo is never a rename.
+        (ws("alpha"), "20260302-091437-another-fact"),
+        // A path, a step up, an empty name and the index are no memory's name.
+        (ws("alpha"), "../20260302-091437-a-fact"),
+        (ws("alpha"), "sub/20260302-091437-a-fact"),
+        (ws("alpha"), ".."),
+        (ws("alpha"), ""),
+        (ws("alpha"), "MEMORY"),
+        // A journal's name has its prefix, and a persona's has none.
+        (ws("alpha"), "a-fact"),
+        (ws("alpha"), "2026030-091437-a-fact"),
+        (persona("devops"), "20260302-091437-a-fact"),
+    ] {
+        let refused =
+            move_memory_as(&plane, &Scope::Shared, "a-fact", &to, later(), Some(name)).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::InvalidInput, "{name}: {refused}");
+        assert_eq!(tree(tmp.path()), before, "{name}: nothing moved");
+    }
+}
+
+#[test]
+fn an_undo_name_the_store_holds_already_is_refused_and_nothing_is_replaced() {
+    purlis_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (plane, path) = moved_to_shared(&tmp);
+    // Written under the first name while the memory was away.
+    std::fs::write(&path, "# Someone else's\n").unwrap();
+    let before = tree(tmp.path());
+
+    let refused = move_memory_as(
+        &plane,
+        &Scope::Shared,
+        "a-fact",
+        &ws("alpha"),
+        later(),
+        Some("20260302-091437-a-fact"),
+    )
+    .unwrap_err();
+
+    assert_eq!(refused.kind(), ErrorKind::AlreadyExists, "{refused}");
+    assert_eq!(tree(tmp.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_undo_name_that_is_a_link_is_refused_and_the_link_is_not_followed() {
+    purlis_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (plane, path) = moved_to_shared(&tmp);
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path().join("planted.md"), &path).unwrap();
+    let before = tree(tmp.path());
+
+    let refused = move_memory_as(
+        &plane,
+        &Scope::Shared,
+        "a-fact",
+        &ws("alpha"),
+        later(),
+        Some("20260302-091437-a-fact"),
+    )
+    .unwrap_err();
+
+    assert_ne!(refused.kind(), ErrorKind::InvalidInput, "{refused}");
+    assert_eq!(tree(tmp.path()), before);
+    assert!(!outside.path().join("planted.md").exists());
 }
 
 #[cfg(unix)]
