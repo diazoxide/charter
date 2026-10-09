@@ -198,9 +198,10 @@ refusal and `purlis doctor` print the terminal command only for a vault this mac
 and point to the tab for the others.
 
 **It is refused inside a chat, or a shell the app started, before anything is read**: a chat is
-never the one supplying a vault's token. It is refused too where purlis cannot tell (the
-project's record of open chats cannot be read, or this process's parent or session cannot).
-Type it in a terminal of your own.
+never the one supplying a vault's token. A chat of any project this machine has opened counts,
+not only one of the project the command names. It is refused too where purlis cannot tell (the
+record of open chats of one of those projects, or the machine store that lists them, cannot be
+read, or this process's parent or session cannot). Type it in a terminal of your own.
 
 In the app, a token given to the set-up is held only for the window that began it, and goes
 when the set-up ends, when that window closes or reloads, and at the latest fifteen minutes

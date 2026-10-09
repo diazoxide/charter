@@ -1306,6 +1306,80 @@ fn a_process_in_a_chats_session_is_inside_it_though_its_parent_has_gone() {
     );
 }
 
+/// A project at `root` whose record of open chats names one chat, its program `pid`.
+fn a_project_with_a_chat(root: &Path, pid: u32) {
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "/bin/zsh".into(),
+            name: "chat 1".into(),
+            number: Some(1),
+            pid: Some(pid),
+            ..Default::default()
+        }],
+        dealt: 1,
+        ..Default::default()
+    };
+    crate::reopen::write(root, &record).unwrap();
+}
+
+#[test]
+fn a_chat_of_another_project_this_machine_opened_is_a_chat_too() {
+    // #1542: a chat of another project that clears its variables and names this project is
+    // below a program the OTHER project's record names. Every project the machine store
+    // remembers is asked.
+    let config = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    a_project_with_a_chat(other.path(), 30);
+    let parents = |pid: u32| match pid {
+        70 => Some(30),
+        30 => Some(20),
+        _ => Some(1),
+    };
+    let session = |_| Ok(70);
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, session),
+        Where::Outside,
+        "a project nobody opened on this machine is not asked"
+    );
+
+    crate::machine::update(config.path(), |store| store.remember(other.path(), 1)).unwrap();
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, session),
+        Where::Inside
+    );
+
+    // Its record garbled: purlis cannot tell, and says so.
+    std::fs::write(crate::reopen::path(other.path()), "not a record").unwrap();
+    assert!(matches!(
+        in_a_chat_with(&set.ctx, 70, parents, session),
+        Where::Unsure(_)
+    ));
+
+    // A remembered project that is gone asks nothing.
+    drop(other);
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, session),
+        Where::Outside
+    );
+}
+
+#[test]
+fn a_machine_store_purlis_cannot_read_is_a_doubt() {
+    let config = tempfile::tempdir().unwrap();
+    let home = config.path().to_string_lossy().into_owned();
+    let set = Set::with_env("unused", &[("PURLIS_CONFIG_HOME", &home)]);
+    let store = crate::machine::dir(config.path());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join(crate::machine::FILE), "not a store").unwrap();
+
+    let Where::Unsure(why) = in_a_chat_with(&set.ctx, 70, |_| Some(1), |_| Ok(70)) else {
+        panic!("a garbled store was read as no other projects");
+    };
+    assert!(why.contains("projects this machine opened"), "{why}");
+}
+
 #[test]
 fn where_purlis_cannot_tell_it_says_so_and_takes_no_token() {
     let set = Set::new("unused");
