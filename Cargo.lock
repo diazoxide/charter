@@ -5311,6 +5311,7 @@ dependencies = [
  "ulid",
  "unicode-normalization",
  "unicode-properties",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
  "uuid",

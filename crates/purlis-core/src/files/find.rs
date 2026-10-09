@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::{Branch, Refused};
 
@@ -250,14 +251,48 @@ pub fn find(scope: &[Place<'_>], query: &str, most: usize) -> Found {
 
 /// Which of `path`'s characters `pattern` matched, ascending and each once. Asked only for the
 /// hits answered, so a keystroke pays for at most `most` of them.
+///
+/// nucleo does not count in characters: it reads the path's bytes when every letter of it (a
+/// grapheme cluster) starts with an ASCII character, else one unit per letter. Each unit it
+/// matched is turned back into all the characters of its letter, so the window, which counts
+/// characters, marks the right letters, and marks an accent with the letter it sits on.
 fn letters(pattern: &Pattern, matcher: &mut Matcher, path: &str) -> Vec<u32> {
     let mut buf = Vec::new();
-    let mut indices = Vec::new();
-    pattern.indices(Utf32Str::new(path, &mut buf), matcher, &mut indices);
+    let mut units = Vec::new();
+    let haystack = Utf32Str::new(path, &mut buf);
+    let by_byte = matches!(haystack, Utf32Str::Ascii(_));
+    pattern.indices(haystack, matcher, &mut units);
+    let mut marked = if path.is_ascii() {
+        units
+    } else {
+        // Each letter: the byte it starts at, and its characters.
+        let mut letters = Vec::new();
+        let mut at = 0u32;
+        for (byte, letter) in path.grapheme_indices(true) {
+            let n = letter.chars().count() as u32;
+            letters.push((byte, at..at + n));
+            at += n;
+        }
+        units
+            .iter()
+            .filter_map(|&unit| {
+                let unit = unit as usize;
+                let letter = if by_byte {
+                    letters
+                        .partition_point(|(byte, _)| *byte <= unit)
+                        .checked_sub(1)
+                } else {
+                    Some(unit)
+                };
+                letter.and_then(|letter| letters.get(letter))
+            })
+            .flat_map(|(_, chars)| chars.clone())
+            .collect()
+    };
     // Each atom's indices are appended as it matched them (nucleo's own note on `indices`).
-    indices.sort_unstable();
-    indices.dedup();
-    indices
+    marked.sort_unstable();
+    marked.dedup();
+    marked
 }
 
 fn named(branch: Branch<'_>) -> Named {
@@ -356,5 +391,20 @@ mod tests {
     fn a_letter_is_counted_as_a_character_not_a_byte() {
         // `é` is two bytes and one character: the `m` after it is character 5, byte 6.
         assert_eq!(matched("mn", "café/menu.md"), [5, 7]);
+    }
+
+    #[test]
+    fn a_letter_after_a_combining_mark_is_counted_as_a_character() {
+        // `e` and U+0301 are one letter to nucleo and two characters to the window: when every
+        // letter starts with an ASCII one, nucleo matches the path's bytes, and the `m` is
+        // byte 7 but character 6. The `e` and its accent are marked together.
+        assert_eq!(matched("mn", "cafe\u{301}/menu.md"), [6, 8]);
+        assert_eq!(matched("ce", "cafe\u{301}/x.md"), [0, 3, 4]);
+    }
+
+    #[test]
+    fn a_letter_after_a_cluster_is_counted_as_a_character() {
+        // A thumb with a skin tone is one letter to nucleo and two characters to the window.
+        assert_eq!(matched("mn", "\u{1f44d}\u{1f3fd}/mn.md"), [3, 4]);
     }
 }

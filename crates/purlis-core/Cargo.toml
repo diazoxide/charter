@@ -45,6 +45,11 @@ portable-pty.workspace = true
 # file-level copyleft used unmodified; its dependencies, memchr and unicode-segmentation, are
 # already in this workspace's lockfile.
 nucleo-matcher = "0.3"
+# The letters nucleo matches by (grapheme clusters), turned back into the characters the window
+# counts (#1131). The version nucleo-matcher itself uses, already in this workspace's lockfile,
+# so it adds no crate to the tree and no licence to review; one version, so both split a path
+# into the same letters.
+unicode-segmentation = "1"
 # ⌘⇧F's content search (FM-8, #1111; V86 F9): ripgrep's own crates. `ignore` walks a branch's
 # folder with its .gitignore rules read in-process and never follows a link; `grep-searcher`
 # and `grep-regex` match line by line, with the regex's compiled size bounded. MIT OR
