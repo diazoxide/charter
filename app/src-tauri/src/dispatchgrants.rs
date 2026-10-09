@@ -48,6 +48,25 @@
 //! sandbox off, or one a person started without it, runs as the person and can write either:
 //! nothing here is a boundary against that chat (D-1437-R2).
 //!
+//! # No, for this chat and for good (#1503)
+//!
+//! **Keep blocked holds for the chat's life** ([`Store::keep_blocked`]): the same chat asking
+//! across the same pair again is refused at once with the person's no, and the person is not
+//! asked again. It is the app's, in memory, and ends with the chat as its grants do; a new chat
+//! is asked. It stands in for the question only: a grant the person makes afterwards covers
+//! the chat like any other.
+//!
+//! **Never for this pair** ([`Store::never`]) is the person's on this machine
+//! (`app/dispatch-never.json`), and beats every grant: no chat of that persona is asked or
+//! allowed for that target until the person lifts it in Settings ([`lift_dispatch_never`]). It
+//! holds for a chat with a chat of that persona above it too, which the dispatch decision
+//! reads before this store is asked. **Where that record does not read, no grant counts**: the
+//! person is asked, told why, and their Allow starts the one dispatch they read.
+//!
+//! **Any persona** ([`allow_dispatch_to_any`]) is granted from Settings and from nowhere else.
+//! No answer to a Notice makes one: [`Store::allow`] keeps the one pair the held dispatch
+//! names, whose target is a persona's name, and the project's Notice accepts pairs only.
+//!
 //! **A "this chat" grant ends with the chat** ([`Store::chat_closed`]), as its sandbox grants
 //! do, and stays through a restart, which starts the new run before the old one ends
 //! (D-1437-R3).
@@ -187,6 +206,40 @@ pub struct Store {
     chat: Mutex<HashMap<String, Vec<ChatMade>>>,
     next: AtomicU32,
     answers: Mutex<Option<Answers>>,
+    /// The pairs the person kept blocked on a chat's tab, for that chat's life (#1503).
+    kept_blocked: Mutex<HashMap<Whose, Vec<ChatPair>>>,
+    /// The dispatches the person allowed while the record of nevers did not read, each for one
+    /// start: no grant counts then, so their answer starts the one dispatch they read and no
+    /// other ([`Store::allow`]).
+    once: Mutex<Vec<(Whose, ChatPair)>>,
+}
+
+/// The chat a kept-blocked pair is remembered for: by its id, which a restart keeps, or by
+/// its session where it has no id yet.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Whose {
+    Id(String),
+    Session(u32),
+}
+
+impl Whose {
+    fn of(asking: &Asking) -> Self {
+        match &asking.id {
+            Some(id) => Self::Id(id.clone()),
+            None => Self::Session(asking.session),
+        }
+    }
+}
+
+/// What a chat is told when it asks again across a pair the person kept blocked on its tab.
+pub fn kept_blocked_said(target: &str) -> String {
+    let target = purlis_core::shown::short(target);
+    format!(
+        "the person answered Keep blocked when this chat asked to dispatch to {target}, so \
+         nothing was started and they are not asked again in this chat. Do not dispatch to \
+         {target} from this chat again. Do this work without {target}, or tell the person it \
+         is waiting."
+    )
 }
 
 fn lock<T>(held: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -305,13 +358,62 @@ impl Store {
                 let told = self.hold(ground, asking, target, brief, Some(why.clone()));
                 (Requested::Locked(why), told.ok().map(|(held, _)| held))
             }
-            Covers::NeedsGrant => match self.hold(ground, asking, target, brief, None) {
-                Ok((held, new)) => (
-                    Requested::NeedsGrant { pending: held.id },
-                    new.then_some(held),
-                ),
-                Err(why) => (Requested::Refused(why), None),
+            // The person's never: refused in a sentence, nothing held and nobody asked.
+            Covers::Never => (
+                Requested::Refused(dispatchgrant::never_said(
+                    asking.persona.as_deref().unwrap_or_default(),
+                    target,
+                )),
+                None,
+            ),
+            // Read by the decision, with who is above the chat (`covers_in_chain`); said the
+            // same way here, should a caller ever hand one on.
+            Covers::NeverAbove(above) => (
+                Requested::Refused(dispatchgrant::never_above_said(&above, target)),
+                None,
+            ),
+            // The person said no on this chat's tab already: their answer, and no second
+            // question.
+            Covers::NeedsGrant | Covers::Unread if self.is_kept_blocked(&asking, target) => {
+                (Requested::Refused(kept_blocked_said(target)), None)
+            }
+            // The record of nevers does not read, so no grant counts; this one dispatch the
+            // person allowed all the same, having been told so, and it starts once.
+            Covers::Unread if self.spend_once(&asking, target) => (
+                Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat(target)),
+                None,
+            ),
+            // Nothing covers it, or nothing counts until the record of nevers reads: the
+            // person is asked ([`DispatchPending::never_unread`] says which).
+            Covers::NeedsGrant | Covers::Unread => {
+                match self.hold(ground, asking, target, brief, None) {
+                    Ok((held, new)) => (
+                        Requested::NeedsGrant { pending: held.id },
+                        new.then_some(held),
+                    ),
+                    Err(why) => (Requested::Refused(why), None),
+                }
+            }
+        }
+    }
+
+    /// Spends the one start the person allowed `asking` to `target` while the record of
+    /// nevers did not read. Answers whether there was one.
+    fn spend_once(&self, asking: &Asking, target: &str) -> bool {
+        let mut once = lock(&self.once);
+        let wanted = (
+            Whose::of(asking),
+            ChatPair {
+                asking: asking.persona.clone(),
+                target: target.to_owned(),
             },
+        );
+        match once.iter().position(|one| *one == wanted) {
+            Some(at) => {
+                once.remove(at);
+                true
+            }
+            None => false,
         }
     }
 
@@ -400,6 +502,26 @@ impl Store {
         if let Some(why) = ground.locks.dispatch_refused(asking, &held.target) {
             return Err(why);
         }
+        // A never said since the question was raised (#1503): no Allow on a Notice lifts it.
+        // The question goes, its chat is told nothing started, and nothing is granted.
+        if self
+            .in_force(ground.root, &held.asking)
+            .refuses(asking, &held.target)
+        {
+            if let Some(pending) = self.take(id) {
+                self.answer(&Answered {
+                    pending,
+                    allowed: None,
+                });
+            }
+            return Err(format!(
+                "You said never to {} chats dispatching to {} on this machine, so nothing was \
+                 allowed. Lift it in {} first.",
+                purlis_core::shown::short(asking.unwrap_or_default()),
+                purlis_core::shown::short(&held.target),
+                dispatchgrant::SETTINGS
+            ));
+        }
         // What is kept, checked before anything is audited.
         enum Kept {
             Chat(String),
@@ -429,7 +551,7 @@ impl Store {
             purlis_core::settings::dispatch::can_grant(ground.root, pair)?;
         }
         let audited = dispatchgrant::Audited {
-            granted: true,
+            act: dispatchgrant::Act::Grant,
             asking,
             target: &held.target,
             level,
@@ -441,7 +563,7 @@ impl Store {
             if let Err(unsaid) = (ground.audit)(
                 Some(held.asking.session),
                 &dispatchgrant::Audited {
-                    granted: false,
+                    act: dispatchgrant::Act::Revoke,
                     ..audited
                 },
             ) {
@@ -495,6 +617,29 @@ impl Store {
             }
         }
         self.start_what_is_covered(ground);
+        // The record of nevers does not read, so the grant just kept covers nothing yet. The
+        // person read that on the Notice and allowed this dispatch: it starts, once, and the
+        // next one asks again until the record reads.
+        if self.in_force(ground.root, &held.asking).never_unread {
+            if let Some(pending) = self.take(id) {
+                lock(&self.once).push((
+                    Whose::of(&pending.asking),
+                    ChatPair {
+                        asking: pending.asking.persona.clone(),
+                        target: pending.target.clone(),
+                    },
+                ));
+                self.answer(&Answered {
+                    allowed: Some(dispatchgrant::grants_for_a_dispatched_chat(&pending.target)),
+                    pending,
+                });
+            }
+            return Ok(format!(
+                "Allowed {}. This dispatch starts now. The next one asks again until the list \
+                 of pairs you said never to reads.",
+                level.said()
+            ));
+        }
         Ok(format!(
             "Allowed {}. The dispatch starts now, and the next one starts without asking.",
             level.said()
@@ -528,9 +673,26 @@ impl Store {
     /// is no chat left to tell.
     pub fn chat_closed(&self, session: u32, id: Option<&str>) {
         lock(&self.pending).retain(|one| one.asking.session != session);
+        let mut kept = lock(&self.kept_blocked);
+        let mut once = lock(&self.once);
+        kept.remove(&Whose::Session(session));
+        once.retain(|(whose, _)| *whose != Whose::Session(session));
         if let Some(id) = id {
             lock(&self.chat).remove(id);
+            kept.remove(&Whose::Id(id.to_owned()));
+            once.retain(|(whose, _)| *whose != Whose::Id(id.to_owned()));
         }
+    }
+
+    /// Whether the person kept `asking`'s dispatch to `target` blocked on its tab.
+    fn is_kept_blocked(&self, asking: &Asking, target: &str) -> bool {
+        lock(&self.kept_blocked)
+            .get(&Whose::of(asking))
+            .is_some_and(|pairs| {
+                pairs
+                    .iter()
+                    .any(|pair| pair.asking == asking.persona && pair.target == target)
+            })
     }
 
     /// **The person allowed `shown` on the project's Notice** (D-1437-R1): each pair of it the
@@ -546,7 +708,7 @@ impl Store {
             (ground.audit)(
                 None,
                 &dispatchgrant::Audited {
-                    granted: true,
+                    act: dispatchgrant::Act::Grant,
                     asking: Some(&pair.asking),
                     target: &pair.target,
                     level: Level::Project,
@@ -575,18 +737,124 @@ impl Store {
     }
 
     /// **Keep blocked** on the Notice of held dispatch `id`: it goes, nothing is granted, and
-    /// the next dispatch across the pair asks again. Answers whether it was held.
+    /// **the answer holds for that chat's life** (#1503): the same chat asking across the same
+    /// pair again is refused at once ([`kept_blocked_said`]) and the person is not asked
+    /// again. Another chat, and this one once it is closed and opened anew, is asked. Answers
+    /// whether it was held.
+    ///
+    /// Putting away the Notice of a dispatch policy locked is no answer to a question, and
+    /// nothing is remembered for it.
     pub fn keep_blocked(&self, id: u32) -> bool {
         let Some(pending) = self.take(id) else {
             return false;
         };
         if pending.locked.is_none() {
+            let pair = ChatPair {
+                asking: pending.asking.persona.clone(),
+                target: pending.target.clone(),
+            };
+            {
+                let mut kept = lock(&self.kept_blocked);
+                let mine = kept.entry(Whose::of(&pending.asking)).or_default();
+                if !mine.contains(&pair) {
+                    mine.push(pair);
+                }
+            }
             self.answer(&Answered {
                 pending,
                 allowed: None,
             });
         }
         true
+    }
+
+    /// **Takes held dispatch `id` back out, with no answer from the person**: the app's own,
+    /// for a question it raised and withdraws. Nothing is remembered and nobody is told.
+    /// Answers whether it was held.
+    pub fn withdraw(&self, id: u32) -> bool {
+        self.take(id).is_some()
+    }
+
+    /// **Never for this pair**, on the Notice of held dispatch `id` (#1503): audited, then
+    /// kept for the person on this machine. From then on no chat running as that persona is
+    /// asked or allowed to dispatch to that target, whatever is granted and wherever, until
+    /// the person lifts it in Settings. Every dispatch held across the pair, this one and
+    /// other chats', goes unstarted and its chat is told.
+    pub fn never(&self, ground: &Ground<'_>, id: u32) -> Result<String, String> {
+        let gone = || {
+            "That dispatch is no longer waiting, so nothing was changed. Its chat may have \
+             closed."
+                .to_owned()
+        };
+        let held = lock(&self.pending)
+            .iter()
+            .find(|one| one.id == id)
+            .cloned()
+            .ok_or_else(gone)?;
+        if !(ground.is_open)(held.asking.session) {
+            self.take(id);
+            return Err(gone());
+        }
+        if let Some(why) = &held.locked {
+            return Err(why.clone());
+        }
+        let Some(asking) = held.asking.persona.as_deref() else {
+            return Err(
+                "This chat runs as no persona, so there is no pair to say never to. Keep it \
+                 blocked for this chat."
+                    .to_owned(),
+            );
+        };
+        let pair = Pair::new(asking, &held.target)?;
+        // A record that does not read is not written over: said before anything is audited.
+        if let Some(unread) = dispatchgrant::nevers_unread(ground.root) {
+            return Err(unread);
+        }
+        let audited = dispatchgrant::Audited {
+            act: dispatchgrant::Act::Never,
+            asking: Some(asking),
+            target: &held.target,
+            level: Level::You,
+        };
+        (ground.audit)(Some(held.asking.session), &audited)?;
+        if let Err(why) = dispatchgrant::never(ground.root, &pair) {
+            // Recorded as lifted, so the log never ends on a never that is not there.
+            if let Err(unsaid) = (ground.audit)(
+                Some(held.asking.session),
+                &dispatchgrant::Audited {
+                    act: dispatchgrant::Act::LiftNever,
+                    ..audited
+                },
+            ) {
+                tracing::warn!(
+                    "purlis: a never that was not kept is still recorded as made ({unsaid})"
+                );
+            }
+            return Err(format!("purlis could not keep it: {why}"));
+        }
+        let across: Vec<u32> = lock(&self.pending)
+            .iter()
+            .filter(|one| {
+                one.locked.is_none()
+                    && one.asking.persona.as_deref() == Some(asking)
+                    && one.target == held.target
+            })
+            .map(|one| one.id)
+            .collect();
+        for id in across {
+            if let Some(pending) = self.take(id) {
+                self.answer(&Answered {
+                    pending,
+                    allowed: None,
+                });
+            }
+        }
+        Ok(format!(
+            "No {asking} chat dispatches to {} on this machine from now on, and you are not \
+             asked again. Lift it in {}.",
+            held.target,
+            dispatchgrant::SETTINGS
+        ))
     }
 
     /// Every grant made for a chat that is open, oldest first, by chat id.
@@ -647,6 +915,10 @@ pub struct DispatchPending {
     pub levels: Vec<GrantLevel>,
     /// Where policy locks it: the policy's sentence, naming who set it. No Allow is offered.
     pub locked: Option<String>,
+    /// Where this machine's list of pairs the person said never to does not read (#1503): the
+    /// sentence saying so. No grant counts until it reads, which is why the person is asked;
+    /// an Allow starts this one dispatch, and the next asks again.
+    pub never_unread: Option<String>,
 }
 
 /// `held` as the window is told it, in project `plane`.
@@ -674,6 +946,11 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
         brief_cut: held.brief.cut,
         brief_lines: held.brief.lines,
         levels,
+        never_unread: held
+            .locked
+            .is_none()
+            .then(|| dispatchgrant::nevers_unread(root))
+            .flatten(),
         locked: held.locked.clone(),
     }
 }
@@ -821,6 +1098,269 @@ pub fn keep_dispatch_blocked(
     id: u32,
 ) -> Result<bool, String> {
     Ok(planes.held(&plane)?.dispatch_grants().keep_blocked(id))
+}
+
+/// **Never for this pair** on a dispatch's Notice (#1503): the pair is the app's record of the
+/// held dispatch `id`, never the window's word. Audited, then kept for the person on this
+/// machine; the dispatch does not start, and no chat of that persona is asked for that target
+/// again until it is lifted ([`lift_dispatch_never`]).
+#[tauri::command]
+#[specta::specta]
+pub fn never_dispatch(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    id: u32,
+) -> Result<DispatchAllowed, String> {
+    let held = planes.held(&plane)?;
+    with_ground(&held, |ground| held.dispatch_grants().never(ground, id))
+        .map(|said| DispatchAllowed { said })
+}
+
+/// The ground a window command of `held`'s project stands on.
+fn with_ground<T>(held: &crate::planes::Held, with: impl FnOnce(&Ground<'_>) -> T) -> T {
+    let root = held.root();
+    let locks = sandbox::policy::Locks::of(root);
+    with(&Ground {
+        root,
+        locks: &locks,
+        is_open: &|session| held.chats().recorded_chat(session).is_some(),
+        sandboxed: &|session| held.chats().confines_of(session).is_some(),
+        audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
+        at: now_secs(),
+    })
+}
+
+/// A pair the person said never to, as Settings lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchNever {
+    pub asking: String,
+    pub target: String,
+}
+
+/// One persona whose chats may dispatch to any persona, as Settings lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchAny {
+    pub asking: String,
+    /// `you` or `project`: where it is kept.
+    pub level: GrantLevel,
+    /// Whether it is the project's and nobody on this machine has accepted it yet: it covers
+    /// nothing here until it is allowed here, in Settings.
+    pub waiting: bool,
+}
+
+/// What stands beside the named grants (#1503): the pairs the person said never to on this
+/// machine, and the personas whose chats may dispatch to any persona.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchStanding {
+    pub nevers: Vec<DispatchNever>,
+    pub any: Vec<DispatchAny>,
+    /// Where the list of nevers is there and does not read: the sentence saying so, and how
+    /// the person mends it. `nevers` is then empty, and no dispatch grant counts.
+    pub nevers_unread: Option<String>,
+}
+
+/// What stands in the project at `root`.
+fn standing_of(root: &Path) -> DispatchStanding {
+    let unaccepted = dispatchgrant::any_unaccepted(root);
+    let mut any: Vec<DispatchAny> = dispatchgrant::any_yours(root)
+        .into_iter()
+        .map(|asking| DispatchAny {
+            asking,
+            level: GrantLevel::You,
+            waiting: false,
+        })
+        .collect();
+    any.extend(
+        dispatchgrant::any_committed_at(root)
+            .into_iter()
+            .map(|asking| DispatchAny {
+                waiting: unaccepted.contains(&asking),
+                asking,
+                level: GrantLevel::Project,
+            }),
+    );
+    DispatchStanding {
+        nevers: dispatchgrant::nevers(root)
+            .into_iter()
+            .map(|(asking, target)| DispatchNever { asking, target })
+            .collect(),
+        any,
+        nevers_unread: dispatchgrant::nevers_unread(root),
+    }
+}
+
+/// **Lifts the never for `asking` to `target`** in the project at `root`: checked to be
+/// there, audited, then taken out. What then covers the pair is whatever grant stands; with
+/// none, the next dispatch asks.
+fn lift_never(root: &Path, asking: &str, target: &str, audit: Audit<'_>) -> Result<(), String> {
+    // A record that does not read is not written over: said before anything is audited.
+    if let Some(unread) = dispatchgrant::nevers_unread(root) {
+        return Err(unread);
+    }
+    let there = dispatchgrant::nevers(root)
+        .iter()
+        .any(|(from, to)| from == asking && to == target);
+    if !there {
+        return Err("purlis lifted nothing: that never is no longer there.".to_owned());
+    }
+    audit(
+        None,
+        &dispatchgrant::Audited {
+            act: dispatchgrant::Act::LiftNever,
+            asking: Some(asking),
+            target,
+            level: Level::You,
+        },
+    )?;
+    dispatchgrant::lift_never(root, asking, target)
+        .map(|_| ())
+        .map_err(|why| format!("purlis could not lift it: {why}"))
+}
+
+/// **Lets chats running as `asking` dispatch to any persona**, at `level`, in the project at
+/// `root` where `known` says which names are its personas: checked, audited with the target
+/// `*`, then kept. Settings' explicit grant, which no Notice's answer reaches.
+fn allow_any(
+    root: &Path,
+    known: &dyn Fn(&str) -> bool,
+    asking: &str,
+    level: Level,
+    audit: Audit<'_>,
+) -> Result<(), String> {
+    if !known(asking) {
+        return Err(format!(
+            "This project has no persona named {}, so nothing was granted.",
+            purlis_core::shown::short(asking)
+        ));
+    }
+    dispatchgrant::can_allow_any(root, asking, level)?;
+    let audited = dispatchgrant::Audited {
+        act: dispatchgrant::Act::Grant,
+        asking: Some(asking),
+        target: dispatchgrant::ANY,
+        level,
+    };
+    audit(None, &audited)?;
+    dispatchgrant::allow_any(root, asking, level).inspect_err(|_| {
+        // Recorded as taken back, so the log never ends on a grant that is not there.
+        if let Err(unsaid) = audit(
+            None,
+            &dispatchgrant::Audited {
+                act: dispatchgrant::Act::Revoke,
+                ..audited
+            },
+        ) {
+            tracing::warn!(
+                "purlis: a dispatch grant that was not kept is still recorded as made ({unsaid})"
+            );
+        }
+    })
+}
+
+/// **Takes back `asking`'s grant of any persona at `level`**: checked to be there, audited,
+/// then taken out. A chat already running is left as it is.
+fn revoke_any(root: &Path, asking: &str, level: Level, audit: Audit<'_>) -> Result<(), String> {
+    let there = match level {
+        Level::Chat => false,
+        Level::You => dispatchgrant::any_yours(root)
+            .iter()
+            .any(|one| one == asking),
+        Level::Project => dispatchgrant::any_committed_at(root)
+            .iter()
+            .any(|one| one == asking),
+    };
+    if !there {
+        return Err("purlis did not revoke it: that grant is no longer there.".to_owned());
+    }
+    audit(
+        None,
+        &dispatchgrant::Audited {
+            act: dispatchgrant::Act::Revoke,
+            asking: Some(asking),
+            target: dispatchgrant::ANY,
+            level,
+        },
+    )?;
+    dispatchgrant::revoke_any(root, asking, level).map(|_| ())
+}
+
+/// What stands beside the named dispatch grants here: the pairs you said never to, and the
+/// personas whose chats may dispatch to any persona. For Settings' list.
+#[tauri::command]
+#[specta::specta]
+pub fn dispatch_standing(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<DispatchStanding, String> {
+    Ok(standing_of(planes.held(&plane)?.root()))
+}
+
+/// **Lift** on Settings' list of the pairs you said never to: audited, then taken out, so the
+/// next dispatch across the pair is covered by whatever grant stands, or asks. Answers what
+/// stands now.
+#[tauri::command]
+#[specta::specta]
+pub fn lift_dispatch_never(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    asking: String,
+    target: String,
+) -> Result<DispatchStanding, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    lift_never(root, &asking, &target, &|number, audited| {
+        held.hooks().record_dispatch_grant(root, number, audited)
+    })?;
+    Ok(standing_of(root))
+}
+
+/// **Any persona**, from Settings: chats running as `asking` may dispatch to every persona of
+/// the project, one added later included, for you on this machine or for everyone in the
+/// project. Audited, then kept; a dispatch waiting on the person that it covers starts.
+/// Answers what stands now.
+#[tauri::command]
+#[specta::specta]
+pub fn allow_dispatch_to_any(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    asking: String,
+    level: GrantLevel,
+) -> Result<DispatchStanding, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    let personas = purlis_core::workspaces::Plane::open(root.to_path_buf())
+        .personas()
+        .unwrap_or_default();
+    with_ground(&held, |ground| {
+        allow_any(
+            root,
+            &|name| personas.iter().any(|one| one == name),
+            &asking,
+            level.into(),
+            ground.audit,
+        )?;
+        held.dispatch_grants().start_what_is_covered(ground);
+        Ok::<(), String>(())
+    })?;
+    Ok(standing_of(root))
+}
+
+/// **Revoke** on Settings' list of any-persona grants: audited, then taken out. Answers what
+/// stands now.
+#[tauri::command]
+#[specta::specta]
+pub fn revoke_dispatch_to_any(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    asking: String,
+    level: GrantLevel,
+) -> Result<DispatchStanding, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    revoke_any(root, &asking, level.into(), &|number, audited| {
+        held.hooks().record_dispatch_grant(root, number, audited)
+    })?;
+    Ok(standing_of(root))
 }
 
 /// One dispatch grant, as Settings lists it.
@@ -994,7 +1534,7 @@ fn revoke(root: &Path, store: &Store, id: &str, audit: Audit<'_>) -> Result<(), 
             audit(
                 None,
                 &dispatchgrant::Audited {
-                    granted: false,
+                    act: dispatchgrant::Act::Revoke,
                     asking: pair.asking.as_deref(),
                     target,
                     level: Level::Chat,
@@ -1019,7 +1559,7 @@ fn revoke(root: &Path, store: &Store, id: &str, audit: Audit<'_>) -> Result<(), 
             audit(
                 None,
                 &dispatchgrant::Audited {
-                    granted: false,
+                    act: dispatchgrant::Act::Revoke,
                     asking: Some(&pair.asking),
                     target: &pair.target,
                     level,

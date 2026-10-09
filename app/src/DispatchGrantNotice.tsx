@@ -18,8 +18,17 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
  * **A dispatch to another persona that no grant covers, on the asking chat's tab** (#1437).
  * Nothing has started. The Notice says who wants to dispatch to whom and shows the first brief
  * whole, and the person answers once: **Allow for this chat**, **Allow for me on this machine**,
- * **Allow for everyone in this project**, or **Keep blocked**. After an Allow the dispatch
- * starts, and so does every later one the grant covers, with no prompt.
+ * **Allow for everyone in this project**, **Keep blocked**, or **Never for this pair**. After an
+ * Allow the dispatch starts, and so does every later one the grant covers, with no prompt.
+ *
+ * **The two ways to say no** (#1503). Keep blocked holds for this chat's life: it is refused at
+ * once if it asks again, and a new chat is asked. Never for this pair is kept for the person on
+ * this machine: no chat of that persona is asked or allowed for that target until it is lifted
+ * in Settings. It is offered where the chat runs as a persona, since a chat on none has no pair.
+ * No answer here grants "any persona": that is Settings' alone.
+ *
+ * **Where the list of nevers does not read, the Notice says so** (`never_unread`): no grant
+ * counts until it does, which is why a pair already granted is asked about again.
  *
  * **It reads top to bottom as it is answered** (#1481): the sentence, then the ways out in the
  * order above, then the brief in a box of about eight lines that scrolls. The brief is under
@@ -37,7 +46,7 @@ const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
 export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; session: number }) {
   const id = useId();
   const { waiting, read } = useDispatchesHeld(plane, session);
-  /** What the last Allow answered, until it is put away. */
+  /** What the last Allow, or Never for this pair, answered, until it is put away. */
   const [allowed, setAllowed] = useState<{ target: string; said: string }>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -127,11 +136,28 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       .catch((err: unknown) => setSaid(`purlis could not allow it: ${String(err)}`))
       .finally(() => setBusy(false));
   };
+  const sayNever = () => {
+    if (busy) return;
+    setBusy(true);
+    setSaid(undefined);
+    void commands
+      .neverDispatch(plane, first.id)
+      .then((done) => {
+        if (done.status === "error") {
+          setSaid(done.error);
+          read();
+        } else setAllowed({ target: first.target, said: done.data.said });
+      })
+      .catch((err: unknown) => setSaid(`purlis could not keep it: ${String(err)}`))
+      .finally(() => setBusy(false));
+  };
   const keep: NoticeAction = { label: "Keep blocked", onPress: putAway };
+  const never: NoticeAction[] =
+    first.asking === null ? [] : [{ label: "Never for this pair", onPress: sayNever }];
   const allows: NoticeAction[] = ALLOWS.filter(([level]) => first.levels.includes(level)).map(
     ([level, label]) => ({ label, onPress: () => allow(level) }),
   );
-  const [one, ...others] = [...allows, keep];
+  const [one, ...others] = [...allows, keep, ...never];
   const fixes: readonly [NoticeAction, ...NoticeAction[]] = [one ?? keep, ...others];
 
   return (
@@ -141,6 +167,8 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       anything {first.target} can do, without asking you again. The grant covers the helpers{" "}
       {first.asking === null ? "this chat runs" : "those chats run"} too: what one of them asks is
       asked as its chat.
+      {first.never_unread !== null &&
+        ` ${first.never_unread} Allowing here starts this one dispatch, and the next one asks again.`}
       {said !== undefined && ` ${said}`}
       {behind}
     </Notice>

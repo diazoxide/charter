@@ -418,6 +418,36 @@ export const commands = {
 	 */
 	keepDispatchBlocked: (plane: PlaneId, id: number) => typedError<boolean, string>(__TAURI_INVOKE("keep_dispatch_blocked", { plane, id })),
 	/**
+	 *  **Never for this pair** on a dispatch's Notice (#1503): the pair is the app's record of the
+	 *  held dispatch `id`, never the window's word. Audited, then kept for the person on this
+	 *  machine; the dispatch does not start, and no chat of that persona is asked for that target
+	 *  again until it is lifted ([`lift_dispatch_never`]).
+	 */
+	neverDispatch: (plane: PlaneId, id: number) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("never_dispatch", { plane, id })),
+	/**
+	 *  What stands beside the named dispatch grants here: the pairs you said never to, and the
+	 *  personas whose chats may dispatch to any persona. For Settings' list.
+	 */
+	dispatchStanding: (plane: PlaneId) => typedError<DispatchStanding, string>(__TAURI_INVOKE("dispatch_standing", { plane })),
+	/**
+	 *  **Lift** on Settings' list of the pairs you said never to: audited, then taken out, so the
+	 *  next dispatch across the pair is covered by whatever grant stands, or asks. Answers what
+	 *  stands now.
+	 */
+	liftDispatchNever: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("lift_dispatch_never", { plane, asking, target })),
+	/**
+	 *  **Any persona**, from Settings: chats running as `asking` may dispatch to every persona of
+	 *  the project, one added later included, for you on this machine or for everyone in the
+	 *  project. Audited, then kept; a dispatch waiting on the person that it covers starts.
+	 *  Answers what stands now.
+	 */
+	allowDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("allow_dispatch_to_any", { plane, asking, level })),
+	/**
+	 *  **Revoke** on Settings' list of any-persona grants: audited, then taken out. Answers what
+	 *  stands now.
+	 */
+	revokeDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("revoke_dispatch_to_any", { plane, asking, level })),
+	/**
 	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
 	 *  for Settings' list and the project's Notice.
 	 */
@@ -2533,6 +2563,18 @@ export type DispatchAllowed = {
 	said: string,
 };
 
+/**  One persona whose chats may dispatch to any persona, as Settings lists it. */
+export type DispatchAny = {
+	asking: string,
+	/**  `you` or `project`: where it is kept. */
+	level: GrantLevel,
+	/**
+	 *  Whether it is the project's and nobody on this machine has accepted it yet: it covers
+	 *  nothing here until it is allowed here, in Settings.
+	 */
+	waiting: boolean,
+};
+
 /**  One dispatch grant, as Settings lists it. */
 export type DispatchGrant = {
 	/**  What Revoke is sent by. */
@@ -2676,6 +2718,12 @@ export type DispatchMade = {
 	outcome: string,
 };
 
+/**  A pair the person said never to, as Settings lists it. */
+export type DispatchNever = {
+	asking: string,
+	target: string,
+};
+
 /**  A dispatch that needs the person, as the Notice on the asking chat's tab shows it. */
 export type DispatchPending = {
 	plane: PlaneId,
@@ -2705,6 +2753,12 @@ export type DispatchPending = {
 	levels: GrantLevel[],
 	/**  Where policy locks it: the policy's sentence, naming who set it. No Allow is offered. */
 	locked: string | null,
+	/**
+	 *  Where this machine's list of pairs the person said never to does not read (#1503): the
+	 *  sentence saying so. No grant counts until it reads, which is why the person is asked;
+	 *  an Allow starts this one dispatch, and the next asks again.
+	 */
+	never_unread: string | null,
 };
 
 /**  One dispatch, as the Dispatches tab draws its row. */
@@ -2769,6 +2823,20 @@ export type DispatchRow = {
 	 *  stands. `null` for a dispatch that worked in a folder that was already there.
 	 */
 	worktree: RowWorktree | null,
+};
+
+/**
+ *  What stands beside the named grants (#1503): the pairs the person said never to on this
+ *  machine, and the personas whose chats may dispatch to any persona.
+ */
+export type DispatchStanding = {
+	nevers: DispatchNever[],
+	any: DispatchAny[],
+	/**
+	 *  Where the list of nevers is there and does not read: the sentence saying so, and how
+	 *  the person mends it. `nevers` is then empty, and no dispatch grant counts.
+	 */
+	nevers_unread: string | null,
 };
 
 /**  What the Dispatches tab is handed. */
