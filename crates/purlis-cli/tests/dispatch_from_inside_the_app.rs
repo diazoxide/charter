@@ -1412,8 +1412,9 @@ fn a_dispatch_as_another_chat_is_never_heard_by_the_app() {
 }
 
 #[test]
-fn the_old_report_back_still_sends_its_summary_alone() {
-    // `purlis handoff` and its report are unchanged (#1444 converts them).
+fn the_old_report_back_sends_nothing_and_names_the_report_command() {
+    // #1471: `purlis handoff report` is a refusal now. Nothing reaches the app, and the chat
+    // is told the command that sends its report.
     let tmp = daily();
     let (app, _reading, asked) = an_app(&tmp, starts_it);
 
@@ -1425,13 +1426,17 @@ fn the_old_report_back_still_sends_its_summary_alone() {
         "",
     );
 
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    let all = asked.lock().unwrap().clone();
-    let Some((_, Ask::Report(back))) = all.get(1) else {
-        panic!("the report second: {all:?}")
-    };
-    assert_eq!(back.summary, "Dropped it.");
-    assert_eq!(back.task, None);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("`purlis dispatch report --outcome done"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "{:?}",
+        asked.lock().unwrap()
+    );
 }
 
 // ----- waiting on, listing and cancelling a task (#1441) -----------------------------------

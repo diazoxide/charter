@@ -819,7 +819,7 @@ fn a_line_forged_with_a_record_s_fields_carries_none_of_them_past_the_wire() {
             message: "a brief".to_owned(),
             ticket: "t".to_owned(),
             name: None,
-            report: true,
+            older_report: false,
         })),
         Ask::SessionRecord(Box::new(RecordAsk {
             chat: 7,

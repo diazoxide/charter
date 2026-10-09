@@ -179,17 +179,17 @@ fn a_reporting_open(held: &Held, id: &PlaneId, asking: u32, name: &str) -> Answe
             message: stamped(asking),
             ticket,
             name: Some(name.to_owned()),
-            report: true,
+            older_report: true,
         })),
         &nobody,
     )
 }
 
-/// F1/F2 of the review: an open that asks for a report is a task from the moment it is asked
-/// for, so no record of the older shape is ever made again, and it is counted against the
-/// same limit `purlis dispatch` is.
+/// F1/F2 of the review of #1519, after #1471: an open that asks for a report starts nothing,
+/// so no record of the older shape is ever made again, and nothing it asked is counted
+/// against the limit `purlis dispatch` is held to. It is told the route that is.
 #[test]
-fn an_open_that_asks_for_a_report_is_a_task_counted_and_held_as_one() {
+fn an_open_that_asks_for_a_report_starts_nothing_records_nothing_and_counts_nothing() {
     let plane = a_plane_with_personas();
     let host = Pretend::default();
     let (planes, id, steward) = a_steward_chat(&host, &plane);
@@ -199,25 +199,26 @@ fn an_open_that_asks_for_a_report_is_a_task_counted_and_held_as_one() {
         let (said, _) = dispatch(&held, &id, &tickets, steward, None, &format!("task {n}"));
         assert!(matches!(said, Answer::Dispatched { .. }), "{n}: {said:?}");
     }
+    let open = held.chats().open_now().len();
+    let records = dispatchrecord::list(held.root()).len();
 
-    // The sixth is an open that asks for a report: dispatched as a task.
     let said = a_reporting_open(&held, &id, steward, "check prod");
-    let Answer::Dispatched { chat, .. } = said else {
-        panic!("dispatched as a task, not {said:?}")
-    };
-    let from = held.chats().handed_from(chat).expect("its lineage");
-    assert_eq!(
-        (from.chat, from.mode, from.report),
-        (steward, purlis_core::reopen::Mode::Task, Owed::Due)
-    );
-    let record = record_of(&held, chat);
-    assert_eq!(
-        (record.mode, record.report_owed),
-        (dispatchrecord::Mode::Task, true)
-    );
-    assert_eq!(record.place.workspace.as_deref(), Some("alpha"));
 
-    // It counts: a seventh task is refused, by either route, with the same sentence.
+    assert!(
+        matches!(&said, Answer::No { why } if why.contains("purlis dispatch --name")
+            && why.ends_with("--in workspace:alpha")),
+        "{said:?}"
+    );
+    assert_eq!(held.chats().open_now().len(), open, "nothing started");
+    assert_eq!(
+        dispatchrecord::list(held.root()).len(),
+        records,
+        "nothing recorded"
+    );
+
+    // It took no slot: the sixth task starts, and the seventh is refused at the limit.
+    let (said, _) = dispatch(&held, &id, &tickets, steward, None, "check prod");
+    assert!(matches!(said, Answer::Dispatched { .. }), "{said:?}");
     let full = Answer::No {
         why: purlis_core::dispatchdecision::Refused::Limit(
             purlis_core::dispatchlimits::Refused::TooManyRunning {
@@ -229,7 +230,6 @@ fn an_open_that_asks_for_a_report_is_a_task_counted_and_held_as_one() {
     };
     let (said, _) = dispatch(&held, &id, &tickets, steward, None, "one more");
     assert_eq!(said, full);
-    assert_eq!(a_reporting_open(&held, &id, steward, "and another"), full);
 }
 
 #[test]
@@ -254,13 +254,13 @@ fn an_open_that_asks_for_a_report_and_would_create_its_workspace_is_refused_crea
             message: stamped(steward),
             ticket,
             name: None,
-            report: true,
+            older_report: true,
         })),
         &nobody,
     );
 
     assert!(
-        matches!(&said, Answer::No { why } if why.contains("purlis workspace create gamma")),
+        matches!(&said, Answer::No { why } if why.contains("purlis dispatch --name")),
         "{said:?}"
     );
     assert!(!held.root().join("workspaces").join("gamma").exists());

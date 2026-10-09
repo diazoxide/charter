@@ -949,11 +949,11 @@ pub struct RecordAsk {
     pub cwd: Option<std::path::PathBuf>,
 }
 
-/// A report a handed-off chat sends back, as `charter handoff report` hands it over.
+/// A report a dispatched chat sends back, as `purlis dispatch report` hands it over.
 ///
 /// **It names no recipient, and that is the guard.** The chat it goes to is the one the app
-/// recorded as this chat's parent when it opened it for a `--report` handoff
-/// (`reopen::HandedFrom`), so nothing a chat can say sends a report anywhere else. The ticket
+/// recorded as this chat's asker when it started it (`reopen::HandedFrom`), so nothing a chat
+/// can say sends a report anywhere else. The ticket
 /// is [`OpenChat`]'s, spent the same way, so no single line on the socket reports anything and
 /// no line that reported can report again.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -964,8 +964,10 @@ pub struct ReportBack {
     pub summary: String,
     /// See [`OpenChat`]. Minted by the app, spent once, never written down.
     pub ticket: String,
-    /// A task's outcome and what changed (#1436). Absent from a handoff's report back, which
-    /// is its summary alone.
+    /// A task's outcome and what changed (#1436). **Every report this purlis sends carries
+    /// it** (#1471): `purlis handoff report`, which sent a summary alone, is now a refusal that
+    /// names `purlis dispatch report`. Absent only from an older line, which the app refuses
+    /// with that command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskReport>,
 }
@@ -1038,9 +1040,13 @@ pub struct OpenChat {
     /// Absent from a `charter` older than it, which reads as no name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Whether `--report` asked for an answer (charter-app#259). Absent reads as no.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub report: bool,
+    /// **Retired** (#1471): the `report` an older command line set when `--report` asked for an
+    /// answer (charter-app#259). Work that needs an answer is a task, and `purlis handoff
+    /// --report` has sent a dispatch since #1515, so this purlis never writes it. It is still
+    /// read, so that an open that sets it is refused, naming `purlis dispatch`, and is never
+    /// opened as a handoff nobody waits on. Absent reads as no.
+    #[serde(default, rename = "report", skip_serializing)]
+    pub older_report: bool,
 }
 
 /// A handoff's row in the project's dispatch log (`dispatch::record_handoff`), as the app that
@@ -4535,7 +4541,7 @@ mod tests {
                 .to_owned(),
             ticket: ticket.to_owned(),
             name: None,
-            report: false,
+            older_report: false,
         }))
     }
 
@@ -4548,7 +4554,23 @@ mod tests {
         };
 
         assert_eq!(open.name, None);
-        assert!(!open.report);
+        assert!(!open.older_report);
+    }
+
+    /// #1471: an older command line's `report` is still read, so the app can refuse it, and
+    /// this purlis never writes it, whatever the field holds.
+    #[test]
+    fn an_older_lines_report_is_read_and_never_written() {
+        let line = r#"{"open":{"chat":3,"workspace":"alpha","create_vision":null,"persona":null,"message":"m","ticket":"t","report":true}}"#;
+
+        let Ask::Open(mut open) = serde_json::from_str::<Ask>(line).expect("it parses") else {
+            panic!("an open")
+        };
+        assert!(open.older_report);
+
+        open.older_report = true;
+        let written = serde_json::to_string(&Ask::Open(open)).expect("json");
+        assert!(!written.contains("report"), "{written}");
     }
 
     #[test]

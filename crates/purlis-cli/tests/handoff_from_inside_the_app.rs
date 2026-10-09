@@ -312,10 +312,10 @@ fn a_chat_the_app_started_is_opened_in_the_app_on_one_ticket() {
         message,
         ticket,
         name,
-        report,
+        older_report,
     } = &**open;
     assert_eq!(name, &None, "no --name, no name");
-    assert!(!report, "no --report, no report owed");
+    assert!(!older_report, "no report is asked on the wire (#1471)");
     assert_eq!(*chat, ASKING);
     assert_eq!(workspace, "alpha");
     assert_eq!(create_vision, &None);
@@ -487,7 +487,7 @@ fn a_handoff_carries_its_task_name_and_owes_no_report() {
     assert_eq!(out.status.code(), Some(0));
     let open = the_open(&asked);
     assert_eq!(open.name.as_deref(), Some("retry webhooks"), "trimmed");
-    assert!(!open.report, "a handoff is fire-and-forget");
+    assert!(!open.older_report, "a handoff is fire-and-forget");
 }
 
 // ----- a handoff that asks for a report is a task (#1515) --------------------------------
@@ -524,6 +524,11 @@ fn the_handoff_commands_help_says_the_one_route_in_the_same_words() {
     assert!(
         !help.contains("Ask the new chat to report back"),
         "--report is not offered as the way to get an answer: {help}"
+    );
+    // And the retired report back says what sends a report now.
+    assert!(
+        help.contains("`purlis handoff report` is retired: it sends nothing, and names `purlis dispatch report`"),
+        "{help}"
     );
 }
 
@@ -806,81 +811,36 @@ fn a_task_name_charter_would_not_draw_is_refused_before_anything_is_asked() {
     assert!(asked.lock().unwrap().is_empty(), "the app was never asked");
 }
 
+/// #1471: `purlis handoff report` is retired and kept as a refusal. It sends nothing, asks the
+/// app nothing, and names `purlis dispatch report`, which sends every report: with an app
+/// behind it or none, and whatever the summary holds. Where a report goes, how one is refused
+/// and what is not sent at all are `purlis dispatch report`'s tests now
+/// (`dispatch_from_inside_the_app.rs`).
 #[test]
-fn a_report_back_goes_to_the_app_on_one_ticket_and_names_no_recipient() {
+fn a_report_back_is_refused_naming_dispatch_report_and_asks_the_app_nothing() {
     let tmp = daily();
     let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
 
-    let out = charter(
-        &root(&tmp),
-        Some(&socket),
-        &["handoff", "report", "  Dropped it.\nTwo repos changed. "],
-    );
+    for (behind, summary) in [
+        (true, "  Dropped it.\nTwo repos changed. "),
+        (false, "done"),
+        (true, "   "),
+        (true, "done\u{202e}enod"),
+    ] {
+        let app = behind.then_some(&socket as &dyn AppEnv);
+        let out = charter(&root(&tmp), app, &["handoff", "report", summary]);
 
-    assert_eq!(text(&out.stderr), "");
-    assert_eq!(out.status.code(), Some(0));
-    assert!(
-        text(&out.stdout).contains("sent to 'steward 1'"),
-        "{}",
-        text(&out.stdout)
-    );
-    let asked = asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 2, "a ticket, then the report: {asked:?}");
-    let (minted_on, Ask::Ticket { chat }) = &asked[0] else {
-        panic!("a ticket first: {asked:?}")
-    };
-    assert_eq!(*chat, ASKING);
-    let (spent_on, Ask::Report(back)) = &asked[1] else {
-        panic!("the report second: {asked:?}")
-    };
-    assert_eq!(spent_on, minted_on);
-    assert_eq!(back.chat, ASKING, "the chat reporting, and nothing else");
-    assert_eq!(back.summary, "Dropped it.\nTwo repos changed.");
-}
-
-#[test]
-fn a_report_the_app_refuses_says_why_and_that_nothing_was_sent() {
-    let tmp = daily();
-    let (socket, _reading, _asked) = an_app(&tmp, |_, _, _| Answer::No {
-        why: "chat 3 was not opened by a handoff that asked for a report".to_owned(),
-    });
-
-    let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", "done"]);
-
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(
-        text(&out.stderr),
-        "✗ charter handoff report: chat 3 was not opened by a handoff that asked for a report \
-         — nothing was sent.\n"
-    );
-}
-
-#[test]
-fn a_report_with_no_app_behind_it_sends_nothing_and_says_so() {
-    let tmp = daily();
-
-    let out = charter(&root(&tmp), None, &["handoff", "report", "done"]);
-
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        text(&out.stderr).contains("nothing was sent"),
-        "{}",
-        text(&out.stderr)
-    );
-}
-
-#[test]
-fn a_report_charter_would_not_hand_back_is_refused_before_anything_is_asked() {
-    let tmp = daily();
-    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
-
-    for bad in ["   ", "done\u{202e}enod", &"x".repeat(5000)] {
-        let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", bad]);
-
-        assert_eq!(out.status.code(), Some(1), "{bad:?}");
-        assert!(text(&out.stderr).contains("nothing was sent"), "{bad:?}");
+        assert_eq!(out.status.code(), Some(1), "{summary:?}");
+        assert_eq!(text(&out.stdout), "", "{summary:?}");
+        assert_eq!(
+            text(&out.stderr),
+            "✗ purlis handoff report: a report is sent with `purlis dispatch report --outcome \
+             done \"<what you did and found>\"` (or --outcome blocked or failed), and a handoff \
+             owes none — nothing was sent.\n",
+            "{summary:?}"
+        );
     }
-    assert!(asked.lock().unwrap().is_empty());
+    assert!(asked.lock().unwrap().is_empty(), "the app was never asked");
 }
 
 #[test]
@@ -1271,12 +1231,17 @@ fn a_report_kept_for_the_plane_root_says_so() {
         other => opens_as_nine(tickets, connection, other),
     });
 
-    let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", "Done."]);
+    // Sent as every report is since #1471.
+    let out = charter(
+        &root(&tmp),
+        Some(&socket),
+        &["dispatch", "report", "--outcome", "done", "Done."],
+    );
 
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        "charter handoff report: 'steward 1' has closed, so the report is kept for the plane \
+        "purlis dispatch report: 'steward 1' has closed, so the report is kept for the plane \
          root. The next chat that starts there reads it.\n"
     );
 }

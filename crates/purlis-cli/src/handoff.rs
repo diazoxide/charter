@@ -100,9 +100,10 @@ impl Args {
     }
 }
 
-/// The word that makes `charter handoff` a report back rather than a handoff.
+/// The word that made `purlis handoff` a report back rather than a handoff, and is now refused
+/// naming `purlis dispatch report` (#1471).
 ///
-/// **Only with a summary after it.** `charter handoff report <<'BRIEF'` is still a handoff
+/// **Only with a summary after it.** `purlis handoff report <<'BRIEF'` is still a handoff
 /// into a workspace called `report`, as it always was.
 pub const REPORT: &str = "report";
 
@@ -114,14 +115,14 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let root = here.plane.root();
     let ws = args.workspace.as_str();
 
-    if let Some(summary) = args.summary.as_deref() {
+    if args.summary.is_some() {
         if ws == REPORT {
-            return report_back(summary);
+            return report_back();
         }
         voice::err(&format!(
             "{HANDOFF_SAYS} takes one workspace and its brief on stdin, and was given a \
-             second word after '{}' — nothing was opened. A report back is spelled: charter \
-             handoff report \"<summary>\"",
+             second word after '{}' — nothing was opened. A report is sent with purlis \
+             dispatch report --outcome done \"<summary>\"",
             purlis_core::personas::one_line(ws)
         ));
         return ExitCode::FAILURE;
@@ -269,7 +270,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     // the app writes, by the name it shows. A name longer than this one's number can still
     // take a message over the bound, and the app says so in that case; this is the refusal
     // nearly every such brief gets. No report line: a handoff that asks for one went as a task.
-    let sent = handoff::delivered(&msg, &source_chat, false).unwrap_or_else(|| msg.clone());
+    let sent = handoff::delivered(&msg, &source_chat).unwrap_or_else(|| msg.clone());
     if let Some(bad) = handoff::bad_message(&sent) {
         let mut said = format!("{HANDOFF_SAYS} {}", bad.say());
         // Only the byte bound gets the note, and it is compared against the seam's own
@@ -631,9 +632,9 @@ fn in_the_app(
         message: msg.to_owned(),
         ticket,
         name,
-        // Never asked for here (#1515): a handoff that wants an answer is sent as a task
-        // ([`as_a_task`]), so what this opens owes no report.
-        report: false,
+        // Never asked for, and never written (#1515, #1471): a handoff that wants an answer is
+        // sent as a task ([`as_a_task`]), so what this opens owes no report.
+        older_report: false,
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat, row, note }) => Host::Opened(chat, row, note),
@@ -699,97 +700,20 @@ pub(crate) fn ticketed() -> Ticketed {
     }
 }
 
-/// `charter handoff report "<summary>"` — the one report a `--report` handoff asked for, sent
-/// back to the chat that asked (charter-app#259).
-///
-/// **It names no recipient.** The app sends it to the chat it recorded as this one's parent
-/// when it opened this one, and refuses it from any chat a `--report` handoff did not open —
-/// so the pairing is charter's, and nothing typed here can point a report at another chat.
-fn report_back(summary: &str) -> ExitCode {
-    use purlis_core::hookwire::{Answer, Ask, ReportBack};
-
-    let summary = match handoff::report_summary(summary) {
-        Ok(summary) => summary,
-        Err(bad) => {
-            voice::err(&format!("charter handoff report: {}", bad.say()));
-            return ExitCode::FAILURE;
-        }
-    };
-    let (mut asking, chat, ticket) = match ticketed() {
-        Ticketed::Yes(asking, chat, ticket) => (asking, chat, ticket),
-        Ticketed::Refused(why) => return report_refused(&why),
-        Ticketed::NoApp => {
-            voice::err(
-                "charter handoff report: no purlis app answered this call, so nothing was \
-                 sent. A report goes back only from a chat the app opened for a handoff that \
-                 asked for one (charter handoff --report).",
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    let back = ReportBack {
-        chat,
-        summary,
-        ticket,
-        task: None,
-    };
-    match asking.ask(&Ask::Report(Box::new(back)), A_TICKET_TAKES_AT_MOST) {
-        // A chat being stopped that was dispatched as a task is answered as finished: the
-        // same line, since its stop has already told it the chat ends with the turn.
-        Ok(Answer::Reported { to, kept_for: None } | Answer::Finished { to }) => {
-            println!(
-                "charter handoff report: sent to '{}'. It reaches that chat as context on its \
-                 next turn, and is that chat's to read.",
-                purlis_core::personas::one_line(&to)
-            );
-            ExitCode::SUCCESS
-        }
-        Ok(Answer::Reported {
-            to,
-            kept_for: Some(kept),
-        }) => {
-            // The app says where by `Place::word`: a workspace's name, or the plane root's
-            // word for a parent that worked there (SI-1b).
-            let kept_for = match purlis_core::active::Place::read(&kept) {
-                Some(place) => place.said(),
-                None => format!("'{}'", purlis_core::personas::one_line(&kept)),
-            };
-            println!(
-                "charter handoff report: '{}' has closed, so the report is kept for {kept_for}. \
-                 The next chat that starts there reads it.",
-                purlis_core::personas::one_line(&to),
-            );
-            ExitCode::SUCCESS
-        }
-        Ok(Answer::No { why }) => report_refused(&why),
-        Ok(
-            Answer::Ticket { .. }
-            | Answer::Opened { .. }
-            | Answer::Recorded { .. }
-            | Answer::Written { .. }
-            | Answer::Said { .. }
-            | Answer::Vaults { .. }
-            | Answer::Working(_)
-            | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. }
-            | Answer::Task(_),
-        )
-        | Err(_) => {
-            voice::err(
-                "charter handoff report: the purlis app did not answer, so nothing was sent.",
-            );
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn report_refused(why: &str) -> ExitCode {
-    voice::err(&format!(
-        "charter handoff report: {} — nothing was sent.",
-        whole(why)
-    ));
+/// `purlis handoff report "<summary>"`: **retired, and kept as a refusal** (#1471). Every report
+/// is sent by `purlis dispatch report`, with how the work ended: a handoff owes none, and a
+/// chat an older purlis handed work owing one is read as the task it was (#1519). The word stays
+/// because chats learned it, and this tells them the command that sends a report. Nothing is
+/// sent, and the app is not asked.
+fn report_back() -> ExitCode {
+    voice::err(REPORT_RETIRED);
     ExitCode::FAILURE
 }
+
+/// What `purlis handoff report` answers since #1471.
+const REPORT_RETIRED: &str = "purlis handoff report: a report is sent with `purlis dispatch \
+     report --outcome done \"<what you did and found>\"` (or --outcome blocked or failed), and a \
+     handoff owes none — nothing was sent.";
 
 /// What the app said, as one line and **whole**: escaped as anything a chat may have had a
 /// hand in is, and never cut. The app's refusals end with what to do, and the budget a name

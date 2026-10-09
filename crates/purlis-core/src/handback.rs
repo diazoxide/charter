@@ -1,8 +1,9 @@
-//! A report a handed-off chat sent back, kept until the chat that asked for it is prompted
-//! (charter-app#259).
+//! A report a dispatched chat sent back, kept until the chat that asked for it is prompted
+//! (charter-app#259, #1436).
 //!
-//! `charter handoff --report` records, in the app, that the chat it opens owes one report to
-//! the chat that opened it. When that report comes (`charter handoff report "<summary>"`), the
+//! A dispatch records, in the app, that the chat it starts owes one report to the chat that
+//! asked. When that report comes (`purlis dispatch report`, the one command that sends a
+//! report since #1471), the
 //! app checks the pairing it recorded and leaves the report HERE, in the plane, for the
 //! parent's own `UserPromptSubmit` hook to pick up and hand the parent's next turn as
 //! `additionalContext`. **Nothing is typed into the parent's terminal**: a parent in the middle
