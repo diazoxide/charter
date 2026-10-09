@@ -595,8 +595,10 @@ Decided under delegation and flagged for the operator: the missing twin joins it
 rules above (an `allow` only, for Claude Code only, an operator's `ask` or `deny` still wins,
 and the list is written out): `Bash(purlis persona where)`, in
 `harness::claude::READ_ALLOW`. **The whole line, no wildcard**: the command takes no argument a
-chat would pass, so a line with anything after it, and every other word of `purlis persona`,
-is still asked about.
+chat would pass, so the rule matches no line with anything after it, and no other word of
+`purlis persona`. That the harness then asks about a call holding the line beside another
+command is carried over from the record command's measurement above, not measured again, and
+a redirection on the line is among what is still to be measured (D-1444-14).
 
 Nothing else is added. Every chat the app starts carries the same list, so no task holds an
 allow its asking chat lacks, and nothing here writes, starts a chat or reaches a credential.
@@ -609,7 +611,10 @@ answered only where it always was:
   permission hook, before the harness says anything else;
 - the session's pane carries a Notice naming the task by its whole path and what it asks (the
   harness's own line, as the needs-you list already shows it: one line, credential shapes
-  masked, drawn as text), with **Show the task**;
+  masked, drawn as text), with **Show the task**, for as long as purlis holds the prompt on
+  the hook (up to a minute, `harness::hooked::HOOK_TIMEOUT`). Past it the harness's own
+  prompt decides in the task's pane, the Notice and the needs-you row go, and the hand stays
+  from the harness's `Notification`;
 - the asking chat's next turn is told in one line, once for each prompt, that the task waits on
   the person, and that only the person answers it, in the task's own tab.
 
@@ -617,8 +622,9 @@ purlis approves no harness prompt in the person's place: the Notice has no Allow
 asking chat is told not to answer it or work around it.
 
 **Codex and opencode.** Codex has no per-command allow (its approval policy is one switch for
-the session), so nothing can be pre-allowed for it per command, and its hooks say nothing when
-it stops for approval: only its own pane shows the prompt. opencode can be given
+the session), so nothing can be pre-allowed for it per command, and the one hook it fires when
+it stops for approval is `PermissionRequest`, which decides the prompt and which purlis arms
+for no Codex chat: only its own pane shows the prompt. opencode can be given
 `permission.bash` patterns for one session, but there the more specific pattern beats an
 operator's broader `deny` (above), so nothing is added. Its prompt is heard through the shim's
 `permission_prompt` notification, which raises the hand and the asking chat's line, without the

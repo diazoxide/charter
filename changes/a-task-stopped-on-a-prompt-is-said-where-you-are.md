@@ -7,6 +7,6 @@
 
 - **A task stopped on a permission prompt is said where you are.** Its session's tab wears the
   hand from the moment the prompt is held, the session's pane names the task and what it asks,
-  with **Show the task**, and the chat that asked for it is told once, at its next turn, that the
-  task waits on you. You answer it in the task's own tab, as before; purlis answers nothing for
+  with **Show the task**, while purlis holds the prompt (up to a minute), and the chat that asked
+  for it is told once, at its next turn, that the task waits on you. You answer it in the task's own tab, as before; purlis answers nothing for
   you.

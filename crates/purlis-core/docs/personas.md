@@ -204,8 +204,8 @@ harness asks for, or a question), the chat's next turn is told so in one more li
 each prompt: which task, and whether it is a permission. It is told that only the person
 answers it, in the task's own tab, so that it says so where the person is; nothing it does
 answers the prompt. The window says the same on the session's tab: its chip wears the hand
-from the moment the prompt is held, and its pane names the task and what it asks, with
-**Show the task**.
+from the moment the prompt is held, and, while purlis holds the prompt (up to a minute), its
+pane names the task and what it asks, with **Show the task**.
 
 `purlis persona where` prints the same picture at any time, and the `persona_where` tool
 answers it too. Outside a chat the app started, the command says there is no record to read.

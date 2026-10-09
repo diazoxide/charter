@@ -456,19 +456,28 @@ fn newly_waiting(
         .filter(|one| one.asking.is_some())
         .collect();
     tasks.sort_by_key(|one| one.chat);
-    let fresh = tasks
+    let fresh: Vec<&Known> = tasks
         .iter()
+        .copied()
         .filter(|one| !told.contains(&one.chat))
         .take(MOST_ROWS)
+        .collect();
+    // Kept as told: the tasks still waiting that were told before or are told now. One past
+    // the most a turn says is not counted as told, so the next turn says it.
+    *told = tasks
+        .iter()
+        .map(|one| one.chat)
+        .filter(|chat| told.contains(chat) || fresh.iter().any(|one| one.chat == *chat))
+        .collect();
+    fresh
+        .into_iter()
         .filter_map(|one| {
             Some(Waiting {
                 name: one.name.clone(),
                 prompt: one.asking?,
             })
         })
-        .collect();
-    *told = tasks.iter().map(|one| one.chat).collect();
-    fresh
+        .collect()
 }
 
 /// What changed between what a chat was told (`before`) and the picture `now`.
