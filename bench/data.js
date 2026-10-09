@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791525808661,
+  "lastUpdate": 1791526783420,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4368,6 +4368,48 @@ window.BENCHMARK_DATA = {
             "value": 103.7269345,
             "unit": "ms",
             "extra": "median of 5 runs: 102.537, 102.738, 103.727, 104.175, 104.217 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "3f36e5419fbef9267aa306a1bc27fdac2f18b162",
+          "message": "review of #1534: the explorer's remove and merge are the window's alone\n\n- worktree_remove and worktree_merge join WINDOW_ONLY: the explorer's\n  remove (with force, of uncommitted work) and merge of any branch\n  folder are the person's acts in their window, and no link serves them.\n  The count test moves by two; uiRpc.ts is regenerated without them.\n- \"also written by\" names each other chat once, where two are shown\n  under one name.\n- names_folder's doc says what is true: a record that does not parse is\n  skipped, so it keeps nobody off a folder.\n\nRefs #1534\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T10:09:16+04:00",
+          "tree_id": "be9edb800b230fb497f8abf7fc4603a096536251",
+          "url": "https://github.com/purlis/purlis/commit/3f36e5419fbef9267aa306a1bc27fdac2f18b162"
+        },
+        "date": 1791526782121,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5098855,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.508, 0.510, 0.510, 0.527, 0.529 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.895238499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.480, 16.484, 16.895, 17.152, 17.315 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.8081605,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.692, 102.976, 104.808, 105.314, 105.842 ms"
           }
         ]
       }
