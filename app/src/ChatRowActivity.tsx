@@ -16,27 +16,23 @@ import { DOING_ID, saidWhole, useDoingSaid } from "./chatDoing";
  * markup.
  *
  * **Not a live region**: it changes several times a second and would chatter. It is out of
- * the accessibility tree where it stands, and what describes a row points at it (`describes`
- * gives it the id a row's `aria-describedby` names), so a screen reader says it when asked.
+ * the accessibility tree where it stands, and what describes a row points at it (`id` is the
+ * one a row's or a menu line's `aria-describedby` names), so a screen reader says it when asked.
  */
 export const ChatDoingLine = memo(function ChatDoingLine({
   session,
-  describes = false,
+  id,
 }: {
   session: number;
-  /** Whether it carries the id a row is described by (`chatDoingId`): one element per chat
-   *  may, the row's. */
-  describes?: boolean;
+  /** The id what it describes names: `chatDoingId` for the Chats list's row, and its own for
+   *  any other surface that draws it beside that row (a tab's menu, #1551), as an id is one
+   *  element's. */
+  id?: string;
 }) {
   const says = useDoingSaid(session);
   if (says === undefined) return null;
   return (
-    <span
-      className="chat-doing"
-      id={describes ? `${DOING_ID}${session}` : undefined}
-      aria-hidden="true"
-      title={saidWhole(says)}
-    >
+    <span className="chat-doing" id={id} aria-hidden="true" title={saidWhole(says)}>
       {says.words}
       {says.name !== undefined && (
         <>
@@ -53,5 +49,7 @@ export const ChatDoingLine = memo(function ChatDoingLine({
  * place a row keeps for it, filled by {@link ChatDoingLine}.
  */
 export const ChatRowActivity = memo(function ChatRowActivity({ session }: { session: number }) {
-  return <ChatDoingLine session={session} describes />;
+  // The id `chatDoingId` names, written out: that is the row's own call, made as the row is
+  // drawn, and this line is drawn without it.
+  return <ChatDoingLine session={session} id={`${DOING_ID}${session}`} />;
 });

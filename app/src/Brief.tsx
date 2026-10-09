@@ -165,7 +165,7 @@ function goesWithItsSurface(at: Element): boolean {
  * 2. What the context menu was opened on (the task's row in the Chats list).
  * 3. The terminal of the pane in front, so the keyboard is never left on the page.
  */
-function useKeyboardBack() {
+export function useKeyboardBack() {
   // Read while the panel is first drawn, which is before the surface that opened it is gone:
   // a menu's row still has the focus, and what the menu was opened on still says it is open.
   const [start] = useState(() => {

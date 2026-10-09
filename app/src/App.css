@@ -1933,7 +1933,11 @@ button.show-more:focus-visible {
   background: var(--tab-active);
 }
 
-.tasks-menu-row:hover .tasks-menu-places {
+/* And while the keyboard is on the line (#1551), so a keyboard user learns they are there: still
+   out of the tab order, and the line's own keys and the Chats list's row menu are its ways. */
+.tasks-menu-row:hover .tasks-menu-places,
+.tasks-menu-row[data-highlighted] .tasks-menu-places,
+.tasks-menu-row:focus-within .tasks-menu-places {
   display: inline-flex;
 }
 
@@ -4152,6 +4156,15 @@ h2.sidebar-title .node-icon {
   max-width: none;
   max-height: calc(100vh - 2rem);
   overflow: hidden;
+}
+
+/* **Answer a task's question, from its row or its tab menu's line** (#1551): the Activity
+   tab's form in a dialog of its own, as wide as a brief's, and no taller than the window. */
+.warning.answer-panel {
+  width: min(44rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
 }
 
 .brief-panel .brief-facts {

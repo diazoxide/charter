@@ -20,6 +20,7 @@ import {
   Minus,
   PanelRight,
   Pause,
+  Reply,
   SquareArrowOutUpRight,
   SquareTerminal,
   X,
@@ -29,6 +30,7 @@ import type { Offer } from "./actions";
 import { backId, besideId, ownTabId } from "./actions";
 import { onAMac } from "./tabKeys";
 import { briefTitle, useOpenBrief, type BriefAsk } from "./Brief";
+import { answerTitle, useOpenAnswer, type AnswerAsk } from "./AnswerPanel";
 import { ChatDoingLine } from "./ChatRowActivity";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect } from "./chatState";
@@ -280,6 +282,8 @@ function Chip({
   const counts = countsOf(rows, kinds, ended);
   // The Brief panel of a task (#1494), where the window has one to open.
   const openBrief = useOpenBrief();
+  // The Answer dialog of a task asking its asking chat (#1551), where the window has one.
+  const openAnswer = useOpenAnswer();
   const [open, setOpen] = useState(false);
   const [unfolded, setUnfolded] = useState(false);
   /** The ended lines whose reports are open, by the line's key. */
@@ -460,6 +464,16 @@ function Chip({
               picked.current = true;
               hide();
               openBrief(ask);
+            }
+      }
+      onAnswer={
+        openAnswer === undefined
+          ? undefined
+          : (ask) => {
+              // The dialog takes the keyboard: the menu is done.
+              picked.current = true;
+              hide();
+              openAnswer(ask);
             }
       }
       onPlace={
@@ -831,6 +845,7 @@ function TaskLine({
   reportOpen,
   onPick,
   onBrief,
+  onAnswer,
   onPlace,
 }: {
   line: Line;
@@ -844,6 +859,8 @@ function TaskLine({
   onPick: (line: Line) => boolean;
   /** Opens the Brief panel of the line's task (#1494). */
   onBrief?: (ask: BriefAsk) => void;
+  /** Opens the Answer dialog of the line's task, where it asks its asking chat (#1551). */
+  onAnswer?: (ask: AnswerAsk) => void;
   /** Moves the line's task, where it is an open task and the menu was handed the way. */
   onPlace?: (session: number, where: Place) => void;
 }) {
@@ -863,6 +880,11 @@ function TaskLine({
   // **Where a task is drawn, from its own line** (#1489, V100-38): an open task only. The
   // session's own chat is its tab, and an ended task is nowhere.
   const moves = onPlace !== undefined && row !== undefined && row.mode === "task" ? row : undefined;
+  // **Its question, to answer** (#1551): an open task paused on a question to its asking chat.
+  const answer: AnswerAsk | undefined =
+    onAnswer !== undefined && row !== undefined && row.mode === "task" && row.asking !== null
+      ? { chat: row.session, name: line.name }
+      : undefined;
   return (
     <>
       <Menu.Item
@@ -875,6 +897,10 @@ function TaskLine({
         aria-expanded={line.report === undefined ? undefined : reportOpen}
         textValue={line.name}
         title={tokens}
+        // What its task is doing is its description on demand (#1551), as the Chats list's row
+        // has it: the line below is out of the tree where it stands, and named here. An id
+        // that names no element, while nothing is said, describes it with nothing.
+        aria-describedby={row === undefined ? undefined : menuDoingId(row.session)}
         onPointerMove={quiet ? keepsNoKeyboard : undefined}
         onPointerLeave={quiet ? keepsNoKeyboard : undefined}
         // **The keyboard's way to move a task from its line** (#1489): Enter goes to it, and
@@ -941,12 +967,13 @@ function TaskLine({
             working. It reads its own chat, so this line is not drawn again for it. */}
         {row !== undefined && (
           <span className="doing">
-            <ChatDoingLine session={row.session} />
+            <ChatDoingLine session={row.session} id={menuDoingId(row.session)} />
           </span>
         )}
-        {brief !== undefined && moves === undefined && (
+        {(brief !== undefined || answer !== undefined) && moves === undefined && (
           <span className="tasks-menu-places" aria-hidden="true">
-            <BriefPlace ask={brief} onBrief={onBrief} />
+            {brief !== undefined && <BriefPlace ask={brief} onBrief={onBrief} />}
+            {answer !== undefined && <AnswerPlace ask={answer} onAnswer={onAnswer} />}
           </span>
         )}
         {moves !== undefined && onPlace !== undefined && (
@@ -985,6 +1012,8 @@ function TaskLine({
             )}
             {/* Last: it reads, where the others move the task (#1494). */}
             {brief !== undefined && <BriefPlace ask={brief} onBrief={onBrief} />}
+            {/* Last, at the line's very end: what the task waits on (#1551). */}
+            {answer !== undefined && <AnswerPlace ask={answer} onAnswer={onAnswer} />}
           </span>
         )}
       </Menu.Item>
@@ -1001,6 +1030,12 @@ function TaskLine({
       )}
     </>
   );
+}
+
+/** The id of what a menu line's task is doing, which the line is described by (#1551): its
+ *  own, since the Chats list's row carries `chatDoingId` and an id is one element's. */
+function menuDoingId(session: number): string {
+  return `tasks-menu-doing-${session}`;
 }
 
 /** The key of an ended task's line that has a finished row: `finished:<dispatch id>`. */
@@ -1022,6 +1057,21 @@ function BriefPlace({ ask, onBrief }: { ask: BriefAsk; onBrief?: (ask: BriefAsk)
       onPress={() => onBrief(ask)}
     >
       <FileText />
+    </PlaceButton>
+  );
+}
+
+/** The Answer button at the end of an asking task's line (#1551): the pointer's way to its
+ *  dialog from here; the keyboard's is the task's row menu and the palette. */
+function AnswerPlace({ ask, onAnswer }: { ask: AnswerAsk; onAnswer?: (ask: AnswerAsk) => void }) {
+  if (onAnswer === undefined) return null;
+  return (
+    <PlaceButton
+      says={answerTitle(ask.name)}
+      also="also in its row's menu in the Chats list"
+      onPress={() => onAnswer(ask)}
+    >
+      <Reply />
     </PlaceButton>
   );
 }
