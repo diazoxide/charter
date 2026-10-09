@@ -1,4 +1,4 @@
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode, type Ref } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
@@ -60,6 +60,7 @@ export function SettingsLayout({
   found,
   foot,
   children,
+  holder,
 }: {
   levels: readonly LevelOffer[];
   level: string;
@@ -79,6 +80,8 @@ export function SettingsLayout({
   foot?: ReactNode;
   /** The chosen group: a {@link SettingGroup}. */
   children: ReactNode;
+  /** The tab's own element, for what is looked for in this tab and not the whole window. */
+  holder?: Ref<HTMLDivElement>;
 }) {
   const stop = useTabStop(
     group,
@@ -92,7 +95,7 @@ export function SettingsLayout({
       ? ""
       : (none ?? `${found} ${found === 1 ? "setting matches" : "settings match"}`);
   return (
-    <div className="ui-settings">
+    <div className="ui-settings" ref={holder}>
       <div className="ui-settings-top">
         <RadioGroup.Root
           className="ui-levels"

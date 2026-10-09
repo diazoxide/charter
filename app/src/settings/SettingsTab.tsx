@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
 import { commands, type PlaneId, type SettingsEdit, type SettingsWhich } from "../bindings";
 import { NewPersona } from "../NewPersona";
@@ -408,13 +408,16 @@ function Shown({
    * setting's control takes the focus, so the person lands on the field and not only near it.
    * Done once per link: the place forgets the setting once it is focused. Asked again as the
    * level is read and its groups are declared, since a link can land before either.
+   *
+   * The row is looked for in this tab's own element (#1292): a second Settings tab of the same
+   * level, split beside this one, draws a row by the same name.
    */
   const target = shown?.setting;
+  const own = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (target === undefined) return;
-    const row = [...document.querySelectorAll<HTMLElement>("[data-setting]")].find(
-      (one) => one.dataset.setting === target,
-    );
+    const rows = own.current?.querySelectorAll<HTMLElement>("[data-setting]") ?? [];
+    const row = [...rows].find((one) => one.dataset.setting === target);
     if (row === undefined) return;
     row.scrollIntoView?.({ block: "nearest" });
     row
@@ -455,6 +458,7 @@ function Shown({
   };
   return (
     <SettingsLayout
+      holder={own}
       levels={levels}
       level={level}
       onLevelChange={onLevelChange}
