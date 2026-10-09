@@ -7014,6 +7014,15 @@ h2.sidebar-title .node-icon {
   color: var(--text-primary);
 }
 
+/* The picker's text box for any other colour, as #rrggbb: as wide as the value it holds. */
+.persona-mark-hex .ui-field {
+  width: 8ch;
+  font-variant-numeric: tabular-nums;
+}
+.persona-mark-hex .ui-field[aria-invalid="true"] {
+  border-color: var(--danger-base);
+}
+
 /* The mark a view's tab carries in place of a chat's state: what kind of thing the tab holds. */
 .tab-mark {
   flex: none;
