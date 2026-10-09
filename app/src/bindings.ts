@@ -384,6 +384,21 @@ export const commands = {
 	 *  (`restart_chat`).
 	 */
 	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
+	/**
+	 *  **Allow on the one question for several tasks of chat `session`** (#1508, V100-57): `seen`
+	 *  is each task with the block the question showed for it. The whole answer is refused unless
+	 *  every task is held on that one block now and is a task below `session` by the app's own
+	 *  record. Each is judged on its own, and the answer is kept for each task alone (`chat`), or
+	 *  once for every chat of the project on this machine (`you`) or for everyone in it
+	 *  (`project`), with each task owed a restart. The window then restarts each once its turn has
+	 *  ended (`restart_chat`).
+	 */
+	allowSandboxBlockForTasks: (plane: PlaneId, session: number, seen: SeenBlock[], level: GrantLevel) => typedError<TasksAnswered, string>(__TAURI_INVOKE("allow_sandbox_block_for_tasks", { plane, session, seen, level })),
+	/**
+	 *  **Keep blocked on the one question for several tasks of chat `session`** (#1508): checked
+	 *  as an Allow is ([`checked`]), then each task's block is let go. Nothing is granted.
+	 */
+	keepSandboxBlockForTasks: (plane: PlaneId, session: number, seen: SeenBlock[]) => typedError<number[], string>(__TAURI_INVOKE("keep_sandbox_block_for_tasks", { plane, session, seen })),
 	/**  Every grant in force here, for Settings' Granted list (#1348). */
 	sandboxGrants: (plane: PlaneId) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("sandbox_grants", { plane })),
 	/**
@@ -6595,6 +6610,18 @@ export type SearchedPart = {
  */
 export type SecretValue = string;
 
+/**  **One task's block, as the person saw it** on the question: what the window sends back. */
+export type SeenBlock = {
+	/**  The task's number. */
+	task: number,
+	/**  The block's operation and kind, by the words the window was told. */
+	operation: string,
+	kind: string,
+	what: GrantWhat,
+	/**  The host or folder shown for this task. */
+	target: string,
+};
+
 /**  One session record, as the palette and the Sessions panel name it. */
 export type SessionRecordRow = {
 	/**  Its plane-relative path — what it is opened and resumed by (`sessionrecord::locate`). */
@@ -7148,6 +7175,17 @@ export type TaskQuestion = {
 	number: number,
 	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
 	question: string,
+};
+
+/**  What one answer to several tasks did (#1508). */
+export type TasksAnswered = {
+	/**  The sentence the Notice says. */
+	said: string,
+	/**
+	 *  The tasks it answered: each listed one, or, where keeping failed part way, those it
+	 *  allowed before it failed. The window puts their blocks away and restarts them.
+	 */
+	answered: number[],
 };
 
 /**  What the window is answered for one ask. */

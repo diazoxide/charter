@@ -1784,7 +1784,16 @@ impl Planes {
         held.hooks.when_blocked({
             let plane = id.clone();
             let blocks = Arc::clone(&self.blocks);
-            Arc::new(move |block| blocks(hooks::blocked(&plane, &block)))
+            // Weak for the handoff's reason. The block is held for the chat before the window
+            // is told of it, so an answer to it can be checked against what was heard (#1508).
+            let held = Arc::downgrade(&held);
+            Arc::new(move |block| {
+                let told = hooks::blocked(&plane, &block);
+                if let Some(strong) = held.upgrade() {
+                    crate::taskblocks::heard(strong.chats(), &told);
+                }
+                blocks(told);
+            })
         });
         // The conversation a chat's own harness moves it onto — the first one Codex or
         // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).

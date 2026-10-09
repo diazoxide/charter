@@ -78,6 +78,7 @@ mod settings;
 mod slowstart;
 mod smartclose;
 mod stopping;
+mod taskblocks;
 mod taskbrief;
 mod taskchanges;
 mod tasksused;

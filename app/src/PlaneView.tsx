@@ -166,6 +166,8 @@ import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { TasksSharingNotice } from "./TasksSharingNotice";
 import { taskChangesTitle, taskChangesView } from "./taskChanges";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
+import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
+import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -848,7 +850,16 @@ export const PlaneView = memo(function PlaneView({
   /** What each chat's start found to say, by session, until it is dismissed (ADR 0085). */
   const [startNotes, setStartNotes] = useState<Record<number, StartNotes>>({});
   /** What each chat's sandbox blocked, by session, for the Notice on its tab (#1338). */
-  const { blocks: sandboxBlocks, dismiss: dismissBlock } = useSandboxBlocks(plane);
+  const {
+    blocks: sandboxBlocks,
+    dismiss: dismissBlock,
+    answered: blockAnswered,
+  } = useSandboxBlocks(plane);
+  /** What one answer to several tasks' same block allowed, by the session they are tasks of,
+   *  until it is put away (#1508). */
+  const [taskBlocksAnswered, setTaskBlocksAnswered] = useState<
+    readonly { at: number; session: number; target: string; said: string }[]
+  >([]);
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -5364,11 +5375,82 @@ export const PlaneView = memo(function PlaneView({
         .filter((chat) => chat.session !== one.session || !one.live)
         .map((chat) => ({
           session: chat.session,
-          whose: chat.session === own.session ? chat.name : `${chat.name}, a task of ${own.name}`,
+          // The whole path, from the core's record of who asked whom (#1508, V100-56).
+          whose: whoseOf(chat, own, listedChats),
         }));
     }
     return others;
   }, [frontShown, listedChats, tabs]);
+
+  /**
+   * **The questions each pane of the tab in front asks for several of its tasks at once**
+   * (#1508, V100-57), by pane: tasks of the pane's session blocked on the same host or folder,
+   * asked about in one Notice. Their blocks are taken from the tasks' own Notices
+   * (`frontBlocks`), so each is asked once.
+   */
+  const frontGroups = useMemo(() => {
+    const groups: Record<number, TaskBlockGroup[]> = {};
+    const id = tabs.inFront;
+    if (id === undefined) return groups;
+    for (const one of frontShown) {
+      const [own, ...tasks] = chatsOfPane(tabs, id, one.pane, listedChats);
+      if (own === undefined) continue;
+      groups[one.pane] = taskBlockGroups(
+        sandboxBlocks,
+        own.session,
+        tasks.map((chat) => ({ session: chat.session, whose: whoseOf(chat, own, listedChats) })),
+      );
+    }
+    return groups;
+  }, [frontShown, listedChats, sandboxBlocks, tabs]);
+  const frontBlocks = useMemo(
+    () => withoutGrouped(sandboxBlocks, Object.values(frontGroups).flat()),
+    [frontGroups, sandboxBlocks],
+  );
+  /** What each pane of the tab in front asks for its tasks together, and what was answered. */
+  const frontAsked = useMemo(() => {
+    const asked: Record<number, ReactNode> = {};
+    for (const one of frontShown) {
+      const groups = frontGroups[one.pane] ?? [];
+      const answered = taskBlocksAnswered.filter((said) => said.session === one.own);
+      if (groups.length === 0 && answered.length === 0) continue;
+      asked[one.pane] = (
+        <>
+          {groups.map((group) => (
+            <TaskBlocksNotice
+              key={group.key}
+              plane={plane}
+              group={group}
+              onAnswered={(members, said) => {
+                for (const member of members) {
+                  blockAnswered(member.session, member.block);
+                  oweRestart(member.session);
+                }
+                setTaskBlocksAnswered((was) => [
+                  ...was,
+                  { at: Date.now(), session: group.session, target: group.target, said },
+                ]);
+              }}
+              onKeepBlocked={(members) => {
+                for (const member of members) blockAnswered(member.session, member.block);
+              }}
+            />
+          ))}
+          {answered.map((said) => (
+            <TaskBlocksAnswered
+              key={said.at}
+              target={said.target}
+              said={said.said}
+              onDismiss={() =>
+                setTaskBlocksAnswered((was) => was.filter((one) => one.at !== said.at))
+              }
+            />
+          ))}
+        </>
+      );
+    }
+    return asked;
+  }, [blockAnswered, frontGroups, frontShown, oweRestart, plane, taskBlocksAnswered]);
 
   /** Every chat that lives in a tab of this window: a session's own chat, and each task
    *  below one. What a tab can be wearing the hand for. */
@@ -7263,6 +7345,7 @@ export const PlaneView = memo(function PlaneView({
                     finished={frontFinished}
                     explaining={chipToExplain}
                     others={frontOthers}
+                    asked={frontAsked}
                     closeOf={closeOfPane}
                     onBack={backInPane}
                     onShowChat={showChat}
@@ -7279,7 +7362,7 @@ export const PlaneView = memo(function PlaneView({
                     startNotes={startNotes}
                     onDismissStartNote={dismissStartNote}
                     onRestartChat={askRestart}
-                    blocks={sandboxBlocks}
+                    blocks={frontBlocks}
                     onDismissBlock={dismissBlock}
                     onRestarted={chatRestarted}
                     onAllowed={oweRestart}
@@ -8395,6 +8478,7 @@ function PaneFrame({
   onOpenCard,
   workItem,
   notices,
+  asked,
   others,
   doing,
   children,
@@ -8421,6 +8505,8 @@ function PaneFrame({
   workItem?: string;
   /** What purlis has to say of the chat the pane shows (`ChatNotices`). */
   notices: ReactNode;
+  /** What it asks for several of the pane's tasks at once (#1508). */
+  asked?: ReactNode;
   /** And of every other chat that lives in this pane (#1486): each with whose it is. */
   others: readonly HiddenChat[];
   doing: ReactNode;
@@ -8476,7 +8562,7 @@ function PaneFrame({
           {from && <span className="pane-from">{from}</span>}
           {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
         </div>
-        <PaneNotices notices={notices} others={others} onShowChat={onShowChat} />
+        <PaneNotices notices={notices} asked={asked} others={others} onShowChat={onShowChat} />
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -8495,7 +8581,8 @@ function briefOfShown(crumbs: Crumbs): BriefAsk {
  *  of it. */
 type HiddenChat = {
   session: number;
-  /** Whose its Notices are, as each says first: `steward 4`, or `talk, a task of steward 4`. */
+  /** Whose its Notices are, as each says first: `steward 4`, or a task by its whole path,
+   *  `deep (a task of steward 4 › talk)` (#1508). */
   whose: string;
   notices: ReactNode;
 };
@@ -8513,16 +8600,21 @@ type HiddenChat = {
  */
 function PaneNotices({
   notices,
+  asked,
   others,
   onShowChat,
 }: {
   notices: ReactNode;
+  /** The questions for several of the pane's tasks at once (#1508): after the shown chat's
+   *  own, before each other chat's, since each waits for the person. */
+  asked?: ReactNode;
   others: readonly HiddenChat[];
   onShowChat: (session: number) => void;
 }) {
   return (
     <div className="pane-notices">
       {notices}
+      {asked}
       {others.map((other) => (
         <NoticeOfChat
           key={other.session}
@@ -9059,6 +9151,7 @@ function LayoutPanes({
   finished,
   explaining,
   others,
+  asked,
   closeOf,
   onBack,
   onShowChat,
@@ -9107,6 +9200,8 @@ function LayoutPanes({
   finished: Readonly<Record<number, FinishedTask>>;
   /** The chats that live in each pane other than the one it shows, by pane. */
   others: Readonly<Record<number, readonly { session: number; whose: string }[]>>;
+  /** What each pane asks for several of its tasks at once, by pane (#1508). */
+  asked: Readonly<Record<number, ReactNode>>;
   /** The close of pane `pane`, decided for that pane and not for the one in focus. */
   closeOf: (pane: number) => Offer | undefined;
   /** Pane `pane` goes back to its session's own chat. */
@@ -9295,7 +9390,12 @@ function LayoutPanes({
                 />
               )}
             </div>
-            <PaneNotices notices={null} others={hidden} onShowChat={onShowChat} />
+            <PaneNotices
+              notices={null}
+              asked={asked[layout.pane]}
+              others={hidden}
+              onShowChat={onShowChat}
+            />
           </div>
           <div className="pane-corner at-end">{doing}</div>
           <TaskAway
@@ -9354,6 +9454,7 @@ function LayoutPanes({
             )}
           </>
         }
+        asked={asked[layout.pane]}
         others={hidden}
         doing={doing}
       >
@@ -9397,6 +9498,7 @@ function LayoutPanes({
               finished={finished}
               explaining={explaining}
               others={others}
+              asked={asked}
               closeOf={closeOf}
               onBack={onBack}
               onShowChat={onShowChat}
