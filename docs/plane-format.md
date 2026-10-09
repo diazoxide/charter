@@ -5418,8 +5418,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
     while the worktree is kept, and for one removed by other means, which the folder's absence
     says. Written once, and never for a dispatch still running.
 
-  Nothing is ever merged for a dispatch. purlis looks at a kept worktree when its chat is
-  closed and when the project is opened, at no other time, and takes it away only where every
+  **purlis merges nothing for a dispatch by itself, and no chat can have purlis merge it.** The
+  person may, from the task's Changes tab in the window (#1511): a fast-forward of `branch`
+  into the branch it was cut from, of the commit they were shown, or nothing, and never while
+  the task runs or a chat stands in its folder. That writes nothing to the record; the look
+  that follows it is the one below. purlis looks at a kept worktree when its chat is closed,
+  when the project is opened and after the person's merge, at no other time, and takes it
+  away only where every
   commit of `branch` is in the branch it was cut from (`branch.<branch>.charterBase`, below)
   and the folder holds nothing else: no uncommitted path, and no ignored path that is not
   purlis's own layer. **A record's worktree is the one purlis cut for that dispatch and no
@@ -5430,6 +5435,12 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   (`<clone>/.git/worktrees/<piece>`) and the folder itself, after the folder's `.git` line is
   checked to name exactly that directory. A folder that names another is left as it is, and
   the window says so in one sentence (`purlis_core::worktree::pointer::verified`).
+- **What a task changed is not kept here** (#1511). A task on its own branch changed what that
+  branch holds against the branch it was cut from, read from git. A task that worked in a
+  folder other chats work in is told from them by the files its own edit tools wrote while it
+  ran (the touching hook's line says whether its tool writes, `wrote`), which the app keeps in
+  memory only, by chat, for the last 64 tasks, as it keeps the explorer's markers (D-86a): no
+  store holds them, and after the app is started again its Changes tab says it cannot tell.
 - **Status:** **internal** — written by the app alone, and read by the app and by
   `purlis persona stats`, which counts records by persona.
 - **Who writes it:** the app, from its own record of the two chats

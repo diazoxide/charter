@@ -186,7 +186,11 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     // presets Notice (#1385): nothing else is kept from a link by it.
     assert_eq!(ui::STANDING_DISPATCH.len(), 25);
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 1);
+    // And the person's acts named beside them: a task's merge and discard (#1511).
+    for command in ["task_branch_merge", "dispatch_worktree_discard"] {
+        assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
+    }
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 1 + 2);
 }
 
 #[tokio::test]

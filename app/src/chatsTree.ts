@@ -41,7 +41,7 @@ export type ListedChat = {
   /** Whether it has a tab. A task has none until its row is clicked. */
   tab: boolean;
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
-   *  it, in a folder of its own, and nothing merges it. */
+   *  it, in a folder of its own, and only the person merges it (#1511). */
   branch: string | null;
   /** The most tasks it may have running at once, by the limits in force for it, where the
    *  core said: only for a chat that has a task open (#1491, V100-26). */

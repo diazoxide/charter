@@ -1030,6 +1030,55 @@ const STATES: State[] = [
     drawn: /This chat is not open/,
   },
   {
+    name: "what one task changed, on its own branch (#1511)",
+    view: { from: null, view: "task-changes", key: "01K6TASK" },
+    answers: {
+      task_changes: {
+        id: "01K6TASK",
+        task: "fix the queue",
+        running: false,
+        own: { repo: "svc", branch: "fix-the-queue-0000aaaa", standing: "kept", acts: true },
+        places: [
+          {
+            workspace: "alpha",
+            repo: "svc",
+            piece: "fix-the-queue-0000aaaa",
+            base: "main",
+            files: [
+              { path: "src/queue.rs", mark: "changed", from: null, uncommitted: false, also: [] },
+              { path: "src/new.rs", mark: "added", from: null, uncommitted: true, also: ["tidy"] },
+            ],
+            more: 0,
+            unread: null,
+          },
+        ],
+        elsewhere: ["notes.txt"],
+        more: false,
+        said: "The retry.",
+        unknown: null,
+      },
+    },
+    drawn: /^src\/queue\.rs$/,
+  },
+  {
+    name: "what one task changed, where purlis cannot say (#1511)",
+    view: { from: null, view: "task-changes", key: "01K6TASK" },
+    answers: {
+      task_changes: {
+        id: "01K6TASK",
+        task: "tidy",
+        running: true,
+        own: null,
+        places: [],
+        elsewhere: [],
+        more: false,
+        said: null,
+        unknown: "purlis cannot say which files this task changed.",
+      },
+    },
+    drawn: /cannot say which files/,
+  },
+  {
     name: "the project's dispatches, none yet",
     view: { from: null, view: "dispatches", key: "" },
     answers: { dispatches: { rows: [], undrawn: 0 } },

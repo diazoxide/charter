@@ -207,6 +207,7 @@ export function ChatsSection({
   ending,
   onEndTask,
   onEndConfirm,
+  onChanges,
 }: {
   rows: readonly ChatRow[];
   /** The chat in front, whose row is the current one. */
@@ -249,6 +250,8 @@ export function ChatsSection({
   onEndTask?: (session: number, way: TaskEndWay) => void;
   /** The second step was answered: end it, or keep it. */
   onEndConfirm?: (yes: boolean) => void;
+  /** Opens what a finished task changed, in a tab of its own (#1511). */
+  onChanges?: (task: FinishedTask) => void;
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
@@ -791,6 +794,7 @@ export function ChatsSection({
                         onClear={onClearFinished}
                         onReopen={onReopen}
                         onLook={onLookFinished}
+                        onChanges={onChanges}
                       />
                     )),
                   ];
@@ -1114,7 +1118,7 @@ const Row = memo(function Row({
                       {ownBranch !== null && (
                         <span
                           className="own-branch"
-                          title="A branch of its own, which nothing merges for it"
+                          title="A branch of its own, which only you merge, from the task's Changes"
                         >
                           {ownBranch}
                         </span>

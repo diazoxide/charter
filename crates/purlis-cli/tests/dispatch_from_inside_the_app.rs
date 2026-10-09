@@ -290,7 +290,8 @@ fn where_the_new_chat_works_rides_the_ask_as_one_word_and_the_app_s_answer_is_sa
                     Some("worktree") => "in a worktree of its own, on the branch \
                                          `check-the-queue-b5rc0def` in svc, cut from main. \
                                          Nothing is merged for it: its report names the \
-                                         branch, and merging is yours or the person's decision"
+                                         branch, and only the person merges it, from the \
+                                         task's Changes in the window (a chat may ask them to)"
                         .to_owned(),
                     other => format!("in {other:?}"),
                 }),
@@ -313,8 +314,9 @@ fn where_the_new_chat_works_rides_the_ask_as_one_word_and_the_app_s_answer_is_sa
         text(&out.stdout),
         "purlis dispatch: started 'check the queue' as steward (chat 9). It works in a \
          worktree of its own, on the branch `check-the-queue-b5rc0def` in svc, cut from main. \
-         Nothing is merged for it: its report names the branch, and merging is yours or the \
-         person's decision, and its report reaches this chat as context on its next turn.\n"
+         Nothing is merged for it: its report names the branch, and only the person merges it, \
+         from the task's Changes in the window (a chat may ask them to), and its report \
+         reaches this chat as context on its next turn.\n"
     );
 }
 

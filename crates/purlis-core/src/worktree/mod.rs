@@ -947,6 +947,36 @@ pub struct Merged {
 }
 
 pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, Refusal> {
+    merge_at(plane, ws, repo, piece, None)
+}
+
+/// Whether `commit` is a full commit id as git prints one: 40 or 64 lowercase hex digits.
+fn full_commit_id(commit: &str) -> bool {
+    matches!(commit.len(), 40 | 64)
+        && commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// [`merge`], landing exactly `commit` where one is given, and not whatever the piece's branch
+/// points at by the time git runs (#1511): the person's merge of a task's branch lands the
+/// commit they were shown, so a commit made on the branch since is not taken with it.
+/// `commit` must be a full commit id; anything else is refused before git is asked.
+pub fn merge_at(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    commit: Option<&str>,
+) -> Result<Merged, Refusal> {
+    if let Some(commit) = commit.filter(|commit| !full_commit_id(commit)) {
+        return Err(Refusal::Stuck {
+            what: "merge".into(),
+            terminal: format!("'{commit}' is not a full commit id, so nothing was merged"),
+            window: "purlis was not given a commit it can merge exactly. Nothing was merged."
+                .to_owned(),
+        });
+    }
     relocation_refusal(plane)?;
     let path = path_for(plane, ws, repo, piece)?;
     let path = within_workspace(plane, ws, &path)?;
@@ -1103,10 +1133,9 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         .to_string();
     // Fully qualified: `@` is a legal branch name and `git merge --ff-only @` resolves HEAD,
     // printing "Already up to date" at exit 0 while landing nothing.
-    let merged = git::run_untimed(
-        &clone,
-        &["merge", "--ff-only", "--", &name::as_ref(&branch)],
-    )?;
+    // The exact commit where one was given; else the branch, fully qualified.
+    let target = commit.map_or_else(|| name::as_ref(&branch), str::to_owned);
+    let merged = git::run_untimed(&clone, &["merge", "--ff-only", "--", &target])?;
     if !merged.ok() {
         return Err(Refusal::Stuck {
             what: "merge".into(),
@@ -1137,6 +1166,18 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
             window: format!(
                 "'{branch}' has nothing to land in {base}: {repo} is already at it. Nothing was \
                  merged."
+            ),
+        });
+    }
+    if commit.is_some_and(|commit| commit != now) {
+        // A fast-forward lands its target or fails: anything else is a merge purlis did not
+        // ask for, and it says so rather than report one.
+        return Err(Refusal::Stuck {
+            what: "merge".into(),
+            terminal: format!("{repo} is at {now}, not at the commit asked for"),
+            window: format!(
+                "{repo} is at {now} after the merge, not at the commit you were shown. Look at \
+                 {base} by hand."
             ),
         });
     }
@@ -1183,6 +1224,29 @@ pub struct Located {
 #[cfg(test)]
 mod locate_tests {
     use super::*;
+
+    #[test]
+    fn a_merge_of_an_exact_commit_takes_only_a_full_commit_id() {
+        assert!(full_commit_id(&"a".repeat(40)));
+        assert!(full_commit_id(&"0123456789abcdef".repeat(4)));
+        for not_one in [
+            "",
+            "HEAD",
+            "main",
+            "abc123",
+            &"A".repeat(40),
+            &"g".repeat(40),
+        ] {
+            assert!(!full_commit_id(not_one), "{not_one}");
+        }
+        // Refused before anything is read: no project is needed to say so.
+        let refused = merge_at(Path::new("/nowhere"), "alpha", "api", "p", Some("--all"))
+            .expect_err("not a commit id");
+        assert_eq!(
+            refused.in_window(),
+            "purlis was not given a commit it can merge exactly. Nothing was merged."
+        );
+    }
 
     fn plane() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

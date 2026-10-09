@@ -261,6 +261,8 @@ pub struct Held {
     /// Which chats were waiting on the person at their last report: what counts a dispatch's
     /// needs-you once per wait (#1452).
     dispatches: crate::dispatches::Waiting,
+    /// The files each task's file tools named while this app has run (#1511): in memory only.
+    touched_files: crate::taskchanges::Touched,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -406,6 +408,11 @@ impl Held {
     /// The chats waiting on the person, as the dispatch records count them (#1452).
     pub(crate) fn dispatches(&self) -> &crate::dispatches::Waiting {
         &self.dispatches
+    }
+
+    /// The files each task's file tools named while this app has run (#1511).
+    pub(crate) fn touched_files(&self) -> &crate::taskchanges::Touched {
+        &self.touched_files
     }
 
     /// The plane's hook channel itself. The app reads a chat's hook state through
@@ -1752,6 +1759,8 @@ impl Planes {
             let gate = Mutex::new(purlis_core::touching::Gate::default());
             Arc::new(move |touching| {
                 let Some(strong) = held.upgrade() else { return };
+                // And kept for a task's Changes tab, by its chat, in memory only (#1511).
+                crate::taskchanges::touched(&strong, &touching);
                 let folder = strong
                     .chats()
                     .chat_at(touching.chat)
@@ -2572,6 +2581,7 @@ impl Planes {
             at_limits: crate::atlimit::AtLimits::default(),
             unattended: crate::handoff::Unattended::default(),
             dispatches: crate::dispatches::Waiting::default(),
+            touched_files: crate::taskchanges::Touched::default(),
             me,
         }
     }

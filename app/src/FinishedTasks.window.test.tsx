@@ -610,12 +610,14 @@ describe("a chat's finished tasks", () => {
     const failed = theRow(group, "check staging");
 
     // In the Tab order, in the order they are drawn: the row that stands alone, its Brief
-    // (#1494), Reopen and Clear, the fold, then Clear finished.
+    // (#1494), Reopen, Changes (#1511) and Clear, the fold, then Clear finished.
     failed.focus();
     await userEvent.tab();
     expect(within(group).getByRole("button", { name: "Brief of check staging" })).toHaveFocus();
     await userEvent.tab();
     expect(within(group).getByRole("button", { name: "Reopen check staging" })).toHaveFocus();
+    await userEvent.tab();
+    expect(within(group).getByRole("button", { name: "Changes of check staging" })).toHaveFocus();
     await userEvent.tab();
     expect(within(group).getByRole("button", { name: "Clear check staging" })).toHaveFocus();
     await userEvent.tab();

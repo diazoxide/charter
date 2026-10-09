@@ -1534,7 +1534,11 @@ fn tell_the_host_about_the_tool_call(
         let _ = hookwire::touch(
             std::path::Path::new(&socket),
             token.as_ref(),
-            &hookwire::Touching { chat, touching },
+            &hookwire::Touching {
+                chat,
+                touching,
+                wrote: purlis_core::touching::writes(&data),
+            },
         );
     }
     // What the chat is doing, for the one line under its name (#1493): a kind from a fixed list

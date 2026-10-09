@@ -140,6 +140,11 @@ pub struct Server {
 /// **And "Got it" on the Notice that the project's Internet access presets changed** (#1385):
 /// it records that this person was told a preset widens what chats may reach or write, so the
 /// Notice is not shown again. Only the person who read it says so; no link answers it for them.
+///
+/// `task_branch_merge` and `dispatch_worktree_discard` are the person's acts on what a task
+/// left on a branch of its own (#1511, V100-67): a merge into the branch it was cut from, and
+/// a folder removed for good. Each is asked first, in the window, and no chat may cause
+/// either, so neither has a form on a link.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -213,6 +218,9 @@ pub const WINDOW_ONLY: &[&str] = &[
     "never_dispatch_away",
     // The person's "Got it" on a Notice that the project's presets changed.
     "acknowledge_project_presets",
+    // What a task left on a branch of its own: the person's merge or discard (#1511).
+    "task_branch_merge",
+    "dispatch_worktree_discard",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

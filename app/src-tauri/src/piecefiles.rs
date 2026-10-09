@@ -340,7 +340,7 @@ fn what_changed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<WhatC
     })
 }
 
-fn ahead_behind_of(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, String> {
+pub(crate) fn ahead_behind_of(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, String> {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     files::ahead_behind(&crate::reader(), plane, branch)
         .map(|apart| AheadBehind {
@@ -351,7 +351,7 @@ fn ahead_behind_of(plane: &Path, branch: Branch<'_>) -> Result<AheadBehind, Stri
         .map_err(|refused| refused.to_string())
 }
 
-fn status_of(plane: &Path, branch: Branch<'_>) -> Result<BranchStatus, String> {
+pub(crate) fn status_of(plane: &Path, branch: Branch<'_>) -> Result<BranchStatus, String> {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     files::status(&crate::reader(), plane, branch)
         .map(|status| BranchStatus {
