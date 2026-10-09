@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render as renderBare,
   screen,
   waitFor,
@@ -255,7 +256,18 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
 
     await waitFor(() =>
       expect(asked("allow_sandbox_block")).toEqual([
-        { plane: PLANE, session: 4, what: "host", target: "api.example.com:443", level: "chat" },
+        {
+          plane: PLANE,
+          session: 4,
+          // The block it showed, so the core answers only that one (#1538).
+          shown: {
+            operation: "connect",
+            kind: "host",
+            what: "host",
+            target: "api.example.com:443",
+          },
+          level: "chat",
+        },
       ]),
     );
     // Its turn has ended, so it restarts at once, in its own pane.
@@ -263,6 +275,31 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
       expect(asked("restart_chat")).toEqual([{ plane: PLANE, session: 4, columns: 80, rows: 24 }]),
     );
     expect(await screen.findByText("session 9")).toBeInTheDocument();
+  });
+
+  it("sends the host the person typed for a block that named none, with the block it showed", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", { ...HOST, target: null }));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    // Set, not typed: jsdom gives every element a zero-size box, so the pane's resizable
+    // panels take focus on every press and typed keys never reach the box. The real WebView
+    // keeps focus in it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Host to allow" }), {
+      target: { value: "api.example.com" },
+    });
+
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+
+    await waitFor(() =>
+      expect(asked("allow_sandbox_block")).toEqual([
+        {
+          plane: PLANE,
+          session: 4,
+          shown: { operation: "connect", kind: "host", what: "host", target: "api.example.com" },
+          level: "chat",
+        },
+      ]),
+    );
   });
 
   it("Keep blocked puts it away and allows nothing", async () => {
@@ -289,7 +326,18 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     );
     await waitFor(() =>
       expect(asked("allow_sandbox_block")).toEqual([
-        { plane: PLANE, session: 4, what: "host", target: "api.example.com:443", level: "project" },
+        {
+          plane: PLANE,
+          session: 4,
+          // The block it showed, so the core answers only that one (#1538).
+          shown: {
+            operation: "connect",
+            kind: "host",
+            what: "host",
+            target: "api.example.com:443",
+          },
+          level: "project",
+        },
       ]),
     );
   });

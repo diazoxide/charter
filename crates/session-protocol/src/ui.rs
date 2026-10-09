@@ -152,8 +152,9 @@ pub struct Server {
 /// either, so neither has a form on a link.
 ///
 /// `allow_sandbox_block_for_tasks` and `keep_sandbox_block_for_tasks` answer several tasks'
-/// sandbox block on one press (#1508): a person's answer given in their own window, which no
-/// link carries a second way to give.
+/// sandbox block on one press (#1508), and `allow_sandbox_block` answers one chat's (#1538):
+/// a person's answer given in their own window to the block it showed, which no link carries
+/// a second way to give.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -231,7 +232,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     // What a task left on a branch of its own: the person's merge or discard (#1511).
     "task_branch_merge",
     "dispatch_worktree_discard",
-    // One answer to several tasks' sandbox block (#1508).
+    // The answer to a chat's sandbox block (#1538), and one to several tasks' (#1508).
+    "allow_sandbox_block",
     "allow_sandbox_block_for_tasks",
     "keep_sandbox_block_for_tasks",
     // Widens what a persona's chats reach on this machine (#1362).

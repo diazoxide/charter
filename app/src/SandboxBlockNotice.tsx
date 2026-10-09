@@ -178,7 +178,14 @@ function AllowNotice({
     setBusy(true);
     setSaid(undefined);
     void commands
-      .allowSandboxBlock(block.plane, block.session, what, target, level)
+      // The block it showed, so the core answers only that one, and only while the chat is
+      // still held on it (#1538).
+      .allowSandboxBlock(
+        block.plane,
+        block.session,
+        { operation: block.operation, kind: block.kind, what, target },
+        level,
+      )
       .then((done) => {
         if (done.status === "error") setSaid(done.error);
         else {
