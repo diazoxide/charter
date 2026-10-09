@@ -762,6 +762,113 @@ fn a_record_made_before_the_item_was_pinned_pins_it_at_its_next_read() {
     );
 }
 
+/// Write the committed half with `config` for `team`.
+fn commit_team(ctx: &Ctx, config: serde_json::Value) {
+    std::fs::write(
+        ctx.shared_registry(),
+        serde_json::json!({"vaults": {"team": {"provider": "1password", "persona": null,
+            "config": config}}})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_old_record_whose_item_a_commit_chose_is_refused_and_never_pinned() {
+    // #1542 review M1: a commit set the item before the first read after the upgrade. Pinning
+    // it would be a committed entry changing a record (ADR 0047), so the token is not used
+    // until it is given again from the vault's tab, where the settings are shown.
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    as_made_before_the_item_was_pinned(&ctx);
+    commit_team(&ctx, serde_json::json!({"op-item": "another-item"}));
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let moved = registry::vault(&bare, "team").unwrap();
+
+    let refused = identity::from_keyring(&bare, &moved, "OP_TEAM_TOKEN").unwrap_err();
+    assert!(
+        refused.message.contains("committed vaults.json"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("vault's tab"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("another-item"),
+        "{}",
+        refused.message
+    );
+    assert!(!refused.message.contains(PASTED_TOKEN));
+    assert_eq!(identity_record(&ctx)["op_item"], serde_json::Value::Null);
+    assert!(!identity::in_keyring(&bare, &moved));
+    assert_eq!(identity::pinned_op(&bare, &moved).unwrap(), None);
+    // The read says why, and so does the panel that reads no keyring.
+    let read = env_overlay(&bare, &moved).unwrap_err().message;
+    assert!(read.contains("vault's tab"), "{read}");
+    let listed = crate::secrets::identity_missing(&bare, &moved)
+        .unwrap()
+        .message;
+    assert!(listed.contains("committed vaults.json"), "{listed}");
+
+    // A revert of the commit gives the token back, still unpinned until that read.
+    std::fs::remove_file(ctx.shared_registry()).unwrap();
+    assert_eq!(
+        identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN")
+            .unwrap()
+            .as_deref(),
+        Some(PASTED_TOKEN)
+    );
+    assert_eq!(identity_record(&ctx)["op_item"], "charter-team");
+}
+
+#[test]
+fn an_old_record_whose_item_this_machine_names_is_pinned_to_it() {
+    let (tmp, bin, _op, _v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    let mut local = registry::load_local(&ctx).unwrap();
+    local["vaults"]["team"]["config"]["op-item"] = serde_json::json!("mine");
+    registry::save_local(&ctx, &local).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    as_made_before_the_item_was_pinned(&ctx);
+    // A committed item does not outrank this machine's own.
+    commit_team(&ctx, serde_json::json!({"op-item": "theirs"}));
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+
+    assert_eq!(
+        identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN")
+            .unwrap()
+            .as_deref(),
+        Some(PASTED_TOKEN)
+    );
+    assert_eq!(identity_record(&ctx)["op_item"], "mine");
+}
+
+#[test]
+fn a_legacy_item_spelling_here_outranked_by_a_committed_one_is_refused() {
+    // The modern `op-item` is read before the legacy `op_item` across the merged map, so a
+    // committed modern key decides the item even where this machine holds the legacy one.
+    let (tmp, bin, _op, _v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    let mut local = registry::load_local(&ctx).unwrap();
+    local["vaults"]["team"]["config"]["op_item"] = serde_json::json!("mine");
+    registry::save_local(&ctx, &local).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    as_made_before_the_item_was_pinned(&ctx);
+    commit_team(&ctx, serde_json::json!({"op-item": "theirs"}));
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+
+    assert!(identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN").is_err());
+    assert_eq!(identity_record(&ctx)["op_item"], serde_json::Value::Null);
+}
+
 #[test]
 fn an_old_record_that_does_not_match_the_vault_is_not_given_an_item() {
     let (tmp, bin, _op, v) = pinned_plane("");

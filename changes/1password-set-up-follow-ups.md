@@ -11,10 +11,11 @@
   the guided set-up: a letter or a digit, then letters, digits, `.`, `_` and `-`. A pasted
   `https://…/` link is stored as the address it names (#1542).
 
-- **A 1Password token stored before the guided set-up is pinned to its item at its next read.**
-  Records made since then already named the 1Password item a vault's secrets are kept in, so a
-  commit that changed the item stopped the token being used. Older records named none; the next
-  read through one now writes the item it was read with into it (#1542).
+- **A 1Password token stored before the guided set-up is held to its item.** Records made since
+  then already named the 1Password item a vault's secrets are kept in, so a commit that changed
+  the item stopped the token being used. Older records named none. When the item is this
+  machine's own (or the default), the next read now writes it into the record; when a commit
+  chose it, the token is not used until you give it again from the vault's tab (#1542).
 
 - **`purlis vault add --token-stdin` is refused in a chat of any project this machine opened.**
   It read only the open chats of the project the command named, so a chat of another project
