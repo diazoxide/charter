@@ -1793,7 +1793,12 @@ impl Chats {
         // pairs in order and two of one name would leave the later one standing.
         env.retain(|(key, _)| !wrapped.iter().any(|(set, _)| set == key));
         env.extend(wrapped);
-        what_its_hooks_read(&mut env, chat.cwd.as_deref(), sandbox.is_some());
+        what_its_hooks_read(
+            &mut env,
+            chat.cwd.as_deref(),
+            sandbox.is_some(),
+            identity.id.as_deref(),
+        );
         env.sort();
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
@@ -3174,19 +3179,29 @@ fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// What a chat's hooks read about it (#1338, #1345), put in its `env`: the folder it was started
-/// in, and whether a sandbox was actually applied to it. Set where every chat opens, and only
-/// there: whatever a profile or the arming said under either name is replaced.
-fn what_its_hooks_read(env: &mut Vec<(String, String)>, cwd: Option<&Path>, sandboxed: bool) {
+/// in, whether a sandbox was actually applied to it, and its own id, which its status line keeps
+/// its harness's figure of the session's cost under (#1457). Set where every chat opens, and
+/// only there: whatever a profile or the arming said under either name is replaced.
+fn what_its_hooks_read(
+    env: &mut Vec<(String, String)>,
+    cwd: Option<&Path>,
+    sandboxed: bool,
+    id: Option<&str>,
+) {
     let ours = [
         purlis_core::hookwire::SANDBOXED_ENV,
         purlis_core::sandboxblock::CHAT_DIR_ENV,
+        purlis_core::hookwire::CHAT_ID_ENV,
     ];
-    env.retain(|(key, _)| !ours.contains(&key.as_str()));
+    env.retain(|(key, _)| !ours.iter().any(|one| purlis_core::envvar::same(one, key)));
     if let Some(cwd) = cwd {
         env.push((ours[1].to_owned(), cwd.display().to_string()));
     }
     if sandboxed {
         env.push((ours[0].to_owned(), "1".to_owned()));
+    }
+    if let Some(id) = id {
+        env.push((ours[2].to_owned(), id.to_owned()));
     }
 }
 
@@ -3202,7 +3217,12 @@ pub(crate) mod tests {
             ("PURLIS_SANDBOXED".to_owned(), "1".to_owned()),
             ("PATH".to_owned(), "/bin".to_owned()),
         ];
-        what_its_hooks_read(&mut env, Some(Path::new("/plane/workspaces/a")), false);
+        what_its_hooks_read(
+            &mut env,
+            Some(Path::new("/plane/workspaces/a")),
+            false,
+            None,
+        );
         assert_eq!(
             of(&env, "PURLIS_SANDBOXED"),
             None,
@@ -3212,7 +3232,7 @@ pub(crate) mod tests {
             of(&env, "PURLIS_CHAT_DIR").as_deref(),
             Some("/plane/workspaces/a")
         );
-        what_its_hooks_read(&mut env, Some(Path::new("/plane/workspaces/a")), true);
+        what_its_hooks_read(&mut env, Some(Path::new("/plane/workspaces/a")), true, None);
         assert_eq!(of(&env, "PURLIS_SANDBOXED").as_deref(), Some("1"));
         assert_eq!(
             env.iter().filter(|(n, _)| n == "PURLIS_CHAT_DIR").count(),
@@ -3221,6 +3241,33 @@ pub(crate) mod tests {
         assert!(purlis_core::sandbox::chat_is_sandboxed_in(&|name| of(
             &env, name
         )));
+    }
+
+    #[test]
+    fn a_chats_harness_is_told_its_id_by_the_app_and_never_by_a_profile() {
+        // #1457: the id its status line keeps the session's cost under.
+        let of = |env: &[(String, String)], name: &str| {
+            env.iter()
+                .filter(|(n, _)| purlis_core::envvar::same(n, name))
+                .map(|(_, v)| v.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut env = vec![
+            ("PURLIS_CHAT_ULID".to_owned(), "someone-else".to_owned()),
+            ("CHARTER_CHAT_ULID".to_owned(), "someone-else".to_owned()),
+            ("CHARTER_SANDBOXED".to_owned(), "1".to_owned()),
+        ];
+        what_its_hooks_read(&mut env, None, false, Some("01J9ZQ3V7K8M2N4P6R8T0V2X4Z"));
+        assert_eq!(
+            of(&env, purlis_core::hookwire::CHAT_ID_ENV),
+            vec!["01J9ZQ3V7K8M2N4P6R8T0V2X4Z".to_owned()]
+        );
+        assert!(
+            of(&env, purlis_core::hookwire::SANDBOXED_ENV).is_empty(),
+            "a profile cannot claim it under its old name either"
+        );
+        what_its_hooks_read(&mut env, None, false, None);
+        assert!(of(&env, purlis_core::hookwire::CHAT_ID_ENV).is_empty());
     }
 
     #[test]

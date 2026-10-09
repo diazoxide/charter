@@ -37,10 +37,9 @@
 //! brief, the report's text and each message the two chats sent each other ([`Said`], #1495)
 //! are its words, stored as written and held to a cap ([`cut`]). And what its
 //! harness reported of tokens and cost ([`crate::usage::spent`]) is relayed by the chat's
-//! status line through a file a chat can write: **a chat can alter that figure**, so it is
-//! shown as reported and decides nothing: the person's optional token limit (#1512) is shown
-//! against it and not enforced. It is absent where the harness reports none, and never a
-//! zero.
+//! status line, which its harness runs outside the sandbox, into a file of the app's folder
+//! kept by the chat's id, where no sandboxed chat can write (#1457). It is shown as the harness
+//! reported it, absent where the harness reports none, and never a zero.
 //!
 //! **One other file lives in the store**: what was refused while nobody was there
 //! ([`crate::dispatchaway`]), kept here because this is the folder a sandboxed chat can

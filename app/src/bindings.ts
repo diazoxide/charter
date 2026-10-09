@@ -7473,14 +7473,14 @@ export type UnreadFor =
 /**  Why a chat's tokens are a dash: true in every case that leads to it. */
 export type Unsaid = 
 /**
- *  An open chat whose conversation is known and whose harness has said nothing so far:
+ *  An open chat whose id is known and whose harness has said nothing so far:
  *  no turn has ended yet, or its harness reports none.
  */
 "not_yet" | 
 /**  A task that ended with no figure kept: its harness said nothing. */
 "nothing" | 
 /**
- *  purlis cannot tell: it does not know the chat's conversation, or the record could not
+ *  purlis cannot tell: it does not know the chat's id, or the record could not
  *  be read.
  */
 "not_known";

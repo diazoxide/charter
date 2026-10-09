@@ -54,6 +54,8 @@ pub struct Swept {
     pub reports: usize,
     /// Dispatch records ([`crate::dispatchrecord`], #1452).
     pub dispatches: usize,
+    /// What a chat's harness said its session cost ([`crate::usage::spend_dir`], #1457).
+    pub spend: usize,
 }
 
 /// Remove the per-session files of `plane` older than [`KEEP_FOR`] at `now`, except those of
@@ -109,6 +111,22 @@ pub fn sweep_keeping(
             },
             true,
             |file, written| crate::dispatchrecord::aged_from(file, written, now, chats),
+        ),
+        // A chat's figure, by its id: kept while the chat comes back, however old.
+        spend: collect(
+            plane,
+            &[
+                crate::names::state_name(plane),
+                "app",
+                crate::usage::SPEND_DIR_NAME,
+            ],
+            now,
+            |name| {
+                name.strip_suffix(".json").is_some_and(|chat| {
+                    !chat.is_empty() && !chats.iter().any(|live| live.id.as_deref() == Some(chat))
+                })
+            },
+            |_, written| Some(written),
         ),
     }
 }

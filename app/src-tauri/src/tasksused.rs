@@ -3,9 +3,9 @@
 //!
 //! # One source for a chat's tokens
 //!
-//! A chat's tokens are what its harness said its conversation has cost in all
+//! A chat's tokens are what its harness said its session has cost in all
 //! (`purlis_core::usage::spent`), the figure the Dispatches tab says too: nothing here counts
-//! a token itself. An open chat is read from its conversation's file as the window asks; a task
+//! a token itself. An open chat is read from its own file, by its id, as the window asks; a task
 //! that has ended keeps what its record kept when it ended (`dispatchrecord::Record::usage`),
 //! so what it used does not move after its end and survives a restart.
 //!
@@ -26,8 +26,8 @@
 //! time and no total. The menu's time needs each open task's record, which is found once per
 //! chat and then kept by its id ([`Starts`]), so no read walks the whole store again.
 //!
-//! **A reported figure, which a chat can alter** (D-1452-12): it is shown as said, and nothing
-//! decides anything by it.
+//! **A reported figure**, as the chat's harness said it: kept by the chat's id where no
+//! sandboxed chat can write (#1457, D-1452-12), and shown as said.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,12 +42,12 @@ use crate::planes::{Held, PlaneId, Planes};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Unsaid {
-    /// An open chat whose conversation is known and whose harness has said nothing so far:
+    /// An open chat whose id is known and whose harness has said nothing so far:
     /// no turn has ended yet, or its harness reports none.
     NotYet,
     /// A task that ended with no figure kept: its harness said nothing.
     Nothing,
-    /// purlis cannot tell: it does not know the chat's conversation, or the record could not
+    /// purlis cannot tell: it does not know the chat's id, or the record could not
     /// be read.
     NotKnown,
 }
@@ -365,8 +365,8 @@ fn starts() -> &'static Starts {
 
 /// What the app knows of its open chats, for [`read`].
 pub(crate) struct Known<'a, C, R> {
-    /// The conversation an open chat is in.
-    pub conversation: C,
+    /// An open chat's own id (its ULID, ADR 0066), which its figure is kept under.
+    pub id: C,
     /// How a record names an open chat.
     pub chat: R,
     /// Which record is each open task's.
@@ -387,11 +387,9 @@ where
     C: Fn(u32) -> Option<String>,
     R: Fn(u32) -> Option<ChatRef>,
 {
-    let tokens_of = |session: u32| match (known.conversation)(session) {
+    let tokens_of = |session: u32| match (known.id)(session) {
         None => Tokens::NotKnown,
-        Some(conversation) => {
-            usage::spent(root, &conversation).map_or(Tokens::Unsaid(Unsaid::NotYet), Tokens::Said)
-        }
+        Some(id) => usage::spent(root, &id).map_or(Tokens::Unsaid(Unsaid::NotYet), Tokens::Said),
     };
     let open: Vec<(u32, Figure)> = chats
         .iter()
@@ -501,7 +499,11 @@ fn of_held(
     finished: &[String],
 ) -> TasksUsed {
     let known = Known {
-        conversation: |session| crate::dispatches::conversation_of(held, session),
+        id: |session| {
+            held.chats()
+                .recorded_chat(session)
+                .and_then(|chat| chat.identity.id)
+        },
         chat: |session| crate::dispatches::chat_ref(held, session),
         records: starts(),
     };
@@ -645,15 +647,16 @@ mod tests {
         assert_eq!(time_said(2 * 3600 + 5 * 60), "2h 5m");
     }
 
-    const CONVERSATION: &str = "11111111-2222-4333-8444-555555555555";
+    const CHAT: &str = "01J9ZQ3V7K8M2N4P6R8T0V2X4Z";
 
     fn project_with_a_spend() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = std::fs::canonicalize(dir.path()).expect("it resolves");
         assert!(usage::record_spend(
             &root,
+            CHAT,
             &serde_json::json!({
-                "session_id": CONVERSATION,
+                "session_id": "11111111-2222-4333-8444-555555555555",
                 "context_window": { "total_input_tokens": 50_000, "total_output_tokens": 2_000 },
             })
         ));
@@ -661,14 +664,14 @@ mod tests {
     }
 
     #[test]
-    fn each_dash_says_why_truly_no_turn_yet_unknown_conversation_unreadable_record() {
+    fn each_dash_says_why_truly_no_turn_yet_unknown_chat_unreadable_record() {
         let (_dir, root) = project_with_a_spend();
         let known = Known {
-            // Chat 2 has a figure; chat 3's conversation is known and holds none; chat 1's
-            // conversation is not known.
-            conversation: |session: u32| match session {
-                2 => Some(CONVERSATION.to_owned()),
-                3 => Some("22222222-2222-4333-8444-555555555555".to_owned()),
+            // Chat 2 has a figure; chat 3's id is known and holds none; chat 1's id is not
+            // known.
+            id: |session: u32| match session {
+                2 => Some(CHAT.to_owned()),
+                3 => Some("01K6H0Z8Y3V1N3G4QK0A9T5B7C".to_owned()),
                 _ => None,
             },
             chat: |_: u32| None,
@@ -711,7 +714,7 @@ mod tests {
         let (_dir, root) = project_with_a_spend();
         let looked = std::cell::Cell::new(0);
         let known = Known {
-            conversation: |_: u32| Some(CONVERSATION.to_owned()),
+            id: |_: u32| Some(CHAT.to_owned()),
             // Asked only to find a record for the time: a hover never asks.
             chat: |_: u32| {
                 looked.set(looked.get() + 1);

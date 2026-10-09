@@ -42,9 +42,9 @@ const WHILE_RUNNING_MS = 5000;
  * A dispatch that has not ended and whose chat is not open (`not open`) is not running: it has
  * no duration, and the list is not read again on a timer for it.
  *
- * **Cost is what the chat's harness reported**, relayed by the chat's status line: a figure a
- * chat can alter, so the column says *Cost (reported)* and nothing is decided by it. A row whose
- * harness reports none says so in words, never as a zero.
+ * **Cost is what the chat's harness reported**, relayed by the chat's status line into the app's
+ * own folder, where no sandboxed chat can write (#1457), so the column says *Cost (reported)*. A
+ * row whose harness reports none says so in words, never as a zero.
  *
  * **A dispatch that was given a branch of its own lists it under *Where*** (#1453), with how
  * it stands. Nothing merges a task's branch for it, so it is listed until it is merged or the

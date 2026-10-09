@@ -108,6 +108,31 @@ fn the_turns_tokens_are_recorded_when_the_line_is_drawn_too() {
     assert_eq!(recorded(&at), "90,10,90,42\n");
 }
 
+/// #1457: what the harness says the session has cost is kept under the chat the app started it
+/// as, in the app's own folder, which no sandboxed chat may write; never where a chat writes its
+/// own pointers. A harness the app did not start names no chat, and nothing is kept for it.
+#[test]
+fn the_sessions_cost_is_kept_under_the_chat_the_app_named_and_nowhere_else() {
+    let (_keep, at) = plane();
+    const COST: &str = r#"{"session_id":"s-1","cost":{"total_cost_usd":0.25},
+        "context_window":{"total_input_tokens":1200,"total_output_tokens":300}}"#;
+    const CHAT: &str = "01J9ZQ3V7K8M2N4P6R8T0V2X4Z";
+    let kept = at.join(".charter/app/spend").join(format!("{CHAT}.json"));
+
+    // Started by no app: no chat is named, and nothing is kept.
+    assert_eq!(statusline(&at, COST, &[]).code, 0);
+    assert!(!at.join(".charter/app/spend").exists());
+
+    let ran = statusline(&at, COST, &[(purlis_core::hookwire::CHAT_ID_ENV, CHAT)]);
+
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    assert_eq!(
+        std::fs::read_to_string(&kept).expect("kept"),
+        "{\"input_tokens\":1200,\"output_tokens\":300,\"cost_usd\":0.25}\n"
+    );
+    assert!(!at.join(".charter/sessions/s-1.spend").exists());
+}
+
 /// An approved extension beside `plane` that declares one footer badge and fills it with
 /// `value`, true `age` seconds ago — a facts file and no program, so nothing could be started
 /// to draw it. Its config home is `<plane>/config`.
