@@ -87,6 +87,52 @@ fn what_the_working_tree_says_is_not_read_only_what_head_commits() {
     assert!(said[0].contains("Git LFS"), "{said:?}");
 }
 
+/// #1550: a filter a folder's own `.gitattributes` turns on is told too, after the top one's,
+/// each filter once.
+#[test]
+fn a_filter_named_only_in_a_folders_gitattributes_is_told() {
+    let dir = committed(|top| {
+        std::fs::write(top.join(".gitattributes"), "*.psd filter=lfs\n").expect("top");
+        std::fs::create_dir_all(top.join("assets/raw")).expect("folders");
+        std::fs::write(
+            top.join("assets/raw/.gitattributes"),
+            "*.bin filter=crypt\n*.psd filter=lfs\n",
+        )
+        .expect("nested");
+        std::fs::write(top.join("assets/raw/one.bin"), "x").expect("a file");
+    });
+    let said = filter_notes(dir.path(), "w", "w");
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[0].contains("Git LFS"), "{said:?}");
+    assert!(said[1].contains("the `crypt` filter"), "{said:?}");
+    // A repository whose only `.gitattributes` is in a folder is told of it as well.
+    let deep = committed(|top| {
+        std::fs::create_dir_all(top.join("vendor")).expect("a folder");
+        std::fs::write(top.join("vendor/.gitattributes"), "* filter=lfs\n").expect("nested");
+    });
+    let said = filter_notes(deep.path(), "w", "w");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("pointer files"), "{said:?}");
+}
+
+/// #1550: a folder's `.gitattributes` committed as a link is not followed either, and a name
+/// with a pattern's characters in it is read as the name it is.
+#[test]
+fn a_folders_committed_link_is_never_followed_and_a_name_is_never_a_pattern() {
+    let elsewhere = tempfile::tempdir().expect("a file outside");
+    let secret = elsewhere.path().join("outside");
+    std::fs::write(&secret, "* filter=leaked\n").expect("outside");
+    let dir = committed(|top| {
+        std::fs::create_dir_all(top.join("linked")).expect("a folder");
+        std::os::unix::fs::symlink(&secret, top.join("linked/.gitattributes")).expect("a link");
+        std::fs::create_dir_all(top.join("[a]*")).expect("a folder named like a pattern");
+        std::fs::write(top.join("[a]*/.gitattributes"), "* filter=odd\n").expect("nested");
+    });
+    let said = filter_notes(dir.path(), "w", "w");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("the `odd` filter"), "{said:?}");
+}
+
 #[test]
 fn a_committed_link_is_never_followed() {
     let elsewhere = tempfile::tempdir().expect("a file outside");
@@ -95,7 +141,7 @@ fn a_committed_link_is_never_followed() {
     let dir = committed(|top| {
         std::os::unix::fs::symlink(&secret, top.join(".gitattributes")).expect("a link");
     });
-    assert_eq!(committed_attributes(dir.path()), None);
+    assert_eq!(committed_attributes(dir.path()), Vec::<String>::new());
     assert_eq!(filter_notes(dir.path(), "w", "w"), Vec::<String>::new());
 }
 
@@ -108,7 +154,7 @@ fn a_committed_file_past_the_cap_is_not_read() {
         }
         std::fs::write(top.join(".gitattributes"), text).expect("attributes");
     });
-    assert_eq!(committed_attributes(dir.path()), None);
+    assert_eq!(committed_attributes(dir.path()), Vec::<String>::new());
     assert_eq!(filter_notes(dir.path(), "w", "w"), Vec::<String>::new());
 }
 
@@ -185,4 +231,35 @@ fn a_config_that_would_not_have_changed_the_route_adds_nothing() {
     ]);
     assert_eq!(network_note(&set, URL), None);
     assert_eq!(network_note(&[], URL), None);
+}
+
+/// #1550: only a clone that could not reach its host, or was refused there, names a key: one
+/// that failed for another reason says nothing of the person's config.
+#[test]
+fn only_a_failure_to_reach_the_host_reads_as_one_a_key_could_have_changed() {
+    for reached_not in [
+        "fatal: unable to access 'https://github.com/acme/widget.git/': Could not resolve host: \
+         github.com",
+        "fatal: unable to access 'https://github.com/acme/widget.git/': SSL certificate problem: \
+         unable to get local issuer certificate",
+        "fatal: unable to access 'https://github.com/acme/widget.git/': Failed to connect to \
+         github.com port 443 after 3 ms: Couldn't connect to server",
+        "fatal: Authentication failed for 'https://github.com/acme/widget.git/'",
+        "fatal: unable to access 'https://github.com/acme/widget.git/': Received HTTP code 407 \
+         from proxy after CONNECT",
+    ] {
+        assert!(reads_as_a_route_failure(reached_not), "{reached_not}");
+    }
+    for failed_there in [
+        "remote: Repository not found.\nfatal: repository \
+         'https://github.com/acme/nothing.git/' not found",
+        "warning: Could not find remote branch main to clone.\nfatal: Remote branch main not \
+         found in upstream origin",
+        "fatal: could not create work tree dir 'widget': No space left on device",
+        "remote: Repository not found.\nfatal: repository \
+         'https://github.com/openssl/proxy-certificate.git/' not found",
+        "",
+    ] {
+        assert!(!reads_as_a_route_failure(failed_there), "{failed_there}");
+    }
 }

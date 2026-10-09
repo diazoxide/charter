@@ -4330,15 +4330,18 @@ always does. Two differences show (#1413):
 
 - **Filters do not run.** A repository whose `.gitattributes` names a filter (`filter=lfs`
   for Git LFS, or one of its own) is checked out as stored: for LFS, small pointer files in
-  place of the real content. The answer says so for each filter the top `.gitattributes`
-  names, read as the checkout's `HEAD` commits it (a regular file of at most 64 KiB; the
-  working tree, which the chat writes, is never read). For LFS, run `git lfs pull` in the checkout, from the chat or your terminal, to
+  place of the real content. The answer says so for each filter a `.gitattributes` names,
+  the top one's and each folder's (at most 64 files), read as the checkout's `HEAD` commits
+  it (a regular file of at most 64 KiB; the working tree, which the chat writes, is never
+  read). For LFS, run `git lfs pull` in the checkout, from the chat or your terminal, to
   fetch the content.
 - **Network settings do not apply.** `http.proxy`, `http.sslCAInfo`, `http.sslCAPath`,
   `http.sslVerify`, `http.sslCert`, `http.sslKey`, `http.cookieFile`, `http.extraHeader` (each
   also as `http.<url>.*`) and `url.<base>.insteadOf`
   rewrites are not read, so a clone can fail where your terminal's succeeds. When a clone made
-  for a chat fails, purlis reads your global config files to see whether one of these keys
+  for a chat fails to reach its host (a name that does not resolve, a connection, a proxy, a
+  certificate, or the host refusing the sign-in), purlis reads your global config files to
+  see whether one of these keys
   would have changed the clone's route, and names the key, never its value. It reads them only
   to tell you and never applies them. Clone it in your own terminal (`purlis clone <repo>`)
   instead.
