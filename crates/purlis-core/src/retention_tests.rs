@@ -965,3 +965,75 @@ fn a_trace_read_past_the_largest_read_is_kept() {
     let at = std::io::repeat(b'x').take(MOST_TRACE_BYTES);
     assert!(!scan_for_hand_outs(at, SCAN_CHUNK));
 }
+
+/// #1025: `workspace use` collects by the sweep's own rule. A chat the reopen record brings
+/// back keeps its month-old pointer and lock, another chat's go, the tool gate's files are left
+/// to the gate, and a per-terminal pointer goes by its age alone.
+#[test]
+fn a_selection_collects_by_the_rule_the_sweep_on_open_keeps() {
+    let (_d, root) = plane();
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(3),
+            ..Default::default()
+        }],
+        dealt: 3,
+        ..Default::default()
+    };
+    crate::reopen::write(&root, &record).unwrap();
+    let sessions = root.join(".charter/sessions");
+    let terminals = root.join(".charter/terminals");
+    aged(&sessions.join("3.workspace"), OLD);
+    aged(&sessions.join("3.lock"), OLD);
+    aged(&sessions.join("2.workspace"), OLD);
+    aged(&sessions.join("2.tools"), OLD);
+    aged(&sessions.join("4.workspace"), YOUNG);
+    aged(&terminals.join("pane-old.workspace"), OLD);
+    aged(&terminals.join("pane-new.workspace"), YOUNG);
+
+    assert_eq!(on_select(&root, SystemTime::now()), 2);
+
+    assert!(
+        sessions.join("3.workspace").exists(),
+        "a returning chat's pointer"
+    );
+    assert!(sessions.join("3.lock").exists(), "and its lock");
+    assert!(!sessions.join("2.workspace").exists());
+    assert!(
+        sessions.join("2.tools").exists(),
+        "the gate's, collected in its order"
+    );
+    assert!(sessions.join("4.workspace").exists());
+    assert!(!terminals.join("pane-old.workspace").exists());
+    assert!(terminals.join("pane-new.workspace").exists());
+}
+
+/// #1025: where the reopen record cannot say which chats come back, a selection keeps every
+/// session marker, as the sweep on open does. A per-terminal pointer is no chat's, and goes
+/// by its age.
+#[test]
+fn a_selection_keeps_every_session_marker_when_the_record_cannot_say_who_comes_back() {
+    let (_d, root) = plane();
+    a_record_saying(&root, "{not json");
+    aged(&root.join(".charter/terminals/pane.workspace"), OLD);
+
+    assert_eq!(on_select(&root, SystemTime::now()), 1);
+    assert!(root.join(".charter/sessions/3.workspace").exists());
+    assert!(!root.join(".charter/terminals/pane.workspace").exists());
+}
+
+/// #1025: the per-terminal store is opened as every other store is, so one reached through a
+/// link is not swept.
+#[cfg(unix)]
+#[test]
+fn a_terminal_store_reached_through_a_link_is_not_swept() {
+    let (_d, root) = plane();
+    let (_o, elsewhere) = plane();
+    aged(&elsewhere.join("pane.workspace"), OLD);
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join(".charter/terminals")).unwrap();
+
+    assert_eq!(on_select(&root, SystemTime::now()), 0);
+    assert!(elsewhere.join("pane.workspace").exists());
+}
