@@ -169,6 +169,8 @@ import { taskChangesTitle, taskChangesView } from "./taskChanges";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
 import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
+import { TaskPromptNotice } from "./TaskPromptNotice";
+import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -330,6 +332,7 @@ import type {
   PanelView,
   RowAction,
   SavedRecord,
+  Shown,
   SmartClosing,
   WithoutSandbox,
 } from "./bindings";
@@ -5533,6 +5536,14 @@ export const PlaneView = memo(function PlaneView({
       .map((chat) => chat.session);
   }, [listedChats, tabs]);
   const heldFor = useHeldAmong(plane, living);
+  /**
+   * **This project's permission prompts held on their chats' hooks** (HP-6): a chat whose
+   * harness asked the person's permission waits on them from the moment it asks, before its
+   * harness says anything else, so it wears the hand at once (reported 2026-10-09: a task
+   * stopped on one in a tab nobody was at, and nothing said so).
+   */
+  const planeOnly = useMemo(() => [plane], [plane]);
+  const asksHere = usePermissionAsks(planeOnly)[plane] ?? NO_ASKS;
   const refusedFor = useRefusedAmong(plane, living);
   /**
    * **The chats waiting for the person**, the queue first and then every chat with a Notice
@@ -5547,8 +5558,11 @@ export const PlaneView = memo(function PlaneView({
     const blocked = Object.entries(sandboxBlocks)
       .filter(([, blocks]) => blocks.length > 0)
       .map(([session]) => Number(session));
-    return [...new Set([...needsYou, ...heldFor, ...refusedFor, ...blocked, ...restarts])];
-  }, [heldFor, needsYou, refusedFor, restartsSaid, sandboxBlocks]);
+    const prompted = asksHere.map((ask) => ask.session);
+    return [
+      ...new Set([...needsYou, ...prompted, ...heldFor, ...refusedFor, ...blocked, ...restarts]),
+    ];
+  }, [asksHere, heldFor, needsYou, refusedFor, restartsSaid, sandboxBlocks]);
   /**
    * **Each tab's chats that are waiting for the person and are not on screen**, by name, the
    * longest waiting first (#1486, V100-37): what the tab wears the hand for. A chat is on
@@ -7449,6 +7463,7 @@ export const PlaneView = memo(function PlaneView({
                     explaining={chipToExplain}
                     others={frontOthers}
                     asked={frontAsked}
+                    asks={asksHere}
                     closeOf={closeOfPane}
                     onBack={backInPane}
                     onShowChat={showChat}
@@ -8420,6 +8435,7 @@ function listedMenuOf(session: number, offerFor: (id: string) => Offer | undefin
 const NO_ROWS: readonly ChatRow[] = [];
 const NO_ENDED: readonly Ended[] = [];
 const NO_NEEDS: readonly Needing[] = [];
+const NO_ASKS: readonly Shown[] = [];
 
 /**
  * **The chat tab `id` shows** (#1486): the task its session's tab is switched to, and otherwise
@@ -8790,6 +8806,7 @@ function ChatNotices({
   onAllowed,
   restartSaid,
   onRestartAnswer,
+  asks,
 }: {
   plane: PlaneId;
   session: number;
@@ -8811,6 +8828,8 @@ function ChatNotices({
   /** What this pane says of this chat's restart (#1342, #1428), while there is something to say. */
   restartSaid?: RestartSaid;
   onRestartAnswer: (act: "now" | "dismiss") => void;
+  /** The permission prompts this project's chats hold open on their hooks. */
+  asks: readonly Shown[];
 }) {
   const running = useChatsSelect(
     useChatsHere(),
@@ -8823,6 +8842,8 @@ function ChatNotices({
       <DispatchGrantNotice plane={plane} session={session} />
       {/* Two of this chat's tasks in one folder with no branch of their own (#1511). */}
       <TasksSharingNotice plane={plane} session={session} />
+      {/* A chat off screen stopped on its harness's permission prompt: said where the person is. */}
+      <TaskPromptNotice session={session} asks={asks} />
       {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
       {startNotes && (
         <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
@@ -9268,6 +9289,7 @@ function LayoutPanes({
   explaining,
   others,
   asked,
+  asks,
   closeOf,
   onBack,
   onShowChat,
@@ -9318,6 +9340,9 @@ function LayoutPanes({
   others: Readonly<Record<number, readonly { session: number; whose: string }[]>>;
   /** What each pane asks for several of its tasks at once, by pane (#1508). */
   asked: Readonly<Record<number, ReactNode>>;
+  /** The permission prompts this project's chats hold open on their hooks, for the Notice of
+   *  a chat off screen that is stopped on one. */
+  asks: readonly Shown[];
   /** The close of pane `pane`, decided for that pane and not for the one in focus. */
   closeOf: (pane: number) => Offer | undefined;
   /** Pane `pane` goes back to its session's own chat. */
@@ -9444,6 +9469,7 @@ function LayoutPanes({
         onAllowed={() => onAllowed(session)}
         restartSaid={restartsSaid[session]}
         onRestartAnswer={(act) => onRestartAnswer(session, act)}
+        asks={asks}
       />
     );
     const hidden: HiddenChat[] = (others[layout.pane] ?? []).map((other) => ({
@@ -9615,6 +9641,7 @@ function LayoutPanes({
               explaining={explaining}
               others={others}
               asked={asked}
+              asks={asks}
               closeOf={closeOf}
               onBack={onBack}
               onShowChat={onShowChat}

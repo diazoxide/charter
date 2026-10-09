@@ -54,6 +54,29 @@ pub struct Known {
     pub lineage: Option<String>,
     /// The chat that asked for it, where one did.
     pub from: Option<Asker>,
+    /// What it is waiting on the person for in the middle of a turn, where it is: a prompt of
+    /// its harness's that only the person answers.
+    pub asking: Option<Prompt>,
+}
+
+/// What a chat stopped mid-turn to ask the person, as the chat that asked for it is told.
+/// Only the kind: never the prompt's words, which are the harness's and may carry a command
+/// line, a path or a brief.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Prompt {
+    /// Its harness asked the person's permission for a tool call, and purlis holds the ask.
+    Permission,
+    /// Its harness said it is waiting on the person, and not for what.
+    Other,
+}
+
+/// One of a chat's own tasks that is waiting on the person ([`Working::waiting_on_you`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Waiting {
+    /// The task's name as its tab shows it.
+    pub name: String,
+    pub prompt: Prompt,
 }
 
 /// The chat that asked for a chat, as the app recorded it when it opened that chat.
@@ -256,6 +279,11 @@ pub struct Working {
     /// How many more changes there were than are listed ([`MOST_ROWS`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub more_changes: usize,
+    /// The chat's own tasks that began waiting on the person since it was last told (only for
+    /// [`Tell::Turn`]): each once for each prompt, so a task held on one prompt for many turns
+    /// is said at the first of them. At most [`MOST_ROWS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_on_you: Vec<Waiting>,
 }
 
 /// Why a chat asks, which decides whether the app counts it as told.
@@ -275,7 +303,12 @@ pub enum Tell {
 /// What a chat was last told, as the app keeps it beside its record of the chat: each chat in
 /// its picture by the app's number, and how far along it was. Empty for a chat never told.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Told(BTreeMap<u32, (Kin, Stage, Row)>);
+pub struct Told {
+    picture: BTreeMap<u32, (Kin, Stage, Row)>,
+    /// Its own tasks it was told are waiting on the person, by the app's number: one leaves
+    /// once it is no longer waiting, so its next prompt is told again.
+    waiting: std::collections::BTreeSet<u32>,
+}
 
 /// How far along a chat was when its reader was told of it. Coarser than [`Doing`] on purpose:
 /// a chat moving between running and waiting is every turn of its life and is never news.
@@ -388,19 +421,54 @@ pub fn answer(known: &[Known], chat: u32, tell: Tell, told: &mut Told) -> Option
         })
         .collect();
     let mut changes = match tell {
-        Tell::Turn => changed(&told.0, &now),
+        Tell::Turn => changed(&told.picture, &now),
         Tell::Asked | Tell::Start => Vec::new(),
     };
     if tell != Tell::Asked {
-        told.0 = now;
+        told.picture = now;
     }
     let more_changes = changes.len().saturating_sub(MOST_ROWS);
     changes.truncate(MOST_ROWS);
+    let waiting_on_you = match tell {
+        Tell::Turn => newly_waiting(known, chat, &mut told.waiting),
+        Tell::Asked | Tell::Start => Vec::new(),
+    };
     Some(Working {
         picture,
         changes,
         more_changes,
+        waiting_on_you,
     })
+}
+
+/// `chat`'s own tasks that are waiting on the person and were not told as waiting, and the
+/// upkeep of which were (`told`). Its own tasks only, by the app's record of who asked whom
+/// and in its lineage ([`parent_of`]): a task's task is its asker's to be told of, and a chat
+/// under a number dealt again is no task of this one.
+fn newly_waiting(
+    known: &[Known],
+    chat: u32,
+    told: &mut std::collections::BTreeSet<u32>,
+) -> Vec<Waiting> {
+    let mut tasks: Vec<&Known> = known
+        .iter()
+        .filter(|one| parent_of(known, one).is_some_and(|parent| parent.chat == chat))
+        .filter(|one| one.asking.is_some())
+        .collect();
+    tasks.sort_by_key(|one| one.chat);
+    let fresh = tasks
+        .iter()
+        .filter(|one| !told.contains(&one.chat))
+        .take(MOST_ROWS)
+        .filter_map(|one| {
+            Some(Waiting {
+                name: one.name.clone(),
+                prompt: one.asking?,
+            })
+        })
+        .collect();
+    *told = tasks.iter().map(|one| one.chat).collect();
+    fresh
 }
 
 /// What changed between what a chat was told (`before`) and the picture `now`.
@@ -570,8 +638,46 @@ pub fn briefing(picture: &Picture, now: chrono::DateTime<chrono::FixedOffset>) -
     Some(lines.join("\n"))
 }
 
-/// The one line a turn is told when the picture changed, or `None` when it did not.
+/// What a turn is told: one line when the picture changed, and one when a task of its own
+/// began waiting on the person; `None` when neither did.
 pub fn update(working: &Working, now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
+    let lines: Vec<String> = [changed_line(working, now), waiting_line(working)]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// The line for a chat's own tasks that began waiting on the person: who, and for what, and
+/// that the answer is the person's, given in that task's own tab. The chat is told so it can
+/// say so where the person is; nothing it does answers the prompt.
+fn waiting_line(working: &Working) -> Option<String> {
+    if working.waiting_on_you.is_empty() {
+        return None;
+    }
+    let said: Vec<String> = working
+        .waiting_on_you
+        .iter()
+        .map(|task| {
+            format!(
+                "task {} is waiting on the person {}",
+                quoted(&task.name),
+                match task.prompt {
+                    Prompt::Permission => "for a permission",
+                    Prompt::Other => "to answer it",
+                }
+            )
+        })
+        .collect();
+    Some(format!(
+        "⬢ A task of yours is stopped ({AS_DATA}): {}. Only the person answers it, in that \
+         task's own tab: tell them, and do not answer it or work around it.",
+        said.join("; ")
+    ))
+}
+
+/// The one line for what changed in the picture, or `None` when nothing did.
+fn changed_line(working: &Working, now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
     if working.changes.is_empty() {
         return None;
     }
