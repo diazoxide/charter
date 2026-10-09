@@ -15,6 +15,10 @@
 //!   spec decision 20): the same, but an uncovered or locked dispatch is a plain refusal.
 //!   Nothing is held and no Notice is raised, so nobody can allow it later by accident.
 //!
+//! **The app's dispatch path calls [`requested_as`]** (#1543), through
+//! `dispatchunattended::request_dispatch_as`, with the asking chat as it read it once: the two
+//! entry points above are that, for a chat read from `session`, and are what the tests drive.
+//!
 //! What the caller must hold to, because this module cannot:
 //!
 //! - **`session` is the sender's**, taken from the chat the line's token is bound to, and a
@@ -228,6 +232,7 @@ pub fn asking_from(
 
 /// Chat `session` as `chats` records it, in the project at `root`; none for a chat this app
 /// does not have open.
+#[cfg(test)]
 pub fn asking_of(chats: &crate::chats::Chats, root: &Path, session: u32) -> Option<Asking> {
     let chat = chats.recorded_chat(session)?;
     let name = chats
@@ -1760,6 +1765,7 @@ fn now_secs() -> u64 {
 /// request names it. Answers whether the dispatch is covered, held for the person (the Notice
 /// is raised on the asking chat's tab), locked by policy, or refused. The module's own doc is
 /// the contract.
+#[cfg(test)]
 pub fn request_dispatch_grant(
     held: &crate::planes::Held,
     session: u32,
@@ -1783,6 +1789,7 @@ pub fn request_dispatch_grant(
 /// held, no Notice is raised, and a locked one raises none either. So an unattended chat
 /// dispatches only under a grant that already exists and that this machine has acknowledged,
 /// and a missing grant is a sentence for the chat, never a prompt nobody is there to answer.
+#[cfg(test)]
 pub fn request_dispatch_grant_or_refuse(
     held: &crate::planes::Held,
     session: u32,
@@ -1868,6 +1875,7 @@ fn record_set_aside(aside: &purlis_core::dispatchdormant::SetAside, audit: Audit
 /// Both entry points. `works_in` is the workspace the task is to work in (#1505,
 /// [`purlis_core::dispatchwithin::works_in`]), none for the project's root: **every caller
 /// says it**, so no dispatch is judged as if a grant limited to one workspace held in all.
+#[cfg(test)]
 fn requested(
     held: &crate::planes::Held,
     session: u32,
@@ -1876,10 +1884,23 @@ fn requested(
     uncovered: Uncovered,
     works_in: Option<&str>,
 ) -> Requested {
-    let root = held.root();
-    let Some(asking) = asking_of(held.chats(), root, session) else {
+    let Some(asking) = asking_of(held.chats(), held.root(), session) else {
         return Requested::Refused(format!("chat {session} is not one this app has open"));
     };
+    requested_as(held, asking, target, brief, uncovered, works_in)
+}
+
+/// [`requested`], for the asking chat as the caller already read it: so what the caller
+/// decided by and what this answers by are one read of who the chat is (#1543).
+pub fn requested_as(
+    held: &crate::planes::Held,
+    asking: Asking,
+    target: &str,
+    brief: &str,
+    uncovered: Uncovered,
+    works_in: Option<&str>,
+) -> Requested {
+    let root = held.root();
     let audit: Audit<'_> =
         &|number, audited| held.hooks().record_dispatch_grant(root, number, audited);
     // Before any grant is read: the records are brought up to what the project's personas
@@ -2133,12 +2154,11 @@ pub struct DispatchStanding {
     /// Where the list of nevers is there and does not read: the sentence saying so, and how
     /// the person mends it. `nevers` is then empty, and no dispatch grant counts.
     pub nevers_unread: Option<String>,
-    /// Whether **no grant of the project's that was accepted on this machine counts just now**
-    /// (#1543): the last settling of this machine's acceptances against the project's history
-    /// did not answer, or none has landed since purlis started
-    /// ([`purlis_core::dispatcharrival::for_read`]). The table says so beside each, as the
-    /// arrival Notice does. False where nothing of the project's is accepted here.
-    pub project_unsettled: bool,
+    /// Whether, and why, **what this machine accepted of the project's grants is not settled
+    /// against its history now** (#1543, [`purlis_core::dispatcharrival::unsettled`]). Null
+    /// where the last settling answered, and where nothing of the project's is accepted here.
+    /// The table says which, at the top and beside each accepted grant of the project's.
+    pub project_unsettled: Option<ProjectUnsettled>,
     /// The project's personas now, sorted: the table has a row for each, and anything that
     /// names another is drawn as naming no persona (#1504). Null where they could not be
     /// listed, and then no name is called unknown.
@@ -2160,6 +2180,27 @@ pub struct DispatchStanding {
     /// that say anything the question would offer: the table shows it under the persona's
     /// name. **It grants nothing, and nothing here is in force by it.**
     pub wants: Vec<DispatchWants>,
+}
+
+/// Why what this machine accepted of the project's grants is not settled now (#1543).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectUnsettled {
+    /// No settling has landed since purlis started. A dispatch settles before it is decided,
+    /// so where the history reads, an accepted grant counts for it.
+    NotYet,
+    /// The project's history could not be read just now: no accepted grant of the project's
+    /// counts until it can. Each dispatch asks again first.
+    Unread,
+}
+
+impl From<purlis_core::dispatcharrival::Unsettled> for ProjectUnsettled {
+    fn from(why: purlis_core::dispatcharrival::Unsettled) -> Self {
+        match why {
+            purlis_core::dispatcharrival::Unsettled::NotYet => Self::NotYet,
+            purlis_core::dispatcharrival::Unsettled::Unread => Self::Unread,
+        }
+    }
 }
 
 /// What one persona's definition says it wants to dispatch to (#1502): the names its line
@@ -2262,7 +2303,7 @@ fn standing_of(root: &Path) -> DispatchStanding {
         any,
         nevers_unread: dispatchgrant::nevers_unread(root),
         // The verdict a dispatch is read by, with no git run here.
-        project_unsettled: !purlis_core::dispatcharrival::for_read(root).read,
+        project_unsettled: purlis_core::dispatcharrival::unsettled(root).map(Into::into),
         dormant: purlis_core::dispatchdormant::list(root)
             .into_iter()
             .map(|one| DispatchDormant {

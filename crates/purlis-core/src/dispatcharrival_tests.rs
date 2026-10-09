@@ -1241,3 +1241,43 @@ fn a_first_read_runs_no_git_on_its_thread_and_counts_nothing_accepted_until_a_se
     let empty = project(ONE);
     assert_eq!(for_read(empty.path()), Verdict { read: true });
 }
+
+#[test]
+fn what_was_accepted_is_told_unsettled_not_yet_or_unread_and_nothing_else_is() {
+    // #1543: Settings says which of the two states it is, and says nothing where nothing of
+    // the project's is accepted here.
+    let dir = project(ONE);
+    let root = dir.path();
+    // A decline alone, and a commit kept from an earlier settling, have nothing to count.
+    decline(root, "steward", "devops").expect("declined");
+    assert_eq!(unsettled(root), None);
+
+    let accepted = project(ONE);
+    let root = accepted.path();
+    local::accept_dispatch(root, PAIR, &|| true).expect("accepted");
+    // No settling has landed in this process: not yet, and a dispatch settles first.
+    assert_eq!(unsettled(root), Some(Unsettled::NotYet));
+    // That read started a settling of its own: let it land, so it races nothing below.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while slot_of(root)
+        .last
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_none()
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // One that cannot ask the history: unread until one does.
+    assert_eq!(
+        settle_with(root, &Told::of(Head::Unanswered, Between::Unanswered)),
+        Verdict { read: false }
+    );
+    assert_eq!(unsettled(root), Some(Unsettled::Unread));
+    // One that answers: settled.
+    assert_eq!(
+        settle_with(root, &Told::at(A, Between::Unanswered)),
+        Verdict { read: true }
+    );
+    assert_eq!(unsettled(root), None);
+}

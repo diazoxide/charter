@@ -26,7 +26,7 @@ const NOTHING_STANDS: DispatchStanding = {
   nevers: [],
   any: [],
   nevers_unread: null,
-  project_unsettled: false,
+  project_unsettled: null,
   personas: null,
   kept_blocked: [],
   dormant: [],
@@ -175,9 +175,11 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  *   persona. A pair kept blocked for one chat's life is drawn read-only, with the chat.
  * - **Where the list of nevers does not read**, the core's sentence is at the top, no never is
  *   drawn, and every grant says it does not count.
- * - **Where purlis has not read the project's history yet, or cannot** (#1543), it says so at
- *   the top, and each grant of the project's accepted here says it does not count: in the
- *   first moments after a launch, and while git cannot be asked, it is in force for nobody.
+ * - **Where the project's grants accepted here are not settled against its history** (#1543),
+ *   it says which at the top, and each such grant says so and is drawn greyed: not checked
+ *   since purlis started (a dispatch checks first, so it may still count), or a history that
+ *   cannot be read (it counts for nobody: a chat you are at asks you, and one nobody is at is
+ *   refused and listed under Needs you).
  * - **Each grant says which workspace it holds in** (#1505), and the person changes it there
  *   for a grant of their own or of the project's: narrowing and widening are each asked first,
  *   and a project grant's change says it edits the committed file. A grant whose workspace is
@@ -362,13 +364,20 @@ export function DispatchGrantsList({
     notInForce(names) ??
     (unread === null ? undefined : "Does not count until the list above reads.");
 
+  /** What stands in the way of the project's grants accepted here, by the state the core
+   *  says (#1543): not checked against the project's history since purlis started, which a
+   *  dispatch does first, or a history that could not be read, where none counts. */
+  const unsettled = standing.project_unsettled;
+
   /** {@link countsNote}, for a grant of the project's accepted on this machine: it counts
-   *  only while purlis can read the project's history (#1543), which the core says. */
+   *  only once purlis has checked it against the project's history (#1543). */
   const acceptedNote = (names: readonly string[]): string | undefined =>
     countsNote(names) ??
-    (standing.project_unsettled
-      ? "Accepted, but does not count until purlis can read this project's history."
-      : undefined);
+    (unsettled === "not_yet"
+      ? "Accepted. Not checked against this project's history since purlis started: the next dispatch checks it first."
+      : unsettled === "unread"
+        ? "Accepted, but does not count while purlis cannot read this project's history."
+        : undefined);
 
   /** Who a grant lets dispatch to whom, as a sentence says it. */
   const pairSaid = (changes: Changes) =>
@@ -611,7 +620,7 @@ export function DispatchGrantsList({
       note: one.nowhere ?? acceptedNote(names),
       workspace,
       changes,
-      dormant: stalled !== undefined,
+      dormant: stalled !== undefined || unsettled !== null,
       offers: [...countAgain(changes, one), remove, decline],
     };
   };
@@ -717,7 +726,7 @@ export function DispatchGrantsList({
         note: acceptedNote([persona]),
         workspace,
         changes: { level: "project", asking: persona, target: ANY },
-        dormant: notInForce([persona]) !== undefined,
+        dormant: notInForce([persona]) !== undefined || unsettled !== null,
         offers: [clear("project"), decline],
       };
     };
@@ -780,7 +789,10 @@ export function DispatchGrantsList({
         note: one.nowhere ?? (level === "project" ? acceptedNote : countsNote)([persona]),
         workspace: at,
         changes,
-        dormant: one.nowhere !== null || notInForce([persona]) !== undefined,
+        dormant:
+          one.nowhere !== null ||
+          notInForce([persona]) !== undefined ||
+          (level === "project" && unsettled !== null),
         offers: [...countAgain(changes, one), clearIt, ...(level === "project" ? [declineIt] : [])],
       };
     };
@@ -1031,17 +1043,31 @@ export function DispatchGrantsList({
           could not say which grants count. Nothing was changed.
         </Notice>
       )}
-      {unknown === undefined && standing.project_unsettled && (
+      {unknown === undefined && unsettled === "not_yet" && (
         <Notice
-          cause="dispatch-project-unsettled"
+          cause="dispatch-project-not-checked"
           at="pane"
-          // Read again once purlis has read the project's history: a settling lands on its own.
+          // A settling lands on its own: Read again draws what it found.
           fixes={[{ label: "Read again", onPress: () => void read() }]}
         >
-          purlis has not read this project&apos;s git history since it started, or could not read it
-          just now. Until it can, no grant of the project&apos;s that you accepted counts on this
-          machine, and a chat that needs one asks you on its own tab. Your own grants are as they
-          were.
+          purlis has not checked the project&apos;s grants you accepted against its git history
+          since it started. The next dispatch checks first: where the history reads, they count as
+          before. Where it cannot be read, they do not count: a chat you are at asks you on its own
+          tab, and one nobody is at is refused and listed under Needs you.
+        </Notice>
+      )}
+      {unknown === undefined && unsettled === "unread" && (
+        <Notice
+          cause="dispatch-project-unread"
+          at="pane"
+          tone="trouble"
+          // Each dispatch asks git again first; Read again draws what the last one found.
+          fixes={[{ label: "Read again", onPress: () => void read() }]}
+        >
+          purlis could not read this project&apos;s git history just now, so no grant of the
+          project&apos;s that you accepted counts on this machine. A chat you are at asks you on its
+          own tab, and one nobody is at is refused and listed under Needs you. Each dispatch checks
+          the history again first. Your own grants are as they were.
         </Notice>
       )}
       {unknown === undefined && unread !== null && (

@@ -3673,13 +3673,12 @@ export type DispatchStanding = {
 	 */
 	nevers_unread: string | null,
 	/**
-	 *  Whether **no grant of the project's that was accepted on this machine counts just now**
-	 *  (#1543): the last settling of this machine's acceptances against the project's history
-	 *  did not answer, or none has landed since purlis started
-	 *  ([`purlis_core::dispatcharrival::for_read`]). The table says so beside each, as the
-	 *  arrival Notice does. False where nothing of the project's is accepted here.
+	 *  Whether, and why, **what this machine accepted of the project's grants is not settled
+	 *  against its history now** (#1543, [`purlis_core::dispatcharrival::unsettled`]). Null
+	 *  where the last settling answered, and where nothing of the project's is accepted here.
+	 *  The table says which, at the top and beside each accepted grant of the project's.
 	 */
-	project_unsettled: boolean,
+	project_unsettled: ProjectUnsettled | null,
 	/**
 	 *  The project's personas now, sorted: the table has a row for each, and anything that
 	 *  names another is drawn as naming no persona (#1504). Null where they could not be
@@ -6096,6 +6095,19 @@ export type ProjectTheme = {
 	 */
 	local_left_out: string | null,
 };
+
+/**  Why what this machine accepted of the project's grants is not settled now (#1543). */
+export type ProjectUnsettled = 
+/**
+ *  No settling has landed since purlis started. A dispatch settles before it is decided,
+ *  so where the history reads, an accepted grant counts for it.
+ */
+"not_yet" | 
+/**
+ *  The project's history could not be read just now: no accepted grant of the project's
+ *  counts until it can. Each dispatch asks again first.
+ */
+"unread";
 
 /**  One member's destination, as the question names it and the yes hands it back. */
 export type PushDestination = {

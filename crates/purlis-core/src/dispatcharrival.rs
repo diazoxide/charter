@@ -705,6 +705,45 @@ pub fn for_read(root: &Path) -> Verdict {
     UNREAD
 }
 
+/// **Why what this machine accepted of the project's grants is not settled now**, as a reader
+/// that explains it says it (#1543): the two states [`for_read`] answers `read: false` for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsettled {
+    /// No settling has landed in this process yet: the first moments after a launch. A
+    /// dispatch settles before it is decided, so where the history reads, an accepted grant
+    /// counts for it.
+    NotYet,
+    /// The last settling could not read the project's history, or could not keep what it
+    /// found: no accepted grant of the project's counts until one does. Each dispatch
+    /// settles again first.
+    Unread,
+}
+
+/// **Whether, and why, what this machine accepted of the project's grants is not settled now**
+/// in the project at `root`: `None` where the last settling answered, **and where nothing of
+/// the project's is accepted here** (a decline alone, or a commit kept from an earlier
+/// settling, has nothing to count). Runs no git: [`for_read`]'s verdict, told apart by whether
+/// any settling has landed in this process.
+pub fn unsettled(root: &Path) -> Option<Unsettled> {
+    let bound = local::dispatch_bound(root);
+    if bound.seen.is_empty() && bound.any_seen.is_empty() && bound.seen_in.is_empty() {
+        return None;
+    }
+    let landed = slot_of(root)
+        .last
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some();
+    if for_read(root).read {
+        return None;
+    }
+    Some(if landed {
+        Unsettled::Unread
+    } else {
+        Unsettled::NotYet
+    })
+}
+
 const READ: Verdict = Verdict { read: true };
 const UNREAD: Verdict = Verdict { read: false };
 
