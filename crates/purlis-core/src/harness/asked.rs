@@ -214,9 +214,17 @@ pub fn opencode_permission(props: &Value) -> Ask {
 /// The label of opencode's always option, naming the `always` patterns it approves for the
 /// rest of the session, which can be broader than the call asked about (`git push *` for
 /// `git push origin main`). Joined and cut like a [`Summary`], credential shapes masked. With no
-/// readable patterns it says only "Always allow", claiming no scope it cannot name.
+/// readable patterns it says only "Always allow", claiming no scope it cannot name; so does a
+/// pattern holding a character a window draws as nothing or draws elsewhere
+/// ([`super::hooked::drawn_otherwise`]), which could make the label read narrower than it is.
 fn always_label(patterns: &Value) -> String {
-    match listed(patterns, |pattern| pattern.as_str().map(str::to_owned)) {
+    let readable = |pattern: &Value| {
+        pattern
+            .as_str()
+            .filter(|text| !text.chars().any(super::hooked::drawn_otherwise))
+            .map(str::to_owned)
+    };
+    match listed(patterns, readable) {
         Some(patterns) => Summary::of(&format!("Always allow {patterns}"))
             .as_str()
             .to_owned(),
@@ -601,6 +609,12 @@ mod tests {
         assert_eq!(label(Value::Null), "Always allow");
         assert_eq!(label(json!([])), "Always allow");
         assert_eq!(label(json!(["git push *", 7])), "Always allow");
+        // A pattern a window would draw other than it is: not named at all.
+        assert_eq!(
+            label(json!(["git push *", "rm -rf \u{202e}* hsup tig"])),
+            "Always allow"
+        );
+        assert_eq!(label(json!(["git\u{200b} push *"])), "Always allow");
         // As long as a summary, and no longer.
         let long = label(json!([format!("echo {}", "a".repeat(400))]));
         assert!(long.starts_with("Always allow echo a"), "{long}");
