@@ -224,8 +224,8 @@ pub fn undo(plane: &Path, cut: &Cut) -> Result<Undone, Refusal> {
 /// is what a debug build and the tests do. The release build sets `panic = "abort"`, so a panic
 /// there, like a crash or a kill, ends the process with no `Drop` at all, and the folder and
 /// the branch stay. Nothing sweeps them up afterwards on purpose: deleting branches charter
-/// did not see used risks the operator's work (D-GL1a). A safe way to show unclaimed chat
-/// branches is charter#835.
+/// did not see used risks the operator's work (D-GL1a). Instead the window shows such a
+/// branch as unclaimed, with its age, on its row ([`crate::pieces::unclaimed`], #835).
 #[derive(Debug)]
 pub struct Held<'a> {
     plane: &'a Path,

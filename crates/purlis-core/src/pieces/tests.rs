@@ -515,3 +515,61 @@ fn every_declaration_refusal_has_a_sentence_for_the_window() {
         .contains("no branch folder called 'nope'")
     );
 }
+
+// ---- a branch cut for a chat that never started (#835) ----
+
+fn stamp(offset_secs: i64) -> serde_json::Value {
+    serde_json::Value::String(at(offset_secs))
+}
+
+#[test]
+fn a_cut_nothing_has_spoken_for_is_unclaimed_for_as_long_as_it_has_existed() {
+    let cut_at = now() - chrono::Duration::days(3);
+    assert_eq!(unclaimed_age(cut_at, &[], now()).as_deref(), Some("3d"));
+    // A missing heartbeat is a `None` stamp, and says nothing.
+    assert_eq!(unclaimed_age(cut_at, &[None], now()).as_deref(), Some("3d"));
+}
+
+#[test]
+fn a_claim_after_the_cut_speaks_for_it() {
+    let cut_at = now() - chrono::Duration::hours(2);
+    let claim = stamp(2 * 3600 - 5);
+    assert_eq!(unclaimed_age(cut_at, &[Some(&claim)], now()), None);
+}
+
+#[test]
+fn a_claim_in_the_same_second_as_the_cut_speaks_for_it() {
+    // The log writes whole seconds, so a claim made 400ms after the cut reads as earlier.
+    let cut_at = now() - chrono::Duration::hours(2) + chrono::Duration::milliseconds(400);
+    let claim = stamp(2 * 3600);
+    assert_eq!(unclaimed_age(cut_at, &[Some(&claim)], now()), None);
+}
+
+#[test]
+fn a_claim_before_the_cut_is_about_an_earlier_branch_of_that_name() {
+    let cut_at = now() - chrono::Duration::hours(2);
+    let earlier = stamp(5 * 86400);
+    assert_eq!(
+        unclaimed_age(cut_at, &[Some(&earlier)], now()).as_deref(),
+        Some("2h")
+    );
+}
+
+#[test]
+fn a_cut_whose_chat_may_still_be_starting_is_not_called_unclaimed() {
+    let young = now() - chrono::Duration::seconds(UNCLAIMED_AFTER_SECS - 1);
+    assert_eq!(unclaimed_age(young, &[], now()), None);
+    let old = now() - chrono::Duration::seconds(UNCLAIMED_AFTER_SECS);
+    assert_eq!(unclaimed_age(old, &[], now()).as_deref(), Some("5m"));
+}
+
+#[test]
+fn a_stamp_that_is_not_an_instant_is_no_evidence_either_way() {
+    let cut_at = now() - chrono::Duration::days(1);
+    let naive = serde_json::Value::String("2026-03-01T00:00:00".into());
+    let junk = serde_json::json!(17);
+    assert_eq!(
+        unclaimed_age(cut_at, &[Some(&naive), Some(&junk)], now()).as_deref(),
+        Some("1d")
+    );
+}

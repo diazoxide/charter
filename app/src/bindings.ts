@@ -5802,6 +5802,12 @@ export type Piece = {
 	 *  charter cut that has declared nothing, or empty (charter#368). An age, never a verdict.
 	 */
 	said: string,
+	/**
+	 *  How long ago purlis cut this branch for a chat that never started in it (#835): a
+	 *  coarse age, `3d`. `null` for every other branch, among them any made with plain git.
+	 *  The window only says so; removing it stays the row's own action.
+	 */
+	unclaimed?: string | null,
 };
 
 /**  One file of a branch, as the light editor draws it. */
