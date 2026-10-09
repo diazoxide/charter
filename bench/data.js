@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791523814459,
+  "lastUpdate": 1791524595463,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4284,6 +4284,48 @@ window.BENCHMARK_DATA = {
             "value": 103.64872500000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.317, 103.381, 103.649, 104.274, 104.594 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "97e6f06eb063135c2eef6ed1880e5cd839de98dd",
+          "message": "ADR 0067: one chat's Allow is bound too; what stays per task\n\nRecords the #1508 follow-ups decided in implementation: a chat's own\nblock Allow is bound to the block it showed and is the window's alone;\n\"Start without the sandbox\" and a host a block did not name stay one\ntask's answer each; the tab's chip keeps one hand per chat waiting off\nscreen; the blocks are held in memory only, so after a relaunch nothing\nis asked until a chat is blocked again.\n\nRefs #1538\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T09:37:28+04:00",
+          "tree_id": "63bad37ef3cbc85e757e485db6e703b7ef8878af",
+          "url": "https://github.com/purlis/purlis/commit/97e6f06eb063135c2eef6ed1880e5cd839de98dd"
+        },
+        "date": 1791524594265,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5925955,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.580, 0.592, 0.593, 0.607, 0.621 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.116725,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.004, 16.082, 16.117, 16.147, 16.198 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.786967,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.973, 101.411, 101.787, 102.398, 102.723 ms"
           }
         ]
       }
