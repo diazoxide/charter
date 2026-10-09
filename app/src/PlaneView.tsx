@@ -183,6 +183,7 @@ import {
   focusPane,
   noTabs,
   chatNameOf,
+  chatInFrontOf,
   chatOf,
   contentsOf,
   findView,
@@ -954,7 +955,7 @@ export const PlaneView = memo(function PlaneView({
     (how: (tabs: Tabs) => Tabs): Tabs => {
       const next = how(now.current);
       const frontOf = (tabs: Tabs) => {
-        const chat = tabs.inFront === undefined ? undefined : chatOf(tabs, tabs.inFront);
+        const chat = tabs.inFront === undefined ? undefined : chatInFrontOf(tabs, tabs.inFront);
         return chat === undefined || pretendedNow.current.has(chat) ? undefined : chat;
       };
       const was = frontOf(now.current);
@@ -972,8 +973,10 @@ export const PlaneView = memo(function PlaneView({
       // task and withholds a notification by this, so a tab that kept its id and changed its
       // chat must be said too.
       //
-      // A tab showing a view has no chat of its own, so nothing is in front as far as the
-      // record of chats is concerned; the view tab says it is in front itself (`windowViews`).
+      // A tab of views only has no chat, so nothing is in front as far as the record of chats
+      // is concerned; the view tab says it is in front itself (`windowViews`). A chat beside a
+      // view in a tab that opened on it is in front (`chatInFrontOf`, #1525), and is said
+      // again when it is started there or closed, though the tab in front is the same.
       const chat = frontOf(next);
       if (chat !== was) void commands.chatInFront(plane, chat ?? null).catch(() => undefined);
       return next;
@@ -1123,15 +1126,19 @@ export const PlaneView = memo(function PlaneView({
               : [[chat.session, { shown, beside }] as const];
           }),
         );
+        // **A view tab in front comes first**: the chat the core holds in front can be one
+        // beside that view (`chatInFrontOf`), and that chat's own tab is not the one the person
+        // left in front.
+        const viewInFront =
+          frontView === undefined
+            ? undefined
+            : drawn.order.find((id) => {
+                const lead = contentsOf(drawn, id)[0]?.content;
+                return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
+              });
         const inFront =
-          front !== undefined
-            ? homeOf(shownBack, front.session, askedBy)?.tab
-            : frontView !== undefined
-              ? drawn.order.find((id) => {
-                  const lead = contentsOf(drawn, id)[0]?.content;
-                  return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
-                })
-              : undefined;
+          viewInFront ??
+          (front !== undefined ? homeOf(shownBack, front.session, askedBy)?.tab : undefined);
         if (shownBack.order.length > 0)
           change(() => (inFront === undefined ? shownBack : selectTab(shownBack, inFront)));
         // Only now may the window say what view tabs it has: saying it before this point would
