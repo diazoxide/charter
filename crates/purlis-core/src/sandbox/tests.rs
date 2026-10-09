@@ -4168,9 +4168,6 @@ default = "corp"
 
 [source.crates-io]
 replace-with = "vendored"
-
-[source.vendored]
-directory = "vendor"
 "#
     .parse()
     .expect("TOML");
@@ -4188,7 +4185,110 @@ directory = "vendor"
 }
 
 fn cargo_config_text(person: &str) -> String {
-    caches::cargo_config(person)
+    caches::cargo_config(person, None)
+}
+
+/// A person's cargo home at `<base>/cargo` whose config is `config`, its relative paths
+/// resolved as cargo resolves them: against the folder above the one the config is in (#1364).
+fn cargo_config_in(base: &std::path::Path, config: &str) -> toml::Table {
+    let home = base.join("cargo");
+    std::fs::create_dir_all(&home).expect("a cargo home");
+    caches::cargo_config(config, Some(base))
+        .parse()
+        .expect("TOML")
+}
+
+fn source_of<'a>(seeded: &'a toml::Table, name: &str) -> Option<&'a toml::Value> {
+    seeded.get("source").and_then(|source| source.get(name))
+}
+
+#[test]
+fn a_relative_source_path_is_resolved_where_cargo_resolves_it() {
+    let base = tempfile::tempdir().expect("a folder");
+    std::fs::create_dir_all(base.path().join("vendor")).expect("vendor");
+    std::fs::create_dir_all(base.path().join("regs/local")).expect("a local registry");
+    let seeded = cargo_config_in(
+        base.path(),
+        "[source.crates-io]\nreplace-with = \"vendored\"\n\
+         [source.vendored]\ndirectory = \"vendor\"\n\
+         [source.mine]\nlocal-registry = \"./regs/local\"\n",
+    );
+    let canonical = |rel: &str| {
+        base.path()
+            .join(rel)
+            .canonicalize()
+            .expect("there")
+            .display()
+            .to_string()
+    };
+    assert_eq!(
+        source_of(&seeded, "vendored")
+            .and_then(|entry| entry.get("directory"))
+            .and_then(toml::Value::as_str),
+        Some(canonical("vendor").as_str())
+    );
+    assert_eq!(
+        source_of(&seeded, "mine")
+            .and_then(|entry| entry.get("local-registry"))
+            .and_then(toml::Value::as_str),
+        Some(canonical("regs/local").as_str())
+    );
+    // The replacement that names it is untouched.
+    assert_eq!(
+        source_of(&seeded, "crates-io")
+            .and_then(|entry| entry.get("replace-with"))
+            .and_then(toml::Value::as_str),
+        Some("vendored")
+    );
+}
+
+#[test]
+fn a_relative_source_path_that_climbs_out_or_follows_a_link_out_is_dropped() {
+    let outer = tempfile::tempdir().expect("a folder");
+    let base = outer.path().join("base");
+    std::fs::create_dir_all(base.join("inside")).expect("inside");
+    std::fs::create_dir_all(outer.path().join("outside")).expect("outside");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outer.path().join("outside"), base.join("link")).expect("a link");
+    let seeded = cargo_config_in(
+        &base,
+        "[source.crates-io]\nreplace-with = \"up\"\n\
+         [source.up]\ndirectory = \"../outside\"\n\
+         [source.round]\ndirectory = \"inside/../inside\"\n\
+         [source.linked]\ndirectory = \"link\"\n\
+         [source.through]\nlocal-registry = \"link/.\"\n\
+         [source.gone]\ndirectory = \"not-there\"\n\
+         [source.empty]\ndirectory = \"\"\n",
+    );
+    for name in ["up", "round", "linked", "through", "gone", "empty"] {
+        assert_eq!(source_of(&seeded, name), None, "{name} was kept: {seeded}");
+    }
+    // A replacement naming a dropped entry stays, so cargo says the source is missing rather
+    // than quietly fetching from elsewhere.
+    assert_eq!(
+        source_of(&seeded, "crates-io")
+            .and_then(|entry| entry.get("replace-with"))
+            .and_then(toml::Value::as_str),
+        Some("up")
+    );
+}
+
+#[test]
+fn a_relative_source_path_with_no_folder_to_resolve_against_is_dropped() {
+    let seeded: toml::Table = caches::cargo_config(
+        "[source.vendored]\ndirectory = \"vendor\"\n[source.abs]\ndirectory = \"/opt/vendor\"\n",
+        None,
+    )
+    .parse()
+    .expect("TOML");
+    assert_eq!(source_of(&seeded, "vendored"), None);
+    // An absolute path is copied as written, as before: the sandbox decides what a chat reads.
+    assert_eq!(
+        source_of(&seeded, "abs")
+            .and_then(|entry| entry.get("directory"))
+            .and_then(toml::Value::as_str),
+        Some("/opt/vendor")
+    );
 }
 
 #[test]
