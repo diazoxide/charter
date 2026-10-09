@@ -2264,6 +2264,11 @@ export const PlaneView = memo(function PlaneView({
   const { strip: measured, width: room } = useRoom(onStrip.length);
   /** The chat tabs' ids, which the strip's tablist owns them by (#1204). */
   const chatTabId = useTabIds();
+  /** Whether chat tab `id` is drawn as its name box rather than as a tab: it is being renamed
+   *  and is not a chip, which is drawn as a tab whatever is open for renaming (a chat can go
+   *  into the background with its name open). One answer for the strip and for its tablist's
+   *  `aria-owns`, so the tablist never misses a tab it draws (#1204). */
+  const nameBoxFor = (id: number) => renaming === id && !isBackground(id);
   /** The chat strip itself, for handing the keyboard back to a tab after a rename. */
   const chatStrip = useRef<HTMLElement | null>(null);
   /** Unique to this view, so two projects' tabs never name each other's fresh marks. */
@@ -6865,7 +6870,7 @@ export const PlaneView = memo(function PlaneView({
                     box is drawn in its place, and is not a tab. */}
                 <StripTablist
                   name="Tabs"
-                  ids={shown.flatMap((id, place) => (renaming === id ? [] : [chatTabId(place)]))}
+                  ids={shown.flatMap((id, place) => (nameBoxFor(id) ? [] : [chatTabId(place)]))}
                 />
                 {shown.map((id, place) => (
                   <SortableTab key={id} id={String(id)} fixed={isBackground(id)}>
@@ -6954,7 +6959,7 @@ export const PlaneView = memo(function PlaneView({
                             // A chat being stopped wears the stop's look (#1459).
                             data-stopping={showsStopping(tabs, id, stopping) || undefined}
                           >
-                            {renaming === id ? (
+                            {nameBoxFor(id) ? (
                               // The name, open for editing in the tab's place (charter-app#254). Not
                               // inside the tab's button: an input inside a button is two controls in one.
                               <TabRename

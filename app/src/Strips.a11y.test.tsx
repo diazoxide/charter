@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { OpenChat } from "./bindings";
 import { findStripNamed, stripNamed } from "./test-strips";
@@ -260,23 +261,27 @@ function chat(session: number): OpenChat {
 /** A project with two pinned workspaces, the first in front with two chats open in it, so every
  *  strip draws tabs, and the project's and the workspace's gears are drawn. */
 function core() {
-  mockIPC((cmd) => {
-    if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "opened_chats") return [chat(1), chat(2)];
-    if (cmd === "chats_that_would_not_start") return [];
-    if (cmd === "running_sessions") return [];
-    if (cmd === "chat_states") return [];
-    if (cmd === "plane_pins") return { project: false, workspaces: ["alpha", "beta"], missing: [] };
-    if (cmd === "plane_sidebar")
-      return {
-        root: PLANE,
-        personas: [],
-        persona: null,
-        unfiled: [],
-        workspaces: [workspace("alpha", [chat(1), chat(2)]), workspace("beta")],
-      };
-    return null;
-  });
+  mockIPC(
+    (cmd) => {
+      if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+      if (cmd === "opened_chats") return [chat(1), chat(2)];
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd === "running_sessions") return [];
+      if (cmd === "chat_states") return [];
+      if (cmd === "plane_pins")
+        return { project: false, workspaces: ["alpha", "beta"], missing: [] };
+      if (cmd === "plane_sidebar")
+        return {
+          root: PLANE,
+          personas: [],
+          persona: null,
+          unfiled: [],
+          workspaces: [workspace("alpha", [chat(1), chat(2)]), workspace("beta")],
+        };
+      return null;
+    },
+    { shouldMockEvents: true },
+  );
 }
 
 describe("the window's three strips", () => {
@@ -337,5 +342,23 @@ describe("the window's three strips", () => {
     expect(await within(stripNamed("Tabs")).findByRole("textbox")).toBeInTheDocument();
     expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(1);
     expect(notTabs(screen.getByRole("tablist", { name: "Tabs" }))).toEqual([]);
+  });
+
+  it("owns a tab that goes into the background while its name is open (#1204)", async () => {
+    core();
+    render(<App />);
+    await userEvent.click(
+      await within(await findStripNamed("Workspaces")).findByRole("tab", { name: /alpha/ }),
+    );
+    await vi.waitFor(() => expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(2));
+    within(stripNamed("Tabs")).getAllByRole("tab")[0].focus();
+    await userEvent.keyboard("{F2}");
+    await within(stripNamed("Tabs")).findByRole("textbox");
+
+    // The core says the chat is wrapping up, from wherever it was asked: its tab becomes a chip,
+    // which is a tab again, so the tablist owns it (`stripNamed` holds it to that).
+    await act(() => emit("smart-close", { plane: PLANE, session: 1, phase: "sent", record: null }));
+    await vi.waitFor(() => expect(document.querySelector(".tab.chip")).not.toBeNull());
+    expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(2);
   });
 });
