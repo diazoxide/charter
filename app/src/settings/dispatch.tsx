@@ -422,9 +422,8 @@ function useDispatchTable(
             its own tasks, nor time purlis was closed; a task past it is asked for its report and
             ended, and its own tasks with it, though never while you are answering or typing in it.
             Tokens per session is not enforced yet: a session&apos;s row shows its figure against
-            the limit, and nothing is refused or stopped by it, because a chat can alter the figure
-            it counts. Tokens are counted as each harness reports them: a harness that reports no
-            tokens is not counted.
+            the limit, and nothing is refused or stopped by it. Tokens are counted as each harness
+            reports them: a harness that reports no tokens is not counted.
           </p>
         )}
         {!held && (

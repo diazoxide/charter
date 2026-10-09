@@ -185,7 +185,9 @@ describe("Settings › Project › Dispatch", () => {
     const note = await screen.findByTestId("dispatch-tokens-time-note");
     expect(note.textContent).toContain("off until set");
     expect(note.textContent).toContain("Tokens per session is not enforced yet");
-    expect(note.textContent).toContain("a chat can alter the figure it counts");
+    expect(note.textContent).toContain("nothing is refused or stopped by it");
+    // #1457: a sandboxed chat can no longer alter the figure, so that is not the reason given.
+    expect(note.textContent).not.toContain("a chat can alter");
     expect(note.textContent).toContain("a harness that reports no tokens is not counted");
     expect(note.textContent).toContain("working time only");
   });
