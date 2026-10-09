@@ -47,6 +47,13 @@ pub const CHAT_ENV: &str = "PURLIS_CHAT";
 /// to a chat another chat starts ([`NOT_INHERITED`]): a chat the app starts gets its own.
 pub const TOKEN_ENV: &str = "PURLIS_CHAT_TOKEN";
 
+/// The chat's own id (its ULID, ADR 0066), in the environment of a chat the app started and
+/// of no other: what `purlis statusline` keeps the harness's figure of the session's cost under
+/// ([`crate::usage::record_spend`], #1457). Set by the app at the launch, after anything a
+/// profile set, so neither a profile nor a chat's own shell names it for the harness. Never
+/// inherited ([`NOT_INHERITED`]): an app started from a chat's shell does not hand it on.
+pub const CHAT_ID_ENV: &str = "PURLIS_CHAT_ULID";
+
 /// Set to `1` in the environment of a chat the app actually started under a sandbox, and in no
 /// other (#1338, #1345). Read through [`crate::sandbox::chat_is_sandboxed`]. The app sets it at
 /// the launch, so a chat's own shell cannot claim it for the harness the hooks run under.
@@ -105,6 +112,7 @@ pub const NOT_INHERITED: &[&str] = &[
     crate::noterminal::RELAUNCHED_ENV,
     SANDBOXED_ENV,
     crate::sandboxblock::CHAT_DIR_ENV,
+    CHAT_ID_ENV,
 ];
 
 /// Which conversation a report is of, and how well that is known.
@@ -3833,6 +3841,8 @@ mod tests {
         assert!(NOT_INHERITED.contains(&SANDBOXED_ENV));
         assert!(NOT_INHERITED.contains(&crate::sandboxblock::CHAT_DIR_ENV));
         assert!(NOT_INHERITED.contains(&crate::noterminal::RELAUNCHED_ENV));
+        // Nor the launcher's chat's id, which its harness's figure is kept under.
+        assert!(NOT_INHERITED.contains(&CHAT_ID_ENV));
         // charter's own two are set per session, after these are removed, so they are not
         // here — removing them would remove what the app just put in.
         assert!(!NOT_INHERITED.contains(&SOCKET_ENV));

@@ -260,7 +260,6 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`sessions/<sid>.tools` — the persona tool **ceiling**](#sessionssidtools--the-persona-tool-ceiling)
   - [`sessions/<sid>.gate` — "a ceiling was taken for this session"](#sessionssidgate--a-ceiling-was-taken-for-this-session)
   - [`sessions/<sid>.usage` — token/cache trend ring buffer](#sessionssidusage--tokencache-trend-ring-buffer)
-  - [`sessions/<sid>.spend` — what a session's harness says it has cost](#sessionssidspend--what-a-sessions-harness-says-it-has-cost)
   - [`sessions/<sid>.memnudge`](#sessionssidmemnudge)
   - [`sessions/<sid>.configver`](#sessionssidconfigver)
   - [`sessions/<sid>.<tool_use_id>.<kind>.ask-pending`](#sessionssidtool_use_idkindask-pending)
@@ -282,6 +281,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`app/reopen.json`](#appreopenjson)
   - [`app/dispatches/<id>.json` — a dispatch's record](#appdispatchesidjson--a-dispatchs-record)
   - [`app/dispatches/refused-while-away.json`](#appdispatchesrefused-while-awayjson)
+  - [`app/spend/<chat>.json` — what a chat's harness says its session has cost](#appspendchatjson--what-a-chats-harness-says-its-session-has-cost)
   - [`app/hooks.sock`](#apphookssock)
   - [Top-level markers, gates and ledgers](#top-level-markers-gates-and-ledgers)
   - [`chat-turns/<chat>`](#chat-turnschat)
@@ -4541,27 +4541,6 @@ their entry) and the markers of a chat the plane's reopen record will bring back
 - **Keyed on Claude Code's own session id from the payload**, not on `$CHARTER_SESSION_ID`
   (`charter/statusline.py:616`) — so in a frame this file's name differs from the chat id.
 
-### `sessions/<sid>.spend` — what a session's harness says it has cost
-- **Format:** one line of JSON and a trailing newline: `{"input_tokens": n, "output_tokens": n,
-  "cost_usd": x}`, each key present only where the harness's payload carried it. Written over
-  whole at each render: the figures are the session's running totals, so the last is the one
-  kept.
-- **Status:** **internal** — **purlis only** (#1452). Written by `purlis statusline` from
-  Claude Code's per-turn payload (`cost.total_cost_usd`, `context_window.total_input_tokens`,
-  `context_window.total_output_tokens`), beside the usage ring and under the same rule for the
-  session id. A payload that carries none of the three writes nothing: **no file is "no cost
-  reported", never a zero**. A harness with no status line (Codex, opencode) has none.
-- **Tier:** Clone state, transient
-- **Written by:** `purlis_core::usage::record_spend`, from `purlis statusline`.
-- **Read by:** `purlis_core::usage::spent`, by the app when a dispatch ends, for the dispatch's
-  record (`app/dispatches/`).
-- **A chat can alter it.** It is what the chat's harness reported, relayed by the chat's status
-  line, in a folder a chat writes (`sessions/` holds every in-chat command's pointers, so it
-  is in no denial class). A chat can write its own figure, or another conversation's, or
-  remove the file. So the window shows it as *Cost (reported)*, nothing decides anything by
-  it, and its source moves out of a chat's reach before any budget reads it (D-1452-12).
-- **Git:** gitignored. Collected with the other per-session markers (`retention::on_open`).
-
 ### `sessions/<sid>.memnudge`
 - **Format:** plain text, a decimal integer, no newline
 - **Status:** **internal** — a counter written and read only by `hooks` (PostToolUse). Deleted
@@ -5237,10 +5216,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   below), absent for a dispatch nothing was said in, which is every record written before the
   key; `usage` —
   `{"input_tokens"?, "output_tokens"?, "cost_usd"?}`, what the persona chat's harness said the
-  session cost (`sessions/<sid>.spend`). **`usage` is absent for a harness that reports none,
+  session cost (`app/spend/<chat>.json`). **`usage` is absent for a harness that reports none,
   and each part of it is absent where the harness did not say it: never a zero.** It is the
-  one figure in the record that is not the app's own: what the chat's harness reported, from
-  a file a chat can alter, shown as reported and never enforced (D-1452-12). Every text is
+  one figure in the record that is not the app's own: what the chat's harness reported,
+  relayed where no sandboxed chat can write (#1457, D-1452-12). Every text is
   held to a cap as it is written, so a record is never written larger than it is read back:
   a brief to 16 KiB, a report's text and what it says changed to 8 KiB each, a name to 512 bytes, a path to 1 KiB, and a
   report's files and commits to 100 each. A text over its cap is cut at a character and ends
@@ -5676,6 +5655,34 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Tier:** Clone state — deleting it empties the list of what was refused while you were
   away, forgets what you dismissed, and changes no grant and no never (ADR 0069).
 - **Git:** gitignored (under `/.purlis/`).
+
+### `app/spend/<chat>.json` — what a chat's harness says its session has cost
+- **Format:** one line of JSON and a trailing newline: `{"input_tokens": n, "output_tokens": n,
+  "cost_usd": x}`, each key present only where the harness's payload carried it. Written over
+  whole at each render: the figures are the session's running totals, so the last is the one
+  kept. `<chat>` is the chat's own id (its ULID, ADR 0066), never its conversation.
+- **Status:** **internal** — **purlis only** (#1452, moved here by #1457). Written by
+  `purlis statusline` from Claude Code's per-turn payload (`cost.total_cost_usd`,
+  `context_window.total_input_tokens`, `context_window.total_output_tokens`), under the chat
+  the app started the harness as (`$PURLIS_CHAT_ULID`, which the app sets at the launch and a
+  profile cannot). A payload that carries none of the three writes nothing, and nor does a
+  harness the app did not start: **no file is "no cost reported", never a zero**. A harness
+  with no status line (Codex, opencode) has none.
+- **Out of a chat's reach** (D-1452-12). The folder is in the app's own (`app/`), which every
+  harness's compiled sandbox denies a chat writing (ADR 0067, integrity). The one writer is the
+  status line, which Claude Code runs outside the sandbox its tools run in, from the payload it
+  hands it; a harness held whole inside purlis's wrap (Codex, opencode) cannot write it. Which
+  file is a chat's is the app's fact, not a conversation a chat's hooks named. A chat with no
+  sandbox runs as the person and can write it, as it can every file of `app/`. Before #1457 the
+  figure was `sessions/<sid>.spend`, in a folder a chat writes; that file is no longer written
+  or read.
+- **Tier:** Clone state, transient
+- **Written by:** `purlis_core::usage::record_spend`, from `purlis statusline`.
+- **Read by:** `purlis_core::usage::spent`: by the app when a dispatch ends, for the dispatch's
+  record (`app/dispatches/`); for a tab's tasks' tokens (#1500); for a session's
+  `tokens-per-session` (#1512).
+- **Git:** gitignored. Collected when untouched for 30 days unless the reopen record brings the
+  chat back (`retention::on_open`).
 
 ### `app/hooks.sock`
 - **Format:** a unix socket, not a file. Each chat's hooks write one JSON line to it with the
