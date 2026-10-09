@@ -5309,6 +5309,12 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   turn of it was handed the answer, so the Activity tab says the answer was never read and
   does not show it as one the task worked from. The app writes it as the dispatch ends
   (`dispatchrecord::answer_unread`), from what it still held for the task; absent otherwise.
+  **A message whose text reads like a credential is kept without its text** (#1520): `text`
+  is `""` and `"left_out": true` beside it, decided as the app takes the message by the rule a
+  session record is refused by (`secretshape::kind_as_read`, the whole message before any
+  cut), so a token one chat hands another is never written here. It is counted and kept as any
+  message is, so it leaves no hole, and the Activity tab says its text was left out. Absent
+  otherwise; a record that has it beside a `text` that is not empty is not drawn.
   The number the app gives each question (what an answer is for) is in the app's memory only
   and is not written here. It is appended in the write that counts the message
   (`messages`), by the app, where it has already left the message for its reader. The message
@@ -5403,8 +5409,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   dispatch that chat was started by. Three more things in it are a chat's: the brief, the report's text and each
   message in `talk`, which
   are its words, stored as written (the brief passed the dispatch's own checks, the
-  report its summary's and a message the same rule as a report, and nothing scans them again
-  at rest, D-1452-13), and `usage`, which
+  report its summary's and a message the same rule as a report; a message whose text reads
+  like a credential is kept without it (#1520), and nothing scans a brief or a report again at
+  rest, D-1452-13), and `usage`, which
   is its harness's report and which a chat can alter (above). A chat is matched to its
   record by its id; by its number only where the record has no id. A persona chat
   that ends owing a report is recorded as `failed`, "ended without a report". A sandboxed chat

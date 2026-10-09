@@ -102,6 +102,7 @@ function line(
     unread: false,
     by_purlis: false,
     expired: false,
+    left_out: false,
     unkept: null,
     unkept_why: null,
     outcome: null,
@@ -594,6 +595,35 @@ describe("a session's Activity tab", () => {
     expect(question).toHaveAttribute("data-kind", "question");
     expect(within(question).getByTestId("activity-expired")).toHaveTextContent(
       "Its words are no longer kept: purlis keeps what a task said for 30 days after the task ended.",
+    );
+  });
+
+  it("keeps the line of a message whose text read like a credential, and says it was left out", async () => {
+    // #1520: purlis never kept its text; the line says so, and never that words expired.
+    core({ lines: [LINES[0], { ...LINES[3], text: "", left_out: true }] });
+    render(<App />);
+    const list = await opened();
+
+    const answer = within(list).getAllByRole("listitem")[1];
+
+    expect(answer).toHaveAttribute("data-kind", "answer");
+    expect(within(answer).getByTestId("activity-left-out")).toHaveTextContent(
+      "Its text was left out: it reads like a credential, and purlis keeps none.",
+    );
+    expect(within(answer).queryByTestId("activity-expired")).toBeNull();
+  });
+
+  it("offers no Answer on a question whose text was left out, and says where it is answered", async () => {
+    // #1520: even where the core said its task is paused on it.
+    core({ lines: [LINES[0], { ...LINES[2], text: "", left_out: true, asks: 5 }] });
+    render(<App />);
+    const list = await opened();
+
+    const question = within(list).getAllByRole("listitem")[1];
+
+    expect(within(question).queryByRole("button", { name: /^Answer/ })).toBeNull();
+    expect(within(question).getByTestId("activity-left-out")).toHaveTextContent(
+      "steward 3 has this question: purlis did not keep its text, so it is answered there and not here.",
     );
   });
 

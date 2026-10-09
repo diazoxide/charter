@@ -146,6 +146,9 @@ pub struct Line {
     /// A message whose words were kept and are not any more
     /// ([`dispatchrecord::expire_talk`]).
     pub expired: bool,
+    /// A message whose text read like a credential, and was never kept
+    /// ([`dispatchrecord::Said::left_out`], #1520).
+    pub left_out: bool,
     /// For [`Kind::Unkept`]: how many messages the record counted after the last it kept,
     /// and why it kept no more.
     pub unkept: Option<(u32, Why)>,
@@ -220,6 +223,7 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             by_purlis: false,
             unread: false,
             expired: false,
+            left_out: false,
             unkept: None,
             outcome: None,
             files: Vec::new(),
@@ -237,8 +241,10 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             // The person's answer, which the record says is theirs (#1496).
             by_person: said.by == Some(dispatchrecord::By::Person),
             unread: said.unread,
-            // A message is never taken empty: one with no words had them, and they are gone.
-            expired: said.text.is_empty(),
+            // A message is never taken empty but where it was left out: one with no words
+            // had them, and they are gone.
+            expired: said.text.is_empty() && !said.left_out,
+            left_out: said.left_out,
             ..line(lines.len(), &said.at, Kind::of(said.kind), &said.text)
         });
     }

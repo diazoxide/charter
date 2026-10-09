@@ -267,6 +267,12 @@ pub struct Said {
     /// not say an answer was given that the task never read. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unread: bool,
+    /// **Its text reads like a credential, and was not kept** (#1520): `text` is empty and
+    /// always was. Decided as the message is taken ([`said_by`]), by the same rule a session
+    /// record is refused by ([`crate::secretshape::kind_as_read`]), so a token one chat hands
+    /// another is never written to the store. Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left_out: bool,
 }
 
 /// Who said a message, where it was not the chat its kind names ([`Said::by`]).
@@ -572,6 +578,9 @@ pub enum Taken {
 /// **The one place a message's text is stored.** Nothing else writes `talk`, so what a record
 /// keeps of a message is decided here and nowhere else.
 ///
+/// **A message whose text reads like a credential keeps its line and not its text**
+/// ([`Said::left_out`], #1520): it is counted and kept as any message is, with no words.
+///
 /// **A record keeps the first messages, with no hole.** One that does not fit what a record
 /// keeps ([`MOST_SAID`], [`MOST_SAID_BYTES`]) is counted and its text is not kept, and after
 /// it no later message's is either, however small: `messages` above `talk`'s length is then
@@ -606,7 +615,13 @@ pub fn said_by(
         // left out.
         let whole = usize::try_from(record.messages).is_ok_and(|sent| sent == record.talk.len());
         record.messages = record.messages.saturating_add(1);
-        let text = cut(text, MOST_MESSAGE_BYTES);
+        // Read whole, before any cut: a credential the cut would split is still one.
+        let left_out = crate::secretshape::kind_as_read(None, text).is_some();
+        let text = if left_out {
+            String::new()
+        } else {
+            cut(text, MOST_MESSAGE_BYTES)
+        };
         let held: usize = record.talk.iter().map(|said| said.text.len()).sum();
         if whole && record.talk.len() < MOST_SAID && held + text.len() <= MOST_SAID_BYTES {
             record.talk.push(Said {
@@ -615,6 +630,7 @@ pub fn said_by(
                 text,
                 by,
                 unread: false,
+                left_out,
             });
             taken = Taken::Kept(record.clone());
         } else {
@@ -1386,10 +1402,13 @@ pub fn sound(record: &Record) -> bool {
             .map(|said| said.text.len())
             .sum::<usize>()
             <= MOST_SAID_BYTES
-        && record
-            .talk
-            .iter()
-            .all(|said| name(&said.at) && a_time(&said.at) && prose(&said.text, MOST_MESSAGE_BYTES))
+        && record.talk.iter().all(|said| {
+            name(&said.at)
+                    && a_time(&said.at)
+                    && prose(&said.text, MOST_MESSAGE_BYTES)
+                    // One left out never had words.
+                    && (!said.left_out || said.text.is_empty())
+        })
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
                 && report

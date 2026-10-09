@@ -131,7 +131,13 @@ const ENDS_A_TASK: readonly string[] = ["report", "stopped"];
 export function answerable(lines: readonly Drawn[]): ReadonlySet<string> {
   const open = new Set<string>();
   for (const { line } of lines) {
-    if (line.kind === "question" && line.asks !== null && closedBy(line, lines) === undefined)
+    // A question whose text was left out (#1520) is answered in its asking chat, never here.
+    if (
+      line.kind === "question" &&
+      line.asks !== null &&
+      !line.left_out &&
+      closedBy(line, lines) === undefined
+    )
       open.add(lineKey(line));
   }
   return open;
@@ -254,3 +260,12 @@ export function clipped(text: string): { shown: string; more: boolean } {
   if (chars.length > CLIP_CHARS) shown = chars.slice(0, CLIP_CHARS).join("");
   return shown === text ? { shown, more: false } : { shown: `${shown}…`, more: true };
 }
+/** What a message whose text read like a credential says in its place (#1520). */
+export const LEFT_OUT_SAID =
+  "Its text was left out: it reads like a credential, and purlis keeps none.";
+
+/** What a question whose text was left out says of why it has no Answer here (#1520). */
+export function leftOutAsked(line: ActivityLine): string {
+  return `${line.to} has this question: purlis did not keep its text, so it is answered there and not here.`;
+}
+

@@ -137,6 +137,7 @@ fn a_message_is_kept_on_its_task_s_record_with_its_time_and_kind() {
             text: "Which host?".to_owned(),
             by: None,
             unread: false,
+            left_out: false,
         }]
     );
     assert!(dispatchrecord::sound(&record));
@@ -1038,6 +1039,7 @@ fn the_person_s_answer_is_kept_with_who_said_it_and_the_timeline_says_it_is_thei
             text: "prod-2.".to_owned(),
             by: Some(dispatchrecord::By::Person),
             unread: false,
+            left_out: false,
         }
     );
     assert!(dispatchrecord::sound(&record));
@@ -1172,4 +1174,88 @@ fn an_answer_the_task_never_read_says_so_on_the_timeline_and_no_other_line_does(
     .unwrap();
     assert_eq!(stored["talk"][2]["unread"], true);
     assert_eq!(stored["talk"][1].get("unread"), None);
+}
+
+// ----- text that reads like a credential (#1520) -------------------------------------------
+
+#[test]
+fn a_message_that_reads_like_a_credential_keeps_its_line_and_not_its_text() {
+    // Built at run time, so this file holds no credential-shaped text of its own.
+    let token = concat!("ghp_", "0123456789abcdefghijABCDEFGHIJ012345");
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(
+        &root,
+        &id,
+        Sent::Question,
+        "Which token?",
+        "2026-10-08T09:01:00Z",
+    );
+
+    let taken = dispatchrecord::said(
+        &root,
+        &id,
+        Sent::Answer,
+        &format!("Use {token} for it."),
+        at("2026-10-08T09:02:00Z"),
+    )
+    .unwrap();
+    // A later message is kept as ever: leaving one out leaves no hole.
+    says(&root, &id, Sent::Note, "Signed in.", "2026-10-08T09:03:00Z");
+
+    assert!(
+        matches!(taken, Taken::Kept(_)),
+        "its line is kept: {taken:?}"
+    );
+    let stored =
+        std::fs::read_to_string(dispatchrecord::dir(&root).join(format!("{id}.json"))).unwrap();
+    assert!(!stored.contains(token), "its text is nowhere on the disk");
+    let record = dispatchrecord::read(&root, &id).unwrap();
+    assert_eq!(record.messages, 3);
+    assert_eq!(record.talk[1].text, "");
+    assert!(record.talk[1].left_out);
+    assert!(!record.talk[2].left_out);
+    assert!(dispatchrecord::sound(&record));
+
+    let found = timeline(&root, &steward());
+    let said: Vec<(Kind, bool, bool, &str)> = found
+        .lines
+        .iter()
+        .map(|line| (line.kind, line.left_out, line.expired, line.text.as_str()))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (Kind::Dispatched, false, false, "the brief"),
+            (Kind::Question, false, false, "Which token?"),
+            // Said as left out, and never as words that expired.
+            (Kind::Answer, true, false, ""),
+            (Kind::Note, false, false, "Signed in."),
+        ]
+    );
+}
+
+#[test]
+fn a_record_that_says_a_message_was_left_out_and_holds_its_text_is_not_drawn() {
+    let (_d, root) = project();
+    let id = started(
+        &root,
+        &steward(),
+        &chat(7, "talk"),
+        "talk",
+        "2026-10-08T09:00:00Z",
+    );
+    says(&root, &id, Sent::Note, "Still up.", "2026-10-08T09:01:00Z");
+    planted(&root, &id, |record| {
+        record["talk"][0]["left_out"] = true.into()
+    });
+
+    let record = dispatchrecord::read(&root, &id).unwrap();
+    assert!(!dispatchrecord::sound(&record));
 }
