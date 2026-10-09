@@ -152,10 +152,10 @@ export function NewWorkspace({
             <SettingRow
               label="Live"
               help={
-                "A live workspace's charter, memory and todos are committed with the plane and " +
-                "published by every save — ticked, the plane is saved as soon as it is made, the " +
-                "way the Saving tab says this plane saves (and not at all while it has not been " +
-                "told). Left unticked, they stay on this machine."
+                "A live workspace's charter, memory and todos are committed with the project and " +
+                "published by every save — ticked, the project is saved as soon as it is made, " +
+                "the way the Saving tab says this project saves (and not at all while it has not " +
+                "been told). Left unticked, they stay on this machine."
               }
               control={(ids) => (
                 <Choice ids={ids} kind="toggle" checked={live} onCheckedChange={setLive} />

@@ -552,6 +552,17 @@ describe("the one list of actions", () => {
     );
   });
 
+  it("says a live switch publishes with the project, either way (#1192)", () => {
+    const offers = catalogue(now({ workspaces: ["alpha", "beta"], live: ["beta"] }));
+
+    expect(by(offers, "workspace.live:alpha")?.note).toBe(
+      "Publish its charter, memory and todos with the project.",
+    );
+    expect(by(offers, "workspace.live:beta")?.note).toBe(
+      "Stop publishing its charter, memory and todos with the project.",
+    );
+  });
+
   it("offers Settings everywhere, with no project open too, because You is the machine's", async () => {
     // SE-16: with no project open, Settings opens at the You level, this machine's (SE-23: the
     // focused level otherwise), so the row does not wait for a plane — and no row says
