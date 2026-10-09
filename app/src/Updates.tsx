@@ -202,7 +202,9 @@ function said(state: UpdateState): string | undefined {
     case "installed":
       return "Restart to update";
     case "failed":
-      return "update failed";
+      // What to press, as the line can say it: itself, for why. The dialog it opens says
+      // the next press, Check now (#1156).
+      return "update failed — press to see why";
     case "quiet":
       return undefined;
   }
@@ -344,9 +346,12 @@ export function UpdateItem({
                   )}
                 </>
               ) : state.kind === "failed" ? (
-                <p className="honest doctor-trouble" role="alert">
-                  {state.why}
-                </p>
+                <>
+                  <p className="honest doctor-trouble" role="alert">
+                    {state.why}
+                  </p>
+                  <p className="honest">Check now tries again.</p>
+                </>
               ) : (
                 <p className="honest">
                   No newer purlis is known. purlis checks on its own every few hours.

@@ -574,7 +574,7 @@ describe("a chat put into the background (SI-8f)", () => {
     await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
       await screen.findByRole("menuitem", {
-        name: /^Go to two: smart close stopped — no session record arrived/,
+        name: /^Go to two: Smart close stopped — no session record arrived/,
       }),
     ).toBeInTheDocument();
   });
@@ -591,7 +591,7 @@ describe("a chat put into the background (SI-8f)", () => {
     await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
     await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
-      await screen.findByRole("menuitem", { name: /^Go to one: smart close stopped — it ended/ }),
+      await screen.findByRole("menuitem", { name: /^Go to one: Smart close stopped — it ended/ }),
     ).toBeInTheDocument();
   });
 
@@ -611,7 +611,7 @@ describe("a chat put into the background (SI-8f)", () => {
     await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
       await screen.findByRole("menuitem", {
-        name: /^Go to two: smart close stopped — its prompt could not be sent/,
+        name: /^Go to two: Smart close stopped — its prompt could not be sent/,
       }),
     ).toBeInTheDocument();
   });
@@ -629,7 +629,7 @@ describe("a chat put into the background (SI-8f)", () => {
     await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
     await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
-      await screen.findByRole("menuitem", { name: /^Go to two: smart close did not start/ }),
+      await screen.findByRole("menuitem", { name: /^Go to two: Smart close did not start/ }),
     ).toBeInTheDocument();
   });
 

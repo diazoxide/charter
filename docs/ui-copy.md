@@ -35,7 +35,8 @@ empty state and error copy follow it.
   Touch ID.
 - **A control named inside a sentence is written as its label reads**, with no quotes: *start
   one and press Check again*, *Make one with the + above, or New vault… in the palette*. The
-  capital tells the reader it is something to press.
+  capital tells the reader it is something to press. An act named for its button is cased
+  that way wherever it is the subject, too: *Smart close stopped — …* (#1156).
 
 ## Buttons and menu items
 

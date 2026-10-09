@@ -102,6 +102,18 @@ describe("the update button", () => {
     expect(button()).toHaveAccessibleName("Updates: Restart to update");
   });
 
+  it("says what to press when an update failed: the line for why, then Check now (#1156)", async () => {
+    render(<UpdateItem updates={updates({ kind: "failed", why: "the file is read-only" })} />);
+
+    expect(button().textContent?.trim()).toBe("update failed — press to see why");
+    expect(button()).toHaveAccessibleName("Updates: update failed — press to see why");
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("the file is read-only");
+    expect(within(dialog).getByText("Check now tries again.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Check now" })).toBeInTheDocument();
+  });
+
   it("restarts at once when no chat is mid-turn", async () => {
     let restarted = 0;
     render(
