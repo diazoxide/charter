@@ -434,6 +434,12 @@ pub struct Chats {
     /// memory only**: never a file a chat could write, and a chat started again is briefed
     /// afresh.
     told: Mutex<HashMap<u32, purlis_core::awareness::Told>>,
+    /// The model each chat's own harness said its program runs on, by the chat's number
+    /// (#1021): what the record's `model` says while that program runs ([`Self::heard_model`]).
+    /// Apart from [`Self::open`] because a harness reports its start at its own exec, which can
+    /// come before the chat is listed as open. Forgotten as each start is announced and as the
+    /// chat closes, so a model never outlives the program it was reported for.
+    models: Mutex<HashMap<u32, String>>,
     /// The folders a discard is taking away now, and the folders chats are starting in
     /// (#1472): no chat starts in a folder that is going, and none goes while one starts there.
     /// **In memory only.**
@@ -692,6 +698,7 @@ impl Chats {
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
             told: Mutex::new(HashMap::new()),
+            models: Mutex::new(HashMap::new()),
             going: crate::goingaway::Going::default(),
             #[cfg(test)]
             deciding: None,
@@ -1839,6 +1846,8 @@ impl Chats {
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
+                    // A new program knows no model until its harness says (#1021).
+                    lock(&self.models).remove(&session);
                     if let Some(starting) = lock(&self.starting).as_ref() {
                         starting(session, harness, conversation.clone());
                     }
@@ -1917,6 +1926,7 @@ impl Chats {
     pub fn close(&self, session: u32) -> Result<(), String> {
         let gone = lock(&self.open).remove(&session);
         lock(&self.owed).remove(&session);
+        lock(&self.models).remove(&session);
         lock(&self.told).remove(&session);
         lock(&self.records).remove(&session);
         self.blocks.ended(session);
@@ -2576,6 +2586,26 @@ impl Chats {
         }
     }
 
+    /// What a chat's harness said, in `report`, about the model its program runs on (ADR 0087
+    /// §6, #1021), kept for the record's `model` so a commit's `Assisted-by` can name it.
+    ///
+    /// **Only the chat's own harness** ([`its_own_model`]): `now` is the conversation the board
+    /// holds for the chat after it took `report`, and a report the board did not take as the
+    /// chat's own, a sub-agent's, or any event but a `SessionStart` is no model. Written down
+    /// only when the model changed, for [`Self::pin`]'s reason.
+    pub fn heard_model(&self, report: &purlis_core::hookwire::Report, now: Option<&str>) {
+        let Some(model) = its_own_model(report, now) else {
+            return;
+        };
+        let changed = lock(&self.models)
+            .insert(report.chat, model.to_owned())
+            .as_deref()
+            != Some(model);
+        if changed {
+            self.write_it_down();
+        }
+    }
+
     /// What the window says its view tabs are now. Written down when it differs from what was
     /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
     /// machine store then has to vouch for.
@@ -2737,6 +2767,7 @@ impl Chats {
             .iter()
             .map(|&session| (session, self.sessions.process_id(session)))
             .collect();
+        let models = lock(&self.models).clone();
         let open = lock(&self.open);
         let front = *lock(&self.front);
         // **One chat, once** (NO-3): a chat being retried is waiting and open at once until its
@@ -2764,6 +2795,7 @@ impl Chats {
             .filter(|chat| !superseded(chat, None))
             .map(|chat| Chat {
                 pid: None,
+                model: None,
                 ..chat.clone()
             })
             .collect();
@@ -2783,6 +2815,9 @@ impl Chats {
                 // The process it runs as now, which is what a commit is checked against (V82,
                 // #1018) — never one a record put back carried from an earlier launch.
                 pid: pids.get(&session).copied().flatten(),
+                // What its harness said this program runs on (#1021), and nothing a record put
+                // back carried from an earlier run.
+                model: models.get(&session).cloned(),
                 ..chat.clone()
             })
         }));
@@ -2943,6 +2978,7 @@ impl Chats {
         let mut record = self.record();
         for chat in &mut record.chats {
             chat.pid = None;
+            chat.model = None;
         }
         write(&record);
     }
@@ -3196,6 +3232,31 @@ impl Drop for Reserved<'_> {
     fn drop(&mut self) {
         lock(&self.chats.reserved).remove(&self.number);
     }
+}
+
+/// The model `report` names for its chat, where it is that chat's own harness speaking: a
+/// `SessionStart` that names a model, from no sub-agent, about the conversation the board holds
+/// for the chat now (`now`, read after the board took the report). A nested harness's report
+/// names another conversation, or one the board refused (ADR 0024), and is no model.
+fn its_own_model<'a>(
+    report: &'a purlis_core::hookwire::Report,
+    now: Option<&str>,
+) -> Option<&'a str> {
+    use purlis_core::hookwire::Conversation;
+    if report.event != purlis_core::state::Event::SessionStart || report.agent.is_some() {
+        return None;
+    }
+    let Conversation::Named(said) = &report.conversation else {
+        return None;
+    };
+    if now != Some(said.as_str()) {
+        return None;
+    }
+    report
+        .detail
+        .model
+        .as_ref()
+        .map(purlis_core::state::Model::as_str)
 }
 
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3681,6 +3742,8 @@ pub(crate) mod tests {
         rows: 24,
     };
     const ID: &str = "11111111-2222-4333-8444-555555555555";
+    /// A conversation the chat is not in: a nested harness's.
+    const OTHER: &str = "66666666-7777-4888-9999-000000000000";
 
     /// A directory holding a program called `claude` that prints the arguments it was given
     /// and then waits, so a test can see what the app actually put on its command line.
@@ -7405,6 +7468,104 @@ pub(crate) mod tests {
 
         assert!(lock(&wrote).is_empty());
         assert_eq!(chats.record(), Record::default());
+    }
+
+    // ----- the model a chat's harness reported (#1021) -----
+
+    fn session_start(chat: u32, conversation: &str, model: &str) -> purlis_core::hookwire::Report {
+        purlis_core::hookwire::Report {
+            chat,
+            event: purlis_core::state::Event::SessionStart,
+            conversation: purlis_core::hookwire::Conversation::Named(conversation.to_owned()),
+            pid: None,
+            agent: None,
+            detail: purlis_core::state::Detail {
+                model: purlis_core::state::Model::new(model),
+                ..purlis_core::state::Detail::default()
+            },
+        }
+    }
+
+    #[test]
+    fn only_the_chats_own_harness_starting_names_its_model() {
+        use purlis_core::hookwire::Conversation;
+        let own = session_start(7, ID, "claude-opus-4-1");
+        assert_eq!(its_own_model(&own, Some(ID)), Some("claude-opus-4-1"));
+        // A conversation the board does not hold for the chat: a nested harness's.
+        assert_eq!(its_own_model(&own, Some(OTHER)), None);
+        assert_eq!(its_own_model(&own, None), None);
+        for conversation in [
+            Conversation::Contradicted,
+            Conversation::Foreign,
+            Conversation::Unknown,
+        ] {
+            let odd = purlis_core::hookwire::Report {
+                conversation,
+                ..own.clone()
+            };
+            assert_eq!(its_own_model(&odd, Some(ID)), None);
+        }
+        let sub = purlis_core::hookwire::Report {
+            agent: Some("a1".to_owned()),
+            ..own.clone()
+        };
+        assert_eq!(its_own_model(&sub, Some(ID)), None, "a sub-agent's");
+        let stop = purlis_core::hookwire::Report {
+            event: purlis_core::state::Event::Stop,
+            ..own.clone()
+        };
+        assert_eq!(its_own_model(&stop, Some(ID)), None, "only a SessionStart");
+    }
+
+    #[test]
+    fn the_model_a_chats_harness_reported_is_recorded_while_its_program_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", Some(ID)), SIZE)
+            .unwrap();
+        assert_eq!(chats.record().chats[0].model, None, "nothing said yet");
+
+        chats.heard_model(&session_start(session, ID, "claude-opus-4-1"), Some(ID));
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(last.chats[0].model.as_deref(), Some("claude-opus-4-1"));
+
+        // The same model again writes nothing; a nested harness's changes nothing.
+        let before = lock(&wrote).len();
+        chats.heard_model(&session_start(session, ID, "claude-opus-4-1"), Some(ID));
+        chats.heard_model(&session_start(session, OTHER, "elsewhere"), Some(ID));
+        assert_eq!(lock(&wrote).len(), before);
+
+        // The last write of all names no running program, and so no model.
+        let mut last = None;
+        chats.write_last(|record| last = Some(record.clone()));
+        assert_eq!(last.expect("written").chats[0].model, None);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_model_reported_for_an_earlier_program_never_names_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", Some(ID)), SIZE)
+            .unwrap();
+        chats.heard_model(&session_start(session, ID, "claude-opus-4-1"), Some(ID));
+        let _ = chats.close(session);
+
+        let again = chats
+            .start(
+                &Chat {
+                    number: Some(session),
+                    // As a record written while the first one ran would carry it.
+                    model: Some("claude-opus-4-1".to_owned()),
+                    ..chat(&a_claude(dir.path()), "ide.7", Some(ID))
+                },
+                SIZE,
+            )
+            .unwrap();
+        assert_eq!(chats.record().chats[0].model, None);
+        let _ = chats.close(again);
     }
 
     // ----- the name the operator gave a chat (charter-app#254) -----
