@@ -810,6 +810,29 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(shape(tree)).toHaveLength(4);
   });
 
+  it("reads the sidebar again when a task's turn ends, and not when one begins (#1468)", async () => {
+    const { asked, move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    const reads = () => asked.filter((one) => one.cmd === "plane_sidebar").length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const before = reads();
+
+    // A task's turn begins: no report can have come with it, so nothing is read again.
+    move(3, "running", 10);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(reads()).toBe(before);
+
+    // Its turn ends, which is when a report it made is followed: the sidebar is read again.
+    move(3, "waiting", 11);
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it("counts a task on the workspace of the tab it lives in, not the one it works in", async () => {
     const { move } = core(threeDeep());
     render(<App />);

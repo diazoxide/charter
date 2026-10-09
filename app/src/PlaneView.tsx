@@ -1299,10 +1299,11 @@ export const PlaneView = memo(function PlaneView({
   }, [change, plane]);
 
   /**
-   * The persona chats that still owe a report, as one word with what each is doing. A task's
-   * report is followed by the end of its turn, and a task that dies ends: either moves this
-   * word, and the sidebar is read again, which is where a task's reported mark comes from.
-   * Empty while no chat has a task in flight, so nothing is read again for it then.
+   * The persona chats that still owe a report. A task's report is followed by the end of its
+   * turn, and a task that dies ends: either moves `tasksMoved`, and the sidebar is read again,
+   * which is where a task's reported mark comes from. **A turn beginning moves nothing**
+   * (#1468): no report comes with it. Empty while no chat has a task in flight, so nothing is
+   * read again for it then.
    */
   const unreported = useMemo(
     () =>
@@ -1318,9 +1319,7 @@ export const PlaneView = memo(function PlaneView({
             .map((chat) => chat.session),
     [sidebar],
   );
-  const tasksMoved = useChatsSelect(chats, (states) =>
-    unreported.map((session) => `${session}:${stateOf(states, session)}`).join(","),
-  );
+  const tasksMoved = useTurnsEnded(chats, unreported);
 
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
@@ -9773,4 +9772,30 @@ function restartAsked(name: string) {
     busy: false,
     act: "restart" as const,
   };
+}
+
+/**
+ * **How many times one of `sessions` has moved to a state that is not mid-turn** (#1468): a
+ * turn ending, a task ending or failing. A turn beginning is not counted, so a read that
+ * follows this is not made again for what cannot have changed its answer.
+ */
+function useTurnsEnded(chats: ReturnType<typeof useChatsHere>, sessions: readonly number[]) {
+  const [ended, setEnded] = useState(0);
+  useEffect(() => {
+    const was = new Map<number, string>();
+    const read = () => {
+      const states = chats.store.statesFor(chats.plane);
+      let moved = false;
+      for (const session of sessions) {
+        const state = stateOf(states, session);
+        const before = was.get(session);
+        was.set(session, state);
+        if (before !== undefined && before !== state && state !== "running") moved = true;
+      }
+      if (moved) setEnded((n) => n + 1);
+    };
+    read();
+    return chats.store.subscribe(read);
+  }, [chats, sessions]);
+  return ended;
 }
