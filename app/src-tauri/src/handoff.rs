@@ -37,9 +37,11 @@
 //!   ordinary `<persona> <N>`. And it says where it came from by the parent's NAME — in its
 //!   first message, and in the note its tab and header draw — never by the parent's number.
 //!
-//! And it answers the one ask a handed-off chat makes back: **a report** (charter-app#259).
-//! The chat it goes to is the parent the app recorded when it opened the chat, never one the
-//! reporting chat names, and only for a handoff that asked for one. See [`report_it`].
+//! And it answers the one ask a dispatched chat makes back: **a report** (charter-app#259,
+//! #1436). The chat it goes to is the asker the app recorded when it started the chat, never
+//! one the reporting chat names, and only for a task, or for a handed-off chat in the one turn
+//! its stop gives it. **A handoff owes no report** (#1515, #1471): an open that still asks for
+//! one is refused, naming `purlis dispatch`. See [`report_it`].
 //!
 //! # A dispatched task (#1436)
 //!
@@ -121,7 +123,7 @@ pub struct Arrived {
 pub type Arrivals = Arc<dyn Fn(Arrived) + Send + Sync + 'static>;
 
 /// A task a chat asked for, decided and started as every dispatch is: what the line is
-/// answered. The one arm for `purlis dispatch`, and for an open that asks for a report (#1519).
+/// answered.
 fn task_dispatched(
     held: &Held,
     plane: &PlaneId,
@@ -186,16 +188,12 @@ pub fn answer(
             if let Err(why) = tickets.spend(open.chat, connection, &open.ticket, now) {
                 return no(why);
             }
-            // **A handoff that asks for a report is a task** (#1515, #1519): no command of
-            // purlis's sends one since `purlis handoff --report` sends a dispatch, and an open
-            // that still does is dispatched as that command would have: the same decision, the
-            // same limits and the same loop rule, through the dispatch's own arm. Nothing opens
-            // a handoff that owes a report any more.
-            if open.report {
-                return match Wanted::reporting(&open) {
-                    Ok(wanted) => task_dispatched(held, plane, &wanted, arrived),
-                    Err(why) => no(why),
-                };
+            // **A handoff that asks for a report is retired** (#1471): no command of purlis's
+            // sends one since `purlis handoff --report` sends a dispatch (#1515), and a line
+            // that still does is refused, its ticket spent, naming the one route for work that
+            // reports back. Nothing opens a handoff that owes a report.
+            if open.older_report {
+                return no(an_open_asking_a_report(&open.workspace));
             }
             // Decided as every dispatch is (#1444): started, held for the person, or refused.
             match dispatch_it(held, plane, &Wanted::moved(&open), STARTING) {
@@ -280,6 +278,18 @@ pub(crate) fn report_for(
     report_it(held, chat, text, Some(&task), Voice::Purlis).map(|_| ())
 }
 
+/// What an open that still asks for a report (an older command line's `--report`) is refused
+/// with (#1471): work that needs an answer is a task, and the command that sends one into the
+/// workspace it named.
+fn an_open_asking_a_report(workspace: &str) -> String {
+    format!(
+        "a handoff asks for no report, so nothing was opened. Work this chat needs an answer \
+         from is a task: purlis dispatch --name \"<task>\" [--to <persona>] --in \
+         workspace:{}",
+        purlis_core::personas::one_line(workspace)
+    )
+}
+
 /// Whose words a report is: the chat's own, or purlis's, written in its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Voice {
@@ -307,7 +317,13 @@ enum Voice {
 ///
 /// **A chat the person is stopping may send one last report whatever it owed** (#1448): its
 /// stop asked for it ([`crate::stopping`]). It is taken in one call, and given back if the
-/// report is then refused or cannot be kept, so one last turn is one report.
+/// report is then refused or cannot be kept, so one last turn is one report. That turn is the
+/// only report a handed-off chat sends: a handoff owes none (#1471), and its stop's report is
+/// delivered as its words alone, with no outcome of a task's.
+///
+/// **Every report is sent by `purlis dispatch report`**, with how the work ended (#1471). A
+/// line without that part, which only an older `purlis handoff report` wrote, is refused with
+/// the command that sends it.
 ///
 /// **A task's report** (#1436) is the same report with three more parts: its outcome and what
 /// changed, which the persona chat says, and its session record's path, which is this app's
@@ -378,37 +394,30 @@ fn report_under(
         if let Some(was) = crate::finished::reopened_from(held, chat) {
             return purlis_core::dispatched::reopened_reports_nothing(&was);
         }
-        if task.is_some() {
-            format!(
-                "chat {chat} was not started by a dispatch, so there is no chat waiting on a \
-                 report from it"
-            )
-        } else {
-            format!(
-                "chat {chat} was not opened by a handoff, so there is no chat waiting on a \
-                 report from it"
-            )
-        }
+        format!(
+            "chat {chat} was not started by a dispatch, so there is no chat waiting on a report \
+             from it"
+        )
     })?;
     // **A task's stop takes a report only while one is owed** (#1488): one that reported
     // before the person's stop was recorded ended by itself, and has no second report. A chat
     // handed its work may send its stop's one report whatever it owed, as before.
     let last_words = last_words && (from.mode == Mode::Handoff || from.report == Owed::Due);
     match (from.report, from.mode) {
-        (Owed::Due, _) => {}
+        (Owed::Due, Mode::Task) => {}
         _ if last_words => {}
-        (Owed::Nothing, _) => {
+        // **A handoff owes no report** (#1515, #1471): the work moved to a chat the person
+        // reads themselves. Whatever its record says it owes, outside its stop's one turn.
+        (_, Mode::Handoff) => {
             return Err(format!(
-                "the handoff that opened this chat did not ask for a report (it had no \
-                 --report), so '{}' is not waiting on one",
+                "this chat was handed its work, and a handoff owes no report, so '{}' is not \
+                 waiting on one. Say what you found to the person instead",
                 from.name
             ));
         }
-        (Owed::Sent, Mode::Handoff) => {
+        (Owed::Nothing, Mode::Task) => {
             return Err(format!(
-                "this chat has already reported back to '{}', and a handoff gets one report — \
-                 already reported. Another answer needs a task: that chat dispatches one with \
-                 `purlis dispatch`",
+                "'{}' is not waiting on a report from this chat",
                 from.name
             ));
         }
@@ -429,22 +438,24 @@ fn report_under(
             ));
         }
     }
+    // **Every report says how the work ended** (#1471): a line without it was written by an
+    // older `purlis handoff report`, and is answered with the command that sends one. That
+    // holds for a chat an older build opened by a handoff that asked for a report, too, which
+    // is read as a task (#1519).
+    let Some(said) = task else {
+        return Err(format!(
+            "this chat owes '{}' a report, and a report says how the work ended. Send it with \
+             `purlis dispatch report --outcome done \"<what you did and found>\"`, or \
+             --outcome blocked or failed",
+            from.name
+        ));
+    };
     // **Which kind of report it is, is this app's record of how the chat was started**, never
-    // what the line says. A handoff's report is its summary, whatever else the line carried.
-    // A task's says how it ended, and one that does not is not a task's report. That holds for
-    // a chat an older build opened by a handoff that asked for a report, too, which is read as
-    // a task (#1519): its `purlis handoff report` is answered with the command that sends it.
-    let task = match (from.mode, task) {
-        (Mode::Handoff, _) => None,
-        (Mode::Task, Some(said)) => Some(said),
-        (Mode::Task, None) => {
-            return Err(format!(
-                "this chat owes '{}' a task's report, and a task's report says how it ended. \
-                 Send it with `purlis dispatch report --outcome done \"<what you did and \
-                 found>\"`, or --outcome blocked or failed",
-                from.name
-            ));
-        }
+    // what the line says. A handed-off chat's stop report is its words alone: a handoff has no
+    // outcome of a task's (#1471).
+    let task = match from.mode {
+        Mode::Handoff => None,
+        Mode::Task => Some(said),
     };
     let summary = purlis_core::handoff::report_summary(summary).map_err(|bad| bad.say())?;
     // **The branch a worktree task worked on is this app's record of what it cut** (#1453),
@@ -1551,43 +1562,6 @@ impl Wanted {
         }
     }
 
-    /// **What an open that asks for a report wants: the task `purlis handoff --report` sends
-    /// since #1515** (#1519), as that command builds it. The persona it names, its name or one
-    /// for the workspace, the brief off the stamped message, and `--in workspace:<name>`. A
-    /// task works in a workspace that exists, so one that would create its workspace is
-    /// refused, with the two commands that do it.
-    fn reporting(open: &OpenChat) -> Result<Self, String> {
-        if open.create_vision.is_some() {
-            return Err(format!(
-                "a handoff that asks for a report is a task, and a task works in a workspace \
-                 that exists. Create '{ws}' first (purlis workspace create {ws} --vision \
-                 \"<what it is for>\"), then dispatch into it: purlis dispatch --name \
-                 \"<task>\" --in workspace:{ws}.",
-                ws = open.workspace
-            ));
-        }
-        let name = match open.name.as_deref().map(str::trim) {
-            Some(name) if !name.is_empty() => name.to_owned(),
-            _ => purlis_core::handoff::task_name_of_a_handoff(&open.workspace),
-        };
-        Ok(Self {
-            chat: open.chat,
-            to: open.persona.clone(),
-            name,
-            brief: purlis_core::handoff::stamped(&open.message)
-                .map_or(open.message.as_str(), |read| read.brief)
-                .to_owned(),
-            profile: None,
-            place: Some(format!(
-                "{}{}",
-                purlis_core::dispatchplace::WORKSPACE,
-                open.workspace
-            )),
-            by: dispatchdecision::By::Chat,
-            moved: None,
-        })
-    }
-
     /// Which mode this dispatch is.
     fn mode(&self) -> Mode {
         match self.moved {
@@ -1959,10 +1933,8 @@ fn dispatch_noting(
     // of `on_a_branch` (D-T61-2).
     let when = chrono::Local::now().naive_local();
     let message = match (&wanted.moved, wanted.by) {
-        (Some(moved), _) => {
-            handoff::delivered_noting(&moved.message, &asker, false, note.as_deref())
-                .expect("the stamp was read a moment ago")
-        }
+        (Some(moved), _) => handoff::delivered_noting(&moved.message, &asker, note.as_deref())
+            .expect("the stamp was read a moment ago"),
         (None, By::Chat) => handoff::task_message_telling(
             &asker,
             &place,
@@ -3303,16 +3275,10 @@ mod tests {
     }
 
     fn an_open(chat: u32, ticket: &str, message: String) -> Ask {
-        a_named_open(chat, ticket, message, None, false)
+        a_named_open(chat, ticket, message, None)
     }
 
-    fn a_named_open(
-        chat: u32,
-        ticket: &str,
-        message: String,
-        name: Option<&str>,
-        report: bool,
-    ) -> Ask {
+    fn a_named_open(chat: u32, ticket: &str, message: String, name: Option<&str>) -> Ask {
         Ask::Open(Box::new(OpenChat {
             chat,
             workspace: "alpha".to_owned(),
@@ -3321,7 +3287,22 @@ mod tests {
             message,
             ticket: ticket.to_owned(),
             name: name.map(str::to_owned),
-            report,
+            older_report: false,
+        }))
+    }
+
+    /// What a task `chat` dispatches into `alpha` asks, named `name` or "ship it", on the
+    /// brief [`stamped`] carries: **the route a test that wants a report rides** since an open
+    /// that asks for one is refused (#1471). It used to ride a reporting open.
+    fn a_task_into_alpha(chat: u32, ticket: &str, name: Option<&str>) -> Ask {
+        Ask::Dispatch(Box::new(DispatchAsk {
+            chat,
+            to: None,
+            name: name.unwrap_or("ship it").to_owned(),
+            brief: "# Ship it\nnow".to_owned(),
+            profile: None,
+            place: Some(format!("{}alpha", purlis_core::dispatchplace::WORKSPACE)),
+            ticket: ticket.to_owned(),
         }))
     }
 
@@ -3510,15 +3491,12 @@ mod tests {
             message: stamped(asking),
             ticket,
             name: None,
-            report: false,
+            older_report: false,
         }));
         match answer(held, id, tickets, 1, open, &|arrived| {
             *told.lock().unwrap() = Some(arrived)
         }) {
-            // One that asks for a report is dispatched as a task (#1519).
-            Answer::Opened { chat, .. } | Answer::Dispatched { chat, .. } => {
-                Ok((chat, told.into_inner().unwrap().expect("told")))
-            }
+            Answer::Opened { chat, .. } => Ok((chat, told.into_inner().unwrap().expect("told"))),
             Answer::No { why } => Err(why),
             other => panic!("opened or refused, not {other:?}"),
         }
@@ -3576,8 +3554,8 @@ mod tests {
             "no persona, so the asking chat's"
         );
 
-        let message = purlis_core::handoff::delivered(&stamped(1), "claude 1", true)
-            .expect("a stamped message");
+        let message =
+            purlis_core::handoff::delivered(&stamped(1), "claude 1").expect("a stamped message");
         let ready = purlis_core::start::ready_read(
             &purlis_core::start::Start {
                 profile: Some(profile.clone()),
@@ -3606,7 +3584,7 @@ mod tests {
         );
         assert!(
             message.starts_with("⟨handoff from claude 1 · workspace default · ")
-                && message.contains(purlis_core::handoff::REPORT_ASK)
+                && message.contains(purlis_core::handoff::HANDOFF_NOTE)
                 && message.ends_with("# Ship it\nnow"),
             "{message:?}"
         );
@@ -3634,11 +3612,10 @@ mod tests {
                 && note.ends_with("runs on the asking chat's profile, 'work'"),
             "{note}"
         );
-        let message =
-            purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", false, Some(&note))
-                .expect("a stamped message");
+        let message = purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", Some(&note))
+            .expect("a stamped message");
         // Each line under the stamp is found by what it is, in the order `delivered_noting`
-        // fixes: the stamp, what the brief is, (the report line, not asked for here), the note.
+        // fixes: the stamp, what the brief is, the note. A handoff has no report line (#1471).
         let (head, brief) = message
             .split_once("\n\n")
             .expect("a blank line before the brief");
@@ -3648,21 +3625,8 @@ mod tests {
         let request = at(purlis_core::handoff::HANDOFF_NOTE).expect("what the brief is");
         let fallback = at(&format!("⟨{note}⟩")).expect("the profile note");
         assert_eq!((request, fallback), (1, 2), "{head}");
-        assert_eq!(at(purlis_core::handoff::REPORT_ASK), None, "{head}");
+        assert_eq!(lines.len(), 3, "{head}");
         assert_eq!(brief, "# Ship it\nnow", "{message:?}");
-        // With a report asked for, its line stands between the two.
-        let asked =
-            purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", true, Some(&note))
-                .expect("a stamped message");
-        let lines: Vec<&str> = asked.split_once("\n\n").unwrap().0.lines().collect();
-        assert_eq!(
-            lines[1..],
-            [
-                purlis_core::handoff::HANDOFF_NOTE,
-                purlis_core::handoff::REPORT_ASK,
-                format!("⟨{note}⟩").as_str()
-            ]
-        );
         // No profile to fall back to: nothing is started.
         let refused = profile_of(&plane.root, None, Some("rogue"))
             .map(|on| on.chosen)
@@ -3734,8 +3698,8 @@ mod tests {
             "it is told what its brief is, right under the stamp: {first:?}"
         );
         assert!(
-            !first.contains(purlis_core::handoff::REPORT_ASK),
-            "a handoff asks for no report (#1519): {first:?}"
+            !first.contains("report"),
+            "a handoff asks for no report (#1519, #1471): {first:?}"
         );
         assert!(
             !argv.iter().any(|word| word == "--prompt"),
@@ -3774,7 +3738,7 @@ mod tests {
             message: stamped(asking),
             ticket,
             name: None,
-            report: false,
+            older_report: false,
         }));
 
         let said = answer(&held, &id, &tickets, 1, open, &nobody);
@@ -3941,7 +3905,7 @@ mod tests {
                 message: stamped(asking),
                 ticket,
                 name: name.map(str::to_owned),
-                report: false,
+                older_report: false,
             })),
             &|arrived| *told.lock().unwrap() = Some(arrived),
         );
@@ -4599,9 +4563,35 @@ mod tests {
         tickets: &Tickets,
         asking: u32,
         name: Option<&str>,
-        report: bool,
     ) -> Result<(u32, Arrived), String> {
-        hand_off_with(held, id, tickets, asking, stamped(asking), name, report)
+        hand_off_with(held, id, tickets, asking, stamped(asking), name)
+    }
+
+    /// Dispatches a task from `asking` into `alpha` ([`a_task_into_alpha`]) and answers the new
+    /// chat's number: the vehicle of a test that wants a chat that owes a report (#1471).
+    fn a_task_of_alpha(
+        held: &Held,
+        id: &PlaneId,
+        tickets: &Tickets,
+        asking: u32,
+        name: Option<&str>,
+    ) -> Result<(u32, Arrived), String> {
+        let ticket = ticket(held, id, tickets, asking);
+        let told = Mutex::new(None);
+        match answer(
+            held,
+            id,
+            tickets,
+            1,
+            a_task_into_alpha(asking, &ticket, name),
+            &|arrived| *told.lock().unwrap() = Some(arrived),
+        ) {
+            Answer::Dispatched { chat, .. } => {
+                Ok((chat, told.into_inner().unwrap().expect("told")))
+            }
+            Answer::No { why } => Err(why),
+            other => panic!("dispatched or refused, not {other:?}"),
+        }
     }
 
     /// The stamp `charter handoff` writes for a handoff leaving a chat at the plane root
@@ -4618,7 +4608,6 @@ mod tests {
         asking: u32,
         message: String,
         name: Option<&str>,
-        report: bool,
     ) -> Result<(u32, Arrived), String> {
         let ticket = ticket(held, id, tickets, asking);
         let told = Mutex::new(None);
@@ -4627,20 +4616,16 @@ mod tests {
             id,
             tickets,
             1,
-            a_named_open(asking, &ticket, message, name, report),
+            a_named_open(asking, &ticket, message, name),
             &|arrived| *told.lock().unwrap() = Some(arrived),
         ) {
-            // One that asks for a report is dispatched as a task (#1519).
-            Answer::Opened { chat, .. } | Answer::Dispatched { chat, .. } => {
-                Ok((chat, told.into_inner().unwrap().expect("told")))
-            }
+            Answer::Opened { chat, .. } => Ok((chat, told.into_inner().unwrap().expect("told"))),
             Answer::No { why } => Err(why),
             other => panic!("opened or refused, not {other:?}"),
         }
     }
 
-    /// `child`, a task, reports `summary` back as done, on a ticket of its own: what a chat a
-    /// reporting open started sends since that open is a task (#1519).
+    /// `child`, a task, reports `summary` back as done, on a ticket of its own.
     fn reports_back(
         held: &Held,
         id: &PlaneId,
@@ -4721,8 +4706,8 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (first, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), false).expect("opened");
-        hand_off(&held, &id, &tickets, asking, Some("lint"), false).expect("opened");
+            hand_off(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
+        hand_off(&held, &id, &tickets, asking, Some("lint")).expect("opened");
 
         let told = working(&held, &id, first, Tell::Asked);
 
@@ -4762,12 +4747,12 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (first, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), false).expect("opened");
+            hand_off(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
         working(&held, &id, first, Tell::Start);
         assert_eq!(working(&held, &id, first, Tell::Turn).changes, Vec::new());
 
         let (second, _) =
-            hand_off(&held, &id, &tickets, asking, Some("lint"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("lint")).expect("opened");
         // Asked by the command in between: the turn is still told.
         working(&held, &id, first, Tell::Asked);
         let started = working(&held, &id, first, Tell::Turn).changes;
@@ -4821,7 +4806,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_handoff_s_record_holds_every_field_and_no_cost_its_harness_did_not_report() {
+    fn a_finished_task_s_record_holds_every_field_and_no_cost_its_harness_did_not_report() {
         use purlis_core::dispatchrecord::{Mode, Outcome};
 
         let plane = Plane::new();
@@ -4833,14 +4818,13 @@ mod tests {
         let tickets = Tickets::default();
 
         let (child, _) =
-            hand_off(&held, &id, &tickets, asking, Some("check prod"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("check prod")).expect("opened");
 
         // Running, from the moment the app opened the chat.
         let records = dispatch_records(&held);
         assert_eq!(records.len(), 1, "{records:?}");
         let running = &records[0];
         assert!(running.running());
-        // An open that asks for a report is a task (#1519).
         assert_eq!(running.mode, Mode::Task);
         // Who asked: the app's record of the asking chat, at the project's root.
         assert_eq!(running.asker.chat.chat, asking);
@@ -4887,7 +4871,7 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_s_record_carries_the_cost_its_harness_reported_for_its_conversation() {
+    fn a_task_s_record_carries_the_cost_its_harness_reported_for_its_conversation() {
         let plane = Plane::new();
         let host = Pretend::default();
         let planes = planes_on(&host);
@@ -4895,7 +4879,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         // What the chat's status line writes down from its harness's payload.
         let conversation = held
             .board()
@@ -4929,7 +4913,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reporting_open_closed_owing_its_report_is_recorded_as_closed_by_the_person() {
+    fn a_task_closed_owing_its_report_is_recorded_as_closed_by_the_person() {
         use purlis_core::dispatchrecord::Outcome;
 
         let plane = Plane::new();
@@ -4939,8 +4923,8 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (owes, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
-        let (owes_none, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+        let (owes, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
+        let (owes_none, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
 
         let _ = held.close_chat(owes);
         let _ = held.close_chat(owes_none);
@@ -4973,7 +4957,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         let before = dispatch_records(&held);
         assert_eq!(before.len(), 1);
 
@@ -5419,7 +5403,6 @@ mod tests {
             &Tickets::default(),
             asking,
             Some(" drop commons "),
-            false,
         )
         .expect("opened");
 
@@ -5452,8 +5435,7 @@ mod tests {
 
         let shown: Vec<String> = (0..4)
             .map(|_| {
-                let (chat, _) =
-                    hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+                let (chat, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
                 held.chats().shown_name(chat).expect("open")
             })
             .collect();
@@ -5483,7 +5465,6 @@ mod tests {
             &Tickets::default(),
             asking,
             Some("drop\u{200b}commons"),
-            false,
         )
         .expect_err("refused");
 
@@ -5500,8 +5481,7 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         held.chats().rename(asking, "platform steward").unwrap();
 
-        let (_, arrived) =
-            hand_off(&held, &id, &Tickets::default(), asking, None, false).expect("opened");
+        let (_, arrived) = hand_off(&held, &id, &Tickets::default(), asking, None).expect("opened");
 
         assert_eq!(
             arrived.from,
@@ -5525,17 +5505,55 @@ mod tests {
     // ----- a report back (charter-app#259) -----
 
     #[test]
-    fn an_open_that_wants_an_answer_starts_a_task_told_how_a_task_reports() {
-        // #1519: an open that asks for a report is a task, so the chat it starts is told how a
-        // task reports, and never the handoff's old way.
+    fn an_open_that_wants_an_answer_starts_nothing_and_names_the_task_route() {
+        // #1471: an open that asks for a report, which only an older command line sends, is
+        // refused with its ticket spent, naming `purlis dispatch` into the workspace it named.
+        // The task that route starts is told how a task reports.
         let plane = Plane::new();
         let host = Pretend::default();
         let planes = planes_on(&host);
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let before = held.chats().open_now().len();
+        let ticket = ticket(&held, &id, &tickets, asking);
+        let older = Ask::Open(Box::new(OpenChat {
+            older_report: true,
+            ..match a_named_open(asking, &ticket, stamped(asking), Some("lint")) {
+                Ask::Open(open) => *open,
+                _ => unreachable!(),
+            }
+        }));
 
-        hand_off(&held, &id, &Tickets::default(), asking, None, true).expect("opened");
+        let said = answer(&held, &id, &tickets, 1, older, &nobody);
+
+        let Answer::No { why } = said else {
+            panic!("refused, not {said:?}")
+        };
+        assert!(
+            why.starts_with("a handoff asks for no report, so nothing was opened.")
+                && why.ends_with(
+                    "purlis dispatch --name \"<task>\" [--to <persona>] --in workspace:alpha"
+                ),
+            "{why}"
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing opened");
+        assert!(dispatch_records(&held).is_empty(), "nothing recorded");
+        // Its ticket was spent: the line cannot be sent again as a plain open.
+        assert!(matches!(
+            answer(
+                &held,
+                &id,
+                &tickets,
+                1,
+                an_open(asking, &ticket, stamped(asking)),
+                &nobody
+            ),
+            Answer::No { .. }
+        ));
+
+        a_task_of_alpha(&held, &id, &tickets, asking, None).expect("dispatched");
 
         let first = host
             .openings()
@@ -5546,11 +5564,7 @@ mod tests {
             first.contains("purlis dispatch report --outcome done"),
             "{first}"
         );
-        assert!(!first.contains(handoff_report_ask()), "{first}");
-    }
-
-    fn handoff_report_ask() -> &'static str {
-        purlis_core::handoff::REPORT_ASK
+        assert!(!first.contains("handoff report"), "{first}");
     }
 
     #[test]
@@ -5563,7 +5577,7 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (child, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
 
         let said = reports_back(&held, &id, &tickets, child, "Dropped it.");
 
@@ -5601,8 +5615,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        // An open that asks for a report starts a task (#1519), which reports as one.
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         reports_back(&held, &id, &tickets, child, "first");
 
         let again = reports_back(&held, &id, &tickets, child, "second");
@@ -5652,26 +5665,34 @@ mod tests {
     }
 
     #[test]
-    fn a_report_from_a_handoff_that_did_not_ask_is_refused_saying_why() {
+    fn a_report_from_a_handed_off_chat_is_refused_saying_a_handoff_owes_none() {
         let plane = Plane::new();
         let planes = planes();
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
 
-        let said = report(&held, &id, &tickets, child, "done");
+        // #1471: by the one report command, with an outcome, as by the old one without.
+        let said = tasks_report(
+            &held,
+            &id,
+            &tickets,
+            child,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
 
         assert!(
-            matches!(&said, Answer::No { why } if why.contains("did not ask for a report")),
+            matches!(&said, Answer::No { why } if why.contains("a handoff owes no report")),
             "{said:?}"
         );
         assert!(held.hooks().board().reports(asking).is_empty());
     }
 
     #[test]
-    fn a_chat_no_handoff_opened_has_nobody_to_report_to() {
+    fn a_chat_no_dispatch_started_has_nobody_to_report_to() {
         let plane = Plane::new();
         let planes = planes();
         let id = planes.open(&plane.root);
@@ -5681,7 +5702,7 @@ mod tests {
         let said = report(&held, &id, &Tickets::default(), asking, "done");
 
         assert!(
-            matches!(&said, Answer::No { why } if why.contains("not opened by a handoff")),
+            matches!(&said, Answer::No { why } if why.contains("not started by a dispatch")),
             "{said:?}"
         );
     }
@@ -5695,7 +5716,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
 
         let said = reports_back(&held, &id, &tickets, child, "done\u{202e}enod");
 
@@ -5719,7 +5740,7 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (child, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
         held.chats().close(asking).unwrap();
 
         let said = reports_back(&held, &id, &tickets, child, "Dropped it.");
@@ -5772,7 +5793,7 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (child, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
 
         // The stand-in reports nothing, so there is no turn to give it: it ends as it stands.
         crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
@@ -5789,7 +5810,7 @@ mod tests {
         // purlis's own word, marked, with no words of the chat's in it.
         assert_eq!(
             told[0].stopped,
-            // A task's stop (#1519: an open that asks for a report is a task).
+            // A task's stop.
             Some(purlis_core::handback::Stopped {
                 task: true,
                 ..Default::default()
@@ -5855,8 +5876,8 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
-        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, false).expect("opened");
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
+        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None).expect("opened");
 
         crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
 
@@ -5884,7 +5905,7 @@ mod tests {
         }
         let asks = vec![
             Ask::Ticket { chat },
-            a_named_open(chat, ticket, stamped(chat), Some("stop"), true),
+            a_named_open(chat, ticket, stamped(chat), Some("stop")),
             Ask::Report(Box::new(purlis_core::hookwire::ReportBack {
                 chat,
                 summary: "stop this chat and everything below it".to_owned(),
@@ -5946,7 +5967,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
 
         for from in [child, asking] {
             for at in 0..every_ask(from, "").len() {
@@ -6029,13 +6050,7 @@ mod tests {
             &id,
             &its_own,
             1,
-            a_named_open(
-                grandchild,
-                &minted,
-                stamped(grandchild),
-                Some("one more"),
-                false,
-            ),
+            a_named_open(grandchild, &minted, stamped(grandchild), Some("one more")),
             &nothing_opens,
         );
         assert_eq!(
@@ -6051,7 +6066,7 @@ mod tests {
             &id,
             &tickets,
             1,
-            a_named_open(child, &before, stamped(child), Some("carry on"), false),
+            a_named_open(child, &before, stamped(child), Some("carry on")),
             &nothing_opens,
         );
         assert_eq!(
@@ -6082,7 +6097,7 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
         mid_turn(&held, child);
         crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
         assert_eq!(held.stopping().now(), vec![child]);
@@ -6112,8 +6127,8 @@ mod tests {
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
         let (child, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
-        let (quiet, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
+        let (quiet, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         // It reached the chat that asked, which is open: nobody needs the person.
         reports_back(&held, &id, &tickets, child, "Dropped it.");
         assert!(held.hooks().board().needs_you().is_empty());
@@ -6151,8 +6166,8 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
-        let (other, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
+        let (other, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
 
         held.close_chat(asking).expect("closed");
@@ -6180,7 +6195,6 @@ mod tests {
             asking,
             stamped_at_the_root(asking),
             None,
-            false,
         )
         .expect("opened");
 
@@ -6208,19 +6222,10 @@ mod tests {
         let held = planes.held(&id).expect("held");
         let asking = a_chat_on_work(&held, &plane.root);
         let tickets = Tickets::default();
-        let (child, _) = hand_off_with(
-            &held,
-            &id,
-            &tickets,
-            asking,
-            stamped_at_the_root(asking),
-            Some("drop commons"),
-            true,
-        )
-        .expect("opened");
+        let (child, _) = a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons"))
+            .expect("dispatched");
         held.chats().close(asking).unwrap();
 
-        // An open that asks for a report is a task (#1519), and reports as one.
         let said = tasks_report(
             &held,
             &id,
@@ -6268,7 +6273,6 @@ mod tests {
                 "⟨handoff from chat {asking} · workspace plane root · 2026-05-04 11:32⟩\n\nbody"
             ),
             None,
-            false,
         )
         .expect_err("refused");
         assert!(refused.contains("cannot be one"), "{refused}");
@@ -6967,11 +6971,10 @@ mod tests {
         ));
         let _ = purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
 
-        // An open that asks for a report started a task (#1519), so its task's line is a
-        // task's report, outcome and all. Neither report is a needs-you item (#1448), and the
+        // A task's line is a task's report, outcome and all. Neither report is a needs-you item (#1448), and the
         // asking chat's row names both chats that reported.
         let (handed, _) =
-            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
         let said = tasks_report(
             &held,
             &id,
@@ -8989,23 +8992,33 @@ mod tests {
             }
         );
 
-        // A handoff to devops from a chat on `work`, with a report owed and with none.
-        for report in [true, false] {
+        // A task into alpha and a handoff to devops from a chat on `work`: each is told what
+        // it can do, in its own words. The task rode a reporting open before #1471.
+        for task in [true, false] {
             let tickets = Tickets::default();
             let ticket = ticket(&held, &id, &tickets, asking);
-            let open = Ask::Open(Box::new(OpenChat {
-                chat: asking,
-                workspace: "alpha".to_owned(),
-                create_vision: None,
-                persona: Some("devops".to_owned()),
-                message: stamped(asking),
-                ticket,
-                name: None,
-                report,
-            }));
-            let said = answer(&held, &id, &tickets, 1, open, &nothing_opens);
-            let then = if report {
-                // An open that asks for a report is a task (#1519), told as a task is.
+            let ask = if task {
+                Ask::Dispatch(Box::new(DispatchAsk {
+                    to: Some("devops".to_owned()),
+                    ..match a_task_into_alpha(asking, &ticket, None) {
+                        Ask::Dispatch(dispatch) => *dispatch,
+                        _ => unreachable!(),
+                    }
+                }))
+            } else {
+                Ask::Open(Box::new(OpenChat {
+                    chat: asking,
+                    workspace: "alpha".to_owned(),
+                    create_vision: None,
+                    persona: Some("devops".to_owned()),
+                    message: stamped(asking),
+                    ticket,
+                    name: None,
+                    older_report: false,
+                }))
+            };
+            let said = answer(&held, &id, &tickets, 1, ask, &nothing_opens);
+            let then = if task {
                 "Dispatch the task again, naming that one with --profile."
             } else {
                 "A handoff names no profile and starts on the asking chat's: hand off from a \
@@ -9020,7 +9033,7 @@ mod tests {
                          only 'cx' for that persona. {then}"
                     )
                 },
-                "report: {report}"
+                "task: {task}"
             );
         }
 
@@ -10406,8 +10419,8 @@ mod tests {
     #[test]
     fn a_handoff_and_a_chat_nobody_dispatched_are_not_reported_for() {
         // Only a task owes its asking chat an outcome. A handoff's work is the person's to
-        // follow, and its tab ending is theirs to see. (One that asks for a report is a task,
-        // #1519: `an_open_that_asks_for_a_report_is_a_task_counted_and_held_as_one`.)
+        // follow, and its tab ending is theirs to see. (One that asks for a report opens nothing,
+        // #1471: `an_open_that_asks_for_a_report_starts_nothing_records_nothing_and_counts_nothing`.)
         let plane = Plane::new();
         let host = Pretend::default();
         let planes = planes_on(&host);
@@ -10421,7 +10434,7 @@ mod tests {
             &id,
             &tickets,
             1,
-            a_named_open(parent, &ticket, stamped(parent), None, false),
+            a_named_open(parent, &ticket, stamped(parent), None),
             &nobody,
         ) else {
             panic!("the handoff opens")
@@ -10595,7 +10608,7 @@ mod tests {
                 id,
                 &tickets,
                 1,
-                a_named_open(from, &ticket, stamped(from), None, false),
+                a_named_open(from, &ticket, stamped(from), None),
                 &nobody,
             ) {
                 Answer::Opened { chat, .. } => chat,
@@ -11413,10 +11426,11 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_being_stopped_sends_its_one_last_report_by_either_command_and_starts_nothing() {
+    fn a_chat_being_stopped_sends_its_one_last_report_and_starts_nothing() {
         // D-T59-j9 (D-1448-4): a stop asks the chat for one report, by the command its
-        // prompt names. Both commands ask for a ticket first, so a chat in a stop is given
-        // one; what a ticket cannot be spent on is a new chat.
+        // prompt names: `purlis dispatch report`, for a task and a handed-off chat alike
+        // (#1471). It asks for a ticket first, so a chat in a stop is given one; what a ticket
+        // cannot be spent on is a new chat.
         let plane = a_plane_with_personas();
         let host = Pretend::default();
         let (planes, id, steward) = a_steward_chat(&host, &plane);
@@ -11430,7 +11444,7 @@ mod tests {
                 &id,
                 &tickets,
                 1,
-                a_named_open(steward, &ticket, stamped(steward), None, false),
+                a_named_open(steward, &ticket, stamped(steward), None),
                 &nobody,
             ) {
                 Answer::Opened { chat, .. } => chat,
@@ -11461,7 +11475,7 @@ mod tests {
             &id,
             &tickets,
             1,
-            a_named_open(handed, &minted, stamped(handed), Some("carry on"), false),
+            a_named_open(handed, &minted, stamped(handed), Some("carry on")),
             &nothing_opens,
         );
         assert_eq!(
@@ -11480,19 +11494,13 @@ mod tests {
         );
         let again = tasks_report(&held, &id, &Tickets::default(), task, blocked, None);
         assert!(matches!(again, Answer::No { .. }), "{again:?}");
-        // `purlis handoff report`, from the chat a handoff opened: once.
-        let first = report(&held, &id, &Tickets::default(), handed, "Half done.");
+        // `purlis dispatch report`, from the chat a handoff opened (#1471): once.
+        let first = tasks_report(&held, &id, &Tickets::default(), handed, blocked, None);
         assert!(
             matches!(first, Answer::Reported { .. } | Answer::Finished { .. }),
             "{first:?}"
         );
-        let again = report(
-            &held,
-            &id,
-            &Tickets::default(),
-            handed,
-            "And another thing.",
-        );
+        let again = tasks_report(&held, &id, &Tickets::default(), handed, blocked, None);
         assert!(matches!(again, Answer::No { .. }), "{again:?}");
 
         // Two reports reached the chat that asked, one from each, and no third. The task's is

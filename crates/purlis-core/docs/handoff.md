@@ -50,8 +50,9 @@ BRIEF
 
 - **A flag comes first, and `--name` is the one to put there.** A chat the app starts on
   Claude Code is handed an `allow` for a handoff by each flag its line can start with
-  (`--name`, `--report`, `--persona`, `--create`, `--vision`) and for `purlis handoff report`,
-  never for `purlis handoff *` as a whole. A line that starts with the workspace is still a
+  (`--name`, `--report`, `--persona`, `--create`, `--vision`) and for `purlis handoff report`
+  (which only refuses now, naming `purlis dispatch report`), never for `purlis handoff *` as a
+  whole. A line that starts with the workspace is still a
   handoff and is decided the same way; the harness asks about it first, as it asks about
   any command it has no rule for.
 - **`--name` is what the new chat is called** — its tab, and wherever else a chat's name is
@@ -199,15 +200,22 @@ did not show it, and a chat that ended without reporting was not reported for.
 
 ### A chat an older purlis opened owing a report
 
-A chat that a handoff opened with `--report` before this change still owes **one report**.
-Its first message says so under the stamp, and says how: it finishes with
+A chat that a handoff opened with `--report` before this change still owes **one report**,
+and from the next launch on it is **the task of the chat that asked**: listed, waited on, and
+reported for if it ends without a report. Its first message says to finish with `purlis
+handoff report`. That command is retired and kept as a refusal: it sends nothing, and names
+the one that sends every report,
 
 ```bash
-purlis handoff report "<a few lines on what was done and what was found>"
+purlis dispatch report --outcome done "<a few lines on what was done and what was found>"
 ```
 
-The report goes to the chat that asked, **not to you**, and nothing is typed into that chat, so
-a chat in the middle of a turn is never interrupted:
+with `--outcome blocked` or `--outcome failed` where that is true. An open that still asks
+for a report, which only an older command line sends, opens nothing and names `purlis
+dispatch`.
+
+A report goes to the chat that asked, **not to you**, and nothing is typed into that chat
+where purlis cannot type into it, so a chat in the middle of a turn is never interrupted:
 
 - **context on that chat's next turn.** When it is next prompted, its `UserPromptSubmit` hook
   hands the turn the report as `additionalContext`, each line quoted behind `> ` under a
@@ -219,11 +227,11 @@ a chat in the middle of a turn is never interrupted:
 
 **The pairing is purlis's.** The app records, when it opens the chat, which chat asked; the
 report names no recipient, so no chat can send its report anywhere but back to the chat that
-asked. A report is refused, saying why, from a chat no handoff opened, from a handoff that
-asked for none, and a second time from the same handoff, whatever happens in between —
-prompting that chat again does not re-arm it; another answer needs a task. From a chat
-started as a task it is refused with how a task reports. It is refused before anything is
-sent when it is empty,
+asked. A report is refused, saying why, from a chat no dispatch started, from a handed-off
+chat (a handoff owes none), and a second time from the same task, whatever happens in
+between — prompting that chat again does not re-arm it; another answer needs another task.
+One that does not say how the work ended is refused with the command that does. It is
+refused before anything is sent when it is empty,
 past 4,096 bytes, or holds a control character other than a line break or an invisible one.
 
 **If the chat that asked has closed**, the report is kept for the workspace it asked from, and
@@ -232,7 +240,8 @@ when its chat closed goes the same way. A report with nowhere to go is the one t
 the chat that wrote it becomes a needs-you item that says so.
 
 **A chat you stop from the window** gets one short turn to write what it did, and may send one
-report in it, whatever it owed before. The chat that asked is then told the person stopped
+report in it with `purlis dispatch report`, whatever it owed before: a handed-off chat too,
+though a handoff owes none otherwise. The chat that asked is then told the person stopped
 it, on its next turn, as a line of purlis's own (`purlis: the person stopped …`) that quotes
 nothing: a report is what a chat said, and this is not one, so no report can pass for it. It is
 the same line however you stopped it: **Stop** on the chat or on a chat above it, or *Stop them*
@@ -287,8 +296,8 @@ task: the stop is the later word.
 
 Reports wait in `.charter/handbacks/` in the plane, one file each, until a hook takes them.
 
-`purlis handoff report` needs no heredoc: its text is the command's own argument. A live
-command or process substitution in it (`"$(cat notes.md)"`, `<(cat notes.md)`) is refused,
+`purlis handoff report "<summary>"` sends nothing (see above). A live command or process
+substitution in it (`"$(cat notes.md)"`, `<(cat notes.md)`) is still refused before it runs,
 because the shell would replace it before purlis reads it. `purlis handoff report <<'BRIEF'`,
 with no summary after `report`, is still a handoff into a workspace called `report`.
 

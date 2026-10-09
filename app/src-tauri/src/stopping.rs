@@ -25,7 +25,8 @@
 //! while its stop is under way ([`Stopping::is_stopping`]).
 //!
 //! **A chat another chat started gets one short turn to write what it did.** It is sent one
-//! line ([`PROMPT`], or [`TASK_PROMPT`] for a task) asking for a last report to the chat that asked, and it ends when that
+//! line ([`PROMPT`], or [`TASK_PROMPT`] for a task) asking for a last report to the chat that
+//! asked, by `purlis dispatch report` for either (#1471), and it ends when that
 //! turn does. When the line is sent is the board's answer, never the screen's, by the rule
 //! Smart close sends its prompt on (ADR 0064): at once to a chat that is waiting, at the
 //! turn's end to one mid-turn, and **never into a chat that is showing a prompt** — a
@@ -106,11 +107,13 @@ pub const EVENT: &str = "chat-stop";
 /// already under way, and short enough that Stop still means stop.
 pub const LAST_TURN: Duration = Duration::from_secs(90);
 
-/// What a stopped chat is sent for its last turn. It names the one command, as the handoff's
-/// own ask does, and says what happens next.
+/// What a stopped chat is sent for its last turn: a handed-off chat, which owes no report but
+/// for this one turn. It names the one report command, `purlis dispatch report` (#1471: `purlis
+/// handoff report` only refuses now), and says what happens next.
 pub const PROMPT: &str = "The person stopped this chat. Start nothing new. In this one turn, \
-     report what you did and what is left undone in a few lines, with `purlis handoff report \
-     \"<summary>\"`. This chat ends when the turn does.";
+     report what you did and what is left undone in a few lines, with `purlis dispatch report \
+     --outcome blocked \"<summary>\"` (or --outcome done or failed, whichever is true). This \
+     chat ends when the turn does.";
 
 /// What a chat being stopped, or a chat below one, is told when it asks to start a chat: by
 /// the person, or by purlis at a limit the person set (#1512).
@@ -1989,7 +1992,9 @@ mod tests {
         let sent = sent_as(false);
         assert!(sent.starts_with("\x1b[200~The person stopped this chat."));
         assert!(sent.ends_with("\x1b[201~\r"));
-        assert!(PROMPT.contains("`purlis handoff report \"<summary>\"`"));
+        // The one report command (#1471), for a handed-off chat as for a task.
+        assert!(PROMPT.contains("`purlis dispatch report --outcome blocked \"<summary>\"`"));
+        assert!(!PROMPT.contains("handoff report"));
         // A task is told the command a task's report is taken by.
         let to_a_task = sent_as(true);
         assert!(to_a_task.starts_with("\x1b[200~The person stopped this task."));

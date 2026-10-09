@@ -7,6 +7,6 @@
   and can wait on it with `purlis dispatch`, and can tell it or cancel it. If it ends without
   reporting, the asking chat is told. Like any task, purlis ends it once it has reported, and
   you can reopen it from its finished row (#1519).
-- **A handoff that asks for a report is always a task now.** A request for one that reaches
-  the app by any route is dispatched as a task, and counts against the same limits as
-  `purlis dispatch`.
+- **A handoff that asks for a report never opens as one now.** `purlis handoff --report` sends
+  a task, which counts against the same limits as `purlis dispatch`, and a request for one
+  from an older command line opens nothing and names `purlis dispatch` (#1471).

@@ -583,8 +583,7 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
     }
 }
 
-/// A report refusal in this command's words: the core's sentence names the handoff's own
-/// spelling of the command, which a task's chat does not run.
+/// A report refusal in this command's words, as its recorded answers have it.
 fn words(bad: &handoff::BadReport) -> String {
     match bad {
         handoff::BadReport::Empty => "the report is empty, so nothing was sent. Say what was \

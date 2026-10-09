@@ -529,13 +529,14 @@ enum Command {
     /// from a helper sub-agent, and one whose brief it cannot read as it is written
     /// (`purlis_core::handoff`).
     ///
-    /// `charter handoff report "<summary>"` sends the one report of a chat an older handoff
-    /// opened owing one. A chat started as a task reports with `purlis dispatch report`.
+    /// `purlis handoff report` is retired: it sends nothing, and names `purlis dispatch
+    /// report`, which sends every report. A handoff owes none.
     Handoff {
         /// Where the chat opens — an existing workspace, or a new one with --create. Always
-        /// named, this workspace included. `report`, followed by a summary, is a report back.
+        /// named, this workspace included. `report`, followed by a summary, is refused, naming
+        /// `purlis dispatch report`.
         workspace: String,
-        /// With `report` as the first word: the report, a few lines on what was done.
+        /// With `report` as the first word: a report, which is refused (see above).
         summary: Option<String>,
         /// A short name for the task, which the new chat is called instead of its default
         /// (`drop account-console-commons`). At most 64 characters.

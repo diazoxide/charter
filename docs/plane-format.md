@@ -3320,9 +3320,10 @@ before it is stored.
 
 - **Format:** one JSON object per file, compact, no trailing newline.
 - **Status:** **internal** — written by the app, taken by the `purlis` binary's own hooks.
-  A report waits here from the moment a handed-off chat sends it (`purlis handoff report`),
-  or a dispatched task sends its own (`purlis dispatch report`, #1436), until the turn it is
-  handed to.
+  A report waits here from the moment a dispatched task sends it (`purlis dispatch report`,
+  #1436), or a handed-off chat sends the one its stop asks for, by the same command, until the
+  turn it is handed to. `purlis handoff report` sends nothing since #1471: it refuses, naming
+  `purlis dispatch report`. A file an older purlis left here is read as before.
 - **Tier:** Clone state, transient — a report waiting to be taken by one chat's hook. **Not
   readable or writable by a sandboxed chat of a harness whose hooks run outside its sandbox**
   (Claude Code today; ADR 0067 class 2 as amended, D-T59-19): the app leaves these files and
