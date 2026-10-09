@@ -15,6 +15,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { PersonaMark } from "./PersonaMark";
+import type { Offer } from "./actions";
 import type { PanelEmpty, PanelRow, RowAction } from "./bindings";
 import { EmptyState } from "./EmptyState";
 import { useTabStop } from "./roving";
@@ -112,6 +113,7 @@ export function PanelList({
   wrap,
   page = PAGE,
   testid,
+  offerFor,
 }: {
   rows: readonly PanelRow[];
   /** What to say when there are none — the panel's own sentence, not a shared default. */
@@ -127,6 +129,9 @@ export function PanelList({
   /** Run the catalogue row this row names, if the catalogue still offers it. `kept` is a
    *  double-click: what a single click previews, kept (SI-9b, `actions.toKeep`). */
   onRun?: (id: string, kept?: boolean) => void;
+  /** The catalogue's row for an id, or none: what the empty state's `offer` is drawn from
+   *  (#1156). A list without it, or without `onRun`, draws no way out. */
+  offerFor?: (id: string) => Offer | undefined;
   /** Run one of the extension's own actions this row offers (charter-app#341). A list with no
    *  handler draws no action buttons: a button that does nothing is not drawn. */
   onAct?: (row: PanelRow, action: RowAction) => void;
@@ -171,11 +176,29 @@ export function PanelList({
   ]);
 
   if (rows.length === 0) {
+    // **The empty state's way out is the catalogue's row** (#1156), drawn only while the
+    // catalogue offers it, and run the way a row's is: an id the catalogue has stopped offering
+    // draws nothing, which is `Doer`'s rule.
+    const offer = empty.offer === null || onRun === undefined ? undefined : offerFor?.(empty.offer);
     return (
       <EmptyState
         size="panel"
         headline={empty.headline}
-        body={empty.body ?? undefined}
+        body={empty.body === null ? undefined : codeSpans(empty.body)}
+        action={
+          offer === undefined ? undefined : (
+            <button
+              type="button"
+              // #190: WebKit leaves a button out of the tab sequence without this.
+              tabIndex={0}
+              disabled={!offer.available}
+              title={offer.available ? offer.note : offer.reason}
+              onClick={() => onRun?.(offer.id)}
+            >
+              {offer.title}
+            </button>
+          )
+        }
         testid={testid === undefined ? undefined : `${testid}-empty`}
       />
     );
@@ -239,6 +262,17 @@ export function PanelList({
       )}
     </div>
   );
+}
+
+/**
+ * A panel's sentence with each `` `…` `` span drawn in code font (#1156): the core writes a
+ * command the way the docs do, and the window draws it the way a Notice draws one, as `<code>`.
+ * A backtick with no partner is left as it is.
+ */
+export function codeSpans(text: string): ReactNode {
+  const parts = text.split(/`([^`]+)`/);
+  if (parts.length === 1) return text;
+  return parts.map((part, at) => (at % 2 === 1 ? <code key={at}>{part}</code> : part));
 }
 
 /** The roving-focus id of one of a row's actions: its row's key and its id, which a row's key

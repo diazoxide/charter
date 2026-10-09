@@ -42,8 +42,9 @@ export function EmptyState({
 }: {
   /** The one line. A claim about what is true, never an instruction. */
   headline: string;
-  /** A sentence under it, where there is more to say than the headline. */
-  body?: string;
+  /** A sentence under it, where there is more to say than the headline. A node, so a
+   *  command in it can be drawn in code font (`PanelList`'s `codeSpans`). */
+  body?: ReactNode;
   /** The glyph above it, where one helps. Lucide hides a nameless icon from assistive
    *  technology by itself, so it is decoration on top of the headline and never instead. */
   mark?: React.ComponentType<{ className?: string }>;

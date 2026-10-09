@@ -1089,6 +1089,8 @@ function AnsweredBlocks({
               open={open}
               onOpen={setOpen}
               onAct={onAct}
+              // The empty list's way out (#1156): the catalogue's row, as a row's is.
+              offerFor={onPress === undefined ? undefined : lookUp}
               onRun={
                 onPress === undefined
                   ? undefined

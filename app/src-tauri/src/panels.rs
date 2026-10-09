@@ -921,8 +921,9 @@ fn memory_panel(
         ),
         empty: panel::Empty {
             headline: "Nothing remembered yet".into(),
-            body: Some("The + above, or `purlis workspace remember`, records one.".into()),
-            offer: None,
+            body: Some("A chat records one with `purlis workspace remember`.".into()),
+            // The `+` on the list's heading, drawn again where the list is empty (#1156).
+            offer: Some(format!("memory.new:workspace/{workspace}")),
         },
     });
     panel::Panel {
@@ -966,9 +967,9 @@ pub(crate) fn shared_memory_view(root: &Path) -> Result<Vec<panel::Block>, Strin
                 empty: panel::Empty {
                     headline: "Nothing shared yet".into(),
                     body: Some(
-                        "The + above, or `purlis persona remember --shared`, records one.".into(),
+                        "A chat records one with `purlis persona remember --shared`.".into(),
                     ),
-                    offer: None,
+                    offer: Some("memory.new:shared".into()),
                 },
             });
         }
@@ -1145,8 +1146,10 @@ pub(crate) fn persona_view(
                 rows,
                 empty: panel::Empty {
                     headline: "Nothing remembered yet".into(),
-                    body: Some("`purlis persona remember` is how a fact arrives.".into()),
-                    offer: None,
+                    body: Some(format!(
+                        "A chat as {name} records one with `purlis persona remember`."
+                    )),
+                    offer: Some(format!("memory.new:persona/{name}")),
                 },
             });
         }
