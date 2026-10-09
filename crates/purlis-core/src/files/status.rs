@@ -174,7 +174,10 @@ pub(super) fn open(plane: &Path, branch: Branch<'_>) -> Result<Opened, Refused> 
     let workdir = opened
         .workdir()
         .and_then(|dir| std::fs::canonicalize(dir).ok());
-    if workdir.as_deref() != Some(base.as_path()) {
+    // The folder is the work tree, never the repository's own git directory: a git directory
+    // made at the folder, naming the folder as its `core.worktree`, is not a clone (#1550).
+    let git_dir = std::fs::canonicalize(opened.git_dir()).ok();
+    if workdir.as_deref() != Some(base.as_path()) || git_dir.as_deref() == Some(base.as_path()) {
         return Err(missing());
     }
     if piece.is_some() {
@@ -295,7 +298,8 @@ fn allowed_only(repo: &mut gix::Repository) -> Result<(), String> {
 ///
 /// Opened at the folder named, never found by climbing: `safe.bareRepository`, which every git
 /// process purlis starts is given, does not reach gitoxide, and [`open`] refuses a folder that
-/// is not its repository's work tree, so a bare repository is never read here (#1415, #1550).
+/// is not its repository's work tree, or is its git directory, so neither a bare repository nor
+/// a git directory made at the folder is read here (#1415, #1550).
 fn options() -> gix::open::Options {
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.user = true;
@@ -457,20 +461,52 @@ fn rolled_up(changes: &[Change]) -> Vec<Rolled> {
 mod tests {
     use super::*;
 
-    /// #1550: gitoxide is given no `safe.bareRepository`, and needs none: a bare repository
-    /// where a clone should be is refused, never read in its place.
-    #[test]
-    fn a_bare_repository_where_a_clone_should_be_is_never_read() {
+    /// A plane whose `workspaces/alpha/widget` is a git directory made by `make`, opened as
+    /// the clone it should be.
+    fn opened_where_a_clone_should_be(make: &[&[&str]]) -> Result<Opened, Refused> {
         let plane = tempfile::tempdir().unwrap();
         let clone = plane.path().join("workspaces").join("alpha").join("widget");
         std::fs::create_dir_all(&clone).unwrap();
-        assert!(crate::testgit::run_unconfigured(&clone, &["init", "-q", "--bare", "."]).ok());
+        for args in make {
+            assert!(
+                crate::testgit::run_unconfigured(&clone, args).ok(),
+                "{args:?}"
+            );
+        }
         let branch = Branch {
             ws: "alpha",
             repo: "widget",
             piece: None,
         };
-        assert!(open(plane.path(), branch).is_err());
+        open(plane.path(), branch)
+    }
+
+    /// #1550: gitoxide is given no `safe.bareRepository`, and needs none: a bare repository
+    /// where a clone should be is refused as no repository, never read in its place.
+    #[test]
+    fn a_bare_repository_where_a_clone_should_be_is_never_read() {
+        let opened = opened_where_a_clone_should_be(&[&["init", "-q", "--bare", "."]]);
+        assert!(
+            matches!(opened, Err(Refused::Piece(worktree::Refusal::NotARepo(_)))),
+            "{:?}",
+            opened.err()
+        );
+    }
+
+    /// #1550: nor is a git directory made at the folder that names the folder itself as its
+    /// work tree, which reads as a work tree to gitoxide.
+    #[test]
+    fn a_git_directory_naming_its_own_folder_as_its_work_tree_is_never_read() {
+        let opened = opened_where_a_clone_should_be(&[
+            &["init", "-q", "--bare", "."],
+            &["config", "core.bare", "false"],
+            &["config", "core.worktree", "."],
+        ]);
+        assert!(
+            matches!(opened, Err(Refused::Piece(worktree::Refusal::NotARepo(_)))),
+            "{:?}",
+            opened.err()
+        );
     }
 
     #[test]
