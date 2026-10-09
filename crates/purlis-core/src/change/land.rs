@@ -1001,10 +1001,8 @@ pub(super) fn sha_ok(sha: &str) -> bool {
 }
 
 /// Whether `m` has landed: `Ok(None)` when it has, `Ok(Some(why not))`, or `Err` when the
-/// forge could not be asked. The forge must say merged, and charter must have landed it
-/// ([`evidence`]): a logged landing whose commit the clone's default branch still holds, or a
-/// pending one found merged at its head, which is logged now. A blocker merged with neither
-/// was merged outside charter, and its order cannot be vouched for.
+/// forge could not be asked. The answer is [`verdict`]'s; a pending landing found merged is
+/// logged now.
 fn member_landed(
     books: &mut Books,
     m: &Member,
@@ -1017,64 +1015,100 @@ fn member_landed(
     let Some(req) = req else {
         return Ok(Some("it has no request".into()));
     };
-    let commit = match &req.state {
-        State::Open => return Ok(Some("its request is open".into())),
-        State::Closed => return Ok(Some("its request is REJECTED".into())),
-        State::Merged { commit } => commit.clone(),
-    };
-    let merge = match evidence(
+    match verdict(
+        books.plane,
         &books.log,
         &books.pending,
         &m.repo,
-        At::Request(req.number, &req.head),
+        &reached.clone,
+        &req,
     ) {
-        Evidence::Logged(line) => line.merge.clone(),
-        Evidence::Started(_) => {
-            let Some(commit) = commit else {
-                return Ok(Some(
-                    "merged, and the forge names no commit it merged as".into(),
-                ));
-            };
+        Verdict::Landed => Ok(None),
+        Verdict::NotLanded(why) => Ok(Some(why)),
+        Verdict::ToRecord(commit) => {
             if !books.log(&m.repo, &req, &commit) {
                 return Ok(Some(
                     "merged, and the landing log could not be written".into(),
                 ));
             }
-            return Ok(None);
+            Ok(None)
+        }
+    }
+}
+
+/// Whether a member has landed, by the one definition the land gate and `change show` share
+/// (#877): what [`verdict`] says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// The forge says merged, the landing log has it, and the clone's default branch holds
+    /// the logged commit.
+    Landed,
+    /// The forge says merged as this commit, and charter started that landing and has not
+    /// logged it yet: landed once it is logged, which the land gate does and `show` does not.
+    ToRecord(String),
+    /// Not landed, and why, in the words the land gate refuses a blocker in.
+    NotLanded(String),
+}
+
+/// Whether `repo`'s request `req` has landed. The forge must say merged, and charter must
+/// have landed it ([`evidence`]): a logged landing whose commit the clone's default branch
+/// still holds, or a pending one found merged at its head. A request merged with neither was
+/// merged outside charter, and its order cannot be vouched for. Reads only: nothing is written.
+pub fn verdict(
+    plane: &Path,
+    log: &Landings,
+    pending: &Pendings,
+    repo: &str,
+    clone: &Path,
+    req: &Request,
+) -> Verdict {
+    let commit = match &req.state {
+        State::Open => return Verdict::NotLanded("its request is open".into()),
+        State::Closed => return Verdict::NotLanded("its request is REJECTED".into()),
+        State::Merged { commit } => commit.clone(),
+    };
+    let merge = match evidence(log, pending, repo, At::Request(req.number, &req.head)) {
+        Evidence::Logged(line) => line.merge.clone(),
+        Evidence::Started(_) => {
+            return match commit {
+                Some(commit) => Verdict::ToRecord(commit),
+                None => {
+                    Verdict::NotLanded("merged, and the forge names no commit it merged as".into())
+                }
+            };
         }
         Evidence::None => {
-            return Ok(Some(format!(
+            return Verdict::NotLanded(format!(
                 "merged outside purlis: purlis has no record of landing it, so it cannot \
                  vouch for the order. A person decides whether {} lands without it",
-                shown::line(&m.repo)
-            )));
+                shown::line(repo)
+            ));
         }
     };
     // The log is never committed, which makes it local rather than trustworthy: a hand edit
     // reaches here, and then a git argv.
     if !sha_ok(&merge) {
-        return Ok(Some(format!(
+        return Verdict::NotLanded(format!(
             "merged, but the landing log's commit {} is not a commit id, and purlis will not \
              hand it to git",
             shown::short(&merge)
-        )));
-    }
-    let Some(default) = crate::reposave::default_branch(books.plane, &m.repo, &reached.clone)
-    else {
-        return Ok(Some(
-            "merged, but purlis cannot tell this clone's default branch".into(),
         ));
-    };
-    let holds = |at: &str| holds(&reached.clone, &merge, at);
-    if holds(&format!("refs/remotes/origin/{default}")) || holds(&format!("refs/heads/{default}")) {
-        return Ok(None);
     }
-    Ok(Some(format!(
+    let Some(default) = crate::reposave::default_branch(plane, repo, clone) else {
+        return Verdict::NotLanded(
+            "merged, but purlis cannot tell this clone's default branch".into(),
+        );
+    };
+    let holds = |at: &str| holds(clone, &merge, at);
+    if holds(&format!("refs/remotes/origin/{default}")) || holds(&format!("refs/heads/{default}")) {
+        return Verdict::Landed;
+    }
+    Verdict::NotLanded(format!(
         "merged as {}, which this clone's {} does not contain: rewritten, or not fetched since. \
          `git fetch` in it, then land again",
         short(&merge),
         shown::line(&default)
-    )))
+    ))
 }
 
 #[cfg(test)]

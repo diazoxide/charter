@@ -10,17 +10,20 @@
 //! the repository path come from the member's own clone's `origin` ([`Repo::of_clone`]), which
 //! the operator put there by hand.
 //!
-//! **Blocked is derived on each read.** A member's blocker counts as landed here when the
-//! forge reports its request merged. `charter change land`'s own gate (`super::land`) reads
-//! the other half of "landed" too: the landing log, and the default branch still containing the
-//! logged commit.
+//! **Blocked is derived on each read.** A member's blocker counts as landed here exactly when
+//! `purlis change land`'s own gate would count it ([`super::land::verdict`], #877): the forge
+//! reports its request merged, and purlis's records say purlis landed it, in the landing log
+//! with the clone's default branch still holding the logged commit, or as a landing purlis
+//! started. A request merged outside purlis is merged, and not landed.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
+use super::land::Verdict;
 use super::record::Record;
+use super::{landing, pending};
 use crate::forge::Caller;
 use crate::forge::checks::Checks;
 use crate::forge::pr::{Repo, Request, State};
@@ -34,7 +37,10 @@ pub struct Observed {
     pub request: Result<Option<Request>, String>,
     /// The checks at the request's head, read for an open request only.
     pub checks: Option<Checks>,
-    /// Its blockers that have not merged, by this reading. On a merged member, it went in ahead
+    /// `Ok` when it has landed, by the land gate's definition ([`super::land::verdict`]);
+    /// else why not, in the gate's words.
+    pub landed: Result<(), String>,
+    /// Its blockers that have not landed, by this reading. On a merged member, it went in ahead
     /// of them.
     pub waiting_on: Vec<String>,
 }
@@ -69,22 +75,24 @@ impl Observation {
 
 /// Ask the forge about every member of `record`, one member's failure costing only itself.
 pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> Observation {
+    let log = landing::landings(plane, ws, &record.change);
+    let pending = pending::pendings(plane, ws, &record.change);
     let mut members: Vec<Observed> = record
         .members
         .iter()
         .map(|m| {
             let request = crate::repos::clone_at(plane, ws, &m.repo)
                 .ok_or_else(|| format!("no clone of {} in this workspace", m.repo))
-                .and_then(|clone| Repo::of_clone(plane, &clone.path))
-                .and_then(|repo| {
+                .and_then(|clone| {
+                    let repo = Repo::of_clone(plane, &clone.path)?;
                     let found = repo
                         .backend()
                         .by_head(&Caller::command(), &repo.path, &m.branch)
                         .map_err(|why| why.to_string())?;
-                    Ok((repo, found))
+                    Ok((clone.path, repo, found))
                 });
-            let (request, checks) = match request {
-                Ok((repo, Some(req))) => {
+            let (request, checks, landed) = match request {
+                Ok((clone, repo, Some(req))) => {
                     let checks = (req.state == State::Open).then(|| {
                         repo.backend().checks_at(
                             &Caller::command(),
@@ -93,23 +101,31 @@ pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> O
                             req.number,
                         )
                     });
-                    (Ok(Some(req)), checks)
+                    // Read only: a landing purlis started and found merged counts, as the
+                    // gate counts it, and is logged by `land`, never here.
+                    let landed =
+                        match super::land::verdict(plane, &log, &pending, &m.repo, &clone, &req) {
+                            Verdict::Landed | Verdict::ToRecord(_) => Ok(()),
+                            Verdict::NotLanded(why) => Err(why),
+                        };
+                    (Ok(Some(req)), checks, landed)
                 }
-                Ok((_, None)) => (Ok(None), None),
-                Err(why) => (Err(why), None),
+                Ok((_, _, None)) => (Ok(None), None, Err("it has no request".to_string())),
+                Err(why) => (Err(why.clone()), None, Err(why)),
             };
             Observed {
                 repo: m.repo.clone(),
                 branch: m.branch.clone(),
                 request,
                 checks,
+                landed,
                 waiting_on: Vec::new(),
             }
         })
         .collect();
     let landed: BTreeSet<String> = members
         .iter()
-        .filter(|m| m.merged())
+        .filter(|m| m.landed.is_ok())
         .map(|m| m.repo.clone())
         .collect();
     let blocked = record.blocked(&landed);

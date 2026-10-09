@@ -516,6 +516,9 @@ pub fn show(
 ///
 /// `NOT RUN` and `UNKNOWN` are printed as themselves and never as passing. A member charter
 /// could not ask about says why, in the forge CLI's own words.
+///
+/// A blocker is ticked only when it has landed by the land gate's definition (#877): merged,
+/// and landed by purlis. One merged outside purlis is crossed, with the gate's reason.
 pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String> {
     let (merged, of) = observation.landed();
     let mut lines = vec![format!(
@@ -524,12 +527,6 @@ pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String>
     )];
     let names: Vec<String> = observation.members.iter().map(|m| cell(&m.repo)).collect();
     let w = tui::column("", names.iter().map(String::as_str), 0, None);
-    let merged_repos: Vec<&str> = observation
-        .members
-        .iter()
-        .filter(|m| m.merged())
-        .map(|m| m.repo.as_str())
-        .collect();
     for (m, name) in observation.members.iter().zip(&names) {
         let mut row = format!("  {}  ", tui::pad(name, w, Align::Left));
         match &m.request {
@@ -558,12 +555,16 @@ pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String>
                 .needs
                 .iter()
                 .map(|n| {
-                    let mark = if merged_repos.contains(&n.as_str()) {
-                        "✓"
-                    } else {
-                        "✗"
-                    };
-                    format!("{} {mark}", cell(n))
+                    let blocker = observation.members.iter().find(|b| &b.repo == n);
+                    match blocker.map(|b| (b.merged(), &b.landed)) {
+                        Some((_, Ok(()))) => format!("{} ✓", cell(n)),
+                        // Merged, and still not landed: the gate's reason, so the ✗ beside
+                        // a merged row is not a puzzle.
+                        Some((true, Err(why))) => {
+                            format!("{} ✗ ({})", cell(n), shown::line(why))
+                        }
+                        _ => format!("{} ✗", cell(n)),
+                    }
                 })
                 .collect();
             row.push_str(&format!("   needs: {}", needs.join(", ")));
