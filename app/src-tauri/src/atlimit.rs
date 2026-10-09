@@ -14,6 +14,12 @@
 //! ([`purlis_core::dispatchdecision::lineage_counting`], [`purlis_core::dispatchlimits::decide`]).
 //! A task that reports or ends, a limit raised in Settings, and the chat's own close all clear
 //! it at the next read. Held in memory: a launch starts with none, as no chat is refused yet.
+//!
+//! **A dispatch into another workspace is re-decided as it was decided** (#1540): against the
+//! asking chat's workspace, then the one the new chat was to work in, as
+//! [`purlis_core::dispatchdecision::asked_by_a_chat`] holds it to both. A refusal at the
+//! destination's limit keeps its line until a slot frees there, and its row names that
+//! workspace ([`row_words_in`]).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -33,6 +39,10 @@ pub struct AtLimit {
     pub row: String,
     /// The whole sentence for the person: which limit, how many, and where it is changed.
     pub said: String,
+    /// Whether it is the chat's own running limit in its own workspace: the one its tab menu's
+    /// footer already counts against (`6 of 6 running`). Any other limit that binds is said on
+    /// that footer too, in `row`'s words (#1540).
+    pub own: bool,
 }
 
 /// **What a row says of the limit `why`**, by which one it is, so it never reads as another
@@ -54,6 +64,30 @@ pub fn row_words(why: &Limited) -> Option<String> {
         ),
         Limited::PersonaFull { persona, limit, .. } => format!(
             "{} is full ({limit} at once), not this chat's limit",
+            short(persona)
+        ),
+        _ => return None,
+    })
+}
+
+/// [`row_words`], for a limit met in workspace `there`, another than the one the chat works in
+/// (#1540): `at its task limit in beta (2)`. That number is beta's, so it never reads as the
+/// footer's own.
+pub fn row_words_in(why: &Limited, there: Option<&str>) -> Option<String> {
+    let Some(there) = there else {
+        return row_words(why);
+    };
+    use purlis_core::shown::short;
+    Some(match why {
+        Limited::TooManyRunning { limit, .. } => format!("at its task limit in {there} ({limit})"),
+        Limited::LineageFull { limit, .. } => {
+            format!("at its chain's limit in {there} ({limit} live)")
+        }
+        Limited::PersonaDispatches { persona, limit, .. } => {
+            format!("at {}'s task limit in {there} ({limit})", short(persona))
+        }
+        Limited::PersonaFull { persona, limit, .. } => format!(
+            "{} is full in {there} ({limit} at once), not this chat's limit",
             short(persona)
         ),
         _ => return None,
@@ -93,6 +127,8 @@ struct Marks {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Mark {
     to: Option<String>,
+    /// The workspace the refused chat was to work in, where the dispatch named one (#1453).
+    works_in: Option<String>,
     counted: Counted,
     number: u64,
 }
@@ -120,9 +156,15 @@ impl AtLimits {
         }
     }
 
-    /// Chat `chat`'s dispatch to `to` was refused for `why`: marked where a slot frees it.
-    /// Answers whether it was marked.
-    pub fn refused(&self, chat: u32, to: Option<String>, counted: Counted, why: &Refused) -> bool {
+    /// Chat `chat`'s dispatch to `to`, to work in `works_in` where it named a workspace, was
+    /// refused for `why`: marked where a slot frees it. Answers whether it was marked.
+    pub fn refused(
+        &self,
+        chat: u32,
+        (to, works_in): (Option<String>, Option<String>),
+        counted: Counted,
+        why: &Refused,
+    ) -> bool {
         if !frees_with_a_slot(why) {
             return false;
         }
@@ -133,6 +175,7 @@ impl AtLimits {
             chat,
             Mark {
                 to,
+                works_in,
                 counted,
                 number,
             },
@@ -156,15 +199,26 @@ impl AtLimits {
 /// read is dropped.
 pub(crate) fn still(held: &Held, chat: u32) -> Option<AtLimit> {
     let mark = held.at_limits().marks().by_chat.get(&chat).cloned()?;
-    let bound = binds(held, chat, mark.to.as_deref(), mark.counted);
+    let bound = binds(
+        held,
+        chat,
+        (mark.to.as_deref(), mark.works_in.as_deref()),
+        mark.counted,
+    );
     if bound.is_none() {
         held.at_limits().drop_if(chat, mark.number);
     }
     bound
 }
 
-/// The count refusal a dispatch from chat `chat` to `to` would meet now, as the person reads it.
-fn binds(held: &Held, chat: u32, to: Option<&str>, counted: Counted) -> Option<AtLimit> {
+/// The count refusal a dispatch from chat `chat` to `to`, to work in `works_in`, would meet
+/// now, as the person reads it.
+fn binds(
+    held: &Held,
+    chat: u32,
+    (to, works_in): (Option<&str>, Option<&str>),
+    counted: Counted,
+) -> Option<AtLimit> {
     let root = held.root();
     let default = purlis_core::start::persona_for_a_new_chat(root);
     let (pair, cwd, lineage) = held.chats().deciding_over(|open, starting| {
@@ -183,35 +237,43 @@ fn binds(held: &Held, chat: u32, to: Option<&str>, counted: Counted) -> Option<A
     let workspace = cwd
         .as_deref()
         .and_then(|cwd| purlis_core::active::workspace_of_tree(root, cwd));
-    let limits = dispatchlimits::of(
-        root,
-        workspace.as_deref(),
-        pair.asking.as_deref(),
-        pair.to.as_deref(),
-    );
-    match dispatchlimits::decide(&limits, &lineage) {
-        Decision::Refused(why) => {
-            let why = Refused::Limit(why);
-            if !frees_with_a_slot(&why) {
-                return None;
-            }
-            let Refused::Limit(
-                limited @ (Limited::TooManyRunning { limit, .. }
-                | Limited::LineageFull { limit, .. }
-                | Limited::PersonaDispatches { limit, .. }
-                | Limited::PersonaFull { limit, .. }),
-            ) = &why
-            else {
-                return None;
-            };
-            Some(AtLimit {
-                limit: *limit,
-                row: row_words(limited)?,
-                said: crate::handoff::said_to_the_person(&why),
-            })
-        }
+    let limits_in = |workspace: Option<&str>| {
+        dispatchlimits::of(root, workspace, pair.asking.as_deref(), pair.to.as_deref())
+    };
+    // Its own workspace first, as the decision holds it.
+    if let Decision::Refused(why) =
+        dispatchlimits::decide(&limits_in(workspace.as_deref()), &lineage)
+    {
+        return bound_by(&why, None);
+    }
+    // Then the one it was to work in, where that is another (#1453): off there is no slot's to
+    // free, so no line.
+    let there = works_in.filter(|there| Some(*there) != workspace.as_deref())?;
+    if dispatchlimits::off_in(root, there, pair.to.as_deref()).is_some() {
+        return None;
+    }
+    match dispatchlimits::decide(&limits_in(Some(there)), &lineage) {
+        Decision::Refused(why) => bound_by(&why, Some(there)),
         Decision::Allowed => None,
     }
+}
+
+/// What a row says of the limit `why`, met in workspace `there` where that is another than the
+/// chat's own, or nothing where no slot frees it.
+fn bound_by(why: &Limited, there: Option<&str>) -> Option<AtLimit> {
+    let limit = match why {
+        Limited::TooManyRunning { limit, .. }
+        | Limited::LineageFull { limit, .. }
+        | Limited::PersonaDispatches { limit, .. }
+        | Limited::PersonaFull { limit, .. } => *limit,
+        _ => return None,
+    };
+    Some(AtLimit {
+        limit,
+        own: there.is_none() && matches!(why, Limited::TooManyRunning { .. }),
+        row: row_words_in(why, there)?,
+        said: crate::handoff::said_to_the_person(&Refused::Limit(why.clone())),
+    })
 }
 
 #[cfg(test)]
@@ -295,23 +357,52 @@ mod tests {
     }
 
     #[test]
+    fn a_limit_met_in_another_workspace_is_named_with_it() {
+        let full = Limited::TooManyRunning {
+            limit: 2,
+            running: 2,
+        };
+        assert_eq!(row_words_in(&full, None), row_words(&full));
+        assert_eq!(
+            row_words_in(&full, Some("beta")).as_deref(),
+            Some("at its task limit in beta (2)")
+        );
+        assert_eq!(
+            row_words_in(
+                &Limited::PersonaFull {
+                    persona: "devops".to_owned(),
+                    limit: 1,
+                    running: 1
+                },
+                Some("beta")
+            )
+            .as_deref(),
+            Some("devops is full in beta (1 at once), not this chat's limit")
+        );
+        assert_eq!(
+            row_words_in(&Limited::TooDeep { limit: 3, depth: 3 }, Some("beta")),
+            None
+        );
+    }
+
+    #[test]
     fn a_read_drops_only_the_mark_it_read_never_one_set_meanwhile() {
         let marks = AtLimits::default();
         let full = Refused::Limit(Limited::TooManyRunning {
             limit: 6,
             running: 6,
         });
-        marks.refused(4, None, Counted::Tasks, &full);
+        marks.refused(4, (None, None), Counted::Tasks, &full);
         let read = marks.marks().by_chat[&4].number;
         // A second refusal lands while the read decides: its mark stands.
-        marks.refused(4, None, Counted::Tasks, &full);
+        marks.refused(4, (None, None), Counted::Tasks, &full);
         marks.drop_if(4, read);
         assert!(marks.marked(4));
         let now = marks.marks().by_chat[&4].number;
         marks.drop_if(4, now);
         assert!(!marks.marked(4));
         // And a close or a dispatch let through clears it outright.
-        marks.refused(4, None, Counted::Tasks, &full);
+        marks.refused(4, (None, None), Counted::Tasks, &full);
         marks.clear(4);
         assert!(!marks.marked(4));
     }
@@ -320,13 +411,13 @@ mod tests {
     fn a_refusal_no_slot_frees_marks_nothing() {
         let marks = AtLimits::default();
         let deep = Refused::Limit(Limited::TooDeep { limit: 3, depth: 3 });
-        assert!(!marks.refused(4, None, Counted::Tasks, &deep));
+        assert!(!marks.refused(4, (None, None), Counted::Tasks, &deep));
         assert!(!marks.marked(4));
         let full = Refused::Limit(Limited::TooManyRunning {
             limit: 6,
             running: 6,
         });
-        assert!(marks.refused(4, Some("devops".to_owned()), Counted::Tasks, &full));
+        assert!(marks.refused(4, (Some("devops".to_owned()), None), Counted::Tasks, &full));
         assert!(marks.marked(4));
     }
 }

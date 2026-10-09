@@ -6,11 +6,25 @@
  * by, both the core's (`OpenChat.tasks_running`, `OpenChat.tasks_limit`). Nothing is said
  * where nothing counts against the limit: a session whose tasks have all finished has nothing
  * a limit holds back. A refusal is said on the session's row (`ListedChat.atLimit`).
+ *
+ * **Where another limit binds, the footer says that one too** (#1540): its chain's, a
+ * persona's, another workspace's, or its token figure, in the row's own words
+ * (`AtLimit.row`). Only the chat's own running limit is left out, since `6 of 6 running` says
+ * it already (`AtLimit.own`).
  */
 import type { ChatRow, ListedChat } from "./chatsTree";
 
-/** `4 of 6 running`, for a chat the core gave both numbers for, with a task counted. */
+/** `4 of 6 running`, for a chat the core gave both numbers for, with a task counted; and the
+ *  limit that binds it where that is another than this count's (`at its chain's limit (16
+ *  live)`). */
 export function runningSaid(
+  chat: Pick<ListedChat, "tasksLimit" | "tasksRunning" | "atLimit"> | undefined,
+): string | undefined {
+  const said = [countedSaid(chat), bindsSaid(chat)].filter((one) => one !== undefined);
+  return said.length === 0 ? undefined : said.join(" · ");
+}
+
+function countedSaid(
   chat: Pick<ListedChat, "tasksLimit" | "tasksRunning"> | undefined,
 ): string | undefined {
   const limit = chat?.tasksLimit;
@@ -19,6 +33,12 @@ export function runningSaid(
     return undefined;
   if (running === 0) return undefined;
   return `${running} of ${limit} running`;
+}
+
+function bindsSaid(chat: Pick<ListedChat, "atLimit"> | undefined): string | undefined {
+  const at = chat?.atLimit;
+  if (at === null || at === undefined || at.own) return undefined;
+  return at.row;
 }
 
 /** Each tab's footer, by tab: what its own session (the chat at the top of its list) says. */

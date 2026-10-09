@@ -2617,6 +2617,12 @@ export type AtLimit = {
 	row: string,
 	/**  The whole sentence for the person: which limit, how many, and where it is changed. */
 	said: string,
+	/**
+	 *  Whether it is the chat's own running limit in its own workspace: the one its tab menu's
+	 *  footer already counts against (`6 of 6 running`). Any other limit that binds is said on
+	 *  that footer too, in `row`'s words (#1540).
+	 */
+	own: boolean,
 };
 
 /**

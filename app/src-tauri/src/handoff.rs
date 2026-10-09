@@ -2037,10 +2037,13 @@ fn dispatch_noting(
                 Attendance::Attended => dispatchdecision::Counted::Tasks,
                 Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
             };
-            if held
-                .at_limits()
-                .refused(from, asked.to.clone(), counted, why)
-            {
+            let works_in = moves_into.as_deref().or(ground.workspace());
+            if held.at_limits().refused(
+                from,
+                (asked.to.clone(), works_in.map(str::to_owned)),
+                counted,
+                why,
+            ) {
                 held.rows_changed();
             }
             // Said to whoever asked: a chat reads what to do instead, and the person
