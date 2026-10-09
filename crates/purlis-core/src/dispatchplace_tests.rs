@@ -741,6 +741,18 @@ fn the_command_s_remove_is_kept_off_a_task_s_folder_as_the_explorer_s_is() {
          was removed."
     );
 
+    // Typed in another case, it is the same folder where the file system folds case, as
+    // macOS's does: held all the same, and its branch with it.
+    for (ws, repo, typed) in [
+        ("alpha", "api", "CHECK-B5RC0DEF"),
+        ("Alpha", "API", "check-b5rc0def"),
+    ] {
+        assert!(
+            kept_from_removal(&root, ws, repo, typed, true, || true).is_some(),
+            "{ws} {repo} {typed}"
+        );
+    }
+
     // Its folder already gone: only git's stale registration is left, and nothing to lose,
     // but the branch is still kept.
     std::fs::remove_dir_all(root.join("workspaces/alpha/.worktrees/api").join(piece)).unwrap();
@@ -769,6 +781,11 @@ fn a_record_that_does_not_read_keeps_the_command_off_the_folder_its_text_names()
     );
     assert!(said.contains(&format!("{ID}.json")), "{said}");
     assert!(said.ends_with("Nothing was removed."), "{said}");
+    // Typed in another case, it is the same folder where the file system folds case, and its
+    // branch is kept whatever the file system.
+    assert!(kept_from_removal(&root, "ALPHA", "Api", "Check-B5RC0DEF", true, || true).is_some());
+    #[cfg(target_os = "macos")]
+    assert!(kept_from_removal(&root, "ALPHA", "Api", "Check-B5RC0DEF", false, || true).is_some());
     // Gone already, it goes, without its branch.
     std::fs::remove_dir_all(root.join("workspaces/alpha/.worktrees/api").join(piece)).unwrap();
     assert_eq!(
