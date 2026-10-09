@@ -463,17 +463,29 @@ pub(super) fn plain(path: &str) -> Option<String> {
 }
 
 /// Every folder holding a change, with the mark its changes share and how many it holds.
+///
+/// A renamed file is counted in the folders above its new path, and also in those above where it
+/// came from, as a file each of them lost (#1130): `src/` shows the file moved out of it, as
+/// [`Mark::Deleted`]. A folder above both is counted once, as the rename.
 fn rolled_up(changes: &[Change]) -> Vec<Rolled> {
     let mut folders: BTreeMap<String, (BTreeSet<Mark>, usize)> = BTreeMap::new();
     for change in changes {
-        let mut above = Some(change.path.as_str());
-        while let Some(path) = above {
-            let parent = path.rfind('/').map(|at| &path[..at]);
-            let folder = parent.unwrap_or("");
-            let entry = folders.entry(folder.to_string()).or_default();
+        let above = folders_above(&change.path);
+        for folder in &above {
+            let entry = folders.entry((*folder).to_string()).or_default();
             entry.0.insert(change.mark);
             entry.1 += 1;
-            above = parent;
+        }
+        let Some(from) = change.from.as_deref() else {
+            continue;
+        };
+        for folder in folders_above(from) {
+            if above.contains(&folder) {
+                continue;
+            }
+            let entry = folders.entry(folder.to_string()).or_default();
+            entry.0.insert(Mark::Deleted);
+            entry.1 += 1;
         }
     }
     folders
@@ -487,6 +499,18 @@ fn rolled_up(changes: &[Change]) -> Vec<Rolled> {
             count,
         })
         .collect()
+}
+
+/// The folders above `path`, nearest first, the branch's own (`""`) last.
+fn folders_above(path: &str) -> Vec<&str> {
+    let mut above = Vec::new();
+    let mut at = path;
+    while let Some(cut) = at.rfind('/') {
+        at = &at[..cut];
+        above.push(at);
+    }
+    above.push("");
+    above
 }
 
 #[cfg(test)]
@@ -661,5 +685,60 @@ mod tests {
             assert_eq!(plain(path), None, "{path}");
         }
         assert_eq!(plain("in dir/ok.txt"), Some("in dir/ok.txt".to_string()));
+    }
+
+    fn change(path: &str, mark: Mark, from: Option<&str>) -> Change {
+        Change {
+            path: path.to_string(),
+            mark,
+            from: from.map(str::to_string),
+            uncommitted: true,
+        }
+    }
+
+    fn rolled(folder: &str, mark: Mark, count: usize) -> Rolled {
+        Rolled {
+            folder: folder.to_string(),
+            mark,
+            count,
+        }
+    }
+
+    /// #1130: a file moved out of `src/` marks `src/` as having lost it; a folder above both
+    /// ends counts the rename once.
+    #[test]
+    fn a_renames_source_folders_are_rolled_up_as_losing_the_file() {
+        let changes = [change("lib/deep/a.rs", Mark::Renamed, Some("src/old/a.rs"))];
+
+        assert_eq!(
+            rolled_up(&changes),
+            [
+                rolled("", Mark::Renamed, 1),
+                rolled("lib", Mark::Renamed, 1),
+                rolled("lib/deep", Mark::Renamed, 1),
+                rolled("src", Mark::Deleted, 1),
+                rolled("src/old", Mark::Deleted, 1),
+            ]
+        );
+    }
+
+    /// #1130: within one folder a rename is one change there; where the source folder holds
+    /// other changes too, it is marked as changed, counting each.
+    #[test]
+    fn a_renames_source_folder_with_other_changes_is_marked_changed() {
+        let changes = [
+            change("src/b.rs", Mark::Renamed, Some("src/a.rs")),
+            change("src/kept/c.rs", Mark::Added, None),
+            change("top.rs", Mark::Renamed, Some("src/kept/d.rs")),
+        ];
+
+        assert_eq!(
+            rolled_up(&changes),
+            [
+                rolled("", Mark::Changed, 3),
+                rolled("src", Mark::Changed, 3),
+                rolled("src/kept", Mark::Changed, 2),
+            ]
+        );
     }
 }
