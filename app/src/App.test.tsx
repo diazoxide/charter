@@ -121,8 +121,9 @@ function paneDoing(session: number) {
   return within(holder as HTMLElement);
 }
 
-/** Answers every command the app sends, and records what it was asked. */
-function core(): { asked: { cmd: string; args: unknown }[] } {
+/** Answers every command the app sends, and records what it was asked. `options` is what the
+ *  picker offers. */
+function core(options: unknown = START_OPTIONS): { asked: { cmd: string; args: unknown }[] } {
   const asked: { cmd: string; args: unknown }[] = [];
   let opened = 0;
   mockIPC((cmd, args) => {
@@ -135,7 +136,7 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
-    if (cmd === "start_options") return START_OPTIONS;
+    if (cmd === "start_options") return options;
     if (cmd === "start_chat") return { session: ++opened };
     return null;
   });
@@ -355,6 +356,31 @@ describe("App", () => {
     await splitInto("Split right");
 
     expect(panes()).toEqual(["session 1", "session 2"]);
+  });
+
+  it("starts a split's chat on the harness picked for it, not the first pane's (HY-13a)", async () => {
+    const codex = {
+      ...START_OPTIONS.profiles[0],
+      name: "codex",
+      kind: "codex",
+      shown: "codex",
+      is_default: false,
+    };
+    const { asked } = core({ ...START_OPTIONS, profiles: [...START_OPTIONS.profiles, codex] });
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await userEvent.click(await screen.findByRole("radio", { name: /^codex/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(panes()).toEqual(["session 1", "session 2"]));
+    expect(tabs(), "both panes are drawn in the one tab").toHaveLength(1);
+    expect(
+      asked
+        .filter(({ cmd }) => cmd === "start_chat")
+        .map(({ args }) => (args as { profile: string }).profile),
+    ).toEqual(["claude", "codex"]);
   });
 
   it("shows only the panes of the tab in front", async () => {
