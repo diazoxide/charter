@@ -94,11 +94,15 @@ describe("the Granted list", () => {
     expect(rows[2]).toHaveTextContent(
       "Reach 10.0.0.5:6443 · Everyone in this project · committed by Dana",
     );
-    // Locked by policy: said, and no Revoke.
+    // Locked by policy: said, and still yours to take away (#1431); a project host's Revoke
+    // edits the committed file.
     expect(rows[2]).toHaveTextContent(
       "Not in force. 10.0.0.5:6443 is not a host policy allows. Locked by policy, set by IT in /etc/purlis/policy.json.",
     );
-    expect(within(rows[2]).queryByRole("button")).toBeNull();
+    expect(rows[2]).toHaveTextContent("Revoking it edits the committed charter.toml.");
+    expect(
+      within(rows[2]).getByRole("button", { name: "Revoke reaching 10.0.0.5:6443" }),
+    ).toBeVisible();
 
     // What reads the chats left on an older sandbox hears that a sandbox command returned
     // (#1428): the revoked folder is kept where no watcher reports a write.
@@ -108,6 +112,14 @@ describe("the Granted list", () => {
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
     expect(asked).toEqual([{ plane: PLANE, id: MINE.id }]);
     await waitFor(() => expect(heard.result.current).toBeGreaterThan(before));
+
+    // The locked one goes the same way.
+    await userEvent.click(screen.getByRole("button", { name: "Revoke reaching 10.0.0.5:6443" }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
+    expect(asked).toEqual([
+      { plane: PLANE, id: MINE.id },
+      { plane: PLANE, id: PROJECT.id },
+    ]);
   });
 
   it("says when nothing is granted", async () => {

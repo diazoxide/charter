@@ -646,13 +646,16 @@ forbid the opt-out").
      started unconfined, and purlis is never the actor of a `trust.sandbox.off` there. The
      refusal names the policy and its owner. Ruling V21 3 (Windows starts at the opt-out, with
      purlis as the actor) stands only where no policy requires the sandbox.
-   - No refusal sends the person to the opt-out: each names the policy and its owner instead.
+   - No refusal sends the person to the opt-out: each names the policy and its owner instead,
+     and leads with the policy ("policy requires the sandbox for every chat on this machine"),
+     not with the project (#1431).
    - §1's "absent is not off" stands for the project's own file. A policy is the one thing that
      turns the sandbox on where the project did not, and only on the machines it is on.
 5. **What a lock drops is said where it is kept or added** (#1423): Settings refuses a host
-   the policy does not allow when it is added, with the policy's sentence; the Granted list
-   marks a kept grant the policy now drops as not in force; and the one-time Notice of a change
-   to the project's hosts names only the hosts a chat reaches.
+   the policy does not allow when it is added, with the policy's sentence, by its Add and by
+   Edit as TOML alike, while one the file already held is kept (#1431); the Granted list marks a
+   kept grant the policy now drops as not in force, and still offers Revoke on it (#1431); and
+   the one-time Notice of a change to the project's hosts names only the hosts a chat reaches.
 
 ## Amended (2026-10-08, #1055): a commit in a linked worktree is a brokered write
 

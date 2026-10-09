@@ -839,16 +839,26 @@ impl Chats {
         sandbox: Option<&purlis_core::sandbox::Applied>,
         persona: Option<&str>,
     ) -> Result<Armed, String> {
-        let not_carried = "this project runs every chat sandboxed, and this app cannot hand the \
-                           sandbox to this chat's harness, so nothing was started";
+        // Said under the policy in force (#1431): where it requires the sandbox, the refusal
+        // leads with the policy, not the project, and ends with who set it.
+        let not_carried = |then: &str| {
+            purlis_core::sandbox::under_policy(
+                &purlis_core::sandbox::policy::Locks::of(&self.project),
+                format!(
+                    "{}, and this app cannot hand the sandbox to this chat's harness, so nothing \
+                     was started{then}",
+                    purlis_core::sandbox::LEAD
+                ),
+            )
+        };
         if let Some(applied) = sandbox
             && harness != Some(applied.harness())
         {
-            return Err(format!("{not_carried}."));
+            return Err(not_carried("."));
         }
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return match sandbox {
-                Some(_) => Err(format!("{not_carried}: purlis's own binary was not found.")),
+                Some(_) => Err(not_carried(": purlis's own binary was not found.")),
                 None => Ok((Vec::new(), Vec::new())),
             };
         };
@@ -862,8 +872,8 @@ impl Chats {
         };
         match harness.state_hooks(kit, cwd, plugins, sandbox) {
             StateHooks::ThisSessionOnly { args, env, .. } => Ok((args, env)),
-            StateHooks::None if sandbox.is_some() => Err(format!(
-                "{not_carried}: purlis's plugin, which carries it, was not found."
+            StateHooks::None if sandbox.is_some() => Err(not_carried(
+                ": purlis's plugin, which carries it, was not found.",
             )),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -1734,9 +1744,13 @@ impl Chats {
         // as it is open: charter's egress proxy and its own temp directory (ADR 0067 §2).
         let confinement = match sandbox {
             Some(applied) => applied.confine().map_err(|err| {
-                format!(
-                    "this project runs every chat sandboxed, and purlis could not start what the \
-                     sandbox needs beside this chat ({err}), so nothing was started."
+                purlis_core::sandbox::under_policy(
+                    &purlis_core::sandbox::policy::Locks::of(&self.project),
+                    format!(
+                        "{}, and purlis could not start what the sandbox needs beside this chat \
+                         ({err}), so nothing was started.",
+                        purlis_core::sandbox::LEAD
+                    ),
                 )
             })?,
             None => None,
@@ -4783,6 +4797,40 @@ pub(crate) mod tests {
             .expect_err("not started");
 
         assert!(refused.contains("cannot hand the sandbox"), "{refused}");
+        assert!(refused.starts_with(purlis_core::sandbox::LEAD), "{refused}");
+    }
+
+    /// #1431: where an administrator's policy requires the sandbox, the refusal says the policy
+    /// is why, not the project, and who set it.
+    #[test]
+    fn a_refusal_where_policy_requires_the_sandbox_leads_with_the_policy() {
+        use purlis_core::sandbox::policy::{Locks, set_for_this_test};
+        let plane = a_sandboxed_plane();
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.path().join("charter")),
+            plugin: Some(plane.path().join("plugin")),
+            shims: None,
+            git_hooks: None,
+        });
+        let ready = ready_under(Harness::Codex, a_claude_sandbox(plane.path()));
+        set_for_this_test(Locks::parse(
+            r#"{"owner": "IT", "sandbox": {"opt-out": false}}"#,
+            std::path::Path::new("/etc/purlis/policy.json"),
+        ));
+        let refused = chats.start_ready(&chat("/bin/sh", "c", None), &ready, SIZE);
+        set_for_this_test(Locks::none());
+
+        let refused = refused.expect_err("not started");
+        assert!(
+            refused.starts_with(purlis_core::sandbox::POLICY_LEAD),
+            "{refused}"
+        );
+        assert!(refused.contains("cannot hand the sandbox"), "{refused}");
+        assert!(
+            refused.ends_with("Locked by policy, set by IT in /etc/purlis/policy.json."),
+            "{refused}"
+        );
     }
 
     #[test]

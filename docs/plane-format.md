@@ -453,8 +453,11 @@ Not a plane file: no project carries it and no chat writes it (#1343, #1423; ADR
 as amended, C9). An administrator puts it on a machine to lock what every project's sandbox, and
 everyone working in it, may widen, and to require the sandbox in every project. The strictest
 value wins over the project's committed settings, your own and a persona's, and every value it
-locks shows "Locked by policy" in Settings with who set it, and offers no control. It is read by
-`crates/purlis-core/src/sandbox/policy.rs` (`Locks::of`).
+locks shows "Locked by policy" in Settings with who set it, and offers no control to widen it.
+A host it locks out is refused as it is written, by Settings' Add and by Edit as TOML alike; one
+a file already held is kept and reaches nothing (#1431). What a person granted before the policy
+came, and it now locks out, is listed in Settings › Sandbox › Granted as not in force, with
+Revoke. It is read by `crates/purlis-core/src/sandbox/policy.rs` (`Locks::of`).
 
 ```json
 {
