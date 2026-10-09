@@ -759,3 +759,23 @@ fn a_save_waits_for_the_manifests_lock_and_keeps_what_was_written_while_it_waite
     assert!(refused[0].contains("changed on disk"), "{refused:?}");
     assert_eq!(on_disk(&root), written);
 }
+
+#[test]
+fn what_the_manifest_held_lets_through_only_that_value_never_a_new_one_in_its_place() {
+    // The file held one odd entry (2) and an odd name. An edit that keeps them is written; one
+    // that puts a NEW odd entry or name where they stood is refused, though its sentence would
+    // read the same.
+    let held = r#"{"name": "beta", "repos": [{"name": "widget"}, 5]}"#;
+    let dir = plane(Some(held));
+    for typed in [
+        r#"{"name": "beta", "repos": [{"name": "widget"}, {"name": "../escape"}]}"#,
+        r#"{"name": "gamma", "repos": [{"name": "widget"}, 5]}"#,
+    ] {
+        let refused = save_text(dir.path(), "alpha", Some(held), typed).unwrap_err();
+        assert_eq!(refused.len(), 1, "{typed}: {refused:?}");
+        assert_eq!(on_disk(dir.path()), held, "{typed}");
+    }
+    let kept = r#"{"name": "beta", "repos": [5, {"name": "widget"}], "description": "x"}"#;
+    save_text(dir.path(), "alpha", Some(held), kept).unwrap();
+    assert_eq!(on_disk(dir.path()), kept);
+}
