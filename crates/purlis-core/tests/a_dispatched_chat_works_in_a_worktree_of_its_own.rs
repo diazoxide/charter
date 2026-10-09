@@ -753,6 +753,80 @@ fn a_merged_folder_goes_and_its_branch_stays_where_git_will_not_delete_it() {
     );
 }
 
+#[test]
+fn a_squash_merged_branch_reads_as_landed_and_its_folder_goes_while_the_branch_stays() {
+    purlis_core::unsteered!();
+    // #1472: a squash merge puts the branch's files in the base and none of its commits, so
+    // git never finds the branch merged. The look asks of the files: its folder goes, and the
+    // branch, the one place its commits are, stays.
+    let f = support::plane_with_clone("api");
+    let iso = Isolated::default();
+    let squashed = cut(&f, "squashed work");
+    f.commit(&squashed.path, "one");
+    f.commit(&squashed.path, "two");
+    let tip = branch_at(&f, &squashed.branch);
+    // Someone else's work lands on main first, in another file.
+    f.commit(&f.clone, "theirs");
+    support::git(&f.clone, &["merge", "-q", "--squash", &squashed.branch]);
+    support::git(&f.clone, &["commit", "-q", "-m", "squashed work"]);
+
+    assert_eq!(
+        standing::landed(&f.plane, &f.ws, &f.repo, &squashed.piece, &squashed.branch),
+        standing::Landed::Carried {
+            branch: squashed.branch.clone(),
+            base: "main".to_owned(),
+        }
+    );
+    assert_eq!(
+        dispatchplace::tidy(&f.plane, &tree(&squashed), &iso),
+        Tidied::FolderRemoved
+    );
+    assert!(
+        squashed.path.symlink_metadata().is_err(),
+        "its folder is gone"
+    );
+    assert!(has_branch(&f, &squashed.branch), "its branch stays");
+    assert_eq!(branch_at(&f, &squashed.branch), tip, "with its commits");
+
+    // Squashed in, and the base changed one of its files again since: not carried, kept.
+    let changed_again = cut(&f, "changed again");
+    f.commit(&changed_again.path, "shared");
+    support::git(
+        &f.clone,
+        &["merge", "-q", "--squash", &changed_again.branch],
+    );
+    support::git(&f.clone, &["commit", "-q", "-m", "squashed"]);
+    std::fs::write(f.clone.join("shared"), "edited on main\n").unwrap();
+    support::git(&f.clone, &["commit", "-q", "-am", "edited"]);
+    assert_eq!(
+        standing::landed(
+            &f.plane,
+            &f.ws,
+            &f.repo,
+            &changed_again.piece,
+            &changed_again.branch
+        ),
+        standing::Landed::No
+    );
+    assert_eq!(
+        dispatchplace::tidy(&f.plane, &tree(&changed_again), &iso),
+        Tidied::Kept
+    );
+    assert!(changed_again.path.join("shared").is_file());
+
+    // Carried, with something uncommitted in the folder: never removed.
+    let dirty = cut(&f, "squashed but dirty");
+    f.commit(&dirty.path, "three");
+    support::git(&f.clone, &["merge", "-q", "--squash", &dirty.branch]);
+    support::git(&f.clone, &["commit", "-q", "-m", "squashed three"]);
+    std::fs::write(dirty.path.join("scratch.txt"), "not committed\n").unwrap();
+    assert_eq!(
+        dispatchplace::tidy(&f.plane, &tree(&dirty), &iso),
+        Tidied::Kept
+    );
+    assert!(dirty.path.join("scratch.txt").is_file());
+}
+
 /// The record of a worktree task whose persona chat is chat `worker`, under the id its
 /// worktree was named for.
 fn recorded_as(

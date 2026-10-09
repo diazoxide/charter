@@ -1070,7 +1070,7 @@ pub enum Tidied {
     /// Its branch had landed where it was cut from, and its folder and branch are gone.
     Removed,
     /// Its branch had landed and its folder is gone; git would not delete the branch (the
-    /// clone is not on the branch it landed in), so the branch stays.
+    /// clone is not on the branch it landed in, or it was squashed in), so the branch stays.
     FolderRemoved,
     /// It stays: not merged, not readable, or holding something that is not committed.
     Kept,
@@ -1080,7 +1080,9 @@ pub enum Tidied {
 /// only then:
 ///
 /// - every commit of the branch purlis cut is in the branch it was cut from
-///   ([`standing::landed`]); and
+///   ([`standing::landed`]), or every file it changed reads there as it has it, as a squash
+///   merge leaves it: then the folder goes and the branch stays, since git does not find it
+///   merged and it is the one place those commits are (#1472); and
 /// - the folder holds no uncommitted path **and no ignored one that is not purlis's own
 ///   layer** (D-1453-10 as amended in review, M4). git's safe removal does not count ignored
 ///   files and deletes them, and what a task leaves there may be all it produced: a results
@@ -1095,12 +1097,12 @@ pub fn tidy(root: &Path, tree: &Tree, isolation: &git::Isolated) -> Tidied {
     };
     let (ws, repo, piece) = (&tree.workspace, &tree.repo, &tree.piece);
     crate::gitbroker::in_a_checked_folder(root, ws, repo, piece, isolation, || {
-        if !matches!(
-            standing::landed(root, ws, repo, piece, branch),
-            standing::Landed::Yes { .. }
-        ) {
-            return Tidied::Kept;
-        }
+        let carried = match standing::landed(root, ws, repo, piece, branch) {
+            standing::Landed::Yes { .. } => false,
+            // Squashed or rebased in (#1472): the folder goes, the branch stays.
+            standing::Landed::Carried { .. } => true,
+            _ => return Tidied::Kept,
+        };
         let Ok(Some(risk)) = standing::at_risk(root, ws, repo, piece) else {
             return Tidied::Kept;
         };
@@ -1109,7 +1111,12 @@ pub fn tidy(root: &Path, tree: &Tree, isolation: &git::Isolated) -> Tidied {
         if !clean(&risk.changes) || !clean(&risk.ignored) {
             return Tidied::Kept;
         }
-        match worktree::remove(root, ws, repo, piece, false, true) {
+        let removed = if carried {
+            worktree::remove_keeping_branch(root, ws, repo, piece)
+        } else {
+            worktree::remove(root, ws, repo, piece, false, true)
+        };
+        match removed {
             Ok(removed) if removed.branch_deleted => Tidied::Removed,
             Ok(_) => Tidied::FolderRemoved,
             Err(_) => Tidied::Kept,

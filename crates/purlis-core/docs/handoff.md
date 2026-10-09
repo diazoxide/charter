@@ -491,7 +491,10 @@ The worktree is listed on its dispatch's row in the Dispatches tab, as the task'
   folder, listed with Discard, where you are shown what is in it. A task that committed
   nothing and left nothing leaves no worktree behind once its chat is closed. Where git will
   not delete the merged branch (the repo is on another branch than the one it landed in), the
-  folder goes and the row says the branch was kept.
+  folder goes and the row says the branch was kept. **A squash-merged branch counts as
+  merged** where every file it changed reads in the branch it was cut from as it has it
+  (#1472): its folder goes on the same terms, and the branch stays, since git does not find
+  it merged and it is the one place its commits are.
 - **folder discarded**, or **folder removed** for one removed from the explorer or by hand.
 - A repo whose own git settings name a program (a filter, a diff or merge driver, an
   include) gets no worktree task and no Discard: purlis runs no git there for a chat or for

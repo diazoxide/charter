@@ -670,6 +670,34 @@ pub fn remove(
     force: bool,
     delete_branch: bool,
 ) -> Result<Removed, Refusal> {
+    remove_as(plane, ws, repo, piece, force, delete_branch, false)
+}
+
+/// [`remove`] without `--force`, for a piece whose **branch stays**: its commits are held by
+/// that branch, so they are not counted as what the removal would lose, and the branch is not
+/// deleted. Everything uncommitted still refuses it, by purlis's look and by git's own.
+///
+/// For a branch whose work is carried in the branch it was cut from by its files and not its
+/// commits (a squash merge, [`standing::Landed::Carried`]): its folder can go, and its
+/// commits stay where they are.
+pub fn remove_keeping_branch(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+) -> Result<Removed, Refusal> {
+    remove_as(plane, ws, repo, piece, false, false, true)
+}
+
+fn remove_as(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    force: bool,
+    delete_branch: bool,
+    branch_stays: bool,
+) -> Result<Removed, Refusal> {
     relocation_refusal(plane)?;
     let path = path_for(plane, ws, repo, piece)?;
     // Asked NOW, not remembered from when the piece was created: a path that has become a
@@ -748,7 +776,14 @@ pub fn remove(
                 });
             }
         }
-        match unique_commits(&path, branch.as_deref())? {
+        // A branch that stays keeps its own commits: only what no branch at all reaches is
+        // lost then.
+        let not_counted = if branch_stays {
+            None
+        } else {
+            branch.as_deref()
+        };
+        match unique_commits(&path, not_counted)? {
             None => {
                 // Its own refusal: "could not determine whether this holds uncommitted
                 // changes" is not what failed, and telling the operator the wrong thing about
