@@ -361,6 +361,15 @@ fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
         // No `cmd` on this trace row, for A7's reason: the line carries a brief.
         return Some(Verdict::new(reason, None, why));
     }
+    // A7e: the text a dispatch subcommand sends (a report, a follow-up, an answer, a note, a
+    // question) beside a live substitution (#1456, #1463), as A7 refuses the handoff's report.
+    // GATED, as A7d is.
+    if plane.is_some()
+        && let Some((reason, why)) = crate::dispatchguard::text_refusal(cmd)
+    {
+        // No `cmd` on this trace row, for A7's reason: the line carries a chat's own text.
+        return Some(Verdict::new(reason, None, why));
+    }
     // A7b: any consent-gated command spelt under a name the project's consent rules do not
     // spell, which the host would run with no prompt (RN-3, D-RN3-9; lifted per rule where the
     // project carries the purlis twin, RN-7). GATED, as A7 is: the rules it stands in for are a
@@ -494,6 +503,33 @@ mod tests {
             caller,
         };
         asks(&call, in_a_plane.then_some(&plane))
+    }
+
+    /// #1456, #1463: the text a dispatch subcommand sends, beside a live substitution, is
+    /// refused inside a project (A7e), before the person would be asked about the call as a
+    /// rider. Outside a project nothing is dispatched, and the text written out passes.
+    #[test]
+    fn a_dispatch_subcommand_s_text_with_a_live_substitution_is_refused_in_a_project() {
+        let fix = Fixture::new();
+        let cmd = "purlis dispatch report --outcome done \"$(cat notes.md)\"";
+        let refused = verdict_of(cmd, &fix, true).expect("refused");
+        assert_eq!(refused.reason, crate::dispatchguard::REASON_TEXT_SOURCE);
+        assert!(
+            refused
+                .said()
+                .contains("`purlis dispatch report` sends its text as it is written here"),
+            "{}",
+            refused.said()
+        );
+        assert_eq!(verdict_of(cmd, &fix, false), None);
+        assert_eq!(
+            verdict_of(
+                "purlis dispatch report --outcome done \"fixed the queue\"",
+                &fix,
+                true
+            ),
+            None
+        );
     }
 
     /// D-1444-14: a dispatch or a handoff that shares its call with another command is asked

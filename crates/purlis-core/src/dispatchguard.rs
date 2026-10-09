@@ -147,6 +147,103 @@ fn helper_is_told() -> String {
 }
 
 // ----------------------------------------------------------------------------------------
+// the text a dispatch subcommand sends, written as the shell will not rewrite it (#1456, #1463)
+// ----------------------------------------------------------------------------------------
+//
+// A report, a follow-up, an answer, a note and a question each send their text as the command's
+// own argument, quoted to the chat that reads it. A live substitution in the call is replaced by
+// the shell before purlis reads a word, so what is sent is not what was written here, and the
+// command it runs is the shell's. The handoff's report is refused for it (A7), and so are these.
+
+/// The trace reason a dispatch's text with a live substitution in its call is refused under.
+pub const REASON_TEXT_SOURCE: &str = "dispatch-text-source";
+
+/// The subcommands of `purlis dispatch` that send text as it is written, each with the shape
+/// its refusal tells the chat to write instead.
+const SENDS_TEXT: [(&str, &str); 5] = [
+    ("report", "report --outcome done \"<summary>\""),
+    ("tell", "tell <chat> \"<text>\""),
+    ("answer", "answer <chat> \"<answer>\""),
+    ("note", "note \"<note>\""),
+    ("ask", "ask \"<question>\""),
+];
+
+/// The text-sending subcommand a segment's words run, as its row of [`SENDS_TEXT`], or `None`.
+fn sends_text(toks: &[String]) -> Option<(&'static str, &'static str)> {
+    let (prog, _env, argv) = shellwrap::split_env(toks);
+    let words = match charter_words(&prog, &argv) {
+        Some(words) => words,
+        None if names_our_binary(&prog) => argv.get(1..).unwrap_or_default().to_vec(),
+        None => return None,
+    };
+    if words.first().is_none_or(|word| word != WORD) {
+        return None;
+    }
+    let sub = words.get(1)?;
+    SENDS_TEXT.into_iter().find(|(word, _)| word == sub)
+}
+
+/// A text-sending subcommand a call runs: its row of [`SENDS_TEXT`], and the string a shell
+/// runs it in, where it is one level into one.
+type TextSubcommand = (&'static str, &'static str, Option<String>);
+
+/// The text-sending subcommand `cmd` runs in any segment, or one level into a string a shell
+/// runs ([`shellwrap::shell_scripts`]), as [`runs_dispatch`] reads them.
+fn a_text_subcommand(cmd: &str) -> Option<TextSubcommand> {
+    let in_a_segment = |text: &str| {
+        shellseg::segment_argv(text)
+            .iter()
+            .find_map(|toks| sends_text(toks))
+    };
+    if let Some((sub, shape)) = in_a_segment(cmd) {
+        return Some((sub, shape, None));
+    }
+    let toks = shellseg::lex(&crate::heredoc::strip_reader_heredocs(cmd)).ok()?;
+    let toks = shellseg::split_punctuation(toks);
+    crate::heredoc::segments_of(&toks)
+        .iter()
+        .find_map(|(seg, _before)| {
+            let words: Vec<String> = seg.iter().map(|tok| tok.text.clone()).collect();
+            shellwrap::shell_scripts(&words).iter().find_map(|inner| {
+                let read = crate::handoffguard::as_the_shell_reads(inner);
+                in_a_segment(&read).map(|(sub, shape)| (sub, shape, Some(read)))
+            })
+        })
+}
+
+/// `(trace reason, denial)` for a call that runs `purlis dispatch report`, `tell`, `answer`,
+/// `note` or `ask` and holds a live substitution anywhere, or `None`.
+///
+/// **Scoped to the whole call**, as A5, A6 and the handoff's report are, for their reason:
+/// which argument a substitution lands in is more parser in the direction that fails open.
+/// **On every harness and for the chat itself**, not only a helper: it is a fact about the
+/// shell, and the text is the chat's own to write out. A quoted heredoc's body is data and is
+/// not a substitution ([`crate::livesub::live_substitution`]).
+pub fn text_refusal(cmd: &str) -> Option<(&'static str, String)> {
+    if !crate::livesub::may_substitute(cmd) {
+        return None;
+    }
+    let (sub, shape, inner) = a_text_subcommand(cmd)?;
+    // In the call as written, or in the string the shell runs the subcommand in: a
+    // substitution single-quoted on the outside is live when that string is run.
+    let hit = crate::livesub::live_substitution(cmd)
+        .or_else(|| inner.as_deref().and_then(crate::livesub::live_substitution))?;
+    let (kind, effect) = if crate::livesub::is_process_substitution(hit) {
+        ("process", "run and replace with a path")
+    } else {
+        ("command", "replace")
+    };
+    Some((
+        REASON_TEXT_SOURCE,
+        format!(
+            "`purlis dispatch {sub}` sends its text as it is written here, and this call has a \
+             live {kind} substitution in it, which the shell would {effect} before purlis \
+             reads it. Write the text out in plain words: purlis dispatch {shape}"
+        ),
+    ))
+}
+
+// ----------------------------------------------------------------------------------------
 // a rider beside a pre-allowed dispatch or handoff (D-1444-14)
 // ----------------------------------------------------------------------------------------
 //
@@ -399,6 +496,24 @@ mod tests {
     }
 
     #[test]
+    fn the_pre_allowed_list_of_tasks_is_still_refused_to_a_helper_and_starts_nothing() {
+        // #1463: `dispatch_list` runs without the harness asking, as `purlis dispatch list`
+        // does. The pre-allow is the harness's prompt and no more: a helper's call is still
+        // refused in front of it, and the tools that start a chat or send a report are not
+        // among the reads.
+        let list = format!("mcp__purlis__{}", crate::chattools::DISPATCH_LIST);
+        assert!(crate::chattools::PRE_ALLOWED.contains(&crate::chattools::DISPATCH_LIST));
+        assert!(tool_refusal(&list, a_sub_agent()).is_some());
+        assert_eq!(tool_refusal(&list, the_chat()), None);
+        for writes in [
+            crate::chattools::DISPATCH,
+            crate::chattools::DISPATCH_REPORT,
+        ] {
+            assert!(!crate::chattools::PRE_ALLOWED.contains(&writes), "{writes}");
+        }
+    }
+
+    #[test]
     fn a_sub_agent_calling_the_dispatch_tools_is_refused_under_either_server_name() {
         for tool in ["mcp__purlis__dispatch", "mcp__purlis__dispatch_report"] {
             let said = tool_refusal(tool, a_sub_agent()).unwrap_or_else(|| panic!("{tool}"));
@@ -619,6 +734,83 @@ mod tests {
             "purlis handoff --name \"x beta",
         ] {
             assert_eq!(rider(cmd).as_deref(), Some(UNREADABLE), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn a_live_substitution_in_the_text_a_dispatch_subcommand_sends_is_refused() {
+        // #1456, #1463: as the handoff's report is. Whoever asks, on every harness.
+        for (cmd, sub) in [
+            (
+                "purlis dispatch report --outcome done \"$(cat notes.md)\"",
+                "report",
+            ),
+            (
+                "purlis dispatch report --outcome done \"`git log -1`\"",
+                "report",
+            ),
+            ("purlis dispatch tell 9 \"use $(whoami)\"", "tell"),
+            ("purlis dispatch answer 9 \"$(env)\"", "answer"),
+            ("purlis dispatch note \"at $(date)\"", "note"),
+            ("purlis dispatch ask \"which one? $(ls)\"", "ask"),
+            ("charter dispatch note \"$(id)\"", "note"),
+            ("cd svc && purlis dispatch tell 3 \"$(cat x)\"", "tell"),
+            ("$PURLIS_HOOK_BINARY dispatch note \"$(id)\"", "note"),
+            ("bash -c 'purlis dispatch note \"$(id)\"'", "note"),
+            (
+                "purlis dispatch report --outcome done \"$(cat <<'EOF'\nfixed it\nEOF\n)\"",
+                "report",
+            ),
+        ] {
+            let (reason, said) = text_refusal(cmd).unwrap_or_else(|| panic!("{cmd:?}"));
+            assert_eq!(reason, REASON_TEXT_SOURCE);
+            assert!(
+                said.starts_with(&format!("`purlis dispatch {sub}` sends its text as it is")),
+                "{said}"
+            );
+        }
+        assert_eq!(
+            text_refusal("purlis dispatch note \"$(id)\"").map(|(_, said)| said),
+            Some(
+                "`purlis dispatch note` sends its text as it is written here, and this call \
+                 has a live command substitution in it, which the shell would replace before \
+                 purlis reads it. Write the text out in plain words: purlis dispatch note \
+                 \"<note>\""
+                    .to_owned()
+            )
+        );
+        let (_, said) = text_refusal("purlis dispatch tell 9 \"$(cat <(id))\"").expect("refused");
+        assert!(said.contains("live command substitution"), "{said}");
+        let (_, said) = text_refusal("purlis dispatch tell 9 <(id)").expect("refused");
+        assert!(
+            said.contains(
+                "live process substitution in it, which the shell would run and \
+                           replace with a path"
+            ),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn text_written_out_and_everything_but_a_text_subcommand_pass_this_refusal() {
+        for cmd in [
+            // The text as written: single quotes, an escaped dollar, a parameter.
+            "purlis dispatch report --outcome done 'cost $(nothing)'",
+            "purlis dispatch note \"a \\$(literal) one\"",
+            "purlis dispatch tell 9 \"$NAME is set\"",
+            "purlis dispatch answer 9 \"the blue one\"",
+            // A dispatch's brief is its heredoc, judged as a brief, not here.
+            "purlis dispatch --name x <<'B'\nrun $(this) later\nB",
+            // Subcommands that send no text.
+            "purlis dispatch wait 9 && echo \"$(date)\"",
+            "purlis dispatch list; echo $(date)",
+            "purlis dispatch cancel 9 \"$(id)\"",
+            // Not purlis's dispatch, or not a dispatch at all.
+            "echo purlis dispatch note \"$(id)\"",
+            "purlis workspace note \"dispatch $(id)\"",
+            "git commit -m \"$(cat msg)\"",
+        ] {
+            assert_eq!(text_refusal(cmd), None, "{cmd:?}");
         }
     }
 
