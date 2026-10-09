@@ -1754,10 +1754,10 @@ export const commands = {
 	 *  Delete a persona: `charter persona remove <name>`, never forced.
 	 * 
 	 *  The core refuses one another persona still `extends:` or `uses:`, naming them. What it
-	 *  deletes is the persona's directory: its definition, memory and refs;
-	 *  its vault is left alone, and the answer says so. When the plane-wide selection
-	 *  (`.charter/active-persona`) names it, that selection goes too, as it does from a terminal
-	 *  that has no session or pane of its own.
+	 *  deletes is the persona's directory (definition, memory and refs) and, in a project that
+	 *  still has it, the helper file purlis once generated for it. Its vault is left alone, and
+	 *  the answer says so. When the plane-wide selection (`.charter/active-persona`) names it,
+	 *  that selection goes too, as it does from a terminal that has no session or pane of its own.
 	 */
 	personaRemove: (plane: PlaneId, name: string) => typedError<string[], string>(__TAURI_INVOKE("persona_remove", { plane, name })),
 	/**
@@ -7098,6 +7098,12 @@ export type StartOptions = {
 	 *  picked. The person can still pick another.
 	 */
 	persona_profiles: { [key in string]: string },
+	/**
+	 *  Each persona's one-line description (`agent-description`, else `description`), by the
+	 *  persona's name, where it declares one (#1460): shown under its row. Always sent; optional
+	 *  in the window's type so a picker drawn from an older answer reads it as none.
+	 */
+	persona_descriptions?: { [key in string]: string } | null,
 	/**
 	 *  Set when git would carry `charter.local.toml`: every declared profile is refused
 	 *  until it is fixed, and this is the one fix for that state.

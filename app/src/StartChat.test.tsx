@@ -47,6 +47,29 @@ function show(over: Partial<StartOptions> = {}, repo?: string) {
   return { onStart, onApprove, onCancel, user: userEvent.setup() };
 }
 
+describe("a persona's one-line description (#1460)", () => {
+  it("is said on its row, before the row's other facts", () => {
+    show({
+      personas: ["steward", "release", "ops"],
+      persona_descriptions: { steward: "Scopes the work", ops: "Keeps the lights on" },
+    });
+
+    expect(screen.getByRole("radio", { name: /^steward/ })).toHaveAccessibleDescription(
+      "Scopes the work · plane default",
+    );
+    expect(screen.getByRole("radio", { name: /^ops/ })).toHaveAccessibleDescription(
+      "Keeps the lights on",
+    );
+    expect(screen.getByRole("radio", { name: /^release/ })).not.toHaveAccessibleDescription();
+  });
+
+  it("is nothing for an answer that carries none", () => {
+    show({ persona_descriptions: undefined });
+
+    expect(screen.getByRole("radio", { name: /^release/ })).not.toHaveAccessibleDescription();
+  });
+});
+
 describe("a persona's own profile (#1445)", () => {
   const codex = { ...ONE.profiles[0], name: "codex", kind: "codex", shown: "codex" };
   const work = { ...ONE.profiles[0], name: "work", shown: "claude --work", is_default: false };

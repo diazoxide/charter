@@ -186,6 +186,13 @@ pub fn description(meta: &std::collections::BTreeMap<String, String>) -> Option<
         .find(|said| !said.is_empty())
 }
 
+/// The one-line description of the persona `name` ([`description`]), its `extends:` chain
+/// applied, or `None` for one that declares none or does not load. What the new-chat picker
+/// shows beside each persona (#1460).
+pub fn description_of(root: &Path, name: &str) -> Option<String> {
+    super::resolve(root, name).and_then(|def| description(&def.meta))
+}
+
 /// Where the generated sub-agents lived, under the tree.
 pub fn agents_dir(root: &Path) -> PathBuf {
     root.join(".claude").join("agents")
@@ -292,6 +299,36 @@ pub(crate) fn remove_agent(root: &Path, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_persona_s_description_is_read_along_its_chain_and_agent_description_answers_first() {
+        let plane = tempfile::tempdir().unwrap();
+        let write = |name: &str, text: &str| {
+            let dir = plane.path().join("personas").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("persona.md"), text).unwrap();
+        };
+        write(
+            "base",
+            "---\nrole: Base\ndescription: Keeps the lights on\n---\n",
+        );
+        write("kid", "---\nextends: base\nrole: Kid\n---\n");
+        write(
+            "own",
+            "---\nrole: Own\ndescription: x\nagent-description: Runs nights\n---\n",
+        );
+        write("bare", "---\nrole: Bare\n---\n");
+        assert_eq!(
+            description_of(plane.path(), "kid").as_deref(),
+            Some("Keeps the lights on")
+        );
+        assert_eq!(
+            description_of(plane.path(), "own").as_deref(),
+            Some("Runs nights")
+        );
+        assert_eq!(description_of(plane.path(), "bare"), None);
+        assert_eq!(description_of(plane.path(), "ghost"), None);
+    }
 
     fn generated(marker: &str, name: &str) -> String {
         format!(
