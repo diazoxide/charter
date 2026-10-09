@@ -495,6 +495,32 @@ fn a_chats_start_is_read_from_its_id_and_from_nothing_that_is_not_one() {
 }
 
 #[test]
+fn a_chat_brought_back_says_when_its_current_run_began_not_when_it_was_first_started() {
+    let ulid_at = |time: Option<i64>| {
+        let ms = u64::try_from(time.unwrap()).unwrap() * 1000;
+        ulid::Ulid::from_parts(ms, 7).to_string()
+    };
+    // First started on Oct 1, and started again today at 12:40.
+    let first = chrono::DateTime::parse_from_rfc3339("2026-10-01T09:00:00+00:00")
+        .unwrap()
+        .timestamp();
+    let identity = crate::reopen::Identity {
+        id: Some(ulid_at(Some(first))),
+        run: Some(ulid_at(at_time(12, 40))),
+        ..Default::default()
+    };
+
+    assert_eq!(run_started(&identity), at_time(12, 40));
+
+    // No run recorded: no time, never the first start said as this run's.
+    let no_run = crate::reopen::Identity {
+        run: None,
+        ..identity
+    };
+    assert_eq!(run_started(&no_run), None);
+}
+
+#[test]
 fn a_chat_is_told_how_it_was_asked_for_and_whether_its_report_is_awaited() {
     // #1455: the lineage record's mode, and whether a report is still owed.
     const ROOT: &str = "01J9ZQ3V5N8X4T2K7M6P0R1S2A";
