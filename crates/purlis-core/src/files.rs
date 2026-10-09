@@ -36,8 +36,8 @@ pub use watch::{ASKED, KNOWN, Root, root};
 // Both read in a bounded child of charter's own binary (FM-4, D-88h).
 mod reader;
 pub use reader::{
-    Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, READ_FAILED, Reader, ahead_behind,
-    serve_if_asked, status,
+    AT_ONCE, Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, READ_FAILED, Reader, ahead_behind,
+    serve_if_asked, status, was_busy,
 };
 // The one diff engine (RC-2): every comparison, read in the same bounded child.
 mod compare;
