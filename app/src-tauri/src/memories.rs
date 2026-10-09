@@ -509,6 +509,10 @@ impl MemoryScope {
 /// copied, its title and stamp kept, its index line moved with it — and is answered where it is
 /// now, so its tab follows it. A target holding a memory of that name, a store the plane does
 /// not have and one charter may not write are refused, and nothing moves.
+///
+/// `restore_as` is the name the memory had in `to`, which Undo passes so a journal memory comes
+/// back under its first name to the second, not only to the minute. It may differ from the
+/// name the move would give only in a journal's prefix; any other name is refused.
 #[tauri::command]
 #[specta::specta]
 pub async fn memory_move(
@@ -517,10 +521,18 @@ pub async fn memory_move(
     scope: MemoryScope,
     slug: String,
     to: MemoryScope,
+    restore_as: Option<String>,
 ) -> Result<MemoryView, String> {
     let held = planes.held(&plane)?;
     crate::off_the_window(WRITING, move || {
-        let moved = move_to(held.root(), &scope, &slug, &to, now());
+        let moved = move_to(
+            held.root(),
+            &scope,
+            &slug,
+            &to,
+            now(),
+            restore_as.as_deref(),
+        );
         held.wrote(&[scope.store(), to.store()]);
         moved
     })
@@ -533,9 +545,10 @@ fn move_to(
     slug: &str,
     to: &MemoryScope,
     stamp: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
 ) -> Result<MemoryView, String> {
     let plane = Plane::open(root);
-    let at = memscope::move_memory(&plane, &scope.core(), slug, &to.core(), stamp)
+    let at = memscope::move_memory_as(&plane, &scope.core(), slug, &to.core(), stamp, restore_as)
         .map_err(|e| e.to_string())?;
     let slug = stem(&at);
     read_in(root, to, &Store::of(root, to)?, &slug)?
@@ -1120,7 +1133,7 @@ mod tests {
         let dir = plane();
         let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
 
-        let moved = move_to(dir.path(), &alpha(), &made.slug, &steward(), at()).unwrap();
+        let moved = move_to(dir.path(), &alpha(), &made.slug, &steward(), at(), None).unwrap();
 
         assert_eq!(moved.scope, steward());
         assert_eq!(moved.slug, "deploys");
@@ -1148,11 +1161,61 @@ mod tests {
         )
         .unwrap();
 
-        let refused =
-            move_to(dir.path(), &alpha(), &made.slug, &MemoryScope::Shared, at()).unwrap_err();
+        let refused = move_to(
+            dir.path(),
+            &alpha(),
+            &made.slug,
+            &MemoryScope::Shared,
+            at(),
+            None,
+        )
+        .unwrap_err();
 
         assert!(refused.contains("already holds"), "{refused}");
         assert_eq!(read(dir.path(), &alpha(), &made.slug).unwrap(), Some(made));
+    }
+
+    #[test]
+    fn an_undo_of_a_move_puts_a_journal_memory_back_under_its_name_to_the_second() {
+        let dir = plane();
+        let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
+        let away = move_to(dir.path(), &alpha(), &made.slug, &steward(), at(), None).unwrap();
+
+        let back = move_to(
+            dir.path(),
+            &steward(),
+            &away.slug,
+            &alpha(),
+            at(),
+            Some(&made.slug),
+        )
+        .unwrap();
+
+        assert_eq!(back, made, "the same memory, under the same name");
+    }
+
+    #[test]
+    fn an_undo_name_that_is_another_memorys_is_refused_and_moves_nothing() {
+        let dir = plane();
+        let made = create(dir.path(), &alpha(), "Deploys", "Through the canary.", at()).unwrap();
+        let away = move_to(dir.path(), &alpha(), &made.slug, &steward(), at(), None).unwrap();
+
+        for name in ["20260302-091437-elsewhere", "../deploys", "deploys"] {
+            let refused = move_to(
+                dir.path(),
+                &steward(),
+                &away.slug,
+                &alpha(),
+                at(),
+                Some(name),
+            )
+            .unwrap_err();
+            assert!(refused.contains("not"), "{name}: {refused}");
+        }
+        assert_eq!(
+            read(dir.path(), &steward(), &away.slug).unwrap(),
+            Some(away)
+        );
     }
 
     #[test]
@@ -1163,7 +1226,7 @@ mod tests {
             name: "ghost".into(),
         };
 
-        let refused = move_to(dir.path(), &alpha(), &made.slug, &ghost, at()).unwrap_err();
+        let refused = move_to(dir.path(), &alpha(), &made.slug, &ghost, at(), None).unwrap_err();
 
         assert!(refused.contains("ghost"), "{refused}");
         assert!(read(dir.path(), &alpha(), &made.slug).unwrap().is_some());

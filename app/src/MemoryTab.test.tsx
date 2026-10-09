@@ -365,6 +365,7 @@ describe("moving a memory (KN-3)", () => {
       scope: REF.scope,
       slug: REF.slug,
       to: { kind: "shared" },
+      restoreAs: null,
     });
   });
 

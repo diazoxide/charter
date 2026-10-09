@@ -1634,7 +1634,10 @@ file `memstore.write` could have written in its new store.
   of the move only for a file with no stamp line. **A memory moved out of a journal and back
   has its first name again to the minute, not to the second**: the stamp line holds minutes,
   so `20260302-091437-a-fact.md` comes back as `20260302-091400-a-fact.md`, its text byte for
-  byte. A memory moved between persona stores, or between journals, keeps its name exactly.
+  byte. The window's Undo of a Move knows the first name and puts the memory back under it to
+  the second; that name may differ from the one the move would give only in the journal's
+  prefix, and it is refused like any other name the store already holds. A memory moved between
+  persona stores, or between journals, keeps its name exactly.
 - **Its index line moves with it**: `- [{title}]({filename})` is appended to the new store's
   index (made with that store's header when it has none: the journal's own, or `# Memory Index`
   for a persona's, as `remember` makes one) and dropped from the old one's.
