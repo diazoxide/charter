@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791545684477,
+  "lastUpdate": 1791548485997,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4830,6 +4830,48 @@ window.BENCHMARK_DATA = {
             "value": 101.0689565,
             "unit": "ms",
             "extra": "median of 5 runs: 100.164, 100.849, 101.069, 101.451, 101.620 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f03a11f8db8234bce5914bd541cd8501a829157e",
+          "message": "Ask a branch again when the reader gate was full, and say busy plainly\n\nWith six reads hung app-wide, a branch the watch resolves queues behind\nthem past its deadline and fails as busy. The window asks for its set\nonly when the set changes, so that branch went unwatched with nothing\nsaid. resolve() now asks again while the answer is busy, enough times for\nevery watched branch to have had its turn.\n\nThe busy message drops the doubled \"purlis\" and the \"no read came free\"\nmechanism (docs/ui-copy.md): \"purlis could not read the branch: it was\nbusy reading other branches for 30 seconds\". files::was_busy tells it\napart from a read that failed.\n\nRefs #1130\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T15:52:20+04:00",
+          "tree_id": "1ef47d99a32d01c2c692f419013fc08d4dec4557",
+          "url": "https://github.com/purlis/purlis/commit/f03a11f8db8234bce5914bd541cd8501a829157e"
+        },
+        "date": 1791548484795,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5180230000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.486, 0.487, 0.518, 0.534, 0.536 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8520395,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.544, 16.562, 16.852, 17.054, 17.152 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.2836615,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.315, 103.467, 104.284, 104.861, 106.051 ms"
           }
         ]
       }
