@@ -5436,8 +5436,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   running and keep their words until they end and for 30 days after. Where the store cannot be read
   (a sandboxed chat runs the command), the removal says so and the words stay until they
   expire.
-  The app does this when it opens a project, over every record, and as it reads a timeline,
-  over the records that timeline reads. A dispatch that
+  The app does this when it opens a project, over every record, once a day while the project
+  is open, over every record again (#1556), and as it reads a timeline, over the records that
+  timeline reads. A dispatch that
   has not ended keeps its words; **one whose `ended` does not read as a time, or stands more
   than five minutes after the app's clock, has them emptied at once** (#1520), since its 30
   days cannot be counted. `talk` is read back under the
@@ -5472,8 +5473,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   listed task's parent is always listed; the tab says how many older tasks of the chat's own
   it does not list, and that older records were not read where there are any. Both bounds
   are the core's, handed to the tab. The 30-day expiry runs on that one
-  read, so a timeline reads the store once; a record older than the 2,000 is expired when the
-  project is next opened.
+  read, so a timeline reads the store once; a record older than the 2,000 is expired by the
+  daily sweep, or when the project is next opened.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.
