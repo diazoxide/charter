@@ -352,6 +352,42 @@ describe("the first task", () => {
     });
   });
 
+  it("reads the start options again on Read again, when they could not be read (#1296)", async () => {
+    const why = "purlis could not read the project's profiles.";
+    // The first run reads them too, before the tab is opened: only the tab's reads fail, until
+    // the person has read the refusal.
+    let refusing = false;
+    let reads = 0;
+    core((cmd) => {
+      if (cmd !== "start_options") return undefined;
+      reads += 1;
+      if (refusing) throw why;
+      return undefined;
+    });
+    render(<App />);
+    const person = userEvent.setup();
+    await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
+    await person.click(screen.getByRole("button", { name: "Open" }));
+    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const offer = await within(strip).findByRole("tab", { name: /First task · widget/ });
+    refusing = true;
+    await person.click(offer);
+    const pane = await screen.findByRole("region", { name: "First task · widget" });
+
+    const said = await within(pane).findByText(why);
+    expect(within(pane).getByRole("button", { name: "Start the first chat" })).toBeDisabled();
+    refusing = false;
+    const before = reads;
+    await person.click(within(pane).getByRole("button", { name: "Read again" }));
+
+    await waitFor(() =>
+      expect(within(pane).getByRole("button", { name: "Start the first chat" })).toBeEnabled(),
+    );
+    expect(said).not.toBeInTheDocument();
+    expect(within(pane).queryByText(why)).not.toBeInTheDocument();
+    expect(reads).toBe(before + 1);
+  });
+
   it("says in full why a run did not start", async () => {
     const why = "Profile 'claude' runs a program purlis has not measured.";
     core((cmd) => {
