@@ -37,6 +37,8 @@ import {
   perform,
   revealSaid,
   SHELL_KEY_SAID,
+  SEARCH_ID,
+  SEARCH_KEY_SAID,
   SWITCHER_KEY_SAID,
   type BranchPath,
   type Cut,
@@ -1363,6 +1365,8 @@ describe("carrying out a row", () => {
       new Set([
         "newChat",
         "newShell",
+        // Search in files (#1137), on the workspace in front.
+        "openView:charter/search/workspace|alpha|||,Search",
         "newShell:alpha",
         "newShell:beta",
         "split:row",
@@ -1871,9 +1875,10 @@ describe("the palette at fifty chats", () => {
       // since SE-23: `Your settings…` (`your` has an `r`). One more under `r` since #1499:
       // `Open a chat beside the one in front` (`front` has an `r`).
       // One more under both since #1487: `Previous chat in this tab`, a row about the tab in
-      // front, before the branch's two in the catalogue.
+      // front, before the branch's two in the catalogue. One more under `r` since #1137:
+      // `Search in files` (`search` has an `r`).
       expect(at("re", loaded())).toBe(8);
-      expect(at("r", loaded())).toBe(14);
+      expect(at("r", loaded())).toBe(15);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1989,8 +1994,9 @@ describe("the palette at fifty chats", () => {
     // 607 since #1487: the tab in front's task menu, its next and previous chat, and back to
     // its own chat. Four rows, however many tabs and tasks there are.
     // 657 since #1495: Activity, one row per chat.
+    // 658 since #1137: Search in files, one row.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(657);
+    expect(offers).toHaveLength(658);
   });
 
   /**
@@ -3338,5 +3344,35 @@ describe("Brief, for a task (#1494)", () => {
     void run(offers, briefId(3), hands);
 
     expect(hands.calls).toEqual(["showBrief:3"]);
+  });
+});
+
+describe("Search in files in the palette (#1137)", () => {
+  it("opens the Search tab as narrow as the focus, with the key said on the row", async () => {
+    const branch = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const offers = catalogue(now({ workspaces: ["alpha"], focused: "alpha", plane: "/p", branch }));
+    const row = by(offers, SEARCH_ID);
+    const hands = doing();
+
+    await run(offers, SEARCH_ID, hands);
+
+    expect(row?.title).toBe("Search in files");
+    expect(row?.note).toBe(`Every file of branch fix-it, in a Search tab. ${SEARCH_KEY_SAID}.`);
+    expect(hands.calls).toEqual(["openView:charter/search/branch|alpha|alpha/svc/fix-it||,Search"]);
+  });
+
+  it("searches the workspace in front with no branch picked, and the project at its root", () => {
+    const inAlpha = by(catalogue(now({ focused: "alpha", plane: "/p" })), SEARCH_ID);
+    const atRoot = by(catalogue(now({ focused: OUTSIDE, plane: "/p" })), SEARCH_ID);
+
+    expect(inAlpha?.note).toContain("Every file of workspace alpha");
+    expect(atRoot?.note).toContain("Every file of this project");
+  });
+
+  it("cannot search with no project open, and says so", () => {
+    const row = by(catalogue(now()), SEARCH_ID);
+
+    expect(row?.available).toBe(false);
+    expect(row?.reason).toBe("No project is open, so there are no files to search.");
   });
 });

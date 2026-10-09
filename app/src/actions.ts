@@ -56,7 +56,9 @@ import {
   scopeKey,
   type MemoryRef,
 } from "./memories";
-import { pieceFilesTitle, pieceFilesView } from "./pieceViews";
+import { searchFromFocus, searchTitle, searchView, type SearchAsk } from "./contentSearch";
+import { pieceFilesTitle, pieceFilesView, type Place } from "./pieceViews";
+import { searchKeySaid } from "./searchKey";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { switcherKeySaid } from "./switcherKey";
@@ -169,6 +171,10 @@ export const ROOT_TIP = "Plane — chats here start at the plane root";
 /** The key that opens a shell tab, as this platform spells it — said on the row, so the palette
  *  is where an operator learns it (`shellKey.ts`). */
 export const SHELL_KEY_SAID = shellKeySaid(onAMac());
+
+/** The key that opens a Search tab, as this platform spells it — said on *Search in files*'s
+ *  row, for the same reason (`searchKey.ts`, #1137). */
+export const SEARCH_KEY_SAID = searchKeySaid(onAMac());
 
 /** The key that opens the project switcher, as this platform spells it — said on its row, for
  *  the same reason (`switcherKey.ts`, FR-27). */
@@ -692,6 +698,9 @@ export type Now = {
   /** Each chat's finished tasks, by its number (#1485): a tab whose tasks have all finished
    *  still has a task menu to open (#1487). */
   finished?: ReadonlyMap<number, readonly FinishedTask[]>;
+  /** The branch nearest the operator: the cockpit's, else the one the explorer picked. What
+   *  *Search in files* searches first, as ⌘⇧F does (#1137). */
+  branch?: Place;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -1158,6 +1167,17 @@ export function noteOf(offer: Offer, unknown: boolean): string | undefined {
   return unknown && offer.noState !== undefined ? offer.noState.note : offer.note;
 }
 
+/** *Search in files*'s row (#1137). */
+export const SEARCH_ID = "search.files";
+
+/** What a Search tab opened on `ask` looks in, as its row's note says it. */
+function searchedSaid(ask: SearchAsk): string {
+  if (ask.kind === "branch" && ask.branch !== undefined)
+    return `branch ${ask.branch.piece ?? ask.branch.repo}`;
+  if (ask.kind === "workspace" && ask.workspace !== undefined) return `workspace ${ask.workspace}`;
+  return "this project";
+}
+
 /** An offer that cannot, which therefore has to say why. */
 function cannot(id: string, title: string, reason: string, name?: string): Offer {
   return { id, title, available: false, reason, does: { verb: "nothing" }, name };
@@ -1254,6 +1274,32 @@ export function catalogue(now: Now): Offer[] {
   // surface every later trust decision is read on is the one that lists what is in force NOW.
   // It is about the machine and not about a project, which is why it does not wait for one.
   offers.push(can("extensions.show", "Extensions…", { verb: "showExtensions" }));
+
+  // **Search in files** (FM-8, #1137): the Search tab ⌘⇧F opens, as narrow as the focus — the
+  // branch nearest the operator, else the workspace in front, else the project. The key is said
+  // on the row, so the palette is where it is learned.
+  {
+    const ask = searchFromFocus(
+      now.branch,
+      now.focused === undefined || now.focused === OUTSIDE ? undefined : now.focused,
+    );
+    offers.push(
+      now.plane === undefined
+        ? cannot(
+            SEARCH_ID,
+            "Search in files",
+            "No project is open, so there are no files to search.",
+          )
+        : {
+            ...can(SEARCH_ID, "Search in files", {
+              verb: "openView",
+              view: searchView(ask),
+              title: searchTitle(ask),
+            }),
+            note: `Every file of ${searchedSaid(ask)}, in a Search tab. ${SEARCH_KEY_SAID}.`,
+          },
+    );
+  }
 
   for (const [id, title, direction] of [
     ["pane.split.right", "Split right", "row"],
