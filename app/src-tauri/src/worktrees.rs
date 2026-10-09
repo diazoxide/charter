@@ -832,17 +832,30 @@ mod tests {
         let (_dir, root, clone) = plane();
         // Cut and never claimed, as a crash between the cut and the start leaves it.
         let added = worktree::add(&root, "alpha", "thing", "chat-1", None).unwrap();
-        let three_days_ago = |tree: &Path| {
+        // A cut is dated by its branch's reflog, and by the tree's `.git` file only where there
+        // is none (#835): both are aged, as a cut three days old has them.
+        let three_days_ago = |tree: &Path, branch: &str| {
+            let ago = std::time::Duration::from_secs(3 * 86400);
             std::fs::File::options()
                 .write(true)
                 .open(tree.join(".git"))
                 .unwrap()
-                .set_modified(
-                    std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86400),
-                )
+                .set_modified(std::time::SystemTime::now() - ago)
                 .unwrap();
+            let reflog = clone.join(".git/logs/refs/heads").join(branch);
+            let text = std::fs::read_to_string(&reflog).unwrap();
+            let (first, rest) = text.split_once('\n').unwrap();
+            let (head, message) = first.split_once('\t').unwrap();
+            assert!(message.starts_with("branch: Created from"), "{first}");
+            let mut fields: Vec<&str> = head.rsplitn(3, ' ').collect();
+            let seconds = (chrono::Utc::now() - chrono::Duration::from_std(ago).unwrap())
+                .timestamp()
+                .to_string();
+            fields[1] = &seconds;
+            fields.reverse();
+            std::fs::write(&reflog, format!("{}\t{message}\n{rest}", fields.join(" "))).unwrap();
         };
-        three_days_ago(&added.path);
+        three_days_ago(&added.path, &added.branch);
 
         let listed = pieces_of(&root, "alpha", "thing").unwrap();
 
@@ -854,7 +867,13 @@ mod tests {
         // A chat started on a branch of its own is claimed, and its row carries no such word,
         // however old the branch.
         let (started, _) = on_a_branch(&root, None, Some(&clone), None, true, started_in).unwrap();
-        three_days_ago(&started.unwrap());
+        let chat_2_branch = pieces_of(&root, "alpha", "thing")
+            .unwrap()
+            .into_iter()
+            .find(|p| p.piece == "chat-2")
+            .and_then(|p| p.branch)
+            .expect("chat-2 is on a branch");
+        three_days_ago(&started.unwrap(), &chat_2_branch);
         let claimed = pieces_of(&root, "alpha", "thing").unwrap();
         let chat_2 = claimed.iter().find(|p| p.piece == "chat-2").unwrap();
         assert_eq!(chat_2.unclaimed, None);
