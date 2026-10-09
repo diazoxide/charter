@@ -2951,6 +2951,16 @@ impl Chats {
             .map(|one| one.chat.clone())
     }
 
+    /// The chat with id `id` that a launch could not start is told nothing as it starts again
+    /// (#1546): its dispatch is no longer at work (`crate::restored::retrying`).
+    pub(crate) fn tell_nothing(&self, id: &str) {
+        for one in lock(&self.would_not_start).iter_mut() {
+            if one.chat.identity.id.as_deref() == Some(id) {
+                one.told = None;
+            }
+        }
+    }
+
     /// Whether the chat numbered `number` is one a launch could not start, and still waits.
     pub fn waits_to_start(&self, number: u32) -> bool {
         lock(&self.would_not_start)

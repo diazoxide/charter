@@ -12,9 +12,10 @@
 //! **A refused start is not an end.** A task whose start the launch refused (every agent was
 //! stopped, a profile wants approving again, a folder moved) waits in the list of chats that
 //! did not start, its dispatch still running, drawn under the chat that asked (#1497). **Try
-//! to start again** on that row starts it told to carry on ([`retrying`]); **End task** on it
-//! ends it and tells the chat that asked (`crate::unstarted::end`). Forget, for a chat listed
-//! across the window, does the same ([`forgetting`]).
+//! to start again** on that row starts it told to carry on, while that dispatch still runs
+//! ([`retrying`]); **End task** on it ends it and tells the chat that asked
+//! (`crate::unstarted::end`). Forget, for a chat listed across the window, does the same
+//! ([`forgetting`]).
 //!
 //! A dispatch whose chat neither came back nor waits to has ended, **where the record was read
 //! or the person chose to start fresh**: a record that could not be read says nothing about
@@ -57,7 +58,8 @@ pub(crate) fn put_back(
     size: purlis_core::engine::Size,
     settles: bool,
 ) -> Vec<crate::chats::Open> {
-    let launch = dispatchrestart::at_launch(record, &dispatchrecord::list(held.root()));
+    let launch =
+        dispatchrestart::at_launch(held.root(), record, &dispatchrecord::list(held.root()));
     for chat in &launch.not_resumed {
         tracing::info!(
             "purlis: task chat '{}' could not be told to carry on; it has ended, and the chat \
@@ -364,9 +366,35 @@ pub(crate) fn resuming(
 }
 
 /// **Retry now** (or a task row's **Try to start again**) on the chat with id `id` that a
-/// launch could not start (#1513): as
-/// [`resuming`], for the reports kept while it was not open, by its id.
+/// launch could not start (#1513): as [`resuming`], for the reports kept while it was not open,
+/// by its id.
+///
+/// **A task is told to carry on only while its dispatch is at work** (#1546): one whose record
+/// another hand ended while it waited is started told nothing, as any chat that did not start
+/// is (`dispatchrestart::still_at_work`).
 pub(crate) fn retrying(
+    held: &Held,
+    id: &str,
+    start: impl FnOnce() -> Result<u32, String>,
+) -> Result<u32, String> {
+    let ended = held.chats().waiting_to_start().into_iter().any(|one| {
+        one.chat.identity.id.as_deref() == Some(id)
+            && one.told.is_some()
+            && !dispatchrestart::still_at_work(
+                held.root(),
+                &dispatchrecord::list(held.root()),
+                &one.chat,
+            )
+    });
+    if ended {
+        held.chats().tell_nothing(id);
+    }
+    coming_back_as(held, id, start)
+}
+
+/// The chat with id `id` starts: the reports kept for it are taken from the workspace before,
+/// and handed to it once it has.
+fn coming_back_as(
     held: &Held,
     id: &str,
     start: impl FnOnce() -> Result<u32, String>,

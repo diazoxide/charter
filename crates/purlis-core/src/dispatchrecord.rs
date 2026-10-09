@@ -1106,6 +1106,16 @@ pub fn kept_again(root: &Path, id: &str, kept: Option<&str>) -> io::Result<bool>
     })
 }
 
+/// **The folder a chat started in `cwd` worked in, as a record says it** ([`Place::folder`]):
+/// relative to the project at `root` (`.` for its root), or the whole path of one outside it.
+pub fn folder_of(root: &Path, cwd: &Path) -> String {
+    match cwd.strip_prefix(root) {
+        Ok(inside) if inside.as_os_str().is_empty() => ".".to_owned(),
+        Ok(inside) => inside.to_string_lossy().into_owned(),
+        Err(_) => cwd.to_string_lossy().into_owned(),
+    }
+}
+
 /// **The ended tasks whose reports reached no chat, and that `asked` answers for** (#1513,
 /// V100-64), oldest first: what the chat that asked is handed when the person reopens it.
 /// `asked` is given each record, and says whether its asking chat is the chat coming back.
