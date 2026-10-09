@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791549571179,
+  "lastUpdate": 1791550872797,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4914,6 +4914,48 @@ window.BENCHMARK_DATA = {
             "value": 103.47363949999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.477, 103.287, 103.474, 106.076, 107.049 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "2f1eb2a3072dec038ba91246fc9b38e287218b63",
+          "message": "Undo of a memory's Move restores its exact name\n\nA journal memory moved to a persona or shared memory and back by Undo\ncame home only to the minute: the move rebuilds a journal name from the\nstamp line, which holds no seconds. The window knows the first name, so\nUndo now passes it.\n\n- memstore::move_one takes an optional exact name. It must be one plain\n  name, the same memory's name once a journal prefix is taken off both,\n  and carry a journal prefix exactly when the target is a journal. So it\n  can choose only the prefix's stamp, never rename a memory. Anything\n  else is InvalidInput. It goes through every existing check: a name the\n  target holds (a file or a link) is AlreadyExists, nothing is replaced,\n  and the target is reached by descriptor as before.\n- memscope::move_memory_as carries it; move_memory keeps its signature,\n  so purlis-cli is unchanged.\n- The memory_move command gains restore_as: Option<String>. Undo passes\n  the slug the memory had, the tab's Move passes null. bindings.ts and\n  uiRpc.ts regenerated.\n\nKeeping the index line's position on Undo stays open on the issue, and\nthe in-flight guard on Undo is another lane's.\n\nRefs #1190\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T16:35:50+04:00",
+          "tree_id": "e3aab23181d6029c3b7a0dc8d0cf1e1630788bbc",
+          "url": "https://github.com/purlis/purlis/commit/2f1eb2a3072dec038ba91246fc9b38e287218b63"
+        },
+        "date": 1791550872152,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.47604199999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.457, 0.460, 0.476, 0.481, 0.494 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.263751499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.144, 16.236, 16.264, 16.316, 16.334 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.32307399999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.629, 101.083, 101.323, 101.907, 102.206 ms"
           }
         ]
       }
