@@ -279,6 +279,7 @@ mod tests {
                 ci,
                 why: None,
             }),
+            landed: Err("its request is open".into()),
             waiting_on: vec![],
         }
     }

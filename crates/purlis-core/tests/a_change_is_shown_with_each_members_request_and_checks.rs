@@ -13,7 +13,7 @@ use std::process::Command;
 
 use purlis_core::change::cmd;
 use purlis_core::change::observe::{Observation, observe};
-use purlis_core::change::{Member, Record, store};
+use purlis_core::change::{Member, Record, landing, pending, store};
 use purlis_core::forge::checks::Ci;
 use purlis_core::forge::pr::State;
 use purlis_core::repocmd::Say;
@@ -281,30 +281,90 @@ mod shown {
         assert_eq!(seen.landed(), (0, 2));
     }
 
+    /// `repo`'s request, merged at [`HEAD`].
+    fn merged_pr(scene: &Scene, repo: &str, n: u64) {
+        pulls(
+            scene,
+            repo,
+            &format!(
+                r#"[{{"number": {n}, "html_url": "u", "state": "closed", "merged_at": "2026-09-26T00:00:00Z", "merge_commit_sha": "e0c9d13", "head": {{"sha": "{HEAD}", "ref": "change/api-2", "repo": {{"full_name": "acme/{repo}"}}}}}}]"#
+            ),
+        );
+    }
+
+    /// A commit on `repo`'s `origin/main`, which `origin/HEAD` names, as if fetched after the
+    /// merge; its id.
+    fn merged_upstream(world: &World, repo: &str) -> String {
+        let clone = world.plane.join("workspaces/alpha").join(repo);
+        git(
+            &clone,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "the merge",
+            ],
+        );
+        git(
+            &clone,
+            &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+        );
+        git(
+            &clone,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        let out = purlis_core::forklock::output(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1"),
+        )
+        .expect("git runs");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// `web` open behind `svc`, whose checks are running.
+    fn web_running(scene: &Scene) {
+        pulls(scene, "web", &open_pr("web", 14));
+        checks(
+            scene,
+            "web",
+            r#"{"total_count": 1, "check_runs": [{"status": "in_progress"}]}"#,
+            NO_STATUSES,
+        );
+    }
+
     #[test]
-    fn a_merged_blocker_unblocks_its_dependent_and_is_counted_merged() {
+    fn a_blocker_purlis_landed_unblocks_its_dependent_and_is_counted_merged() {
         purlis_core::unsteered!();
         if !in_child() {
             return;
         }
         let scene = Scene::new("show-merged.test");
         let world = world(&scene, "github", &[("svc", &[]), ("web", &["svc"])]);
-        pulls(
-            &scene,
-            "svc",
-            &format!(
-                r#"[{{"number": 601, "html_url": "u", "state": "closed", "merged_at": "2026-09-26T00:00:00Z", "merge_commit_sha": "e0c9d13", "head": {{"sha": "{HEAD}", "ref": "change/api-2", "repo": {{"full_name": "acme/svc"}}}}}}]"#
-            ),
-        );
-        pulls(&scene, "web", &open_pr("web", 14));
-        checks(
-            &scene,
-            "web",
-            r#"{"total_count": 1, "check_runs": [{"status": "in_progress"}]}"#,
-            NO_STATUSES,
-        );
+        merged_pr(&scene, "svc", 601);
+        web_running(&scene);
+        let merge = merged_upstream(&world, "svc");
+        landing::append(
+            &world.plane,
+            "alpha",
+            "laptop",
+            &landing::Landing::new("api-2", "svc", 601, HEAD, &merge, chrono::Utc::now()),
+        )
+        .unwrap();
         let seen = look(&world);
         assert!(seen.members[0].merged());
+        assert_eq!(seen.members[0].landed, Ok(()));
         assert!(
             seen.members[0].checks.is_none(),
             "a merged request's checks are not read"
@@ -316,9 +376,110 @@ mod shown {
         let lines = cmd::observed_lines(&record, &seen);
         assert!(lines[0].contains("1 of 2 merged"), "{lines:?}");
         assert!(
-            lines.iter().any(|l| l.contains("needs: svc ✓")),
+            lines.iter().any(|l| l.ends_with("needs: svc ✓")),
             "{lines:?}"
         );
+    }
+
+    /// #877: `show` counts a blocker landed only as the land gate does. Merged on the forge's
+    /// word alone, with no landing of purlis's, it is merged and still blocks.
+    #[test]
+    fn a_blocker_merged_outside_purlis_is_merged_and_still_blocks_as_the_land_gate_says() {
+        purlis_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("show-merged-outside.test");
+        let world = world(&scene, "github", &[("svc", &[]), ("web", &["svc"])]);
+        merged_pr(&scene, "svc", 601);
+        web_running(&scene);
+        let seen = look(&world);
+        assert!(seen.members[0].merged());
+        assert!(
+            seen.members[0]
+                .landed
+                .clone()
+                .unwrap_err()
+                .starts_with("merged outside purlis"),
+            "{seen:?}"
+        );
+        assert_eq!(seen.members[1].waiting_on, vec!["svc".to_string()]);
+        assert_eq!(seen.landed(), (1, 2), "merged is still counted merged");
+        let record = store::read(&world.plane, "alpha", "api-2").unwrap();
+        let lines = cmd::observed_lines(&record, &seen);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("needs: svc ✗ (merged outside purlis")
+                    && l.ends_with(" — blocked")),
+            "{lines:?}"
+        );
+    }
+
+    /// The landing log names a commit the clone's default branch does not hold: not landed,
+    /// in the land gate's words.
+    #[test]
+    fn a_logged_blocker_the_default_branch_does_not_hold_still_blocks() {
+        purlis_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("show-merged-moved.test");
+        let world = world(&scene, "github", &[("svc", &[]), ("web", &["svc"])]);
+        merged_pr(&scene, "svc", 601);
+        web_running(&scene);
+        merged_upstream(&world, "svc");
+        let moved = "0123456789abcdef0123456789abcdef01234567";
+        landing::append(
+            &world.plane,
+            "alpha",
+            "laptop",
+            &landing::Landing::new("api-2", "svc", 601, HEAD, moved, chrono::Utc::now()),
+        )
+        .unwrap();
+        let seen = look(&world);
+        assert!(
+            seen.members[0]
+                .landed
+                .clone()
+                .unwrap_err()
+                .contains("which this clone's main does not contain"),
+            "{seen:?}"
+        );
+        assert_eq!(seen.members[1].waiting_on, vec!["svc".to_string()]);
+    }
+
+    /// A landing purlis started and the forge now reports merged counts, as the gate counts it,
+    /// and `show` leaves the logging to `land`: nothing is written.
+    #[test]
+    fn a_blocker_purlis_started_and_found_merged_unblocks_and_nothing_is_logged() {
+        purlis_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("show-merged-started.test");
+        let world = world(&scene, "github", &[("svc", &[]), ("web", &["svc"])]);
+        merged_pr(&scene, "svc", 601);
+        web_running(&scene);
+        pending::append(
+            &world.plane,
+            "alpha",
+            "laptop",
+            &pending::Pending::new(
+                "api-2",
+                "svc",
+                601,
+                HEAD,
+                pending::Via::Queue,
+                pending::Stage::Asked,
+                chrono::Utc::now(),
+            ),
+        )
+        .unwrap();
+        let seen = look(&world);
+        assert_eq!(seen.members[0].landed, Ok(()));
+        assert!(seen.members[1].waiting_on.is_empty());
+        assert!(landing::landings(&world.plane, "alpha", "api-2").is_empty());
     }
 
     #[test]
