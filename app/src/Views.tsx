@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { PersonaMark } from "./PersonaMark";
 import { PersonaMarkPicker } from "./PersonaMarkPicker";
+import { PersonaServersNotice } from "./PersonaServersNotice";
 import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { LandAsk, PushAsk, askLand } from "./ChangeActions";
@@ -440,9 +441,17 @@ export function ViewPane({
           );
         })}
       </header>
-      {/* A persona's icon and colour, picked here and written to its definition (#1449). */}
+      {/* A persona's icon and colour, picked here and written to its definition (#1449), and
+          its servers that wait for this machine's approval (#1460). */}
       {view.from === null && view.view === "persona" && view.key !== "" && (
-        <PersonaMarkPicker key={`${plane}\u0000${view.key}`} plane={plane} persona={view.key} />
+        <>
+          <PersonaMarkPicker key={`${plane}\u0000${view.key}`} plane={plane} persona={view.key} />
+          <PersonaServersNotice
+            key={`servers\u0000${plane}\u0000${view.key}`}
+            plane={plane}
+            persona={view.key}
+          />
+        </>
       )}
       <div className="view-body">
         {holding ? (

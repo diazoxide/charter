@@ -317,8 +317,11 @@ purlis persona approve-mcp --persona marketing
 purlis persona approve-mcp --dry-run          # shows them and records nothing
 ```
 
-`--yes` approves without asking and is required off a terminal. The command is refused inside
-a chat: the approval is a person's. It is a digest of the line, kept in
+`--yes` approves without asking and is required off a terminal. The same approval is given in
+the window: a persona's tab shows each of its servers that waits, with the line it runs and
+**Approve**, which records that line only if it is still the one shown. Neither is open to a
+chat: the command is refused inside one, and the window's Approve is the window's alone, never
+a link's. The approval is a person's. It is a digest of the line, kept in
 `.charter/mcp-approved.json`, so any change to the entry or the vault lapses it. **An approval
 given while the persona was a sub-agent carries over**: the line is the same. A credentialed
 server nobody approved is **withheld**, never started without its credential, and the chat is

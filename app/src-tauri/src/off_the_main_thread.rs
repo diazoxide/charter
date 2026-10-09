@@ -55,6 +55,7 @@ mod tests {
                 crate::todos::todo_forget,
                 crate::todos::todo_read,
                 crate::personas::persona_create,
+                crate::personas::persona_servers_waiting,
                 crate::personas::persona_remove,
                 crate::resize_session,
                 crate::unwatch_session,
@@ -247,6 +248,10 @@ mod tests {
                 "plane": plane, "name": "scribe", "role": null,
                 "delegateWhen": "writing things down", "parent": null,
             }),
+        );
+        check(
+            "persona_servers_waiting",
+            json!({ "plane": plane, "name": "scribe" }),
         );
         check(
             "persona_remove",

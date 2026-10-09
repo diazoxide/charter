@@ -177,8 +177,9 @@ pub fn told(root: &Path, state: &Path, persona: &str, harness: Option<Harness>) 
         out.push(format!(
             "This persona's MCP server(s) {} were not started: each is handed a credential \
              from the persona's vault, and nobody has approved that on this machine. Their \
-             tools are not here. Tell the operator, who approves them in a terminal with \
-             `{APPROVE} --persona {}`; a new chat then starts with them.",
+             tools are not here. Tell the operator, who approves them on the persona's tab in \
+             purlis's window, or in a terminal with `{APPROVE} --persona {}`; a new chat then \
+             starts with them.",
             list(
                 servers
                     .withheld

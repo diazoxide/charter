@@ -108,7 +108,10 @@ pub struct Server {
 ///
 /// - **it lets a persona's committed hosts reach past this machine's sandbox** (#1362):
 ///   `allow_persona_hosts`, which the person at this machine's window allows as it was shown
-///   there.
+///   there;
+/// - **it hands a persona's vault value to a server a committed file names** (#1460):
+///   `approve_persona_server`, the window's form of `purlis persona approve-mcp`, which no chat
+///   may run either. The person approves the line the window showed.
 ///
 /// None is served on a link. A command added later that does one of these belongs here.
 ///
@@ -245,6 +248,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "keep_sandbox_block_for_tasks",
     // Widens what a persona's chats reach on this machine (#1362).
     "allow_persona_hosts",
+    // Hands a persona's vault value to a server a committed file names (#1460).
+    "approve_persona_server",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

@@ -1778,6 +1778,20 @@ export const commands = {
 	 */
 	personaMarkSet: (plane: PlaneId, name: string, icon: string | null, colour: string | null) => typedError<null, string>(__TAURI_INVOKE("persona_mark_set", { plane, name, icon, colour })),
 	/**
+	 *  The MCP servers of the persona `name` that wait for this machine's approval: each takes a
+	 *  value from the persona's vault, so a chat as the persona is started without it until a
+	 *  person approves its line (#1451, #1460).
+	 */
+	personaServersWaiting: (plane: PlaneId, name: string) => typedError<PersonaServerWaiting[], string>(__TAURI_INVOKE("persona_servers_waiting", { plane, name })),
+	/**
+	 *  **Approve** on a waiting server's Notice (#1460): the person approves `server` of `name` on
+	 *  this machine, exactly as the Notice showed it, `shown` being the digest of that line. A
+	 *  line that changed since is refused, and nothing is recorded. What waits after is the answer.
+	 *  The window's alone (`WINDOW_ONLY`): no link and no chat gives this approval, as no chat may
+	 *  run `purlis persona approve-mcp`.
+	 */
+	approvePersonaServer: (plane: PlaneId, name: string, server: string, shown: string) => typedError<PersonaServerWaiting[], string>(__TAURI_INVOKE("approve_persona_server", { plane, name, server, shown })),
+	/**
 	 *  The profile a persona's chats start on, and the project's profiles it may be set to.
 	 * 
 	 *  Off the window's thread: reading the profiles asks git whether the local file would travel.
@@ -5621,6 +5635,26 @@ export type PersonaProfile = {
 	inherited_from: string | null,
 	/**  Every profile the project offers on this machine, by name: what may be picked. */
 	offered: string[],
+};
+
+/**
+ *  One of a persona's MCP servers that takes a credential and waits for this machine's approval
+ *  (#1460): what its Notice in the persona's view shows, and the digest of the line it shows,
+ *  which an Approve sends back.
+ */
+export type PersonaServerWaiting = {
+	/**  The server's name in `mcp.json`. */
+	server: string,
+	/**
+	 *  What it would run and which of the persona's vault values it would be handed: the line
+	 *  an approval is given to, as `purlis persona approve-mcp` asks it.
+	 */
+	line: string,
+	/**
+	 *  The line's digest, or `null` for an entry purlis cannot show in full, which cannot be
+	 *  approved.
+	 */
+	fingerprint: string | null,
 };
 
 /**  Where a smart close stands. */

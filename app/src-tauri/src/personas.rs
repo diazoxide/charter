@@ -223,6 +223,74 @@ pub async fn persona_mark_set(
     .await
 }
 
+/// One of a persona's MCP servers that takes a credential and waits for this machine's approval
+/// (#1460): what its Notice in the persona's view shows, and the digest of the line it shows,
+/// which an Approve sends back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PersonaServerWaiting {
+    /// The server's name in `mcp.json`.
+    pub server: String,
+    /// What it would run and which of the persona's vault values it would be handed: the line
+    /// an approval is given to, as `purlis persona approve-mcp` asks it.
+    pub line: String,
+    /// The line's digest, or `null` for an entry purlis cannot show in full, which cannot be
+    /// approved.
+    pub fingerprint: Option<String>,
+}
+
+fn waiting_in(root: &Path, name: &str) -> Vec<PersonaServerWaiting> {
+    if !purlis_core::personas::valid_name(name) {
+        return Vec::new();
+    }
+    purlis_core::personaverbs::approve::waiting(root, name)
+        .into_iter()
+        .map(|one| PersonaServerWaiting {
+            server: one.server,
+            line: one.line,
+            fingerprint: one.fingerprint,
+        })
+        .collect()
+}
+
+/// The MCP servers of the persona `name` that wait for this machine's approval: each takes a
+/// value from the persona's vault, so a chat as the persona is started without it until a
+/// person approves its line (#1451, #1460).
+#[tauri::command]
+#[specta::specta]
+pub async fn persona_servers_waiting(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+) -> Result<Vec<PersonaServerWaiting>, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("reading the persona's servers", move || {
+        Ok(waiting_in(held.root(), &name))
+    })
+    .await
+}
+
+/// **Approve** on a waiting server's Notice (#1460): the person approves `server` of `name` on
+/// this machine, exactly as the Notice showed it, `shown` being the digest of that line. A
+/// line that changed since is refused, and nothing is recorded. What waits after is the answer.
+/// The window's alone (`WINDOW_ONLY`): no link and no chat gives this approval, as no chat may
+/// run `purlis persona approve-mcp`.
+#[tauri::command]
+#[specta::specta]
+pub async fn approve_persona_server(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    server: String,
+    shown: String,
+) -> Result<Vec<PersonaServerWaiting>, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        purlis_core::personaverbs::approve::approve_shown(held.root(), &name, &server, &shown)?;
+        Ok(waiting_in(held.root(), &name))
+    })
+    .await
+}
+
 /// Open a persona's definition in whatever the operating system opens a `.md` file with.
 ///
 /// The path is found and checked here, from the persona's name: the window names a persona,

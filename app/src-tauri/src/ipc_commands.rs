@@ -260,6 +260,8 @@ macro_rules! app_commands {
                 personas::persona_edit,
                 personas::persona_marks,
                 personas::persona_mark_set,
+                personas::persona_servers_waiting,
+                personas::approve_persona_server,
                 personas::persona_profile,
                 personas::persona_set_profile,
                 todos::todo_add,

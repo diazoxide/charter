@@ -187,8 +187,9 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert_eq!(ui::STANDING_DISPATCH.len(), 25);
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
     // And the person's acts named beside them: a task's merge and discard (#1511), the answer
-    // to a chat's sandbox block and to several tasks' (#1538, #1508), and the Allow of a
-    // persona's hosts on this machine (#1362).
+    // to a chat's sandbox block and to several tasks' (#1538, #1508), the Allow of a
+    // persona's hosts on this machine (#1362), and the approval of a persona's server that
+    // takes a value from its vault (#1460).
     for command in [
         "task_branch_merge",
         "dispatch_worktree_discard",
@@ -196,11 +197,12 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "allow_sandbox_block_for_tasks",
         "keep_sandbox_block_for_tasks",
         "allow_persona_hosts",
+        "approve_persona_server",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_hosts"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 2 + 2 + 3 + 1 + 2);
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 25 + 2 + 2 + 3 + 1 + 2 + 1);
 }
 
 #[tokio::test]

@@ -204,6 +204,66 @@ fn approve_in(
     0
 }
 
+/// One of a persona's credentialed servers this machine has not approved, as the window shows
+/// it (#1460): its name, the line a yes approves, and that line's digest, which the window
+/// sends back with the yes. `None` for an entry purlis cannot show in full, which nobody can
+/// approve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waiting {
+    pub server: String,
+    pub line: String,
+    pub fingerprint: Option<String>,
+}
+
+/// The servers of `persona` that wait for this machine's approval, by name.
+pub fn waiting(root: &Path, persona: &str) -> Vec<Waiting> {
+    let ok = mcp::approved(&super::state_dir(root), persona);
+    mcp::credentialed(root, persona)
+        .into_iter()
+        .filter(|c| c.fingerprint.as_ref().is_none_or(|fp| !ok.contains(fp)))
+        .map(|c| Waiting {
+            server: c.server,
+            line: c.line,
+            fingerprint: c.fingerprint,
+        })
+        .collect()
+}
+
+/// **A person's yes to one server, given in the window** (#1460): `server` of `persona` is
+/// approved on this machine, beside what was approved already, **only if its line is still the
+/// one the window showed** (`shown`, the line's digest). A line that changed since, or a server
+/// that is gone, is refused and nothing is recorded, so a file changed between the showing and
+/// the press is asked about again. The caller is the window alone: a chat never reaches this.
+pub fn approve_shown(root: &Path, persona: &str, server: &str, shown: &str) -> Result<(), String> {
+    if let Some(refused) = crate::personas::name_refusal(root, persona) {
+        return Err(refused);
+    }
+    let label = mcp::label(&[persona, server]);
+    let now = mcp::credentialed(root, persona)
+        .into_iter()
+        .find(|c| c.server == server)
+        .ok_or_else(|| {
+            format!(
+                "{label} is no longer a server that takes a credential, so nothing was approved."
+            )
+        })?;
+    let Some(fingerprint) = now.fingerprint else {
+        return Err(format!("cannot approve {label}: {}", mcp::UNRENDERABLE));
+    };
+    if fingerprint != shown {
+        return Err(format!(
+            "{label} changed since it was shown, so nothing was approved. Read what it runs now, \
+             then approve it again."
+        ));
+    }
+    let state = super::state_dir(root);
+    let mut keep: Vec<String> = mcp::approved(&state, persona).into_iter().collect();
+    keep.push(fingerprint);
+    mcp::approve(root, &state, persona, &keep).map_err(|err| {
+        format!("purlis could not record the approval for {label} ({err}), so it stays withheld.")
+    })
+}
+
 /// A y/N question for a caller on a terminal: the question on stderr, one line read from
 /// stdin, and only an explicit `y`/`yes` is a yes. EOF is a no. `None` off a terminal.
 pub fn confirm_on_terminal() -> Option<Confirm> {
@@ -290,6 +350,48 @@ mod tests {
         );
         assert!(servers.started.contains_key("grafana"));
         assert_eq!(servers.withheld.len(), 1);
+    }
+
+    #[test]
+    fn the_window_approves_one_server_as_it_was_shown_and_keeps_what_stood() {
+        // #1460: the window shows each waiting server's line and sends its digest back.
+        let plane = Plane::daily_with_ops();
+        let waiting = waiting(plane.root(), "ops");
+        let servers: Vec<&str> = waiting.iter().map(|w| w.server.as_str()).collect();
+        assert_eq!(servers, ["grafana", "gsc"]);
+        let shown = |at: usize| waiting[at].fingerprint.clone().expect("a line");
+
+        approve_shown(plane.root(), "ops", "grafana", &shown(0)).expect("approved");
+        assert_eq!(approved(&plane), [shown(0)]);
+        let left: Vec<String> = super::waiting(plane.root(), "ops")
+            .into_iter()
+            .map(|w| w.server)
+            .collect();
+        assert_eq!(left, ["gsc"]);
+
+        approve_shown(plane.root(), "ops", "gsc", &shown(1)).expect("approved");
+        let mut both = vec![shown(0), shown(1)];
+        both.sort();
+        assert_eq!(
+            approved(&plane),
+            both,
+            "the first approval stands beside the second"
+        );
+        assert!(super::waiting(plane.root(), "ops").is_empty());
+    }
+
+    #[test]
+    fn a_line_that_changed_since_it_was_shown_is_refused_and_nothing_is_recorded() {
+        let plane = Plane::daily_with_ops();
+        let refused = approve_shown(plane.root(), "ops", "grafana", "0123abcd").unwrap_err();
+        assert!(refused.contains("changed since it was shown"), "{refused}");
+        let gone = approve_shown(plane.root(), "ops", "nope", "0123abcd").unwrap_err();
+        assert!(
+            gone.contains("no longer a server that takes a credential"),
+            "{gone}"
+        );
+        assert!(approved(&plane).is_empty());
+        assert!(!mcp::approvals_path(&plane.state()).exists());
     }
 
     #[test]

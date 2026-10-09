@@ -174,8 +174,9 @@ purlis persona remove <name>      # refused while another persona extends or use
 - Editing or removing a persona changes a committed file. Commit it.
 - A chat as a persona is started with that persona's MCP servers (`personas/<name>/mcp.json`)
   and its denied tools (`disallowed-tools:`) on Claude Code. If the briefing says a server
-  was not started because nobody approved it, tell the operator: `purlis persona approve-mcp`
-  is theirs to run in a terminal, and it is refused inside a chat.
+  was not started because nobody approved it, tell the operator: the approval is theirs, on the
+  persona's tab in purlis's window or with `purlis persona approve-mcp` in a terminal, and it is
+  refused inside a chat.
 - purlis generates no sub-agent for a persona, and `purlis persona sync-agents` is retired. A
   project that still has the files it wrote removes them with `purlis doctor --fix
   persona-agents`, which the operator runs: it changes committed files.
