@@ -6552,8 +6552,19 @@ export const PlaneView = memo(function PlaneView({
   // neither is not reported at all.
   /** Its sessions, for the status line's count of the ones running. */
   const quitSessions = useMemo(() => quitting.map((chat) => chat.session), [quitting]);
+  // **Who it was sent to, and for which project, are part of what was sent** (#1037): a new
+  // callback, or this view told it is another project, has heard nothing yet, so it is told once
+  // even when nothing else moved.
   const reported = useRef<
-    { mine: typeof mine; quitting: Leaving[]; doing: State[]; moved: number } | undefined
+    | {
+        to: typeof onReport;
+        plane: PlaneId;
+        mine: typeof mine;
+        quitting: Leaving[];
+        doing: State[];
+        moved: number;
+      }
+    | undefined
   >(undefined);
   useLayoutEffect(() => {
     const report = () => {
@@ -6562,13 +6573,15 @@ export const PlaneView = memo(function PlaneView({
       const moved = Math.max(0, ...Object.values(states.movedAt));
       const was = reported.current;
       if (
-        was?.mine === mine &&
+        was?.to === onReport &&
+        was.plane === plane &&
+        was.mine === mine &&
         was.quitting === quitting &&
         was.moved === moved &&
         sameList(was.doing, doing)
       )
         return;
-      reported.current = { mine, quitting, doing, moved };
+      reported.current = { to: onReport, plane, mine, quitting, doing, moved };
       onReport(plane, {
         ...mine,
         ending: quitting.map(({ chat }, at) => ({ ...chat, state: doing[at] })),
