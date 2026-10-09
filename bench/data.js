@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791529131054,
+  "lastUpdate": 1791530897269,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -4494,6 +4494,48 @@ window.BENCHMARK_DATA = {
             "value": 101.690619,
             "unit": "ms",
             "extra": "median of 5 runs: 100.959, 101.089, 101.691, 101.707, 101.788 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "c919b964db0588d621fff28095a2008d10f09eb8",
+          "message": "build(deps): bump taiki-e/install-action\n\nBumps the actions group with 1 update in the / directory: [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `taiki-e/install-action` from 2.87.22 to 2.87.25\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/83ac0ad63c0167e6f06796fab0fce28db1bf3db0...183e4297cca2404691e9380e1307288dced5c82a)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.25\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-09T11:27:07+04:00",
+          "tree_id": "2ef9bef06fb119213cff1d90f7133283dca249ec",
+          "url": "https://github.com/purlis/purlis/commit/c919b964db0588d621fff28095a2008d10f09eb8"
+        },
+        "date": 1791530896144,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.2848625,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.262, 0.284, 0.285, 0.296, 0.297 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.625498999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.526, 16.585, 16.625, 16.644, 16.699 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.729733,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.765, 100.982, 101.730, 101.991, 102.211 ms"
           }
         ]
       }
