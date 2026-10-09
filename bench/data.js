@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791555636521,
+  "lastUpdate": 1791556451409,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5082,6 +5082,48 @@ window.BENCHMARK_DATA = {
             "value": 105.247716,
             "unit": "ms",
             "extra": "median of 5 runs: 104.156, 104.680, 105.248, 105.734, 106.085 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "ca5d3f80a6ed4291f40af052f52561e97ba5854e",
+          "message": "Draw only the newest answer of the Granted list\n\nIts read and Revoke now answer off the window's thread, so an older answer\ncould land after a newer one and bring a revoked grant back on screen.\n\nRefs #1543\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T18:12:10+04:00",
+          "tree_id": "6795165b1aa7d83a2d595e57d211577a6f3cbd09",
+          "url": "https://github.com/purlis/purlis/commit/ca5d3f80a6ed4291f40af052f52561e97ba5854e"
+        },
+        "date": 1791556450725,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.52952,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.487, 0.523, 0.530, 0.537, 0.556 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9671165,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.449, 16.744, 16.967, 16.995, 17.571 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.561722,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.258, 104.248, 104.562, 105.022, 105.259 ms"
           }
         ]
       }
