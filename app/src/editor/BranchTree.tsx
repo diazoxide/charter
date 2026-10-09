@@ -33,6 +33,11 @@ import { touchingIn, useTouching, type Touching, type Touches } from "../touchin
  * or moving to its parent, and type-ahead. Enter or a click on a file picks it, and the file
  * picked is the tree's `aria-selected` row and where the keyboard comes back in.
  *
+ * **The file picked is revealed** (#1137): when the pick comes from outside the tree (a search
+ * jump, `fileJump.ts`), the folders above it are opened and its row is scrolled into view once it
+ * is drawn. A file picked in the tree is on screen already, so nothing moves for it; each new
+ * `reveal` count reveals the file again, so a later jump finds it even after its folder was closed.
+ *
  * **What a chat is touching is marked live** (#1154), with the explorer's own dot (FM-6): the
  * file and each folder above it, naming the chat. The tab learns where its branch is and which
  * chats are open only once a chat touches something ({@link useTouchingHere}).
@@ -47,11 +52,15 @@ export function BranchTree({
   picked,
   onPick,
   onPress,
+  reveal,
 }: {
   plane: PlaneId;
   place: Place;
   /** The file the preview shows, by its path in the branch. */
   picked?: string;
+  /** Moves each time `picked` is to be revealed again (a jump's count): its folders opened and
+   *  its row scrolled into view. */
+  reveal?: number;
   onPick: (path: string) => void;
   /** A file or folder row's menu was used (FM-10). No menu without it. */
   onPress?: (offer: Offer) => void;
@@ -62,6 +71,19 @@ export function BranchTree({
   /** The folders opened, by fold key. The branch's own folder is always open: it is the root. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([topKey]));
   const [showIgnored, setShowIgnored] = useState(false);
+  // **The pick revealed** (#1137): taken while drawing, so the folders above it are read in the
+  // same pass; the row is scrolled to once it is drawn (the effect further down).
+  const asked = picked === undefined ? undefined : `${picked}\u0000${reveal ?? ""}`;
+  const [revealed, setRevealed] = useState<string>();
+  if (asked !== revealed) {
+    setRevealed(asked);
+    if (picked !== undefined) {
+      const above = foldsAbove(workspace, top, picked);
+      setExpanded((was) =>
+        above.every((key) => was.has(key)) ? was : new Set([...was, ...above]),
+      );
+    }
+  }
   const reads = useBranchFolders(plane, workspace, openUnder(workspace, top, expanded));
   const icons = useFileIcons(plane, workspace);
   const touching = useTouchingHere(plane, place);
@@ -87,6 +109,19 @@ export function BranchTree({
     drawn.map((row) => row.id),
   );
   const byId = new Map(rows.map((row) => [row.id, row]));
+  const treeRef = useRef<HTMLDivElement>(null);
+  /** The reveal last scrolled to, so a redraw does not scroll the tree under the operator. */
+  const scrolled = useRef<string>(undefined);
+  const pickedDrawn = pickedRow !== undefined && drawn.some((row) => row.id === pickedRow);
+  useEffect(() => {
+    if (!pickedDrawn || asked === undefined || scrolled.current === asked) return;
+    scrolled.current = asked;
+    // `block: "nearest"` moves the list only when the row is off screen. Optional because jsdom
+    // has no layout, and so no `scrollIntoView`.
+    [...(treeRef.current?.querySelectorAll<HTMLElement>("[data-row]") ?? [])]
+      .find((el) => el.dataset.row === pickedRow)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [asked, pickedDrawn, pickedRow]);
 
   const fold = (key: string, open: boolean) =>
     setExpanded((was) => {
@@ -129,6 +164,7 @@ export function BranchTree({
     <div className="explorer piece-files-tree">
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
         <div
+          ref={treeRef}
           role="tree"
           aria-label={`Files of ${placeName(place)}`}
           data-testid="piece-files-tree"
@@ -311,4 +347,12 @@ function openUnder(
   };
   walk(top);
   return out;
+}
+
+/** The fold keys of the folders above `path` in `top`'s branch, outermost first. */
+function foldsAbove(workspace: string, top: BranchFolderRef, path: string): string[] {
+  const parts = path.split("/").slice(0, -1);
+  return parts.map((_, i) =>
+    fileFold(workspace, { ...top, folder: parts.slice(0, i + 1).join("/") }),
+  );
 }

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
+import { jumpTo } from "../fileJump";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
 import type { Offer } from "../actions";
 
@@ -460,5 +461,69 @@ describe("a row of the file tab's tree (FM-10)", () => {
     expect(pressed.map((offer) => offer.does)).toEqual([
       { verb: "copyPath", at: { ...CUT, path: "src" }, absolute: true },
     ]);
+  });
+});
+
+describe("a jump reveals its file in the tree (#1137)", () => {
+  /** The rows brought into view, by their `data-row`: jsdom has no layout of its own. */
+  function scrolls() {
+    const scrolled: string[] = [];
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value(this: Element) {
+        scrolled.push(this.getAttribute("data-row") ?? "");
+      },
+    });
+    return scrolled;
+  }
+  afterEach(() => {
+    delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  const LIB = "file:svc/fix-it:src/deep/lib.rs";
+
+  it("opens the folders above the file a jump picked, and scrolls its row into view", async () => {
+    const scrolled = scrolls();
+    core({
+      "README.md": { kind: "text", text: "# svc\n" },
+      "src/deep/lib.rs": { kind: "text", text: "a\nb\n" },
+    });
+    jumpTo({ plane: PLANE, place: CUT, path: "src/deep/lib.rs", line: 2 });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+
+    expect(await row("lib.rs")).toHaveAttribute("aria-selected", "true");
+    expect(await row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await row("deep")).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(scrolled).toEqual([LIB]));
+  });
+
+  it("reveals the file again on a later jump to it, after its folder was closed", async () => {
+    const scrolled = scrolls();
+    core({ "src/deep/lib.rs": { kind: "text", text: "a\nb\n" } });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    act(() => jumpTo({ plane: PLANE, place: CUT, path: "src/deep/lib.rs", line: 1 }));
+    expect(await row("lib.rs")).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(scrolled).toEqual([LIB]));
+
+    await userEvent.click(await row("src"));
+    expect(await row("src")).toHaveAttribute("aria-expanded", "false");
+    act(() => jumpTo({ plane: PLANE, place: CUT, path: "src/deep/lib.rs", line: 2 }));
+
+    expect(await row("lib.rs")).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(scrolled).toEqual([LIB, LIB]));
+  });
+
+  it("leaves the folders as they are for a file picked in the tree itself", async () => {
+    scrolls();
+    core({
+      "src/lib.rs": { kind: "text", text: "x\n" },
+      "src/more/a.rs": { kind: "text", text: "" },
+    });
+    render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row("src"));
+    await userEvent.click(await row("lib.rs"));
+
+    expect(await row("lib.rs")).toHaveAttribute("aria-selected", "true");
+    expect(await row("more")).toHaveAttribute("aria-expanded", "false");
   });
 });
