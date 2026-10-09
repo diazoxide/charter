@@ -1584,7 +1584,7 @@ impl Wanted {
     /// What this dispatch is called where purlis names it to its asking chat: the task's
     /// name, or for a handoff that gave none, where the work moved to. `None` for a name
     /// purlis would not draw.
-    fn shown(&self) -> Option<String> {
+    pub(crate) fn shown(&self) -> Option<String> {
         match &self.moved {
             Some(moved) if self.name.trim().is_empty() => Some(
                 purlis_core::handoff::task_name_of_a_handoff(&moved.workspace),
@@ -1600,14 +1600,76 @@ impl Wanted {
 /// starts exactly the dispatch whose brief the person read.
 ///
 /// In memory only, as the store's own list is: both end with the app.
+///
+/// **And what the Dispatches tab lists of them** (#1456): each one held, from when it was
+/// held, and the last [`KEPT_BLOCKED_LISTED`] the person kept blocked. Neither ever had a
+/// dispatch record, and nothing of them is written: they end with the app too.
 #[derive(Default)]
-pub struct HeldDispatches(std::sync::Mutex<std::collections::HashMap<u32, Wanted>>);
+pub struct HeldDispatches {
+    held: std::sync::Mutex<std::collections::HashMap<u32, Wanted>>,
+    /// When each held dispatch was held, by the store's number.
+    since: std::sync::Mutex<std::collections::HashMap<u32, String>>,
+    /// The dispatches the person kept blocked, oldest first, with when.
+    kept_blocked: std::sync::Mutex<std::collections::VecDeque<(Wanted, String)>>,
+}
+
+/// How many dispatches the person kept blocked the Dispatches tab lists, newest kept.
+pub const KEPT_BLOCKED_LISTED: usize = 50;
+
+/// A time as the dispatch records write one: RFC 3339, in UTC, to the second.
+fn now_stamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
 
 impl HeldDispatches {
     fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, Wanted>> {
-        self.0
+        self.held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn since(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, String>> {
+        self.since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Every dispatch held on the person now, in the order they were asked, with when.
+    pub(crate) fn listed(&self) -> Vec<(Wanted, Option<String>)> {
+        let held = self.lock();
+        let since = self.since();
+        let mut listed: Vec<(u32, Wanted, Option<String>)> = held
+            .iter()
+            .map(|(id, wanted)| (*id, wanted.clone(), since.get(id).cloned()))
+            .collect();
+        listed.sort_by_key(|(id, ..)| *id);
+        listed
+            .into_iter()
+            .map(|(_, wanted, at)| (wanted, at))
+            .collect()
+    }
+
+    /// The person kept `wanted` blocked: listed, newest last, until the app ends or
+    /// [`KEPT_BLOCKED_LISTED`] newer ones push it out.
+    pub(crate) fn kept_blocked(&self, wanted: Wanted) {
+        let mut kept = self
+            .kept_blocked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kept.len() == KEPT_BLOCKED_LISTED {
+            kept.pop_front();
+        }
+        kept.push_back((wanted, now_stamp()));
+    }
+
+    /// The dispatches the person kept blocked, oldest first, with when.
+    pub(crate) fn kept_blocked_listed(&self) -> Vec<(Wanted, String)> {
+        self.kept_blocked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Keeps `wanted` as held dispatch `pending`, unless one is kept under that number
@@ -1620,16 +1682,21 @@ impl HeldDispatches {
             return Some(first.shown().unwrap_or_else(|| first.name.clone()));
         }
         held.insert(pending, wanted.clone());
+        self.since().insert(pending, now_stamp());
         None
     }
 
     fn take(&self, pending: u32) -> Option<Wanted> {
-        self.lock().remove(&pending)
+        let taken = self.lock().remove(&pending);
+        self.since().remove(&pending);
+        taken
     }
 
     /// Chat `session` closed: what it asked for goes with it, as the store's own entry does.
     pub fn forget(&self, session: u32) {
-        self.lock().retain(|_, wanted| wanted.chat != session);
+        let mut held = self.lock();
+        held.retain(|_, wanted| wanted.chat != session);
+        self.since().retain(|id, _| held.contains_key(id));
     }
 
     /// Takes out everything chat `session` asked for that still waits on the person.
@@ -1644,6 +1711,7 @@ impl HeldDispatches {
             .into_iter()
             .filter_map(|id| held.remove(&id).map(|wanted| (id, wanted)))
             .collect();
+        self.since().retain(|id, _| held.contains_key(id));
         // In the order they were asked.
         taken.sort_by_key(|(id, _)| *id);
         taken.into_iter().map(|(_, wanted)| wanted).collect()
@@ -2590,6 +2658,8 @@ pub fn answered(
     // Where the start itself was refused, its failed row is written already (#1497).
     let mut row = None;
     let (how, detail) = if answer.allowed.is_none() {
+        // Listed on the Dispatches tab, which has no record of it (#1456).
+        held.held_dispatches().kept_blocked(wanted.clone());
         (Answered::KeptBlocked, pair)
     } else {
         match dispatch_noting(held, plane, &wanted, STARTING) {
@@ -8712,6 +8782,21 @@ mod tests {
         );
         assert!(matches!(said, Answer::NeedsGrant { .. }), "{said:?}");
         let pending = held.dispatch_grants().waiting(asking)[0].id;
+        // #1456: it has no record, and the Dispatches tab still lists it while it waits.
+        let listed = || {
+            crate::dispatches::not_started_rows(&held)
+                .into_iter()
+                .map(|row| (row.state, row.task, row.persona))
+                .collect::<Vec<_>>()
+        };
+        let named = |state: &str| {
+            vec![(
+                state.to_owned(),
+                Some("check the cluster".to_owned()),
+                Some("devops".to_owned()),
+            )]
+        };
+        assert_eq!(listed(), named("held"));
 
         assert!(held.dispatch_grants().keep_blocked(pending));
 
@@ -8727,6 +8812,8 @@ mod tests {
         assert_eq!(told[0].from, "check the cluster");
         assert_eq!(told[0].summary, "steward to devops");
         assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        // And listed as kept blocked, no longer as waiting (#1456).
+        assert_eq!(listed(), named("kept-blocked"));
         // No grant was made.
         let (again, _) = dispatch(
             &held,

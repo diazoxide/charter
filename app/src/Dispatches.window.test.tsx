@@ -11,7 +11,13 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { DispatchRow, OpenChat, SessionRecordRow, WorktreeLoss } from "./bindings";
+import type {
+  DispatchRow,
+  NotStartedRow,
+  OpenChat,
+  SessionRecordRow,
+  WorktreeLoss,
+} from "./bindings";
 
 /**
  * **The Dispatches tab** (#1452) against the whole window: it is offered from the Sessions
@@ -179,6 +185,8 @@ function core(
   on: {
     rows?: DispatchRow[] | Error;
     undrawn?: number;
+    /** The dispatches that never started (#1456). */
+    notStarted?: NotStartedRow[];
     /** What the core says a discard would lose, or its refusal to ask. */
     loss?: WorktreeLoss | Error;
     /** The core's refusal of the discard itself. */
@@ -220,7 +228,7 @@ function core(
     if (cmd === "dispatches") {
       const rows = on.rows ?? ROWS;
       if (rows instanceof Error) throw rows.message;
-      return { rows, undrawn: on.undrawn ?? 0 };
+      return { rows, undrawn: on.undrawn ?? 0, not_started: on.notStarted ?? [] };
     }
     if (cmd === "dispatch_worktree_loss") {
       if (on.loss === undefined) throw "no worktree was asked about";
@@ -569,6 +577,36 @@ describe("the Dispatches tab", () => {
     expect(screen.getByTestId("dispatches-undrawn")).toHaveTextContent(
       "2 records purlis will not draw: they hold text purlis refuses to put on the screen.",
     );
+  });
+
+  it("lists a dispatch held on your answer and one you kept blocked, which have no record (#1456)", async () => {
+    const held: NotStartedRow = {
+      state: "held",
+      mode: "task",
+      persona: "devops",
+      task: "rotate the keys",
+      asker: "steward 3",
+      by_person: false,
+      at: "2026-10-09T08:30:00Z",
+    };
+    const blocked: NotStartedRow = {
+      ...held,
+      state: "kept-blocked",
+      task: "drop the tables",
+      at: "2026-10-09T08:00:00Z",
+    };
+    core({ rows: [], notStarted: [held, blocked] });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-sessions");
+    await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
+
+    const listed = await screen.findAllByTestId("dispatch-not-started");
+    expect(listed.map((one) => one.textContent)).toEqual([
+      "The task rotate the keys for devops, asked by steward 3: waiting for your answer on its Notice (2026-10-09 08:30 UTC).",
+      "The task drop the tables for devops, asked by steward 3: kept blocked by you (2026-10-09 08:00 UTC). Nothing was started.",
+    ]);
+    // Not "no dispatches yet": the project has two, neither of which started.
+    expect(screen.queryByTestId("dispatches-empty")).toBeNull();
   });
 
   it("says so when every record in the store is one purlis will not draw", async () => {

@@ -333,7 +333,10 @@ BRIEF
   Dispatch.
   Either way the asking chat is told on its next turn, the way it is told a report; and if
   that chat was started again before you answered, the question went with its old run, so it
-  is told that the task was not started and to dispatch it again. A second
+  is told that the task was not started and to dispatch it again. While it waits on you, and
+  once you kept it blocked, the Dispatches tab lists it under **Not started** (#1456): it has
+  no record, so this list is kept in memory, the last 50 kept-blocked ones, and is gone once
+  the app is started again. A second
   dispatch across the same pair while you are being asked is refused, not queued beside the
   first: the chat is told which task is waiting and to dispatch again once you have answered. A chat
   nobody is at is never asked for; see *A dispatch from an unattended chat*, below.

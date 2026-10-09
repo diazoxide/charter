@@ -1,4 +1,4 @@
-import type { DispatchRow, RowWorktree, WorktreeLoss } from "./bindings";
+import type { DispatchRow, NotStartedRow, RowWorktree, WorktreeLoss } from "./bindings";
 import type { ViewRef } from "./tabs";
 
 /**
@@ -171,4 +171,20 @@ export function counted(count: number, one: string, many: string): string {
 export function saidAt(stamp: string): string {
   const read = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(stamp);
   return read ? `${read[1]} ${read[2]} UTC` : stamp;
+}
+
+/**
+ * What the Dispatches tab says of a dispatch that never started (#1456): what it was, for
+ * whom, who asked, and whether it waits on the person's answer or they kept it blocked.
+ */
+export function notStartedSaid(row: NotStartedRow): string {
+  const kind = row.mode === "handoff" ? "handoff" : "task";
+  const what = row.task === null ? `A ${kind}` : `The ${kind} ${row.task}`;
+  const to = row.persona === null ? "the asking chat's own persona" : row.persona;
+  const chat = row.asker ?? "a chat that has closed";
+  const by = row.by_person ? `you, from ${chat}` : chat;
+  const when = row.at === null ? "" : ` (${saidAt(row.at)})`;
+  return row.state === "held"
+    ? `${what} for ${to}, asked by ${by}: waiting for your answer on its Notice${when}.`
+    : `${what} for ${to}, asked by ${by}: kept blocked by you${when}. Nothing was started.`;
 }

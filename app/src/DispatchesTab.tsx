@@ -7,6 +7,7 @@ import {
   commands,
   type DispatchRow,
   type Dispatches,
+  type NotStartedRow,
   type PlaneId,
   type WorktreeLoss,
 } from "./bindings";
@@ -19,6 +20,7 @@ import {
   losesNothing,
   lostSaid,
   nestedSaid,
+  notStartedSaid,
   NO_PERSONA,
   NO_PERSONA_SAID,
   personasOf,
@@ -176,8 +178,17 @@ export function DispatchesTab({
         : `${undrawn} records purlis will not draw: they hold text purlis refuses to put on the screen.`}
     </p>
   );
+  const notStarted = said.read?.not_started ?? [];
+  const waiting = notStarted.length > 0 && <NotStarted rows={notStarted} />;
   if (rows.length === 0) {
-    if (refused) return refused;
+    if (refused)
+      return (
+        <>
+          {waiting}
+          {refused}
+        </>
+      );
+    if (waiting) return waiting;
     return (
       <EmptyState
         mark={Send}
@@ -190,6 +201,7 @@ export function DispatchesTab({
   const shown = shownDispatches(rows, filter);
   return (
     <>
+      {waiting}
       <div className="vault-tools dispatches-tools">
         <select
           className="search-scope"
@@ -390,6 +402,26 @@ export function DispatchesTab({
         </ChatAsk>
       )}
     </>
+  );
+}
+
+/** The dispatches that never started, and so have no record (#1456): held on the person's
+ *  answer, or kept blocked by them. The app lists them from memory, and says so. */
+function NotStarted({ rows }: { rows: NotStartedRow[] }) {
+  return (
+    <section className="dispatches-not-started" aria-label="Dispatches that did not start">
+      <h3>Not started</h3>
+      <ul>
+        {rows.map((row, at) => (
+          <li key={at} data-testid="dispatch-not-started" data-state={row.state}>
+            {notStartedSaid(row)}
+          </li>
+        ))}
+      </ul>
+      <p className="none">
+        Listed while the app runs: none of these is kept once it is started again.
+      </p>
+    </section>
   );
 }
 
