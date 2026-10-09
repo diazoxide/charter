@@ -15,6 +15,11 @@
 //! `FD_SETSIZE`, is slower or wrong for each number past what it needs. 10 240 is ten times
 //! what 200 chats hold. A limit the process was given above the ceiling is kept: lowering it
 //! would take away what whoever started charter chose to give it.
+//!
+//! **Below a lower system ceiling, the most it allows.** macOS also refuses a soft limit above
+//! `kern.maxfilesperproc`, which is normally far above 10 240 but can be set lower with `sysctl`
+//! or by a managed profile. A refused ask is retried lower ([`settle`]), so the process ends at
+//! that ceiling instead of at the 256 it was started with.
 
 /// `OPEN_MAX` as macOS's `<sys/syslimits.h>` defines it: the most a soft `RLIMIT_NOFILE` is
 /// raised to, on every platform.
@@ -37,8 +42,11 @@ pub enum Raised {
     From { from: u64, to: u64 },
     /// The soft limit was already high enough (`None` is unlimited), and was left alone.
     AlreadyEnough(Option<u64>),
-    /// The system refused the new limit; the process goes on with the one it had.
+    /// The system refused the new limit and every lower one above `from`; the process goes on
+    /// with the one it had.
     Refused { from: u64, to: u64 },
+    /// The platform has no open-file limit to raise (Windows has no `RLIMIT_NOFILE`).
+    NotApplicable,
 }
 
 impl std::fmt::Display for Raised {
@@ -55,13 +63,42 @@ impl std::fmt::Display for Raised {
                     "the open-file limit stays {from}: the system refused {to}"
                 )
             }
+            Self::NotApplicable => write!(f, "this platform has no open-file limit to raise"),
         }
     }
 }
 
-/// Raises this process's soft `RLIMIT_NOFILE` as [`soft_limit_to_ask`] says. Called once, as
-/// the app or `charterd` starts. It never fails the start: a refused limit is reported and the
-/// process goes on with the one it was given.
+/// The highest soft limit above `from`, and at most `to`, that the system `accepts`, or `None`
+/// when it accepts none. `accepts` sets the limit and says whether the system took it.
+///
+/// `to` is asked first, so a system that takes it is asked once. Otherwise the answer is found
+/// by halving the range between the last limit taken and the last one refused, about 14 asks
+/// from 256 to 10 240. Every accepted ask is higher than the one before it, so the limit the
+/// process is left with is the one returned. This finds macOS's `kern.maxfilesperproc` without
+/// reading it: reading it takes a `sysctl` call no safe binding in the build offers.
+pub fn settle(from: u64, to: u64, mut accepts: impl FnMut(u64) -> bool) -> Option<u64> {
+    if to <= from {
+        return None;
+    }
+    if accepts(to) {
+        return Some(to);
+    }
+    // `taken` is accepted (or is the limit the process has), `refused` is not.
+    let (mut taken, mut refused) = (from, to);
+    while refused - taken > 1 {
+        let mid = taken + (refused - taken) / 2;
+        if accepts(mid) {
+            taken = mid;
+        } else {
+            refused = mid;
+        }
+    }
+    (taken > from).then_some(taken)
+}
+
+/// Raises this process's soft `RLIMIT_NOFILE` as [`soft_limit_to_ask`] says, or as near it as
+/// the system allows ([`settle`]). Called once, as the app or `charterd` starts. It never fails
+/// the start: a refused limit is reported and the process goes on with the one it was given.
 #[cfg(unix)]
 pub fn raise() -> Raised {
     use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
@@ -71,20 +108,23 @@ pub fn raise() -> Raised {
     };
     // `soft_limit_to_ask` answers only for a finite soft limit.
     let from = given.current.unwrap_or(to);
-    let asked = Rlimit {
-        current: Some(to),
-        maximum: given.maximum,
-    };
-    match setrlimit(Resource::Nofile, asked) {
-        Ok(()) => Raised::From { from, to },
-        Err(_) => Raised::Refused { from, to },
+    let settled = settle(from, to, |current| {
+        let asked = Rlimit {
+            current: Some(current),
+            maximum: given.maximum,
+        };
+        setrlimit(Resource::Nofile, asked).is_ok()
+    });
+    match settled {
+        Some(now) => Raised::From { from, to: now },
+        None => Raised::Refused { from, to },
     }
 }
 
 /// Windows has no `RLIMIT_NOFILE`.
 #[cfg(not(unix))]
 pub fn raise() -> Raised {
-    Raised::AlreadyEnough(None)
+    Raised::NotApplicable
 }
 
 #[cfg(test)]
