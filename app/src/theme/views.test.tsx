@@ -1038,7 +1038,13 @@ const STATES: State[] = [
         id: "01K6TASK",
         task: "fix the queue",
         running: false,
-        own: { repo: "svc", branch: "fix-the-queue-0000aaaa", standing: "kept", acts: true },
+        own: {
+          repo: "svc",
+          branch: "fix-the-queue-0000aaaa",
+          standing: "kept",
+          acts: true,
+          left: null,
+        },
         places: [
           {
             workspace: "alpha",

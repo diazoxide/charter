@@ -143,6 +143,18 @@ export function lostSaid(loss: WorktreeLoss): string | undefined {
     : `${loss.unmerged} commits made on no branch would be lost:`;
 }
 
+/**
+ * The heading over the uncommitted folders that are **repositories of their own** (#1472), or
+ * nothing where there are none: git lists each as one line, and all its files and its history
+ * go with the folder.
+ */
+export function nestedSaid(loss: WorktreeLoss): string | undefined {
+  if (loss.nested.length === 0) return undefined;
+  return loss.nested.length === 1
+    ? "1 of them is a repository of its own. Everything in it, its history too, goes with the folder:"
+    : `${loss.nested.length} of them are repositories of their own. Everything in them, their history too, goes with the folder:`;
+}
+
 /** Whether a discard would delete nothing: no uncommitted file, no ignored path of the task's,
  *  and no commit made on no branch. */
 export function losesNothing(loss: WorktreeLoss): boolean {

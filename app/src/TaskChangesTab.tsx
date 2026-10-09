@@ -16,7 +16,9 @@ import { discardSays } from "./dispatches";
 import { pieceDiffTitle, pieceDiffView } from "./pieceViews";
 import type { ViewRef } from "./tabs";
 import {
+  deleteSays,
   filesIn,
+  leftSaid,
   mergeBlocked,
   mergeSays,
   ownSaid,
@@ -75,6 +77,9 @@ export function TaskChangesTab({
   const [merging, setMerging] = useState<{ merge: BranchMerge; trouble?: string }>();
   /** The discard being asked about, with the core's refusal of the last answer. */
   const [discarding, setDiscarding] = useState<{ loss: WorktreeLoss; trouble?: string }>();
+  /** The delete of a merged branch whose folder is gone being asked about (#1472): the commit
+   *  it was shown at, with the core's refusal of the last answer. */
+  const [deleting, setDeleting] = useState<{ tip: string; trouble?: string }>();
   /** What the last press could not do, or what it did, until it is put away. */
   const [told, setTold] = useState<{ tone: "news" | "trouble"; says: string }>();
   const [busy, setBusy] = useState(false);
@@ -144,6 +149,18 @@ export function TaskChangesTab({
     setAgain((was) => was + 1);
   };
 
+  const deleteBranch = async () => {
+    if (deleting === undefined) return;
+    setBusy(true);
+    const answer = await commands
+      .taskBranchDelete(plane, id, deleting.tip)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setBusy(false);
+    if (answer.status === "error") return setDeleting({ ...deleting, trouble: answer.error });
+    setDeleting(undefined);
+    setAgain((was) => was + 1);
+  };
+
   if (said === undefined)
     return (
       <p className="pending" aria-busy="true">
@@ -168,6 +185,25 @@ export function TaskChangesTab({
       <p className="honest">{own === null ? SHARED_SAID : ownSaid(own)}</p>
       {read.running && (
         <p className="honest">It is still working: this is what it has changed so far.</p>
+      )}
+      {own !== null && leftSaid(own) !== undefined && (
+        <p className="honest" data-testid="task-changes-left">
+          {leftSaid(own)}
+        </p>
+      )}
+      {own?.left?.merged === true && !read.running && (
+        <div className="task-changes-acts">
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => {
+              setTold(undefined);
+              if (own.left !== null) setDeleting({ tip: own.left.tip });
+            }}
+          >
+            Delete branch…
+          </button>
+        </div>
       )}
       {own?.acts === true && (
         <div className="task-changes-acts">
@@ -240,6 +276,17 @@ export function TaskChangesTab({
           busy={busy}
           onAnswer={() => void merge()}
           onCancel={() => setMerging(undefined)}
+        />
+      )}
+      {deleting !== undefined && own !== null && (
+        <ChatAsk
+          title="Delete this task's branch?"
+          says={deleteSays(own)}
+          answer="Delete"
+          trouble={deleting.trouble}
+          busy={busy}
+          onAnswer={() => void deleteBranch()}
+          onCancel={() => setDeleting(undefined)}
         />
       )}
       {discarding !== undefined && (

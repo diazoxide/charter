@@ -8086,6 +8086,8 @@ mod tests {
             on: Some(branch.clone()),
             changes: Vec::new(),
             ignored: Vec::new(),
+            nested: Vec::new(),
+            seal: String::new(),
             unmerged: 0,
             lost: Vec::new(),
         };
@@ -8145,6 +8147,27 @@ mod tests {
         assert_eq!(discard(&held, &dispatch, &loss), Err(open.to_owned()));
         assert!(folder.join("scratch.txt").is_file());
         let _ = held.close_chat(squatter);
+        // #1472: a listed file written again is the same list of paths, and is still a change
+        // the person was not shown. So is a commit made in a repository nested in the folder.
+        std::fs::write(
+            folder.join("scratch.txt"),
+            "not committed, and written again\n",
+        )
+        .expect("written again");
+        assert_eq!(
+            discard(&held, &dispatch, &loss),
+            Err(purlis_core::dispatchplace::CHANGED_SINCE_ASKED.to_owned())
+        );
+        assert!(folder.join("scratch.txt").is_file());
+        std::fs::create_dir_all(folder.join("vendor/lib")).expect("a nested repo");
+        git(&folder.join("vendor/lib"), &["init", "-q"]);
+        let loss = loss_of(&held, &dispatch).expect("what would be lost now");
+        assert_eq!(loss.nested, vec!["vendor/lib/".to_owned()]);
+        std::fs::write(folder.join("vendor/lib/HEAD-note"), "x").expect("its work");
+        assert_eq!(
+            discard(&held, &dispatch, &loss),
+            Err(purlis_core::dispatchplace::CHANGED_SINCE_ASKED.to_owned())
+        );
 
         // The answer to what was shown removes the folder. The branch holds a commit that is
         // nowhere else, so it stays: no commit is lost, and nothing is merged.

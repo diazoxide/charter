@@ -4239,6 +4239,19 @@ export type Launch = {
 	why: string | null,
 };
 
+/**  A task's own branch whose folder is gone, as its Changes tab says it (#1472). */
+export type LeftBranch = {
+	/**  The commit it is at, by its full id: what a delete is of. */
+	tip: string,
+	/**
+	 *  Whether the branch the repo is on holds every commit of it: the one case Delete branch
+	 *  is offered, and the one case git deletes it.
+	 */
+	merged: boolean,
+	/**  How many of its commits the branch the repo is on does not hold. */
+	ahead: number,
+};
+
 /**
  *  An action the core left out of a subject's list, and why. Never dropped silently: the menu
  *  draws it as a row that cannot run, with `why` as its reason.
@@ -4732,6 +4745,12 @@ export type OwnBranch = {
 	 *  Each is still refused while a chat stands in the folder.
 	 */
 	acts: boolean,
+	/**
+	 *  The branch, where its folder is gone and the branch is still in the repo (#1472):
+	 *  discarded, removed by other hands, or merged while git kept the branch. `null` while
+	 *  the folder is there, and where the branch is gone too or could not be read.
+	 */
+	left: LeftBranch | null,
 };
 
 /**  One part of a panel's body. */
@@ -7275,10 +7294,11 @@ export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSetting
  *  shows it before it asks (#1453), and as the window hands it back with the answer: **the
  *  paths discarded are the ones the person was shown, or nothing is.**
  * 
- *  A comparison of paths, and it says so: every uncommitted file is listed by its own path,
- *  so a new one is seen. A listed file changed again, or a file added inside a folder git
- *  ignores whole, is the same list and passes. The moment between the last read and git's
- *  removal is not covered either.
+ *  Compared whole, with a fingerprint of everything in the folder beside the paths
+ *  ([`WorktreeLoss::seal`]), so a listed file written again, a file added inside a folder git
+ *  ignores whole and a commit made in a nested repository are each a change (#1472). The last
+ *  comparison is made in the same call as the removal, just before git runs it; git's own time
+ *  to remove the folder is the moment it does not cover.
  */
 export type WorktreeLoss = {
 	/**  The task, by the name its row has. */
@@ -7305,6 +7325,16 @@ export type WorktreeLoss = {
 	 *  settings, and what purlis keeps hidden in a chat's folder. Deleted with the folder.
 	 */
 	ignored: string[],
+	/**
+	 *  The uncommitted folders of `changes` that are repositories of their own (`?? vendor/lib/`):
+	 *  git lists each as one line, and all its files and its history go with the folder.
+	 */
+	nested: string[],
+	/**
+	 *  A fingerprint of everything the folder holds, read as the question was asked
+	 *  (`purlis_core::dispatchplace::sealed`): what tells a file written again from the same list.
+	 */
+	seal: string,
 	/**
 	 *  How many commits the folder holds that exist on no other branch and no remote. **Where
 	 *  the folder is on a branch they are not lost**: that branch stays. Where it is on none,

@@ -86,6 +86,9 @@ const ON_ITS_BRANCH = finished("01K6OWN", "fix the queue", {
   changed: "the queue's retry",
 });
 const BESIDE = finished("01K6SHARED", "tidy the docs");
+/** A task whose folder was discarded and whose branch, merged, is still in the repo (#1472). */
+const LEFT_BRANCH = "left-behind-0000bbbb";
+const LEFT = finished("01K6LEFT", "left behind", { branch: LEFT_BRANCH });
 
 function file(path: string, more: Partial<TaskFile> = {}): TaskFile {
   return { path, mark: "changed", from: null, uncommitted: false, also: [], ...more };
@@ -97,7 +100,7 @@ const CHANGES: Record<string, TaskChanges> = {
     id: ON_ITS_BRANCH.id,
     task: ON_ITS_BRANCH.name,
     running: false,
-    own: { repo: "api", branch: BRANCH, standing: "kept", acts: true },
+    own: { repo: "api", branch: BRANCH, standing: "kept", acts: true, left: null },
     places: [
       {
         workspace: "alpha",
@@ -137,6 +140,26 @@ const CHANGES: Record<string, TaskChanges> = {
   },
 };
 
+/** What the core says of LEFT: no folder to compare, and its branch still in the repo. */
+const LEFT_CHANGES: TaskChanges = {
+  id: LEFT.id,
+  task: LEFT.name,
+  running: false,
+  own: {
+    repo: "api",
+    branch: LEFT_BRANCH,
+    standing: "discarded",
+    acts: false,
+    left: { tip: "b".repeat(40), merged: true, ahead: 0 },
+  },
+  places: [],
+  elsewhere: [],
+  more: false,
+  said: null,
+  unknown:
+    "Its branch's folder was discarded, so there is no folder to compare. A branch that held a commit is still in the repo.",
+};
+
 const MERGE: BranchMerge = {
   task: ON_ITS_BRANCH.name,
   repo: "api",
@@ -157,8 +180,14 @@ function core({
   merge = MERGE,
   merged,
   sharing = [],
+  left = LEFT_CHANGES,
+  deleted,
 }: {
   merge?: BranchMerge;
+  /** What the core says of LEFT. */
+  left?: TaskChanges;
+  /** The delete's refusal, or nothing for a delete that goes. */
+  deleted?: string;
   /** The merge's refusal, or nothing for a merge that lands. */
   merged?: string;
   sharing?: SharedFolder[];
@@ -183,8 +212,12 @@ function core({
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
       if (cmd === "stopping_chats") return [];
-      if (cmd === "finished_tasks") return [ON_ITS_BRANCH, BESIDE];
-      if (cmd === "task_changes") return CHANGES[a.id as string];
+      if (cmd === "finished_tasks") return [ON_ITS_BRANCH, BESIDE, LEFT];
+      if (cmd === "task_changes") return a.id === LEFT.id ? left : CHANGES[a.id as string];
+      if (cmd === "task_branch_delete") {
+        if (deleted !== undefined) throw new Error(deleted);
+        return null;
+      }
       if (cmd === "task_branch_merge_question") return merge;
       if (cmd === "task_branch_merge") {
         if (merged !== undefined) throw new Error(merged);
@@ -331,6 +364,52 @@ describe("what a task changed", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(said.asked("task_branch_merge")).toEqual([]);
+  });
+
+  it("says what is left of a branch whose folder is gone, and deletes it only as shown (#1472)", async () => {
+    const said = core();
+    render(<App />);
+    const tab = await openChangesOf("Review changes of left behind");
+
+    expect(within(tab).getByTestId("task-changes-left")).toHaveTextContent(
+      `The branch ${LEFT_BRANCH} is still in api, and the branch api is on holds every commit of it, so deleting it loses nothing.`,
+    );
+    // Its folder is gone: nothing to merge or discard.
+    expect(within(tab).queryByRole("button", { name: "Merge…" })).toBeNull();
+    expect(within(tab).queryByRole("button", { name: "Discard branch…" })).toBeNull();
+
+    await userEvent.click(within(tab).getByRole("button", { name: "Delete branch…" }));
+    const question = await screen.findByRole("alertdialog", { name: "Delete this task's branch?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Delete" }));
+
+    // By the dispatch's id and the commit it was shown at, and nothing else.
+    await waitFor(() =>
+      expect(said.asked("task_branch_delete")).toEqual([
+        { plane: PLANE, id: LEFT.id, tip: "b".repeat(40) },
+      ]),
+    );
+  });
+
+  it("offers no delete of a branch that holds work, and says it stays", async () => {
+    core({
+      left: {
+        ...LEFT_CHANGES,
+        own: {
+          repo: "api",
+          branch: LEFT_BRANCH,
+          standing: "discarded",
+          acts: false,
+          left: { tip: "c".repeat(40), merged: false, ahead: 2 },
+        },
+      },
+    });
+    render(<App />);
+    const tab = await openChangesOf("Review changes of left behind");
+
+    expect(within(tab).getByTestId("task-changes-left")).toHaveTextContent(
+      `The branch ${LEFT_BRANCH} is still in api, holding 2 commits the branch api is on does not have. It stays: merge it, or delete it with git, yourself.`,
+    );
+    expect(within(tab).queryByRole("button", { name: "Delete branch…" })).toBeNull();
   });
 
   it("names both tasks on the asking chat's pane when two work in one folder", async () => {

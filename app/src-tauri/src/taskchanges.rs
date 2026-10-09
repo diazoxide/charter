@@ -144,6 +144,22 @@ pub(crate) struct OwnBranch {
     /// Whether Merge and Discard are offered: its folder is there and the task has ended.
     /// Each is still refused while a chat stands in the folder.
     pub acts: bool,
+    /// The branch, where its folder is gone and the branch is still in the repo (#1472):
+    /// discarded, removed by other hands, or merged while git kept the branch. `null` while
+    /// the folder is there, and where the branch is gone too or could not be read.
+    pub left: Option<LeftBranch>,
+}
+
+/// A task's own branch whose folder is gone, as its Changes tab says it (#1472).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub(crate) struct LeftBranch {
+    /// The commit it is at, by its full id: what a delete is of.
+    pub tip: String,
+    /// Whether the branch the repo is on holds every commit of it: the one case Delete branch
+    /// is offered, and the one case git deletes it.
+    pub merged: bool,
+    /// How many of its commits the branch the repo is on does not hold.
+    pub ahead: u32,
 }
 
 /// What a task changed, as its Changes tab draws it.
@@ -233,11 +249,26 @@ fn of_its_own_branch(held: &Held, record: &Record, changes: &mut TaskChanges) {
     };
     let standing = dispatchplace::standing(held.root(), record).unwrap_or(Standing::Gone);
     let tree = Tree::of(record).filter(|_| standing == Standing::Kept);
+    // Its folder gone, what is left of its branch: an ordinary branch of the repo now.
+    let left = match (&tree, Tree::of(record)) {
+        (None, Some(named)) => {
+            dispatchplace::branch_left(held.root(), &named, &crate::gitbroker::isolation())
+                .ok()
+                .flatten()
+                .map(|left| LeftBranch {
+                    tip: left.tip,
+                    merged: left.merged,
+                    ahead: left.ahead,
+                })
+        }
+        _ => None,
+    };
     changes.own = Some(OwnBranch {
         repo: recorded.repo.clone(),
         branch: recorded.branch.clone(),
         standing: standing.word().to_owned(),
         acts: tree.is_some() && !record.running(),
+        left,
     });
     match tree {
         Some(tree) => changes.places.push(changed_in(
@@ -521,6 +552,52 @@ pub(crate) async fn task_branch_merge(
     .await
 }
 
+/// **Deletes the own branch of the task of dispatch `id`, whose folder is gone, where git finds
+/// it merged and it is still at `tip`**, the commit the window showed (#1472). git's own
+/// `branch -d`: a branch that holds work stays, whatever the window asked. Refused while the
+/// task still runs.
+pub(crate) fn delete_branch(held: &Held, id: &str, tip: &str) -> Result<(), String> {
+    let record = record_of(held, id)?;
+    let tree = Tree::of(&record)
+        .ok_or("That task was given no branch of its own, so there is none to delete.")?;
+    let branch = tree.branch.clone().unwrap_or_else(|| tree.piece.clone());
+    if record.running() {
+        return Err(format!(
+            "'{}' is still running. purlis deletes its branch once it has ended. Nothing was \
+             deleted.",
+            name_of(&record)
+        ));
+    }
+    dispatchplace::delete_left_branch(held.root(), &tree, tip, &crate::gitbroker::isolation())
+        .map_err(|not| not.in_window(&tree.repo, &branch))?;
+    tracing::info!(
+        "purlis: the person deleted the merged branch of task '{}' in {}",
+        purlis_core::shown::short(&name_of(&record)),
+        tree.repo
+    );
+    Ok(())
+}
+
+/// **Delete branch** on a finished task's own branch whose folder is gone (#1472): deletes the
+/// branch where git finds it merged into the branch the repo is on, and only then. `tip` is the
+/// commit the window showed it at, as `task_changes` answered it: where the branch is anywhere
+/// else by now, nothing is deleted. The person's own act: a command of the window alone, served
+/// on no link.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn task_branch_delete(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    id: String,
+    tip: String,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("deleting the task's branch", move || {
+        delete_branch(&held, &id, &tip)
+    })
+    .await
+}
+
 // ---------------------------------------------------------------------------------------
 // Two tasks in one folder
 // ---------------------------------------------------------------------------------------
@@ -712,8 +789,13 @@ mod tests {
     #[test]
     fn a_merge_and_a_discard_are_commands_no_link_serves() {
         // The person's acts on a task's branch (#1511): the window invokes them over Tauri's
-        // IPC, and the UI RPC a host serves on a link never carries either.
-        for command in ["task_branch_merge", "dispatch_worktree_discard"] {
+        // IPC, and the UI RPC a host serves on a link never carries either. Nor the delete of
+        // a merged branch whose folder is gone (#1472).
+        for command in [
+            "task_branch_merge",
+            "dispatch_worktree_discard",
+            "task_branch_delete",
+        ] {
             assert!(
                 purlis_session_protocol::ui::WINDOW_ONLY.contains(&command),
                 "{command} would be served on a link"

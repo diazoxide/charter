@@ -914,3 +914,153 @@ fn a_task_with_no_folder_has_nothing_to_merge_and_git_is_never_asked() {
         Some(NotMerged::Gone)
     );
 }
+
+// ----- what a discard compares (#1472) ------------------------------------------------------
+
+/// A folder holding a tracked-looking file, a `.git` pointer and a build folder.
+fn a_task_folder() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(folder.join(".git"), "gitdir: /somewhere\n").unwrap();
+    std::fs::write(folder.join("notes.txt"), "first\n").unwrap();
+    std::fs::create_dir_all(folder.join("target/debug")).unwrap();
+    std::fs::write(folder.join("target/debug/out"), "built\n").unwrap();
+    (dir, folder)
+}
+
+/// Sets the time `path` was last written to `secs` after the epoch.
+fn written_at(path: &Path, secs: u64) {
+    let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+        .unwrap();
+}
+
+#[test]
+fn a_folder_reads_the_same_until_something_in_it_is_written_added_or_removed() {
+    let (_dir, folder) = a_task_folder();
+    let first = sealed(&folder).expect("a readable folder");
+    assert_eq!(sealed(&folder).as_deref(), Some(first.as_str()));
+
+    // A listed file written again: the same path, so the list alone would pass it.
+    std::fs::write(folder.join("notes.txt"), "second, and longer\n").unwrap();
+    let written = sealed(&folder).unwrap();
+    assert_ne!(written, first);
+
+    // Written again to the same size: its time tells it.
+    written_at(&folder.join("notes.txt"), 1_000);
+    let before = sealed(&folder).unwrap();
+    std::fs::write(folder.join("notes.txt"), "second, and LONGER\n").unwrap();
+    written_at(&folder.join("notes.txt"), 2_000);
+    assert_ne!(sealed(&folder).unwrap(), before);
+
+    // A file added inside a folder git ignores whole, which git lists as `target/` either way.
+    let before = sealed(&folder).unwrap();
+    std::fs::write(folder.join("target/debug/new"), "x").unwrap();
+    assert_ne!(sealed(&folder).unwrap(), before);
+
+    // Removed again.
+    let before = sealed(&folder).unwrap();
+    std::fs::remove_file(folder.join("target/debug/new")).unwrap();
+    assert_ne!(sealed(&folder).unwrap(), before);
+}
+
+#[test]
+fn a_nested_repository_s_history_is_read_with_the_rest_of_the_folder() {
+    let (_dir, folder) = a_task_folder();
+    std::fs::create_dir_all(folder.join("vendor/lib/.git/objects")).unwrap();
+    std::fs::write(
+        folder.join("vendor/lib/.git/HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .unwrap();
+    let before = sealed(&folder).unwrap();
+    // A commit made in it writes only inside its own `.git`.
+    std::fs::write(folder.join("vendor/lib/.git/objects/ab"), "a commit").unwrap();
+    assert_ne!(sealed(&folder).unwrap(), before);
+}
+
+#[test]
+fn the_folder_s_own_git_pointer_is_not_read_and_a_link_is_read_as_what_it_points_at() {
+    let (_dir, folder) = a_task_folder();
+    let before = sealed(&folder).unwrap();
+    std::fs::write(folder.join(".git"), "gitdir: /somewhere/else\n").unwrap();
+    assert_eq!(sealed(&folder).unwrap(), before);
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc", folder.join("link")).unwrap();
+        let linked = sealed(&folder).unwrap();
+        std::fs::remove_file(folder.join("link")).unwrap();
+        std::os::unix::fs::symlink("/tmp", folder.join("link")).unwrap();
+        assert_ne!(sealed(&folder).unwrap(), linked);
+    }
+}
+
+#[test]
+fn a_folder_that_is_not_there_or_is_a_file_has_no_fingerprint() {
+    let (_dir, folder) = a_task_folder();
+    assert_eq!(sealed(&folder.join("missing")), None);
+    assert_eq!(sealed(&folder.join("notes.txt")), None);
+}
+
+#[test]
+fn a_new_folder_git_lists_as_one_line_is_a_repository_of_its_own() {
+    let changes: Vec<String> = [
+        " M src/a.rs",
+        "?? notes.txt",
+        "?? vendor/lib/",
+        "?? \"with space/\"",
+        "A  added/",
+    ]
+    .iter()
+    .map(|line| (*line).to_owned())
+    .collect();
+    assert_eq!(
+        nested_repositories(&changes),
+        vec!["vendor/lib/".to_owned(), "\"with space/\"".to_owned()]
+    );
+}
+
+// ----- a branch whose folder is gone (#1472) ------------------------------------------------
+
+#[test]
+fn a_branch_whose_folder_is_there_is_discarded_never_deleted_and_git_is_never_asked() {
+    let (_dir, root) = project();
+    let tree = Tree {
+        workspace: "alpha".to_owned(),
+        repo: "api".to_owned(),
+        piece: "check-the-queue-b5rc0def".to_owned(),
+        branch: Some("check-the-queue-b5rc0def".to_owned()),
+    };
+    std::fs::create_dir_all(tree.folder(&root).unwrap()).unwrap();
+    let isolation = git::Isolated::default();
+
+    assert_eq!(branch_left(&root, &tree, &isolation), Ok(None));
+    assert_eq!(
+        delete_left_branch(&root, &tree, "the commit shown", &isolation),
+        Err(NotDeleted::FolderThere)
+    );
+    // A record that names no branch has none to delete.
+    let unnamed = Tree {
+        branch: None,
+        ..tree.clone()
+    };
+    assert_eq!(branch_left(&root, &unnamed, &isolation), Ok(None));
+    assert_eq!(
+        delete_left_branch(&root, &unnamed, "the commit shown", &isolation),
+        Err(NotDeleted::Gone)
+    );
+    // Each refusal says nothing was deleted, and never names a branch purlis did not cut.
+    for refused in [
+        NotDeleted::FolderThere,
+        NotDeleted::Moved,
+        NotDeleted::NotMerged,
+    ] {
+        assert!(
+            refused
+                .in_window("api", &tree.piece)
+                .ends_with("Nothing was deleted."),
+            "{refused:?}"
+        );
+    }
+}

@@ -475,10 +475,15 @@ The worktree is listed on its dispatch's row in the Dispatches tab, as the task'
 - **folder kept** while its folder is there, merged or not. **Discard** on the row removes
   the folder, for good, with every uncommitted file and every ignored file in it. It is a
   window command, so only you run it. It asks first, naming each uncommitted file by its
-  path and each ignored path that is not purlis's own; it is refused while any chat is still
-  open in the folder; and where the folder holds other paths by the time you answer, nothing
-  is removed and you are asked again. (It compares paths: a listed file changed again, or a
-  file added inside a folder git ignores whole, is the same list.) **The branch purlis cut
+  path and each ignored path that is not purlis's own, and each new folder that is a
+  repository of its own, whose history goes with it; it is refused while any chat is still
+  open in the folder or starting there, and no chat starts there while it runs; and where the
+  folder holds anything else by the time you answer, nothing is removed and you are asked
+  again. It compares the paths and a fingerprint of every entry in the folder (its size and
+  the time it was last written), so a listed file written again, a file added inside a folder
+  git ignores whole and a commit made in a nested repository each count; it reads the folder
+  that last time in the same step as the removal, so a write by any chat, one standing above
+  the folder too, refuses it up to the moment git removes the folder (#1472). **The branch purlis cut
   loses no commit by a discard**: it is deleted only where git already finds it merged, and
   one that holds a commit found nowhere else stays, an ordinary branch of the repo. The one
   thing a discard can lose is a commit made in the folder on no branch at all; the question
@@ -496,6 +501,11 @@ The worktree is listed on its dispatch's row in the Dispatches tab, as the task'
   (#1472): its folder goes on the same terms, and the branch stays, since git does not find
   it merged and it is the one place its commits are.
 - **folder discarded**, or **folder removed** for one removed from the explorer or by hand.
+  The branch stays. **Review changes** on such a row (and on a merged one whose branch git
+  kept) opens the task's Changes tab, which says whether the branch is still in the repo and
+  whether the branch the repo is on holds every commit of it (#1472). Where it does, the tab
+  offers **Delete branch…**, asked first and of the commit you were shown, by git's own
+  `branch -d`; one that holds work stays, and the tab says to merge or delete it yourself.
 - A repo whose own git settings name a program (a filter, a diff or merge driver, an
   include) gets no worktree task and no Discard: purlis runs no git there for a chat or for
   its own account. Remove such a folder from its branch's row in the explorer.

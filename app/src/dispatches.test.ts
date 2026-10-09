@@ -9,6 +9,7 @@ import {
   isDispatches,
   losesNothing,
   lostSaid,
+  nestedSaid,
   NO_PERSONA,
   personasOf,
   saidAt,
@@ -135,9 +136,22 @@ describe("the Dispatches tab's filters", () => {
     on: "check-the-queue-b5rc0def",
     changes: ["?? scratch.txt"],
     ignored: ["target/"],
+    nested: [],
+    seal: "a1b2",
     unmerged: 12,
     lost: [],
   };
+
+  it("names an uncommitted folder that is a repository of its own, and only one", () => {
+    // #1472: git lists a nested repository as one line, and its history goes with it.
+    expect(nestedSaid(LOSS)).toBeUndefined();
+    expect(nestedSaid({ ...LOSS, changes: ["?? vendor/lib/"], nested: ["vendor/lib/"] })).toBe(
+      "1 of them is a repository of its own. Everything in it, its history too, goes with the folder:",
+    );
+    expect(nestedSaid({ ...LOSS, nested: ["a/", "b/"] })).toBe(
+      "2 of them are repositories of their own. Everything in them, their history too, goes with the folder:",
+    );
+  });
 
   it("says what a discard removes, and that the branch purlis cut loses no commit", () => {
     const loss = LOSS;
