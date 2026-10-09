@@ -315,14 +315,20 @@ fn options() -> gix::open::Options {
 /// header.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AheadBehind {
-    /// Commits the branch has that its base does not.
+    /// Commits the branch has that its base does not, counted up to [`MOST_COUNTED`]: that
+    /// number means that many or more.
     pub ahead: usize,
-    /// Commits its base gained that the branch does not have.
+    /// Commits its base gained that the branch does not have, counted up to [`MOST_COUNTED`].
     pub behind: usize,
     /// The base they are counted against, as recorded; `None` when the branch has no base
     /// recorded that resolves, and then both counts are `0` and mean nothing.
     pub base: Option<String>,
 }
+
+/// The most commits [`AheadBehind`] counts on either side (#1152). A branch thousands of commits
+/// off its base, or a base from another history, would otherwise walk until the reader's
+/// deadline and show a refusal instead of a number; past this the window says "10,000+".
+pub const MOST_COUNTED: usize = 10_000;
 
 /// How far the branch is from its recorded base, counted as `git rev-list --left-right
 /// --count <base>...HEAD` counts, through gitoxide with the config cut down as [`open`] cuts
@@ -355,18 +361,26 @@ pub(super) fn ahead_behind_here(plane: &Path, branch: Branch<'_>) -> Result<Ahea
             .with_hidden([hidden])
             .all()
             .map_err(|e| e.to_string())?;
-        let mut n = 0;
-        for commit in walk {
-            commit.map_err(|e| e.to_string())?;
-            n += 1;
-        }
-        Ok(n)
+        counted_up_to(walk, MOST_COUNTED)
     };
     Ok(AheadBehind {
         ahead: count(head, at).map_err(unreadable)?,
         behind: count(at, head).map_err(unreadable)?,
         base: Some(named),
     })
+}
+
+/// How many commits `walk` yields, stopping at `most`: the walk is not read past it.
+fn counted_up_to<T, E: std::fmt::Display>(
+    walk: impl IntoIterator<Item = Result<T, E>>,
+    most: usize,
+) -> Result<usize, String> {
+    let mut n = 0;
+    for commit in walk.into_iter().take(most) {
+        commit.map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 /// A recorded base, resolved: the commit it names, where the branch left it, and its name.
@@ -460,6 +474,35 @@ fn rolled_up(changes: &[Change]) -> Vec<Rolled> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1152: a count stops at its cap, and reads no commit past it.
+    #[test]
+    fn a_count_stops_at_its_cap_and_walks_no_further() {
+        let mut walked = 0;
+        let walk = std::iter::repeat_with(|| {
+            walked += 1;
+            Ok::<(), String>(())
+        })
+        .take(MOST_COUNTED * 2);
+
+        let counted = counted_up_to(walk, MOST_COUNTED);
+
+        assert_eq!(counted, Ok(MOST_COUNTED));
+        assert_eq!(walked, MOST_COUNTED);
+    }
+
+    /// Under the cap a count is every commit, and a commit that cannot be read is said.
+    #[test]
+    fn under_its_cap_a_count_is_every_commit_and_a_bad_one_is_said() {
+        let three = (0..3).map(Ok::<u32, String>);
+        assert_eq!(counted_up_to(three, MOST_COUNTED), Ok(3));
+
+        let broken = [Ok(1), Err("object missing".to_string())];
+        assert_eq!(
+            counted_up_to(broken, MOST_COUNTED),
+            Err("object missing".to_string())
+        );
+    }
 
     /// A plane whose `workspaces/alpha/widget` is a git directory made by `make`, opened as
     /// the clone it should be.
