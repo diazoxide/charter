@@ -436,21 +436,50 @@ fn the_harness_word_is_v67s_and_comes_from_the_chats_profile_not_its_program() {
 
 #[test]
 fn a_value_up_to_a_hundred_characters_is_kept_and_a_longer_one_left_out() {
-    let at_most = "m".repeat(100);
-    let over = "m".repeat(101);
-    let with = |model: &str| {
+    // The bound is on a trailer's whole value. For `Assisted-by` that value is
+    // `<harness>:<model>`, so the model is sized to make the whole value 100, then 101.
+    let assisted_by = |model_len: usize| {
         Provenance {
-            model: Some(model.into()),
+            model: Some("m".repeat(model_len)),
             ..everything()
         }
         .trailers(Form::Full)[0]
             .clone()
     };
+    let room = MOST - "claude-code:".len();
+    let kept = assisted_by(room);
+    let value = kept.strip_prefix("Assisted-by: ").expect("the key");
+    assert_eq!(value.len(), 100, "{kept}");
     assert_eq!(
-        with(&at_most),
-        format!("Assisted-by: claude-code:{at_most}")
+        kept,
+        format!("Assisted-by: claude-code:{}", "m".repeat(room))
     );
-    assert_eq!(with(&over), "Assisted-by: claude-code");
+    assert_eq!(assisted_by(room + 1), "Assisted-by: claude-code");
+
+    // A value that stands alone is held to the same 100.
+    let persona = |len: usize| {
+        Provenance {
+            persona: Some("p".repeat(len)),
+            ..everything()
+        }
+        .trailers(Form::Full)
+        .into_iter()
+        .find(|line| line.starts_with(&format!("{PERSONA}: ")))
+    };
+    assert_eq!(
+        persona(100),
+        Some(format!("{PERSONA}: {}", "p".repeat(100)))
+    );
+    assert_eq!(persona(101), None);
+
+    // And the reader keeps what the writer keeps, and leaves out what it leaves out.
+    assert_eq!(
+        Claims::read(&kept).assisted_by.one(),
+        Some(value),
+        "a whole value of 100 reads back"
+    );
+    let over = format!("Assisted-by: claude-code:{}", "m".repeat(room + 1));
+    assert_eq!(Claims::read(&over).assisted_by, Claim::Unsaid);
 }
 
 fn lines(trailers: &[&str]) -> Vec<String> {
