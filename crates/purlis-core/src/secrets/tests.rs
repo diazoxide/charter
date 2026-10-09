@@ -713,6 +713,75 @@ fn a_record_from_before_the_rename_reads_only_its_charter_item() {
     assert!(!refused.contains("  "), "{refused:?}");
 }
 
+/// Take the `op_item` out of the identity record, as a build from before #1527 wrote it.
+fn as_made_before_the_item_was_pinned(ctx: &Ctx) {
+    let mut local = registry::load_local(ctx).unwrap();
+    local["vaults"]["team"]["config"]["identity"]
+        .as_object_mut()
+        .unwrap()
+        .remove("op_item");
+    registry::save_local(ctx, &local).unwrap();
+}
+
+#[test]
+fn a_record_made_before_the_item_was_pinned_pins_it_at_its_next_read() {
+    // #1542: an old record named no item, so a commit that changed `op-item` read another
+    // item of the same 1Password vault through it.
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    as_made_before_the_item_was_pinned(&ctx);
+    assert_eq!(identity_record(&ctx)["op_item"], serde_json::Value::Null);
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    assert_eq!(
+        identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN")
+            .unwrap()
+            .as_deref(),
+        Some(PASTED_TOKEN)
+    );
+    // The item it was read with is pinned now, and nothing else of the record changed.
+    let rec = identity_record(&ctx);
+    assert_eq!(rec["op_item"], "charter-team");
+    assert_eq!(rec["op_vault"], "Fixture");
+    assert_eq!(rec["held"], "keyring");
+
+    // From then on a committed change of the item unpins it, as it does a record made now.
+    std::fs::write(
+        ctx.shared_registry(),
+        serde_json::json!({"vaults": {"team": {"provider": "1password", "persona": null,
+            "config": {"op-item": "another-item"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let moved = registry::vault(&bare, "team").unwrap();
+    assert!(!identity::in_keyring(&bare, &moved));
+    assert_eq!(
+        identity::from_keyring(&bare, &moved, "OP_TEAM_TOKEN").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn an_old_record_that_does_not_match_the_vault_is_not_given_an_item() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    as_made_before_the_item_was_pinned(&ctx);
+    // The vault now names another 1Password vault: the record is not honoured, and so pins
+    // nothing for the vault as it now is.
+    let mut local = registry::load_local(&ctx).unwrap();
+    local["vaults"]["team"]["config"]["op-vault"] = serde_json::json!("Elsewhere");
+    registry::save_local(&ctx, &local).unwrap();
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let moved = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        identity::from_keyring(&bare, &moved, "OP_TEAM_TOKEN").unwrap(),
+        None
+    );
+    assert_eq!(identity_record(&ctx)["op_item"], serde_json::Value::Null);
+}
+
 #[test]
 fn two_pasted_tokens_are_kept_under_two_different_items() {
     let (tmp, bin, _op, v) = pinned_plane("");
