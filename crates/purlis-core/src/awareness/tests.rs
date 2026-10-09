@@ -667,3 +667,33 @@ fn a_task_waiting_on_the_person_is_told_beside_what_changed_on_its_own_line() {
         "{said}"
     );
 }
+
+#[test]
+fn a_task_past_the_most_a_turn_says_is_told_at_the_next_turn_not_dropped() {
+    let mut known = vec![a_chat(1, "steward 1", Some("steward"), "ops")];
+    let many = u32::try_from(MOST_ROWS).expect("small") + 2;
+    for chat in 10..10 + many {
+        known.push(asked_by(
+            a_chat(chat, &format!("t{chat}"), Some("devops"), "ops"),
+            1,
+            "steward 1",
+        ));
+    }
+    let mut told = told_at_start(&known, 1);
+    for one in known.iter_mut().skip(1) {
+        one.asking = Some(Prompt::Permission);
+    }
+
+    let first = answer(&known, 1, Tell::Turn, &mut told).expect("open");
+    assert_eq!(first.waiting_on_you.len(), MOST_ROWS);
+    let next = answer(&known, 1, Tell::Turn, &mut told).expect("open");
+    assert_eq!(
+        next.waiting_on_you
+            .iter()
+            .map(|one| one.name.as_str())
+            .collect::<Vec<_>>(),
+        [format!("t{}", 10 + many - 2), format!("t{}", 10 + many - 1)]
+    );
+    let then = answer(&known, 1, Tell::Turn, &mut told).expect("open");
+    assert!(then.waiting_on_you.is_empty());
+}
