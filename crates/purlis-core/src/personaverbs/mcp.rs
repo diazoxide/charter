@@ -2,10 +2,11 @@
 //! into its generated sub-agent, and the consent that decides whether that server is handed
 //! the persona's vault — `persona.mcp_*` and `charter/mcpseen.py`.
 //!
-//! **Nothing starts these servers now** (#1451). The generated sub-agent declared them, and it
-//! is retired: `persona lint` and `persona use` say so. What is declared is still read, and
-//! the approvals record and its consent line are kept as they were, for the work that gives a
-//! persona chat its persona's servers, which is not in this version yet (#1460).
+//! **A chat that runs as the persona is started with them, on Claude Code** (#1451,
+//! [`super::chatstart::servers`]); the generated sub-agent that declared them before is
+//! retired. On Codex and opencode they are not started yet (#1460). The approvals record and
+//! its consent line are kept as they were: a person gives an approval with `purlis persona
+//! approve-mcp` in a terminal, never from a chat.
 //!
 //! # The consent line IS the approval
 //!
