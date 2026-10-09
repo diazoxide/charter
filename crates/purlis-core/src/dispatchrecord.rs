@@ -1610,12 +1610,74 @@ pub fn settle(
 /// [`settle`] as the app runs it when it opens a project, before any chat starts: the chats
 /// still open are the ones the reopen record ([`crate::reopen`]) brings back. A record that
 /// cannot be read says nothing about which chats are gone, so nothing is ended.
+///
+/// First, a handoff an older build opened that still owes its report is made the task it now
+/// is ([`older_owing_handoffs_are_tasks`]), so one whose chat is gone ends as a task that did
+/// not report, and one whose chat comes back ends as a task when it reports. **This runs as
+/// the project opens, before any chat is put back**: what puts chats back, and what decides
+/// whether a dispatched chat resumes as a task, reads these records after it and finds the
+/// newer shape (#1513).
 pub fn settle_on_open(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
     let Ok(reopen) = crate::reopen::read_strictly(root) else {
         return 0;
     };
+    older_owing_handoffs_are_tasks(root, reopen.as_ref());
     let live = reopen.as_ref().map(Live::of).unwrap_or_default();
     settle(root, |worker| live.iter().any(|chat| chat.is(worker)), now)
+}
+
+/// **Every running dispatch an older build opened as a handoff that asked for a report is a
+/// task from now on** (#1519): its record says so, as the reopen record does of its chat
+/// (`reopen`'s older-handoff reading). Before #1515 that was how a chat that needed an answer
+/// started another. Since #1519 an open that asks for a report is dispatched as a task, so
+/// no dispatch this build opens has this shape. Its report then ends it as a task's does, and
+/// it is a finished row under the chat that asked. Only the mode changes: who asked, where it
+/// works and what it owes are as they were. A handoff that asked for nothing, and one that
+/// has ended, are left as they are.
+///
+/// **Held to the chat's own record** where `reopen` brings the chat back: only one that
+/// record says still owes its report is converted. One whose report was delivered, where the
+/// older build did not get to end its dispatch record, stays the handoff it was, so it is
+/// never shown as a task that did not report. A chat `reopen` does not bring back is
+/// converted, and ends as a task that did not report. How many changed.
+pub fn older_owing_handoffs_are_tasks(
+    root: &Path,
+    reopen: Option<&crate::reopen::Record>,
+) -> usize {
+    fn owing(record: &Record) -> bool {
+        record.mode == Mode::Handoff && record.report_owed && record.running()
+    }
+    let still_owes = |record: &Record| {
+        let back = reopen.and_then(|reopen| {
+            reopen.chats.iter().find(|chat| {
+                named(
+                    &record.worker.chat,
+                    chat.identity.id.as_deref(),
+                    chat.number,
+                )
+            })
+        });
+        back.is_none_or(|chat| {
+            chat.from
+                .as_ref()
+                .is_some_and(|from| from.report == crate::reopen::Owed::Due)
+        })
+    };
+    list(root)
+        .into_iter()
+        .filter(owing)
+        .filter(still_owes)
+        .filter(|record| {
+            change(root, &record.id, |record| {
+                let older = owing(record);
+                if older {
+                    record.mode = Mode::Task;
+                }
+                older
+            })
+            .unwrap_or(false)
+        })
+        .count()
 }
 
 /// How `record`'s dispatch ends when its persona chat goes without reporting: failed, saying

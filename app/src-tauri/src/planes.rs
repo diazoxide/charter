@@ -1624,6 +1624,8 @@ impl Planes {
             tracing::warn!("purlis: reports kept for a renamed workspace were not moved ({why})");
         }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
+        // It first makes an older build's handoff that still owes a report the task it now is
+        // (#1519): before any chat is put back, so what puts them back reads the newer shape.
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
         // And what the chats of a dispatch said to each other is kept for 30 days after it
         // ended, whichever of them is still brought back (#1495, D-1495-12).
@@ -6236,6 +6238,28 @@ mod tests {
     /// named. Answers its number and the file everything typed into it lands in.
     #[cfg(unix)]
     fn a_claude_stand_in(held: &Held, dir: &Path, sub: &str, asker: Option<u32>) -> (u32, PathBuf) {
+        let from = asker.map(|chat| purlis_core::reopen::HandedFrom {
+            chat,
+            name: "asker".to_owned(),
+            workspace: purlis_core::active::Place::PlaneRoot,
+            report: purlis_core::reopen::Owed::Due,
+            mode: purlis_core::dispatchdecision::Mode::Task,
+            depth: 1,
+            root: None,
+            above: None,
+            by_person: false,
+        });
+        a_claude_stand_in_from(held, dir, sub, from)
+    }
+
+    /// [`a_claude_stand_in`], started from the other chat its record names in `from`.
+    #[cfg(unix)]
+    fn a_claude_stand_in_from(
+        held: &Held,
+        dir: &Path,
+        sub: &str,
+        from: Option<purlis_core::reopen::HandedFrom>,
+    ) -> (u32, PathBuf) {
         let dir = dir.join(sub);
         std::fs::create_dir_all(&dir).expect("a directory");
         let ready = dir.join("ready");
@@ -6253,17 +6277,7 @@ mod tests {
         chat.profile = Some("stand-in".to_owned());
         chat.name = sub.to_owned();
         chat.label = Some(sub.to_owned());
-        chat.from = asker.map(|chat| purlis_core::reopen::HandedFrom {
-            chat,
-            name: "asker".to_owned(),
-            workspace: purlis_core::active::Place::PlaneRoot,
-            report: purlis_core::reopen::Owed::Due,
-            mode: purlis_core::dispatchdecision::Mode::Task,
-            depth: 1,
-            root: None,
-            above: None,
-            by_person: false,
-        });
+        chat.from = from;
         let session = held
             .chats()
             .start(&chat, STARTING)
@@ -6335,6 +6349,65 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert_eq!(typed_into(&typed), line);
         held.close_chat(task).unwrap();
+        held.close_chat(asker).unwrap();
+    }
+
+    /// #1519: a chat an older build opened by a handoff that asked for a report, put back
+    /// after an update from the record that build wrote. It is the task of the chat that
+    /// asked: listed by that chat, and its report wakes it with purlis's one line.
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_an_older_build_handed_off_owing_a_report_wakes_its_asker_when_it_reports() {
+        use purlis_core::dispatched::{Answered, What};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (asker, typed) = a_claude_stand_in(&held, dir.path(), "asker", None);
+        // The record as the older build wrote it: no mode, a report owed. Read as a launch
+        // reads it.
+        let older = dir.path().join("older");
+        let file = purlis_core::reopen::path(&older);
+        std::fs::create_dir_all(file.parent().expect("a folder")).expect("a folder");
+        std::fs::write(
+            &file,
+            format!(
+                r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"9","from":{{"chat":{asker},"name":"asker","workspace":"plane root","report":"owed"}}}}]}}"#
+            ),
+        )
+        .expect("written");
+        let from = purlis_core::reopen::read_or_refusal(&older)
+            .expect("it reads")
+            .chats
+            .remove(0)
+            .from;
+        let (task, _) = a_claude_stand_in_from(&held, dir.path(), "task", from);
+        has_had_two_turns(&held, asker);
+
+        let purlis_core::hookwire::Answer::Task(listed) = asks_after(&held, asker, What::List)
+        else {
+            panic!("a list")
+        };
+        let Answered::Listed { rows } = *listed else {
+            panic!("rows, not {listed:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|row| row.chat).collect::<Vec<_>>(),
+            [task],
+            "the asker lists it as its task"
+        );
+
+        the_task_reports(&held, task);
+
+        let line = typed_as(&purlis_core::dispatched::nudge(&[
+            purlis_core::dispatched::Landed::Report(task),
+        ]));
+        assert!(
+            becomes(|| typed_into(&typed) == line),
+            "{:?}",
+            typed_into(&typed)
+        );
+        let _ = held.close_chat(task);
         held.close_chat(asker).unwrap();
     }
 
