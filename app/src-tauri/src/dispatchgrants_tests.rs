@@ -2073,6 +2073,22 @@ fn a_record_of_nevers_that_does_not_read_is_neither_added_to_nor_lifted_from() {
 }
 
 #[test]
+fn settings_is_told_while_no_grant_of_the_project_s_accepted_here_counts() {
+    // #1543: before the first settling of this machine's acceptances lands (the first moments
+    // after a launch), and while the project's history cannot be read, an accepted project
+    // grant is in force for nobody. The table is told so, not only the arrival Notice.
+    let world = World::new();
+    assert!(
+        !standing_of(world.root()).project_unsettled,
+        "nothing accepted here, so nothing waits on a settling"
+    );
+    // Accepted by an earlier run of the app: nothing settled in this process yet.
+    purlis_core::sandbox::local::accept_dispatch(world.root(), "steward -> devops", &|| true)
+        .expect("accepted");
+    assert!(standing_of(world.root()).project_unsettled);
+}
+
+#[test]
 fn a_never_stands_whatever_becomes_of_this_machine_s_other_record() {
     // The review's probe, through the store: a never, a grant for the chat itself, and a
     // fault in the record the standing grants are kept in.
