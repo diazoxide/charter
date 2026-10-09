@@ -211,6 +211,28 @@ fn a_line_longer_than_the_bound_is_refused_on_its_own() {
 }
 
 #[test]
+fn a_prompt_too_long_to_write_is_refused_before_it_is_sent() {
+    let session = SessionId::new("s-1");
+    assert_eq!(prompt_request(&session, "hello").map(|_| ()), Ok(()));
+    // The text alone fills the budget, so the line it is written in cannot fit.
+    assert_eq!(
+        prompt_request(&session, &"p".repeat(MOST_UNWRITTEN_BYTES)).map(|_| ()),
+        Err(TurnFailed::TooLong)
+    );
+    // Measured as written: each quote is escaped, so half the budget in quotes is over it.
+    assert_eq!(
+        prompt_request(&session, &"\"".repeat(MOST_UNWRITTEN_BYTES / 2)).map(|_| ()),
+        Err(TurnFailed::TooLong)
+    );
+    // Under the bound with room for the envelope: sent.
+    assert!(prompt_request(&session, &"p".repeat(MOST_UNWRITTEN_BYTES - 4096)).is_ok());
+    assert_eq!(
+        TurnFailed::TooLong.to_string(),
+        "the prompt is longer than purlis sends to an agent, 8 MiB"
+    );
+}
+
+#[test]
 fn the_writer_writes_each_line_in_order_and_gives_its_bytes_back() {
     let unwritten = Arc::new(Unwritten::default());
     unwritten.hold("one".to_owned()).expect("held");
