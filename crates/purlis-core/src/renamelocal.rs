@@ -873,6 +873,24 @@ fn exclude_of(plane: &Path) -> Result<Option<(PathBuf, String)>, String> {
     Ok(Some((exclude, prefix)))
 }
 
+/// The `info/exclude` line that ignores `name` at `prefix`, the project's path in its
+/// repository, and nothing else (#1285). A folder may be named with what git reads as a
+/// pattern, so `*`, `?`, `[` and `\` in the path are escaped and match only themselves. The
+/// line starts with `/`, so a `!` or `#` in the path never begins it and needs no escape.
+/// `name` is purlis's own and holds none of them.
+fn exclude_line(prefix: &str, name: &str) -> String {
+    let mut line = String::with_capacity(prefix.len() + name.len() + 1);
+    line.push('/');
+    for c in prefix.chars() {
+        if matches!(c, '*' | '?' | '[' | '\\') {
+            line.push('\\');
+        }
+        line.push(c);
+    }
+    line.push_str(name);
+    line
+}
+
 /// Make git ignore each of `names` at the top of `plane`, through the repository's own
 /// `info/exclude`: appended, journalled first, and only the lines it lacks.
 fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
@@ -887,7 +905,7 @@ fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
     let had = String::from_utf8_lossy(before.as_deref().unwrap_or_default()).into_owned();
     let lines: Vec<String> = names
         .iter()
-        .map(|name| format!("/{prefix}{name}"))
+        .map(|name| exclude_line(&prefix, name))
         .filter(|line| !had.lines().any(|there| there.trim() == line))
         .collect();
     if lines.is_empty() {
