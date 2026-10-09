@@ -447,11 +447,14 @@ describe("Move, in the window", () => {
         scope: { kind: "persona", name: "steward" },
         slug: "never-pkill",
         to: { kind: "shared" },
+        restoreAs: null,
       }),
+      // Back under the exact name it had, which a journal's name keeps to the second.
       expect.objectContaining({
         scope: { kind: "shared" },
         slug: "never-pkill",
         to: { kind: "persona", name: "steward" },
+        restoreAs: "never-pkill",
       }),
     ]);
     // The tab follows it back, as it followed it out.

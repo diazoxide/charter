@@ -106,7 +106,7 @@ impl Scope {
 ///
 /// Moved out of a journal and back, a memory has its first name again **to the minute**: its
 /// stamp line holds minutes, so the seconds of its first name come back as `00`
-/// ([`memstore::move_one`]).
+/// ([`memstore::move_one`]). An undo that knows the name passes it to [`move_memory_as`].
 ///
 /// Refused, with nothing moved: the same scope twice (`InvalidInput`), a scope the plane does
 /// not have ([`Scope::dir`]), a target holding a memory of that name (`AlreadyExists`), and a
@@ -117,6 +117,22 @@ pub fn move_memory(
     slug: &str,
     to: &Scope,
     now: chrono::NaiveDateTime,
+) -> io::Result<PathBuf> {
+    move_memory_as(plane, from, slug, to, now, None)
+}
+
+/// [`move_memory`], put back under `restore_as` when one is given: how the window's Undo of a
+/// Move gives a journal memory its first name again **to the second**. `restore_as` is that
+/// memory's own name in `to`'s form, and only its journal prefix may differ from the one
+/// [`move_memory`] would give; any other name is refused with `InvalidInput`, and one `to`
+/// holds already with `AlreadyExists` ([`memstore::move_one`]).
+pub fn move_memory_as(
+    plane: &Plane,
+    from: &Scope,
+    slug: &str,
+    to: &Scope,
+    now: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
 ) -> io::Result<PathBuf> {
     if from == to {
         return Err(io::Error::new(
@@ -134,6 +150,7 @@ pub fn move_memory(
         to.timestamped(),
         &to.header(plane.root()),
         now,
+        restore_as,
     )
 }
 

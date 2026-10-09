@@ -708,6 +708,7 @@ fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
 /// store into the other, never over anything, and nothing is looked up by path once they are
 /// open. **Nothing is made until every check has passed**: a target store that is not there
 /// yet is made only for the rename, so a refusal leaves no empty store behind.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn move_one(
     root: &Path,
     from: &Path,
@@ -716,6 +717,7 @@ pub(super) fn move_one(
     timestamped: bool,
     header: &str,
     now: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
 ) -> io::Result<PathBuf> {
     let name = md_name(ident);
     let src = hold_any(root, from, false)?.ok_or_else(|| no_such(ident))?;
@@ -743,7 +745,7 @@ pub(super) fn move_one(
         return Err(no_such(ident));
     }
     let text = raw(&src, &name)?;
-    let dest = super::moved_name(&name, &text, timestamped, now);
+    let dest = super::moved_as(&name, &text, timestamped, now, restore_as)?;
     if let Some(dst) = &there {
         let bare = super::unstamped(&dest);
         if dst.entry(&dest).map_err(refused)?.is_some()

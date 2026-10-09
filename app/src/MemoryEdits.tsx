@@ -184,10 +184,13 @@ export function useMemoryEdits({
           return;
         }
       } else {
-        // Moved back the way it came, whole, by the same core move: a memory written under its
-        // name in the old store since is refused there, and said here.
+        // Moved back the way it came, whole, by the same core move, and under the exact name it
+        // had (`restore_as`): a journal's name to the second, not only to its stamp's minute. A
+        // memory written under that name in the old store since is refused there, and said here.
         const { from, at } = pressed;
-        const answer = await settled(commands.memoryMove(plane, at.scope, at.slug, from.scope));
+        const answer = await settled(
+          commands.memoryMove(plane, at.scope, at.slug, from.scope, from.slug),
+        );
         if (answer.status === "error") {
           refused(answer.error);
           return;

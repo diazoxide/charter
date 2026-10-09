@@ -1842,6 +1842,40 @@ pub(crate) fn moved_name(
     format!("{}{bare}", stamped.format("%Y%m%d-%H%M%S-"))
 }
 
+/// The name a memory called `name`, whose whole text is `text`, takes when it moves: `restore_as`
+/// when one is given, else [`moved_name`]'s.
+///
+/// `restore_as` is how an undo puts a memory back under the exact name it had: a journal name
+/// to the second, which [`moved_name`] can give only to the minute. It names **the same memory
+/// in the same store's form** and nothing else: one plain name, with the same name as
+/// [`moved_name`]'s once a journal's prefix is taken off either, and a journal's prefix exactly
+/// when `timestamped`. So all it can choose is the prefix's stamp; anything else is
+/// `InvalidInput`, and it is never a way to rename a memory.
+fn moved_as(
+    name: &str,
+    text: &str,
+    timestamped: bool,
+    now: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
+) -> std::io::Result<String> {
+    let dest = moved_name(name, text, timestamped, now);
+    let Some(exact) = restore_as else {
+        return Ok(dest);
+    };
+    one_segment(exact)?;
+    let exact = md_name(exact);
+    let bare = unstamped(&exact);
+    if bare == unstamped(&dest) && (bare != exact) == timestamped {
+        Ok(exact)
+    } else {
+        Err(invalid(&format!(
+            "'{}' is not a name '{}' can be put back under",
+            crate::shown::readable(&exact, PATH_LIMIT),
+            unstamped(&dest).strip_suffix(".md").unwrap_or(&dest)
+        )))
+    }
+}
+
 /// Why a move found its target store taken.
 fn taken(to: &std::path::Path, root: &std::path::Path, dest: &str) -> std::io::Error {
     let store = to.strip_prefix(root).unwrap_or(to);
@@ -1868,6 +1902,10 @@ fn taken(to: &std::path::Path, root: &std::path::Path, dest: &str) -> std::io::E
 /// hold `ident`, `InvalidInput` for a slug that is a path or two stores that are one, and
 /// `PermissionDenied` for a store or a name a link takes out of the project. Both stores are
 /// locked for the whole move, in the order of their paths.
+///
+/// `restore_as` is the exact name an undo puts it back under ([`moved_as`]), held to every rule
+/// above: refused with `AlreadyExists`, never over anything, when `to` holds it.
+#[allow(clippy::too_many_arguments)]
 pub fn move_one(
     root: &std::path::Path,
     from: &std::path::Path,
@@ -1876,8 +1914,12 @@ pub fn move_one(
     timestamped: bool,
     header: &str,
     now: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
 ) -> std::io::Result<std::path::PathBuf> {
     one_segment(ident)?;
+    if let Some(name) = restore_as {
+        one_segment(name)?;
+    }
     if from == to {
         return Err(invalid("a memory is moved to another store, not its own"));
     }
@@ -1885,16 +1927,17 @@ pub fn move_one(
     gate(root, to)?;
     #[cfg(unix)]
     {
-        holding::move_one(root, from, ident, to, timestamped, header, now)
+        holding::move_one(root, from, ident, to, timestamped, header, now, restore_as)
     }
     #[cfg(not(unix))]
     {
-        move_by_path(root, from, ident, to, timestamped, header, now)
+        move_by_path(root, from, ident, to, timestamped, header, now, restore_as)
     }
 }
 
 /// [`move_one`] by path, where no store is held by descriptor.
 #[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
 fn move_by_path(
     root: &std::path::Path,
     from: &std::path::Path,
@@ -1903,6 +1946,7 @@ fn move_by_path(
     timestamped: bool,
     header: &str,
     now: chrono::NaiveDateTime,
+    restore_as: Option<&str>,
 ) -> std::io::Result<std::path::PathBuf> {
     let file = resolve_exact(root, from, ident).ok_or_else(|| no_such(ident))?;
     let name = file
@@ -1916,7 +1960,7 @@ fn move_by_path(
         (crate::rewrite::Lock::on(to), crate::rewrite::Lock::on(from))
     };
     let text = std::fs::read_to_string(&file)?;
-    let dest = moved_name(&name, &text, timestamped, now);
+    let dest = moved_as(&name, &text, timestamped, now, restore_as)?;
     let target = to.join(&dest);
     let held = read_files(root, to).0;
     if std::fs::symlink_metadata(&target).is_ok()

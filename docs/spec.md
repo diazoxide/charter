@@ -430,9 +430,9 @@ how it is cited and nothing here is renumbered.
     move has an Undo for the same few seconds as Delete's (it moves the memory back), and the
     command line has `purlis workspace move-memory` and `purlis persona move-memory`, each
     with `--to-workspace`, `--to-persona` or `--to-shared`. The file is renamed whole, its title
-    and stamp kept (a journal name moved away and back comes back to the minute); a target that
-    already holds a memory of that name is refused. Browsing the archive is later work. **ADR
-    0065.**
+    and stamp kept (a journal name moved away and back comes back to the minute, and to the
+    second when Undo moves it back); a target that already holds a memory of that name is
+    refused. Browsing the archive is later work. **ADR 0065.**
 
 ### The light editor — added 2026-10-02
 
