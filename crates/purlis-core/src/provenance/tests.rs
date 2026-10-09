@@ -666,11 +666,56 @@ fn several_values_for_a_key_leave_that_key_unknown_whichever_comes_last() {
 }
 
 #[test]
-fn a_value_that_could_not_be_written_claims_nothing() {
+fn a_value_that_could_not_be_written_claims_nothing_on_its_own() {
+    for alone in ["two words", "", "caf\u{e9}"] {
+        let claims = Claims::read(&format!("Purlis-Chat: {alone}\nNot a trailer\n"));
+        assert_eq!(claims.chat, Claim::Unsaid, "{alone:?}");
+    }
+    // Said twice, it is still one line's worth of nothing.
+    let twice = Claims::read("Purlis-Persona: two words\nPurlis-Persona: two words\n");
+    assert_eq!(twice.persona, Claim::Unsaid);
+}
+
+#[test]
+fn a_value_that_could_not_be_written_beside_another_leaves_the_key_unknown() {
+    // #1021: the malformed line is still a second claim, and nothing says which was the
+    // commit's, so the well-formed one does not stand alone.
     let claims = Claims::read(&format!(
-        "Purlis-Chat: two words\nPurlis-Chat:\nPurlis-Chat: {CHAT}\nNot a trailer\n"
+        "Purlis-Chat: {CHAT}\nPurlis-Chat: two words\nPurlis-Persona: steward\n"
     ));
-    assert_eq!(claims.chat, Claim::One(CHAT.into()));
+    assert_eq!(
+        claims.chat,
+        Claim::Several(vec![CHAT.into(), "two words".into()])
+    );
+    assert_eq!(claims.chat.one(), None);
+    assert_eq!(
+        claims.persona.one(),
+        Some("steward"),
+        "only that key is unknown"
+    );
+
+    // An empty value and one over the bound count too, whichever comes first, and are shown
+    // as a reader can print them.
+    let long = "x".repeat(MOST + 1);
+    let claims = Claims::read(&format!(
+        "Charter-Chat:\nPurlis-Chat: {CHAT}\nAssisted-by: {long}\nAssisted-by: claude-code\n\
+         Purlis-Change: a\u{7}b\nPurlis-Change: billing-v2\n"
+    ));
+    assert_eq!(
+        claims.chat,
+        Claim::Several(vec!["\"\"".into(), CHAT.into()])
+    );
+    assert_eq!(
+        claims.assisted_by,
+        Claim::Several(vec![
+            format!("{}...", "x".repeat(MOST)),
+            "claude-code".into()
+        ])
+    );
+    assert_eq!(
+        claims.change,
+        Claim::Several(vec!["a\\u0007b".into(), "billing-v2".into()])
+    );
 }
 
 #[test]
