@@ -152,6 +152,28 @@ fn a_chat_on_a_harness_is_known_by_its_ulid_its_harness_and_its_persona() {
 }
 
 #[test]
+fn a_chat_whose_harness_reported_its_model_says_harness_colon_model() {
+    // #1021 (from #1009): once the harness has said which model, `Assisted-by` names it; a
+    // chat it has not said it for keeps the harness alone.
+    let plane = plane_with(vec![
+        crate::reopen::Chat {
+            model: Some("claude-opus-4-1".into()),
+            ..chat(3, Some("claude"), Some("steward"), Some(CHAT))
+        },
+        chat(4, Some("claude"), None, None),
+    ]);
+    let said = Provenance::of_chat(plane.path(), 3).expect("an agent run");
+    assert_eq!(said.model.as_deref(), Some("claude-opus-4-1"));
+    assert_eq!(
+        said.trailers(Form::Full)[0],
+        "Assisted-by: claude-code:claude-opus-4-1"
+    );
+    let unsaid = Provenance::of_chat(plane.path(), 4).expect("an agent run");
+    assert_eq!(unsaid.trailers(Form::Full)[0], "Assisted-by: claude-code");
+    assert_eq!(said.trailers(Form::Llm)[0], "Assisted-by: LLM");
+}
+
+#[test]
 fn a_shell_a_chat_the_record_does_not_hold_and_no_record_are_no_agent_run() {
     let plane = plane_with(vec![chat(5, None, Some("steward"), Some(CHAT))]);
     assert_eq!(
