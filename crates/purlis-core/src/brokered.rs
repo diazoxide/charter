@@ -111,9 +111,11 @@ impl Write {
                  {MOST_TEXT_BYTES}: make it shorter, or split it in two"
             ));
         }
-        if title.is_some_and(|title| title.chars().any(char::is_control)) {
+        if title.is_some_and(|title| title.chars().any(crate::memstore::breaks_a_line)) {
             return Err(
-                "a title is one line, with no newline or other control character in it".to_owned(),
+                "a title is one line, with no newline, line or paragraph separator, \
+                        direction override or other control character in it"
+                    .to_owned(),
             );
         }
         Ok(())

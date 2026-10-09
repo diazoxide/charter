@@ -714,7 +714,16 @@ fn a_link_swapped_in_while_persona_memory_is_written_never_carries_a_write_outsi
 #[test]
 fn a_title_that_is_not_one_line_is_refused_at_the_brokered_boundary() {
     let (_dir, root) = a_project();
-    for title in ["Two\n- [evil](../../x.md)", "Carriage\rreturn", "Bell\u{7}"] {
+    for title in [
+        "Two\n- [evil](../../x.md)",
+        "Carriage\rreturn",
+        "Bell\u{7}",
+        "Line\u{2028}separator",
+        "Paragraph\u{2029}separator",
+        "Next\u{85}line",
+        "Turned\u{202E}around",
+        "Isolated\u{2066}text",
+    ] {
         let write = Write::WorkspaceRemember {
             text: "x".to_owned(),
             title: Some(title.to_owned()),
