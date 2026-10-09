@@ -604,3 +604,69 @@ fn what_a_cut_short_write_of_a_dispatch_record_left_behind_is_collected_with_the
     assert!(other.exists());
     assert!(record.exists());
 }
+
+#[test]
+fn a_dispatch_record_is_collected_thirty_days_after_it_ended_however_lately_it_was_rewritten() {
+    // #1556: forgetting what the two chats said rewrites the record; that is no reason to keep
+    // its brief and its report another month.
+    let (_d, root) = plane();
+    let now = SystemTime::now();
+    let ended_at = |age: Duration| chrono::DateTime::<chrono::Utc>::from(now - age);
+    let ended = |age: Duration| {
+        let path = a_dispatch_record(&root, (1, None), (2, None), Duration::ZERO);
+        let id = path.file_stem().unwrap().to_str().unwrap().to_owned();
+        crate::dispatchrecord::close(
+            &root,
+            &id,
+            crate::dispatchrecord::Ending::default(),
+            ended_at(age),
+        )
+        .unwrap();
+        // Written again today.
+        crate::dispatchrecord::kept_open(&root, &id).unwrap();
+        path
+    };
+    let long_ended = ended(OLD);
+    let lately_ended = ended(YOUNG);
+    // Still running, and written today.
+    let running = a_dispatch_record(&root, (1, None), (2, None), Duration::ZERO);
+    // An end that stands in the future is not one: aged from when it was last written.
+    let ahead = a_dispatch_record(&root, (1, None), (2, None), Duration::ZERO);
+    let mut record: crate::dispatchrecord::Record =
+        serde_json::from_str(&std::fs::read_to_string(&ahead).unwrap()).unwrap();
+    record.ended = Some(crate::dispatch::stamp(
+        chrono::Utc::now() + chrono::Duration::days(400),
+    ));
+    std::fs::write(&ahead, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    let file = std::fs::File::options().write(true).open(&ahead).unwrap();
+    file.set_modified(now - OLD).unwrap();
+    // Ended long ago, and its asking chat comes back: kept however old.
+    let of_a_live_chat = a_dispatch_record(
+        &root,
+        (3, Some(OCTOBERS_CHAT)),
+        (40, Some(SEPTEMBERS_WORKER)),
+        Duration::ZERO,
+    );
+    let id = of_a_live_chat
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    crate::dispatchrecord::close(
+        &root,
+        &id,
+        crate::dispatchrecord::Ending::default(),
+        ended_at(OLD),
+    )
+    .unwrap();
+
+    let swept = sweep_keeping(&root, now, &[], &[live(3, Some(OCTOBERS_CHAT))]);
+
+    assert_eq!(swept.dispatches, 2);
+    assert!(!long_ended.exists());
+    assert!(!ahead.exists());
+    assert!(lately_ended.exists());
+    assert!(running.exists());
+    assert!(of_a_live_chat.exists());
+}

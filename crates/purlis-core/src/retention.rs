@@ -14,11 +14,13 @@
 //! age this reads, so it stays too.
 //!
 //! **A dispatch record is session data too** (#1452). `.charter/app/dispatches/<id>.json` holds
-//! a brief and a report, and is collected by the same rule: a month after it was last written,
-//! unless the chat that asked or the chat that worked is one the reopen record brings back,
-//! by its id and not its number, which another launch deals again. A write of one that was cut
-//! short leaves its temporary file beside it, holding the same brief: it is collected by the
-//! same rule.
+//! a brief and a report, and is collected a month after its dispatch ended, as the record says
+//! (#1556): a later write of it, such as forgetting what its two chats said, does not keep it
+//! longer. One that has not ended, or whose end cannot be read, is collected a month after it
+//! was last written. Either way not while the chat that asked or the chat that worked is one
+//! the reopen record brings back, by its id and not its number, which another launch deals
+//! again ([`crate::dispatchrecord::aged_from`]). A write of one that was cut short leaves its
+//! temporary file beside it, holding the same brief: it is collected by the same rule.
 //!
 //! **A trace that records a secret handed out is kept** (V71). Those events
 //! ([`crate::secrets::cmd::HANDED_OUT`]) are the only record of which credential went where
@@ -75,7 +77,7 @@ pub fn sweep_keeping(
             &[crate::names::state_name(plane), "sessions"],
             now,
             |name| a_marker(name) && !of_a_live_session(name, live),
-            |_| false,
+            |_, written| Some(written),
         ),
         traces: collect(
             plane,
@@ -86,10 +88,11 @@ pub fn sweep_keeping(
                     .is_some_and(|sid| !sid.is_empty() && crate::hookstate::safe(sid) == sid)
                     && !of_a_live_session(name, live)
             },
-            hands_out_a_secret,
+            |file, written| (!hands_out_a_secret(file)).then_some(written),
         ),
         reports: sweep_reports(plane, now),
-        dispatches: collect(
+        // Read however lately written: a record says when its dispatch ended (#1556).
+        dispatches: collect_by(
             plane,
             &[
                 crate::names::state_name(plane),
@@ -103,7 +106,8 @@ pub fn sweep_keeping(
                 crate::dispatchrecord::a_record(name)
                     || crate::dispatchrecord::a_record_s_temp(name)
             },
-            |file| crate::dispatchrecord::of_a_live_chat(file, chats),
+            true,
+            |file, written| crate::dispatchrecord::aged_from(file, written, now, chats),
         ),
     }
 }
@@ -158,7 +162,7 @@ fn sweep_reports(plane: &Path, now: SystemTime) -> usize {
         &[crate::names::state_name(plane), "reports"],
         now,
         a_report_draft,
-        |_| false,
+        |_, written| Some(written),
     )
 }
 
@@ -211,14 +215,31 @@ fn of_a_live_session(name: &str, live: &[String]) -> bool {
     })
 }
 
-/// Remove every month-old plain file directly in `plane/<steps…>` whose name `ours` takes and
-/// that `kept` does not keep once it has read it; how many went.
+/// Remove every month-old plain file directly in `plane/<steps…>` whose name `ours` takes; how
+/// many went. `from` answers when a file is aged from, given the file and when it was last
+/// written, or `None` for one it keeps however old.
+///
+/// A file last written within the month is not read, but in a store whose files say their own
+/// time (`own_time`): there a file rewritten since can still be a month past it.
 fn collect(
     plane: &Path,
     steps: &[&str],
     now: SystemTime,
     ours: impl Fn(&str) -> bool,
-    kept: impl Fn(&mut std::fs::File) -> bool,
+    from: impl Fn(&mut std::fs::File, SystemTime) -> Option<SystemTime>,
+) -> usize {
+    collect_by(plane, steps, now, ours, false, from)
+}
+
+/// [`collect`], reading every file of a store whose files say their own time
+/// (`own_time`), however lately each was written.
+fn collect_by(
+    plane: &Path,
+    steps: &[&str],
+    now: SystemTime,
+    ours: impl Fn(&str) -> bool,
+    own_time: bool,
+    from: impl Fn(&mut std::fs::File, SystemTime) -> Option<SystemTime>,
 ) -> usize {
     let Some(store) = held::Dir::open(plane, steps) else {
         return 0;
@@ -228,21 +249,28 @@ fn collect(
         let Some(mut file) = store.file(&name) else {
             continue;
         };
-        let stale = file
+        let Some(written) = file
             .metadata()
-            .is_ok_and(|found| found.is_file() && aged(&found, now));
-        if stale && !kept(&mut file) && store.remove(&name) {
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|found| found.modified().ok())
+        else {
+            continue;
+        };
+        if !own_time && !aged(written, now) {
+            continue;
+        }
+        let stale = from(&mut file, written).is_some_and(|at| aged(at, now));
+        if stale && store.remove(&name) {
             gone += 1;
         }
     }
     gone
 }
 
-/// Whether a file was last written [`KEEP_FOR`] or more before `now`.
-fn aged(found: &std::fs::Metadata, now: SystemTime) -> bool {
-    found
-        .modified()
-        .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= KEEP_FOR))
+/// Whether `at` is [`KEEP_FOR`] or more before `now`.
+fn aged(at: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(at).is_ok_and(|age| age >= KEEP_FOR)
 }
 
 /// A store's directory, held for the length of one sweep.

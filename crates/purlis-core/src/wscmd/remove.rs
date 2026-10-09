@@ -194,7 +194,7 @@ fn left_behind_said(ws: &str, left: crate::dispatchrecord::LeftBehind) -> String
     };
     let mut said = format!(
         "Kept {} of work in '{ws}' in the project's own state, each with its brief and report, \
-         until it is collected 30 days after it was last written.",
+         until it is collected 30 days after its task ended.",
         many(left.records, "dispatch record", "dispatch records")
     );
     if left.forgot > 0 {
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(
             said(1, 1, 0),
             "Kept 1 dispatch record of work in 'beta' in the project's own state, each with its \
-             brief and report, until it is collected 30 days after it was last written. What 1 \
+             brief and report, until it is collected 30 days after its task ended. What 1 \
              task that ended and the chats that asked said to each other is forgotten now."
         );
         // Some ended and some run on: the running ones are not said to be forgotten.

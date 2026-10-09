@@ -23,10 +23,11 @@
 //! sandbox** (a project without one, a chat started without it) only the file's mode holds,
 //! and that keeps out other users of the machine, not the person's own chats.
 //!
-//! It is kept the way a chat's per-session files are ([`crate::retention`]): 30 days after it
-//! was last written it is collected when the project is opened, unless the chat that asked or
-//! the chat that worked is one the reopen record brings back. A chat is matched by its ULID
-//! ([`same_chat`]): a number is dealt again in another launch, and keeps nothing.
+//! It is kept the way a chat's per-session files are ([`crate::retention`]): 30 days after its
+//! dispatch ended, or after it was last written where it has not ended ([`aged_from`]), it is
+//! collected when the project is opened, unless the chat that asked or the chat that worked is
+//! one the reopen record brings back. A chat is matched by its ULID ([`same_chat`]): a number
+//! is dealt again in another launch, and keeps nothing.
 //!
 //! # Who writes it
 //!
@@ -1859,11 +1860,23 @@ pub fn ended_unreported(record: &Record, usage: Option<Usage>) -> Ending {
     }
 }
 
-/// Whether the record `file` holds is one a chat in `live` asked for or worked on: what
-/// [`crate::retention`] keeps however old. Matched as [`same_chat`] matches: by the chat's
-/// ULID, so a chat that only shares a number with one of long ago keeps nothing. A file that
-/// does not read as a record is not kept by this.
-pub(crate) fn of_a_live_chat(file: &mut std::fs::File, live: &[Live]) -> bool {
+/// **When the record `file` holds is aged from**, for [`crate::retention`] to collect it 30
+/// days after (#1556), or `None` where it is one a chat in `live` asked for or worked on,
+/// which is kept however old. Matched as [`same_chat`] matches: by the chat's ULID, so a chat
+/// that only shares a number with one of long ago keeps nothing. `written` is when the file
+/// was last written.
+///
+/// **A dispatch that ended is aged from its end**, which the record says: a later write of it
+/// (its row cleared, its words forgotten, its worktree looked at) does not keep it, with its
+/// brief and its report, for another 30 days. One still running, one whose end does not read
+/// as a time or stands in the future, and a file that does not read as a record of this
+/// version are aged from when the file was last written.
+pub(crate) fn aged_from(
+    file: &mut std::fs::File,
+    written: std::time::SystemTime,
+    now: std::time::SystemTime,
+    live: &[Live],
+) -> Option<std::time::SystemTime> {
     use std::io::Read;
     let mut text = String::new();
     if file
@@ -1871,13 +1884,25 @@ pub(crate) fn of_a_live_chat(file: &mut std::fs::File, live: &[Live]) -> bool {
         .read_to_string(&mut text)
         .is_err()
     {
-        return false;
+        return Some(written);
     }
-    parse(&text).is_some_and(|record| {
-        [&record.asker.chat, &record.worker.chat]
-            .iter()
-            .any(|recorded| live.iter().any(|chat| chat.is(recorded)))
-    })
+    let Some(record) = parse(&text) else {
+        return Some(written);
+    };
+    if [&record.asker.chat, &record.worker.chat]
+        .iter()
+        .any(|recorded| live.iter().any(|chat| chat.is(recorded)))
+    {
+        return None;
+    }
+    let latest = chrono::DateTime::<chrono::Utc>::from(now) + END_SKEW;
+    let ended = record
+        .ended
+        .as_deref()
+        .and_then(|ended| chrono::DateTime::parse_from_rfc3339(ended).ok())
+        .map(|ended| ended.with_timezone(&chrono::Utc))
+        .filter(|ended| *ended <= latest);
+    Some(ended.map_or(written, std::time::SystemTime::from))
 }
 
 /// Whether `name` is a record's file name: `<ULID>.json`.
