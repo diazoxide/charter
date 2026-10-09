@@ -128,11 +128,11 @@ tools/coldstart-linux.sh i3-nobus   # i3 under X11 with no session bus, as `star
 `APP` names another binary and `LIMIT_MS` and `CEILING_MS` another limit and ceiling.
 
 CI runs a `windows` job too, every night but not on a pull request or a push to `main`,
-and it is **evidence, not a gate**: `continue-on-error`, not one of the eight required checks, and it reports the whole `cargo check` error list rather than
-stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —
-what it is for is making "what is true on Windows" a measurement instead of a guess. What it
-has found so far is [ADR 0031](docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md),
-and #95 to #103.
+and it is **evidence, not a gate**: `continue-on-error`, not one of the eight required checks,
+and it reports the whole `cargo check` error list rather than stopping at the first line.
+Nothing has been ported to Windows, so it is expected to be red — what it is for is making
+"what is true on Windows" a measurement instead of a guess. What it has found so far is
+[ADR 0031](docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md), and #95 to #103.
 
 Every plane write is also checked against what the Python charter answered for the same
 command on the same fixture plane: its output, its exit status and the tree it left, byte for
