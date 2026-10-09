@@ -162,7 +162,7 @@ describe("view tabs", function () {
         return out;
       });
       // `delegate-when` is what makes a persona findable, and what a router reads.
-      expect(facts["Delegate to it for"]).toContain("k8s deploys");
+      expect(facts["Dispatch to it for"]).toContain("k8s deploys");
       // The vault's NAME, and nothing that is in it.
       expect(facts["Vault"]).toMatch(/^devops\b/);
       expect(facts["Defined in"]).toContain("personas/devops/persona.md");

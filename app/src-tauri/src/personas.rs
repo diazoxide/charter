@@ -101,7 +101,7 @@ fn create_in(
 /// Delete a persona: `charter persona remove <name>`, never forced.
 ///
 /// The core refuses one another persona still `extends:` or `uses:`, naming them. What it
-/// deletes is the persona's directory — definition, memory and refs — and its generated agent;
+/// deletes is the persona's directory: its definition, memory and refs;
 /// its vault is left alone, and the answer says so. When the plane-wide selection
 /// (`.charter/active-persona`) names it, that selection goes too, as it does from a terminal
 /// that has no session or pane of its own.

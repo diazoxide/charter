@@ -54,7 +54,7 @@ const PERSONA: ViewAnswer = {
     {
       kind: "facts",
       facts: [
-        { label: "Delegate to it for", value: "routing" },
+        { label: "Dispatch to it for", value: "routing" },
         { label: "Vault", value: "none; this persona holds no credentials of its own" },
       ],
     },
@@ -169,7 +169,7 @@ describe("the persona view", () => {
     const values = within(facts)
       .getAllByRole("definition")
       .map((it) => it.textContent);
-    expect(labels).toEqual(["Delegate to it for", "Vault"]);
+    expect(labels).toEqual(["Dispatch to it for", "Vault"]);
     expect(values).toEqual(["routing", "none; this persona holds no credentials of its own"]);
   });
 
