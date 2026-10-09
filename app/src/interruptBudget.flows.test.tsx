@@ -7,6 +7,7 @@ import App from "./App";
 import type { DispatchPending, OpenChat, RelaunchQuestion } from "./bindings";
 import { type Interrupts, countInterrupts, withinTheBudget } from "./interruptBudget";
 import type { Ending } from "./QuitWarning";
+import { stripNamed } from "./test-strips";
 import { UpdateItem, type Updates } from "./Updates";
 
 /**
@@ -383,7 +384,7 @@ function handingOff(held: DispatchPending[]) {
 
 /** The chat tab whose text ends in `name`: a persona's mark comes first. */
 const tabNamed = (name: string) =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .find((tab) => tab.textContent?.endsWith(name));
 
