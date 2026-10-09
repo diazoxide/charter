@@ -18,7 +18,9 @@
 //! only where crates come from: the `[registries]` indexes, `registry.default` and the
 //! `[source]` replacements ([`cargo_config`]). Never a token, a credential provider, a build
 //! setting or an alias, and never a `bin` folder. A private registry that needs a login is not
-//! reached from a sandboxed chat.
+//! reached from a sandboxed chat. A relative `[source]` folder is resolved where cargo resolves
+//! it for the person's file, and kept only when it stays inside that folder, links followed
+//! (#1364). Its text names a folder; what a chat may read there is still the sandbox's to say.
 //!
 //! **What a chat writes there** ([`CacheHome`]): each tool's folder, whole; and of cargo's
 //! home only its registry, its git checkouts, what is inside each bare repository of its git
@@ -269,7 +271,10 @@ pub fn home_of(machine: &Machine, root: &Path, denied: &Denied) -> Option<CacheH
         bare: vec![cargo.join(CARGO_GIT_DB)],
         files: CARGO_FILES.iter().map(|file| cargo.join(file)).collect(),
         env: Vec::new(),
-        cargo_config: cargo_config(&person_cargo_config(machine)),
+        cargo_config: {
+            let (person, root) = person_cargo_config(machine);
+            cargo_config(&person, root.as_deref())
+        },
     };
     home.trees
         .splice(0..0, CARGO_TREES.iter().map(|tree| cargo.join(tree)));
@@ -286,8 +291,10 @@ pub fn home_of(machine: &Machine, root: &Path, denied: &Denied) -> Option<CacheH
 }
 
 /// The text of the person's own cargo config: `$CARGO_HOME`'s, or `~/.cargo`'s, under either
-/// name cargo reads. Empty where there is none.
-fn person_cargo_config(machine: &Machine) -> String {
+/// name cargo reads. Empty where there is none. With it, the folder its relative paths are
+/// resolved against: the one above the folder the config is in, as cargo resolves a path
+/// written in a config file (#1364).
+fn person_cargo_config(machine: &Machine) -> (String, Option<PathBuf>) {
     let Some(home) = machine
         .env
         .get("CARGO_HOME")
@@ -296,12 +303,45 @@ fn person_cargo_config(machine: &Machine) -> String {
         .filter(|dir| dir.is_absolute())
         .or_else(|| machine.home.as_ref().map(|home| home.join(".cargo")))
     else {
-        return String::new();
+        return (String::new(), None);
     };
-    ["config.toml", "config"]
+    let text = ["config.toml", "config"]
         .iter()
         .find_map(|name| super::read_plane_file(&home.join(name)).ok().flatten())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (text, home.parent().map(Path::to_path_buf))
+}
+
+/// The keys of a `[source]` entry that name a folder, which cargo resolves against the
+/// config's folder when they are relative.
+const SOURCE_PATHS: [&str; 2] = ["directory", "local-registry"];
+
+/// `written`, a [`SOURCE_PATHS`] value of the person's config, as the project's cargo home's
+/// config must say it. An absolute path is copied as written: what a chat may read there is the
+/// sandbox's to decide, and this grants nothing. A relative one is resolved against `root`
+/// ([`person_cargo_config`]), since the copy sits in another folder and would resolve it
+/// elsewhere. It is taken only when it climbs nowhere (no `..`), names a folder that is there,
+/// and that folder, with every link on the way followed, is still inside `root`: otherwise
+/// `None`, and the entry is left out.
+fn source_path(written: &str, root: Option<&Path>) -> Option<String> {
+    use std::path::Component;
+    let path = Path::new(written);
+    if path.is_absolute() {
+        return Some(written.to_owned());
+    }
+    if written.is_empty()
+        || !path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        return None;
+    }
+    let root = root?.canonicalize().ok()?;
+    let resolved = root.join(path).canonicalize().ok()?;
+    if !resolved.starts_with(&root) || !resolved.is_dir() {
+        return None;
+    }
+    resolved.to_str().map(str::to_owned)
 }
 
 /// The keys of a `[source]` entry that say where crates come from, and nothing else.
@@ -321,7 +361,12 @@ const SOURCE_KEYS: [&str; 8] = [
 /// `registry.default`, and each `[source]` entry's [`SOURCE_KEYS`]. Never a token, a credential
 /// provider, a build setting, an alias or a runner, which name programs or hold a secret. A
 /// config purlis cannot read as TOML gives nothing.
-pub fn cargo_config(person: &str) -> String {
+///
+/// `root` is the folder a relative `directory` or `local-registry` is resolved against
+/// ([`source_path`]). A `[source]` entry with one that cannot be resolved there is left out
+/// whole: a `replace-with` naming it then makes cargo say the source is missing, rather than
+/// fetching from somewhere the person did not name.
+pub fn cargo_config(person: &str, root: Option<&Path>) -> String {
     let mut out = toml::Table::new();
     let top = person.parse::<toml::Table>().unwrap_or_default();
     let keep = |table: Option<&toml::Value>, keys: &[&str]| -> toml::Table {
@@ -357,13 +402,38 @@ pub fn cargo_config(person: &str) -> String {
         registry.insert("default".to_owned(), default.clone());
         out.insert("registry".to_owned(), toml::Value::Table(registry));
     }
-    let source = keep(top.get("source"), &SOURCE_KEYS);
+    let mut source = keep(top.get("source"), &SOURCE_KEYS);
+    let before = source.len();
+    source.retain(|_, entry| {
+        let Some(entry) = entry.as_table_mut() else {
+            return false;
+        };
+        SOURCE_PATHS.iter().all(|key| {
+            let Some(value) = entry.get(*key) else {
+                return true;
+            };
+            let Some(resolved) = value
+                .as_str()
+                .and_then(|written| source_path(written, root))
+            else {
+                return false;
+            };
+            entry.insert((*key).to_owned(), toml::Value::String(resolved));
+            true
+        })
+    });
+    let dropped = if source.len() < before {
+        "# Left out: a [source] entry whose relative folder purlis could not find inside the \
+         folder above your cargo home, without climbing out of it or following a link out.\n"
+    } else {
+        ""
+    };
     if !source.is_empty() {
         out.insert("source".to_owned(), toml::Value::Table(source));
     }
     format!(
         "# Written by purlis for this project's sandboxed chats at every start: where crates come \
-         from, copied from your own cargo config. Nothing else is read from here.\n{out}"
+         from, copied from your own cargo config. Nothing else is read from here.\n{dropped}{out}"
     )
 }
 
