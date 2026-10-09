@@ -422,9 +422,13 @@ fn within_the_budget(
     ))
 }
 
-/// Refuses `text`, a vision or a section entry (`what`), where it opens an HTML comment or a
-/// code fence and does not close it (#1598): a Markdown renderer would hide every section of
-/// `workspace.md` after it. A `<!--` inside a code fence or a code span is code, not a comment.
+/// Refuses `text`, a vision or a section entry (`what`), where it opens an HTML comment, a
+/// code fence or one of the raw HTML blocks that run to the end of the document until their
+/// end comes (`<pre>`, `<script>`, `<style>`, `<textarea>`, `<?`, `<!` and a letter,
+/// `<![CDATA[`), and does not close it (#1598): a Markdown renderer would hide every section of
+/// `workspace.md` after it, as the app's drops raw HTML. A `<!--` inside a code fence or a code
+/// span is code, not a comment. A fence or a raw block starts on a line indented at most three
+/// spaces, as CommonMark reads one: a line indented further neither opens nor closes one.
 fn hides_nothing_after_it(text: &str, what: &str) -> Result<(), String> {
     let hidden = |by: &str| {
         Err(format!(
@@ -432,16 +436,58 @@ fn hides_nothing_after_it(text: &str, what: &str) -> Result<(), String> {
              workspace.md after it: nothing was written. Close it, or leave it out"
         ))
     };
+    // A line with its indentation of at most three spaces taken off; `None` for one indented
+    // further, where neither a fence nor a raw block starts.
+    fn unindented(line: &str) -> Option<&str> {
+        let rest = line.trim_start_matches(' ');
+        (line.len() - rest.len() <= 3 && !rest.starts_with('\t')).then_some(rest)
+    }
     // The fence a line opens: its character, how many, and what follows them.
     fn fence_of(line: &str) -> Option<(char, usize, &str)> {
-        let line = line.trim_start();
+        let line = unindented(line)?;
         let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
         let many = line.chars().take_while(|c| *c == mark).count();
         (many >= 3).then(|| (mark, many, &line[many..]))
     }
+    // The ends a raw HTML block that `line` opens waits for, of the kinds that run on to the
+    // end of the document without one (CommonMark's kinds 1, 3, 4 and 5; a comment is read
+    // below, wherever on a line it opens).
+    fn raw_block_of(line: &str) -> Option<&'static [&'static str]> {
+        let line = unindented(line)?.to_ascii_lowercase();
+        let tag = |name: &str| {
+            line.strip_prefix('<')
+                .and_then(|rest| rest.strip_prefix(name))
+                .is_some_and(|after| after.is_empty() || after.starts_with([' ', '\t', '>']))
+        };
+        if ["script", "pre", "style", "textarea"].into_iter().any(tag) {
+            Some(&["</script>", "</pre>", "</style>", "</textarea>"])
+        } else if line.starts_with("<![cdata[") {
+            Some(&["]]>"])
+        } else if line.starts_with("<?") {
+            Some(&["?>"])
+        } else if line
+            .strip_prefix("<!")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+        {
+            Some(&[">"])
+        } else {
+            None
+        }
+    }
+    let ends_in = |line: &str, ends: &[&str]| {
+        let line = line.to_ascii_lowercase();
+        ends.iter().any(|end| line.contains(end))
+    };
     let mut fence: Option<(char, usize)> = None;
+    let mut raw: Option<&'static [&'static str]> = None;
     let mut in_comment = false;
     for line in crate::mdsection::split_lines(text) {
+        if let Some(ends) = raw {
+            if ends_in(line, ends) {
+                raw = None;
+            }
+            continue;
+        }
         if !in_comment {
             if let Some((mark, many)) = fence {
                 if fence_of(line).is_some_and(|(closing, more, rest)| {
@@ -453,6 +499,12 @@ fn hides_nothing_after_it(text: &str, what: &str) -> Result<(), String> {
             }
             if let Some((mark, many, _)) = fence_of(line) {
                 fence = Some((mark, many));
+                continue;
+            }
+            if let Some(ends) = raw_block_of(line) {
+                if !ends_in(line, ends) {
+                    raw = Some(ends);
+                }
                 continue;
             }
         }
@@ -471,6 +523,9 @@ fn hides_nothing_after_it(text: &str, what: &str) -> Result<(), String> {
     }
     if fence.is_some() {
         return hidden("a code fence (``` or ~~~)");
+    }
+    if raw.is_some() {
+        return hidden("a raw HTML block (<pre>, <script>, <style>, <textarea>, <? or <!)");
     }
     if in_comment {
         return hidden("an HTML comment (<!--)");
