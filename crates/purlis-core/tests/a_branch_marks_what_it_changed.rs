@@ -108,9 +108,11 @@ fn a_changed_added_deleted_and_renamed_file_each_carry_their_mark_and_folders_ro
     );
     assert_eq!(rolled(&status, "docs"), Some((Mark::Added, 1)));
     assert_eq!(rolled(&status, "lib"), Some((Mark::Renamed, 1)));
-    // A folder holding more than one kind of change is changed.
-    assert_eq!(rolled(&status, "src"), Some((Mark::Changed, 2)));
-    // The branch's own folder rolls up everything.
+    // A folder holding more than one kind of change is changed. `src/` holds three: the file
+    // committed in it, the one deleted from it, and the one renamed out of it, which it lost
+    // (#1130, D-1130-1). The rename is not above both ends there, so it is not the rename's.
+    assert_eq!(rolled(&status, "src"), Some((Mark::Changed, 3)));
+    // The branch's own folder rolls up everything, the rename once: it is above both ends.
     assert_eq!(rolled(&status, ""), Some((Mark::Changed, 5)));
     assert_eq!(rolled(&status, "nowhere"), None);
     assert_eq!(status.base.as_deref(), Some("main"));
