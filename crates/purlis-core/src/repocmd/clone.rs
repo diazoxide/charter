@@ -419,9 +419,10 @@ fn clone_one(
     };
     if !run.ok() {
         let mut said = failure(&run, &dest);
-        // A clone the app made for a chat read none of your git config (#1413): where yours
-        // would have changed its route, say which key.
+        // A clone the app made for a chat read none of your git config (#1413): where it could
+        // not reach its host and yours would have changed its route, say which key (#1550).
         if git::isolation().is_some()
+            && (run.code.is_none() || super::unread::reads_as_a_route_failure(&run.err))
             && let Some(note) = super::unread::network_note(&super::unread::global_entries(), &url)
         {
             said = format!("{said}\n{note}");

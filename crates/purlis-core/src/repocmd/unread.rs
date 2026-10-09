@@ -42,16 +42,22 @@ pub fn filters_named(attributes: &str) -> Vec<String> {
 }
 
 /// What a checkout at `top`, made by brokered git, says of the filters its `.gitattributes`
-/// names: one sentence per filter, none where it names none. `name` is how the checkout is
-/// called in the answer, `at` where it is, as the person would `cd` to it.
+/// files name: one sentence per filter, none where they name none. `name` is how the checkout
+/// is called in the answer, `at` where it is, as the person would `cd` to it.
 ///
-/// Only the top `.gitattributes` is read: it is where a repository turns LFS on. It is read
-/// as **committed** ([`committed_attributes`]), never from the working tree a chat writes.
+/// Every `.gitattributes` is read, the top one first and then each one in a folder (#1550): a
+/// repository can turn a filter on for one folder alone. Each is read as **committed**
+/// ([`committed_attributes`]), never from the working tree a chat writes.
 pub fn filter_notes(top: &Path, name: &str, at: &str) -> Vec<String> {
-    let Some(text) = committed_attributes(top) else {
-        return Vec::new();
-    };
-    filters_named(&text)
+    let mut filters: Vec<String> = Vec::new();
+    for text in committed_attributes(top) {
+        for filter in filters_named(&text) {
+            if !filters.contains(&filter) {
+                filters.push(filter);
+            }
+        }
+    }
+    filters
         .into_iter()
         .map(|filter| {
             if filter == "lfs" {
@@ -74,35 +80,84 @@ pub fn filter_notes(top: &Path, name: &str, at: &str) -> Vec<String> {
         .collect()
 }
 
-/// The most of a committed `.gitattributes` read: far past any real one.
+/// The most of one committed `.gitattributes` read: far past any real one.
 pub const ATTRIBUTES_AT_MOST: u64 = 64 * 1024;
 
-/// The top `.gitattributes` of the checkout at `top` **as its `HEAD` commits it**, asked of git
-/// through the hardened runner: the app reads it outside the chat's sandbox, and the working
-/// tree is the chat's to write, so a file there could be a link to anything the app can read,
-/// a pipe that never ends, or a file without end (#1413). `None` where `HEAD` holds no regular
-/// file by that name (a committed link is not followed, as git itself does not follow one), or
-/// one larger than [`ATTRIBUTES_AT_MOST`], or git cannot say.
-pub fn committed_attributes(top: &Path) -> Option<String> {
+/// The most `.gitattributes` files one checkout's note reads: far past any real repository's.
+/// The top one is always among them.
+pub const ATTRIBUTES_FILES_AT_MOST: usize = 64;
+
+/// Every `.gitattributes` of the checkout at `top` **as its `HEAD` commits it**, the top one
+/// first, asked of git through the hardened runner: the app reads them outside the chat's
+/// sandbox, and the working tree is the chat's to write, so a file there could be a link to
+/// anything the app can read, a pipe that never ends, or a file without end (#1413).
+///
+/// Which files there are is asked of the index git just wrote at the checkout (`ls-files`,
+/// which matches a pattern in every folder and answers only the names that match), and each
+/// one is then looked up in `HEAD` (`ls-tree`) and read from there: a name the index holds and
+/// `HEAD` does not is not read. Left out: a name `HEAD` holds as anything but a regular file
+/// (a committed link is not followed, as git itself does not follow one), one larger than
+/// [`ATTRIBUTES_AT_MOST`], every one past [`ATTRIBUTES_FILES_AT_MOST`], and all of them where
+/// git cannot say.
+pub fn committed_attributes(top: &Path) -> Vec<String> {
     let ask = |args: &[&str]| {
         git::run(top, args, git::READ)
             .ok()
             .filter(git::Run::ok)
             .map(|run| run.out)
     };
-    // `<mode> blob <object>\t.gitattributes`, or nothing where HEAD has none.
-    let listed = ask(&["ls-tree", "HEAD", "--", ".gitattributes"])?;
-    let (meta, _) = listed.split_once('\t')?;
-    let mut fields = meta.split_whitespace();
-    let (mode, kind, object) = (fields.next()?, fields.next()?, fields.next()?);
-    if kind != "blob" || !matches!(mode, "100644" | "100755") {
-        return None;
+    let Some(indexed) = ask(&[
+        "ls-files",
+        "-z",
+        "--",
+        ".gitattributes",
+        ":(glob)**/.gitattributes",
+    ]) else {
+        return Vec::new();
+    };
+    let mut names: Vec<&str> = Vec::new();
+    for name in indexed.split('\0').filter(|one| !one.is_empty()) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
     }
-    let size: u64 = ask(&["cat-file", "-s", object])?.trim().parse().ok()?;
-    if size > ATTRIBUTES_AT_MOST {
-        return None;
+    // The top one first, whatever sorts before it.
+    names.sort_by_key(|name| *name != ".gitattributes");
+    names.truncate(ATTRIBUTES_FILES_AT_MOST);
+    if names.is_empty() {
+        return Vec::new();
     }
-    ask(&["cat-file", "blob", object])
+    // Each name as written: a name is never read as a pattern here.
+    let mut listing = vec!["--literal-pathspecs", "ls-tree", "-l", "-z", "HEAD", "--"];
+    listing.extend(names.iter().copied());
+    let Some(listed) = ask(&listing) else {
+        return Vec::new();
+    };
+    // `<mode> <kind> <object> <size>\t<path>`, one for each name HEAD holds.
+    let mut by_name: Vec<(&str, &str)> = Vec::new();
+    for entry in listed.split('\0').filter(|one| !one.is_empty()) {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        let mut fields = meta.split_whitespace();
+        let (Some(mode), Some(kind), Some(object), Some(size)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let size: Option<u64> = size.parse().ok();
+        if kind == "blob"
+            && matches!(mode, "100644" | "100755")
+            && size.is_some_and(|size| size <= ATTRIBUTES_AT_MOST)
+        {
+            by_name.push((path, object));
+        }
+    }
+    names
+        .iter()
+        .filter_map(|name| by_name.iter().find(|(path, _)| path == name))
+        .filter_map(|(_, object)| ask(&["cat-file", "blob", object]))
+        .collect()
 }
 
 /// The keys of `entries`, a git config listing (`key`, `value`; the section and name
@@ -249,6 +304,40 @@ pub fn global_entries() -> Vec<(String, String)> {
     }
     out
 }
+
+/// Whether a failed clone's own words (`err`, git's standard error) read as a failure to reach
+/// the host: a name that did not resolve, a connection, a proxy, a certificate, or the host
+/// refusing who asked (curl's "unable to access", git's "Authentication failed"). Only such a
+/// failure is one a key of [`route_keys`] could have changed, so only then is it named
+/// ([`network_note`]): a clone that fails for another reason (a repository that is not there,
+/// a ref, a disk) names none, so a clone made to fail cannot ask which keys the person's config
+/// sets for a host (#1550).
+///
+/// What git quotes (`'…'`, a URL or a folder) is left out first: a repository called `openssl`
+/// that is not there does not read as a certificate failure.
+pub fn reads_as_a_route_failure(err: &str) -> bool {
+    let unquoted: String = err
+        .split('\'')
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    ROUTE_FAILURES.iter().any(|said| unquoted.contains(said))
+}
+
+/// What git and curl say, lowercased, when a clone could not reach its host or was refused at
+/// it.
+const ROUTE_FAILURES: [&str; 9] = [
+    "unable to access",
+    "authentication failed",
+    "could not resolve",
+    "failed to connect",
+    "connection timed out",
+    "connection refused",
+    "proxy",
+    "ssl",
+    "certificate",
+];
 
 /// The sentence a failed brokered clone of `url` adds when the person's own git config would
 /// have changed its route (`entries`, [`global_entries`]): which keys, and where to run it
