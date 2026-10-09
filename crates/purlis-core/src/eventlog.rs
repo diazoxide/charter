@@ -34,6 +34,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::state::run::{Cause, RunState};
+
 /// One event, in ADR 0066's envelope.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Event {
@@ -1173,14 +1175,35 @@ impl Recorder {
         match (report.event, &report.agent) {
             (crate::state::Event::SubagentStop, Some(agent)) => {
                 let key = (under.chat.clone(), agent.clone());
-                self.children.remove(&key);
+                let live = self.children.remove(&key);
                 if self.stopped.len() >= AGENTS_HELD {
                     self.stopped.clear();
                 }
                 self.stopped.insert(key);
+                // Its own stop ends its run (ADR 0076 §6): once, for the child that was live.
+                if let Some((run, parent)) = live {
+                    self.end_child(
+                        &under.chat,
+                        run,
+                        parent,
+                        RunState::Completed,
+                        Cause::ChildEnded,
+                    )?;
+                }
             }
-            // The chat's session is over, and every sub-agent of its run with it.
-            (crate::state::Event::SessionEnd, None) => self.end_children(&under.chat),
+            // The chat's session is over, and every sub-agent of its run with it: in the end
+            // its parent's run comes to. A clear supersedes the run; a session over for good
+            // is the run that ends `completed | exited` at the exit that follows (ADR 0076,
+            // ADR 0068 amended). A child has no exit code of its own to say otherwise.
+            (crate::state::Event::SessionEnd, None) => {
+                let cause = match report.detail.ending {
+                    crate::state::Ending::Cleared => Cause::Superseded,
+                    crate::state::Ending::ForGood => Cause::Exited(crate::state::run::Exit::Lost {
+                        session_ended: true,
+                    }),
+                };
+                self.end_children(&under.chat, RunState::Completed, cause)?;
+            }
             _ => {}
         }
         Ok(event)
@@ -1447,6 +1470,36 @@ impl Recorder {
         Ok(event)
     }
 
+    /// Chat `number`'s current run has ended, in `state` for `cause`: each of its sub-agents
+    /// still live ends with it, in the same state and for the same cause (ADR 0076 §6), with a
+    /// `run.ended` under its child run. What the host calls at the run's exit or its own stop;
+    /// a `/clear`, a `SessionEnd` and a new run begun for the chat end them here already. The
+    /// events written, none when no child was live.
+    ///
+    /// Refused, with nothing ended, for a `state` that is not an end state.
+    pub fn end_children_with(
+        &mut self,
+        plane: &Path,
+        number: u32,
+        state: RunState,
+        cause: Cause,
+    ) -> io::Result<Vec<Event>> {
+        if !state.is_end() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a run does not end {state:?}"),
+            ));
+        }
+        let Some(chat) = self
+            .chats
+            .get(&(plane.to_path_buf(), number))
+            .map(|who| who.chat.clone())
+        else {
+            return Ok(Vec::new());
+        };
+        self.end_children(&chat, state, cause)
+    }
+
     /// What makes this recorder's events durable: [`Durable::through`] after each write.
     pub fn durable(&self) -> std::sync::Arc<Durable> {
         self.log.durable()
@@ -1564,9 +1617,11 @@ impl Recorder {
         RunOf { chat, run }: RunOf<'_>,
         cause: Began,
     ) -> io::Result<Event> {
+        // A child still live is of the run this one takes the place of, which has ended
+        // superseded (ADR 0076 §2): a run whose own end was told has none left.
+        let ended = self.end_children(chat, RunState::Completed, Cause::Superseded);
         // Held before the line is written: a log that refuses the line must not leave the
         // chat's next hook line to mint it a second id.
-        self.end_children(chat);
         self.chats.insert(
             (plane.to_path_buf(), number),
             Identity {
@@ -1574,6 +1629,7 @@ impl Recorder {
                 run: run.to_owned(),
             },
         );
+        ended?;
         self.log.append(
             Some(chat),
             Some(run),
@@ -1591,11 +1647,61 @@ impl Recorder {
         }
     }
 
-    /// Forgets every sub-agent of `chat`: its run ended, and theirs with it. This is how a
-    /// Codex chat's child runs end at all, since charter does not arm Codex's `SubagentStop`.
-    fn end_children(&mut self, chat: &str) {
-        self.children.retain(|(of, _), _| of != chat);
+    /// Ends every sub-agent of `chat` still live: its run ended in `state` for `cause`, and
+    /// theirs with it, each with a `run.ended` (ADR 0076 §6). This is how a Codex chat's child
+    /// runs end at all, since charter does not arm Codex's `SubagentStop`.
+    ///
+    /// Every one is forgotten whether or not its line is written, and every line is tried:
+    /// the first refusal is the answer.
+    fn end_children(
+        &mut self,
+        chat: &str,
+        state: RunState,
+        cause: Cause,
+    ) -> io::Result<Vec<Event>> {
+        let mut live = Vec::new();
+        self.children.retain(|(of, _), (run, parent)| {
+            let keep = of != chat;
+            if !keep {
+                live.push((run.clone(), parent.clone()));
+            }
+            keep
+        });
         self.stopped.retain(|(of, _)| of != chat);
+        // In the order they began: a ULID's order is its time's.
+        live.sort();
+        let mut ended = Vec::new();
+        let mut refused = None;
+        for (run, parent) in live {
+            match self.end_child(chat, run, parent, state, cause) {
+                Ok(event) => ended.push(event),
+                Err(why) => {
+                    refused.get_or_insert(why);
+                }
+            }
+        }
+        refused.map_or(Ok(ended), Err)
+    }
+
+    /// The `run.ended` of child run `run` of `parent`: its end state and cause.
+    fn end_child(
+        &mut self,
+        chat: &str,
+        run: String,
+        parent: String,
+        state: RunState,
+        cause: Cause,
+    ) -> io::Result<Event> {
+        let under = Under {
+            chat: chat.to_owned(),
+            run,
+            parent: Some(parent),
+        };
+        self.append(
+            &under,
+            "run.ended",
+            serde_json::json!({ "state": end_word(state), "cause": cause.word() }),
+        )
     }
 
     /// Begins a run of the chat for `cause`, as `run` where the host minted it, and says so in
@@ -1616,6 +1722,11 @@ impl Recorder {
             chat,
             run: run.map_or_else(crate::reopen::mint, str::to_owned),
         };
+        if cause == Began::Clear {
+            // The cleared run is superseded, and its children end with it, before the run
+            // that takes its place begins.
+            self.end_children(&who.chat, RunState::Completed, Cause::Superseded)?;
+        }
         self.log.append(
             Some(&who.chat),
             Some(&who.run),
@@ -1624,10 +1735,18 @@ impl Recorder {
             serde_json::json!({ "cause": cause.word() }),
         )?;
         self.chats.insert(key, who.clone());
-        if cause == Began::Clear {
-            self.end_children(&who.chat);
-        }
         Ok(who)
+    }
+}
+
+/// An end state's word, as `run.ended`'s body says it (ADR 0076 §1). Every caller passes an
+/// end state; any other would read as no end at all.
+fn end_word(state: RunState) -> &'static str {
+    match state {
+        RunState::Completed => "completed",
+        RunState::Failed => "failed",
+        RunState::Stopped => "stopped",
+        _ => "not-ended",
     }
 }
 
