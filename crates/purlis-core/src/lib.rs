@@ -42,6 +42,7 @@ pub mod dispatchnever;
 pub mod dispatchplace;
 pub mod dispatchprofiles;
 pub mod dispatchrecord;
+pub mod dispatchrestart;
 pub mod dispatchtalk;
 pub mod dispatchunattended;
 pub mod dispatchwants;

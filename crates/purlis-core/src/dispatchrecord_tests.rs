@@ -447,7 +447,14 @@ fn a_session_record_lists_the_dispatches_its_chat_asked_for() {
     std::thread::sleep(std::time::Duration::from_millis(3));
     let later = open(&root, a_handoff(), at("2026-10-07T14:00:00Z")).unwrap();
     let next = "workspaces/alpha/sessions/20261007-150000-again.md";
-    assert_eq!(session_recorded(&root, &steward(), next), 1);
+    // Listed on it, and every dispatch the chat asked for knows it as its newest (#1513).
+    assert_eq!(session_recorded(&root, &steward(), next), 3);
+    for one in [&first, &second, &later] {
+        assert_eq!(
+            read(&root, &one.id).unwrap().asker_last_record.as_deref(),
+            Some(next)
+        );
+    }
 
     let ids = |path: &str| -> Vec<String> {
         listed_on(&root, path)
@@ -2113,4 +2120,20 @@ fn older_chat_back(root: &Path, owed: crate::reopen::Owed) {
         ..Default::default()
     };
     crate::reopen::write(root, &record).unwrap();
+}
+
+#[test]
+fn the_persona_chat_s_newest_session_record_is_the_one_its_dispatch_names() {
+    // #1456, #1513: a report after a relaunch names the record the task wrote last.
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    session_recorded(&root, &devops(), "workspaces/beta/sessions/first.md");
+    session_recorded(&root, &devops(), "workspaces/beta/sessions/second.md");
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(
+        record.worker.session_record.as_deref(),
+        Some("workspaces/beta/sessions/second.md")
+    );
+    assert!(sound(&record));
 }

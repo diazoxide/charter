@@ -5172,7 +5172,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `session_record` (the asking chat's session record, once it wrote one after this dispatch,
   by its project-relative path); `persona` — the persona dispatched to, absent for none;
   `worker` — the persona chat: `chat`, `id`, `name`, `persona`, `harness`, `profile`, and
-  `session_record` (its own, once it wrote one); `task` — the task's name, absent where the
+  `session_record` (its own: the newest it wrote, #1513); `task` — the task's name, absent where the
   dispatch gave none; `place` — where it worked: `workspace` (absent for the project's root),
   `folder` (relative to the project, `.` for its root, or absolute for one outside it),
   `worktree` (`{"repo", "piece", "branch"?, "removed"?}`, absent unless the dispatch gave it
@@ -5220,7 +5220,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   does the report of a task the person started from a tab (`asker.by_person`: it is their
   conversation, and they close it), nor one that reached no chat because the asking chat had
   gone. Those chats stay open as the chats they are, and are finished rows once they are
-  closed. Four more keys, all absent from a record written before them:
+  closed. Six more keys, all absent from a record written before them:
   - `conversation` — the conversation the persona chat was in when the dispatch ended: **the
     id that chat's own harness reported**, as the board follows it, and only where the harness
     reported none, the id the app started the chat on. Never a value a line on the hook
@@ -5254,6 +5254,25 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   - `kept_open` — `true` once the person took the task's chat over after it reported: a key
     of theirs in its pane, or a Smart close of it beginning. purlis does not end such a chat,
     then or at the next launch.
+  - `undelivered` — `{"kept"?}`, set where a task's report reached no chat because the chat
+    that asked had gone (#1513, V100-64): the report was kept for that chat's workspace, or it
+    waited for that chat's next turn and the chat closed first. `kept` names the file it is
+    kept in, as `workspace-<ws>/<file>.json` or `plane-root/<file>.json` under
+    `<state>/handbacks/`, and nothing else is read as one: absent where it was kept in no file
+    (a task that ended at a launch with its asking chat not open). **When the chat that asked
+    comes back** (a launch that puts it back, **Retry now** on it, or **Resume** from a
+    session record that `asker.session_record` or `asker_last_record` names) the report is
+    taken back from that file before the chat starts and left for its next turn once it has,
+    and the key is removed in the same write that claims it, so one report reaches it once. A
+    chat a Resume started knows the chat it resumed (`identity.resumed_from` in
+    `app/reopen.json`), so **a report that lands after the Resume** goes to it as its record
+    ends. Written by the app, as the report is kept, and by the settle that ends a dispatch
+    whose chat is not coming back. Never set for a task the person started from a tab, whose
+    report is theirs (D-1443-9).
+  - `asker_last_record` — the newest session record the asking chat wrote since this
+    dispatch, by its project-relative path (#1513), where `asker.session_record` keeps the
+    first, which lists the dispatch on it. What a Resume of any of that chat's records is
+    matched by.
 
   **A finished task's row** is every record with `mode: "task"` and a `report`, not `cleared`,
   whose `asker.id` is the id of a chat the app has open and whose `worker.id` is not, oldest
@@ -5314,6 +5333,31 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `app/reopen.json` with its dispatch record still running, and is tried again at the next
   launch. The window draws it under the chat that asked, from those two files and no third,
   until it starts or the person ends it.
+
+  **A task that had not reported when the app quit is brought back** (#1513, V100-63), under
+  its asking chat, by the lineage on its own entry in `app/reopen.json` (`from`), and on its
+  conversation, with one sentence of purlis's as its first message telling it to carry on,
+  never its brief. purlis tells it so only where this store agrees: a running `task` record
+  that owes a report, whose `worker.id` is that chat's and whose `asker.id` is the chat the
+  entry names as the one that asked, running as the persona the dispatch went to (an entry
+  whose id an earlier entry has is vouched for in nothing). **One that cannot be told so has
+  ended by itself**: a task with no conversation to resume, or no profile to start on, is not
+  started at all (a fresh chat would need its brief a second time), whether or not its asking
+  chat comes back. Its record ends as `ended_by: "unreported"`, with a report text that says
+  purlis was restarted and why, its `conversation` kept for a Reopen, and the chat that asked
+  is told in the words a task whose program ended is told, once. **A refused start is not an
+  end**: a task the launch tried and could not start (every agent stopped, a profile to approve
+  again, a folder that moved) waits in the list of chats that did not start with its record
+  running, drawn under its asking chat (#1497), and **Try to start again** starts it told
+  to carry on; **End task** on that row ends it, and its asking chat is told. After the put-back, **where the record of open chats was read or
+  the person chose to start fresh**, a running record whose chat neither came back nor waits
+  to start has ended the same way, and where it was a task owing a report to a chat, it is
+  marked `undelivered`; so is one the open of the project settles. A record that could not be
+  read ends nothing. **A brief is not dispatched a second time**: a chat whose current run
+  began after it dispatched a task (purlis restarted it, it was started again or cleared; its
+  run's id is a later ULID than the record's `id`) that sends the same brief to the same
+  persona, while that task's chat is open and its record running, is refused with the task's
+  number.
 - **The messages it keeps** (#1495): `talk` is a list of
   `{"at", "kind", "text"}`, one for each message purlis took between the two chats while the
   dispatch ran. `at` is when the app took it (UTC, as `started`); `kind` is `"follow_up"` or

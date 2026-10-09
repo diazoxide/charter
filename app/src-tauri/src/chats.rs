@@ -314,6 +314,9 @@ struct Waiting {
     chat: Chat,
     why: String,
     approval: Option<NeedsApproval>,
+    /// What the launch would have told it as it started (#1513): a task still owing its
+    /// report is told to carry on, and Retry now tells it the same.
+    told: Option<&'static str>,
 }
 
 /// A chat a launch could not start, as [`Chats::waiting_to_start`] hands it over.
@@ -322,6 +325,8 @@ pub(crate) struct WaitingChat {
     pub chat: Chat,
     pub why: String,
     pub approval: Option<NeedsApproval>,
+    /// What it is told as it starts, kept while it is held aside (#1513).
+    pub told: Option<&'static str>,
 }
 
 /// Every chat the app has open, and which of them is in front.
@@ -2666,12 +2671,26 @@ impl Chats {
         }
     }
 
-    /// Puts a record back: one session per chat it holds, resumed where it can be.
+    /// [`Self::put_back_telling`], telling no chat anything: what the tests put a record back
+    /// with. A launch puts one back through `restored::put_back`.
+    #[cfg(test)]
+    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+        self.put_back_telling(record, size, &|_| None)
+    }
+
+    /// Puts a record back: one session per chat it holds, resumed where it can be, with `told`
+    /// as a chat's first message where it answers one: a sentence of purlis's, last on its line,
+    /// as a restart tells one. A task still owing its report is told to carry on (#1513).
     ///
     /// A chat whose program cannot be started is left out and the rest still open — a
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
-    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+    pub fn put_back_telling(
+        &self,
+        record: &Record,
+        size: Size,
+        told: &dyn Fn(&Chat) -> Option<&'static str>,
+    ) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
         // Before a single chat starts, so that a number the record spent on a chat it no
         // longer holds — one the operator closed before quitting — is not dealt again to a
@@ -2725,12 +2744,13 @@ impl Chats {
                 why: format!("more than {most} chats were recorded"),
                 // Never tried, so nothing was refused: Retry now reads it.
                 approval: None,
+                told: told(chat),
             });
         }
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
         for (chat, why) in starting {
-            match self.start_recorded(chat, size, *why) {
+            match self.start_recorded_told(chat, size, *why, told(chat), None) {
                 Ok(session) => {
                     if chat.active {
                         front = Some(session);
@@ -2747,6 +2767,7 @@ impl Chats {
                         approval,
                         chat: chat.clone(),
                         why,
+                        told: told(chat),
                     });
                 }
             }
@@ -2817,7 +2838,7 @@ impl Chats {
     /// **By id**, because a name says less than it seems to: a split's chat takes its tab's
     /// name and tab numbers start again at every launch, so two waiting chats can share one,
     /// and a Forget meant for the second must never drop the first (NO-3 review). Every waiting
-    /// chat has an id: [`Self::put_back`] mints one before it tries a chat that had none.
+    /// chat has an id: [`Self::put_back_telling`] mints one before it tries a chat that had none.
     pub fn would_not_start(&self) -> Vec<NotStarted> {
         lock(&self.would_not_start)
             .iter()
@@ -2840,6 +2861,7 @@ impl Chats {
                 chat: one.chat.clone(),
                 why: one.why.clone(),
                 approval: one.approval.clone(),
+                told: one.told,
             })
             .collect()
     }
@@ -2860,6 +2882,7 @@ impl Chats {
             chat: taken.chat,
             why: taken.why,
             approval: taken.approval,
+            told: taken.told,
         })
     }
 
@@ -2870,6 +2893,7 @@ impl Chats {
             chat: waiting.chat,
             why: waiting.why,
             approval: waiting.approval,
+            told: waiting.told,
         });
         self.write_it_down();
     }
@@ -2882,12 +2906,13 @@ impl Chats {
     /// is open, so one written after the start has it once, as running. It leaves the list only
     /// once it has started, and if it fails again it stays with the new reason.
     pub fn retry(&self, id: &str, size: Size) -> Result<u32, String> {
-        let chat = lock(&self.would_not_start)
+        let (chat, told) = lock(&self.would_not_start)
             .iter()
             .find(|one| one.chat.identity.id.as_deref() == Some(id))
-            .map(|one| one.chat.clone())
+            .map(|one| (one.chat.clone(), one.told))
             .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
-        let started = self.start_recorded(&chat, size, Why::Relaunch);
+        // Told what the launch would have told it: a task is told to carry on (#1513).
+        let started = self.start_recorded_told(&chat, size, Why::Relaunch, told, None);
         // Read again at every refusal, outside the lock: what the profile needs now, and not
         // what it needed at the launch (#1246).
         let approval = started
@@ -2912,11 +2937,27 @@ impl Chats {
         started
     }
 
+    /// The chat with id `id` that a launch could not start, as its record holds it (#1513):
+    /// what a Forget of a task ends by.
+    pub fn waiting_chat(&self, id: &str) -> Option<Chat> {
+        lock(&self.would_not_start)
+            .iter()
+            .find(|one| one.chat.identity.id.as_deref() == Some(id))
+            .map(|one| one.chat.clone())
+    }
+
+    /// Whether the chat numbered `number` is one a launch could not start, and still waits.
+    pub fn waits_to_start(&self, number: u32) -> bool {
+        lock(&self.would_not_start)
+            .iter()
+            .any(|one| one.chat.number == Some(number))
+    }
+
     /// **Forget this chat** (NO-3): drops a chat a launch could not start from the record, by
     /// its id.
     ///
     /// The one way such a chat leaves it. It is kept on purpose otherwise, so that a directory
-    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back`]).
+    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back_telling`]).
     pub fn forget(&self, id: &str) -> Result<(), String> {
         {
             let mut waiting = lock(&self.would_not_start);

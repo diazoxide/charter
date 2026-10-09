@@ -660,6 +660,8 @@ mod tests {
             attempts: 0,
             worked: 0,
             limit: None,
+            undelivered: None,
+            asker_last_record: None,
         }
     }
 

@@ -379,6 +379,18 @@ pub struct Record {
     /// record of which limit and the figure, which its finished row names. Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<crate::dispatchlimits::Reached>,
+    /// Set where the task's report reached no chat, because the chat that asked had gone
+    /// (#1513, V100-64): see [`Undelivered`]. Taken off once the report is handed to that
+    /// chat, reopened ([`delivered_late`]). Absent for a report its asking chat was left, for
+    /// a handoff, and for every record written before this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undelivered: Option<Undelivered>,
+    /// The newest session record the asking chat wrote since this dispatch, by its
+    /// project-relative path (#1513): what a Resume of any of its records is matched by, where
+    /// [`Asker::session_record`] keeps the first, which lists the dispatch. Absent until it
+    /// writes one, and for every record written before this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asker_last_record: Option<String>,
 }
 
 fn is_zero(worked: &u64) -> bool {
@@ -393,6 +405,23 @@ fn one_or_none(attempts: &u32) -> bool {
 /// number and no id. That number is nobody's, so the record is never matched to a chat by it.
 pub fn never_a_chat(record: &Record) -> bool {
     record.did_not_start && record.worker.chat.id.is_none()
+}
+
+/// **A task's report that reached no chat** (#1513, V100-64): the chat that asked had closed
+/// by the time the task ended. The report itself is this record's ([`Record::report`]), where
+/// the person finds it; this says it is still owed to the chat that asked, should the person
+/// reopen that chat.
+///
+/// **The app's fact, written as the report was kept.** Nothing a chat sends sets it, and a
+/// record read back is held to the shape the app writes ([`sound`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Undelivered {
+    /// The file the report was kept in for the workspace it was asked from, where one was: by
+    /// its name under the reports' folder ([`crate::handback::kept_name`]). It is taken back
+    /// when the asking chat is reopened, so that chat is handed the report once. Absent for a
+    /// task the person started, whose report is kept for no chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<String>,
 }
 
 /// Who ended a dispatch, where the app knows it was not the persona chat's own report alone.
@@ -513,6 +542,8 @@ pub fn open_as(
         attempts: 0,
         worked: 0,
         limit: None,
+        undelivered: None,
+        asker_last_record: None,
     };
     // As it is stored, so what the caller holds is what a read gives back.
     let record = capped(&record);
@@ -1029,6 +1060,57 @@ pub fn kept_open(root: &Path, id: &str) -> io::Result<bool> {
     })
 }
 
+/// **The report of task `id` reached no chat** (#1513): the chat that asked had gone, and the
+/// report was kept in `kept` for its workspace, or for nobody where `kept` is none. `false`
+/// for a record that is not there, is not a task's, or says so already: the first word is
+/// the one kept. A name that is not one a kept report has is not written.
+pub fn kept_undelivered(root: &Path, id: &str, kept: Option<&str>) -> io::Result<bool> {
+    let kept = kept.filter(|name| crate::handback::a_kept_name(name));
+    change(root, id, |record| {
+        if record.mode != Mode::Task || record.undelivered.is_some() {
+            return false;
+        }
+        record.undelivered = Some(Undelivered {
+            kept: kept.map(str::to_owned),
+        });
+        true
+    })
+}
+
+/// The report of task `id` was handed to the chat that asked, reopened (#1513): it is owed to
+/// nobody from here. `false` for a record that is not there or owes none. **Answers `true`
+/// once for a record**, under the store's lock, so two reopens of one chat hand the report
+/// over once between them.
+pub fn delivered_late(root: &Path, id: &str) -> io::Result<bool> {
+    change(root, id, |record| record.undelivered.take().is_some())
+}
+
+/// **The ended tasks whose reports reached no chat, and that `asked` answers for** (#1513,
+/// V100-64), oldest first: what the chat that asked is handed when the person reopens it.
+/// `asked` is given each record, and says whether its asking chat is the chat coming back.
+/// Only records purlis draws ([`sound`]), and only tasks that ended with a report.
+pub fn undelivered_to(root: &Path, asked: impl Fn(&Record) -> bool) -> Vec<Record> {
+    let mut owed: Vec<Record> = list(root)
+        .into_iter()
+        .filter(|record| {
+            record.mode == Mode::Task
+                && record.undelivered.is_some()
+                && record.report.is_some()
+                && !record.running()
+                && asked(record)
+                && sound(record)
+        })
+        .collect();
+    owed.reverse();
+    owed
+}
+
+/// `brief` as a record keeps it ([`cut`] to [`MOST_BRIEF_BYTES`]): what a brief asked again
+/// is compared with ([`crate::dispatchrestart::dispatched_before`]).
+pub fn brief_as_kept(brief: &str) -> String {
+    cut(brief, MOST_BRIEF_BYTES)
+}
+
 /// Takes the finished task `id`'s row off its asking chat's list. **The row and nothing
 /// else**: the record stays as it is but for the mark. What the person's Clear finished runs is
 /// [`clear_forgetting`]. `false` for a record that is not there,
@@ -1136,23 +1218,32 @@ pub fn task_worked_by(root: &Path, worker: &str) -> Option<Record> {
 }
 
 /// A chat wrote a session record at `path` (project-relative): every dispatch it asked for
-/// that names none yet is listed on it, and the dispatch it worked on names it as the persona
-/// chat's. `chat` is the app's record of the chat that wrote it. How many records changed.
+/// that names none yet is listed on it, and every one it asked for knows it as its newest
+/// ([`Record::asker_last_record`]); the dispatch it worked on names it as the persona chat's,
+/// the newest one it wrote (#1513: what a report after a relaunch names). `chat` is the
+/// app's record of the chat that wrote it. How many records changed.
 pub fn session_recorded(root: &Path, chat: &ChatRef, path: &str) -> usize {
     let dir = dir(root);
     let _held = crate::rewrite::Lock::on(&dir);
+    let path = cut(path, MOST_PATH_BYTES);
     let mut changed = 0;
     for mut record in list(root) {
         let mut touched = false;
-        if same_chat(&record.asker.chat, chat) && record.asker.session_record.is_none() {
-            record.asker.session_record = Some(path.to_owned());
-            touched = true;
+        if same_chat(&record.asker.chat, chat) {
+            if record.asker.session_record.is_none() {
+                record.asker.session_record = Some(path.clone());
+                touched = true;
+            }
+            if record.asker_last_record.as_deref() != Some(path.as_str()) {
+                record.asker_last_record = Some(path.clone());
+                touched = true;
+            }
         }
         if !never_a_chat(&record)
             && same_chat(&record.worker.chat, chat)
-            && record.worker.session_record.is_none()
+            && record.worker.session_record.as_deref() != Some(path.as_str())
         {
-            record.worker.session_record = Some(path.to_owned());
+            record.worker.session_record = Some(path.clone());
             touched = true;
         }
         if touched && write(root, &record).is_ok() {
@@ -1413,6 +1504,8 @@ fn capped(record: &Record) -> Record {
         attempts: record.attempts,
         worked: record.worked,
         limit: record.limit,
+        undelivered: record.undelivered.clone(),
+        asker_last_record: record.asker_last_record.as_deref().map(path),
     }
 }
 
@@ -1505,6 +1598,12 @@ pub fn sound(record: &Record) -> bool {
                     // One left out never had words.
                     && (!said.left_out || said.text.is_empty())
         })
+        && maybe(&record.asker_last_record, &path)
+        && record
+            .undelivered
+            .as_ref()
+            .and_then(|kept| kept.kept.as_deref())
+            .is_none_or(crate::handback::a_kept_name)
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
                 && report
@@ -1591,7 +1690,8 @@ pub fn listed_on(root: &Path, path: &str) -> Vec<Record> {
 
 /// Ends every running dispatch whose persona chat `still_open` does not answer for, at `now`:
 /// as [`ENDED_WITHOUT_A_REPORT`], failed, where it owed a report, and with none where it owed
-/// none. How many ended.
+/// none. **A task that owed a chat its report is marked [`Undelivered`]** (#1513): that chat
+/// is not open either, and is told when it comes back. How many ended.
 pub fn settle(
     root: &Path,
     still_open: impl Fn(&ChatRef) -> bool,
@@ -1602,7 +1702,12 @@ pub fn settle(
         .filter(|record| record.running() && !still_open(&record.worker.chat))
         .filter(|record| {
             let by = record.report_owed.then_some(EndedBy::Unreported);
-            close_by(root, &record.id, ended_unreported(record, None), by, now).unwrap_or(false)
+            let ended = close_by(root, &record.id, ended_unreported(record, None), by, now)
+                .unwrap_or(false);
+            if ended && record.mode == Mode::Task && record.report_owed && !record.asker.by_person {
+                let _ = kept_undelivered(root, &record.id, None);
+            }
+            ended
         })
         .count()
 }

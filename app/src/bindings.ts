@@ -4473,6 +4473,12 @@ export type HandedFromNote = {
 	 *  was started, never a word a chat said.
 	 */
 	by_person?: boolean | null,
+	/**
+	 *  Whether the chat it came from is one a launch could not start, which waits in the list
+	 *  of chats that did not start (#1513): it has not closed, and its row says so. Absent for
+	 *  a chat whose asker is open, or closed.
+	 */
+	asker_waiting?: boolean | null,
 };
 
 /**
