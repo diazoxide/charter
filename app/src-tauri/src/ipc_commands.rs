@@ -207,6 +207,7 @@ macro_rules! app_commands {
                 workspace_repos,
                 alerts_everywhere,
                 start_options,
+                harness_cards,
                 approve_profile,
                 start_chat,
                 worktrees::worktree_of_chat,

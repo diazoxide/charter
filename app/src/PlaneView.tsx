@@ -158,6 +158,7 @@ import {
   usePlaneChanged,
 } from "./planeChanged";
 import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
+import { useHarnessCards } from "./harnessCards";
 import { Notice, NoticeBand, NoticeOf } from "./Notice";
 import { SandboxBlockNotice } from "./SandboxBlockNotice";
 import { VaultRefusedNotice } from "./VaultRefusedNotice";
@@ -730,6 +731,8 @@ export const PlaneView = memo(function PlaneView({
   const curationsChanges = usePlaneChanged([plane], CURATIONS);
   /** The changes what this project has on and its theme are made of (FD-10). */
   const settingsChanges = usePlaneChanged([plane], SETTINGS);
+  /** Each harness's card, for the palette's *What <product> can do here* rows (#1134). */
+  const harnessCards = useHarnessCards(plane, inFront, settingsChanges);
   /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
    *  saves does not make it list every workspace's todos again. */
   const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
@@ -5882,6 +5885,7 @@ export const PlaneView = memo(function PlaneView({
             // Not from a shell: it is on no harness profile to start the persona's chat on.
             askable: (session) => !shells.has(session),
             branch: nearBranch,
+            harnesses: harnessCards,
           }),
     [
       askedBy,
@@ -5929,6 +5933,7 @@ export const PlaneView = memo(function PlaneView({
       askOffer,
       shells,
       nearBranch,
+      harnessCards,
     ],
   );
 

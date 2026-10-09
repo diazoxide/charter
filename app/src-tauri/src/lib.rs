@@ -1200,6 +1200,28 @@ async fn start_options(
         .map_err(|err| format!("purlis could not read the profiles: {err}"))?
 }
 
+/// Every harness the project has, its card at a glance (HP-19): the palette's *What <product>
+/// can do here* rows, one per harness, reached with no chat open (#1134).
+///
+/// Only the declarations are read, never a program, so it is cheap to ask whenever the project
+/// comes in front; off the main thread all the same, as every read of the plane is.
+#[tauri::command]
+#[specta::specta]
+async fn harness_cards(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<HarnessGlance>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        purlis_core::harness_card::read(&root)
+            .iter()
+            .map(HarnessGlance::from)
+            .collect()
+    })
+    .await
+    .map_err(|err| format!("purlis could not read the harnesses: {err}"))
+}
+
 /// What [`start_options`] answers for the project at `root`.
 fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
     let (set, check) = purlis_core::profiles::for_launch(root);
