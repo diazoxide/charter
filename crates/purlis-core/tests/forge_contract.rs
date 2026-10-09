@@ -1313,7 +1313,7 @@ mod network_log {
 
 /// GitHub's `owned` for a personal account: the org endpoint answers `404`, and the same listing
 /// is asked of the user endpoint (GitHub REST `2022-11-28`, "List repositories for a user").
-/// GitLab's counterpart is gap 1 of `docs/forges.md` (#803).
+/// GitLab's counterpart is [`gitlab_user_namespace`].
 mod github_personal_account {
     use super::*;
 
@@ -1344,6 +1344,97 @@ mod github_personal_account {
         assert_eq!(owned.len(), 1);
         assert_eq!(owned[0].path_with_namespace, "acme/api");
         assert_eq!(owned[0].forge, Kind::GitHub);
+        spent(&recorded);
+    }
+}
+
+/// GitLab's `owned` for a user namespace (#803): the group endpoint answers `404 Group Not
+/// Found`, and the same listing is asked of the user endpoint (GitLab 19.4 `doc/api/projects.md`,
+/// "List all personal projects for a user"), as GitHub falls back from an organisation to a
+/// user. A group is still asked first, and only a not-found answer falls back.
+mod gitlab_user_namespace {
+    use super::*;
+    use purlis_core::forge::Failure;
+
+    const GROUP: &str = "groups/solo/projects?per_page=100&page=1&include_subgroups=true\
+                         &archived=false";
+    const USER: &str = "users/solo/projects?per_page=100&page=1&archived=false";
+
+    fn page(path: &str, reply: Value) -> Value {
+        json!({"call": {"endpoint": {"rest": {"method": null, "path": path}}, "fields": []},
+               "reply": reply})
+    }
+
+    fn over(exchanges: Value) -> (Box<dyn ForgeBackend>, Arc<Recorded>) {
+        let text = json!({"source": "GitLab 19.4 REST API docs, groups.md: List projects (404 \
+                                     for a user), projects.md: List all personal projects \
+                                     for a user",
+                          "exchanges": exchanges});
+        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
+        let backend = Forge::default_of(Kind::GitLab).backend_over(recorded.clone());
+        (backend, recorded)
+    }
+
+    fn personal() -> Value {
+        let repos = json!([{"id": 3, "name": "Dots", "path": "dots",
+            "path_with_namespace": "solo/dots", "default_branch": "main", "description": null,
+            "web_url": "https://gitlab.com/solo/dots",
+            "ssh_url_to_repo": "git@gitlab.com:solo/dots.git", "topics": []}]);
+        json!({"code": 0, "out": repos.to_string()})
+    }
+
+    /// GitLab's answer for a group that does not exist, as `glab api` says it and as the
+    /// native transport sees it.
+    fn no_such_group() -> [Value; 2] {
+        let body = "{\"message\":\"404 Group Not Found\"}";
+        [
+            json!({"code": 1, "out": body, "err": "glab: 404 Group Not Found (HTTP 404)"}),
+            json!({"code": 1, "out": body, "err": "", "status": 404}),
+        ]
+    }
+
+    #[test]
+    fn owned_falls_back_to_the_user_endpoint_on_a_group_404_and_answers_the_same_shape() {
+        purlis_core::unsteered!();
+        for missing in no_such_group() {
+            let (backend, recorded) = over(json!([page(GROUP, missing), page(USER, personal())]));
+            let owned = backend.owned(&caller(), &Owner::new("solo")).unwrap();
+            assert_eq!(owned.len(), 1);
+            assert_eq!(owned[0].name, "dots");
+            assert_eq!(owned[0].path_with_namespace, "solo/dots");
+            assert_eq!(owned[0].ssh_url, "git@gitlab.com:solo/dots.git");
+            assert_eq!(owned[0].forge, Kind::GitLab);
+            spent(&recorded);
+        }
+    }
+
+    #[test]
+    fn only_a_not_found_answer_falls_back() {
+        purlis_core::unsteered!();
+        let forbidden = json!({"code": 1, "out": "{\"message\":\"403 Forbidden\"}", "err": "",
+                               "status": 403});
+        let (backend, recorded) = over(json!([page(GROUP, forbidden)]));
+        let err = backend.owned(&caller(), &Owner::new("solo")).unwrap_err();
+        assert_eq!(err.failure(), &Failure::Forbidden, "{err}");
+        assert!(err.said().contains("GitLab group 'solo'"), "{err}");
+        spent(&recorded);
+    }
+
+    #[test]
+    fn a_name_that_is_neither_a_group_nor_a_user_fails_in_the_user_endpoints_words() {
+        purlis_core::unsteered!();
+        let no_user = json!({"code": 1, "out": "{\"message\":\"404 User Not Found\"}",
+                             "err": "", "status": 404});
+        let [missing, _] = no_such_group();
+        let (backend, recorded) = over(json!([page(GROUP, missing), page(USER, no_user)]));
+        let err = backend.owned(&caller(), &Owner::new("solo")).unwrap_err();
+        assert_eq!(err.failure(), &Failure::NotFound, "{err}");
+        assert!(
+            err.said()
+                .contains("GitLab user 'solo' (no group has that name)")
+                && err.said().contains("404 User Not Found"),
+            "{err}"
+        );
         spent(&recorded);
     }
 }

@@ -788,6 +788,19 @@ impl Asker {
         path: &str,
         what_failed: &str,
     ) -> Result<Value, ForgeError> {
+        self.found(caller, path, what_failed, |_| false)
+            .map(|found| found.unwrap_or(Value::Null))
+    }
+
+    /// As [`Asker::strict`], except that a refusal `missing` recognises is `None`: the one
+    /// answer a caller reads as "not here, ask elsewhere". Every other failure still raises.
+    pub(super) fn found(
+        &self,
+        caller: &Caller,
+        path: &str,
+        what_failed: &str,
+        missing: impl Fn(&Reply) -> bool,
+    ) -> Result<Option<Value>, ForgeError> {
         let answer = match self.send(caller, &Call::get(path, super::LIST_TIMEOUT)) {
             Ok(answer) => answer,
             Err(NoAnswer::Timeout(why)) => {
@@ -800,6 +813,9 @@ impl Asker {
             }
         };
         if !answer.ok() {
+            if missing(&answer) {
+                return Ok(None);
+            }
             return Err(ForgeError::of(
                 answer.failure(),
                 format!(
@@ -808,7 +824,7 @@ impl Asker {
                 ),
             ));
         }
-        super::parse(self.kind(), &answer.out, path)
+        super::parse(self.kind(), &answer.out, path).map(Some)
     }
 
     /// Best-effort JSON GET. `None` on **every** failure. Python's `_api` on both backends.
