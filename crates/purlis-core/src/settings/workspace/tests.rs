@@ -659,3 +659,103 @@ fn a_manifest_with_escapes_and_no_secret_is_saved() {
     let dir = plane(Some(&before));
     save_text(dir.path(), "alpha", Some(&before), &typed).unwrap();
 }
+
+// ---------------------------------------------------------------------------------------
+// #1292: validators for `repos` and `name` in a raw edit, and the manifest's lock
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_name_that_is_not_the_workspaces_folder_is_refused_in_the_readers_shape() {
+    let dir = plane(Some(&old()));
+    for typed in [
+        r#"{"name": "beta", "repos": []}"#,
+        r#"{"name": 7, "repos": []}"#,
+    ] {
+        let refused = save_text(dir.path(), "alpha", Some(&old()), typed).unwrap_err();
+        assert_eq!(refused.len(), 1, "{typed}: {refused:?}");
+        assert!(
+            refused[0].starts_with("name in workspaces/alpha/workspace.json is not \"alpha\""),
+            "{refused:?}"
+        );
+        assert_eq!(on_disk(dir.path()), old(), "{typed}");
+    }
+    // The folder's own name, and none at all, are written.
+    save_text(dir.path(), "alpha", Some(&old()), r#"{"repos": []}"#).unwrap();
+}
+
+#[test]
+fn repos_that_are_not_a_list_of_name_records_are_refused_in_the_readers_shape() {
+    let dir = plane(Some(&old()));
+    for (typed, starts) in [
+        (
+            r#"{"name": "alpha", "repos": {"widget": {}}}"#,
+            "repos in workspaces/alpha/workspace.json is not a list",
+        ),
+        (
+            r#"{"name": "alpha", "repos": ["widget"]}"#,
+            "repos in workspaces/alpha/workspace.json has an entry (1)",
+        ),
+        (
+            r#"{"name": "alpha", "repos": [{"name": "widget"}, {"branch": "main"}]}"#,
+            "repos in workspaces/alpha/workspace.json has an entry (2)",
+        ),
+        (
+            r#"{"name": "alpha", "repos": [{"name": "../escape"}]}"#,
+            "repos in workspaces/alpha/workspace.json has an entry (1)",
+        ),
+        (
+            r#"{"name": "alpha", "repos": [{"name": "widget", "branch": 3}]}"#,
+            "repos in workspaces/alpha/workspace.json has an entry (1)",
+        ),
+    ] {
+        let refused = save_text(dir.path(), "alpha", Some(&old()), typed).unwrap_err();
+        assert_eq!(refused.len(), 1, "{typed}: {refused:?}");
+        assert!(refused[0].starts_with(starts), "{typed}: {refused:?}");
+        assert_eq!(on_disk(dir.path()), old(), "{typed}");
+    }
+    // Records with and without a branch are what the readers read.
+    let typed =
+        r#"{"name": "alpha", "repos": [{"name": "widget", "branch": "main"}, {"name": "gadget"}]}"#;
+    save_text(dir.path(), "alpha", Some(&old()), typed).unwrap();
+}
+
+#[test]
+fn a_manifest_already_holding_an_odd_name_or_repos_can_still_be_mended_elsewhere() {
+    let held = r#"{"name": "beta", "repos": "widget"}"#;
+    let dir = plane(Some(held));
+    // Not this edit's to answer for: the description is what changed.
+    let mended = r#"{"name": "beta", "repos": "widget", "description": "x"}"#;
+    save_text(dir.path(), "alpha", Some(held), mended).unwrap();
+    assert_eq!(on_disk(dir.path()), mended);
+}
+
+#[test]
+fn a_save_waits_for_the_manifests_lock_and_keeps_what_was_written_while_it_waited() {
+    let dir = plane(Some(&old()));
+    let root = dir.path().to_path_buf();
+    let ws = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap();
+    let held = ws.manifest_lock();
+    let saving = {
+        let root = root.clone();
+        let base = old();
+        std::thread::spawn(move || save(&root, "alpha", Some(&base), &[off()]))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        on_disk(&root),
+        old(),
+        "the save wrote while the lock was held"
+    );
+    // A writer holding the lock changes the file: the waiting save must see it, not write
+    // over it from what it read before.
+    let mut doc: serde_json::Value = serde_json::from_str(&old()).unwrap();
+    doc["repos"] = serde_json::json!([{"name": "widget"}, {"name": "gadget"}]);
+    let written = charters(doc);
+    fs::write(root.join("workspaces/alpha/workspace.json"), &written).unwrap();
+    drop(held);
+    let refused = saving.join().unwrap().unwrap_err();
+    assert!(refused[0].contains("changed on disk"), "{refused:?}");
+    assert_eq!(on_disk(&root), written);
+}

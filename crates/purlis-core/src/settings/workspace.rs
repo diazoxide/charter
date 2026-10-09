@@ -137,6 +137,53 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
     out
 }
 
+/// What the manifest's own readers would take leniently from the manifest whose text this is,
+/// one sentence each (#1292): a `name` that is not the workspace's folder, and `repos` that is
+/// not a list of `{"name": …}` records. Edit as JSON refuses them, unless the file already held
+/// them, so a raw edit cannot write what `clone`, `restore` and the repo list would read past
+/// or drop. In the readers' `<key> in <file> …` shape, so the window can name the key. Empty for
+/// text that is not a JSON object, which is refused on its own.
+pub fn manifest_refusals(text: &str, workspace: &str) -> Vec<String> {
+    let file = named(workspace);
+    let Ok(Json::Object(doc)) = serde_json::from_str::<Json>(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    match doc.get("name") {
+        None => {}
+        Some(Json::String(name)) if name == workspace => {}
+        Some(_) => out.push(format!(
+            "name in {file} is not \"{workspace}\" — a workspace is named by its folder, so its \
+             manifest's name is the folder's; rename the workspace to change it"
+        )),
+    }
+    let shape = "a workspace's repos are a list of {\"name\": \"<repo>\"} records, each with an \
+                 optional \"branch\"";
+    match doc.get("repos") {
+        None => {}
+        Some(Json::Array(rows)) => {
+            for (at, row) in rows.iter().enumerate() {
+                let ok = row.as_object().is_some_and(|row| {
+                    row.get("name")
+                        .and_then(Json::as_str)
+                        .is_some_and(crate::contain::repo_name_ok)
+                        && row
+                            .get("branch")
+                            .is_none_or(|branch| branch.is_string() || branch.is_null())
+                });
+                if !ok {
+                    out.push(format!(
+                        "repos in {file} has an entry ({}) that is not a repo's record — {shape}",
+                        at + 1
+                    ));
+                }
+            }
+        }
+        Some(_) => out.push(format!("repos in {file} is not a list — {shape}")),
+    }
+    out
+}
+
 /// One workspace's manifest as the Workspace settings tab reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Read {
@@ -225,6 +272,9 @@ pub fn save(
 ) -> Result<(), Vec<String>> {
     let ws = workspace_of(root, workspace).map_err(|why| vec![why])?;
     let file = named(workspace);
+    // From the base check to the write, one lock (#1292): a check alone leaves the window
+    // between them open to a clone or a removal writing the same file.
+    let _held = ws.manifest_lock();
     let now = on_disk(&ws).map_err(|why| vec![why])?;
     if now.as_deref() != base {
         return Err(vec![format!(
@@ -308,6 +358,9 @@ pub fn save_text(
 ) -> Result<(), Vec<String>> {
     let ws = workspace_of(root, workspace).map_err(|why| vec![why])?;
     let file = named(workspace);
+    // From the base check to the write, one lock (#1292): a check alone leaves the window
+    // between them open to a clone or a removal writing the same file.
+    let _held = ws.manifest_lock();
     let now = on_disk(&ws).map_err(|why| vec![why])?;
     if now.as_deref() != base {
         return Err(vec![format!(
@@ -329,12 +382,17 @@ pub fn save_text(
             )]);
         }
     };
-    let standing = now
+    let standing: Vec<String> = now
         .as_deref()
         .filter(|now| serde_json::from_str::<Json>(now).is_ok_and(|doc| doc.is_object()))
-        .map_or_else(Vec::new, |now| refusals(now, workspace));
+        .map_or_else(Vec::new, |now| {
+            let mut out = refusals(now, workspace);
+            out.extend(manifest_refusals(now, workspace));
+            out
+        });
     let mut refused: Vec<String> = refusals(text, workspace)
         .into_iter()
+        .chain(manifest_refusals(text, workspace))
         .filter(|why| !standing.contains(why))
         .collect();
     // As typed, and as charter reads it: a string can spell a character as an escape, and the

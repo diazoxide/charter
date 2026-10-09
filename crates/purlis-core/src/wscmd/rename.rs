@@ -507,8 +507,14 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
         // A dispatch grant limited to the new name was made for a workspace that is gone:
         // counted so now, while the name is nobody's, so this workspace inherits none (#1505).
         crate::dispatchwithin::noticed(root);
-        // The commit point.
-        if let Err(why) = std::fs::rename(&from, &to) {
+        // The commit point. Taken under the workspace's manifest lock (#1292, D-1292-1): a
+        // writer that read `workspace.json` before the move finishes its write first, so it
+        // never lands in a folder that has just gone. The lock is on the directory's inode,
+        // which the move keeps, so it is let go here and the rewrite below takes it again.
+        let moving = crate::rewrite::Lock::on(&from);
+        let moved = std::fs::rename(&from, &to);
+        drop(moving);
+        if let Err(why) = moved {
             let _ = std::fs::remove_file(journal_path(root));
             say(Say::Fail(format!(
                 "could not rename workspaces/{old} to workspaces/{new} ({why}), so nothing was \
@@ -842,6 +848,7 @@ fn rename_manifest(root: &Path, new: &str) -> std::io::Result<()> {
     let ws = plane
         .workspace(new)
         .map_err(|why| std::io::Error::other(why.to_string()))?;
+    let _held = ws.manifest_lock();
     let (doc, owner) = ws.manifest();
     let Some(serde_json::Value::Object(mut map)) = doc else {
         return Ok(());
