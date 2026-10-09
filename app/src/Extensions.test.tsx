@@ -187,6 +187,16 @@ describe("what a contributed icon theme got wrong (#1145)", () => {
     expect(said).not.toContain("d;");
     expect(said.length).toBeLessThan(300);
   });
+
+  it("says the extension's name and complaints as plain text, with no bidi or control mark", () => {
+    const said = troubleSaid({
+      name: `Seti\u202e${"n".repeat(200)}`,
+      complaints: ['folder names "x\u0007\u2066y", which is no symbol'],
+    });
+    for (const mark of ["\u0007", "\u202e", "\u2066"]) expect(said).not.toContain(mark);
+    expect(said).toContain(`Icon theme “Seti${"n".repeat(59)}…”`);
+    expect(said).toContain(`folder names "xy", which is no symbol`);
+  });
 });
 
 describe("the extension registry", () => {
