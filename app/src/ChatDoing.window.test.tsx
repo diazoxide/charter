@@ -535,58 +535,66 @@ describe("what a screen reader is told of the line (#1493)", () => {
 });
 
 describe("fifty working tasks (SC-3)", () => {
-  it("draws again only the second line of the chat whose line changed, and no row", async () => {
-    const { move, tell } = core([
-      ...Array.from({ length: 50 }, (_, at) => chat(at + 1, at % 2 === 0 ? "alpha" : "beta")),
-      ...Array.from({ length: 50 }, (_, at) =>
-        chat(at + 51, "alpha", { persona: "devops", from: taskOf(at + 1) }),
-      ),
-    ]);
-    // Not under StrictMode, which draws everything twice: what is counted is draws.
-    renderBare(<App />);
-    await section();
-    await waitFor(() => expect(rows()).toHaveLength(100));
-    // Every task at work, each with a line.
-    for (let task = 51; task <= 100; task += 1) move(task, "running");
-    for (let task = 51; task <= 100; task += 1) tell(task, doing("thinking"));
-    for (let turn = 0; turn < 10; turn += 1) await act(async () => {});
-    expect(theTree().querySelectorAll(".chat-doing")).toHaveLength(50);
-    /** The chats whose line, or second line's contents, were drawn since the last look. */
-    const lines = () => [...new Set(drawn.lines)].sort((a, b) => a - b);
-    drawn.lines.length = 0;
-    drawn.rows.length = 0;
+  // What SC-3 holds this test to is draws, counted below, not time: a hundred rows drawn in
+  // jsdom take about a second alone and went past vitest's 5 s default on a loaded CI runner
+  // running the whole suite at once. The limit is the heavy window tests' (MemoryLists,
+  // Notices), so only a hang fails it.
+  it(
+    "draws again only the second line of the chat whose line changed, and no row",
+    { timeout: 20_000 },
+    async () => {
+      const { move, tell } = core([
+        ...Array.from({ length: 50 }, (_, at) => chat(at + 1, at % 2 === 0 ? "alpha" : "beta")),
+        ...Array.from({ length: 50 }, (_, at) =>
+          chat(at + 51, "alpha", { persona: "devops", from: taskOf(at + 1) }),
+        ),
+      ]);
+      // Not under StrictMode, which draws everything twice: what is counted is draws.
+      renderBare(<App />);
+      await section();
+      await waitFor(() => expect(rows()).toHaveLength(100));
+      // Every task at work, each with a line.
+      for (let task = 51; task <= 100; task += 1) move(task, "running");
+      for (let task = 51; task <= 100; task += 1) tell(task, doing("thinking"));
+      for (let turn = 0; turn < 10; turn += 1) await act(async () => {});
+      expect(theTree().querySelectorAll(".chat-doing")).toHaveLength(50);
+      /** The chats whose line, or second line's contents, were drawn since the last look. */
+      const lines = () => [...new Set(drawn.lines)].sort((a, b) => a - b);
+      drawn.lines.length = 0;
+      drawn.rows.length = 0;
 
-    tell(60, doing("command", "cargo"));
+      tell(60, doing("command", "cargo"));
 
-    expect(said("devops 60")).toBe("running cargo");
-    // Chat 60's line and what holds it: two draws at most, both its own.
-    expect(lines()).toEqual([60]);
-    expect(drawn.lines.length).toBeLessThanOrEqual(2);
-    expect(drawn.rows).toEqual([]);
+      expect(said("devops 60")).toBe("running cargo");
+      // Chat 60's line and what holds it: two draws at most, both its own.
+      expect(lines()).toEqual([60]);
+      expect(drawn.lines.length).toBeLessThanOrEqual(2);
+      expect(drawn.rows).toEqual([]);
 
-    // The same thing said again draws nothing at all.
-    drawn.lines.length = 0;
-    tell(60, doing("command", "cargo"));
-    expect(drawn.lines).toEqual([]);
+      // The same thing said again draws nothing at all.
+      drawn.lines.length = 0;
+      tell(60, doing("command", "cargo"));
+      expect(drawn.lines).toEqual([]);
 
-    // The tool comes back: its own line again, and nothing else.
-    tell(60, done("command", "cargo"));
-    expect(said("devops 60")).toBe("ran cargo");
-    expect(lines()).toEqual([60]);
-    expect(drawn.rows).toEqual([]);
+      // The tool comes back: its own line again, and nothing else.
+      tell(60, done("command", "cargo"));
+      expect(said("devops 60")).toBe("ran cargo");
+      expect(lines()).toEqual([60]);
+      expect(drawn.rows).toEqual([]);
 
-    // A burst across ten chats draws those ten chats' lines, and no row.
-    drawn.lines.length = 0;
-    for (let task = 71; task <= 80; task += 1) tell(task, doing("editing", `f${task}.rs`));
-    expect(lines()).toEqual(Array.from({ length: 10 }, (_, at) => at + 71));
-    expect(drawn.lines.length).toBeLessThanOrEqual(20);
-    expect(drawn.rows).toEqual([]);
+      // A burst across ten chats draws those ten chats' lines, and no row.
+      drawn.lines.length = 0;
+      for (let task = 71; task <= 80; task += 1) tell(task, doing("editing", `f${task}.rs`));
+      expect(lines()).toEqual(Array.from({ length: 10 }, (_, at) => at + 71));
+      expect(drawn.lines.length).toBeLessThanOrEqual(20);
+      expect(drawn.rows).toEqual([]);
 
-    // A line taken away draws its own chat's second line again and nothing else.
-    drawn.lines.length = 0;
-    tell(60, null);
-    expect(line("devops 60")).toBeNull();
-    expect(lines()).toEqual([60]);
-    expect(drawn.rows).toEqual([]);
-  });
+      // A line taken away draws its own chat's second line again and nothing else.
+      drawn.lines.length = 0;
+      tell(60, null);
+      expect(line("devops 60")).toBeNull();
+      expect(lines()).toEqual([60]);
+      expect(drawn.rows).toEqual([]);
+    },
+  );
 });
