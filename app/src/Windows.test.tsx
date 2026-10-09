@@ -13,6 +13,7 @@ import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
 import type { WindowSaid } from "./windows";
+import { stripNamed } from "./test-strips";
 
 /**
  * A project tab split into an OS window of its own, and moved back (charter#126; ADR 0033,
@@ -128,7 +129,7 @@ function core(
 }
 
 const projectTabs = () =>
-  within(screen.getByRole("tablist", { name: "Projects" }))
+  within(stripNamed("Projects"))
     .getAllByRole("tab")
     .map(
       (tab) =>
@@ -138,7 +139,7 @@ const projectTabs = () =>
     );
 
 function projectTab(name: string): HTMLElement {
-  const tab = within(screen.getByRole("tablist", { name: "Projects" }))
+  const tab = within(stripNamed("Projects"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".project-name")?.textContent === name);
   if (!tab) throw new Error(`no project tab called ${name}`);

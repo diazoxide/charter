@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render as renderBare, screen, within } from "@testi
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { stripNamed } from "./test-strips";
 
 /**
  * Making a new project, from the window.
@@ -142,7 +143,7 @@ describe("making a project", () => {
     render(<App />);
     await screen.findByRole("tab", { name: /plane/ });
 
-    const controls = within(screen.getByRole("tablist", { name: "Projects" }))
+    const controls = within(stripNamed("Projects"))
       .getAllByRole("button")
       .filter((button) => button.classList.contains("bare"));
 

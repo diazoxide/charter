@@ -13,6 +13,7 @@ import type {
   TaskFile,
 } from "./bindings";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **What a task changed, against the whole window** (#1511): Changes on a finished task's row
@@ -278,7 +279,7 @@ describe("what a task changed", () => {
     // The task's own words, beside what purlis found.
     expect(tab).toHaveTextContent("What it says changed");
     // A tab of its own, named for the task.
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     expect(within(strip).getByText("Changes · fix the queue")).toBeInTheDocument();
   });
 

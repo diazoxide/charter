@@ -777,6 +777,29 @@ jsdom computes no layout and no cascade, so what can be held there is the rule a
 strip names its own shade and draws no line, the three shades are three different tokens, no
 strip's tab carries an edge, and there is no `--nested` left to indent anything with.
 
+## A strip's tablist owns its tabs and nothing else (purlis#1204)
+
+A `tablist` may own `tab` elements only, and what it owns is everything under it in the DOM plus
+everything its `aria-owns` names: **`aria-owns` adds to a tablist's children and never takes them
+away.** A strip's cells hold more than a tab (a project's `×` and gear, a workspace's gear, a
+chat's `×`, fresh mark and task chip, the project strip's own `+` buttons), so the `tablist` role
+is not on the element that holds them.
+
+- **The strip element** (`.projects`, `.workspaces-strip`, `.tabs`) has no role. It is marked
+  `data-strip="Projects" | "Workspaces" | "Tabs"`, and keeps its cells, its `RovingFocusGroup.Root`
+  (the arrows, Home and End read the order from the document, not from a role), its `DndContext`
+  and the ref `useRoom` measures.
+- **The tablist** is an empty `<span role="tablist" aria-label=…>` first inside it
+  (`StripTablist.tsx`), owning the tabs drawn by id, in order. The stylesheet lays it over the
+  strip with `pointer-events: none`, so it takes no room and no press.
+- **Reaching a strip's tabs**: code, the stylesheet and the scenario specs go through
+  `[data-strip="…"]`; a vitest finds the tablist by its role and name and takes the strip around
+  it with `stripNamed` (`test-strips.ts`), which also holds the tablist to owning exactly the tabs
+  the strip draws. `Strips.a11y.test.tsx` writes out axe's `aria-required-children` and holds all
+  three strips to it.
+
+How WebKit reads `aria-owns` under VoiceOver is checked on real hardware, not here.
+
 ## The four regions added no primitive, which is the rule working
 
 ADR 0038 split the window into four regions, and the whole layout came out of what was

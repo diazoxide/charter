@@ -13,6 +13,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { PanelRow, TodoView } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A todo's tab, against the whole window** (#1214): a todo row opens the todo as a view tab on
@@ -178,7 +179,7 @@ function core(extra?: Pick<TodoView, "title" | "body">) {
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")
@@ -306,7 +307,7 @@ describe("a workspace renamed under an open todo (#1248)", () => {
     await userEvent.click(await todoRowFor("Review the rollout plan"));
     await screen.findByTestId("todo-body");
 
-    const workspaces = screen.getByRole("tablist", { name: "Workspaces" });
+    const workspaces = stripNamed("Workspaces");
     const alpha = within(workspaces)
       .getAllByRole("tab")
       .find((one) => one.querySelector(".workspace-name")?.textContent === "alpha");

@@ -4,6 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { SettingsTab } from "./settings/SettingsTab";
+import { findStripNamed } from "./test-strips";
 
 /**
  * LIVE and LOCAL, from the window (charter-app#301): a LIVE workspace is marked where it is
@@ -69,7 +70,7 @@ describe("LIVE and LOCAL, in the window", () => {
   it("marks a LIVE workspace's tab and leaves a LOCAL one unmarked", async () => {
     core();
     render(<App />);
-    const strip = await screen.findByRole("tablist", { name: "Workspaces" });
+    const strip = await findStripNamed("Workspaces");
     const alpha = await within(strip).findByRole("tab", { name: /alpha/ });
     const beta = within(strip).getByRole("tab", { name: /beta/ });
     expect(within(alpha).getByRole("img", { name: "live" })).toBeTruthy();
@@ -79,7 +80,7 @@ describe("LIVE and LOCAL, in the window", () => {
   it("asks before making a workspace live, from the workspace's own menu", async () => {
     const asked = core();
     render(<App />);
-    const strip = await screen.findByRole("tablist", { name: "Workspaces" });
+    const strip = await findStripNamed("Workspaces");
     fireEvent.contextMenu(await within(strip).findByRole("tab", { name: /beta/ }));
     const menu = await screen.findByRole("menu");
     await userEvent.click(within(menu).getByRole("menuitem", { name: /Make beta live/ }));
@@ -93,7 +94,7 @@ describe("a switch whose save did not happen", () => {
   it("opens the project's Saving tab from the dialog (NO-8, #1296)", async () => {
     core();
     render(<App />);
-    const strip = await screen.findByRole("tablist", { name: "Workspaces" });
+    const strip = await findStripNamed("Workspaces");
     fireEvent.contextMenu(await within(strip).findByRole("tab", { name: /beta/ }));
     await userEvent.click(
       within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Make beta live/ }),

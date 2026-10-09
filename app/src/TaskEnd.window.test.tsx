@@ -15,6 +15,7 @@ import App from "./App";
 import type { FinishedTask, OpenChat, TaskEnding } from "./bindings";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The person ends a task with Stop and get its report or Close now** (#1488, V100-5,
@@ -519,7 +520,7 @@ describe("the one question, for a task in the middle of a turn", () => {
 describe("a task that has a tab of its own", () => {
   /** The tab called `name`, on the strip. */
   const tabOf = (name: string) =>
-    within(screen.getByRole("tablist", { name: "Tabs" }))
+    within(stripNamed("Tabs"))
       .queryAllByRole("tab")
       .find((one) => one.querySelector(".tab-name")?.textContent === name);
   /** The close on the strip of the tab called `name`. */
@@ -826,7 +827,7 @@ describe("the breadcrumb's line, while a tab shows a task", () => {
     await userEvent.click(row(tree, "talk"));
     await waitFor(() => expect(onScreen()).toEqual([4]));
     const tab = () => {
-      const found = within(screen.getByRole("tablist", { name: "Tabs" }))
+      const found = within(stripNamed("Tabs"))
         .getAllByRole("tab")
         .find((one) => one.querySelector(".tab-name")?.textContent === "steward 1");
       if (found === undefined) throw new Error("no tab is called steward 1");

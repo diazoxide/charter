@@ -16,6 +16,7 @@ import App from "./App";
 import type { ByHand, Moved, OpenChat } from "./bindings";
 import { onAMac } from "./tabKeys";
 import { askLogin } from "./RepoPicker";
+import { stripNamed } from "./test-strips";
 
 /**
  * A plain shell tab, and what the window does when a harness is started by hand inside one
@@ -159,19 +160,19 @@ function core(
 
 /** The chats, as the strip under the workspaces lists them. */
 const chatTabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
 const workspaces = () =>
-  within(screen.getByRole("tablist", { name: "Workspaces" }))
+  within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .map(
       (tab) => tab.querySelector(".workspace-name")?.textContent ?? tab.getAttribute("aria-label"),
     );
 
 const focusedWorkspace = () =>
-  within(screen.getByRole("tablist", { name: "Workspaces" }))
+  within(stripNamed("Workspaces"))
     .getAllByRole("tab")
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
     .map(
@@ -181,9 +182,7 @@ const focusedWorkspace = () =>
 /** The mark a shell tab wears: aria-hidden, as every tab's kind mark is, so looked up by what
  *  it says it is rather than by a name a screen reader would read twice. */
 const shellMark = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
-    .getByRole("tab")
-    .querySelector('[data-mark="shell"]');
+  within(stripNamed("Tabs")).getByRole("tab").querySelector('[data-mark="shell"]');
 
 async function fromThePalette(row: string) {
   await userEvent.keyboard("{F2}");
@@ -246,7 +245,7 @@ describe("a plain shell tab", () => {
     await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
 
     await userEvent.click(
-      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+      within(stripNamed("Workspaces")).getByRole("tab", {
         name: "Plane root",
       }),
     );
@@ -283,7 +282,7 @@ describe("a plain shell tab", () => {
 
 /** The state mark on the one tab, or `null` where it draws none. */
 const stateMark = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getByRole("tab")
     .querySelector("[data-state]")
     ?.getAttribute("data-state") ?? null;

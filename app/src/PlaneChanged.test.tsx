@@ -5,6 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import type { PlaneAnswer } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The panels follow the plane on disk** (charter-app#264).
@@ -357,7 +358,7 @@ describe("the readers of the plane, told what changed", () => {
     render(<App />);
     await waitFor(() => expect(todoRows()).toHaveLength(2));
     const workspaceTabs = () =>
-      within(screen.getByRole("tablist", { name: "Workspaces" }))
+      within(stripNamed("Workspaces"))
         .queryAllByRole("tab")
         .map((tab) => tab.textContent ?? "");
     const drawn = (name: string) => workspaceTabs().some((tab) => tab.includes(name));

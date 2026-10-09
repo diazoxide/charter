@@ -20,7 +20,7 @@ import { bandNotice } from "../reading.js";
  * whole run and a spec that leaked state broke train 38.
  */
 
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-strip="Projects"]';
 
 type Pins = { project: boolean; workspaces: string[]; missing: string[]; order: string[] };
 
@@ -67,7 +67,7 @@ async function stripNames(): Promise<string[]> {
         ...(document.querySelector(selector)?.querySelectorAll('[role="tab"]:not(.plane-root)') ??
           []),
       ].map((tab) => tab.querySelector(".workspace-name")?.textContent ?? ""),
-    '[role="tablist"][aria-label="Workspaces"]',
+    '[data-strip="Workspaces"]',
   );
 }
 

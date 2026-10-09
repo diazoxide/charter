@@ -15,6 +15,7 @@ import type { FinishedTask, Moved, OpenChat, Shown } from "./bindings";
 import type { State } from "./chatState";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A task stopped on its harness's permission prompt is said where the person is**
@@ -250,7 +251,7 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
 
 const section = () => screen.findByRole("tree", { name: "Chats of this project" });
 const treeRows = (tree: HTMLElement) => within(tree).getAllByRole("treeitem");
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 
 /** The tab of the session called `name`. */
 const tab = (name: string) => {

@@ -4,7 +4,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import { sayingSomething } from "./test-strips";
+import { sayingSomething, stripNamed } from "./test-strips";
 
 // The pane's own terminal is driven by the scenario tests, against the real app. Here it
 // stands in for one, so these tests are about the tabs, the splits and what they ask the core.
@@ -147,7 +147,7 @@ const panes = () => screen.getAllByTestId("pane").map((pane) => pane.textContent
 // Scoped to the tab strip: the sidebar lists workspaces as a tablist too, so a query for
 // `role="tab"` across the whole window mixes a workspace in among the tabs.
 const tabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     // The NAME a tab carries, not everything drawn in it: a tab also says what its chat is
     // doing, and these tests are about which tabs exist.
@@ -400,9 +400,7 @@ describe("App", () => {
     await openAChat();
     await openAChat();
 
-    await userEvent.click(
-      within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab")[0],
-    );
+    await userEvent.click(within(stripNamed("Tabs")).getAllByRole("tab")[0]);
 
     expect(panes()).toEqual(["session 1"]);
   });

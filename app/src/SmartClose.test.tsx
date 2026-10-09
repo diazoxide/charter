@@ -15,7 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { Phase, SavedRecord, SmartCloseOffer } from "./bindings";
 import { LEAST, LEAST_CHIP, leastAt } from "./fits";
-import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
+import { dragWithTheKeyboard, laidOutInARow, stripNamed } from "./test-strips";
 import { DEFAULT_TEXT } from "./textSize";
 
 /**
@@ -123,13 +123,13 @@ async function step(
 }
 
 const tabOf = (name: string) =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .find((tab) => tab.querySelector(".tab-name")?.textContent === name);
 
 /** The chip a tab called `name` shrinks to while it wraps up: no name on it, only its tooltip. */
 const chipOf = (name: string) =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .find((tab) => tab.getAttribute("aria-label") === `${name} — wrapping up`);
 
@@ -142,7 +142,7 @@ function theChip(name: string): HTMLElement {
 
 /** The chat strip as the operator reads it, left to right: a chip by its tooltip. */
 const strip = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent ?? tab.getAttribute("aria-label"));
 
@@ -438,7 +438,7 @@ async function smartClose(name: string) {
 }
 
 const selected = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .find((tab) => tab.getAttribute("aria-selected") === "true");
 
@@ -462,7 +462,7 @@ describe("a chat put into the background (SI-8f)", () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get(this: HTMLElement) {
-        return this.getAttribute("aria-label") === "Tabs" ? room : 0;
+        return this.getAttribute("data-strip") === "Tabs" ? room : 0;
       },
     });
     try {

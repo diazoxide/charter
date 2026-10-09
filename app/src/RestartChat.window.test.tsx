@@ -18,6 +18,7 @@ import { ChatsHere, fixedChats, nothingKnown, type State } from "./chatState";
 import { forgetDismissals } from "./dismissals";
 import { sandboxCommandReturned } from "./sandboxAsked";
 import { SandboxChangedNotice } from "./SandboxChanged";
+import { stripNamed } from "./test-strips";
 
 /**
  * **Restart chat, and the Notice after a sandbox setting changes** (#1428), against the whole
@@ -182,7 +183,7 @@ async function aChat(now: Partial<Core> = {}) {
 
 /** The menu on chat 4's tab, as a right-click opens it. */
 async function tabMenu() {
-  const strip = screen.getByRole("tablist", { name: "Tabs" });
+  const strip = stripNamed("Tabs");
   fireEvent.contextMenu(within(strip).getByRole("tab", { name: /claude 4/ }));
   return screen.findByRole("menu");
 }

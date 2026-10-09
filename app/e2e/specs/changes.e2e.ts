@@ -23,7 +23,7 @@ import { $, browser, expect } from "@wdio/globals";
  * **It leaves the window and the plane as it found them.**
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-strip="Tabs"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 const PANE = '[data-testid="view-pane-charter-changes-alpha"]';
 const TITLE = "Changes · alpha";
@@ -52,9 +52,7 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.textContent ?? ""),
   );
 }

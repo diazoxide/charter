@@ -4,6 +4,7 @@ import { act, cleanup, render as renderBare, screen, within } from "@testing-lib
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * A project the core let go of leaves the window (#1242).
@@ -103,7 +104,7 @@ function core(over: { restore?: string[]; handed?: string[]; chats?: Record<stri
 }
 
 const projectTabs = () =>
-  within(screen.getByRole("tablist", { name: "Projects" }))
+  within(stripNamed("Projects"))
     .getAllByRole("tab")
     .map(
       (tab) =>

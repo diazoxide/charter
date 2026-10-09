@@ -5,7 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
-import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
+import { dragWithTheKeyboard, laidOutInARow, stripNamed } from "./test-strips";
 
 /**
  * **Dragging a tab with the keyboard** (SI-6): Shift+Space picks the focused tab up, the arrows
@@ -112,14 +112,14 @@ afterEach(() => {
 /** The names on a strip — leaving out the plane root's tab, which is first on every
  *  workspace strip and can never be dragged (SI-1; asserted below). */
 const namesOn = (strip: string) =>
-  within(screen.getByRole("tablist", { name: strip }))
+  within(stripNamed(strip))
     .getAllByRole("tab")
     .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.textContent);
 
 /** One strip's tab whose text includes `name`. */
 const tabOn = (strip: string, name: string) =>
-  within(screen.getByRole("tablist", { name: strip }))
+  within(stripNamed(strip))
     .getAllByRole("tab")
     .find((tab) => tab.textContent?.includes(name)) as HTMLElement;
 
@@ -311,8 +311,7 @@ describe("dragging a workspace tab with the keyboard", () => {
     const window = core();
     render(<App />);
     await waitFor(() => expect(namesOn("Workspaces")).toHaveLength(2));
-    const first = () =>
-      within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole("tab")[0];
+    const first = () => within(stripNamed("Workspaces")).getAllByRole("tab")[0];
     expect(first()).toHaveAttribute("aria-label", "Plane root");
 
     // alpha, the first named tab, carried one place left: onto the root's.
@@ -356,7 +355,7 @@ describe("dragging a project tab with the keyboard", () => {
   }
 
   const projects = () =>
-    within(screen.getByRole("tablist", { name: "Projects" }))
+    within(stripNamed("Projects"))
       .getAllByRole("tab")
       .map((tab) => tab.querySelector(".project-name")?.textContent);
 

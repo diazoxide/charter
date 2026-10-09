@@ -99,6 +99,7 @@ import { answerAsk, usePermissionAsks } from "./permissionAsks";
 import { useAwayRefusals } from "./dispatchAway";
 import type { AwayItem } from "./AwayRefusals";
 import { useUpdates } from "./Updates";
+import { StripTablist, useTabIds } from "./StripTablist";
 import { noTabs, SETTINGS_TAB_TITLE } from "./tabs";
 import { useTextSizes } from "./textSize";
 import { MAIN, runElsewhere, thisWindow, useOtherWindows, useRunHere } from "./windows";
@@ -1435,6 +1436,8 @@ function App() {
    * holder of sessions"*, and the shape is what says so before any word is read.
    */
   const { strip: projectStrip, controls: projectControls, width: room } = useRoom(drawn.length);
+  /** The project tabs' ids, which the strip's tablist owns them by (#1204). */
+  const projectTabId = useTabIds();
   const projectLeast = leastAt(LEAST.project, useTextSizes().window);
   const projectsShown = useMemo(
     () =>
@@ -1771,14 +1774,20 @@ function App() {
                 strategy={horizontalListSortingStrategy}
               >
                 <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
-                  <nav
+                  <div
                     className="projects"
-                    role="tablist"
-                    aria-label="Projects"
+                    data-strip="Projects"
                     ref={projectStrip}
                     style={{ "--least": `${projectLeast}px` } as CSSProperties}
                   >
-                    {projectsShown.shown.map((project) => {
+                    {/* The tablist, which owns the tabs and not the cells around them (#1204,
+                        `StripTablist.tsx`). First, so a screen reader reads the tabs before
+                        the controls beside them. */}
+                    <StripTablist
+                      name="Projects"
+                      ids={projectsShown.shown.map((_, place) => projectTabId(place))}
+                    />
+                    {projectsShown.shown.map((project, place) => {
                       const at = drawn.indexOf(project);
                       return (
                         <SortableTab key={project.plane} id={project.plane}>
@@ -1807,6 +1816,7 @@ function App() {
                                 >
                                   <button
                                     role="tab"
+                                    id={projectTabId(place)}
                                     aria-selected={project.plane === inFront}
                                     aria-describedby={sortable.attributes["aria-describedby"]}
                                     {...sortable.listeners}
@@ -1842,9 +1852,9 @@ function App() {
                       );
                     })}
                     {/* The strip's own controls, and the one part of this strip that never
-                        collapses. They are inside the tablist because a `role="tab"` has to be owned
-                        by the tablist it belongs to, so `useRoom` is told to take their width off the
-                        room the tabs get rather than leaving the tabs to be squeezed under them.
+                        collapses. They are inside the strip (not its tablist, #1204) so that
+                        `useRoom` is told to take their width off the room the tabs get rather
+                        than leaving the tabs to be squeezed under them.
 
                         **A `+` and not a labelled button** — the operator's: *"open-project button
                         is not looks like separate button, but it should looks like new tab, without
@@ -1884,7 +1894,7 @@ function App() {
                         onPress={press}
                       />
                     </span>
-                  </nav>
+                  </div>
                 </RovingFocusGroup.Root>
               </SortableContext>
             </DndContext>

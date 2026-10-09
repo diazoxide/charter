@@ -48,9 +48,7 @@ async function planeRoot(): Promise<string> {
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.textContent ?? ""),
   );
 }

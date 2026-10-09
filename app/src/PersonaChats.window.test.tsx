@@ -14,6 +14,7 @@ import App from "./App";
 import { EndingChat } from "./EndingChat";
 import type { ClosingChat, PersonaChat } from "./bindings";
 import { forgetDismissals } from "./dismissals";
+import { stripNamed } from "./test-strips";
 
 /**
  * **Closing a chat that asked persona chats for something**, against the whole window: the one
@@ -143,7 +144,7 @@ async function closingTheStewardChat(theirs: ClosingChat) {
 }
 
 function tabNames() {
-  const strip = screen.getByRole("tablist", { name: "Tabs" });
+  const strip = stripNamed("Tabs");
   return within(strip)
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent ?? tab.textContent ?? "");
@@ -180,11 +181,7 @@ describe("closing a chat with chats at work below it", () => {
     // **Its tab goes with the session's** (#1489, V100-39): a task's own tab is sent back when
     // the session that asked closes, and the task is not ended by that. It was never closed,
     // and the core is told it has no tab.
-    await waitFor(() =>
-      expect(within(screen.getByRole("tablist", { name: "Tabs" })).queryAllByRole("tab")).toEqual(
-        [],
-      ),
-    );
+    await waitFor(() => expect(within(stripNamed("Tabs")).queryAllByRole("tab")).toEqual([]));
     expect(asked("close_chat_tab")).toEqual([{ plane: PLANE, session: 9 }]);
   });
 
@@ -203,11 +200,7 @@ describe("closing a chat with chats at work below it", () => {
     // One step: the chat is never left running between the stop and its own close, and the
     // window ends nothing a second time.
     expect(order()).toEqual(["close_chat_stopping"]);
-    await waitFor(() =>
-      expect(within(screen.getByRole("tablist", { name: "Tabs" })).queryAllByRole("tab")).toEqual(
-        [],
-      ),
-    );
+    await waitFor(() => expect(within(stripNamed("Tabs")).queryAllByRole("tab")).toEqual([]));
   });
 
   it("carries the answer through Smart close: stopped now, and remembered for its close", async () => {

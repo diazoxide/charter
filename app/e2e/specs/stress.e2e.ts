@@ -108,16 +108,12 @@ function theApp(): number {
 
 /** The close buttons in the tab bar, left to right. */
 async function closeButtons(): Promise<WebdriverIO.Element[]> {
-  return [
-    ...(await $$(
-      '[role="tablist"][aria-label="Tabs"] button[aria-label^="End chat "]',
-    ).getElements()),
-  ];
+  return [...(await $$('[data-strip="Tabs"] button[aria-label^="End chat "]').getElements())];
 }
 
 /** The workspaces on the strip above the tabs (ADR 0036). */
 async function workspaceTabs(): Promise<WebdriverIO.Element[]> {
-  return [...(await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements())];
+  return [...(await $$('[data-strip="Workspaces"] [role="tab"]').getElements())];
 }
 
 /** What a strip tab is called: its drawn name, or — the plane root's icon tab (SI-1) — its

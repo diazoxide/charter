@@ -534,13 +534,28 @@ body {
   flex-wrap: nowrap;
 }
 
+/* **A strip's tablist** (#1204, `StripTablist.tsx`): an empty element inside the strip that owns
+   its tabs through `aria-owns`, so the `×`, the gears and the strip's own buttons beside them are
+   not the tablist's. Out of the row, so it takes no place among the tabs; laid over the whole
+   strip, so a screen reader that draws its cursor around the tablist draws it around the tabs;
+   and never under the pointer, which goes through it to the tab or the `×` it is over. */
+[data-strip] {
+  position: relative;
+}
+
+[data-strip] > .strip-tablist {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 /* A strip's own controls: the `+` that makes one more of what the strip lists, and the
    show-more button. **Never sized with the tabs and never collapsed with them** — the
    measured defect of charter-app#130/#131 was a wanted control living inside the thing that
    hides controls, and a collapse is that thing. On the project strip, whose buttons are
-   INSIDE its tablist because a `role="tab"` has to be owned by the tablist it belongs to,
-   `useRoom` takes this element's width off the room the tabs are given; on the workspace
-   strip it is a sibling of the tablist, so what the tablist measures is already what is left.
+   INSIDE the strip, `useRoom` takes this element's width off the room the tabs are given; on
+   the workspace strip it is a sibling of the strip, so what the strip measures is already
+   what is left.
 
    **One class for both**, since charter-app#193 gave the workspace strip the same two things
    the project strip has. A second class name for the same row would be a second place to
@@ -7323,13 +7338,13 @@ h2.sidebar-title .node-icon {
 /* **A tab being selected.** The cell's surface and its lit edge cross-fade rather than cut, on
    all three strips. `quick`, because this is the window answering a press and must never be
    something the operator waits on; the selection itself is immediate, only its paint eases.
-   Written against the tablist's own structure rather than the strips' class names, so a strip
+   Written against the strip's own structure rather than the strips' class names, so a strip
    restyled tomorrow keeps it without being told. Colour only: a tab's width and position never
    animate, because a tab that slides under the pointer breaks aiming (`tabs.ts`). */
-[role="tablist"] > *,
-[role="tablist"] > *::after,
-[role="tablist"] [role="tab"],
-[role="tablist"] [role="tab"]::after {
+[data-strip] > *,
+[data-strip] > *::after,
+[data-strip] [role="tab"],
+[data-strip] [role="tab"]::after {
   transition-property: background-color, color;
   transition-duration: var(--motion-duration-quick);
   transition-timing-function: var(--motion-easing-standard);

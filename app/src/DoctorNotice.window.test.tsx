@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { DoctorReport, DoctorRow } from "./bindings";
 import { forgetThisLaunch } from "./regions";
+import { findStripNamed } from "./test-strips";
 
 /**
  * **A Notice that carries a fix with a form draws that form** (#1250), against the whole
@@ -271,7 +272,7 @@ describe("the doctor's git identity finding, as a Notice (#1250)", () => {
   it("is not drawn while the identity is set", async () => {
     core({ identity: () => set });
     render(<App />);
-    await screen.findByRole("tablist", { name: "Workspaces" });
+    await findStripNamed("Workspaces");
     await new Promise((done) => setTimeout(done, 50));
 
     expect(document.querySelector('[data-cause^="doctor-finding:"]')).toBeNull();

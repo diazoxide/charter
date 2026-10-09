@@ -4,6 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
+import { findStripNamed, stripNamed } from "./test-strips";
 
 /**
  * **A tab strip owns only tabs** (#1204): the rule axe calls `aria-required-children`. A
@@ -19,9 +20,11 @@ import type { OpenChat } from "./bindings";
  * still owns every `×` and gear in those cells; the role has to move off an element that holds
  * them, or they have to leave it.
  *
- * **And it lists the debt**, the way `Notice.guard.test.ts` lists its own: every element the
- * three strips own today that is not a tab, exactly, per strip. A new control inside a strip
- * fails here; #1204's fix crosses its entries off, until each list is empty.
+ * **So the role is on an element of its own** (`StripTablist.tsx`): empty, inside the strip,
+ * owning the strip's tabs through `aria-owns`. The window's three strips are held to it here:
+ * each tablist owns its tabs and nothing else, and the `×`, the gears and the strip's own
+ * controls are still drawn in the strip. The list of what a strip owns that is not a tab was
+ * debt that #1204 paid off; a control that comes back into a tablist fails here.
  */
 
 vi.mock("./SessionPane", () => ({
@@ -277,38 +280,62 @@ function core() {
 }
 
 describe("the window's three strips", () => {
-  it("own only tabs, but for the debt #1204 is paying off", async () => {
+  it("own only tabs (#1204)", async () => {
     core();
     render(<App />);
-    const strip = (name: string) => screen.getByRole("tablist", { name });
+    const tablist = (name: string) => screen.getByRole("tablist", { name });
     // Drawn as the test means them: alpha in front with its two chat tabs, and the gears on
     // the strips that have one.
-    await screen.findByRole("tablist", { name: "Projects" });
+    await findStripNamed("Projects");
     await userEvent.click(
-      await within(await screen.findByRole("tablist", { name: "Workspaces" })).findByRole("tab", {
-        name: /alpha/,
-      }),
+      await within(await findStripNamed("Workspaces")).findByRole("tab", { name: /alpha/ }),
     );
-    await vi.waitFor(() => expect(within(strip("Tabs")).getAllByRole("tab")).toHaveLength(2));
-    await within(strip("Workspaces")).findByRole("button", { name: /settings/i });
+    await vi.waitFor(() => expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(2));
+    await within(stripNamed("Workspaces")).findByRole("button", { name: /settings/i });
+    // What the debt list held is still drawn, and still in its strip: the `×`, the gears and
+    // the project strip's own controls moved nowhere.
+    expect(
+      within(stripNamed("Projects")).getAllByRole("button", { name: /^Close project/ }),
+    ).toHaveLength(1);
+    expect(
+      within(stripNamed("Projects")).getByRole("button", { name: "Open a project…" }),
+    ).toBeInTheDocument();
+    expect(
+      within(stripNamed("Projects")).getByRole("button", { name: "New project…" }),
+    ).toBeInTheDocument();
+    expect(
+      within(stripNamed("Projects")).getByRole("button", { name: /settings/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(stripNamed("Tabs")).getAllByRole("button", { name: /^(End|Close) / }),
+    ).toHaveLength(2);
 
     expect({
-      projects: notTabs(strip("Projects")),
-      workspaces: notTabs(strip("Workspaces")),
-      chats: notTabs(strip("Tabs")),
-    }).toEqual({
-      // The project's `×` and gear in its cell, and the strip's own controls, which sit inside
-      // the tablist so that `useRoom` can measure them (`App.tsx`).
-      projects: [
-        '.strip-doing button.bare "New project…"',
-        '.strip-doing button.bare "Open a project…"',
-        "button.closer",
-        "button.gear",
-      ],
-      // The focused workspace's gear in its cell (SE-23).
-      workspaces: ["button.gear"],
-      // Each chat tab's `×`.
-      chats: ["button.closer", "button.closer"],
-    });
+      projects: notTabs(tablist("Projects")),
+      workspaces: notTabs(tablist("Workspaces")),
+      chats: notTabs(tablist("Tabs")),
+    }).toEqual({ projects: [], workspaces: [], chats: [] });
+    // And each owns every tab its strip draws, in order (`stripNamed` holds it to that).
+    for (const name of ["Projects", "Workspaces", "Tabs"])
+      expect(ownedByTheRule(tablist(name)).map(({ element }) => element)).toEqual([
+        ...stripNamed(name).querySelectorAll('[role="tab"]'),
+      ]);
+  });
+
+  it("owns no name box while a chat tab is being renamed (#1204)", async () => {
+    core();
+    render(<App />);
+    await userEvent.click(
+      await within(await findStripNamed("Workspaces")).findByRole("tab", { name: /alpha/ }),
+    );
+    await vi.waitFor(() => expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(2));
+
+    within(stripNamed("Tabs")).getAllByRole("tab")[0].focus();
+    await userEvent.keyboard("{F2}");
+
+    // The name box is drawn in the tab's place, in the strip, and the tablist does not own it.
+    expect(await within(stripNamed("Tabs")).findByRole("textbox")).toBeInTheDocument();
+    expect(within(stripNamed("Tabs")).getAllByRole("tab")).toHaveLength(1);
+    expect(notTabs(screen.getByRole("tablist", { name: "Tabs" }))).toEqual([]);
   });
 });

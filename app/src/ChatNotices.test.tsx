@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { ApprovalSentence } from "./ProfileApproval";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The chat Notices get their way out** (NO-3, #1230), against the whole window.
@@ -165,7 +166,7 @@ const sent = (asked: Asked[], cmd: string) =>
   asked.filter((one) => one.cmd === cmd).map((one) => one.args);
 const notice = (cause: string) => document.querySelector(`[data-cause="${cause}"]`);
 const tabNames = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
@@ -503,7 +504,7 @@ describe("the keyboard after a Forget (#1246)", () => {
     await forget("id-b");
     await waitFor(() =>
       expect(document.activeElement).toBe(
-        within(screen.getByRole("tablist", { name: "Tabs" }))
+        within(stripNamed("Tabs"))
           .getAllByRole("tab")
           .find((tab) => tab.getAttribute("aria-selected") === "true"),
       ),
@@ -651,7 +652,7 @@ describe("a chat the project's instructions changed under", () => {
     core();
     render(<App />);
     const mark = await screen.findByRole("button", { name: /Start chat one fresh/ });
-    const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
+    const tab = within(stripNamed("Tabs"))
       .getAllByRole("tab")
       .find((one) => one.querySelector(".tab-name")?.textContent === "one") as HTMLElement;
 

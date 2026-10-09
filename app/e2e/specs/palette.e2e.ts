@@ -105,14 +105,12 @@ async function arrangement(): Promise<string[]> {
   );
 }
 
-/** The names on the tab strip, left to right. Scoped to that tablist: the strip above lists
+/** The names on the tab strip, left to right. Scoped to that strip: the strip above lists
  *  workspaces as a tablist too, and a query across the window would mix the two. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [
-      ...(document
-        .querySelector('[role="tablist"][aria-label="Tabs"]')
-        ?.querySelectorAll('[role="tab"]') ?? []),
+      ...(document.querySelector('[data-strip="Tabs"]')?.querySelectorAll('[role="tab"]') ?? []),
     ].map((tab) => tab.querySelector(".tab-name")?.textContent ?? ""),
   );
 }

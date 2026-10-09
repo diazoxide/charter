@@ -15,7 +15,7 @@ import { $, browser, expect } from "@wdio/globals";
  * run's.
  */
 
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-strip="Tabs"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 const VAULT = "e2e-vault";
 const TAB = `[data-testid="vault-tab-${VAULT}"]`;

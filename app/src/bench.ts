@@ -141,14 +141,14 @@ function button(name: string): HTMLElement {
 
 /** The CHAT tabs, and only those.
  *
- *  Scoped, because there are three tablists in this window now: the projects above the bar
+ *  Scoped, because there are three strips in this window now: the projects above the bar
  *  (ADR 0033), the workspaces under them (ADR 0036), and the chat tabs in it. A bench that read
  *  `[role="tab"]` off the document measured whichever came first in the DOM, which since
  *  project tabs landed is a project. */
-const TABS = '[role="tablist"][aria-label="Tabs"]';
+const TABS = '[data-strip="Tabs"]';
 
 /** The project tabs, in the title bar (ADR 0054). */
-const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-strip="Projects"]';
 
 /** The name of the tab in front. */
 function selectedTab(): string | undefined {

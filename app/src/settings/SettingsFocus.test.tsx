@@ -9,6 +9,7 @@ import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
 import { useRef } from "react";
 import { enterSettings, forgetEntering, landSettingsFocus, useEnteringFocus } from "./entering";
+import { stripNamed } from "../test-strips";
 
 /**
  * **The keyboard goes into Settings on every way in** (#1206; the spec on #558, user story 32):
@@ -137,8 +138,8 @@ afterEach(() => {
 });
 
 const nav = () => screen.getByRole("navigation", { name: "Groups" });
-const workspaces = () => screen.getByRole("tablist", { name: "Workspaces" });
-const projects = () => screen.getByRole("tablist", { name: "Projects" });
+const workspaces = () => stripNamed("Workspaces");
+const projects = () => stripNamed("Projects");
 const level = (name: string) => screen.getByRole("radio", { name });
 
 /** The keyboard is on the group nav's current group, named `group` when given. */

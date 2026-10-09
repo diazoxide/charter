@@ -17,6 +17,7 @@ import type { OpenChat } from "./bindings";
 import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A task gets a tab of its own only when asked, and a pane beside its session** (#1489,
@@ -244,7 +245,7 @@ const row = (tree: HTMLElement, name: string) => {
   return found;
 };
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .queryAllByRole("tab")

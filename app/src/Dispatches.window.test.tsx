@@ -18,6 +18,7 @@ import type {
   SessionRecordRow,
   WorktreeLoss,
 } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * **The Dispatches tab** (#1452) against the whole window: it is offered from the Sessions
@@ -282,7 +283,7 @@ function core(
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const selected = () => within(strip()).getByRole("tab", { selected: true }).textContent ?? "";
 
 /** Opens the Dispatches tab from the Sessions panel's heading, and answers its table. */

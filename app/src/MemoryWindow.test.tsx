@@ -15,6 +15,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { MemoryView, PanelRow } from "./bindings";
 import { forgetDrafts } from "./memories";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A memory's tab, against the whole window** (SI-9b, ADR 0065): a persona's memory rows open
@@ -228,7 +229,7 @@ function core({
   return { asked };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")

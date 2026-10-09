@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render as renderBare, waitFor, within } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { OpenChat } from "./bindings";
+import { stripNamed } from "./test-strips";
 
 /**
  * A chat a handoff opened lands on a strip, behind the chat the operator is reading
@@ -81,7 +82,7 @@ function core(open: OpenChat[]): { arrive: (payload: unknown) => void } {
   };
 }
 
-const strip = () => screen.getByRole("tablist", { name: "Tabs" });
+const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
     .getAllByRole("tab")

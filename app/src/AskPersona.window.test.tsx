@@ -15,6 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { AskOffer, DispatchPending, VaultRefused } from "./bindings";
 import { forgetDismissals } from "./dismissals";
+import { stripNamed } from "./test-strips";
 
 /**
  * **Ask {persona}…, from a chat's tab**, against the whole window: the row on the tab's menu,
@@ -191,7 +192,7 @@ async function aStewardChat(now: Partial<Core> = {}) {
 
 /** The menu on the steward chat's tab, as a right-click opens it. */
 async function tabMenu() {
-  const strip = screen.getByRole("tablist", { name: "Tabs" });
+  const strip = stripNamed("Tabs");
   fireEvent.contextMenu(within(strip).getAllByRole("tab")[0]);
   return screen.findByRole("menu");
 }
@@ -257,7 +258,7 @@ describe("Ask a persona from a chat's tab", () => {
         harness: "claude",
       }),
     );
-    const strip = screen.getByRole("tablist", { name: "Tabs" });
+    const strip = stripNamed("Tabs");
     const tabs = await waitFor(() => {
       const all = within(strip).getAllByRole("tab");
       expect(all).toHaveLength(2);

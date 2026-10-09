@@ -12,7 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
-import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
+import { dragWithTheKeyboard, laidOutInARow, queryStripNamed, stripNamed } from "./test-strips";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
 import { onAMac } from "./tabKeys";
 
@@ -199,7 +199,7 @@ function last(listeners: Map<string, number[]>, event: string): number {
 
 /** The projects on the strip, and which one is in front. */
 const projectTabs = () =>
-  within(screen.getByRole("tablist", { name: "Projects" }))
+  within(stripNamed("Projects"))
     .getAllByRole("tab")
     .map(
       (tab) =>
@@ -211,7 +211,7 @@ const projectTabs = () =>
 /** One project's tab on the strip, by the name it carries. Scoped, because a chat tab in the
  *  project in front can be called after the project it is in. */
 function projectTab(name: string): HTMLElement {
-  const tab = within(screen.getByRole("tablist", { name: "Projects" }))
+  const tab = within(stripNamed("Projects"))
     .getAllByRole("tab")
     .find((one) => one.querySelector(".project-name")?.textContent === name);
   if (!tab) throw new Error(`no project tab called ${name}`);
@@ -220,13 +220,13 @@ function projectTab(name: string): HTMLElement {
 
 /** The chat tabs of the project in front. */
 const chatTabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
 /** What the chat tab called `name` says its chat is doing. */
 const stateOnTab = (name: string) =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .getAllByRole("tab")
     .find((tab) => tab.querySelector(".tab-name")?.textContent === name)
     ?.querySelector("[data-state]")
@@ -375,9 +375,8 @@ describe("a window holding more than one project", () => {
 
     await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
     expect(
-      within(screen.getByRole("tablist", { name: "Tabs" }))
-        .getByRole("tab", { selected: true })
-        .querySelector(".tab-name")?.textContent,
+      within(stripNamed("Tabs")).getByRole("tab", { selected: true }).querySelector(".tab-name")
+        ?.textContent,
     ).toBe("one.1");
   });
 
@@ -574,9 +573,7 @@ describe("a window holding more than one project", () => {
     render(<App />);
     await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
 
-    within(screen.getByRole("tablist", { name: "Projects" }))
-      .getAllByRole("tab")[1]
-      .focus();
+    within(stripNamed("Projects")).getAllByRole("tab")[1].focus();
     await dragWithTheKeyboard("{ArrowLeft}");
 
     await waitFor(() => expect(projectTabs()).toEqual(["two", "one*"]));
@@ -714,7 +711,7 @@ describe("the cold launch putting the last quit's projects back", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "Open a repo to start",
     );
-    expect(screen.queryByRole("tablist", { name: "Projects" })).not.toBeInTheDocument();
+    expect(queryStripNamed("Projects")).not.toBeInTheDocument();
   });
 });
 

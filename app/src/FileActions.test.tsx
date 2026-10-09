@@ -13,6 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { forgetYourEditor, setYourEditor } from "./yourEditor";
+import { stripNamed } from "./test-strips";
 
 /**
  * **A file or folder row's actions, against the whole window** (FM-10, #1113): each row of its
@@ -179,7 +180,7 @@ describe("a file or folder row's actions (FM-10)", () => {
     );
     expect(asks(asked, "open_session")).toEqual([]);
     expect(
-      await within(screen.getByRole("tablist", { name: "Tabs" })).findByRole("tab", {
+      await within(stripNamed("Tabs")).findByRole("tab", {
         name: /shell 1/,
       }),
     ).toBeInTheDocument();

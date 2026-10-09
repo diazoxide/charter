@@ -8,6 +8,7 @@ import App from "../App";
 import type { ViewTab } from "../bindings";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
+import { stripNamed } from "../test-strips";
 
 /**
  * **Reaching Settings from the window** (SE-16, #1166): the palette, the app menu's Settings…
@@ -77,7 +78,7 @@ async function palette(typed: string) {
 }
 
 const settingsTabs = () =>
-  within(screen.getByRole("tablist", { name: "Tabs" }))
+  within(stripNamed("Tabs"))
     .queryAllByRole("tab")
     .filter((tab) => /^Settings/.test(tab.textContent ?? ""));
 

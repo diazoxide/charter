@@ -39,9 +39,7 @@ async function untilTheStripIsRead(): Promise<void> {
   await browser.waitUntil(
     async () => {
       // In one pass: the strip is drawn while it is polled (charter#506, `reading.ts`).
-      const names = await textOfEach(
-        '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
-      );
+      const names = await textOfEach('[data-strip="Workspaces"] [role="tab"] .workspace-name');
       return names.join(",") === "alpha,beta";
     },
     { timeout: 30_000, interval: 250, timeoutMsg: "the strip never listed the fixture plane" },
@@ -56,7 +54,7 @@ async function planeRoot(): Promise<string> {
 }
 
 /** The strip in the bar, by its role and name. */
-const PROJECTS = '[data-testid="title-bar"] [role="tablist"][aria-label="Projects"]';
+const PROJECTS = '[data-testid="title-bar"] [data-strip="Projects"]';
 
 describe("the title bar", () => {
   it("is the first thing in the window, against the top edge, with the project strip in it", async () => {
@@ -77,7 +75,7 @@ describe("the title bar", () => {
       top + height + 1,
     );
     // …and the workspace strip begins where the bar ends, rather than under it or over it.
-    const workspaces = await $('[role="tablist"][aria-label="Workspaces"]');
+    const workspaces = await $('[data-strip="Workspaces"]');
     expect((await workspaces.getLocation("y")) as number).toBeGreaterThanOrEqual(top + height - 1);
   });
 

@@ -5,6 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
+import { stripNamed } from "../test-strips";
 
 /**
  * **A tab's menu opens Settings at that tab's level** (#1213): right-click a project, then
@@ -101,9 +102,9 @@ function core(planes: string[], pinned: string[] = []) {
   );
 }
 
-const projects = () => screen.getByRole("tablist", { name: "Projects" });
-const workspaces = () => screen.getByRole("tablist", { name: "Workspaces" });
-const tabs = () => within(screen.getByRole("tablist", { name: "Tabs" })).queryAllByRole("tab");
+const projects = () => stripNamed("Projects");
+const workspaces = () => stripNamed("Workspaces");
+const tabs = () => within(stripNamed("Tabs")).queryAllByRole("tab");
 const inFront = () => tabs().find((tab) => tab.getAttribute("aria-selected") === "true");
 
 /** One project's tab on the strip, by the name it carries. */
