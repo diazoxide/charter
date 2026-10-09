@@ -515,6 +515,7 @@ export function ViewPane({
                 plane={plane}
                 cut={piece.place}
                 path={piece.path}
+                onOpenView={onOpenView}
               />
             )}
           </Suspense>
