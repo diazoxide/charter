@@ -482,12 +482,45 @@ export function fixedChats(states: ChatStates = nothingKnown): Chats {
   return { store: { subscribe: () => () => {}, statesFor: () => states }, plane: undefined };
 }
 
-/** The project's chats a row reads its own chat from. `PlaneView` provides it. */
-export const ChatsHere = createContext<Chats>(fixedChats());
+/** What a component reads with no `ChatsHere` above it: nothing known, never moving. */
+const OUTSIDE: Chats = fixedChats();
 
-/** The chats of the project this component is drawn in. */
+/** The project's chats a row reads its own chat from. `PlaneView` provides it. */
+export const ChatsHere = createContext<Chats>(OUTSIDE);
+
+/** How many reads found no `ChatsHere` above them, since {@link forgetReadsOutsideChatsHere}. */
+let readsOutside = 0;
+
+/**
+ * The chats of the project this component is drawn in.
+ *
+ * **With no project above it, every chat reads "unknown"** (#1037) — what a component drawn on
+ * its own, in a test or a preview, should read, so the default stays and nothing throws. In the
+ * window the same read would hide what every chat is doing without a word, so it is counted
+ * ({@link readsOutsideChatsHere}) and `ChatsHere.window.test.tsx` holds the window to none.
+ */
 export function useChatsHere(): Chats {
-  return useContext(ChatsHere);
+  const chats = useContext(ChatsHere);
+  const outside = chats === OUTSIDE;
+  useEffect(() => {
+    if (outside) readOutside();
+  }, [outside]);
+  return chats;
+}
+
+function readOutside() {
+  readsOutside += 1;
+}
+
+/** How many components read the chats with no `ChatsHere` above them, as each was drawn: for
+ *  tests. */
+export function readsOutsideChatsHere(): number {
+  return readsOutside;
+}
+
+/** For tests: start counting {@link readsOutsideChatsHere} again. */
+export function forgetReadsOutsideChatsHere() {
+  readsOutside = 0;
 }
 
 /**
