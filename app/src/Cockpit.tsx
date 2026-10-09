@@ -77,13 +77,22 @@ export function useAheadBehind(
   return held !== undefined && held.key === key ? held.read : undefined;
 }
 
+/** The most commits the core counts on either side (`files::status::MOST_COUNTED`, #1152): a
+ *  count that reached it means that many or more. */
+export const MOST_COUNTED = 10_000;
+
+/** A count of commits as the header says it: "10,000+" once it reached the core's cap. */
+export function commitsSaid(n: number): string {
+  return n >= MOST_COUNTED ? `${MOST_COUNTED.toLocaleString("en")}+` : n.toLocaleString("en");
+}
+
 /** What the ahead/behind reads as. */
 function apartSaid(read: AheadBehindRead | undefined): string {
   if (read === undefined) return "Counting…";
   if (read.trouble !== undefined) return read.trouble;
   const apart = read.apart;
   if (apart === undefined || apart.base === null) return "No base recorded";
-  return `${apart.ahead} ahead, ${apart.behind} behind ${apart.base}`;
+  return `${commitsSaid(apart.ahead)} ahead, ${commitsSaid(apart.behind)} behind ${apart.base}`;
 }
 
 /** How many files the branch changed, from FM-4's status. */
