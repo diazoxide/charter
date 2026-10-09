@@ -658,7 +658,7 @@ mod tests {
             NotStarted::ProgramWritable(PathBuf::from("/p/node_modules/.bin/claude")).to_string(),
             "this project runs every chat sandboxed, and the program lives where this chat can \
              write: /p/node_modules/.bin/claude, so it was not started sandboxed. Keep the \
-             program outside the plane and outside what a chat may write."
+             program outside the project and outside what a chat may write."
         );
     }
 
@@ -973,7 +973,7 @@ mod tests {
             NotStarted::WordWritable("/p/c.sh".to_owned()).to_string(),
             "this project runs every chat sandboxed, and this profile's command names /p/c.sh, \
              which lies where this chat can write, so it was not started sandboxed. Keep every \
-             file the command names outside the plane and outside what a chat may write."
+             file the command names outside the project and outside what a chat may write."
         );
     }
 
@@ -1015,7 +1015,7 @@ mod tests {
             NotStarted::WordTooLong.to_string(),
             "this project runs every chat sandboxed, and a word of this profile's command is \
              longer than 4 KiB, which purlis does not check, so it was not started sandboxed. \
-             Keep what it says in a file outside the plane and name that file instead."
+             Keep what it says in a file outside the project and name that file instead."
         );
     }
 
