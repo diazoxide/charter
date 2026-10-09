@@ -29,8 +29,17 @@ pub(crate) const TEMPLATE: &str =
 /// `args` for `git`, with `init.templateDir` set on the command line, so any repository they
 /// create — by `init` or by `clone`, wherever it lands — is made from [`TEMPLATE`]. A verb that
 /// creates nothing never reads it.
+///
+/// It may also run in a bare repository it does not name, as a test's checks of its own bare
+/// remotes do: the product's git never finds one that way ([`git::BARE_ONLY_WHEN_NAMED`]),
+/// and a `-c` after it here is the last word.
 pub(crate) fn unsigned(args: &[&str]) -> Vec<String> {
-    let mut out = vec!["-c".to_string(), format!("init.templateDir={TEMPLATE}")];
+    let mut out = vec![
+        "-c".to_string(),
+        format!("init.templateDir={TEMPLATE}"),
+        "-c".to_string(),
+        "safe.bareRepository=all".to_string(),
+    ];
     out.extend(args.iter().map(|a| (*a).to_string()));
     out
 }

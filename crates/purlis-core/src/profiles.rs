@@ -1158,14 +1158,17 @@ const TRACKED_STATUS: &str = " MTADRCU";
 /// The only function here that runs git: one `git status` of one path. It is asked where a
 /// person asked, and — since charter-app#308 — by `crate::settings::layer_text` on every read of
 /// the Local layer, but only when the file exists; a plane with no local file runs no git.
+///
+/// git runs through the hardened runner ([`crate::worktree::git::run`], #1415): a constructed
+/// environment, no program a config names, a bare repository only where it is named.
 pub fn ignore_check(root: &Path) -> IgnoreCheck {
-    ignore_check_with(root, Path::new("git"))
+    checked_within(root, None, GIT_TIMEOUT)
 }
 
 /// [`ignore_check`] against a named `git`, which is how a test drives the answer git cannot
 /// give.
 pub fn ignore_check_with(root: &Path, git: &Path) -> IgnoreCheck {
-    ignore_check_within(root, git, GIT_TIMEOUT)
+    checked_within(root, Some(git), GIT_TIMEOUT)
 }
 
 /// [`ignore_check_with`] waiting `timeout` for git instead of [`GIT_TIMEOUT`].
@@ -1174,6 +1177,11 @@ pub fn ignore_check_with(root: &Path, git: &Path) -> IgnoreCheck {
 /// thirty seconds made that one test half of `cargo test -p purlis-core`'s wall clock —
 /// and the nightly mutation run pays the whole suite once per mutant, six thousand times.
 pub fn ignore_check_within(root: &Path, git: &Path, timeout: std::time::Duration) -> IgnoreCheck {
+    checked_within(root, Some(git), timeout)
+}
+
+/// [`ignore_check`] with `git` a test's program, or `None`: the product's hardened runner.
+fn checked_within(root: &Path, git: Option<&Path>, timeout: std::time::Duration) -> IgnoreCheck {
     if !crate::names::local_settings(root).exists() {
         return IgnoreCheck::default();
     }
@@ -1189,7 +1197,7 @@ pub fn ignore_check_within(root: &Path, git: &Path, timeout: std::time::Duration
 /// path is IGNORED (`git check-ignore`, which answers for a path that does not exist and counts
 /// a tracked path as not ignored), and says it in [`ignore_check`]'s own sentences.
 pub fn ignore_check_before_writing(root: &Path) -> IgnoreCheck {
-    ignore_check_before_writing_within(root, Path::new("git"), GIT_TIMEOUT)
+    before_writing_within(root, None, GIT_TIMEOUT)
 }
 
 /// [`ignore_check_before_writing`] against a named `git`, waiting `timeout` for it.
@@ -1198,8 +1206,17 @@ pub fn ignore_check_before_writing_within(
     git: &Path,
     timeout: std::time::Duration,
 ) -> IgnoreCheck {
+    before_writing_within(root, Some(git), timeout)
+}
+
+/// [`ignore_check_before_writing`] with `git` a test's program, or `None`: the hardened runner.
+fn before_writing_within(
+    root: &Path,
+    git: Option<&Path>,
+    timeout: std::time::Duration,
+) -> IgnoreCheck {
     if crate::names::local_settings(root).exists() {
-        return ignore_check_within(root, git, timeout);
+        return checked_within(root, git, timeout);
     }
     check_of(root, git_ignore_state(root, git, timeout))
 }
@@ -1255,7 +1272,7 @@ enum GitState {
 /// What git says about the local file, from ONE `git status` ([`git_answer`] says why its
 /// flags). `--untracked-files=all` overrides an operator's `status.showUntrackedFiles=no`,
 /// which would otherwise hide `??`.
-fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
+fn git_path_state(root: &Path, git: Option<&Path>, timeout: std::time::Duration) -> GitState {
     let out = match git_answer(
         root,
         git,
@@ -1272,14 +1289,13 @@ fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitS
         Ok(out) => out,
         Err(state) => return state,
     };
-    let said = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-    if !out.status.success() {
+    let said = out.stderr.trim().to_owned();
+    if out.code != Some(0) {
         return failed(&out, &said);
     }
     // What the porcelain lines say, kept apart from the state they decide: a tracked line
     // anywhere wins, because the next commit carries the file whatever else is printed.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
+    let lines: Vec<&str> = out.stdout.lines().collect();
     let (mut tracked, mut untracked) = (false, false);
     for line in &lines {
         let code: String = line.chars().take(2).collect();
@@ -1309,7 +1325,7 @@ fn local_name(root: &Path) -> &'static str {
 
 /// What git says about a local file that does not exist yet, from ONE `git check-ignore`:
 /// exit 0 is ignored, exit 1 is not — which is also its answer for a path git tracks.
-fn git_ignore_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
+fn git_ignore_state(root: &Path, git: Option<&Path>, timeout: std::time::Duration) -> GitState {
     let out = match git_answer(
         root,
         git,
@@ -1319,22 +1335,29 @@ fn git_ignore_state(root: &Path, git: &Path, timeout: std::time::Duration) -> Gi
         Ok(out) => out,
         Err(state) => return state,
     };
-    match out.status.code() {
+    match out.code {
         Some(0) => GitState::Ignored,
         Some(1) => GitState::Committable,
-        _ => failed(&out, String::from_utf8_lossy(&out.stderr).trim()),
+        _ => failed(&out, out.stderr.trim()),
     }
 }
 
 /// A git that exited non-zero: not a repository, or an unknown with git's first line.
-fn failed(out: &std::process::Output, said: &str) -> GitState {
-    if out.status.code() == Some(128) && said.contains("not a git repository") {
+fn failed(out: &Answered, said: &str) -> GitState {
+    if out.code == Some(128) && said.contains("not a git repository") {
         return GitState::NotARepo;
     }
     GitState::Unknown(match said.lines().next() {
         Some(line) => line.to_owned(),
-        None => format!("git exited {:?}", out.status.code()),
+        None => format!("git exited {:?}", out.code),
     })
+}
+
+/// What one git call that finished answered.
+struct Answered {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
 }
 
 /// One git command in `root`, bounded by `timeout`, with its output — or the unknown it came
@@ -1344,10 +1367,31 @@ fn failed(out: &std::process::Output, said: &str) -> GitState {
 /// another language.
 fn git_answer(
     root: &Path,
-    git: &Path,
+    git: Option<&Path>,
     args: &[&str],
     timeout: std::time::Duration,
-) -> Result<std::process::Output, GitState> {
+) -> Result<Answered, GitState> {
+    let late = || {
+        GitState::Unknown(format!(
+            "git did not answer within {} seconds",
+            timeout.as_secs()
+        ))
+    };
+    // The product's git: the hardened runner, which bounds the wait itself (#1415).
+    let Some(git) = git else {
+        let mut asked = vec!["--no-optional-locks"];
+        asked.extend_from_slice(args);
+        let run = crate::worktree::git::run(root, &asked, timeout)
+            .map_err(|e| GitState::Unknown(e.to_string()))?;
+        if run.code.is_none() {
+            return Err(late());
+        }
+        return Ok(Answered {
+            code: run.code,
+            stdout: run.out,
+            stderr: run.err,
+        });
+    };
     let mut child = match crate::forklock::spawn(
         std::process::Command::new(git)
             .args(["--no-optional-locks", "-C", &root.display().to_string()])
@@ -1373,17 +1417,19 @@ fn git_answer(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(GitState::Unknown(format!(
-                    "git did not answer within {} seconds",
-                    timeout.as_secs()
-                )));
+                return Err(late());
             }
             Err(e) => return Err(GitState::Unknown(e.to_string())),
         }
     }
-    child
+    let out = child
         .wait_with_output()
-        .map_err(|e| GitState::Unknown(e.to_string()))
+        .map_err(|e| GitState::Unknown(e.to_string()))?;
+    Ok(Answered {
+        code: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
 }
 
 #[cfg(test)]

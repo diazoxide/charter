@@ -76,8 +76,8 @@ fn isolated_answer(
     };
     let mut checked = Vec::new();
     for repo in touched(root, &ask.workspace, &ask.work) {
-        match runs_a_program(&repo) {
-            Ok(git_dir) => checked.push((repo, git_dir)),
+        match checked_repo(&repo) {
+            Ok(found) => checked.push((repo, found)),
             Err(why) => return no(why),
         }
     }
@@ -113,11 +113,10 @@ fn isolated_answer(
                 )
             };
             // The clone's git calls are given the git directory the check resolved, so the
-            // worktree is cut from the repository that was checked (D-1335-9).
+            // worktree is cut from the repository that was checked (D-1335-9) — that very
+            // directory, compared again before every call and once after (#1415).
             match (git::isolation(), checked.first()) {
-                (Some(held), Some((tree, git_dir))) => {
-                    git::isolated(&held.pinned(tree, git_dir), || add(&mut say))
-                }
+                (Some(held), Some((tree, found))) => cut_pinned(&held, tree, found, &mut say, add),
                 _ => add(&mut say),
             }
         }
@@ -158,8 +157,11 @@ pub fn in_a_checked_clone<T>(
     }
     let clone = root.join("workspaces").join(ws).join(repo);
     git::isolated(isolation, || {
-        let git_dir = runs_a_program(&clone)?;
-        Ok(git::isolated(&isolation.pinned(&clone, &git_dir), then))
+        let found = checked_repo(&clone)?;
+        Ok(git::isolated(
+            &isolation.pinned_as(&clone, &found.git_dir, found.id),
+            then,
+        ))
     })
 }
 
@@ -194,8 +196,9 @@ pub fn in_a_checked_folder<T>(
         .map_err(|refusal| NotRun::Repo(refusal.to_string()))?;
     let clone = root.join("workspaces").join(ws).join(repo);
     git::isolated(isolation, || {
-        let git_dir = runs_a_program(&clone).map_err(NotRun::Repo)?;
-        let mut held = isolation.pinned(&clone, &git_dir);
+        let found = checked_repo(&clone).map_err(NotRun::Repo)?;
+        let git_dir = found.git_dir;
+        let mut held = isolation.pinned_as(&clone, &git_dir, found.id);
         if folder.symlink_metadata().is_ok() {
             let own = crate::worktree::pointer::verified(&git_dir, &folder, piece)
                 .map_err(NotRun::Folder)?;
@@ -358,6 +361,46 @@ fn touched(root: &Path, ws: &str, work: &GitWork) -> Vec<PathBuf> {
 /// so a linked worktree's git directory is never the answer. Answers the git directory it
 /// checked, for the action to be pinned to.
 pub fn runs_a_program(repo: &Path) -> Result<PathBuf, String> {
+    checked_repo(repo).map(|found| found.git_dir)
+}
+
+/// What [`checked_repo`] found: the git directory it checked, and which directory that was
+/// ([`git::DirId`]), for the action to be pinned to (#1415).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    pub git_dir: PathBuf,
+    pub id: Option<git::DirId>,
+}
+
+/// Runs `add` with every git call held to the git directory `found` checked for `tree`, that
+/// very directory (#1415), and checks once more after it: an add during which the directory
+/// was replaced says so and fails, whatever git answered.
+fn cut_pinned(
+    held: &git::Isolated,
+    tree: &Path,
+    found: &Checked,
+    say: &mut dyn FnMut(Say),
+    add: impl FnOnce(&mut dyn FnMut(Say)) -> u8,
+) -> u8 {
+    let pinned = held.pinned_as(tree, &found.git_dir, found.id);
+    let code = git::isolated(&pinned, || add(&mut *say));
+    if pinned.holds() {
+        code
+    } else {
+        say(Say::Fail(REPLACED.to_owned()));
+        code.max(1)
+    }
+}
+
+/// What a worktree add says when the clone's git directory was replaced while it ran.
+const REPLACED: &str = "the clone's git directory was replaced while the app worked in it, so \
+    what it made may be another repository's. Look at the clone before you use it";
+
+/// [`runs_a_program`], answering the identity of the git directory too. **Pinned by
+/// identity** (#1415): the directory at `<repo>/.git` is taken by its device and inode before
+/// anything is asked of it, and a check that finds another directory there by the end refuses,
+/// so a rename between the check and the run can't swap another clone in.
+pub fn checked_repo(repo: &Path) -> Result<Checked, String> {
     let shown = repo.display();
     let not_a_clone = || {
         format!(
@@ -366,6 +409,7 @@ pub fn runs_a_program(repo: &Path) -> Result<PathBuf, String> {
         )
     };
     let own = std::fs::canonicalize(repo.join(".git")).map_err(|_| not_a_clone())?;
+    let id = git::DirId::of(&own);
     let resolved = git::run(repo, &["rev-parse", "--absolute-git-dir"], git::READ)
         .map_err(|e| e.to_string())?;
     let git_dir = std::fs::canonicalize(resolved.line()).map_err(|_| not_a_clone())?;
@@ -373,7 +417,9 @@ pub fn runs_a_program(repo: &Path) -> Result<PathBuf, String> {
         return Err(not_a_clone());
     }
     let listed = git::isolated(
-        &git::isolation().unwrap_or_default().pinned(repo, &git_dir),
+        &git::isolation()
+            .unwrap_or_default()
+            .pinned_as(repo, &git_dir, id),
         || {
             git::run(
                 repo,
@@ -406,7 +452,13 @@ pub fn runs_a_program(repo: &Path) -> Result<PathBuf, String> {
             ));
         }
     }
-    Ok(git_dir)
+    if git::DirId::of(&git_dir) != id {
+        return Err(format!(
+            "{shown}'s `.git` was replaced while the app checked it, so the app will not run git \
+             there for the chat. Run the command again"
+        ));
+    }
+    Ok(Checked { git_dir, id })
 }
 
 /// Whether config key `key` (as git lists it: section and name lowercased) names a program.
