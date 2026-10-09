@@ -21,7 +21,7 @@ const ROUTES = {
   "bash": {
     "name": "Bash",
     "pre": "pretooluse",
-    "post": null
+    "post": "posttooluse-blocked"
   },
   "read": {
     "name": "Read",
@@ -109,6 +109,20 @@ const context = (said) => {
   if (said.code !== 0) return ""
   const extra = answer(said)?.hookSpecificOutput?.additionalContext
   return typeof extra === "string" ? extra : ""
+}
+
+// What a tool came back with, in the shape a Claude Code hook is handed it. opencode hands back
+// a shell command's standard output and error as one text, with its exit status beside it
+// (`metadata.exit`). A command that failed is read for a block as standard error is, marked
+// `mixed`: it holds what the command printed too, so purlis names no host or path from it for a
+// grant, and the person types one. One that did not fail is one mixed text, of which purlis
+// reads only a sandbox's own violation lines, so a `cat` that prints a refusal's words raises
+// nothing.
+const response = (tool, output) => {
+  const said = String(output?.output ?? "")
+  if (tool !== "bash") return { output: said }
+  const exit = output?.metadata?.exit
+  return typeof exit === "number" && exit !== 0 ? { stderr: said, mixed: true } : said
 }
 
 // Why a tool call is refused, or null when it may run.
@@ -203,15 +217,22 @@ export const CharterPlugin = async (plugin, options) => {
     return said
   }
 
+  // The folder a tool call runs in: a shell command's own `workdir`, read against this
+  // instance's folder where it is relative, else this instance's folder.
+  const where = (tool, args) => {
+    const workdir = tool === "bash" && typeof args?.workdir === "string" ? args.workdir : ""
+    if (!workdir) return directory
+    return workdir.startsWith("/") ? workdir : `${directory.replace(/\/+$/, "")}/${workdir}`
+  }
+
   // Awaited before the tool runs; throwing is what refusing is.
   const before = async (input, output) => {
     const tool = toolId(input)
     const args = output?.args ?? {}
-    const workdir = typeof args?.workdir === "string" && args.workdir ? args.workdir : directory
     const why = refusal(await run(route(tool, "pre") ?? DEFAULT_PRE, {
       hook_event_name: "PreToolUse",
       session_id: rootOf(input?.sessionID),
-      cwd: tool === "bash" ? workdir : directory,
+      cwd: where(tool, args),
       tool_name: route(tool, "name") ?? tool,
       tool_input: args,
     }, input?.sessionID))
@@ -239,8 +260,9 @@ export const CharterPlugin = async (plugin, options) => {
 
     "tool.execute.before": before,
 
-    // The tallies and nudges purlis keeps after a tool ran. A note rides the tool's own
-    // output, fenced, and only for a tool that reports an action rather than content.
+    // The tallies and nudges purlis keeps after a tool ran, and a shell command's result read
+    // for a sandbox block (#1353). A note rides the tool's own output, fenced, and only for a
+    // tool that reports an action rather than content.
     "tool.execute.after": async (input, output) => {
       const tool = toolId(input)
       const word = route(tool, "post")
@@ -248,10 +270,10 @@ export const CharterPlugin = async (plugin, options) => {
       const said = await run(word, {
         hook_event_name: "PostToolUse",
         session_id: rootOf(input?.sessionID),
-        cwd: directory,
+        cwd: where(tool, input?.args),
         tool_name: route(tool, "name") ?? tool,
         tool_input: input?.args ?? {},
-        tool_response: { output: String(output?.output ?? "") },
+        tool_response: response(tool, output),
       }, input?.sessionID)
       const note = context(said)
       if (!note || !EFFECTFUL.includes(tool) || !output) return

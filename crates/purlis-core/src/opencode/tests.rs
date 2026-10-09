@@ -249,3 +249,44 @@ fn a_sandboxed_chat_makes_no_snapshot() {
     let doc: serde_json::Value = serde_json::from_str(&unsandboxed).expect("JSON");
     assert_eq!(doc.get("snapshot"), None);
 }
+
+#[test]
+fn a_shell_commands_result_goes_to_the_block_hook_as_claude_codes_does() {
+    // #1353: a sandbox block in an opencode chat reaches the same Notice as Claude Code's. The
+    // block detector is harness-neutral; the shim only routes `bash` to the block word.
+    let bash = TOOLS.iter().find(|t| t.id == "bash").expect("bash");
+    assert_eq!(bash.post, Some("posttooluse-blocked"));
+    let text = shim(Arming::Session);
+    assert!(text.contains(r#""post": "posttooluse-blocked""#), "{text}");
+    // Only the session shim reports results: the installed copy is the guards alone.
+    let installed = shim(Arming::GuardOnly(Path::new("/bin/purlis")));
+    assert!(!installed.contains("tool.execute.after"), "{installed}");
+}
+
+#[test]
+fn a_failed_shell_commands_one_stream_is_read_as_its_standard_error() {
+    // opencode hands back a shell command's standard output and error as one text, with its
+    // exit status in `metadata.exit` (read off opencode 1.18.33's bash tool). A command that
+    // failed is read as standard error is, marked mixed so no host or path it printed is named
+    // for a grant (`sandboxblock`); one that did not is one mixed text, of which the detector
+    // reads only a sandbox's own violation lines, so a `cat` that prints a refusal's words
+    // raises nothing.
+    let text = shim(Arming::Session);
+    assert!(
+        text.contains(
+            r#"typeof exit === "number" && exit !== 0 ? { stderr: said, mixed: true } : said"#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("tool_response: response(tool, output)"),
+        "{text}"
+    );
+    // A relative path in a block is read against the folder the command ran in, as before it,
+    // and a relative `workdir` against the instance's folder.
+    assert!(text.contains("cwd: where(tool, input?.args)"), "{text}");
+    assert!(
+        text.contains(r#"workdir.startsWith("/") ? workdir"#),
+        "{text}"
+    );
+}

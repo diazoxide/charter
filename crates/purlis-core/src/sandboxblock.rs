@@ -25,6 +25,16 @@
 //! that path only the violation block is read: a chat that prints a file or greps purlis's own
 //! sources is not refused anything.
 //!
+//! **Each harness's adapter hands its result over in that shape** (#1353). opencode returns a
+//! shell command's standard output and error as one text, with its exit status beside it. Its
+//! shim (`crate::opencode`) passes a command that did not fail as one mixed text, so only a
+//! violation block is read from it. A command that failed is passed as standard error marked
+//! `mixed`, and all three kinds of evidence are read from it, standard output included, which is
+//! wider than Claude Code's route: a failing command that prints a refusal's words raises a
+//! block. So from a mixed stream nothing but a violation line names a target for a grant
+//! ([`detect_with_targets`]): such a Notice names no host or path, and the person types it.
+//! Codex arms no hook after a command, so a Codex chat's blocks are not read.
+//!
 //! # Whose operation it was
 //!
 //! **Per violation line, by the process it names**: a line whose process is `purlis` (or a name
@@ -307,6 +317,9 @@ pub fn detect(payload: &serde_json::Value, place: &Place<'_>) -> Vec<Block> {
 /// outside purlis's own state and the protected files. `None` for every other block, and for a
 /// connection whose report names no host (Claude Code's proxy says none): the person types it.
 ///
+/// A `tool_response` marked `mixed` holds what the command printed on both streams in its
+/// `stderr` (opencode's, #1353): from it only a violation line names a target.
+///
 /// It goes to the app alone, on the block's line, for the Notice's Allow. It is never kept with
 /// the block ([`record`] keeps a [`Block`]), counted, or put in a Report.
 pub fn detect_with_targets(
@@ -318,7 +331,18 @@ pub fn detect_with_targets(
         serde_json::Value::String(mixed) => found.extend(violations(mixed, place)),
         response => {
             if let Some(stderr) = response["stderr"].as_str() {
-                found.extend(on_stderr(stderr, place));
+                if response["mixed"].as_bool() == Some(true) {
+                    // Standard error and output in one text (opencode's, #1353): what the
+                    // command printed may name any host or path, so only a violation line,
+                    // which is the sandbox's own, names a target.
+                    let own = violations(stderr, place);
+                    found.extend(on_stderr(stderr, place).into_iter().map(|(block, target)| {
+                        let kept = target.is_some() && own.contains(&(block, target.clone()));
+                        (block, if kept { target } else { None })
+                    }));
+                } else {
+                    found.extend(on_stderr(stderr, place));
+                }
             }
         }
     }
