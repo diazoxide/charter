@@ -4551,20 +4551,23 @@ export type Offered = {
 
 /**
  *  The chats of a project still running under an older sandbox (#1428), for the Notice after
- *  a sandbox setting changes.
+ *  a sandbox setting changes: those that run under a sandbox other than the one a start would
+ *  compile for them now. The window is sent this type itself (`chats_on_older_sandbox`).
  */
 export type OlderSandbox = {
 	/**  The chats, by session, lowest first. */
 	chats: OnOlderSandbox[],
 };
 
-/**  One chat still running under an older sandbox. */
+/**  One chat still running under an older sandbox ([`OlderSandbox`]). */
 export type OnOlderSandbox = {
 	session: number,
 	/**
-	 *  What stands for what the project's settings decide of this chat's sandbox now: a
-	 *  dismissal of the Notice is kept for each chat by it, so the Notice is shown once for
-	 *  each change, and one chat restarting does not bring it back for another.
+	 *  What stands for what the project's settings decide of this chat's sandbox now
+	 *  ([`Settled::key`]): a dismissal of the Notice is kept for each chat by it, so the
+	 *  Notice is shown once for each change, and one chat restarting does not bring it back
+	 *  for another. It is kept on disk with a dismissal, so it is the same on every build of
+	 *  purlis.
 	 */
 	change: string,
 };
