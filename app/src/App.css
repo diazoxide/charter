@@ -5390,8 +5390,15 @@ h2.sidebar-title .node-icon {
   font-size: 0.85rem;
 }
 
+/* The verdict's mark, drawn heavier than the window's other icons, as the table's glyph was
+   bold: it is what the eye runs down. */
 .doctor-glyph {
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+}
+
+.doctor-glyph .lucide {
+  stroke-width: 3;
 }
 
 .doctor-ok .doctor-glyph {
@@ -5779,6 +5786,8 @@ h2.sidebar-title .node-icon {
 }
 
 .menu-sub-mark {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-muted);
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { LoaderCircle, Stethoscope } from "lucide-react";
+import { Check, LoaderCircle, Stethoscope, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { Notice } from "./Notice";
 import { landSettingsFocus } from "./settings/entering";
 import {
@@ -322,8 +322,10 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
   return { said, tone, label };
 }
 
-/** The glyph `charter doctor`'s own table draws for each verdict, so the two read alike. */
-const GLYPH: Record<DoctorRow["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
+/** The mark each verdict is drawn with: the icon set's for what `purlis doctor`'s own table
+ *  writes as ✓, ! and ✗, so the two read alike (DS-4, #627). Decorative: the heading a row is
+ *  under says its verdict in words. */
+const MARK: Record<DoctorRow["status"], LucideIcon> = { ok: Check, warn: TriangleAlert, fail: X };
 
 /** What a row's Fix button needs: the doctor's `fix`, and whether one may be pressed now. */
 export type Fixer = {
@@ -517,6 +519,12 @@ export function DoctorNotices({
   );
 }
 
+/** A verdict's mark, from {@link MARK}. */
+function Mark({ status }: { status: DoctorRow["status"] }) {
+  const Icon = MARK[status];
+  return <Icon />;
+}
+
 /**
  * The rows of one heading. A row whose fix is a setting names that setting's group
  * (`DoctorRow.settings`, SE-22), and is drawn with the way into it: `onOpenSettings`. A row
@@ -536,7 +544,7 @@ function Rows({
       {rows.map((row) => (
         <li key={row.name} className={`doctor-row doctor-${row.status}`} data-row={row.name}>
           <span className="doctor-glyph" aria-hidden="true">
-            {GLYPH[row.status]}
+            <Mark status={row.status} />
           </span>
           <span className="doctor-name">{row.name}</span>
           <span className="doctor-detail">{row.detail}</span>
