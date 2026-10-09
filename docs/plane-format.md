@@ -5461,7 +5461,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   timeline of the chat that asked for it and shown on none; a file that does not parse as a
   record of this version at all is skipped and counted nowhere, as in the Dispatches tab.
   **A timeline is bounded** (#1520, `activity::Bounds::TAB`): it reads the project's newest
-  2,000 records, found by their file names (a ULID sorts by the time it was minted), and
+  2,000 records, found by their file names (a ULID sorts by the time it was minted; a name
+  minted more than five minutes after the app's clock is taken as the oldest, so files named
+  in the future cannot push the real records out of the read, #1556), and
   lists the newest 200 tasks the chat dispatched itself, each with every task under it, so a
   listed task's parent is always listed; the tab says how many older tasks of the chat's own
   it does not list, and that older records were not read where there are any. Both bounds

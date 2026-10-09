@@ -1332,16 +1332,13 @@ impl Live {
 /// the app's own bookkeeping works on. A file that is not a record of this version is skipped
 /// and left as it is. What is put on the screen is [`drawn`]'s.
 pub fn list(root: &Path) -> Vec<Record> {
-    newest(root, usize::MAX).0
+    ids(root).iter().filter_map(|id| read(root, id)).collect()
 }
 
-/// [`list`], **reading at most the `most` newest records** (#1520): those, newest first, and
-/// how many record files older than them were not read. A record's file is named by its id, a
-/// ULID, which sorts by the time it was minted, so the newest are found from the names alone
-/// and no file past `most` is opened.
-pub fn newest(root: &Path, most: usize) -> (Vec<Record>, usize) {
+/// The ids the store's file names hold, newest first by the time each was minted.
+fn ids(root: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir(root)) else {
-        return (Vec::new(), 0);
+        return Vec::new();
     };
     let mut ids: Vec<String> = entries
         .flatten()
@@ -1350,6 +1347,32 @@ pub fn newest(root: &Path, most: usize) -> (Vec<Record>, usize) {
         .filter(|id| an_id(id))
         .collect();
     ids.sort_by(|a, b| b.cmp(a));
+    ids
+}
+
+/// [`list`], **reading at most the `most` newest records** (#1520): those, newest first, and
+/// how many record files older than them were not read. A record's file is named by its id, a
+/// ULID, which sorts by the time it was minted, so the newest are found from the names alone
+/// and no file past `most` is opened.
+///
+/// **A name minted after `now` is taken as the oldest** (#1556): every record purlis opens is
+/// named at the time it opened, so one dated later (beyond a clock a little ahead of this one)
+/// was not, and a file of that name cannot push the real records out of the read. It is still
+/// read where there is room after them.
+pub fn newest(
+    root: &Path,
+    most: usize,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (Vec<Record>, usize) {
+    let mut ids = ids(root);
+    let latest = (now + END_SKEW).timestamp_millis();
+    let ahead = |id: &String| {
+        ulid::Ulid::from_string(id).map_or(true, |minted| {
+            i64::try_from(minted.timestamp_ms()).map_or(true, |minted| minted > latest)
+        })
+    };
+    // Stable: newest first within each of the two.
+    ids.sort_by_key(ahead);
     let unread = ids.len().saturating_sub(most);
     ids.truncate(most);
     let records = ids.iter().filter_map(|id| read(root, id)).collect();
