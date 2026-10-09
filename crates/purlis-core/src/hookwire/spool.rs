@@ -110,6 +110,19 @@ const A_PART_IS_A_DEAD_HOOKS_AFTER: Duration = Duration::from_secs(60 * 60);
 /// this is not one, and is `unreadable`.
 const A_LINE_IS_READ_UP_TO: u64 = 1024 * 1024;
 
+/// How long the drain waits for one chat's spool, its folder or the file a build before #983
+/// wrote, while another process holds it (#1419): an older build's hook holds that file across
+/// its sync, which it waits for at most a quarter of a second. Past it the chat is left as it
+/// is, its lines unread and its keys kept, said in the log, and drained at the next start: one
+/// holder never holds up the drain of every other chat, or the app's start.
+const THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST: Duration = Duration::from_secs(1);
+
+/// The most of the file a build before #983 wrote that the drain reads (#1419). That build's
+/// hook appended a line only to a file of at most 16 MiB, so every line it wrote is within
+/// this; a file past it is not one it wrote, and is `unreadable`, left unread for its owner to
+/// look at.
+const AN_OLDER_BUILDS_FILE_IS_READ_UP_TO: u64 = 16 * 1024 * 1024 + A_LINE_IS_READ_UP_TO;
+
 /// The most ranges of missing numbers `keys.json` keeps for one key ([`Held::missing`]). A range
 /// is what one gap left, and a gap is a hook that was writing while a drain ran, or one that
 /// died: a handful. Past this the lowest go, and a line under one of those is `repeated`.
@@ -456,17 +469,16 @@ impl Folder {
         }
     }
 
-    /// [`Folder::open`] for a hook, which makes the folder, owner-only, where it is not there,
-    /// and says whether it did.
-    fn of_a_hook(dir: &Path, chat: u32) -> io::Result<(Self, bool)> {
+    /// [`Folder::open`] for a hook, which makes the folder, owner-only, where it is not there.
+    fn of_a_hook(dir: &Path, chat: u32) -> io::Result<Self> {
         use std::os::unix::fs::DirBuilderExt;
         let at = folder_for(dir, chat);
-        let made = match std::fs::DirBuilder::new().mode(0o700).create(&at) {
-            Ok(()) => true,
-            Err(why) if why.kind() == io::ErrorKind::AlreadyExists => false,
+        match std::fs::DirBuilder::new().mode(0o700).create(&at) {
+            Ok(()) => {}
+            Err(why) if why.kind() == io::ErrorKind::AlreadyExists => {}
             Err(why) => return Err(crate::rewrite::refused_at(&at)(why)),
-        };
-        Ok((Self::open(dir, chat)?, made))
+        }
+        Self::open(dir, chat)
     }
 
     /// Every name in the folder, each once and in order, refused past `at_most` of them
@@ -674,6 +686,8 @@ struct Bounds {
     wait: Duration,
     /// Called once per line, after it is written and before it is synced: the disk taking it.
     a_line_reaches_the_disk: fn() -> io::Result<()>,
+    /// Makes the spool directory durable, with the chat's folder in it: [`sync_dir`].
+    the_spool_reaches_the_disk: fn(&Path) -> io::Result<()>,
 }
 
 impl Bounds {
@@ -681,6 +695,7 @@ impl Bounds {
         lines: A_SPOOL_HOLDS_AT_MOST,
         wait: A_LINE_IS_SPOOLED_WITHIN,
         a_line_reaches_the_disk: || Ok(()),
+        the_spool_reaches_the_disk: sync_dir,
     };
 }
 
@@ -762,7 +777,12 @@ fn append_within(
 /// 2. The line, with that number and its MAC, is written into that file and `fsync`ed.
 /// 3. The file is linked as `<key>.<seq>.json`, which fails rather than replace a line, and the
 ///    `.part` name is removed.
-/// 4. The folder is `fsync`ed, and `dir` too if the folder is new.
+/// 4. The folder is `fsync`ed, and then `dir`, which holds the folder's own name.
+///
+/// **`dir` is synced for every line, not only by the hook that made the folder** (#1419): a hook
+/// that made it and ran out of its wait before that sync was done leaves a folder whose name
+/// may not be durable, and nothing on disk says so. The next line's sync makes it durable; it
+/// is one more sync of a small directory, on the path a line takes only when the host did not.
 ///
 /// A write the disk refuses leaves nothing: the `.part` file is removed and the number is free
 /// again. A hook that dies in the middle leaves the `.part` file, which holds the number and is
@@ -778,7 +798,7 @@ fn write_line(
     line: String,
     bounds: Bounds,
 ) -> io::Result<u64> {
-    let (folder, made) = Folder::of_a_hook(dir, chat)?;
+    let folder = Folder::of_a_hook(dir, chat)?;
     let mut on_disk = OnDisk {
         v: VERSION,
         seq: 0,
@@ -832,9 +852,7 @@ fn write_line(
         }
         folder.let_go(&name, &part);
         folder.sync()?;
-        if made {
-            sync_dir(dir)?;
-        }
+        (bounds.the_spool_reaches_the_disk)(dir)?;
         return Ok(seq);
     }
 }
@@ -1152,8 +1170,18 @@ pub mod why {
 ///
 /// **Refused when a newer build wrote `keys.json`** ([`read_keys`]): nothing is drained.
 pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<()> {
+    drain_leaving(dir, each).map(drop)
+}
+
+/// [`drain`], answering the chats it left, unread, because another process held their spool
+/// past [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`]: each keeps every key it has, for the drain that
+/// reads it.
+fn drain_leaving(
+    dir: &Path,
+    each: &mut dyn FnMut(Drained) -> io::Result<()>,
+) -> io::Result<Vec<u32>> {
     if !dir.is_dir() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     keys_locked(dir, || {
         let mut keys = read_keys(dir)?;
@@ -1175,13 +1203,17 @@ pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io:
                     }
                 }
             }
-            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(why) => return Err(why),
         }
+        let mut left = Vec::new();
         for (chat, (file, folder)) in chats {
-            drain_chat(dir, chat, (file, folder), &mut keys, each)?;
+            if !drain_chat(dir, chat, (file, folder), &mut keys, each)? {
+                left.push(chat);
+            }
         }
-        // Every chat is drained: a chat keeps the key it was issued last, and no other.
+        // Every chat is drained: a chat keeps the key it was issued last, and no other. One
+        // left unread keeps them all, so its lines still check at the drain that reads them.
         let before = keys.keys.len();
         let newest: HashMap<u32, String> = keys
             .keys
@@ -1189,11 +1221,11 @@ pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io:
             .map(|held| (held.chat, held.id.clone()))
             .collect();
         keys.keys
-            .retain(|held| newest.get(&held.chat) == Some(&held.id));
-        if keys.keys.len() == before {
-            return Ok(());
+            .retain(|held| newest.get(&held.chat) == Some(&held.id) || left.contains(&held.chat));
+        if keys.keys.len() != before {
+            write_keys(dir, &keys)?;
         }
-        write_keys(dir, &keys)
+        Ok(left)
     })
 }
 
@@ -1219,7 +1251,15 @@ pub fn end_chat(
             file_for(dir, chat).symlink_metadata().is_ok(),
             folder_for(dir, chat).symlink_metadata().is_ok(),
         );
-        drain_chat(dir, chat, stores, &mut keys, each)?;
+        if !drain_chat(dir, chat, stores, &mut keys, each)? {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "another process held chat {chat}'s spool for {} ms",
+                    THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST.as_millis()
+                ),
+            ));
+        }
         forget(dir, keys, |held| held.chat != chat)
     })
 }
@@ -1251,14 +1291,15 @@ pub fn forget_all_but(dir: &Path, back: &[u32]) -> io::Result<()> {
 
 /// [`drain`], as a host runs it when a project is opened, and then [`forget_all_but`] the
 /// chats in `back`: the two in the one order that drops no key before its lines are drained.
-/// A drain that stops drops nothing.
+/// A drain that stops drops nothing, and a chat the drain left unread (#1419) keeps its keys.
 pub fn drain_at_open(
     dir: &Path,
     back: &[u32],
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<()> {
-    drain(dir, each)?;
-    forget_all_but(dir, back)
+    let left = drain_leaving(dir, each)?;
+    let kept: Vec<u32> = back.iter().chain(&left).copied().collect();
+    forget_all_but(dir, &kept)
 }
 
 /// Writes `keys` with only the keys `kept` answers for, where that drops any.
@@ -1274,21 +1315,46 @@ fn forget(dir: &Path, mut keys: Keys, kept: impl Fn(&Held) -> bool) -> io::Resul
 /// Drains chat `chat`'s spool in `dir`, its file and then its folder where `stores` says it has
 /// them, and takes what was handed on into `keys`, written before a line's file is removed.
 /// Under the lock on `dir`, which its caller holds.
+///
+/// Answers whether it read them: `false` for a chat whose file or folder another process held
+/// past [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`] (#1419). What it did not read is left as it is,
+/// said in the log, for the next drain; what it read of the chat before that is handed on and
+/// kept as drained.
 fn drain_chat(
     dir: &Path,
     chat: u32,
     (file, folder): (bool, bool),
     keys: &mut Keys,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let mut given = Given::new();
     if file {
-        given = drain_file(dir, chat, keys, each)?;
+        match drain_file(dir, chat, keys, each)? {
+            Some(gave) => given = gave,
+            None => return Ok(false),
+        }
     }
     if folder {
-        drain_folder(dir, chat, keys, given, each)?;
+        return drain_folder(dir, chat, keys, given, each);
     }
-    Ok(())
+    Ok(true)
+}
+
+/// The lock on chat `chat`'s spool, `file` (its folder or its file, as `what` says), taken
+/// within [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`]; `None`, said in the log, once another
+/// process has held it that long.
+fn spool_locked(file: File, chat: u32, what: &str) -> io::Result<Option<crate::filelock::Held>> {
+    match crate::filelock::lock_within(file, THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST, what) {
+        Ok(held) => Ok(Some(held)),
+        Err(why) if why.kind() == io::ErrorKind::TimedOut => {
+            tracing::warn!(
+                "purlis: chat {chat}'s hook spool was not drained ({why}); its lines and keys \
+                 are kept, and it is drained at the next start"
+            );
+            Ok(None)
+        }
+        Err(why) => Err(why),
+    }
 }
 
 /// The lines a drain has handed on from one of a chat's stores, each by its key's id, its number
@@ -1462,7 +1528,9 @@ impl<'a> Checked<'a> {
 
 /// Drains chat `chat`'s folder of lines, after its file of them gave `already`.
 ///
-/// It holds the folder's lock, which only another drain waits for: no hook takes it. It reads
+/// It holds the folder's lock, which only another drain waits for: no hook takes it. It waits
+/// for it at most [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`], and answers `false`, having read
+/// nothing, past that ([`drain_chat`]). It reads
 /// each file that has a line's name and checks it as it reads, hands them on, and then removes
 /// those files and every name it could not read, and no other. A `.part` file is a number a
 /// hook holds and is not read. One with no line of its name yet is said (`unfinished`), left
@@ -1477,24 +1545,27 @@ fn drain_folder(
     keys: &mut Keys,
     already: Given,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     // A spool path that does not open as a folder (a file, a link, live or dangling, a pipe)
     // holds no line to read, and must not stop the drain of every chat after it: it is
     // reported as one unreadable line, and left for its owner to look at.
     let folder = match Folder::open(dir, chat) {
         Ok(folder) => folder,
-        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(true),
         Err(_) => {
-            return each(Drained::Rejected {
+            each(Drained::Rejected {
                 chat,
                 seq: None,
                 why: why::UNREADABLE,
-            });
+            })?;
+            return Ok(true);
         }
     };
-    let held = folder.held.try_clone()?;
-    held.lock()?;
-    let _one_drain_at_a_time = crate::filelock::Held::locked(held);
+    let Some(_one_drain_at_a_time) =
+        spool_locked(folder.held.try_clone()?, chat, "this chat's spool folder")?
+    else {
+        return Ok(false);
+    };
 
     let names = folder.names(usize::MAX)?;
     let taken = keys.by_id();
@@ -1556,19 +1627,25 @@ fn drain_folder(
     for name in unread {
         let _ = folder.remove(&**name);
     }
-    folder.sync()
+    folder.sync()?;
+    Ok(true)
 }
 
 /// Drains chat `chat`'s file of lines, the spool of a build before #983: read under the file's
 /// lock, as that build's hooks append under it, handed on, and emptied. Answers what it gave.
 /// What it handed on is taken into `keys` and written before the file is emptied, as
 /// [`drain_folder`] does before it removes a line.
+///
+/// **Bounded** (#1419): the lock is waited for at most [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`],
+/// past which it answers `None` having read nothing ([`drain_chat`]), and at most
+/// [`AN_OLDER_BUILDS_FILE_IS_READ_UP_TO`] of the file is read: a file past that is one
+/// `unreadable`, left as it is and said at each drain, and none of its lines is handed on.
 fn drain_file(
     dir: &Path,
     chat: u32,
     keys: &mut Keys,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
-) -> io::Result<Given> {
+) -> io::Result<Option<Given>> {
     // A spool path that does not open as a plain file (a directory, a link, live or dangling,
     // a pipe) holds no line to read, and must not stop the drain of every chat after it: it is
     // reported as one unreadable line, and left for its owner to look at.
@@ -1577,20 +1654,31 @@ fn drain_file(
     options.read(true).write(true);
     let file = match crate::contain::nofollow(&mut options).open(&path) {
         Ok(file) if file.metadata()?.is_file() => file,
-        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Given::new()),
+        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Some(Given::new())),
         _ => {
             each(Drained::Rejected {
                 chat,
                 seq: None,
                 why: why::UNREADABLE,
             })?;
-            return Ok(Given::new());
+            return Ok(Some(Given::new()));
         }
     };
-    file.lock()?;
-    let mut file = crate::filelock::Held::locked(file);
+    let Some(file) = spool_locked(file, chat, "this chat's spool file")? else {
+        return Ok(None);
+    };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    (&*file)
+        .take(AN_OLDER_BUILDS_FILE_IS_READ_UP_TO + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > AN_OLDER_BUILDS_FILE_IS_READ_UP_TO {
+        each(Drained::Rejected {
+            chat,
+            seq: None,
+            why: why::UNREADABLE,
+        })?;
+        return Ok(Some(Given::new()));
+    }
     let taken = keys.by_id();
     let mut checked = Checked::of(chat, Store::File, &taken, Given::new());
     for raw in lines_of(&bytes) {
@@ -1603,8 +1691,8 @@ fn drain_file(
     // Everything handed on is recorded, and every line was this drain's: emptied, not removed,
     // so a hook of that build holding it open appends to the file the next drain reads.
     file.set_len(0)?;
-    rustix::fs::fsync(&file)?;
-    Ok(given)
+    rustix::fs::fsync(&*file)?;
+    Ok(Some(given))
 }
 
 #[cfg(test)]
