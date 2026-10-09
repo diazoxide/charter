@@ -200,8 +200,17 @@ pub enum Refusal {
         /// `<short sha> <subject>`, newest first, at most [`NAMED`] of them.
         commits: Vec<String>,
     },
+    /// git itself refused a step. `err` is what git printed: the terminal's `Display` keeps
+    /// it, and the window never shows it, since it can name a path under the workspace or
+    /// carry git's own `--force` advice (#1102). `name` is what the window calls the branch:
+    /// the branch a cut asked for, or the piece's name for a removal, as the other removal
+    /// refusals say it.
     #[error("git {what} failed:\n{err}")]
-    GitRefused { what: String, err: String },
+    GitRefused {
+        what: GitStep,
+        name: String,
+        err: String,
+    },
     /// A refusal charter put in words itself, beside what git did: `terminal` names the
     /// command-line repair `charter worktree` offers, and `window` says the same of a branch
     /// and its folder with no command in it (#989). `Display` reads as [`Refusal::GitRefused`]
@@ -226,7 +235,8 @@ impl Refusal {
     /// `Display` gives, where the difference between the two is the point.
     ///
     /// Exhaustive on purpose: a refusal added later reaches the window only once someone has
-    /// chosen its words. What git printed, and a repo's or branch's own name, pass through.
+    /// chosen its words. A repo's or branch's own name passes through. When git refuses a step
+    /// outright, its words stay in the terminal (#1102).
     pub fn in_window(&self) -> String {
         match self {
             Self::BadWorkspace(ws) => format!("'{ws}' does not name a workspace in this project."),
@@ -282,7 +292,16 @@ impl Refusal {
                 "purlis could not read what git says about this repo's branches ({why}), so \
                  it did nothing."
             ),
-            Self::GitRefused { err, .. } => format!("git refused:\n{err}"),
+            Self::GitRefused {
+                what: GitStep::Add,
+                name,
+                ..
+            } => format!("git would not make branch '{name}' and its folder, so nothing was made."),
+            Self::GitRefused {
+                what: GitStep::Remove,
+                name,
+                ..
+            } => format!("git would not remove the folder of '{name}', so nothing was removed."),
             Self::Stuck { window, .. } => window.clone(),
             Self::Io { what, why, .. } => format!("could not {what} the branch's folder: {why}"),
             Self::Dirty { piece } => format!(
@@ -316,6 +335,25 @@ impl Refusal {
             | Self::BadBranchName(_)
             | Self::GitUnavailable(_) => self.to_string(),
         }
+    }
+}
+
+/// The git step a [`Refusal::GitRefused`] names. `Display` is the command's own words, for the
+/// terminal; the window's sentence is chosen per step in [`Refusal::in_window`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitStep {
+    /// `git worktree add`: a cut.
+    Add,
+    /// `git worktree remove`: a removal, or the clearing of a gone folder's record.
+    Remove,
+}
+
+impl std::fmt::Display for GitStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Add => "worktree add",
+            Self::Remove => "worktree remove",
+        })
     }
 }
 
@@ -667,7 +705,8 @@ pub fn add(
     )?;
     if !created.ok() {
         return Err(Refusal::GitRefused {
-            what: "worktree add".into(),
+            what: GitStep::Add,
+            name: branch.clone(),
             err: created.err,
         });
     }
@@ -786,7 +825,8 @@ pub fn clear_gone(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<boo
     let clone = clone_dir(plane, ws, repo)?;
     if path.symlink_metadata().is_ok() {
         return Err(Refusal::GitRefused {
-            what: "worktree remove".into(),
+            what: GitStep::Remove,
+            name: piece.to_string(),
             err: format!("something is at the folder of '{piece}' again, so nothing was cleared"),
         });
     }
@@ -920,7 +960,8 @@ fn remove_present(
     let done = git::run(clone, &argv, git::READ)?;
     if !done.ok() {
         return Err(Refusal::GitRefused {
-            what: "worktree remove".into(),
+            what: GitStep::Remove,
+            name: piece.to_string(),
             err: done.err,
         });
     }

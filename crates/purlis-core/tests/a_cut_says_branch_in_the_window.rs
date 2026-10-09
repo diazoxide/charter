@@ -3,7 +3,8 @@
 //! `charter worktree` keeps its own words, where the difference between a directory and a
 //! branch is the point; the window gets [`Refusal::in_window`] and [`Note::in_window`]. The
 //! match in each is exhaustive, so a new refusal cannot reach the window without a sentence
-//! chosen for it. These hold the words; what git itself printed, and a path, pass through.
+//! chosen for it. These hold the words; a path passes through, and what git printed when it
+//! refused a step stays in the terminal (#1102).
 
 mod support;
 
@@ -11,7 +12,7 @@ use purlis_core::contain::Elsewhere;
 use purlis_core::worktree::confine::Outside;
 use purlis_core::worktree::git::GitUnavailable;
 use purlis_core::worktree::name::BadBranch;
-use purlis_core::worktree::{self, Note, Refusal};
+use purlis_core::worktree::{self, GitStep, Note, Refusal};
 
 /// Words the first hour never shows (ADR 0072 §3), as charter's own nouns.
 const KEPT_OUT: &[&str] = &["piece", "worktree", "plane"];
@@ -22,6 +23,10 @@ fn says_none_of_them(said: &str) {
         assert!(!lower.contains(word), "{word:?} reached the window: {said}");
     }
 }
+
+/// What git can print when it refuses a step: a path under the workspace, and its own advice.
+const GIT_SAID: &str = "fatal: '/p/workspaces/alpha/.worktrees/api/spike' contains modified \
+                        or untracked files, use --force to delete it";
 
 /// One of every refusal, with names that hold none of the words themselves.
 fn every_refusal() -> Vec<Refusal> {
@@ -89,8 +94,14 @@ fn every_refusal() -> Vec<Refusal> {
             commits: vec![s("abc1234 work")],
         },
         Refusal::GitRefused {
-            what: s("worktree add"),
-            err: s("fatal: no"),
+            what: GitStep::Add,
+            name: s("spike"),
+            err: s(GIT_SAID),
+        },
+        Refusal::GitRefused {
+            what: GitStep::Remove,
+            name: s("spike"),
+            err: s(GIT_SAID),
         },
         Refusal::Io {
             what: "create",
@@ -303,4 +314,44 @@ fn a_removal_git_will_not_clear_is_refused_in_the_windows_words() {
     std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     stuck_in_the_windows_words(refusal.expect_err("refused"), "worktree prune");
+}
+
+#[test]
+fn git_refusing_a_step_keeps_its_words_in_the_terminal_and_names_the_branch_in_the_window() {
+    purlis_core::unsteered!();
+    let cut = Refusal::GitRefused {
+        what: GitStep::Add,
+        name: "spike".into(),
+        err: GIT_SAID.into(),
+    };
+    assert_eq!(
+        cut.in_window(),
+        "git would not make branch 'spike' and its folder, so nothing was made."
+    );
+    assert_eq!(
+        cut.to_string(),
+        format!("git worktree add failed:\n{GIT_SAID}")
+    );
+
+    let removal = Refusal::GitRefused {
+        what: GitStep::Remove,
+        name: "spike".into(),
+        err: GIT_SAID.into(),
+    };
+    assert_eq!(
+        removal.in_window(),
+        "git would not remove the folder of 'spike', so nothing was removed."
+    );
+    assert_eq!(
+        removal.to_string(),
+        format!("git worktree remove failed:\n{GIT_SAID}")
+    );
+    for said in [cut.in_window(), removal.in_window()] {
+        for git_word in [".worktrees", "fatal", "--force", "/p/"] {
+            assert!(
+                !said.contains(git_word),
+                "{git_word:?} reached the window: {said}"
+            );
+        }
+    }
 }
