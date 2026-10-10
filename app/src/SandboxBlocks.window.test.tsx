@@ -483,6 +483,22 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
     expect(asked("restart_chat")).toHaveLength(1);
   });
 
+  it("guards a press after a host joins at the bound, where the first host is dropped", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-moved", WAITING));
+    const full = Array.from({ length: AT_MOST_HOSTS }, (_, at) => `h${at}.example.com:443`);
+    for (const host of full) await act(() => emit("chat-sandbox-blocked", ON(host)));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await settle();
+    // The ninth host drops the first, which named the block: still the same Notice, still guarded.
+    await act(() => emit("chat-sandbox-blocked", ON("late.example.com:443")));
+    expect(screen.queryByText(full[0])).not.toBeInTheDocument();
+    expect(screen.getByText("late.example.com:443").tagName).toBe("CODE");
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    expect(notice).toHaveTextContent("A host joined this Notice just now, so nothing was allowed.");
+    expect(asked("allow_sandbox_block")).toEqual([]);
+  });
+
   it("keeps a host that arrives while the answer is on its way up, asking", async () => {
     const { asked } = await aChat();
     await act(() => emit("chat-moved", RUNNING));
@@ -648,6 +664,13 @@ describe("the blocks a window holds", () => {
       held = blocked(held, on(`h${at}.example.com`));
     const hosts = held[4].find((one) => one.target !== null);
     expect(hosts !== undefined && hostsOf(hosts)).toHaveLength(AT_MOST_HOSTS);
+    // When a host joined is held with the block, for the Notice's guard; a host it lists already
+    // joins nothing.
+    const first = blocked({}, on("a.example.com"), 1000);
+    expect(first[4][0].joined).toBeUndefined();
+    const second = blocked(first, on("b.example.com"), 2000);
+    expect(second[4][0].joined).toBe(2000);
+    expect(blocked(second, on("B.example.com."), 3000)[4][0].joined).toBe(2000);
     // Answered, it loses only the hosts the answer named.
     const shown = blocked({}, on("a.example.com"));
     const more = blocked(shown, on("b.example.com"));

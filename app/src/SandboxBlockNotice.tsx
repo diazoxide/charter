@@ -195,9 +195,12 @@ function AllowNotice({
     const grew = asking.some((host) => !joined.listing.split(" ").includes(host));
     setJoined({ listing, at: grew ? joinedAt() : joined.at });
   }
-  /** Whether a press now is too soon after a host joined what it would allow. */
+  /**
+   * Whether a press now is too soon after a host joined what it would allow: as this Notice saw
+   * it join, or as the window's store held it, so a Notice drawn again keeps the guard.
+   */
   const tooSoon = () => {
-    if (joinedAt() - joined.at < SETTLE_MS) {
+    if (joinedAt() - Math.max(joined.at, block.joined ?? 0) < SETTLE_MS) {
       setSaid(
         "A host joined this Notice just now, so nothing was allowed. Read the hosts it lists and " +
           "answer again.",
