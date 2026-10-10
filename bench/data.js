@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791611565821,
+  "lastUpdate": 1791613614518,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5460,6 +5460,48 @@ window.BENCHMARK_DATA = {
             "value": 101.5935275,
             "unit": "ms",
             "extra": "median of 5 runs: 100.433, 101.481, 101.594, 101.637, 102.274 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "bacaa93df3218e3c76643ba2c4f57f9a79739974",
+          "message": "Refresh a mirrored file only when purlis can confirm it wrote the one there\n\nA launch, a reinit and a guard change bring a generated or mirrored\nfile up to the project's newer text: the settings in a workspace\nfolder, and the settings, machine-local settings, agents and skills in\na checkout. That overwrite went by the record kept beside the file\nalone, and the record sits where a chat may be able to write it.\n\nNow the project's app state must vouch for the text on disk at that\nexact path as well, for the layer that offers it: the same note of\nwhat the project offered that a withdraw already asks (#1616). A file\nonly the record vouches for is left byte for byte as it is and reported\nas its own row, \"unconfirmed\": reinit says purlis has newer text but\ncannot confirm it wrote the file there, and names moving it aside and\n`purlis workspace reinit` as what writes the current one. A chat in a\npiece holding one is not started, as for a file purlis did not write.\nThe note is never filled in from a record.\n\nThe machine-local settings are noted now too, for the refresh alone.\nA chat's own AGENTS.md still goes by the record: a chat can write that\nfile itself.\n\nFive recorded rows that carry a rule into workspaces an older charter\nwired now start from a plane whose app state noted the text those\nworkspaces hold, as a plane wired by this build has, and leave both\ntexts noted. The row that withholds a machine-local file notes that\nfile's text too. Written by hand: this sandbox cannot bless.\n\nRefs #1583\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T09:44:05+04:00",
+          "tree_id": "f12f6fbfb94aeea1307886083c7d4aad237836b8",
+          "url": "https://github.com/purlis/purlis/commit/bacaa93df3218e3c76643ba2c4f57f9a79739974"
+        },
+        "date": 1791613613264,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5329355,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.523, 0.526, 0.533, 0.540, 0.541 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.020893,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.555, 16.566, 17.021, 17.152, 17.221 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.01471950000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.820, 104.002, 104.015, 104.652, 106.636 ms"
           }
         ]
       }
