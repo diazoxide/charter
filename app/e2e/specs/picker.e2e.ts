@@ -115,21 +115,52 @@ describe("starting a chat", () => {
     // In the row's card in the Chats list (#1673, #1675): the explorer, which said it on the
     // chat's row, lists no chats, and the Chats view is open by default. The card comes up
     // once the pointer rests on the row, so each row is rested on in turn and its card read.
+    // The pointer is the engine's own events, as `tab-chip.e2e.ts` parks one: a WebDriver move
+    // scrolls the row into view, and a scrolled document moves everything the specs after
+    // this one measure.
     const list = await $('[data-testid="chats-section"]');
     await list.waitForDisplayed({ timeout: 20_000 });
+
+    /** Rests the pointer on the row of chat `session`, or takes it off, as an engine says so. */
+    const point = (session: string, on: boolean) =>
+      browser.execute(
+        (chat, over) => {
+          const row = document.querySelector<HTMLElement>(
+            `[data-testid="chats-section"] [role="treeitem"][data-session="${chat}"]`,
+          );
+          row?.dispatchEvent(
+            new PointerEvent(over ? "pointerover" : "pointerout", {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              relatedTarget: null,
+            }),
+          );
+        },
+        session,
+        on,
+      );
 
     let said: string[] = [];
     await browser
       .waitUntil(
         async () => {
           said = [];
-          const rows = await $$('[data-testid="chats-section"] [role="treeitem"]').getElements();
-          for (const row of rows) {
-            const session = await row.getAttribute("data-session");
-            await row.moveTo();
+          const sessions = await browser.execute(() =>
+            [
+              ...document.querySelectorAll<HTMLElement>(
+                '[data-testid="chats-section"] [role="treeitem"][data-session]',
+              ),
+            ].map((row) => row.dataset.session ?? ""),
+          );
+          for (const session of sessions) {
+            await point(session, true);
             const card = await $(`[role="tooltip"][data-testid="chat-card-${session}"]`);
             const up = await card.waitForExist({ timeout: 3_000 }).catch(() => false);
             if (up) said.push(await card.getText());
+            await point(session, false);
           }
           return said.some((text) => text.includes("needs-approval (claude)"));
         },
