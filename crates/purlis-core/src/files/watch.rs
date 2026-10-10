@@ -35,20 +35,30 @@ pub const ASKED: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
     base: PathBuf,
+    refs: Vec<PathBuf>,
     plane: PathBuf,
     ws: String,
     repo: String,
     piece: Option<String>,
 }
 
+/// What the reader's child answers [`root`] with: the branch's folder, and the files in its
+/// clone's git folder whose change moves the branch's last commit ([`Root::refs`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Rooted {
+    base: PathBuf,
+    refs: Vec<PathBuf>,
+}
+
 /// The branch's folder, resolved as the status read resolves it, by `reader`.
 pub fn root(reader: &Reader, plane: &Path, branch: Branch<'_>) -> Result<Root, Refused> {
-    let base = match reader.ask(plane, branch, Ask::Root)? {
-        Answer::Root(base) => base,
+    let Rooted { base, refs } = match reader.ask(plane, branch, Ask::Root)? {
+        Answer::Root(rooted) => rooted,
         _ => return Err(Refused::Read("the reader answered something else".into())),
     };
     Ok(Root {
         base,
+        refs,
         plane: plane.to_path_buf(),
         ws: branch.ws.to_string(),
         repo: branch.repo.to_string(),
@@ -60,6 +70,14 @@ impl Root {
     /// The branch's folder.
     pub fn path(&self) -> &Path {
         &self.base
+    }
+
+    /// The files in the clone's git folder whose change moves what the branch has checked out
+    /// (#1152): its `HEAD`, the branch's own ref, and the clone's `packed-refs`. A commit that
+    /// writes no file in the branch's folder — `git commit --amend --no-edit`, a commit of
+    /// what was staged — moves only these. Empty when the reader found none it would vouch for.
+    pub fn refs(&self) -> &[PathBuf] {
+        &self.refs
     }
 
     fn branch(&self) -> Branch<'_> {
@@ -119,8 +137,41 @@ impl Root {
 }
 
 /// [`root`], here, in this process: the bounded child's half.
-pub(super) fn root_here(plane: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
-    open(plane, branch).map(|opened| opened.base)
+pub(super) fn root_here(plane: &Path, branch: Branch<'_>) -> Result<Rooted, Refused> {
+    let opened = open(plane, branch)?;
+    let refs = refs_of(&opened.repo);
+    Ok(Rooted {
+        base: opened.base,
+        refs,
+    })
+}
+
+/// [`Root::refs`] of an opened branch, resolved. Only files inside the clone's own git folder:
+/// the branch's git folder must be the clone's, or one of its worktrees' inside it, and the
+/// branch's ref a plain `refs/heads/` name; otherwise that file is left out rather than
+/// watched wherever the branch's `.git` file points.
+fn refs_of(repo: &gix::Repository) -> Vec<PathBuf> {
+    let (Ok(common), Ok(own)) = (
+        std::fs::canonicalize(repo.common_dir()),
+        std::fs::canonicalize(repo.git_dir()),
+    ) else {
+        return Vec::new();
+    };
+    if own != common && !own.starts_with(common.join("worktrees")) {
+        return Vec::new();
+    }
+    let mut refs = vec![own.join("HEAD"), common.join("packed-refs")];
+    if let Ok(Some(name)) = repo.head_name()
+        && let Ok(name) = std::str::from_utf8(name.as_bstr())
+        && let Some(branch) = name.strip_prefix("refs/heads/")
+        && !branch.is_empty()
+        && Path::new(name)
+            .components()
+            .all(|step| matches!(step, Component::Normal(_)))
+    {
+        refs.push(common.join(name));
+    }
+    refs
 }
 
 /// [`Root::folders`], here, in this process: the bounded child's half.
