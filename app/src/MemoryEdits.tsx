@@ -12,6 +12,7 @@ import { Notice } from "./Notice";
 import type { Doing, Ran } from "./actions";
 import { commands, type MemoryScope, type MemoryView, type PlaneId } from "./bindings";
 import { settled } from "./PlaneEdits";
+import { NO_TARGETS, type MemoryTargets } from "./memoryMoves";
 import {
   DRAFT,
   DRAFT_TITLE,
@@ -95,6 +96,8 @@ export function useMemoryEdits({
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   /** The line whose Undo is on its way: a second press on it sends nothing (#1190). */
   const sending = useRef<Undoable>(undefined);
+  /** The same, for the line to draw: its Undo is disabled while it is on its way (#1190). */
+  const [sent, setSent] = useState<Undoable>();
 
   const wrote = useCallback(() => {
     setChanged((was) => was + 1);
@@ -208,6 +211,7 @@ export function useMemoryEdits({
     // it lands, and neither its refusal nor its end may say anything over that line.
     const pressed = undoing;
     sending.current = pressed;
+    setSent(pressed);
     try {
       const refused = (why: string) =>
         setUndoing((now) => (now === pressed ? { ...now, trouble: why } : now));
@@ -240,6 +244,7 @@ export function useMemoryEdits({
     } finally {
       // Cleared on every way out, so a refused Undo can be pressed again.
       if (sending.current === pressed) sending.current = undefined;
+      setSent((now) => (now === pressed ? undefined : now));
     }
   }, [follow, plane, undoing, wrote]);
 
@@ -274,7 +279,7 @@ export function useMemoryEdits({
       <Notice
         cause={undoing.kind === "deleted" ? "memory-deleted" : "memory-moved"}
         tone={undoing.trouble === undefined ? "news" : "trouble"}
-        fixes={[{ label: "Undo", onPress: () => void undo() }]}
+        fixes={[{ label: "Undo", onPress: () => void undo(), busy: sent === undoing }]}
       >
         {undoing.trouble ??
           (undoing.kind === "deleted"
@@ -320,10 +325,13 @@ export function useMemoryStores(plane: PlaneId, again: unknown): readonly Memory
 
 const NO_STORES: readonly MemoryScope[] = [];
 
-/** The stores a project's window lends the memory lists it draws, for their rows' Move rows. */
-export const MemoryStores = createContext<readonly MemoryScope[]>(NO_STORES);
+/**
+ * What a project's window lends the memory lists and tabs it draws, for their Move: the stores
+ * (their rows' Move rows) and the LIVE workspaces (what a move into one's journal says, #1190).
+ */
+export const MemoryStores = createContext<MemoryTargets>(NO_TARGETS);
 
-/** The stores lent, or none in a test or a window that lends none. */
-export function useLentMemoryStores(): readonly MemoryScope[] {
+/** The stores and LIVE names lent, or none in a test or a window that lends none. */
+export function useLentMemoryStores(): MemoryTargets {
   return useContext(MemoryStores);
 }
