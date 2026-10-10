@@ -225,9 +225,9 @@ describe("a window holding more than one project", function () {
     const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(second);
-    // Return in the path box is the opener's own submit: its button shares the
-    // name of the trust question's Open project, which comes next.
-    await browser.keys(["Enter"]);
+    // The path box's own submit, found by its form: its name is the trust
+    // question's Open project too, which comes next.
+    await $('form.by-path button[type="submit"]').click();
 
     // **A tab is an open, and an open goes through the gate.** A project nobody has approved
     // is described and not opened; there is no third way in (ADR 0035).
