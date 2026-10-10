@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
 import { BellRing, Compass } from "lucide-react";
-import { ActivityBar } from "./ActivityBar";
+import { ActivityBar, VIEW_MARKS, type PanelTab, type Tabbed } from "./ActivityBar";
 import {
   CATALOGUE,
   inSlots,
@@ -12,6 +12,7 @@ import {
   slotSize,
   SLOTS,
   startingSize,
+  VIEWS,
   type Arrangement,
   type Placement,
   type RegionId,
@@ -39,6 +40,7 @@ export function RegionFrame({
   arrangement,
   content,
   views,
+  panels = [],
   badges,
   keys,
   onPick,
@@ -58,6 +60,12 @@ export function RegionFrame({
    * folds and its filter. The right-hand side's views (#1678) arrive the same way.
    */
   views?: Partial<Record<ViewId, ReactNode>>;
+  /**
+   * **The approved extensions' panels, each a view** (#1678), in the order they go on the bar,
+   * after purlis's own views of the region that takes them, with the name and mark each
+   * declared. What each draws is in {@link views} under its id.
+   */
+  panels?: readonly PanelTab[];
   /** What each view's tab carries beside its icon: a count, drawn while the side is away too. */
   badges?: Partial<Record<ViewId, ReactNode>>;
   /** How each view's key is spelled, for its tab's tooltip. */
@@ -76,6 +84,16 @@ export function RegionFrame({
   };
   const withViews = (one: Placement) =>
     views !== undefined && CATALOGUE[one.id].views !== undefined;
+  const present = panels.map((one) => one.view);
+  /** A region's views, as its bar draws them: purlis's own, then the panels, where it takes them. */
+  const tabbed = (id: RegionId): Tabbed[] => [
+    ...(CATALOGUE[id].views ?? []).map((view) => ({
+      view,
+      name: VIEWS[view].name,
+      mark: VIEW_MARKS[view],
+    })),
+    ...(CATALOGUE[id].panels ? panels : []),
+  ];
   /** The bars at one edge: one per region with views placed in that side's slot. */
   const bars = (side: "left" | "right") =>
     slots[side]
@@ -85,15 +103,15 @@ export function RegionFrame({
           key={one.id}
           side={side}
           name={CATALOGUE[one.id].name}
-          views={CATALOGUE[one.id].views ?? []}
-          open={one.collapsed ? undefined : openView(one)}
+          views={tabbed(one.id)}
+          open={one.collapsed ? undefined : openView(one, present)}
           keys={keys}
           badges={badges}
           {...ids}
           onPick={(view) => onPick?.(view)}
         />
       ));
-  const drawn: SlotContent = { content, views, ids, withViews };
+  const drawn: SlotContent = { content, views, ids, withViews, tabbed, present };
 
   // **How big each slot starts, read once.** `defaultSize` is a constraint, and a constraint
   // that changes re-registers the panel — charter-app#141 again. The arrangement the window
@@ -141,6 +159,9 @@ type SlotContent = {
   views?: Partial<Record<ViewId, ReactNode>>;
   ids: { panelOf: (view: ViewId) => string; tabOf: (view: ViewId) => string };
   withViews: (one: Placement) => boolean;
+  tabbed: (id: RegionId) => Tabbed[];
+  /** The extensions' panels there are now, which decide whether one picked last can open. */
+  present: readonly ViewId[];
 };
 
 /**
@@ -149,10 +170,10 @@ type SlotContent = {
  * what the person did in it. Put away, every one of them is hidden.
  */
 function RegionViews({ placed, drawn }: { placed: Placement; drawn: SlotContent }) {
-  const open = placed.collapsed ? undefined : openView(placed);
+  const open = placed.collapsed ? undefined : openView(placed, drawn.present);
   return (
-    <div className="region-views" hidden={placed.collapsed}>
-      {(CATALOGUE[placed.id].views ?? []).map((view) => (
+    <div className="region-views" data-region={placed.id} hidden={placed.collapsed}>
+      {drawn.tabbed(placed.id).map(({ view }) => (
         <div
           key={view}
           role="tabpanel"

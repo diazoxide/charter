@@ -1,8 +1,25 @@
 import type { ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { FolderTree, GitBranch, MessagesSquare, Search, type LucideIcon } from "lucide-react";
+import {
+  Brain,
+  FolderTree,
+  GitBranch,
+  History,
+  KeyRound,
+  ListTodo,
+  MessagesSquare,
+  Search,
+  UsersRound,
+  type LucideIcon,
+} from "lucide-react";
 import { useTabStop } from "./roving";
-import { VIEWS, type Side, type ViewId } from "./regions";
+import type { OwnViewId, PanelViewId, Side, ViewId } from "./regions";
+
+/** A view as its tab draws it: its id, what it is called and its mark. */
+export type Tabbed = { view: ViewId; name: string; mark: LucideIcon };
+
+/** An extension's panel as its tab draws it (#1678): the name and mark its panel declared. */
+export type PanelTab = Tabbed & { view: PanelViewId };
 
 /**
  * **A side's activity bar: a strip of icons, one per view, that switches the side between them**
@@ -24,7 +41,8 @@ import { VIEWS, type Side, type ViewId } from "./regions";
  * other side too.
  *
  * **Generic over the side.** It knows nothing of the left: the right side's bar (#1678) is this
- * component with the attention region's views, drawn by `RegionFrame` from the same data.
+ * component with the attention region's views, drawn by `RegionFrame` from the same data, and an
+ * extension's panel is a tab like any other, with the name and mark it declared.
  */
 export function ActivityBar({
   side,
@@ -41,8 +59,8 @@ export function ActivityBar({
   side: Side;
   /** The region's name, which is the tab list's. */
   name: string;
-  /** The views, in the bar's order. */
-  views: readonly ViewId[];
+  /** The views, in the bar's order, each with its name and mark. */
+  views: readonly Tabbed[];
   /** The open view, or nothing while the side is put away. */
   open: ViewId | undefined;
   /** How each view's key is spelled on this platform, for the tooltip. */
@@ -55,14 +73,15 @@ export function ActivityBar({
   tabOf: (view: ViewId) => string;
   onPick: (view: ViewId) => void;
 }) {
-  const stop = useTabStop(open, views);
+  const stop = useTabStop(
+    open,
+    views.map((one) => one.view),
+  );
   return (
     <div className="activity-bar" data-side={side}>
       <RovingFocusGroup.Root asChild orientation="vertical" loop={false} {...stop}>
         <div role="tablist" aria-orientation="vertical" aria-label={name}>
-          {views.map((view) => {
-            const Mark = VIEW_MARKS[view];
-            const called = VIEWS[view].name;
+          {views.map(({ view, name: called, mark: Mark }) => {
             const selected = view === open;
             const key = keys?.[view];
             const badge = badges?.[view];
@@ -125,13 +144,23 @@ export function ActivityCount({
 }
 
 /**
- * Each view's mark, by what it IS. A `Record` over `ViewId`, so a view added without a mark is
- * a type error rather than a tab with a hole in it.
+ * Each of purlis's own views' mark, by what it IS. A `Record` over `OwnViewId`, so a view added
+ * without a mark is a type error rather than a tab with a hole in it. An extension's panel brings
+ * its own, from the vocabulary its panel declares (`Panels.MARKS`).
+ *
+ * The right side's are the marks their tabs already have where one exists (`Views.OWN_MARKS`:
+ * Memory's brain, a session record's history, a vault's key); Todos is the list, where one todo
+ * is the dashed circle, and Personas is people, where one persona is a person.
  */
-export const VIEW_MARKS: Record<ViewId, LucideIcon> = {
+export const VIEW_MARKS: Record<OwnViewId, LucideIcon> = {
   chats: MessagesSquare,
   explorer: FolderTree,
   // #1676: a magnifier for finding in files, and a branch for what git says of the repos.
   search: Search,
   changes: GitBranch,
+  todos: ListTodo,
+  memory: Brain,
+  personas: UsersRound,
+  sessions: History,
+  vaults: KeyRound,
 };

@@ -810,6 +810,108 @@ describe("the open view of a side (#1673)", () => {
   });
 });
 
+describe("the open view of the right side (#1678)", () => {
+  const aside = (arrangement: ReturnType<typeof remembered>) => {
+    const found = placed(arrangement, "aside");
+    if (found === undefined) throw new Error("no attention region");
+    return found;
+  };
+
+  it("is Memory until the person picks another, though Todos is first on the bar", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    expect(CATALOGUE.aside.views).toEqual(["todos", "memory", "personas", "sessions", "vaults"]);
+    expect(openView(aside(result.current.arrangement))).toBe("memory");
+  });
+
+  it("puts the side away on a pick of Memory while it is open, and opens Todos on a pick of it", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("memory"));
+    expect(aside(result.current.arrangement).collapsed).toBe(true);
+
+    act(() => result.current.pick("todos"));
+    expect(aside(result.current.arrangement)).toMatchObject({ view: "todos", collapsed: false });
+    // The left side is not touched by a pick on the right.
+    expect(navigationOf(result.current.arrangement)).toEqual(DEFAULT_ARRANGEMENT[0]);
+  });
+
+  it("opens an extension's panel as a view of its own, and remembers it in the file", async () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("panel:ext/stats/burn", ["panel:ext/stats/burn"]));
+
+    expect(openView(aside(result.current.arrangement), ["panel:ext/stats/burn"])).toBe(
+      "panel:ext/stats/burn",
+    );
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(lastWritten().projects["/one"].regions[1].view).toBe("panel:ext/stats/burn");
+  });
+
+  it("is read back from the file as an extension's panel, and opens on Memory while it is not there", () => {
+    put({
+      version: 2,
+      regions: [{ id: "aside", side: "right", view: "panel:ext/stats/burn" }],
+    });
+
+    const remembers = aside(remembered());
+    expect(remembers.view).toBe("panel:ext/stats/burn");
+    expect(openView(remembers, ["panel:ext/stats/burn"])).toBe("panel:ext/stats/burn");
+    // Its extension is not approved in this window: the side opens on its default.
+    expect(openView(remembers, [])).toBe("memory");
+  });
+
+  it("puts the side away on a pick of the view drawn open, when the remembered one is gone", () => {
+    put({
+      version: 2,
+      regions: [{ id: "aside", side: "right", view: "panel:ext/gone/x" }],
+    });
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("memory", []));
+
+    expect(aside(result.current.arrangement).collapsed).toBe(true);
+  });
+
+  it("keeps the side's width and whether it is away beside its view, under the project", async () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("todos"));
+    act(() => result.current.resized({ right: 28 }));
+    act(() => result.current.pick("todos"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(lastWritten().projects["/one"].regions[1]).toEqual({
+      id: "aside",
+      side: "right",
+      order: 0,
+      collapsed: true,
+      size: 28,
+      view: "todos",
+    });
+    // And it comes back so for the project, read from the file the next launch is handed.
+    put(lastWritten());
+    expect(aside(remembered("/one"))).toMatchObject({ view: "todos", size: 28, collapsed: true });
+  });
+
+  it("refuses a view that is neither the side's nor an extension panel's, and says so", async () => {
+    put({ version: 2, regions: [{ id: "aside", side: "right", view: "chats" }] });
+
+    expect(openView(aside(remembered()))).toBe("memory");
+    await settleLayout();
+    expect(aboutThisMachine()[0].detail).toContain('"chats" is not a view of aside');
+  });
+
+  it("is not an extension's panel on the left, which takes none", async () => {
+    put({
+      version: 2,
+      regions: [{ id: "navigation", side: "left", view: "panel:ext/stats/burn" }],
+    });
+
+    expect(navigationOf(remembered()).view).toBeUndefined();
+  });
+});
+
 describe("Use the default layout (#1289), with each project's own (#1673)", () => {
   it("starts every project opened afterwards from the default, the file's and this launch's gone", async () => {
     put({

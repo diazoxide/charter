@@ -398,8 +398,12 @@ describe("a window holding more than one project", () => {
     });
     await screen.findByRole("button", { name: "1 chat needs you" });
 
-    expect(within(screen.getByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
-    expect(within(screen.getByTestId("panels")).queryByText(/need you/)).toBeNull();
+    // In none of the right side's views (#1678).
+    expect(document.querySelectorAll(".panels").length).toBeGreaterThan(0);
+    for (const view of document.querySelectorAll<HTMLElement>(".panels")) {
+      expect(within(view).queryByLabelText("Needs you")).toBeNull();
+      expect(within(view).queryByText(/need you/)).toBeNull();
+    }
   });
 
   it("draws each project's own theme while it is in front, in the window and every terminal", async () => {

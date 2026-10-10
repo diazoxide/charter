@@ -275,14 +275,15 @@ describe("the palette reaching what the window can do", () => {
   it("switches workspace, which is what the regions follow", async () => {
     core();
     render(<App />);
-    await screen.findByTestId("panels");
-    // The right-hand region names the workspace whose todos and personas it is drawing
-    // (ADR 0038 renamed it: it is what is asking for you, not the workspace).
-    expect(await screen.findByLabelText("Attention · alpha")).toBeInTheDocument();
+    // The right-hand side draws the workspace in front (#1678: one view at a time now, so it
+    // carries no workspace label of its own); the status line names that workspace.
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    const line = screen.getByTestId("status-line");
+    await waitFor(() => expect(line).toHaveTextContent("alpha"));
 
     await runFromPalette("focus workspace beta");
 
-    expect(await screen.findByLabelText("Attention · beta")).toBeInTheDocument();
+    await waitFor(() => expect(line).toHaveTextContent("beta"));
   });
 
   it("closes a chat", async () => {

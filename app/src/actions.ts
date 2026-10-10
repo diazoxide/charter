@@ -71,7 +71,7 @@ import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
 import type { RegionId } from "./regions";
-import { VIEWS, type ViewId } from "./sideViews";
+import { ATTENTION_VIEWS, VIEWS, type OwnViewId, type PanelViewId, type ViewId } from "./sideViews";
 import { SIDE_KEYS_SAID } from "./sideKeys";
 import { SETTINGS_GROUPS } from "./settings/catalogue";
 import { askSettingsLink, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
@@ -776,9 +776,11 @@ export type Now = {
   /** The project's memory stores (`memory_scopes`): an open memory tab's Move rows, one per
    *  store but its own (#1190). None while unread, and then there are no Move rows. */
   memoryStores?: readonly MemoryScope[];
-  /** The regions put away (#1673): the navigation region's row says whether it brings it back
-   *  or puts it away. */
+  /** The regions put away (#1673): each side's region row says whether it brings it back or
+   *  puts it away. */
   away?: readonly RegionId[];
+  /** The extensions' panels the right side shows as views (#1678), each a row by its name. */
+  sidePanels?: readonly { view: PanelViewId; name: string }[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -1271,12 +1273,24 @@ export const SEARCH_ID = "search.files";
 export const sideViewId = (view: ViewId) => `view.show:${view}`;
 /** The palette's row that puts the navigation region away or brings it back (#1673). */
 export const TOGGLE_NAVIGATION_ID = "view.toggle:navigation";
+/** The palette's row that puts the attention region away or brings it back (#1678). */
+export const TOGGLE_ATTENTION_ID = "view.toggle:aside";
+/** The right side's own views, as the region's palette row names them: "Todos, … and Vaults". */
+const RIGHT_VIEWS_SAID = ((names: string[]) =>
+  `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`)(
+  ATTENTION_VIEWS.map((view) => VIEWS[view].name),
+);
 /** What each view is, on its palette row. */
-const VIEW_NOTES: Record<Exclude<ViewId, "search">, string> = {
+const VIEW_NOTES: Record<Exclude<OwnViewId, "search">, string> = {
   chats: "The project's chats and their tasks, on the left.",
   explorer: "The focused workspace's repos, branches and files, on the left.",
   changes:
     "The focused workspace's repos: branch, uncommitted files, branches and pipeline, on the left.",
+  todos: "What is left to do in the focused workspace, on the right.",
+  memory: "What the focused workspace remembers, on the right.",
+  personas: "The project's personas, on the right.",
+  sessions: "The focused workspace's session records, on the right.",
+  vaults: "The project's vaults, on the right.",
 };
 
 /** The row that opens `harness`'s card (#1134). */
@@ -1412,13 +1426,22 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
-  // **The left side's views, and the side itself** (#1673, B-10): every view is a row, with its
-  // key said, so the palette is where the keys are learned — as Search's is.
-  for (const view of Object.keys(VIEWS) as ViewId[]) {
+  // **Each side's views, and the sides themselves** (#1673, #1678, B-10): every view is a row,
+  // with its key said where it has one, so the palette is where the keys are learned — as
+  // Search's is. An extension's panel is a view too, by the name it declared. Search's row is
+  // *Search in files*, above (#1676), so it is not said twice.
+  for (const view of Object.keys(VIEWS) as OwnViewId[]) {
     if (view === "search") continue;
+    const key = SIDE_KEYS_SAID[view];
     offers.push({
       ...can(sideViewId(view), `Show the ${VIEWS[view].name} view`, { verb: "showSideView", view }),
-      note: `${VIEW_NOTES[view]} ${SIDE_KEYS_SAID[view]}.`,
+      note: key === undefined ? VIEW_NOTES[view] : `${VIEW_NOTES[view]} ${key}.`,
+    });
+  }
+  for (const { view, name } of now.sidePanels ?? []) {
+    offers.push({
+      ...can(sideViewId(view), `Show the ${name} view`, { verb: "showSideView", view }),
+      note: "An extension's panel, on the right.",
     });
   }
   offers.push({
@@ -1430,6 +1453,16 @@ export function catalogue(now: Now): Offer[] {
       { verb: "toggleRegion", region: "navigation" },
     ),
     note: `The Chats, Explorer, Search and Changes views on the left. ${SIDE_KEYS_SAID.navigation}.`,
+  });
+  offers.push({
+    ...can(
+      TOGGLE_ATTENTION_ID,
+      now.away?.includes("aside")
+        ? "Bring the Attention region back"
+        : "Put the Attention region away",
+      { verb: "toggleRegion", region: "aside" },
+    ),
+    note: `${RIGHT_VIEWS_SAID} on the right. ${SIDE_KEYS_SAID.aside}.`,
   });
 
   // **A harness's card with no chat open** (HP-19, #1134): one row per harness the project

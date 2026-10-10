@@ -297,10 +297,11 @@ has it; nothing reads the key after that.
   own starts from. Changing the arrangement in any project writes it here too, so a project
   opened afterwards starts as the person last left one. The ids this build has are `navigation`
   (the left side: the Chats, Explorer, Search and Changes views; version 1 called it `explorer`,
-  and that id is still read as this one) and `aside` (the attention region: personas, memory,
-  contributed panels). A region the list leaves out is where it starts; an id this build does
-  not have is left out and named in the alerts drawer. **`bottom`**, the repository state bar
-  every file before #1676 placed, is read past without a word: its content is the Changes view.
+  and that id is still read as this one) and `aside` (the attention region: the Todos, Memory,
+  Personas, Sessions and Vaults views and the extensions' panels, since #1678). A region the list
+  leaves out is where it starts; an id this build does not have is left out and named in the
+  alerts drawer. **`bottom`**, the repository state bar every file before #1676 placed, is read
+  past without a word: its content is the Changes view.
 - **`projects`** is each project's own arrangement, by its path, as `regions` is written
   (#1673): the side a view is on, which view it shows, its width and whether it is away come
   back as that project left them. purlis writes a project's entry when its arrangement changes;
@@ -308,8 +309,12 @@ has it; nothing reads the key after that.
   at most 32, letting go of the projects opened longest ago first. An entry that is not an
   arrangement is skipped, and the project starts from the machine's.
 - **`view`**, on a region that has views, is the one it shows: `chats`, `explorer`, `search`
-  or `changes` for `navigation`. Leave it out for the first, `chats`. A view the region does not have is its
-  first, and the alerts drawer says so.
+  or `changes` for `navigation`, and `todos`, `memory`, `personas`, `sessions`, `vaults` or
+  `panel:` and an extension's panel key (`panel:ext/<extension>/<id>`) for `aside` (#1678).
+  Leave it out for the one it opens on: `chats` on the left, `memory` on the right. A view the
+  region does not have opens on that one, and the alerts drawer says so; an extension's panel
+  that is not contributed now opens on it too, and is kept, so it comes back when its extension
+  does.
 - **`side`** is `left` or `right` — the two slots beside the terminals, which have the window's
   whole height (#1676: there is no slot along the bottom; a region a file still puts on
   `bottom` goes back to its own side without a word, and its size, a height there, is left

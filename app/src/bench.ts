@@ -545,7 +545,7 @@ const bench: Bench = {
 };
 
 /** What each region is drawn as: the element its content puts in a slot. */
-const REGION_CONTENT = '[data-testid="explorer"], [data-testid="panels"]';
+const REGION_CONTENT = '[data-testid="explorer"], .region-views[data-region="aside"]';
 
 /** Every slot each region's content has been mounted in, in order. */
 const seen: Record<string, string[]> = {};
@@ -567,7 +567,8 @@ function watchRegions(): void {
         const found = [...(node.matches(REGION_CONTENT) ? [node] : [])];
         found.push(...node.querySelectorAll(REGION_CONTENT));
         for (const one of found) {
-          const region = one.getAttribute("data-testid") ?? "";
+          // The attention region's views are its content since #1678, named by their region.
+          const region = one.getAttribute("data-testid") ?? one.getAttribute("data-region") ?? "";
           const slot = one.closest('[data-panel][id^="region-"]')?.id ?? "nowhere";
           const list = (seen[region] ??= []);
           if (list.at(-1) !== slot) list.push(slot);

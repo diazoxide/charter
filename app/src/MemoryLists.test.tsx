@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { MemoryView, PanelRow } from "./bindings";
 import { forgetDrafts } from "./memories";
+import { showThePanel } from "./test-strips";
 
 /**
  * **A workspace's Memory section, against the whole window** (SI-9c, ADR 0065 Q5, Q9, Q10): the
@@ -164,7 +165,7 @@ describe("a workspace's Memory section", () => {
   it("makes a memory from its +, and lists it once it is saved", { timeout: 20_000 }, async () => {
     const { asked } = core();
     render(<App />);
-    const section = await screen.findByTestId("panel-memory");
+    const section = await showThePanel("Memory");
     expect(within(section).getByText("Nothing remembered yet")).toBeInTheDocument();
 
     await userEvent.click(within(section).getByRole("button", { name: "New memory in alpha…" }));
@@ -196,7 +197,7 @@ describe("a workspace's Memory section", () => {
     async () => {
       const { asked } = core([{ slug: "20260928-160500-freeze", title: "Freeze" }]);
       render(<App />);
-      const section = await screen.findByTestId("panel-memory");
+      const section = await showThePanel("Memory");
 
       await userEvent.click(within(section).getByRole("button", { name: "Open alpha's archive" }));
       await userEvent.click(await screen.findByRole("button", { name: /^Freeze/ }));

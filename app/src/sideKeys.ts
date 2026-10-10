@@ -3,11 +3,12 @@ import { onAMac } from "./tabKeys";
 import { opensSearch, searchKeySaid } from "./searchKey";
 
 /**
- * **The keys of the left side** (#1673, B-10): VS Code's, so an editor's fingers carry over.
+ * **The keys of the sides** (#1673, #1678, B-10): VS Code's, so an editor's fingers carry over.
  *
  * | | On a Mac | Everywhere else |
  * | --- | --- | --- |
  * | Put the navigation region away, or bring it back | `⌘B` | `Ctrl+B` |
+ * | Put the attention region away, or bring it back | `⌥⌘B` | `Ctrl+Alt+B` |
  * | Show Explorer | `⌘⇧E` | `Ctrl+Shift+E` |
  * | Show Chats | `⌘⇧C` | `Ctrl+Shift+C` |
  * | Show Search (#1676) | `⌘⇧F` | `Ctrl+Shift+F` |
@@ -26,6 +27,14 @@ import { opensSearch, searchKeySaid } from "./searchKey";
  * byte for the same reason Ctrl+Shift+E is not, so it is the window's while a chat has the
  * keyboard, on every platform.
  *
+ * **⌥⌘B is the right side's** (#1678), VS Code's key for its secondary side bar, and it names
+ * the region and not the edge, as VS Code's ⌘B follows its primary side bar wherever that is
+ * put. On a Mac, Option makes B type `∫`, so a key that types no letter is read by its place, as
+ * the palette's ⌥⌘C is (`Palette.fileKeyOf`); a key that types another letter is never this one.
+ * Off a Mac, Ctrl with Alt is AltGr on Windows, so only a key that still types `b` is read, and a
+ * layout whose AltGr+B types a character keeps it; and since a terminal sends Ctrl+Alt+B (an
+ * escape and Ctrl+B), a chat with the keyboard keeps it too.
+ *
  * ⌘⇧C is Chats' because it is free: VS Code gives it to an external terminal, which this window
  * has no use for, and ⌘⇧H, ⌘⇧J and ⌘⇧T are taken (`taskKeys.ts`, `shellKey.ts`).
  */
@@ -35,14 +44,20 @@ export type SideKey = ({ toggle: RegionId } | { show: ViewId }) & {
 };
 
 export function sideKeyOf(e: KeyboardEvent, mac: boolean): SideKey | undefined {
-  if (e.altKey) return undefined;
   if (opensSearch(e, mac)) return mac ? { show: "search" } : { show: "search", chatKeeps: true };
-  if (e.ctrlKey && e.shiftKey && !e.metaKey && e.key.toLowerCase() === "g") {
+  if (e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "g") {
     return { show: "changes" };
   }
   const command = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (!command) return undefined;
   const letter = e.key.length === 1 ? e.key.toLowerCase() : "";
+  if (e.altKey) {
+    if (e.shiftKey) return undefined;
+    if (letter === "b") return mac ? { toggle: "aside" } : { toggle: "aside", chatKeeps: true };
+    // On a Mac, Option+B types `∫`: no letter at all, so the key's place says which it is.
+    if (mac && !/^\p{L}$/u.test(e.key) && e.code === "KeyB") return { toggle: "aside" };
+    return undefined;
+  }
   if (!e.shiftKey) {
     if (letter !== "b") return undefined;
     return mac ? { toggle: "navigation" } : { toggle: "navigation", chatKeeps: true };
@@ -53,10 +68,13 @@ export function sideKeyOf(e: KeyboardEvent, mac: boolean): SideKey | undefined {
 }
 
 /** How the tooltips, the palette's rows and the docs spell the keys, on this platform. */
-export function sideKeysSaid(mac: boolean): Record<"navigation" | ViewId, string> {
+export function sideKeysSaid(
+  mac: boolean,
+): Record<"navigation" | "aside", string> & Partial<Record<ViewId, string>> {
   return mac
     ? {
         navigation: "⌘B",
+        aside: "⌥⌘B",
         chats: "⌘⇧C",
         explorer: "⌘⇧E",
         search: searchKeySaid(mac),
@@ -64,6 +82,7 @@ export function sideKeysSaid(mac: boolean): Record<"navigation" | ViewId, string
       }
     : {
         navigation: "Ctrl+B",
+        aside: "Ctrl+Alt+B",
         chats: "Ctrl+Shift+C",
         explorer: "Ctrl+Shift+E",
         search: searchKeySaid(mac),

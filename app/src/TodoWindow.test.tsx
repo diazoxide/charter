@@ -13,7 +13,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { PanelRow, TodoView } from "./bindings";
-import { stripNamed } from "./test-strips";
+import { stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **A todo's tab, against the whole window** (#1214): a todo row opens the todo as a view tab on
@@ -186,7 +186,7 @@ const tabNames = () =>
     .map((tab) => tab.textContent);
 
 async function todoRowFor(title: string) {
-  const panel = await screen.findByTestId("panel-todos");
+  const panel = await showThePanel("Todos");
   return within(panel).findByRole("button", { name: new RegExp(title) });
 }
 

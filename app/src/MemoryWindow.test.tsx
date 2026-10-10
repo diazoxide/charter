@@ -15,7 +15,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { MemoryView, PanelRow } from "./bindings";
 import { forgetDrafts } from "./memories";
-import { stripNamed } from "./test-strips";
+import { stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **A memory's tab, against the whole window** (SI-9b, ADR 0065): a persona's memory rows open
@@ -255,7 +255,7 @@ const tabNames = () =>
 
 /** Opens steward's tab, and answers its list of memories. */
 async function personaTab() {
-  const panel = await screen.findByTestId("panel-personas");
+  const panel = await showThePanel("Personas");
   await userEvent.click(within(panel).getByRole("button", { name: /steward/ }));
   return screen.findByRole("list", { name: "steward" });
 }

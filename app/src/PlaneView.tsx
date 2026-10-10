@@ -181,6 +181,7 @@ import { TaskPromptNotice } from "./TaskPromptNotice";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
 import {
+  ATTENTION_VIEWS,
   inSlots,
   openView as viewOpenIn,
   SIDES,
@@ -190,11 +191,11 @@ import {
 } from "./regions";
 import { SIDE_KEYS_SAID, sideKeyOf } from "./sideKeys";
 import { RegionFrame } from "./RegionFrame";
-import { ActivityCount } from "./ActivityBar";
+import { ActivityCount, type PanelTab } from "./ActivityBar";
 import { DoctorNotices, useDoctor } from "./Doctor";
 import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin } from "./Updates";
-import { StatusLine, runningIn, type Alerts } from "./StatusLine";
+import { StatusLine, runningIn, todoCount, type Alerts } from "./StatusLine";
 import {
   byLastActivity,
   closeChat,
@@ -316,7 +317,7 @@ import { EndingChat, type SmartAsk } from "./EndingChat";
 import { ChatAsk, focusAfterNoticeGone } from "./ChatAsk";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
-import { Panels } from "./Panels";
+import { attentionPanels, Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
@@ -423,6 +424,13 @@ import { enterSettings, placeOfView } from "./settings/entering";
 /** Any C0 or C1 control character, or DEL: what a line typed and left unrun must not hold. */
 // eslint-disable-next-line no-control-regex
 const HAS_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** Whether two lists of the right side's extension panels draw the same tabs. */
+const samePanels = (a: readonly PanelTab[], b: readonly PanelTab[]) =>
+  a.length === b.length &&
+  a.every(
+    (one, at) => one.view === b[at].view && one.name === b[at].name && one.mark === b[at].mark,
+  );
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
@@ -2001,6 +2009,16 @@ export const PlaneView = memo(function PlaneView({
    *  personas'. A todo closed in another workspace does not read this one again. */
   const workspaceChanges = usePlaneChanged([plane], panelsOf(ofWorkspace ?? ""));
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, workspaceChanges);
+  /** The extensions' panels as views of the right side (#1678): a tab of their own each. Held
+   *  by what they draw and not by the state they were read from, which is a new object on many
+   *  a redraw: the catalogue reads this list, and a catalogue that changes draws every chat row
+   *  again (SC-3). Kept in state and replaced only when it draws something else, which is
+   *  React's own way to hold a value from the last render. */
+  const sidePanelsNow = attentionPanels(workspaceState, contributed);
+  const [sidePanels, setSidePanels] = useState(sidePanelsNow);
+  if (!samePanels(sidePanels, sidePanelsNow)) setSidePanels(sidePanelsNow);
+  /** The focused workspace's open todos, for the Todos tab's count (#1678, B-8). */
+  const openTodos = todoCount(workspaceState);
   /** Whether a read of that workspace stands refused, so the catalogue offers Read again
    *  where the explorer is not on screen to offer it (#1244). */
   const readRefused = readRefusedIn(workspaceState);
@@ -2120,9 +2138,13 @@ export const PlaneView = memo(function PlaneView({
         searchHere();
         requestAnimationFrame(() => giveViewTheKeyboard(view));
       }
-      pick(view);
+      // The extension panels present now: a panel's view is picked only while it is there (#1678).
+      pick(
+        view,
+        sidePanels.map((one) => one.view),
+      );
     },
-    [leftOpen, pick, searchHere],
+    [leftOpen, pick, searchHere, sidePanels],
   );
   /** The files git has uncommitted in the focused workspace's clones: the Changes tab's count. */
   const changedFiles = uncommitted(workspaceState);
@@ -6131,10 +6153,12 @@ export const PlaneView = memo(function PlaneView({
             harnesses: harnessCards,
             memoryStores,
             away,
+            sidePanels,
           }),
     [
       askedBy,
       away,
+      sidePanels,
       clones,
       cloningNow,
       absentHere,
@@ -7752,8 +7776,32 @@ export const PlaneView = memo(function PlaneView({
               columns={facts.columns}
               cloning={cloning}
             />
+            />
+          ),
+          // **The attention region's views** (#1678): the "for you" side (ADR 0038 as amended
+          // 2026-10-10), one panel per view, and each approved extension's panel a view too.
+          ...Object.fromEntries(
+            [...ATTENTION_VIEWS, ...sidePanels.map((one) => one.view)].map((view) => [
+              view,
+              <Panels
+                key={view}
+                view={view}
+                workspace={ofWorkspace}
+                state={workspaceState}
+                offers={found}
+                onPress={press}
+                contributed={contributed}
+                shownRow={shownRow}
+                onShowRow={setShownRow}
+                vaults={vaults}
+                onAddTodo={edits.addTodo}
+                atRoot={focused === OUTSIDE}
+                rootPanels={rootPanels?.contributed}
+              />,
+            ]),
           ),
         }}
+        panels={sidePanels}
         // The Chats tab's count is the queue's, drawn where the queue is read (#1034): a chat
         // that starts asking redraws the badge and nothing around it. It is on the bar, so it
         // is there while the side is put away (B-8). Changes counts what git has uncommitted.
@@ -7775,26 +7823,19 @@ export const PlaneView = memo(function PlaneView({
               )}
             </QueueRead>
           ),
-        }}
-        keys={SIDE_KEYS_SAID}
-        onPick={pickSideView}
-        content={{
-          aside: (
-            <Panels
-              workspace={ofWorkspace}
-              state={workspaceState}
-              offers={found}
-              onPress={press}
-              contributed={contributed}
-              shownRow={shownRow}
-              onShowRow={setShownRow}
-              vaults={vaults}
-              onAddTodo={edits.addTodo}
-              atRoot={focused === OUTSIDE}
-              rootPanels={rootPanels?.contributed}
+          // The focused workspace's open todos (B-8), the status line's own count: plain, since
+          // a todo is yours to do and not a chat asking for you.
+          todos: (
+            <ActivityCount
+              count={openTodos ?? 0}
+              said={openTodos === 1 ? "1 open todo" : `${openTodos ?? 0} open todos`}
             />
           ),
         }}
+        keys={SIDE_KEYS_SAID}
+        onPick={pickSideView}
+        // Every region is views now (#1676, #1678): nothing is drawn outside a view.
+        content={{}}
         centre={
           /* The centre is where a chat is, so its menu is the chat verbs the bar has: a new
              tab, the two splits, the key the palette claimed, and — under the line — ending
