@@ -15,6 +15,7 @@ import type {
 import { forgetProjectThemes } from "./projectTheme";
 import type { WorkspaceState } from "./workspaceState";
 import type { Offer } from "./actions";
+import { forgetLastRead, readAt } from "./editor/lastRead";
 
 /**
  * **A branch's files in the explorer** (FM-1): the render states the real-app scenario
@@ -27,6 +28,7 @@ afterEach(() => {
   cleanup();
   clearMocks();
   forgetProjectThemes();
+  forgetLastRead();
 });
 
 const PLANE = "/plane" as unknown as PlaneId;
@@ -423,6 +425,52 @@ describe("a file or folder row's menu (FM-10)", () => {
       expect.stringMatching(/^Reveal in /),
       "Open in your editor",
       "Start a chat here",
+      "Add to a chat's context",
+    ]);
+  });
+
+  it("hands Add to a chat's context the row's branch and path (#1151)", async () => {
+    core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
+    const pressed: Offer[] = [];
+    draw(vi.fn(), (offer) => pressed.push(offer));
+    await userEvent.click(row("file:svc/one:"));
+
+    await menuOf("README.md");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add to a chat's context" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      {
+        verb: "addToChat",
+        at: { workspace: "alpha", repo: "svc", piece: "one", path: "README.md" },
+        folder: false,
+      },
+    ]);
+  });
+
+  it("opens your editor at the line last read in the file's preview (#1143)", async () => {
+    core({ "one:": [entry("README.md"), entry("NOTES.md")] });
+    const pressed: Offer[] = [];
+    draw(vi.fn(), (offer) => pressed.push(offer));
+    await userEvent.click(row("file:svc/one:"));
+    act(() => readAt(PLANE, { workspace: "alpha", repo: "svc", piece: "one" }, "README.md", 42));
+
+    await menuOf("README.md");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open in your editor" }));
+    await menuOf("NOTES.md");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open in your editor" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      {
+        verb: "openInEditor",
+        at: { workspace: "alpha", repo: "svc", piece: "one", path: "README.md" },
+        line: 42,
+      },
+      // A file whose preview was not read opens at its first line.
+      {
+        verb: "openInEditor",
+        at: { workspace: "alpha", repo: "svc", piece: "one", path: "NOTES.md" },
+        line: 1,
+      },
     ]);
   });
 

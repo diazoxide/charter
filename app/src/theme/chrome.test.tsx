@@ -67,6 +67,7 @@ import { TaskEndAsk } from "../TaskEnd";
 import { PinItem, UpdateItem } from "../Updates";
 import { VaultTab } from "../VaultTab";
 import { OpenVault } from "../Vaults";
+import { AddToAChat } from "../AddToAChat";
 import { forgetThisLaunch } from "../regions";
 import { complaints } from "./complaints.testkit";
 import { BUILT_IN, DEFAULT_THEME, drawIn, drawTint, inForce, tinted } from "./theme";
@@ -1066,6 +1067,29 @@ const DIALOGS: Opened[] = [
           ]}
           offers={new Map()}
           onPress={nothing}
+          onCancel={nothing}
+        />,
+      ),
+  },
+  {
+    name: "Add to a chat's context",
+    file: "AddToAChat.tsx",
+    open: async () =>
+      render(
+        <AddToAChat
+          referenced={{
+            plane: PLANE,
+            workspace: "alpha",
+            repo: "svc",
+            piece: "fix-it",
+            path: "src/lib.rs",
+            folder: false,
+          }}
+          chats={[
+            { session: 1, name: "steward" },
+            { session: 2, name: "helper" },
+          ]}
+          onPick={nothing}
           onCancel={nothing}
         />,
       ),

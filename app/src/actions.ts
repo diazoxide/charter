@@ -452,6 +452,10 @@ export type Does =
   /** Opens a shell tab whose working directory is a folder of a branch (FM-10). The core
    *  resolves the folder; the shell starts no harness, so nothing asks first. */
   | { verb: "shellInFolder"; at: BranchPath }
+  /** Opens the picker of this project's chats for a branch file or folder (FM-9, #1151): the
+   *  one picked has a reference to it typed in, and never sent. It types nothing by itself:
+   *  the pick does, through the core, which places the path as it does for a drop. */
+  | { verb: "addToChat"; at: BranchPath; folder: boolean }
   /** Starts a chat on the branch, in its folder, with a reference to this file or folder typed
    *  as its first prompt and never sent (FM-9). The core places the path and renders it in the
    *  harness's syntax; on a harness it cannot type into, the reference is copied instead. */
@@ -878,6 +882,8 @@ export type Doing = {
   shellInFolder: (at: BranchPath) => void;
   /** A chat on the branch with a reference to `at` typed into it (FM-9). */
   startChatHere: (at: BranchPath) => Promise<Ran>;
+  /** Opens the chat picker for `at`. Nothing is typed until a chat in it is picked. */
+  addToChat: (at: BranchPath, folder: boolean) => void;
 };
 
 /**
@@ -2704,6 +2710,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "startChatHere":
       return doing.startChatHere(does.at);
+    case "addToChat":
+      doing.addToChat(does.at, does.folder);
+      return DID;
     case "nothing":
       return DID;
   }
@@ -4216,6 +4225,7 @@ export const FILE_VERBS = [
   "openInEditor",
   "shellInFolder",
   "startChatHere",
+  "addToChat",
 ] as const;
 
 /** The file manager's own name where the window runs. */
@@ -4317,5 +4327,14 @@ export function fileRows(what: FileOn): Offer[] {
     );
   }
   rows.push(placed(`file.chat:${key}`, "Start a chat here", { verb: "startChatHere", at }));
+  // Into a chat that is open already (#1151): the preview's *Add to a chat's context*, from the
+  // row, so the keyboard reaches it with the menu key. A link is refused as every placed row is.
+  rows.push(
+    placed(`file.addtochat:${key}`, "Add to a chat's context", {
+      verb: "addToChat",
+      at,
+      folder: kind === "folder",
+    }),
+  );
   return rows;
 }
