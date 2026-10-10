@@ -412,6 +412,13 @@ export const commands = {
 	 *  as an Allow is ([`checked`]), then each task's block is let go. Nothing is granted.
 	 */
 	keepSandboxBlockForTasks: (plane: PlaneId, session: number, seen: SeenBlock[]) => typedError<number[], string>(__TAURI_INVOKE("keep_sandbox_block_for_tasks", { plane, session, seen })),
+	/**
+	 *  **Keep blocked** on a block's Notice (#1666, taking over #1411's line): `shown` is the block
+	 *  the Notice showed. Refused unless the chat is held on that block now (#1538). Nothing is
+	 *  granted. For a host, what the chat's proxy holds on it is refused now, and the chat is told,
+	 *  in purlis's fixed words, not to try it again unless the person asks.
+	 */
+	keepSandboxBlock: (plane: PlaneId, session: number, shown: BlockShown) => typedError<null, string>(__TAURI_INVOKE("keep_sandbox_block", { plane, session, shown })),
 	/**  Every grant in force here, for Settings' Granted list (#1348). */
 	sandboxGrants: (plane: PlaneId) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("sandbox_grants", { plane })),
 	/**
@@ -2702,10 +2709,16 @@ export type AllTasksEnding = {
 
 /**
  *  What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
- *  a restart on its conversation, which the window asks for once its turn has ended.
+ *  a restart on its conversation, which the window asks for once its turn has ended, unless
+ *  [`Self::live`].
  */
 export type Allowed = {
 	said: string,
+	/**
+	 *  The chat took it at once, through its proxy's live ask (#1666): the command that asked
+	 *  carries on, and nothing restarts, so the window owes the chat no restart.
+	 */
+	live: boolean,
 };
 
 /**
@@ -2932,7 +2945,13 @@ export type BlockOffer =
  *  sandbox (#1343): nothing is offered, and [`ChatBlocked::route`] names the policy and who
  *  set it, so the person knows whom to ask.
  */
-"policy";
+"policy" | 
+/**
+ *  The host is allowed already (#1666's fold-in): no Allow, since one would allow nothing
+ *  new. [`ChatBlocked::route`] says so and that this chat reaches it once it restarts; the
+ *  Notice offers Restart this chat.
+ */
+"allowed";
 
 /**
  *  **A Report of a sandbox block of purlis's own** (#1338), as the window shows it before
@@ -3209,6 +3228,18 @@ export type ChatBlocked = {
 	 *  each a policy does not forbid (#1343).
 	 */
 	levels: GrantLevel[],
+	/**
+	 *  Whether the connection is **held** while the person answers (#1666): purlis's proxy
+	 *  waits on this Notice, and an Allow lets the same command carry on with nothing
+	 *  restarting. Set by the app from the chat's own board, never from what a chat sent.
+	 */
+	held: boolean,
+	/**
+	 *  For [`BlockOffer::Host`]: what an administrator's policy ruled out here, and who set it
+	 *  (#1666): a scope it removed, or asking while a connection waits. None where it ruled
+	 *  nothing out.
+	 */
+	ruled: string | null,
 };
 
 /**

@@ -1028,3 +1028,83 @@ fn a_refusal_s_lead_says_policy_where_policy_requires_the_sandbox() {
         format!("purlis could not start it. {POLICY_SENTENCE}")
     );
 }
+
+// ---- the live ask (#1666): asks off, scopes removed, hosts pinned never allowed ---------------
+
+#[test]
+fn policy_can_turn_live_asks_off_and_says_so() {
+    assert!(!Locks::none().forbids_live_asks());
+    assert_eq!(Locks::none().live_asks_refused(), None);
+    let under = locks(r#"{"owner": "IT", "sandbox": {"live-asks": false}}"#);
+    assert!(under.forbids_live_asks());
+    let why = under.live_asks_refused().expect("off");
+    assert!(why.contains("Policy turns off asking"), "{why}");
+    assert!(why.contains("set by IT"), "{why}");
+    assert!(!locks(r#"{"sandbox": {"live-asks": true}}"#).forbids_live_asks());
+}
+
+#[test]
+fn policy_can_remove_an_allow_scope_and_says_which() {
+    let under = locks(r#"{"owner": "IT", "sandbox": {"allow-scopes": ["you"]}}"#);
+    let host = What::Host(Host::parse("api.example.com").expect("a host"));
+    assert_eq!(under.refuses_grant(&host, grant::Level::You), None);
+    let chat = under
+        .refuses_grant(&host, grant::Level::Chat)
+        .expect("removed");
+    assert!(
+        chat.contains("Policy removed Allow for this chat"),
+        "{chat}"
+    );
+    assert!(chat.contains("set by IT"), "{chat}");
+    let project = under
+        .refuses_grant(&host, grant::Level::Project)
+        .expect("removed");
+    assert!(
+        project.contains("Policy removed Allow for everyone in this project"),
+        "{project}"
+    );
+    // Absent, every scope stays.
+    assert_eq!(
+        locks(r#"{"sandbox": {}}"#).refuses_grant(&host, grant::Level::Chat),
+        None
+    );
+}
+
+#[test]
+fn a_host_policy_pins_as_never_allowed_is_refused_at_every_scope() {
+    let under = locks(r#"{"owner": "IT", "sandbox": {"never-hosts": ["*.paste.example"]}}"#);
+    let pinned = What::Host(Host::parse("drop.paste.example:443").expect("a host"));
+    for level in [grant::Level::Chat, grant::Level::You, grant::Level::Project] {
+        let why = under.refuses_grant(&pinned, level).expect("pinned");
+        assert!(why.contains("Policy never allows"), "{why}");
+    }
+    let host = Host::parse("drop.paste.example").expect("a host");
+    assert!(under.never_allows(&host).is_some());
+    assert_eq!(
+        under.never_allows(&Host::parse("api.example.com").expect("a host")),
+        None
+    );
+    let other = What::Host(Host::parse("api.example.com").expect("a host"));
+    assert_eq!(under.refuses_grant(&other, grant::Level::You), None);
+}
+
+#[test]
+fn a_project_host_policy_pins_never_allowed_does_not_compile() {
+    let under = locks(r#"{"sandbox": {"never-hosts": ["api.example.com"]}}"#);
+    let compiled = compiled(&under, None, &Grants::default());
+    assert!(!has(&compiled, "api.example.com"), "{:?}", compiled.hosts);
+    assert!(has(&compiled, "build.corp.example"));
+}
+
+#[test]
+fn a_policy_s_new_keys_that_cannot_be_read_refuse_the_file_and_turn_asks_off() {
+    for text in [
+        r#"{"sandbox": {"live-asks": "no"}}"#,
+        r#"{"sandbox": {"allow-scopes": ["everyone"]}}"#,
+        r#"{"sandbox": {"never-hosts": ["https://a.example/"]}}"#,
+    ] {
+        let under = locks(text);
+        assert!(under.refused_because().is_some(), "{text}");
+        assert!(under.forbids_live_asks(), "{text}");
+    }
+}

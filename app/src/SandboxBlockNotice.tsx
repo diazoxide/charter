@@ -36,7 +36,18 @@ import { SETTLE_MS } from "./TaskBlocksNotice";
  * **Policy has the last word** (#1343): Allow is offered only at the levels an administrator's
  * policy leaves open (`block.levels`), and where policy forbids every Allow and starting the
  * chat without the sandbox too, nothing is offered — the Notice still says what was blocked,
- * what policy forbids, and who set it, so the person knows whom to ask.
+ * what policy forbids, and who set it, so the person knows whom to ask. Where it removed one
+ * choice, or turned asking off, the Notice says so (`block.ruled`, #1666).
+ *
+ * **A host is asked live** (#1666): where the chat's proxy holds the connection while the
+ * person answers (`block.held`), the Notice says it waits, and an Allow lets the same command
+ * carry on with nothing restarting (`Allowed.live`). For a host the main button allows it for
+ * this project on this machine; **Other scopes…** offers only this chat, or everyone in the
+ * project. **Keep blocked** refuses what the proxy holds and tells the chat
+ * (`keep_sandbox_block`).
+ *
+ * **A host allowed already offers no Allow** (#1666's fold-in): it says so, and that this chat
+ * takes it once it restarts, with **Restart this chat**.
  */
 export function SandboxBlockNotice({
   block,
@@ -149,6 +160,13 @@ export function SandboxBlockNotice({
   );
 }
 
+/** What each scope's button says (#1666, N-3). */
+const SCOPE: Readonly<Record<GrantLevel, string>> = {
+  you: "Allow for me on this machine",
+  chat: "Allow only for this chat",
+  project: "Allow for everyone in this project",
+};
+
 /** The time now: when a host joined, read once in the render that draws it, or when pressed. */
 const joinedAt = () => Date.now();
 
@@ -211,9 +229,20 @@ function AllowNotice({
   };
   /** Whether policy leaves Allow at `level` open (#1343). */
   const allowsAt = (level: GrantLevel) => block.levels.includes(level);
-  const always = allowsAt("you") || (what === "host" && allowsAt("project"));
+  /**
+   * **The main button, and the rest under a menu.** A host: this project on this machine first
+   * (#1666, N-3), then only this chat, then everyone in the project. A folder: this chat, then
+   * this machine; never the project.
+   */
+  const order: readonly GrantLevel[] =
+    what === "host" ? ["you", "chat", "project"] : ["chat", "you"];
+  const open = order.filter(allowsAt);
+  const main = open[0];
+  const others = open.slice(1);
 
   const allow = (level: GrantLevel) => {
+    if (busy) return;
+    if (target === "") return;
     if (tooSoon()) return;
     setBusy(true);
     setSaid(undefined);
@@ -224,6 +253,8 @@ function AllowNotice({
       const done: string[] = [];
       const refused: string[] = [];
       let last: Allowed | undefined;
+      /** Whether every host allowed was taken live: then nothing restarts for them (#1666). */
+      let live = true;
       for (const one of targets) {
         // The block it showed, so the core answers only that one, and only while the chat is
         // still held on it (#1538).
@@ -239,6 +270,7 @@ function AllowNotice({
           else {
             done.push(one);
             last = answer.data;
+            live = live && answer.data.live === true;
           }
         } catch (err: unknown) {
           refused.push(`${named}purlis could not allow it: ${String(err)}`);
@@ -248,8 +280,8 @@ function AllowNotice({
         setAllowedHosts((was) => [...was, ...done]);
         setAllowed(last);
         setAlways(false);
-        // One restart takes every host allowed.
-        onAllowed();
+        // One restart takes every host allowed, unless the chat's proxy took them live.
+        if (!live) onAllowed();
       }
       if (refused.length > 0) setSaid(refused.join(" "));
     })().finally(() => {
@@ -258,6 +290,54 @@ function AllowNotice({
       // Notice for chats left behind asks again (#1428).
       sandboxCommandReturned();
     });
+  };
+  /** Keep blocked (#1666): the core refuses what the proxy holds, and tells the chat. */
+  const keepBlocked = () => {
+    if (busy) return;
+    const targets = hosts.length > 0 ? asking : block.target !== null ? [block.target] : [];
+    if (what !== "host" || targets.length === 0) {
+      onDismiss();
+      return;
+    }
+    setBusy(true);
+    setSaid(undefined);
+    void Promise.all(
+      targets.map((one) =>
+        commands
+          .keepSandboxBlock(block.plane, block.session, {
+            operation: block.operation,
+            kind: block.kind,
+            what,
+            target: one,
+          })
+          .then((done) => (done.status === "error" ? done.error : undefined))
+          .catch((err: unknown) => `purlis could not keep it blocked: ${String(err)}`),
+      ),
+    )
+      .then((answers) => {
+        const refused = answers.filter((one): one is string => one !== undefined);
+        // Said, never swallowed: the Notice stays up with why (docs/ui-copy.md).
+        if (refused.length > 0) setSaid(refused.join(" "));
+        else onDismiss();
+      })
+      .finally(() => setBusy(false));
+  };
+  /** Restart this chat, for a host allowed already (#1666's fold-in). */
+  const restartThis = () => {
+    if (busy) return;
+    setBusy(true);
+    setSaid(undefined);
+    void commands
+      .askChatRestart(block.plane, block.session)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else {
+          onAllowed();
+          onDismiss();
+        }
+      })
+      .catch((err: unknown) => setSaid(`purlis could not restart the chat: ${String(err)}`))
+      .finally(() => setBusy(false));
   };
   const withoutSandbox = () => {
     setBusy(true);
@@ -272,6 +352,27 @@ function AllowNotice({
       .finally(() => setBusy(false));
   };
 
+  if (block.offer === "allowed")
+    return (
+      <Notice
+        cause={cause}
+        at="pane"
+        tone="trouble"
+        label="Sandbox block"
+        fixes={[{ label: "Restart this chat", onPress: restartThis, busy }]}
+        onDismiss={onDismiss}
+      >
+        The sandbox blocked {block.said}
+        {block.target !== null && (
+          <>
+            : <code className="block-allow-target">{block.target}</code>
+          </>
+        )}
+        . {block.route}
+        {said !== undefined && ` ${said}`}
+        {behind}
+      </Notice>
+    );
   if (block.offer === "brokered")
     return (
       <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
@@ -387,47 +488,29 @@ function AllowNotice({
       </p>
       {alwaysOpen && (
         <div className="block-allow-actions">
-          {allowsAt("you") && (
+          {others.map((level) => (
             <button
+              key={level}
               type="button"
               tabIndex={0}
               disabled={busy || target === ""}
-              onClick={() => allow("you")}
+              onClick={() => allow(level)}
             >
-              Allow for me on this machine
+              {SCOPE[level]}
             </button>
-          )}
-          {what === "host" && allowsAt("project") && (
-            <button
-              type="button"
-              tabIndex={0}
-              disabled={busy || target === ""}
-              onClick={() => allow("project")}
-            >
-              Allow for everyone in this project
-            </button>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
   // Only the levels policy leaves open (#1343); Keep blocked always.
-  const keep: NoticeAction = { label: "Keep blocked", onPress: onDismiss };
+  const keep: NoticeAction = { label: "Keep blocked", onPress: keepBlocked };
   const allows: NoticeAction[] = [
-    ...(allowsAt("chat")
+    ...(main !== undefined ? [{ label: SCOPE[main], onPress: () => allow(main) }] : []),
+    ...(others.length > 0
       ? [
           {
-            label: "Allow for this chat",
-            onPress: () => {
-              if (!busy && target !== "") allow("chat");
-            },
-          },
-        ]
-      : []),
-    ...(always
-      ? [
-          {
-            label: "Always allow…",
+            label: what === "host" ? "Other scopes…" : "Always allow…",
             onPress: () => setAlways((was) => !was),
             opens: { id, open: alwaysOpen },
           },
@@ -445,9 +528,20 @@ function AllowNotice({
       fixes={fixes}
       under={under}
     >
-      The sandbox blocked {block.said}.
+      {block.held ? (
+        <>
+          The chat's command is waiting on {block.said}: purlis holds the connection while you
+          answer, and an Allow lets the same command carry on. If nobody answers within a minute it
+          is refused, and an Allow after that tells the chat to run it again.
+        </>
+      ) : (
+        <>The sandbox blocked {block.said}.</>
+      )}
       {asking.length > 1 &&
-        ` ${asking.length} hosts were refused. One Allow allows each of them, and the chat restarts once.`}
+        (block.held
+          ? ` ${asking.length} hosts are asked about. One Allow allows each of them.`
+          : ` ${asking.length} hosts were refused. One Allow allows each of them, and the chat restarts once.`)}
+      {block.ruled !== null && block.ruled !== undefined && ` ${block.ruled}`}
       {allowedHosts.length > 0 && <> Allowed already: {drawn(allowedHosts)}.</>}
       {said !== undefined && ` ${said}`}
       {behind}

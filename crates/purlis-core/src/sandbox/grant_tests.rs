@@ -646,3 +646,39 @@ fn a_wrapped_chat_writes_a_granted_folder_with_every_denial_after_it() {
         );
     }
 }
+
+// ---- a host allowed already (#1666's fold-in) ----------------------------------------------
+
+#[test]
+fn a_host_allowed_already_is_found_at_the_scope_that_holds_it() {
+    let one = |typed: &str| super::super::hosts::Host::parse(typed).expect("a host");
+    let none = super::super::policy::Locks::none();
+    let yours = [one("pypi.example.com")];
+    let project = [one("*.blob.core.windows.net")];
+    assert_eq!(
+        already(&one("pypi.example.com:443"), &yours, &project, &none),
+        Some(Level::You)
+    );
+    assert_eq!(
+        already(
+            &one("results.blob.core.windows.net:443"),
+            &yours,
+            &project,
+            &none
+        ),
+        Some(Level::Project)
+    );
+    assert_eq!(
+        already(&one("elsewhere.example:443"), &yours, &project, &none),
+        None
+    );
+    // One a policy locks out is not allowed: it reaches nothing while the policy stands.
+    let locked = super::super::policy::Locks::parse(
+        r#"{"sandbox": {"personal-hosts": false}}"#,
+        std::path::Path::new("/etc/purlis/policy.json"),
+    );
+    assert_eq!(
+        already(&one("pypi.example.com:443"), &yours, &project, &locked),
+        None
+    );
+}

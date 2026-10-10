@@ -71,6 +71,8 @@ const OURS: ChatBlocked = {
   target: null,
   route: null,
   levels: [],
+  held: false,
+  ruled: null,
 };
 
 /** What `cargo build`'s refused cache write becomes: the chat's own work. */
@@ -103,7 +105,7 @@ const DRAFT: BlockReport = {
   digest: "0123456789ab",
 };
 
-function core(restart: { error?: string } = {}) {
+function core(restart: { error?: string; live?: boolean } = {}) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC(
     (cmd, args) => {
@@ -124,9 +126,15 @@ function core(restart: { error?: string } = {}) {
       if (cmd === "sandbox_block_report") return DRAFT;
       if (cmd === "file_sandbox_block_report") return "https://github.com/purlis/purlis/issues/9";
       if (cmd === "allow_sandbox_block")
-        return {
-          said: "Allowed for this chat. The chat restarts on the same conversation once its turn ends, and is told to retry.",
-        };
+        return restart.live === true
+          ? {
+              said: "Allowed for me on this machine. The command that asked carries on now; nothing restarts.",
+              live: true,
+            }
+          : {
+              said: "Allowed for this chat. The chat restarts on the same conversation once its turn ends, and is told to retry.",
+              live: false,
+            };
       if (cmd === "restart_chat") {
         if (restart.error !== undefined) throw new Error(restart.error);
         return { chat: { ...CHAT, session: 9, resumed: "c1" }, notices: [], not_yet: null };
@@ -142,7 +150,7 @@ function core(restart: { error?: string } = {}) {
   };
 }
 
-async function aChat(restart: { error?: string } = {}) {
+async function aChat(restart: { error?: string; live?: boolean } = {}) {
   const said = core(restart);
   render(<App />);
   // The chat is on screen: its pane is drawn.
@@ -253,7 +261,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     expect(screen.getByText("api.example.com:443")).toBeInTheDocument();
     expect(asked("allow_sandbox_block")).toEqual([]);
 
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
 
     await waitFor(() =>
       expect(asked("allow_sandbox_block")).toEqual([
@@ -267,7 +277,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
             what: "host",
             target: "api.example.com:443",
           },
-          level: "chat",
+          level: "you",
         },
       ]),
     );
@@ -289,7 +299,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
       target: { value: "api.example.com" },
     });
 
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
 
     await waitFor(() =>
       expect(asked("allow_sandbox_block")).toEqual([
@@ -297,7 +309,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
           plane: PLANE,
           session: 4,
           shown: { operation: "connect", kind: "host", what: "host", target: "api.example.com" },
-          level: "chat",
+          level: "you",
         },
       ]),
     );
@@ -313,14 +325,14 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     expect(asked("restart_chat")).toEqual([]);
   });
 
-  it("offers Always for every chat here on this machine, or everyone in the project", async () => {
+  it("offers only this chat or everyone in the project under Other scopes (#1666)", async () => {
     const { asked } = await aChat();
     await act(() => emit("chat-sandbox-blocked", HOST));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
 
-    await userEvent.click(within(notice).getByRole("button", { name: "Always allow…" }));
+    await userEvent.click(within(notice).getByRole("button", { name: "Other scopes…" }));
     expect(
-      await screen.findByRole("button", { name: "Allow for me on this machine" }),
+      await screen.findByRole("button", { name: "Allow only for this chat" }),
     ).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Allow for everyone in this project" }),
@@ -377,7 +389,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     expect(notice).toHaveTextContent(
       "purlis never allows that to a chat. Use purlis's own commands.",
     );
-    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+    expect(
+      within(notice).queryByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeNull();
   });
 
   it("offers the chat without the sandbox, as your choice, where purlis grants nothing", async () => {
@@ -397,7 +411,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     );
     // The folder is the chat's own word, drawn apart from purlis's sentence.
     expect(screen.getByText("/Users/dev/Library/LaunchAgents").tagName).toBe("CODE");
-    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+    expect(
+      within(notice).queryByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeNull();
     await userEvent.click(
       within(notice).getByRole("button", { name: "Start without the sandbox for this chat" }),
     );
@@ -430,7 +446,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
       "does not go through the sandbox's proxy: db.prod.example.com. This program looks",
     );
     expect(screen.getByText("db.prod.example.com").tagName).toBe("CODE");
-    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+    expect(
+      within(notice).queryByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeNull();
   });
 
   it("restarts a chat owed one only once its turn has ended, even after the Notice is gone", async () => {
@@ -438,7 +456,9 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     await act(() => emit("chat-moved", RUNNING));
     await act(() => emit("chat-sandbox-blocked", HOST));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(1));
     // Put away while the chat is mid-turn: nothing restarts yet, and nothing is lost.
     await userEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
@@ -483,11 +503,15 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
     expect(notice).not.toHaveTextContent("more block");
 
     // A press just after a host joined allows nothing, and says why.
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     expect(notice).toHaveTextContent("A host joined this Notice just now, so nothing was allowed.");
     expect(asked("allow_sandbox_block")).toEqual([]);
     await settle();
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
 
     await waitFor(() =>
       expect(asked("allow_sandbox_block")).toEqual(
@@ -495,7 +519,7 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
           plane: PLANE,
           session: 4,
           shown: { operation: "connect", kind: "host", what: "host", target: host },
-          level: "chat",
+          level: "you",
         })),
       ),
     );
@@ -517,7 +541,9 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
     await act(() => emit("chat-sandbox-blocked", ON("late.example.com:443")));
     expect(screen.queryByText(full[0])).not.toBeInTheDocument();
     expect(screen.getByText("late.example.com:443").tagName).toBe("CODE");
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     expect(notice).toHaveTextContent("A host joined this Notice just now, so nothing was allowed.");
     expect(asked("allow_sandbox_block")).toEqual([]);
   });
@@ -528,7 +554,9 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
     for (const host of HOSTS) await act(() => emit("chat-sandbox-blocked", ON(host)));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
     await settle();
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     await act(() => emit("chat-sandbox-blocked", ON("d.example.com:443")));
     await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(3));
     expect(
@@ -540,7 +568,9 @@ describe("several hosts refused at once are one Notice (#1637)", () => {
     await waitFor(() => expect(now).toHaveTextContent("Allowed already"));
     expect(screen.getByText("d.example.com:443")).toBeInTheDocument();
     await settle();
-    await userEvent.click(within(now).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(now).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(4));
     expect((asked("allow_sandbox_block")[3].shown as { target: string }).target).toBe(
       "d.example.com:443",
@@ -564,12 +594,14 @@ describe("a block policy forbids offers nothing it forbids and says who forbade 
     await aChat();
     await act(() => emit("chat-sandbox-blocked", { ...HOST, levels: ["project"] }));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
-    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
-    await userEvent.click(within(notice).getByRole("button", { name: "Always allow…" }));
     expect(
-      await screen.findByRole("button", { name: "Allow for everyone in this project" }),
+      within(notice).queryByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeNull();
+    // The one scope left is the main button, with no menu.
+    expect(
+      within(notice).getByRole("button", { name: "Allow for everyone in this project" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Allow for me on this machine" })).toBeNull();
+    expect(within(notice).queryByRole("button", { name: "Other scopes…" })).toBeNull();
   });
 
   it("offers no Allow and no Start without the sandbox, and names the policy and its owner", async () => {
@@ -586,7 +618,8 @@ describe("a block policy forbids offers nothing it forbids and says who forbade 
     expect(notice).toHaveTextContent("is not a host policy allows");
     expect(notice).toHaveTextContent(LOCKED);
     for (const name of [
-      "Allow for this chat",
+      "Allow for me on this machine",
+      "Other scopes…",
       "Always allow…",
       "Start without the sandbox for this chat",
     ])
@@ -630,7 +663,9 @@ describe("a restart a chat is owed for a grant (#1342)", () => {
     const { asked } = await aChat();
     await act(() => emit("chat-sandbox-blocked", HOST));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     const restart = await screen.findByRole("status", { name: "Restart" });
     expect(restart).toHaveTextContent("restart it when you are ready");
     expect(asked("restart_chat")).toEqual([]);
@@ -643,10 +678,139 @@ describe("a restart a chat is owed for a grant (#1342)", () => {
     await act(() => emit("chat-moved", WAITING));
     await act(() => emit("chat-sandbox-blocked", HOST));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
-    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     const trouble = await screen.findByRole("status", { name: "Restart" });
     await waitFor(() => expect(trouble).toHaveTextContent("no conversation to resume"));
     expect(within(trouble).getByRole("button", { name: "Restart now" })).toBeInTheDocument();
+  });
+});
+
+describe("a new host is asked live (#1666)", () => {
+  const HELD: ChatBlocked = {
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    said: "a connection to an internet host this project does not allow",
+    offer: "host",
+    target: "api.example.com:443",
+    levels: ["chat", "you", "project"],
+    held: true,
+  };
+
+  it("says the command waits, and Allow lets it carry on with nothing restarting", async () => {
+    const { asked } = await aChat({ live: true });
+    await act(() => emit("chat-moved", WAITING));
+    await act(() => emit("chat-sandbox-blocked", HELD));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent("purlis holds the connection while you answer");
+    // The main button is this project on this machine.
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
+    await waitFor(() =>
+      expect(asked("allow_sandbox_block")).toEqual([
+        {
+          plane: PLANE,
+          session: 4,
+          shown: {
+            operation: "connect",
+            kind: "host",
+            what: "host",
+            target: "api.example.com:443",
+          },
+          level: "you",
+        },
+      ]),
+    );
+    expect(await screen.findByText(/carries on now; nothing restarts/)).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(asked("restart_chat")).toEqual([]);
+  });
+
+  it("Keep blocked answers the held connection in the core, and allows nothing", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", HELD));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(within(notice).getByRole("button", { name: "Keep blocked" }));
+    await waitFor(() =>
+      expect(asked("keep_sandbox_block")).toEqual([
+        {
+          plane: PLANE,
+          session: 4,
+          shown: {
+            operation: "connect",
+            kind: "host",
+            what: "host",
+            target: "api.example.com:443",
+          },
+        },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    expect(asked("allow_sandbox_block")).toEqual([]);
+  });
+
+  it("says what policy ruled out on the Notice", async () => {
+    await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...HELD,
+        held: false,
+        levels: ["you"],
+        ruled:
+          "Policy removed Allow for this chat. Locked by policy, set by IT in /etc/purlis/policy.json.",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent("Policy removed Allow for this chat");
+    expect(within(notice).queryByRole("button", { name: "Other scopes…" })).toBeNull();
+  });
+
+  it("offers no Allow for a host allowed already, only Restart this chat (#1666 fold-in)", async () => {
+    const { asked } = await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...HELD,
+        held: false,
+        offer: "allowed",
+        target: "productionresultssa15.blob.core.windows.net:443",
+        levels: [],
+        route:
+          "It is allowed already, for me on this machine. This chat started before that, so it reaches it once it restarts on the same conversation.",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent("It is allowed already");
+    for (const name of [
+      "Allow for me on this machine",
+      "Allow for everyone in this project",
+      "Other scopes…",
+    ])
+      expect(within(notice).queryByRole("button", { name })).toBeNull();
+    await userEvent.click(within(notice).getByRole("button", { name: "Restart this chat" }));
+    await waitFor(() => expect(asked("ask_chat_restart")).toEqual([{ plane: PLANE, session: 4 }]));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    expect(asked("allow_sandbox_block")).toEqual([]);
+  });
+
+  it("closes an Allow whose host was allowed already, saying so (#1666 fold-in)", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", { ...HELD, held: false }));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Allow for me on this machine" }),
+    );
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(1));
+    // The answer is said, and the ask is no longer offered.
+    await waitFor(() =>
+      expect(
+        within(notice).queryByRole("button", { name: "Allow for me on this machine" }),
+      ).toBeNull(),
+    );
   });
 });
 

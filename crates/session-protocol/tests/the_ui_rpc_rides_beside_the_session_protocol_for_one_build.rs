@@ -198,6 +198,8 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "allow_sandbox_block",
         "allow_sandbox_block_for_tasks",
         "keep_sandbox_block_for_tasks",
+        // One chat's Keep blocked, which refuses a connection its proxy holds (#1666).
+        "keep_sandbox_block",
         "allow_persona_hosts",
         "allow_blocked_host",
         "forget_sandbox_block",
@@ -211,7 +213,7 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(ui::WINDOW_ONLY.contains(&"asks_waiting"));
     assert_eq!(
         ui::WINDOW_ONLY.len(),
-        35 + 26 + 3 + 2 + 3 + 1 + 2 + 1 + 1 + 2
+        35 + 26 + 3 + 2 + 3 + 1 + 2 + 1 + 1 + 2 + 1
     );
 }
 

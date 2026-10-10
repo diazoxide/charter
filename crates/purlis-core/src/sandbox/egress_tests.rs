@@ -1061,3 +1061,100 @@ fn a_chats_profile_reaches_only_its_own_two_ports() {
     );
     assert!(!profile.contains("localhost:*"));
 }
+
+// ---- the live ask (#1666): held while the person is asked --------------------------------------
+
+/// A proxy whose asks hold for `hold`, and the board the window answers on. `.invalid` never
+/// resolves (RFC 2606), so a held connection that is let on is answered 502 by the proxy trying
+/// it, and one that is refused 403 without a try: which of the two says what the hold decided.
+fn asking(hold: Duration) -> (Proxy, std::sync::Arc<super::asks::Asks>, Heard) {
+    let heard = Heard::default();
+    let asks = std::sync::Arc::new(super::asks::Asks::timed(
+        std::sync::Arc::new(|_| {}),
+        hold,
+        Duration::from_millis(20),
+    ));
+    let proxy = Proxy::serving(super::egress::Serving {
+        asks: Some(std::sync::Arc::clone(&asks)),
+        ..heard.serving(none())
+    })
+    .expect("a proxy");
+    (proxy, asks, heard)
+}
+
+fn until_held(asks: &super::asks::Asks) {
+    for _ in 0..1000 {
+        if asks.holding() == 1 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("the connection was never held");
+}
+
+#[test]
+fn a_held_tunnel_goes_on_the_moment_its_host_is_allowed() {
+    let (proxy, asks, heard) = asking(Duration::from_secs(30));
+    let mut client = to(&proxy);
+    let answered = std::thread::spawn(move || {
+        status(
+            &mut client,
+            "CONNECT held.invalid:443 HTTP/1.1\r\nHost: held.invalid:443\r\n\r\n",
+        )
+    });
+    until_held(&asks);
+    asks.allow(&super::hosts::Host::parse("held.invalid").unwrap(), By::You);
+    // Carried: the proxy tried the host, which never resolves.
+    assert_eq!(answered.join().unwrap(), "HTTP/1.1 502 Bad Gateway");
+    assert!(heard.refused().is_empty(), "no Block for a host let on");
+}
+
+#[test]
+fn a_held_socks_connect_goes_on_the_moment_its_host_is_allowed() {
+    let (proxy, asks, _) = asking(Duration::from_secs(30));
+    let mut client = to_socks(&proxy);
+    let answered = std::thread::spawn(move || socks_connect(&mut client, "held.invalid", 443));
+    until_held(&asks);
+    asks.allow(
+        &super::hosts::Host::parse("held.invalid").unwrap(),
+        By::Chat,
+    );
+    // Host unreachable: carried, and tried.
+    assert_eq!(answered.join().unwrap(), 4);
+}
+
+#[test]
+fn a_held_connection_nobody_answers_is_refused_recorded_and_told_to_retry_later() {
+    let (proxy, asks, heard) = asking(Duration::from_millis(300));
+    let mut client = to(&proxy);
+    let said = status(
+        &mut client,
+        "CONNECT held.invalid:443 HTTP/1.1\r\nHost: held.invalid:443\r\n\r\n",
+    );
+    assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    // In the record's tally, as an ask refused; no second Block: the ask's Notice is up.
+    assert!(
+        heard
+            .reached
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(target, by, _)| target.as_deref() == Some("held.invalid:443") && *by == "ask"),
+    );
+    assert!(heard.refused().is_empty());
+    let retry = asks.allow(&super::hosts::Host::parse("held.invalid").unwrap(), By::You);
+    assert_eq!(retry, vec!["held.invalid:443".to_owned()]);
+}
+
+#[test]
+fn without_a_board_an_ask_is_refused_at_once_as_before() {
+    let heard = Heard::default();
+    let proxy = Proxy::serving(heard.serving(none())).expect("a proxy");
+    let mut client = to(&proxy);
+    let said = status(
+        &mut client,
+        "CONNECT held.invalid:443 HTTP/1.1\r\nHost: held.invalid:443\r\n\r\n",
+    );
+    assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    assert_eq!(heard.refused(), vec!["held.invalid:443".to_owned()]);
+}

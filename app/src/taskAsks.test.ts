@@ -40,6 +40,8 @@ function hostBlock(session: number, host: string | null = "registry.npmjs.org"):
     target: host,
     route: null,
     levels: ["chat", "you", "project"],
+    held: false,
+    ruled: null,
   };
 }
 

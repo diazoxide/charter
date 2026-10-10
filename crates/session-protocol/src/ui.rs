@@ -158,7 +158,9 @@ pub struct Server {
 /// `allow_sandbox_block_for_tasks` and `keep_sandbox_block_for_tasks` answer several tasks'
 /// sandbox block on one press (#1508), and `allow_sandbox_block` answers one chat's (#1538):
 /// a person's answer given in their own window to the block it showed, which no link carries
-/// a second way to give.
+/// a second way to give. `keep_sandbox_block` is one chat's Keep blocked (#1666): it refuses a
+/// connection the chat's proxy holds while the person is asked, so it is theirs alone too; no
+/// chat answers its own ask (V16a).
 ///
 /// `open_extension_record` starts the person's editor on this machine's extension record
 /// (#1296): a program of theirs run on a machine file, from the Extensions dialog, which no link
@@ -253,6 +255,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "allow_sandbox_block",
     "allow_sandbox_block_for_tasks",
     "keep_sandbox_block_for_tasks",
+    // Keep blocked on one chat's: refuses what its proxy holds and tells the chat (#1666).
+    "keep_sandbox_block",
     // Widens what a persona's chats reach on this machine (#1362).
     "allow_persona_hosts",
     // Starts the person's editor on this machine's extension record (#1296).

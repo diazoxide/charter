@@ -413,6 +413,8 @@ pub struct Chats {
     /// coalesced by the proxy: what keeps every connection in the network record. Empty until
     /// the project records its network.
     reached: Arc<Mutex<Option<ProxyReached>>>,
+    /// Who keeps purlis's word on a chat's held connections for its next turn (#1666).
+    network_words: Mutex<Option<NetworkWords>>,
     /// The session record the app last wrote for each open chat, project-relative (#1436): what
     /// a task's report names as its record. The app's own knowledge of what it wrote, so a
     /// report never names a path its chat chose. **In memory only**, and gone with the chat.
@@ -723,6 +725,7 @@ impl Chats {
             blocks: crate::taskblocks::Blocks::default(),
             refused: Arc::new(Mutex::new(None)),
             reached: Arc::new(Mutex::new(None)),
+            network_words: Mutex::new(None),
             records: Mutex::new(HashMap::new()),
             briefs: crate::rebrief::Sent::default(),
             dispatching: Mutex::new(()),
@@ -1187,12 +1190,26 @@ impl Chats {
     /// **Lets chat `session` do `what`** (#1342), for as long as the app holds it, and owes it a
     /// restart on its conversation that tells it `told`. A chat that is not open, or one with no
     /// id, gets nothing, and is told why.
+    #[cfg(test)]
     pub fn grant(
         &self,
         session: u32,
         what: purlis_core::sandbox::grant::What,
         at: u64,
         told: String,
+    ) -> Result<(), String> {
+        self.hold_grant(session, what, at)?;
+        self.owe_restart(session, told);
+        Ok(())
+    }
+
+    /// [`Self::grant`] without the restart: for a grant the chat's proxy takes live (#1666),
+    /// held still so a later start of the chat keeps it and the Granted list shows it.
+    pub fn hold_grant(
+        &self,
+        session: u32,
+        what: purlis_core::sandbox::grant::What,
+        at: u64,
     ) -> Result<(), String> {
         let (id, name) = {
             let open = lock(&self.open);
@@ -1220,8 +1237,6 @@ impl Chats {
                 chat: name,
             });
         }
-        drop(grants);
-        self.owe_restart(session, told);
         Ok(())
     }
 
@@ -1265,6 +1280,110 @@ impl Chats {
             .any(|one| one.chat.identity.id.as_deref() == Some(id))
     }
 
+    /// Chat `session`'s board of live asks (#1666), where its proxy holds a connection while
+    /// the person is asked.
+    pub fn board_of(&self, session: u32) -> Option<Arc<purlis_core::sandbox::asks::Asks>> {
+        lock(&self.open)
+            .get(&session)?
+            .confinement
+            .as_ref()?
+            .asks()
+            .cloned()
+    }
+
+    /// Whether chat `session`'s proxy is asking the person about `target` (#1666): what the
+    /// window's Notice says a connection waits on.
+    pub fn asking(&self, session: u32, target: Option<&str>) -> bool {
+        let Some(host) = target.and_then(|typed| purlis_core::sandbox::grant::host(typed).ok())
+        else {
+            return false;
+        };
+        self.board_of(session)
+            .is_some_and(|board| board.asks_about(&host))
+    }
+
+    /// **The person allowed `host` at `level`, from the window** (#1666): every open chat whose
+    /// proxy asks live and whom it reaches takes it now, with nothing restarting: chat
+    /// `session` alone for this chat, every chat of the project for the other two. Each chat a
+    /// held connection of had given up on it is told, in purlis's fixed words, to retry.
+    pub fn allow_live(
+        &self,
+        session: Option<u32>,
+        host: &purlis_core::sandbox::hosts::Host,
+        level: purlis_core::sandbox::grant::Level,
+    ) -> Live {
+        use purlis_core::sandbox::grant::Level;
+        let boards: Vec<(u32, Arc<purlis_core::sandbox::asks::Asks>)> = {
+            let open = lock(&self.open);
+            open.iter()
+                .filter(|(number, _)| level != Level::Chat || Some(**number) == session)
+                .filter_map(|(number, running)| {
+                    Some((*number, running.confinement.as_ref()?.asks()?.clone()))
+                })
+                .collect()
+        };
+        let mut live = Live::default();
+        for (number, board) in boards {
+            let retry = board.allow(host, level.into());
+            if !retry.is_empty() {
+                self.tell_network(
+                    number,
+                    purlis_core::dispatchtalk::NetworkWord::Retry { hosts: retry },
+                );
+                live.told_to_retry.push(number);
+            }
+            live.reached.push(number);
+        }
+        live
+    }
+
+    /// **An Allow of `host` at `level` was removed**, from the window (#1666): what it allowed
+    /// live reaches nothing again in the chats it reached: the chat whose id is `chat` for this
+    /// chat, every open chat for the other two.
+    pub fn forget_live(
+        &self,
+        chat: Option<&str>,
+        host: &purlis_core::sandbox::hosts::Host,
+        level: purlis_core::sandbox::grant::Level,
+    ) {
+        let boards: Vec<Arc<purlis_core::sandbox::asks::Asks>> = lock(&self.open)
+            .values()
+            .filter(|running| chat.is_none() || running.chat.identity.id.as_deref() == chat)
+            .filter_map(|running| running.confinement.as_ref()?.asks().cloned())
+            .collect();
+        for board in boards {
+            board.forget(host, level.into());
+        }
+    }
+
+    /// **The person kept `host` blocked for chat `session`, from the window** (#1666): what its
+    /// proxy holds on it is refused now, and the chat is told, in purlis's fixed words, not to
+    /// try again unless asked (#1411). Nothing is granted.
+    pub fn keep_blocked_live(&self, session: u32, host: &purlis_core::sandbox::hosts::Host) {
+        if let Some(board) = self.board_of(session) {
+            board.keep_blocked(host);
+        }
+        self.tell_network(
+            session,
+            purlis_core::dispatchtalk::NetworkWord::KeptBlocked {
+                hosts: vec![host.to_string()],
+            },
+        );
+    }
+
+    /// Hands chat `session`'s next turn purlis's word on its held connections (#1666), on the
+    /// road the person's words take: from the app's memory, never a file.
+    fn tell_network(&self, session: u32, word: purlis_core::dispatchtalk::NetworkWord) {
+        if let Some(tell) = lock(&self.network_words).clone() {
+            tell(session, word);
+        }
+    }
+
+    /// Who keeps purlis's word on a chat's held connections for its next turn (#1666).
+    pub fn tell_network_words_to(&self, keep: NetworkWords) {
+        *lock(&self.network_words) = Some(keep);
+    }
+
     /// The sandbox blocks each open chat is held on now (#1508).
     pub fn blocks(&self) -> &crate::taskblocks::Blocks {
         &self.blocks
@@ -1302,6 +1421,15 @@ impl Chats {
     }
 
     /// Whether chat `id` holds a grant of `what`.
+    /// Whether open chat `session` holds a grant of `what` already (#1666): an Allow of it for
+    /// this chat again keeps nothing new.
+    pub fn holds_for(&self, session: u32, what: &purlis_core::sandbox::grant::What) -> bool {
+        let id = lock(&self.open)
+            .get(&session)
+            .and_then(|running| running.chat.identity.id.clone());
+        id.is_some_and(|id| self.holds(&id, what))
+    }
+
     pub fn holds(&self, id: &str, what: &purlis_core::sandbox::grant::What) -> bool {
         lock(&self.grants)
             .get(id)
@@ -1836,16 +1964,29 @@ impl Chats {
         // Each chat its own pair of ports (#1664): a connection's chat is the proxy it came in
         // on, and what it carried is told under that chat, never under anything it said.
         let refusals = refused_by_the_proxy(Arc::clone(&self.refused), Arc::clone(&whose), harness);
-        let reached = reached_by_the_proxy(
-            Arc::clone(&self.reached),
-            Arc::clone(&whose),
-            ReachedAs {
-                id: identity.id.clone(),
-                persona: runs_as.clone(),
-            },
-        );
+        let who = ReachedAs {
+            id: identity.id.clone(),
+            persona: runs_as.clone(),
+        };
+        let reached =
+            reached_by_the_proxy(Arc::clone(&self.reached), Arc::clone(&whose), who.clone());
+        // The live ask (#1666): a connection to a host nothing lists is held while the person
+        // is asked, unless an administrator's policy turns that off.
+        let asks = (!purlis_core::sandbox::policy::Locks::of(&self.project).forbids_live_asks())
+            .then(|| {
+                asked_by_the_proxy(
+                    Asking {
+                        hear: Arc::clone(&self.refused),
+                        reached: Arc::clone(&self.reached),
+                        whose: Arc::clone(&whose),
+                        who,
+                        harness,
+                    },
+                    self.project.clone(),
+                )
+            });
         let confinement = match sandbox {
-            Some(applied) => applied.confine_telling(refusals, Some(reached)).map_err(|err| {
+            Some(applied) => applied.confine_asking(refusals, Some(reached), asks).map_err(|err| {
                 purlis_core::sandbox::under_policy(
                     &purlis_core::sandbox::policy::Locks::of(&self.project),
                     format!(
@@ -3424,6 +3565,101 @@ fn refused_by_the_proxy(
                 .spawn(move || told(block));
         })
     })
+}
+
+/// What an Allow reached live ([`Chats::allow_live`], #1666).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Live {
+    /// The open chats whose proxy took it at once, by number: none of them restarts for it.
+    pub reached: Vec<u32>,
+    /// Those of them a held connection had given up on before the Allow, each told to retry.
+    pub told_to_retry: Vec<u32>,
+}
+
+/// What keeps purlis's word on a chat's held connections for its next turn (#1666).
+pub type NetworkWords =
+    Arc<dyn Fn(u32, purlis_core::dispatchtalk::NetworkWord) + Send + Sync + 'static>;
+
+/// Who a chat's board of live asks tells (#1666), and as whom.
+struct Asking {
+    hear: Arc<Mutex<Option<crate::hooks::Blocks>>>,
+    reached: Arc<Mutex<Option<ProxyReached>>>,
+    whose: Arc<std::sync::atomic::AtomicU32>,
+    who: ReachedAs,
+    harness: Option<Harness>,
+}
+
+/// **A chat's board of live asks** (#1666): what purlis's own proxy holds a connection on
+/// while the person is asked, for the chat whose port it came in on.
+///
+/// - **A host allowed already** in the project at `root` (yours, or everyone's), since the chat
+///   started, goes on at once and is never asked about: the person said yes to it.
+/// - **An ask** raises the chat's Block on the road a refusal takes, its connection held
+///   meanwhile (the window reads that from [`Chats::asking`]), and is kept in the network
+///   record as an ask. A task's Block shows on its session's tab and in the needs-you queue by
+///   the road every task's Block takes (#1508). **The seam for the asks registry (#1690)** is
+///   here: when it lands, each ask registers there, answered by `allow_sandbox_block` and
+///   `keep_sandbox_block`.
+/// - **A timeout** is kept in the network record. The Notice stays.
+///
+/// Every answer comes from the window ([`Chats::allow_live`], [`Chats::keep_blocked_live`]);
+/// nothing a chat sends reaches the board.
+fn asked_by_the_proxy(asking: Asking, root: PathBuf) -> Arc<purlis_core::sandbox::asks::Asks> {
+    use purlis_core::sandbox::asks::{Asks, Heard};
+    use purlis_core::sandboxblock::{Block, Kind, Operation};
+    let Asking {
+        hear,
+        reached,
+        whose,
+        who,
+        harness,
+    } = asking;
+    let board = Asks::new(Arc::new(move |heard: Heard| {
+        let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
+        if chat == 0 {
+            return;
+        }
+        // Told on a thread of its own, so a held connection never waits on the app's keeping.
+        let told = |what: Box<dyn FnOnce() + Send>| {
+            let _ = std::thread::Builder::new()
+                .name("purlis-asked".into())
+                .spawn(what);
+        };
+        let record = |target: &str, word: &'static str| {
+            if let Some(keep) = lock(&reached).clone() {
+                let (who, target) = (who.clone(), target.to_owned());
+                told(Box::new(move || keep(chat, &who, Some(&target), word, 1)));
+            }
+        };
+        match heard {
+            Heard::Asked(targets) => {
+                for target in targets {
+                    record(&target, purlis_core::sandboxblock::record::ASKED);
+                    let Some(raise) = lock(&hear).clone() else {
+                        continue;
+                    };
+                    let block = purlis_core::hookwire::SandboxBlocked {
+                        chat,
+                        sandbox_blocked: Block {
+                            operation: Operation::Connect,
+                            kind: Kind::Host,
+                            ours: false,
+                        },
+                        harness: harness.map(|harness| harness.name().to_owned()),
+                        target: Some(target),
+                    };
+                    told(Box::new(move || raise(block)));
+                }
+            }
+            Heard::TimedOut(target) => {
+                record(&target, purlis_core::sandboxblock::record::TIMED_OUT);
+            }
+        }
+    }));
+    Arc::new(board.knowing(Arc::new(move |host| {
+        purlis_core::sandbox::grant::allowed_already(&root, host)
+            .map(purlis_core::sandbox::reach::By::from)
+    })))
 }
 
 /// What hears each connection purlis's own proxy carried for a chat (#1664): the chat's number,
