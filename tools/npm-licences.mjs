@@ -12,6 +12,21 @@
 //
 // An SPDX expression is met when the licences it can be taken under are all allowed: `A OR B`
 // needs one of them, `A AND B` both, and `A WITH E` is allowed only as that exact pair.
+//
+// **The two ways out, short of widening the list** (#1145), the npm half of `deny.toml`'s
+// `[[licenses.exceptions]]` and `[[licenses.clarify]]`, kept in `npm-licences.json` beside it
+// (cargo-deny reads those two tables as crate names, so npm's cannot share them):
+//
+//   { "exceptions": [{ "name": "<package>", "allow": ["<licence>", ...], "reason": "..." }],
+//     "clarify": [{ "name": "<package>", "version": "<exact>", "licence": "<SPDX>",
+//                   "reason": "..." }] }
+//
+// An exception allows its licences for the one package it names, at any version, and for no
+// other. A clarification says what one exact version of a package is really under, where its
+// lockfile entry names no licence or the wrong one; what it says is then held to the list like
+// the lock's own word. Each entry gives its reason, as each line of `deny.toml` does in a
+// comment. An entry no package in the lock needs, or a clarification the lock already agrees
+// with, is stale and fails the check: left, it would cover whatever later takes that name.
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,18 +99,138 @@ function licenceOf(entry) {
   return undefined;
 }
 
+/** The file the exceptions and clarifications are kept in, beside `deny.toml`. */
+export const WAYS_OUT = "npm-licences.json";
+
+const nonEmpty = (value) => typeof value === "string" && value.trim() !== "";
+
+/** One exact version, as npm writes it in a lock: no range, wildcard or tag. */
+const EXACT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * The exceptions and clarifications in `text` (the file's contents, or `undefined` where there
+ * is none), with every entry that is not one of them as a `problems` line, which fails the check.
+ */
+export function waysOutIn(text) {
+  const read = { exceptions: [], clarify: [], problems: [] };
+  if (text === undefined) return read;
+  let file;
+  try {
+    file = JSON.parse(text);
+  } catch {
+    read.problems.push(`${WAYS_OUT} is not JSON`);
+    return read;
+  }
+  if (file === null || typeof file !== "object" || Array.isArray(file)) {
+    read.problems.push(`${WAYS_OUT} is not an object`);
+    return read;
+  }
+  for (const key of Object.keys(file)) {
+    if (key !== "exceptions" && key !== "clarify")
+      read.problems.push(`${WAYS_OUT} has ${key}, which it does not know`);
+  }
+  const list = (key) => {
+    const value = file[key] ?? [];
+    if (Array.isArray(value)) return value;
+    read.problems.push(`${WAYS_OUT} ${key} is not a list`);
+    return [];
+  };
+  const named = new Set();
+  list("exceptions").forEach((one, at) => {
+    const whole =
+      nonEmpty(one?.name) &&
+      nonEmpty(one.reason) &&
+      Array.isArray(one.allow) &&
+      one.allow.length > 0 &&
+      one.allow.every(nonEmpty);
+    if (!whole)
+      read.problems.push(
+        `${WAYS_OUT} exceptions[${at}] needs a name, a reason, and the licences it allows`,
+      );
+    else if (named.has(one.name))
+      read.problems.push(
+        `${WAYS_OUT} exceptions[${at}] names ${one.name} again`,
+      );
+    else {
+      named.add(one.name);
+      read.exceptions.push({ name: one.name, allow: [...one.allow] });
+    }
+  });
+  const pinned = new Set();
+  list("clarify").forEach((one, at) => {
+    const whole =
+      nonEmpty(one?.name) &&
+      nonEmpty(one.reason) &&
+      nonEmpty(one.licence) &&
+      typeof one.version === "string" &&
+      EXACT.test(one.version);
+    const key = whole ? `${one.name}@${one.version}` : "";
+    if (!whole)
+      read.problems.push(
+        `${WAYS_OUT} clarify[${at}] needs a name, an exact version, a licence and a reason`,
+      );
+    else if (pinned.has(key))
+      read.problems.push(`${WAYS_OUT} clarify[${at}] names ${key} again`);
+    else {
+      pinned.add(key);
+      read.clarify.push({
+        name: one.name,
+        version: one.version,
+        licence: one.licence,
+      });
+    }
+  });
+  return read;
+}
+
+/** A lockfile entry's package name: its own `name` (an alias's), or the path's last part. */
+function nameOf(path, entry) {
+  if (typeof entry.name === "string") return entry.name;
+  const at = path.lastIndexOf("node_modules/");
+  return at === -1 ? path : path.slice(at + "node_modules/".length);
+}
+
 /** What is outside the list (`failures`), and what is outside it but never shipped (`notes`). */
-export function check({ lock, allowed, vendored, root = "." }) {
-  const failures = [];
+export function check({
+  lock,
+  allowed,
+  vendored,
+  root = ".",
+  waysOut = { exceptions: [], clarify: [], problems: [] },
+}) {
+  const failures = [...waysOut.problems];
   const notes = [];
+  const excepted = new Set();
+  const clarified = new Set();
   for (const [path, entry] of Object.entries(lock.packages ?? {})) {
     if (path === "" || entry.link === true) continue;
-    const licence = licenceOf(entry);
+    const name = nameOf(path, entry);
+    const clarification = waysOut.clarify.find(
+      (one) => one.name === name && one.version === entry.version,
+    );
+    let licence = licenceOf(entry);
+    // A clarification the lock already agrees with changes nothing, so nothing uses it.
+    if (clarification !== undefined && clarification.licence !== licence) {
+      clarified.add(clarification);
+      licence = clarification.licence;
+    }
+    const shown =
+      clarification !== undefined && clarified.has(clarification)
+        ? `${licence} (clarified)`
+        : licence;
     if (satisfies(licence, allowed)) continue;
+    const exception = waysOut.exceptions.find((one) => one.name === name);
+    if (
+      exception !== undefined &&
+      satisfies(licence, [...allowed, ...exception.allow])
+    ) {
+      excepted.add(exception);
+      continue;
+    }
     if (entry.dev === true)
-      notes.push(`${path} is ${licence ?? "unlicensed"} (development only)`);
+      notes.push(`${path} is ${shown ?? "unlicensed"} (development only)`);
     else if (licence === undefined) failures.push(`${path} names no licence`);
-    else failures.push(`${path} is ${licence}, which deny.toml does not allow`);
+    else failures.push(`${path} is ${shown}, which deny.toml does not allow`);
   }
   for (const asset of vendored) {
     if (!satisfies(asset.licence, allowed)) {
@@ -107,6 +242,18 @@ export function check({ lock, allowed, vendored, root = "." }) {
         `the vendored ${asset.name} has no LICENSE beside it in ${asset.files}`,
       );
     }
+  }
+  for (const one of waysOut.exceptions) {
+    if (!excepted.has(one))
+      failures.push(
+        `the exception for ${one.name} is stale: it lets no package in the lock pass`,
+      );
+  }
+  for (const one of waysOut.clarify) {
+    if (!clarified.has(one))
+      failures.push(
+        `the clarification of ${one.name}@${one.version} is stale: no package in the lock is that version and says otherwise`,
+      );
   }
   return { failures, notes };
 }
@@ -131,6 +278,9 @@ if (runAsScript()) {
     allowed: allowedIn(read("deny.toml")),
     vendored: JSON.parse(read("app/icons/vendored.json")),
     root: join(repo, "app/icons"),
+    waysOut: waysOutIn(
+      existsSync(join(repo, WAYS_OUT)) ? read(WAYS_OUT) : undefined,
+    ),
   });
   for (const note of said.notes) console.log(`note: ${note}`);
   for (const failure of said.failures) console.error(`error: ${failure}`);
