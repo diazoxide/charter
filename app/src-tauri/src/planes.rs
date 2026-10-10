@@ -1124,6 +1124,13 @@ impl Held {
 
     /// Chat `closed` has closed with `orphaned` still waiting for its next turn: each open chat
     /// it started that had sent its report, and whose report is one of those, needs the person.
+    ///
+    /// **Not a task that is ending at its report** (#1510, V100-64): its report is on its
+    /// dispatch record, where the person reads it, and its program is ended as it would have
+    /// been had the chat that asked stayed. What says so is the ledger's own word, set as the
+    /// report was delivered, never a record on disk. What is left is a chat that stays open:
+    /// one the person started from a tab (D-1443-9), a blocked task, a handoff's chat, and a
+    /// task the person has taken up again since it reported.
     fn reports_have_nowhere_to_go(
         &self,
         closed: u32,
@@ -1142,6 +1149,9 @@ impl Held {
             }) else {
                 continue;
             };
+            if self.tasks().ledger().ending(open.session) {
+                continue;
+            }
             let name = self
                 .chats
                 .shown_name(open.session)

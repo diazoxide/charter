@@ -1161,8 +1161,14 @@ pub enum Answer {
     /// A task's report was handed to the chat named `to`, **and the task is finished**
     /// (#1485): purlis ends the reporting chat's program once this turn is over. Said only
     /// where the app will: never for a handoff's chat, a task that came out blocked, or one
-    /// the person started from a tab, which answer [`Self::Reported`].
-    Finished { to: String },
+    /// the person started from a tab, which answer [`Self::Reported`]. Where that chat has
+    /// gone, the report is kept for its workspace, `kept_for`, and the task still ends
+    /// (#1510).
+    Finished {
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept_for: Option<String>,
+    },
     /// The app will not, and this is the sentence saying why. The asker prints the command
     /// to run in a terminal and says this underneath it: a refusal the operator cannot see
     /// is a handoff that vanished.

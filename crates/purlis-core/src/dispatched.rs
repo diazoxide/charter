@@ -517,6 +517,19 @@ enum Cancel {
     Heard,
 }
 
+/// **Which reports end their task's program** (#1485): a task's report, of a task a chat asked
+/// for, that did not come out blocked. **A task the person started from a tab is their
+/// conversation**: it stays open until they close it. **A blocked task is waiting on
+/// something**, and its conversation is what the next step needs. And purlis's own word that
+/// the person stopped a chat is no report: the stop ends it.
+fn ends_its_task(report: &Handback) -> bool {
+    report.stopped.is_none()
+        && report
+            .task
+            .as_ref()
+            .is_some_and(|said| !said.by_person && said.outcome != Outcome::Blocked)
+}
+
 /// How far ending a task that has reported has got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum End {
@@ -1091,20 +1104,28 @@ impl Ledger {
     /// `task`'s report was delivered: `report`, left in `file` for the asking chat `asker`'s
     /// next turn where that chat is open (`file` is none for one kept for a workspace). A
     /// cancel of it is over.
+    ///
+    /// A report with no `file` here ends nothing: it is how a report a launch or a reopen
+    /// hands back is recorded. One kept for a workspace because the chat that asked has gone
+    /// is [`Self::reported_with_its_asker_gone`].
     pub fn reported(&mut self, task: u32, asker: u32, report: Handback, file: Option<PathBuf>) {
-        // **Which reports end their task's program** (#1485): one left for an open asking
-        // chat, of a task a chat asked for, that did not come out blocked. A report kept for a
-        // workspace reached no chat, and its writer stays open to say so. **A task the person
-        // started from a tab is their conversation**: it stays open until they close it. **A
-        // blocked task is waiting on something**, and its conversation is what the next step
-        // needs. And purlis's own word that the person stopped a chat is no report: the stop
-        // ends it.
-        let ends = file.is_some()
-            && report.stopped.is_none()
-            && report
-                .task
-                .as_ref()
-                .is_some_and(|said| !said.by_person && said.outcome != Outcome::Blocked);
+        let ends = file.is_some() && ends_its_task(&report);
+        self.keep(task, asker, report, file, ends);
+    }
+
+    /// `task`'s report was kept for its workspace, because the chat that asked, `asker`, has
+    /// gone. **An orphaned task ends at its report, as every other task does** (#1510,
+    /// V100-64): the report is on the task's dispatch record, where the person reads it, and
+    /// for the workspace. The same reports end it as end one delivered to an open asking chat
+    /// ([`ends_its_task`]): a task the person started, a blocked one and a stop's word do not.
+    pub fn reported_with_its_asker_gone(&mut self, task: u32, asker: u32, report: Handback) {
+        let ends = ends_its_task(&report);
+        self.keep(task, asker, report, None, ends);
+    }
+
+    /// [`Self::reported`]'s one body: `ends` says whether the task's program is now to be
+    /// ended.
+    fn keep(&mut self, task: u32, asker: u32, report: Handback, file: Option<PathBuf>, ends: bool) {
         let has_reader = file.is_some();
         if has_reader {
             // purlis's word that the person ended it is told of as that, not as a report.
@@ -2873,8 +2894,7 @@ mod tests {
         // And from then a move of its chat is one the app looks at.
         assert!(ledger.waits_on(TASK));
 
-        // A report kept for a workspace reached no chat: the chat that asked has gone, and the
-        // chat that wrote it stays open, where the person is told it had nowhere to go.
+        // A report handed back with no file (a launch's, a reopen's) ends nothing by itself.
         let mut ledger = Ledger::default();
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
         assert!(!ledger.ending(TASK));
@@ -2882,6 +2902,41 @@ mod tests {
             ledger.end_step(TASK, WAITING, false, Looked::WaitedOut),
             Ends::Nothing
         );
+    }
+
+    #[test]
+    fn an_orphaned_task_ends_at_its_report_as_every_other_task_does() {
+        // #1510 line 4, V100-64: the chat that asked has gone, so the report is kept for its
+        // workspace and on its record. The task is ended as one whose report reached a chat.
+        let mut ledger = Ledger::default();
+        ledger.started(TASK, SystemTime::UNIX_EPOCH);
+
+        ledger.reported_with_its_asker_gone(TASK, ASKER, a_report(Outcome::Done));
+
+        assert!(ledger.ending(TASK));
+        assert!(ledger.waits_on(TASK));
+        // And no chat is typed a line about it: none is there to read one.
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+
+        // The reports that never end a task do not end an orphaned one either: a blocked
+        // task, a task the person started, and purlis's word that the person stopped it.
+        let mut theirs = a_report(Outcome::Done);
+        theirs.task.as_mut().unwrap().by_person = true;
+        let mut stopped = a_report(Outcome::Done);
+        stopped.stopped = Some(crate::handback::Stopped {
+            wrote: false,
+            task: true,
+            by_person: false,
+            record: None,
+            below: Vec::new(),
+            limit: None,
+            branch: None,
+        });
+        for report in [a_report(Outcome::Blocked), theirs, stopped] {
+            let mut ledger = Ledger::default();
+            ledger.reported_with_its_asker_gone(TASK, ASKER, report.clone());
+            assert!(!ledger.ending(TASK), "{report:?}");
+        }
     }
 
     #[test]

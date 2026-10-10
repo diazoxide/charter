@@ -1147,6 +1147,23 @@ pub fn reported(
     held.tasks().changed();
 }
 
+/// Task `task`'s report was kept for its workspace, because the chat that asked, `asker`, has
+/// gone (#1510, V100-64): a command waiting on it has it now, and **its program is to be
+/// ended, as a task's whose report reached its chat** (`Ledger::reported_with_its_asker_gone`).
+/// Decided from what this app holds of the delivery it just made, never from a record on
+/// disk. Under the lock a report is taken under, as [`reported`] is.
+pub fn reported_with_its_asker_gone(
+    held: &Held,
+    task: u32,
+    asker: u32,
+    report: purlis_core::handback::Handback,
+) {
+    held.tasks()
+        .ledger()
+        .reported_with_its_asker_gone(task, asker, report);
+    held.tasks().changed();
+}
+
 /// Whether task `task` has a question open with the chat that dispatched it: asked, and not
 /// answered yet. What its row in the window says it is waiting on (#1484).
 pub fn asks_its_asker(held: &Held, task: u32) -> bool {
