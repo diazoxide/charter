@@ -361,9 +361,11 @@ describe("the right-hand region", () => {
 
 /**
  * A view of the left side that is drawn: put away, the side keeps its views mounted and hidden
- * (#1673), so it is the shown one that comes and goes, not the explorer's element.
+ * (#1673), so it is the shown one that comes and goes, not the explorer's element. The left
+ * side's alone: the right side has views of its own since #1678.
  */
-const A_VIEW_SHOWN = '.region-views:not([hidden]) > [role="tabpanel"]:not([hidden])';
+const A_VIEW_SHOWN =
+  '.region-views[data-region="navigation"]:not([hidden]) > [role="tabpanel"]:not([hidden])';
 
 describe("putting a region away", () => {
   it("takes it off the window and brings it back, and never takes the panes", async () => {
