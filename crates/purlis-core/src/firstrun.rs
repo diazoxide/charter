@@ -10,7 +10,8 @@
 //!
 //! - [`local_plane`] and [`ensure_local_plane`]: where the plane lives, and making it.
 //! - [`take_in`]: a repo cloned into a workspace of its own name, and [`take_in_from`]: the
-//!   same, with the project laid out from a project template first (FR-17).
+//!   same, with the project laid out from a project template first (FR-17). The project then
+//!   tracks the forge the repo's `origin` is on, added when it did not ([`ForgeTaken`], #880).
 //! - [`harnesses`]: which harnesses are installed and whether each has been signed in to.
 //!
 //! # Where the local plane lives
@@ -53,6 +54,13 @@ pub enum ForgeFrom<'a> {
     Repo(&'a Path),
     /// The operator's answer: a forge they picked, or the one whose sign-in they pressed.
     Named(crate::forge::Kind),
+    /// The operator's answer to the question `repo`'s remote raised: the kind is theirs, and
+    /// the host, with the owner when it reads as one, is carried over from the remote so it is
+    /// not typed again (#881, [`crate::scaffold::fromremote::hosted_repo`]).
+    Answered {
+        kind: crate::forge::Kind,
+        repo: &'a Path,
+    },
 }
 
 /// Why [`ensure_local_plane`] made nothing.
@@ -90,10 +98,16 @@ pub fn ensure_local_plane(config_root: &Path, forge: ForgeFrom<'_>) -> Result<Pa
         return Ok(root);
     }
     // Asked before anything is made, so a question leaves no empty directory behind.
-    let (kind, owner) = match forge {
-        ForgeFrom::Named(kind) => (kind, String::new()),
+    let (kind, owner, host) = match forge {
+        ForgeFrom::Named(kind) => (kind, String::new(), None),
+        ForgeFrom::Answered { kind, repo } => {
+            match crate::scaffold::fromremote::hosted_repo(repo, kind) {
+                Some(hosted) => (kind, hosted.owner, Some(hosted.host)),
+                None => (kind, String::new(), None),
+            }
+        }
         ForgeFrom::Repo(repo) => match crate::scaffold::fromremote::forge_of_repo(repo) {
-            Ok(found) => (found.kind, found.owner),
+            Ok(found) => (found.kind, found.owner, None),
             Err(why) => return Err(NotMade::AsksForForge(why)),
         },
     };
@@ -110,6 +124,7 @@ pub fn ensure_local_plane(config_root: &Path, forge: ForgeFrom<'_>) -> Result<Pa
         },
         &crate::scaffold::InitArgs {
             owner,
+            host,
             ..crate::scaffold::InitArgs::for_the_app(false, None, Some(kind))
         },
     );
@@ -130,6 +145,27 @@ pub struct TakenIn {
     pub clone: PathBuf,
     /// The project template laid out, by id, when one was.
     pub template: Option<String>,
+    /// What taking the repo in did to the project's forges (#880).
+    pub forge: ForgeTaken,
+}
+
+/// What [`take_in_from`] did about the forge the repo's `origin` is on (#880).
+///
+/// **Added, not asked** (D-1094-1): taking the repo in is the operator's act, and a project
+/// that does not track the forge its own workspace's repo is on leaves the repo picker and
+/// `discover` blind to it. Asking would spend W10's interrupt budget on a question with one
+/// sensible answer; the block shows in Settings › Project › Forges, where it can be removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeTaken {
+    /// The remote names no forge purlis can tell (none, or a self-managed host): nothing was
+    /// added, and nothing is asked.
+    Unnamed,
+    /// The project already tracks that forge: a block of that kind is on its host.
+    Tracked,
+    /// A `[[forge]]` block for it was added, with the owner the remote names.
+    Added(crate::scaffold::fromremote::FromRemote),
+    /// It was not added, and why. The repo is taken in all the same.
+    NotAdded(String),
 }
 
 /// Which project template the first run lays out (FR-17).
@@ -190,11 +226,72 @@ pub fn take_in_from(root: &Path, repo: &Path, choice: &Choice) -> Result<TakenIn
     if let Some(template) = template {
         crate::template::apply_checked(root, template, Some(&workspace))?;
     }
+    // Last, so an open that is refused adds no forge.
+    let forge = match crate::scaffold::fromremote::forge_of_repo(repo) {
+        Ok(found) => track_forge(root, &found),
+        Err(_) => ForgeTaken::Unnamed,
+    };
     Ok(TakenIn {
         workspace,
         clone,
         template: template.map(|one| one.id.clone()),
+        forge,
     })
+}
+
+/// Makes the project at `root` track `found`'s forge: a new `[[forge]]` block through the
+/// Settings write seam ([`crate::settings::forges::add`]), unless a block already puts a forge
+/// of that kind on its host (D-1094-2: a forge is its kind and host; the owner says only what
+/// `discover` lists, and a second owner on a tracked forge is the operator's to add).
+///
+/// A project that declares no block at all is left as it is: `discover` reads it as the
+/// default forge, and a first block would take that one away.
+pub fn track_forge(root: &Path, found: &crate::scaffold::fromremote::FromRemote) -> ForgeTaken {
+    use crate::settings::{self, Which, forges};
+    let read = match settings::read(root, Which::Shared) {
+        Ok(read) => read,
+        Err(why) => return ForgeTaken::NotAdded(why),
+    };
+    let manifest = crate::names::manifest_name(root);
+    let Ok(cfg) = read.text.parse::<toml::Table>() else {
+        return ForgeTaken::NotAdded(format!("{manifest} is not valid TOML"));
+    };
+    if forges::listed(&read.text).is_empty() {
+        return ForgeTaken::NotAdded(format!(
+            "{manifest} declares no [[forge]] block, and a first one would change which forge \
+             `purlis discover` reads"
+        ));
+    }
+    let wanted = crate::forge::Forge::default_of(found.kind);
+    let tracked = crate::forge::to_query(&cfg)
+        .map(|blocks| blocks.iter().any(|(forge, _, _)| *forge == wanted));
+    match tracked {
+        Ok(true) => return ForgeTaken::Tracked,
+        Ok(false) => {}
+        Err(why) => return ForgeTaken::NotAdded(why),
+    }
+    let entry = forges::Entry {
+        kind: found.kind.word().to_owned(),
+        owner: found.owner.clone(),
+        host: String::new(),
+        exclude: Vec::new(),
+    };
+    let base = read.exists.then_some(read.text.as_str());
+    match forges::add(root, base, &entry) {
+        Ok(_) => ForgeTaken::Added(found.clone()),
+        Err(refusal) => ForgeTaken::NotAdded(said(refusal.named_at(root))),
+    }
+}
+
+/// Every reason in `refusal`, in one line.
+fn said(refusal: crate::settings::collection::Refusal) -> String {
+    refusal
+        .file
+        .into_iter()
+        .chain(refusal.fields.into_iter().map(|one| one.why))
+        .chain(refusal.referrers.into_iter().map(|one| one.what))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// One harness as the first run found it.
@@ -507,6 +604,177 @@ mod tests {
 
         let again = ensure_local_plane(&config, ForgeFrom::Repo(&repo));
         assert_eq!(again, Ok(root), "a plane that is there asks nothing");
+    }
+
+    /// #881: the answer to a self-managed remote's question keeps the remote's host, and the
+    /// owner its path names, in the project's forge block.
+    #[test]
+    fn an_answered_self_managed_remote_keeps_its_host_and_owner() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+        assert!(
+            crate::testgit::run(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://git.example.com/platform/svc.git"
+                ]
+            )
+            .ok()
+        );
+        let config = dir.path().join("cfg");
+        assert!(matches!(
+            ensure_local_plane(&config, ForgeFrom::Repo(&repo)),
+            Err(NotMade::AsksForForge(_))
+        ));
+
+        let root = ensure_local_plane(
+            &config,
+            ForgeFrom::Answered {
+                kind: crate::forge::Kind::GitLab,
+                repo: &repo,
+            },
+        )
+        .expect("the local plane");
+
+        let cfg = crate::forge::load_config(&root).expect("charter.toml");
+        let forges = crate::forge::to_query(&cfg).expect("the forges read");
+        assert_eq!(forges.len(), 1, "{forges:?}");
+        assert_eq!(forges[0].0.host, "git.example.com");
+        assert_eq!(forges[0].1, "platform");
+    }
+
+    /// #880, end to end: a GitLab repo taken into a project made for GitHub adds the GitLab
+    /// forge once, and a second GitLab repo adds nothing.
+    #[test]
+    fn a_repo_on_a_second_forge_is_tracked_once_it_is_taken_in() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = ensure_local_plane(&dir.path().join("cfg"), GITHUB).expect("the local plane");
+        let on = |name: &str, url: &str| {
+            let repo = a_repo(&dir.path().join(name));
+            assert!(crate::testgit::run(&repo, &["remote", "add", "origin", url]).ok());
+            repo
+        };
+
+        let first = take_in(&root, &on("api", "git@gitlab.com:platform/api.git")).expect("in");
+        let second = take_in(&root, &on("web", "https://gitlab.com/platform/web.git")).expect("in");
+        let plain = take_in(&root, &a_repo(&dir.path().join("notes"))).expect("in");
+
+        assert!(
+            matches!(first.forge, ForgeTaken::Added(_)),
+            "{:?}",
+            first.forge
+        );
+        assert_eq!(second.forge, ForgeTaken::Tracked);
+        assert_eq!(plain.forge, ForgeTaken::Unnamed);
+        assert_eq!(
+            hosts(&root),
+            [
+                (crate::forge::Kind::GitHub, String::new()),
+                (crate::forge::Kind::GitLab, "platform".to_owned())
+            ]
+        );
+    }
+
+    /// Each forge `discover` and the repo picker would query in the project at `root`, with
+    /// its owner.
+    fn hosts(root: &Path) -> Vec<(crate::forge::Kind, String)> {
+        let cfg = crate::forge::load_config(root).expect("charter.toml");
+        crate::forge::to_query(&cfg)
+            .expect("the forges read")
+            .into_iter()
+            .map(|(forge, owner, _)| (forge.kind, owner))
+            .collect()
+    }
+
+    /// A scratch project with `shared` as its `charter.toml`.
+    fn project(shared: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::write(dir.path().join("charter.toml"), shared).expect("charter.toml");
+        crate::testgit::run(dir.path(), &["init", "-q"]);
+        dir
+    }
+
+    fn remote(kind: crate::forge::Kind, owner: &str) -> crate::scaffold::fromremote::FromRemote {
+        crate::scaffold::fromremote::FromRemote {
+            kind,
+            owner: owner.to_owned(),
+        }
+    }
+
+    const ON_GITHUB: &str = "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n";
+
+    #[test]
+    fn a_forge_the_project_does_not_track_is_added_with_the_remotes_owner() {
+        use crate::forge::Kind;
+        let dir = project(ON_GITHUB);
+
+        let taken = track_forge(dir.path(), &remote(Kind::GitLab, "platform/web"));
+
+        assert_eq!(
+            taken,
+            ForgeTaken::Added(remote(Kind::GitLab, "platform/web"))
+        );
+        assert_eq!(
+            hosts(dir.path()),
+            [
+                (Kind::GitHub, "acme".to_owned()),
+                (Kind::GitLab, "platform/web".to_owned())
+            ]
+        );
+        assert_eq!(
+            track_forge(dir.path(), &remote(Kind::GitLab, "platform/web")),
+            ForgeTaken::Tracked
+        );
+    }
+
+    /// D-1094-2: a forge is its kind and host. Another owner on a tracked forge adds nothing.
+    #[test]
+    fn another_owner_on_a_tracked_forge_adds_nothing() {
+        use crate::forge::Kind;
+        let dir = project(ON_GITHUB);
+
+        assert_eq!(
+            track_forge(dir.path(), &remote(Kind::GitHub, "someone-else")),
+            ForgeTaken::Tracked
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("charter.toml")).expect("read"),
+            ON_GITHUB
+        );
+    }
+
+    /// A self-managed block is not the kind's own host: the default host is added beside it.
+    #[test]
+    fn a_self_managed_block_does_not_track_the_kinds_own_host() {
+        use crate::forge::Kind;
+        let dir =
+            project("schema = 1\n\n[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.com\"\n");
+
+        assert_eq!(
+            track_forge(dir.path(), &remote(Kind::GitLab, "group")),
+            ForgeTaken::Added(remote(Kind::GitLab, "group"))
+        );
+    }
+
+    /// A project with no block reads as the default forge; a first block would take it away.
+    #[test]
+    fn a_project_that_declares_no_forge_is_left_as_it_is() {
+        use crate::forge::Kind;
+        let dir = project("schema = 1\n");
+
+        let taken = track_forge(dir.path(), &remote(Kind::GitHub, "acme"));
+
+        assert!(
+            matches!(&taken, ForgeTaken::NotAdded(why) if why.contains("declares no [[forge]] block")),
+            "{taken:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("charter.toml")).expect("read"),
+            "schema = 1\n"
+        );
     }
 
     #[test]

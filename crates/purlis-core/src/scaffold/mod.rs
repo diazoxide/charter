@@ -169,17 +169,25 @@ impl InitArgs {
     ///
     /// `forge` is the operator's answer when an earlier run asked for it
     /// ([`ASKS_FOR_FORGE`]); `None` reads it from the repo's remote, as `charter init` does.
+    /// An answer about a self-managed remote keeps that remote's host, and the owner its path
+    /// names, so neither is typed again (#881, [`fromremote::hosted_repo`]).
     pub fn for_the_app(
         plane_is_this_repo: bool,
         adopt: Option<PathBuf>,
         forge: Option<crate::forge::Kind>,
     ) -> Self {
+        let hosted = forge
+            .zip(adopt.as_deref())
+            .and_then(|(kind, repo)| fromremote::hosted_repo(repo, kind));
+        let (owner, host) = hosted.map_or((String::new(), None), |hosted| {
+            (hosted.owner, Some(hosted.host))
+        });
         Self {
             // `charter init`'s rule (#839): the forge, and the owner with it, come from the
             // repo's remote, or are asked for.
             forge: forge.map(|kind| kind.word().to_owned()),
-            owner: String::new(),
-            host: None,
+            owner,
+            host,
             // Never from the app: it is `adopt` with the source fixed to the plane's own
             // directory, and the dialog asks for the source as a directory of its own.
             clone_this_repo: false,
