@@ -152,8 +152,10 @@ export function archiveOf(view: ViewRef): MemoryScope | undefined {
  * archive's other names) still holds the name it was numbered away from, which is what tells a
  * numbered `freeze-2` from a memory its writer called `step-2`.
  *
- * The tab asks the core for this name first and falls back to the archived one when the store
- * already holds it: the core refuses a taken name and moves nothing.
+ * Even then it is only likely, never known: a store can hold a `freeze-2` of its own (two
+ * memories with one title), and the archive keeps no record of the name a file had. So the tab
+ * offers this name beside the archived one and never picks it (`MemoryArchiveTab`); the
+ * core refuses a name the store holds and moves nothing.
  */
 export function unnumbered(archived: string, held: readonly string[]): string | undefined {
   const stem = (name: string) => name.replace(/\.md$/, "");

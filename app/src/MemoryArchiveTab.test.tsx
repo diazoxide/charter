@@ -232,6 +232,10 @@ describe("a long archive (#1191)", () => {
     const list = screen.getByRole("list");
     expect(within(list).getAllByRole("button")).toHaveLength(1);
     expect(within(list).getByRole("button", { name: /Note 13/ })).toBeInTheDocument();
+    // The row cannot show why it matched, so the part of its text that did is drawn under it.
+    const snippet = screen.getByTestId("row-snippet-note-13");
+    expect(snippet).toHaveTextContent("The Friday FREEZE holds until the release.");
+    expect(snippet.querySelector("mark")).toHaveTextContent("Friday FREEZE");
   });
 
   it("finds by title and by stamp, and shows every match past a page", async () => {
@@ -280,12 +284,13 @@ describe("restoring a numbered archive name (#1191, D-1191-1)", () => {
     archived({ archived: "freeze-2", title: "Freeze again" }),
   ];
 
-  it("restores it under the name archiving numbered it away from", async () => {
+  it("offers the un-numbered name beside the archived one, and sends it only when chosen", async () => {
     const asked = core([numbered()], restored("freeze"));
     draw();
     await userEvent.click(await screen.findByRole("button", { name: /Freeze again/ }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
+    expect(screen.getByRole("button", { name: "Restore memory" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restore as freeze" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Freeze again is back in steward's memory as freeze.",
@@ -295,50 +300,55 @@ describe("restoring a numbered archive name (#1191, D-1191-1)", () => {
     expect(sent[0].args).toMatchObject({ archived: "freeze-2", restoreAs: "freeze" });
   });
 
-  it("falls back to its archived name when the store already holds the other", async () => {
-    const asked = core([numbered()], (args) =>
-      args.restoreAs === "freeze"
-        ? new Error("the store already holds freeze.md, so freeze-2 stays archived")
-        : restored("freeze-2"),
-    );
+  it("restores under the archived name by default, and says which name that was", async () => {
+    // The archive cannot tell a numbered `freeze` from a memory the store called `freeze-2`,
+    // and taking `freeze` would leave the archived `freeze` with no name to come back under.
+    const asked = core([numbered()], restored("freeze-2"));
     draw();
     await userEvent.click(await screen.findByRole("button", { name: /Freeze again/ }));
 
     await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Freeze again is back in steward's memory as freeze-2, since it already holds a freeze.",
+      "Freeze again is back in steward's memory as freeze-2.",
     );
     const sent = asked.filter((one) => one.cmd === "memory_unarchive").map((one) => one.args);
-    expect(sent).toMatchObject([
-      { archived: "freeze-2", restoreAs: "freeze" },
-      { archived: "freeze-2", restoreAs: null },
-    ]);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(sent).toMatchObject([{ archived: "freeze-2", restoreAs: null }]);
   });
 
-  it("says any other refusal, and does not try a second name", async () => {
-    const asked = core([numbered()], new Error("the store is read-only"));
+  it("says the core's refusal when the store holds the offered name, and tries no other", async () => {
+    const asked = core(
+      [numbered()],
+      new Error("the store already holds freeze.md, so freeze-2.md stays archived"),
+    );
     draw();
     await userEvent.click(await screen.findByRole("button", { name: /Freeze again/ }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
+    await userEvent.click(screen.getByRole("button", { name: "Restore as freeze" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "purlis could not restore Freeze again: the store is read-only",
+      "purlis could not restore Freeze again: the store already holds freeze.md, so freeze-2.md stays archived",
     );
     expect(asked.filter((one) => one.cmd === "memory_unarchive")).toHaveLength(1);
+    // Nothing moved, so the memory and both ways back are still there.
+    expect(screen.getByRole("button", { name: "Restore memory" })).toBeEnabled();
   });
 
-  it("restores a name the core never numbered under that name", async () => {
-    const asked = core([[archived({ archived: "release-2026", title: "Release" })]]);
+  it("offers no second name for one the core never numbered", async () => {
+    const asked = core([
+      [
+        archived({ archived: "release", title: "Release" }),
+        archived({ archived: "release-2026", title: "Release 2026" }),
+      ],
+    ]);
     draw();
-    await userEvent.click(await screen.findByRole("button", { name: /Release/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Release 2026/ }));
 
+    expect(screen.queryByRole("button", { name: /^Restore as/ })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Release is back in steward's memory.",
+      "Release 2026 is back in steward's memory.",
     );
     expect(asked.find((one) => one.cmd === "memory_unarchive")?.args).toMatchObject({
       archived: "release-2026",

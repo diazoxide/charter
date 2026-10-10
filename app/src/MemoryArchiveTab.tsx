@@ -5,7 +5,7 @@ import { EmptyState } from "./EmptyState";
 import { COMPONENTS } from "./SessionRecordTab";
 import { commands, type ArchivedMemory, type MemoryScope, type PlaneId } from "./bindings";
 import { archiveWhere, memoryOf, scopeKey, scopeWord, unnumbered } from "./memories";
-import { PAGE } from "./PanelList";
+import { PAGE, snippetOf } from "./PanelList";
 import { SettingActions } from "./settings/components";
 
 /**
@@ -22,13 +22,21 @@ import { SettingActions } from "./settings/components";
  * **Restore is an explicit button** and asks nothing first, because nothing is lost: the file
  * moves back under its name in the archive and its index line is appended (`memory_unarchive`,
  * the Delete's Undo). The core tells the project's model what it wrote, so every list showing
- * the store follows (FD-10); this tab reads the archive again at once as well. A name archiving
- * had to number (`freeze-2`) is restored under the name it was numbered away from when the store
- * has none by that name, and under its archived name when it has ({@link unnumbered}, #1191).
+ * the store follows (FD-10); this tab reads the archive again at once as well.
+ *
+ * **A numbered name is offered its un-numbered one, never given it** (#1191, D-1191-1). When
+ * the archive holds both `freeze` and `freeze-2`, the second may be a `freeze` that archiving
+ * had to number, or a memory that was called `freeze-2` in the store: the archive keeps no
+ * record of which. So *Restore memory* still puts it back under its archived name, and a
+ * second button, *Restore as freeze* ({@link unnumbered}), asks the core for the other name.
+ * The tab never picks the name itself: whichever comes back as `freeze` leaves the other unable
+ * to, and that is the reader's call. A store that already holds the name refuses it, moves
+ * nothing, and the refusal is shown as any other is.
  *
  * **A long archive is searched and paged the way a memory list is** (`PanelList`, #1191): one
  * page of rows, then *Show more*, and a search box once the archive holds more than a page. The
- * search reads an archived memory's title, stamp and text, and a typed search shows every match.
+ * search reads an archived memory's title, stamp and text, and a typed search shows every match;
+ * a row found by its text shows the part that matched under it, as a memory list's does.
  * A search that hides the chosen row keeps its text drawn below: what the reader opened stays
  * open until they choose again or restore it.
  */
@@ -107,31 +115,31 @@ export function MemoryArchiveTab({
   const drawn = wanted === "" ? matching.slice(0, limit) : matching;
   const more = matching.length - drawn.length;
 
-  const restore = async (memory: ArchivedMemory) => {
+  // The un-numbered name the chosen memory is offered, beside its archived one.
+  const offered =
+    shown === undefined
+      ? undefined
+      : unnumbered(
+          shown.archived,
+          archived.filter((one) => one !== shown).map((one) => one.archived),
+        );
+
+  /** Restore `memory` under its archived name, or under `as` when the reader chose that. */
+  const restore = async (memory: ArchivedMemory, as?: string) => {
     setRestoring(true);
     setOutcome(undefined);
     try {
-      const named = unnumbered(
-        memory.archived,
-        archived.filter((one) => one !== memory).map((one) => one.archived),
-      );
-      let answer = await commands.memoryUnarchive(plane, scope, memory.archived, named ?? null);
-      let taken = false;
-      if (named !== undefined && answer.status === "error" && isTaken(answer.error)) {
-        taken = true;
-        answer = await commands.memoryUnarchive(plane, scope, memory.archived, null);
-      }
+      const answer = await commands.memoryUnarchive(plane, scope, memory.archived, as ?? null);
       if (answer.status === "error") {
         setOutcome({ refused: `purlis could not restore ${memory.title}: ${answer.error}` });
       } else {
         const where = `${memory.title} is back in ${memoryOf(scope)}`;
+        // Which name it came back under, whenever there were two it could have had.
         setOutcome({
           back:
-            named === undefined
+            as === undefined && offered === undefined
               ? `${where}.`
-              : taken
-                ? `${where} as ${answer.data.slug}, since it already holds a ${named}.`
-                : `${where} as ${answer.data.slug}.`,
+              : `${where} as ${answer.data.slug}.`,
         });
         setChosen(undefined);
         setAgain((was) => was + 1);
@@ -180,24 +188,46 @@ export function MemoryArchiveTab({
           className="panel-rows memory-archive-rows"
           aria-label={`Archived memories in ${scopeWord(scope)}`}
         >
-          {drawn.map((memory) => (
-            <li key={memory.archived} className="panel-row">
-              <button
-                type="button"
-                // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
-                tabIndex={0}
-                className="row"
-                aria-pressed={memory.archived === chosen}
-                onClick={() => {
-                  setChosen(memory.archived === chosen ? undefined : memory.archived);
-                  setOutcome(undefined);
-                }}
-              >
-                <span className="row-text">{memory.title}</span>
-                {memory.stamp !== "" && <span className="row-note">{` · ${memory.stamp}`}</span>}
-              </button>
-            </li>
-          ))}
+          {drawn.map((memory) => {
+            const snippet = snippetOf(
+              {
+                key: memory.archived,
+                text: memory.title,
+                note: memory.stamp,
+                mark: "",
+                tone: "",
+                detail: { kind: "text", text: memory.body },
+                runs: null,
+                actions: [],
+              },
+              wanted,
+            );
+            return (
+              <li key={memory.archived} className="panel-row">
+                <button
+                  type="button"
+                  // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+                  tabIndex={0}
+                  className="row"
+                  aria-pressed={memory.archived === chosen}
+                  onClick={() => {
+                    setChosen(memory.archived === chosen ? undefined : memory.archived);
+                    setOutcome(undefined);
+                  }}
+                >
+                  <span className="row-text">{memory.title}</span>
+                  {memory.stamp !== "" && <span className="row-note">{` · ${memory.stamp}`}</span>}
+                </button>
+                {snippet !== undefined && (
+                  <p className="row-snippet" data-testid={`row-snippet-${memory.archived}`}>
+                    {snippet.before}
+                    <mark>{snippet.match}</mark>
+                    {snippet.after}
+                  </p>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {more > 0 && (
@@ -238,18 +268,19 @@ export function MemoryArchiveTab({
             >
               Restore memory
             </button>
+            {offered !== undefined && (
+              <button
+                type="button"
+                tabIndex={0}
+                disabled={restoring}
+                onClick={() => void restore(shown, offered)}
+              >
+                {`Restore as ${offered}`}
+              </button>
+            )}
           </SettingActions>
         </section>
       )}
     </div>
   );
-}
-
-/**
- * Whether the core refused a restore because the store already holds the name: `unarchive`'s
- * `AlreadyExists`, in both of its paths (memstore.rs and memstore/holding.rs), which moves
- * nothing. The only refusal a numbered restore answers by trying its archived name.
- */
-function isTaken(error: string): boolean {
-  return error.startsWith("the store already holds ");
 }
