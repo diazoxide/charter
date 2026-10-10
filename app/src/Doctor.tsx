@@ -407,15 +407,34 @@ function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fi
 
 /**
  * **The fix ids whose doctor finding stands as a Notice under the strip** (#1250), and not
- * only as a row of the Doctor dialog. `git-identity` is one: without it every commit charter
- * makes (memory, notes, tallies) silently never happens, and its fix is a form the Notice
- * opens where it stands.
+ * only as a row of the Doctor dialog.
+ *
+ * **The rule** (D-1301-1): a finding stands here only where, left alone, it silently loses work
+ * or blocks every chat, and its fix is one press. Everything else is the dialog's, because a
+ * band of rows on every open would be noise.
+ *
+ * - `git-identity` (`git identity`): without it every commit purlis makes (memory, notes,
+ *   tallies) silently never happens. Its fix is a form the Notice opens where it stands.
+ * - `memory-optimize` (`memory indexes`): a memory its `MEMORY.md` does not list is never read
+ *   by a chat, so what was learnt is silently lost. The fix only appends the missing links.
+ *
+ * And why each of the others stays in the dialog:
+ * - `discover`, `rename-plane`, `rename-local`, `persona-agents` and `handoff-rule` run only by
+ *   their name (`by_name_only` in core doctor/fix.rs): the network, this machine's folders, or
+ *   committed files every teammate pulls. One press under the strip is not how those are asked.
+ * - `plugin-install` is about the chats started outside the app; the app arms its own either
+ *   way, and the doctor the window runs at open reports the row as fine.
+ * - `reinit` creates a missing baseline folder, which blocks nothing in the meantime.
+ * - `local-ignore` is found only by the doctor the dialog runs: the one at open does not ask
+ *   git, so its report would let the Notice's dismissal go while the finding stands.
+ * - `workspace-reinit` is offered by no doctor row; the Alerts drawer carries it.
  *
  * Each by the name of the doctor row that finds it: a clean row carries no fix id, so the name
  * is how a report says the finding has gone (and a dismissal of it is let go).
  */
 export const FINDINGS_AS_NOTICES: ReadonlyMap<string, string> = new Map([
   ["git-identity", "git identity"],
+  ["memory-optimize", "memory indexes"],
 ]);
 
 /** The family of cause a doctor finding's Notice is (`doctor-finding:<fix id>`). */
