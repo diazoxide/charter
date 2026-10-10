@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791618184451,
+  "lastUpdate": 1791619123033,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5628,6 +5628,48 @@ window.BENCHMARK_DATA = {
             "value": 102.32423,
             "unit": "ms",
             "extra": "median of 5 runs: 102.244, 102.249, 102.324, 102.708, 102.876 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a7297d49f1217151d6c605be6bb6cebb38931f53",
+          "message": "Say the doctor's layout row offers workspace-reinit where it said none did\n\nDoctor.tsx's reasons beside FINDINGS_AS_NOTICES and the bare --fix test\nboth said no doctor row offers workspace-reinit. The `workspace layout`\nrow now does. It stays in the dialog, because a workspace behind the\nlayout blocks nothing and the Alerts drawer already shows it. One long\nline in install.md is rewrapped.\n\nRefs #1289\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T11:52:32+04:00",
+          "tree_id": "53a85b498e18e64b92562cbc612c2a06b56b8e53",
+          "url": "https://github.com/purlis/purlis/commit/a7297d49f1217151d6c605be6bb6cebb38931f53"
+        },
+        "date": 1791619121859,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5167395,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.489, 0.508, 0.517, 0.533, 0.544 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.027780999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.303, 16.839, 17.028, 17.039, 17.080 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.10549850000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.885, 104.045, 104.105, 104.803, 104.833 ms"
           }
         ]
       }
