@@ -121,6 +121,10 @@ const ALLOW: Readonly<Record<GrantLevel, string>> = {
   project: "Allow for everyone in the project",
 };
 
+/** What a row of a refused lookup says beside its host (#1663): a program's own printed words
+ *  named it, so it is shown as text and never offered to allow. */
+export const LOOKED_UP = "Looked up by a program, not offered.";
+
 /** One row of a refusals list, as a sentence: what, from which chat, when and how often. */
 export function blockedSaid(row: BlockedLately): string {
   const from = row.chat === null ? "" : ` · ${row.chat}`;
@@ -136,7 +140,8 @@ function capital(said: string): string {
 /**
  * The rows of a refusals list (Blocked lately, or a chat's own), each with Allow where the core
  * says one may be kept: **Allow** keeps the host for this project on this machine, and **Allow
- * for everyone in the project** commits it. A row a chat reaches now says so.
+ * for everyone in the project** commits it. A row a chat reaches now says so. A refused
+ * lookup's host is shown and never has an Allow: a program's printed words named it (#1663).
  */
 export function RefusedRows({
   plane,
@@ -169,11 +174,14 @@ export function RefusedRows({
     <>
       <ul className="granted-list" aria-label={label}>
         {rows.map((row) => (
-          <li key={`${row.target ?? ""}\u0000${row.said}`}>
+          <li key={`${row.target ?? ""}\u0000${row.looked_up ?? ""}\u0000${row.said}`}>
             {row.target !== null && <code>{row.target}</code>}
+            {row.looked_up !== null && <code>{row.looked_up}</code>}
             <span>{blockedSaid(row)}</span>
             {row.reached && <span className="granted-note"> Reached now.</span>}
+            {row.looked_up !== null && <span className="granted-note"> {LOOKED_UP}</span>}
             {row.target !== null &&
+              row.looked_up === null &&
               row.levels.map((level) => (
                 <button
                   key={level}

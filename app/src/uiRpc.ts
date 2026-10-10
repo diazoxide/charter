@@ -2289,8 +2289,16 @@ export type BlockShown = {
  *  and how often.
  */
 export type BlockedLately = {
-	/**  The host and port, where the block named one. */
+	/**
+	 *  The host and port, where the block named one: a refused connection's, the one Allow
+	 *  may name.
+	 */
 	target: string | null,
+	/**
+	 *  For a refused lookup, the host the program said it looked up (#1663): shown as text,
+	 *  **never offered to allow**, since a program's own printed words named it.
+	 */
+	looked_up: string | null,
 	/**  What was blocked, as the block's Notice says it. */
 	said: string,
 	/**  The chat it was, by the name it was shown under, where the record has it. */
