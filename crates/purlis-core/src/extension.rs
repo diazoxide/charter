@@ -350,6 +350,11 @@ pub struct Manifest {
     /// theme's terms — a file declared, hashed, kept as the text that was hashed, and parsed by
     /// the window against a closed vocabulary (`app/src/theme/icons.ts`), never run.
     pub icon_themes: Vec<Theme>,
+    /// The themes and icon themes it declares that purlis leaves out, one sentence each, by
+    /// kind and place (#1145): a name purlis will not draw drops that theme only, and the
+    /// extension's other contributions stand. Named in [`prompt`]'s lines, so the approval and
+    /// the Extensions list say what was left out and why.
+    pub left_out: Vec<String>,
     /// The panels it contributes to the window's side region (`crate::panel`).
     ///
     /// **Data, like a theme, and never a file.** A panel's whole body is in this manifest — so
@@ -1112,8 +1117,9 @@ fn parse(text: &str) -> Result<Manifest, String> {
             .ok_or("has a 'contributes' that is not an object")?,
     };
 
-    let themes = themes_of(contributes, "themes", "theme")?;
-    let icon_themes = themes_of(contributes, "icon_themes", "icon theme")?;
+    let mut left_out = Vec::new();
+    let themes = themes_of(contributes, "themes", "theme", &mut left_out)?;
+    let icon_themes = themes_of(contributes, "icon_themes", "icon theme", &mut left_out)?;
 
     let program = match contributes.get("runs") {
         None => None,
@@ -1209,6 +1215,13 @@ fn parse(text: &str) -> Result<Manifest, String> {
         && badges.is_empty()
         && repo_columns.is_empty()
     {
+        // Every theme it declared was left out: that is the reason, not an empty manifest.
+        if !left_out.is_empty() {
+            return Err(format!(
+                "declares nothing purlis will take: {}",
+                left_out.join("; ")
+            ));
+        }
         return Err("declares no contributions, so there is nothing to consent to".into());
     }
     if themes.len() + icon_themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
@@ -1304,6 +1317,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         name,
         themes,
         icon_themes,
+        left_out,
         panels,
         views,
         program,
@@ -1439,11 +1453,21 @@ fn array(value: &serde_json::Value) -> Vec<serde_json::Value> {
 /// The themes `contributes.<key>` declares — colour themes or icon themes, one shape: each an
 /// object with a `file` inside the extension and a `name` (the file's, when it has none) that
 /// purlis draws as a label.
+///
+/// **A name purlis will not draw leaves out that theme only** (#1145): its sentence goes into
+/// `left_out` and the rest of the extension stands. A theme whose shape or file is wrong still
+/// refuses the whole extension, since its file is part of what is hashed and shown.
 fn themes_of(
     contributes: &serde_json::Map<String, serde_json::Value>,
     key: &str,
     noun: &str,
+    left_out: &mut Vec<String>,
 ) -> Result<Vec<Theme>, String> {
+    let a = if noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
     let mut themes = Vec::new();
     for (at, raw) in contributes
         .get(key)
@@ -1454,11 +1478,11 @@ fn themes_of(
     {
         let raw = raw
             .as_object()
-            .ok_or_else(|| format!("declares a {noun} at {at} that is not an object"))?;
+            .ok_or_else(|| format!("declares {a} {noun} at {at} that is not an object"))?;
         let file = raw
             .get("file")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| format!("declares a {noun} at {at} with no file"))?;
+            .ok_or_else(|| format!("declares {a} {noun} at {at} with no file"))?;
         declarable(file)
             .map_err(|why| format!("declares the {noun} file {file:?}, which {why}"))?;
         let named = raw
@@ -1467,13 +1491,15 @@ fn themes_of(
             .map(str::trim)
             .filter(|name| !name.is_empty());
         // A declared name is drawn in the settings tabs' picks and the approval, so it is held
-        // to a label's rule (#1145). The file it falls back to is held by `declarable`.
+        // to a label's rule (#1145). The file it falls back to is held by `declarable`. The
+        // sentence names the theme by its place, never by the name it will not draw.
         if named.is_some_and(|name| !facts::drawable_label(name)) {
-            return Err(format!(
-                "declares a {noun} at {at} with a name purlis will not draw: it is longer than \
-                 {} bytes or holds a control or invisible formatting character",
+            left_out.push(format!(
+                "{a} {noun} at {at}, left out: its name is longer than {} bytes or holds a control \
+                 or invisible formatting character, so purlis will not draw it",
                 facts::MOST_LABEL_BYTES
             ));
+            continue;
         }
         let name = named.unwrap_or(file).to_owned();
         themes.push(Theme {
@@ -2693,6 +2719,7 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
             .iter()
             .map(|theme| format!("an icon theme, “{}”", theme.name)),
     );
+    declares.extend(found.manifest.left_out.iter().cloned());
     declares.extend(found.manifest.panels.iter().map(crate::panel::declares));
     declares.extend(found.manifest.views.iter().map(|view| {
         format!(
