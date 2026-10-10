@@ -538,3 +538,84 @@ fn a_default_that_is_not_the_profiles_plain_name_refuses_the_whole_write() {
         );
     }
 }
+
+/// Writes the persona `name` with `front` as its definition's frontmatter.
+fn persona(root: &Path, name: &str, front: &str) {
+    let dir = root.join("personas").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("persona.md"),
+        format!("---\n{front}\n---\nA role.\n"),
+    )
+    .unwrap();
+}
+
+/// A plain rename, a rename everywhere and a remove of `claude-work` in `text`, each refused:
+/// what each refusal names, and the file left as it was.
+fn every_change_refused(root: &Path, text: &str) -> Vec<Vec<Referrer>> {
+    let at = id(text, "claude-work");
+    let refusals = [
+        rename(root, Some(text), &at, "work").unwrap_err(),
+        rename_everywhere(root, Some(text), &at, "work").unwrap_err(),
+        remove(root, Some(text), &at).unwrap_err(),
+    ];
+    assert_eq!(local(root), text, "nothing is written");
+    refusals.into_iter().map(|one| one.referrers).collect()
+}
+
+#[test]
+fn a_persona_that_names_the_profile_refuses_every_rename_and_the_remove_naming_it() {
+    // #1380: a persona's `profile:` is its own file's, which no rename here rewrites; #1241:
+    // it is changed in the persona's tab, which the referrer says.
+    let dir = plane(Some(LOCAL));
+    persona(dir.path(), "devops", "name: devops\nprofile: claude-work");
+    persona(dir.path(), "writer", "name: writer\nprofile: codex");
+    for referrers in every_change_refused(dir.path(), LOCAL) {
+        assert_eq!(
+            referrers,
+            [Referrer {
+                what: "profile: claude-work in personas/devops/persona.md starts the chats \
+                       dispatched to devops on it."
+                    .to_owned(),
+                group: None,
+                follows: false,
+                elsewhere: Some(Elsewhere::Persona("devops".to_owned())),
+            }]
+        );
+    }
+}
+
+#[test]
+fn a_dispatch_list_that_names_the_profile_refuses_every_rename_and_the_remove_naming_it() {
+    // #1380: `[dispatch.profiles]` is in the project's file, every teammate's.
+    let shared = "schema = 1\n[dispatch.profiles]\ndevops = [\"codex\", \"claude-work\"]\n\
+                  writer = [\"codex\"]\n";
+    let dir = plane_named(OLD, shared, Some(LOCAL));
+    for referrers in every_change_refused(dir.path(), LOCAL) {
+        assert_eq!(
+            referrers,
+            [Referrer {
+                what: format!(
+                    "[dispatch.profiles] devops in {} lets chats dispatched to devops start \
+                     on it.",
+                    PLANE_MANIFEST.newest_old()
+                ),
+                group: None,
+                follows: false,
+                elsewhere: None,
+            }]
+        );
+    }
+}
+
+#[test]
+fn a_profile_no_persona_and_no_dispatch_list_names_is_renamed() {
+    let shared = "schema = 1\n[dispatch.profiles]\nwriter = [\"codex\"]\n";
+    let dir = plane_named(OLD, shared, Some(LOCAL));
+    persona(dir.path(), "writer", "name: writer\nprofile: codex");
+    rename(dir.path(), Some(LOCAL), &id(LOCAL, "claude-work"), "work").unwrap();
+    assert_eq!(
+        local(dir.path()),
+        LOCAL.replace("[harness.claude-work]", "[harness.work]")
+    );
+}
