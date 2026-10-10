@@ -790,8 +790,21 @@ fn is_program(word: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | '+'))
 }
 
-/// A refusal of a connection or of the certificate check, from whichever program said it.
+/// Whether Docker's own "permission denied" sentence, with no `EPERM` beside it, is the
+/// sandbox's on this platform (#1637): on macOS, Seatbelt refuses a socket so and Docker says
+/// only that. Elsewhere it is a user outside the docker group, which no grant or Start without
+/// the sandbox mends.
+const DOCKER_WORDS_ARE_THE_SANDBOXS: bool = cfg!(target_os = "macos");
+
+/// A refusal of a connection or of the certificate check, from whichever program said it, as
+/// this platform reads it ([`network_refusal_on`]).
 fn network_refusal(line: &str) -> Option<(Operation, Kind, Option<String>)> {
+    network_refusal_on(line, DOCKER_WORDS_ARE_THE_SANDBOXS)
+}
+
+/// [`network_refusal`], with `docker_words` saying whether Docker's "permission denied" sentence
+/// alone is the sandbox's ([`DOCKER_WORDS_ARE_THE_SANDBOXS`]).
+fn network_refusal_on(line: &str, docker_words: bool) -> Option<(Operation, Kind, Option<String>)> {
     const REFUSED: [&str; 4] = [
         // purlis's own egress proxy (`sandbox::egress`).
         "purlis's sandbox does not allow ",
@@ -823,11 +836,14 @@ fn network_refusal(line: &str) -> Option<(Operation, Kind, Option<String>)> {
     {
         return Some((Operation::Lookup, Kind::Host, None));
     }
-    // A local socket: Docker's client in its own words, or Go's dial refused by the sandbox
-    // (`EPERM`; a socket's own file mode says "permission denied" alone).
-    (lower.contains("permission denied while trying to connect to the docker")
-        || (lower.contains("dial unix ") && lower.contains("connect: operation not permitted")))
-    .then_some((Operation::Connect, Kind::LocalSocket, None))
+    // A local socket: Go's dial refused by the sandbox (`EPERM`), on any platform; or Docker's
+    // client in its own words where the sandbox says them (#1637). A socket's own file mode
+    // (`EACCES`, "connect: permission denied") is never the sandbox's.
+    let eperm = lower.contains("dial unix ") && lower.contains("connect: operation not permitted");
+    let docker = docker_words
+        && lower.contains("permission denied while trying to connect to the docker")
+        && !lower.contains("connect: permission denied");
+    (eperm || docker).then_some((Operation::Connect, Kind::LocalSocket, None))
 }
 
 /// The kind of `path`, read against `place` and never kept.

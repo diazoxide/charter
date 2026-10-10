@@ -14,7 +14,9 @@
  */
 import type { ChatBlocked, GrantLevel } from "./bindings";
 import type { ListedChat } from "./chatsTree";
-import type { Blocks } from "./sandboxBlocks";
+import { eachHost, matched, type Blocks, type HeldBlock } from "./sandboxBlocks";
+
+export { matched };
 
 /**
  * **A chat's name inside a path**, quoted: `“talk”`. The marks the path is drawn with are
@@ -69,20 +71,6 @@ export type TaskBlockGroup = {
   members: Member[];
 };
 
-/**
- * **What a block names, as a grant matches it**, the core's rule (`taskblocks::normalised`): a
- * host lowered, without a trailing dot and without the default port (`:443`, `:80`); a folder
- * as the core offered it.
- */
-export function matched(offer: "host" | "write", target: string): string {
-  if (offer === "write") return target;
-  const host = target
-    .trim()
-    .toLowerCase()
-    .replace(/:(443|80)$/, "");
-  return host.endsWith(".") ? host.slice(0, -1) : host;
-}
-
 /** The question a block is asked under, or none for one that is answered on its own. */
 function keyOf(block: ChatBlocked): string | undefined {
   if (block.ours || block.target === null) return undefined;
@@ -104,7 +92,8 @@ export function taskBlockGroups(
   const groups = new Map<string, TaskBlockGroup>();
   for (const task of tasks) {
     if (task.session === session) continue;
-    for (const block of blocks[task.session] ?? []) {
+    // Each host on its own (#1637): one answer names one thing every task it lists is held on.
+    for (const block of (blocks[task.session] ?? []).flatMap(eachHost)) {
       const key = keyOf(block);
       if (key === undefined || block.target === null) continue;
       const group = groups.get(key) ?? {
@@ -124,13 +113,31 @@ export function taskBlockGroups(
   return [...groups.values()].filter((group) => group.members.length > 1);
 }
 
-/** `blocks` without the ones `groups` ask about: each is asked once, in its group. */
+/**
+ * `blocks` without the ones `groups` ask about: each is asked once, in its group. A block that
+ * lists several hosts keeps the hosts no group asks about (#1637).
+ */
 export function withoutGrouped(blocks: Blocks, groups: readonly TaskBlockGroup[]): Blocks {
   if (groups.length === 0) return blocks;
-  const asked = new Set(groups.flatMap((group) => group.members.map((one) => one.block)));
-  const left: Record<number, readonly ChatBlocked[]> = {};
+  const asked = new Set(
+    groups.flatMap((group) =>
+      group.members.map((one) => `${one.session}\u0000${keyOf(one.block)}`),
+    ),
+  );
+  const isAsked = (session: string, block: ChatBlocked) => {
+    const key = keyOf(block);
+    return key !== undefined && asked.has(`${session}\u0000${key}`);
+  };
+  const left: Record<number, readonly HeldBlock[]> = {};
   for (const [session, held] of Object.entries(blocks)) {
-    const kept = held.filter((block) => !asked.has(block));
+    const kept = held.flatMap((block): HeldBlock[] => {
+      const each = eachHost(block);
+      const rest = each.filter((one) => !isAsked(session, one));
+      if (rest.length === each.length) return [block];
+      if (rest.length === 0) return [];
+      const hosts = rest.map((one) => one.target ?? "");
+      return [{ ...block, target: hosts[0] ?? null, hosts }];
+    });
     if (kept.length > 0) left[Number(session)] = kept;
   }
   return left;

@@ -36,8 +36,13 @@ use crate::sandboxing::{GrantLevel, GrantWhat};
 const MOST_DEPTH: usize = 64;
 
 /// The most blocks the app holds for one chat at once, as the window keeps them
-/// (`sandboxBlocks.ts`): one per operation and kind, the oldest going first.
+/// (`sandboxBlocks.ts`): one per operation and kind, the oldest going first. The hosts of one
+/// block count once ([`MOST_HOSTS_PER_BLOCK`]).
 const MOST_HELD_PER_CHAT: usize = 5;
+
+/// The most hosts one block of a chat names at once, as the window's one Notice lists them
+/// (#1637): the oldest going first. As many as one tool result can be refused.
+const MOST_HOSTS_PER_BLOCK: usize = purlis_core::sandboxblock::AT_MOST_PER_RESULT;
 
 /// **The host or folder a block names, as a grant matches it**: a host lowered, without a
 /// trailing dot, and without its scheme's default port (`:443`, `:80`), which the grant for the
@@ -83,10 +88,26 @@ impl HeldBlock {
             target: String::new(),
         }
     }
+
+    /// A host its report named: one of several a chat may be held on at once under one
+    /// operation and kind (#1637).
+    fn names_a_host(&self) -> bool {
+        self.what == GrantWhat::Host && !self.target.is_empty()
+    }
+
+    /// Whether `other` is asked about in the same Notice: the same operation and kind, and both
+    /// naming a host or neither. Hosts named alike are listed together in one Notice; any other
+    /// block is one per operation and kind, the newest replacing the one before.
+    fn shares_a_notice(&self, other: &Self) -> bool {
+        self.operation == other.operation
+            && self.kind == other.kind
+            && self.names_a_host() == other.names_a_host()
+    }
 }
 
 /// **The block each open chat is held on now**, as the app heard it: one per operation and
-/// kind, the newest replacing the one before as the window's Notice does. Cleared when an
+/// kind, the newest replacing the one before as the window's Notice does, except that each host
+/// a report named is held beside the others its one Notice lists (#1637). Cleared when an
 /// answer takes it, and when the chat ends ([`crate::chats::Chats::close`]). In memory only.
 #[derive(Default)]
 pub struct Blocks {
@@ -98,14 +119,39 @@ impl Blocks {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Chat `session` is held on `block` now.
+    /// Chat `session` is held on `block` now: beside the other hosts its Notice lists, where it
+    /// names a host (#1637), and otherwise in place of the block of its operation and kind.
     pub fn heard(&self, session: u32, block: HeldBlock) {
         let mut held = self.held();
         let mine = held.entry(session).or_default();
-        mine.retain(|one| one.operation != block.operation || one.kind != block.kind);
-        mine.push(block);
-        if mine.len() > MOST_HELD_PER_CHAT {
-            mine.remove(0);
+        if block.names_a_host() {
+            mine.retain(|one| *one != block);
+        } else {
+            mine.retain(|one| !one.shares_a_notice(&block));
+        }
+        mine.push(block.clone());
+        let hosts = mine
+            .iter()
+            .filter(|one| one.shares_a_notice(&block))
+            .count();
+        if hosts > MOST_HOSTS_PER_BLOCK
+            && let Some(oldest) = mine.iter().position(|one| one.shares_a_notice(&block))
+        {
+            mine.remove(oldest);
+        }
+        // The oldest Notice goes first, with every host it lists.
+        loop {
+            let mut notices: Vec<&HeldBlock> = Vec::new();
+            for one in mine.iter() {
+                if !notices.iter().any(|seen| seen.shares_a_notice(one)) {
+                    notices.push(one);
+                }
+            }
+            if notices.len() <= MOST_HELD_PER_CHAT {
+                break;
+            }
+            let oldest = notices[0].clone();
+            mine.retain(|one| !one.shares_a_notice(&oldest));
         }
     }
 

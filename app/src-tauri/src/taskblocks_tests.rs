@@ -163,21 +163,71 @@ fn a_host_is_matched_as_a_grant_matches_it() {
 }
 
 #[test]
-fn the_app_holds_one_block_per_operation_and_kind_until_it_is_answered_or_the_chat_ends() {
+fn the_app_holds_one_block_per_operation_and_kind_and_each_host_until_it_is_answered_or_the_chat_ends()
+ {
     let blocks = Blocks::default();
     let npm = held(&seen(4, NPM));
     let other = held(&seen(4, "api.example.com"));
     blocks.heard(4, npm.clone());
     assert!(blocks.holds(4, &npm));
-    // A newer block of the same operation and kind is the one the Notice shows now.
+    // Another host refused beside it is asked about with it (#1637): both are held, so the
+    // one Notice's Allow can answer each.
     blocks.heard(4, other.clone());
-    assert!(!blocks.holds(4, &npm));
+    assert!(blocks.holds(4, &npm));
     assert!(blocks.holds(4, &other));
     blocks.answered(4, &other);
     assert!(!blocks.holds(4, &other));
+    assert!(
+        blocks.holds(4, &npm),
+        "answering one host leaves the other up"
+    );
+    // A newer folder of the same operation and kind is the one the Notice shows now.
+    let write = |folder: &str| HeldBlock {
+        operation: "write".to_owned(),
+        kind: "home".to_owned(),
+        what: GrantWhat::Write,
+        target: folder.to_owned(),
+    };
+    blocks.heard(4, write("/Users/dev/a"));
+    blocks.heard(4, write("/Users/dev/b"));
+    assert!(!blocks.holds(4, &write("/Users/dev/a")));
+    assert!(blocks.holds(4, &write("/Users/dev/b")));
+    // A host the report did not name stands beside the named ones: neither replaces the other.
+    let unnamed = HeldBlock::unnamed_host("connect", "host");
+    blocks.heard(4, unnamed.clone());
+    assert!(blocks.holds(4, &unnamed) && blocks.holds(4, &npm));
     blocks.heard(6, npm.clone());
     blocks.ended(6);
     assert!(!blocks.holds(6, &npm));
+}
+
+/// The app holds as much as the window shows (#1637): at most [`MOST_HOSTS_PER_BLOCK`] hosts of
+/// one block, the oldest going first, and at most [`MOST_HELD_PER_CHAT`] blocks, however many
+/// hosts each names.
+#[test]
+fn the_hosts_and_blocks_held_for_one_chat_are_bounded_oldest_first() {
+    let blocks = Blocks::default();
+    let named: Vec<HeldBlock> = (0..=MOST_HOSTS_PER_BLOCK)
+        .map(|at| held(&seen(4, &format!("h{at}.example.com"))))
+        .collect();
+    for one in &named {
+        blocks.heard(4, one.clone());
+    }
+    assert!(!blocks.holds(4, &named[0]), "the oldest host went first");
+    assert!(named[1..].iter().all(|one| blocks.holds(4, one)));
+    // Other blocks push out the oldest block, all of its hosts at once.
+    for kind in ["home", "system", "toolchain-cache", "project-files", "temp"] {
+        blocks.heard(
+            4,
+            HeldBlock {
+                operation: "write".to_owned(),
+                kind: kind.to_owned(),
+                what: GrantWhat::Write,
+                target: format!("/x/{kind}"),
+            },
+        );
+    }
+    assert!(named.iter().all(|one| !blocks.holds(4, one)));
 }
 
 /// What one chat's own Notice sends for its block (#1538): chat 4, its block's operation and

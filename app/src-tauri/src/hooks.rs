@@ -557,6 +557,9 @@ fn held(
 ///   sandbox", saying why a host grant would not help (#1631).
 /// - purlis's state, a protected file and any read (reads are denied only for the classes no
 ///   person grants): the brokered route. A local socket: "Start without the sandbox".
+/// - Anything else no grant names (the certificate check, a system service, starting a program,
+///   a write whose folder the report did not name): "Start without the sandbox", saying why
+///   (#1637). Only purlis's own block offers nothing to allow.
 fn offered(
     root: &Path,
     block: &purlis_core::sandboxblock::Block,
@@ -612,7 +615,10 @@ fn offered(
             Kind::ProjectFiles | Kind::Home | Kind::ToolchainCache | Kind::System,
         ) => {
             let Some(path) = target.filter(|path| Path::new(path).is_absolute()) else {
-                return (BlockOffer::None, None, None);
+                return without_the_sandbox(
+                    "The sandbox did not say which folder it refused, so there is no folder to \
+                     allow.",
+                );
             };
             let folder = grant::proposed_folder(Path::new(path))
                 .display()
@@ -626,8 +632,30 @@ fn offered(
                 }
             }
         }
-        _ => (BlockOffer::None, None, None),
+        // Nothing a grant names (#1637): never a Notice that only dismisses. Started without
+        // the sandbox, the chat is refused none of these.
+        (Operation::Lookup, Kind::CertificateCheck) => without_the_sandbox(
+            "This program checks certificates through a system service that a sandboxed chat \
+             cannot reach, so there is nothing to allow.",
+        ),
+        (Operation::Lookup, _) => without_the_sandbox(
+            "purlis will not let a sandboxed chat reach a system service by name: one could be \
+             any service on this machine, so there is nothing to allow.",
+        ),
+        (Operation::Run, _) => without_the_sandbox(
+            "purlis will not let a sandboxed chat start a program there, so there is nothing to \
+             allow.",
+        ),
+        _ => without_the_sandbox(
+            "purlis grants a chat nothing for this, so there is nothing to allow.",
+        ),
     }
+}
+
+/// Start without the sandbox, saying `why` nothing is allowed: the way out of a block no grant
+/// names (#1637), which an administrator's policy may still forbid ([`held`]).
+fn without_the_sandbox(why: &str) -> (BlockOffer, Option<String>, Option<String>) {
+    (BlockOffer::Unsandboxed, None, Some(why.to_owned()))
 }
 
 /// What is told each path a chat's file tool touched, unconfined.
@@ -2540,6 +2568,59 @@ mod tests {
             told(Operation::Write, Kind::System, true, Some("/opt/x")),
             (BlockOffer::None, None, false)
         );
+    }
+
+    /// **No block of the chat's own work dead-ends its Notice** (#1637): whatever the operation
+    /// and kind, and whether or not the report named what was refused, the Notice offers Allow,
+    /// the way that works, or Start without the sandbox, and says why where it is not Allow.
+    /// Only purlis's own block offers nothing to allow, and its Notice offers a Report.
+    #[test]
+    fn no_block_of_the_chats_own_work_dead_ends_its_notice() {
+        use purlis_core::sandboxblock::{Block, Kind, Operation};
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path().canonicalize().expect("real");
+        for operation in Operation::ALL {
+            for kind in Kind::ALL {
+                for target in [None, Some("relative/x"), Some("/opt/tool/x.lock")] {
+                    let block = Block {
+                        operation,
+                        kind,
+                        ours: false,
+                    };
+                    let (offer, _, route) = offered(&root, &block, target);
+                    assert_ne!(
+                        offer,
+                        BlockOffer::None,
+                        "{operation:?} {kind:?} on {target:?} offers nothing"
+                    );
+                    if !matches!(offer, BlockOffer::Host | BlockOffer::Write) {
+                        assert!(
+                            route.as_deref().is_some_and(|why| !why.trim().is_empty()),
+                            "{operation:?} {kind:?} on {target:?}: {offer:?} says no why"
+                        );
+                    }
+                }
+                let ours = Block {
+                    operation,
+                    kind,
+                    ours: true,
+                };
+                assert_eq!(offered(&root, &ours, None).0, BlockOffer::None);
+            }
+        }
+        // The two the review named: neither a host grant nor a folder would reach them.
+        for kind in [Kind::CertificateCheck, Kind::SystemService] {
+            let block = Block {
+                operation: Operation::Lookup,
+                kind,
+                ours: false,
+            };
+            assert_eq!(
+                offered(&root, &block, None).0,
+                BlockOffer::Unsandboxed,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
