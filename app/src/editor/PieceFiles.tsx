@@ -29,7 +29,7 @@
  * branch, the path, the line and which editor; the core checks the path as it checks a read,
  * and builds the URL or the program's arguments itself.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import { FileText, LoaderCircle } from "lucide-react";
@@ -47,12 +47,13 @@ import { REVEAL_SAID, type Offer } from "../actions";
 import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
-import { CHOOSE_EDITOR, NO_EDITOR, useYourEditor } from "../yourEditor";
-import { askSettingsLink } from "../settings/links";
 import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
 import { useBranchMoved } from "./branchMoved";
 import { readAt } from "./lastRead";
+import { Said, ToYourEditor } from "./ToYourEditor";
+
+export { ToYourEditor };
 
 /** A size, as a person reads one. */
 export function sized(bytes: number): string {
@@ -162,80 +163,6 @@ function useCursorLine(plane: PlaneId, place: Place, path: string | undefined, s
       if (path !== undefined) readAt(plane, place, path, line);
     },
   };
-}
-
-/**
- * What a header's button answered — the core's refusal, or what was done — said under the
- * buttons as a status: *Open in your editor*'s, *Copy path*'s and Reveal's.
- */
-function Said({ children }: { children: ReactNode }) {
-  return (
-    <p className="piece-files-trouble" role="status">
-      {children}
-    </p>
-  );
-}
-
-/**
- * *Open in your editor*: the button, and the sentence when nothing opened. With no editor
- * chosen it asks for one rather than guess, and links to where one is chosen (#1201).
- */
-export function ToYourEditor({
-  plane,
-  cut,
-  path,
-  line,
-}: {
-  plane: PlaneId;
-  cut: Place;
-  path: string;
-  line: number;
-}) {
-  const editor = useYourEditor();
-  // What went wrong, for the file and editor it went wrong for: another file, or another
-  // editor chosen, says nothing until it is tried.
-  const [said, setSaid] = useState<{ about: string; trouble: string }>();
-  const about = `${path}\n${editor ?? ""}`;
-  const trouble = said?.about === about ? said.trouble : undefined;
-  const say = (trouble: string | undefined) =>
-    setSaid(trouble === undefined ? undefined : { about, trouble });
-  const open = () => {
-    if (editor === undefined) {
-      say(NO_EDITOR);
-      return;
-    }
-    say(undefined);
-    void commands
-      .openInYourEditor(plane, cut.workspace, cut.repo, cut.piece, path, line, editor)
-      .then((answer) => {
-        if (answer.status === "error") say(answer.error);
-      })
-      .catch((err: unknown) => say(String(err)));
-  };
-  return (
-    <>
-      <button type="button" tabIndex={0} onClick={open}>
-        {`Open in your editor at line ${line}`}
-      </button>
-      {trouble !== undefined && (
-        <Said>
-          {trouble}
-          {trouble === NO_EDITOR && (
-            <>
-              {" "}
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => askSettingsLink(plane, CHOOSE_EDITOR)}
-              >
-                Choose your editor
-              </button>
-            </>
-          )}
-        </Said>
-      )}
-    </>
-  );
 }
 
 /**

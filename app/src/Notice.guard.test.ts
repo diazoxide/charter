@@ -326,7 +326,7 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       "editor, at its top, are the way out. And the line that says the comparison drawn is " +
       "being read again after the branch moved, which goes when the new one comes",
   },
-  "editor/PieceFiles.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },
+  "editor/ToYourEditor.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },
   "references.tsx": {
     count: 1,
     why: "the reference picker saying it found no chat, inside its menu",
