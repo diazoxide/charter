@@ -167,11 +167,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # bubblewrap and socat: Claude Code's Linux sandbox runs through them (ADR 0067 §1).
+      # Cached and bounded, as in `ci.yml` (#1477).
       - name: Tauri's Linux build dependencies, a display to run in, and the sandbox's programs
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11 bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          tauri: true
+          packages: xvfb dbus-x11 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       # Only `main` saves a Rust cache; a pull request restores `main`'s and saves none.
       # The repository holds 10 GB of caches, and each pull request's own 0.8-1.2 GB ones
