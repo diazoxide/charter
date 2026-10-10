@@ -10,8 +10,8 @@ import type { Level } from "./groups";
  * builders' sources and fails on a group this list lacks, misnames or keeps after it went.
  *
  * In each level's order, as its group nav lists them. A profile's own page
- * (`project.profile.<name>`) is not here: there is one per profile, and the palette's row for
- * profiles is Harness & profiles. The Persona level has no groups of its own yet.
+ * (`project.harness.profile.<name>`) is not here: there is one per profile, and the palette's
+ * row for profiles is Harness & profiles. The Persona level has no groups of its own yet.
  */
 export type CataloguedGroup = { id: string; label: string };
 

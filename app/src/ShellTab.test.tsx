@@ -503,7 +503,7 @@ describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
     expect(await screen.findByText(".gitignore is a link git does not read")).toBeInTheDocument();
   });
 
-  it("closes the picker and opens Settings › Harness from its refused profiles", async () => {
+  it("closes the picker and opens Settings › Harness for a refused profile with no page", async () => {
     const file = (which: "shared" | "local") => ({
       which,
       file: which === "shared" ? "charter.toml" : "charter.local.toml",
@@ -522,13 +522,67 @@ describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
 
     await fromThePalette("New tab");
     await userEvent.click(await screen.findByText("1 refused"));
-    await userEvent.click(
-      screen.getByRole("button", { name: "Open Settings › Harness & profiles" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Open bad in Settings" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument(),
     );
     expect(await screen.findByRole("region", { name: "Harness & profiles" })).toBeInTheDocument();
+  });
+
+  it("opens a refused profile's own page with its command focused, where it has one (#1296)", async () => {
+    const shared = {
+      which: "shared",
+      file: "charter.toml",
+      exists: true,
+      text: "",
+      refusals: [],
+      parsed: true,
+      fields: [],
+    };
+    const local = {
+      which: "local",
+      file: "charter.local.toml",
+      exists: true,
+      text: '[harness.bad]\nkind = "nope"\ncommand = ["bad"]\n',
+      refusals: [],
+      parsed: true,
+      fields: [
+        {
+          path: [{ key: "harness" }, { key: "bad" }, { key: "kind" }],
+          value: { kind: "text", value: "nope" },
+        },
+        {
+          path: [{ key: "harness" }, { key: "bad" }, { key: "command" }],
+          value: { kind: "list", value: ["bad"] },
+        },
+      ],
+      entries: [
+        {
+          collection: "profiles",
+          id: "profile:bad",
+          label: "bad",
+          keys: [{ key: "harness" }, { key: "bad" }],
+          values: [
+            { field: "name", value: "bad" },
+            { field: "kind", value: "nope" },
+            { field: "command", value: "bad" },
+          ],
+        },
+      ],
+    };
+    core([], [], {
+      start_options: () => ({ ...START_OPTIONS, refused: [["bad", "has kind nope"]] }),
+      project_settings: () => ({ shared, local }),
+    });
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await fromThePalette("New tab");
+    await userEvent.click(await screen.findByText("1 refused"));
+    await userEvent.click(screen.getByRole("button", { name: "Open bad in Settings" }));
+
+    expect(await screen.findByRole("region", { name: "bad" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("bad: command")).toHaveFocus());
   });
 });

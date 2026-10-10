@@ -6,9 +6,7 @@ import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import type { StartOptions, WithoutSandbox } from "./bindings";
 import { Choice, Field, SettingActions, SettingGroup, SettingRow } from "./settings/components";
 import { AnswerBar } from "./AnswerBar";
-
-/** Settings › Harness, where a harness profile is declared (SE-22's address). */
-const HARNESS = "project.harness";
+import { profileCommand, profilePage } from "./settings/profileAddress";
 
 /**
  * The value that stands for "no persona at all".
@@ -147,8 +145,9 @@ export function StartChat({
   /** Applies a doctor fix by its id — the `local-ignore` the refusal offers (NO-8) — and reads
    *  the picker again. Absent, the refusal shows the fix's words alone. */
   onFix?: (id: string) => void;
-  /** Opens Settings at a group (SE-22's address): where a refused profile is mended (NO-8). */
-  onOpenSettings?: (group: string) => void;
+  /** Opens Settings at a group (SE-22's address), with the setting to focus there: where a
+   *  refused profile is mended (NO-8, #1296). */
+  onOpenSettings?: (group: string, setting?: string) => void;
   onCancel: () => void;
 }) {
   // Only a persona there is a row for. The core already filters `[persona] default`
@@ -481,15 +480,24 @@ export function StartChat({
                 {options.refused.map(([name, why]) => (
                   <li key={name}>
                     <span>{name}</span> {why}
+                    {/* Where the profile is mended (NO-8, #1296): its own page, its command
+                      focused. One with no page (a committed profile, a whole file) lands on
+                      Harness & profiles, the group its page would be under. */}
+                    {onOpenSettings && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          tabIndex={0}
+                          onClick={() => onOpenSettings(profilePage(name), profileCommand(name))}
+                        >
+                          Open {name} in Settings
+                        </button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
-              {/* Where a profile is declared and mended (NO-8, #1233). */}
-              {onOpenSettings && (
-                <button type="button" tabIndex={0} onClick={() => onOpenSettings(HARNESS)}>
-                  Open Settings › Harness &amp; profiles
-                </button>
-              )}
             </details>
           )}
 

@@ -8178,12 +8178,13 @@ export const PlaneView = memo(function PlaneView({
           }
           fixing={pickerFixing}
           onFix={(id) => void fixInPicker(id)}
-          // A refused profile is mended in Settings › Harness (NO-8): the picker closes, as it
-          // does for the install, since the chat it was for starts after the mend.
-          onOpenSettings={(group) => {
+          // A refused profile is mended on its page in Settings, its command focused (NO-8,
+          // #1296): the picker closes, as it does for the install, since the chat it was for
+          // starts after the mend.
+          onOpenSettings={(group, setting) => {
             setPicking(undefined);
             setPickerTrouble(undefined);
-            openSettingsAt({ group });
+            openSettingsAt({ group, setting });
           }}
           onCancel={() => {
             setPicking(undefined);
