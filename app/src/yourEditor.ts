@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { YourEditor } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
+import type { SettingsLink } from "./settings/links";
 
 /**
  * **Your editor** (RC-20, ADR 0081 §3): which editor *Open in your editor* hands a file and a
@@ -18,6 +19,15 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
  * **None until the operator chooses.** A guess would open the wrong app, or nothing, with no
  * sentence to say why; *Open in your editor* asks for a choice instead.
  */
+
+/**
+ * **What *Open in your editor* says when no editor is chosen** (#1201, #1244): one sentence for
+ * every place that opens a file in your editor — the file tab, the explorer's and the palette's
+ * Open file — each with the link to {@link CHOOSE_EDITOR} beside it.
+ */
+export const NO_EDITOR = "Choose your editor in Settings first.";
+/** Where an editor is chosen: Settings › You › Editor, its one setting focused (SE-22). */
+export const CHOOSE_EDITOR: SettingsLink = { group: "you.editor", setting: "you.editor.yours" };
 
 /** The editors, as Settings offers them, in that order. */
 export const EDITORS: readonly { id: YourEditor; name: string; says: string }[] = [

@@ -100,7 +100,7 @@ import {
   type Said,
   type TaskEndWay,
 } from "./actions";
-import { yourEditor } from "./yourEditor";
+import { CHOOSE_EDITOR, NO_EDITOR, yourEditor } from "./yourEditor";
 import { OPEN_SAVING, usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./saving";
 import { HARNESS_SETUP, type HarnessSetupAsk } from "./harnessSetup";
 import { curationSubjects, useCurations } from "./curations";
@@ -8521,11 +8521,6 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
     </Notice>
   );
 }
-
-/** What Open file says when no editor is chosen: the words the file tab says it in. */
-const NO_EDITOR = "Choose your editor in Settings first.";
-/** Where an editor is chosen: Settings › You › Editor, its one setting focused (SE-22). */
-const CHOOSE_EDITOR: SettingsLink = { group: "you.editor", setting: "you.editor.yours" };
 
 /** What a chat's start found to say (ADR 0085, V35): its lines, and the branches whose
  *  `AGENTS.md` they name as the operator's and hidden by charter's line (NO-4). */

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
+  CHOOSE_EDITOR,
   EDITORS,
   forgetYourEditor,
   loadEditor,
@@ -9,6 +10,7 @@ import {
   yourEditor,
 } from "./yourEditor";
 import { aboutThisMachine, GLOBAL, sayAboutThisMachine } from "./windowprefs";
+import { youGroups } from "./settings/you";
 
 const PATH = "/home/op/.config/charter/layout.json";
 
@@ -70,5 +72,14 @@ describe("which editor is yours (RC-20)", () => {
       "A JetBrains IDE",
       "$VISUAL or $EDITOR",
     ]);
+  });
+});
+
+describe("the way to choose your editor (#1201, #1244)", () => {
+  it("names the Editor group and the setting it holds, so the link lands on the choice", () => {
+    const group = youGroups().find((one) => one.id === CHOOSE_EDITOR.group);
+
+    expect(group?.label).toBe("Editor");
+    expect(group?.settings.map((one) => one.id)).toContain(CHOOSE_EDITOR.setting);
   });
 });
