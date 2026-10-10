@@ -72,6 +72,15 @@ import { AnswerBar } from "./AnswerBar";
  * variable comes to keep its token in the Keychain. The token is handed to the core there and is
  * never in this tab; the answer is the vault read again, with no restart.
  *
+ * **A tab a launch put back reads nothing until the person presses for it** (#1660), where
+ * reading the vault reads more than files: a 1Password vault's table is `op`'s answer, which
+ * takes the vault's token — a Keychain read macOS may ask about — and `op` may read the
+ * 1Password app's own data. A tab nobody opened at this launch must not make macOS ask
+ * anything, so it waits ({@link Waiting}) and reads on *Read*, as an extension's put-back view
+ * asks its program on a press. What the vault is comes from `vault_list`, which reads no secret
+ * and runs no provider; a vault read from files alone ({@link READ_FROM_FILES}) is read at once,
+ * and one the listing does not name waits.
+ *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
  * the secrets too.
@@ -82,9 +91,15 @@ export function VaultTab({
   onChanged,
   onOpenVault,
   actions,
+  waits = false,
+  onAsk,
 }: {
   plane: PlaneId;
   vault: string;
+  /** Put back by a launch and not pressed for yet (`tabs.Content.waits`, #1660). */
+  waits?: boolean;
+  /** The person pressed *Read* on a tab that waits: the window stops it waiting. */
+  onAsk?: () => void;
   /** Open another vault's tab: what a vault named as still having no token is a link to. */
   onOpenVault?: (vault: string) => void;
   /** A write changed the vault: the window reads its vault list again. */
@@ -93,6 +108,9 @@ export function VaultTab({
   actions?: ReactNode;
 }) {
   const [said, setSaid] = useState<{ contents?: VaultContents; trouble?: string }>();
+  /** For a put-back tab, whether its vault is read from files alone: `undefined` until the
+   *  listing answers. */
+  const [fromFiles, setFromFiles] = useState<boolean>();
   const [query, setQuery] = useState("");
   const [asking, setAsking] = useState<Asking>();
   const [shown, setShown] = useState<Shown>();
@@ -203,6 +221,31 @@ export function VaultTab({
   }, [note]);
 
   useEffect(() => {
+    if (!waits) return;
+    let gone = false;
+    void commands
+      .vaultList(plane)
+      .then((answer) => {
+        if (gone) return;
+        const provider =
+          answer.status === "ok"
+            ? answer.data.find((one) => one.name === vault)?.provider
+            : undefined;
+        setFromFiles(provider !== undefined && READ_FROM_FILES.has(provider));
+      })
+      .catch(() => {
+        if (!gone) setFromFiles(false);
+      });
+    return () => {
+      gone = true;
+    };
+  }, [plane, vault, waits]);
+
+  /** Whether the vault may be read now: asked for, or put back and read from files alone. */
+  const mayRead = !waits || fromFiles === true;
+
+  useEffect(() => {
+    if (!mayRead) return;
     // No reset to "opening" here: the tab is keyed by plane and vault (`Views.tsx`), so a pane
     // that comes to show another vault is a new tab from its first render.
     let gone = false;
@@ -218,7 +261,7 @@ export function VaultTab({
     return () => {
       gone = true;
     };
-  }, [plane, vault, again]);
+  }, [plane, vault, again, mayRead]);
 
   useEffect(() => {
     declares.current = (said?.contents?.identity.length ?? 0) > 0;
@@ -335,7 +378,17 @@ export function VaultTab({
         {actions}
       </header>
       <div className="view-body">
-        {said === undefined ? (
+        {!mayRead ? (
+          fromFiles === false ? (
+            <Waiting vault={vault} onAsk={onAsk} />
+          ) : (
+            // Only the listing is asked, which reads no secret: what kind of vault this is.
+            <p className="pending" aria-busy="true">
+              <LoaderCircle className="node-icon spinning" />
+              Looking up the vault…
+            </p>
+          )
+        ) : said === undefined ? (
           <p className="pending" aria-busy="true">
             <LoaderCircle className="node-icon spinning" />
             Opening the vault…
@@ -746,6 +799,28 @@ type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;
 
 /** How long a revealed value stays on the page. */
 const SHOWN_FOR_MS = 30_000;
+
+/** The providers whose table is read from the project's files alone — a keyring vault's keys
+ *  index, a plain or reference file — so opening their tab reads no secret and runs no
+ *  provider (`vaults.rs`, `secrets_of`). Every other one waits when put back (#1660). */
+const READ_FROM_FILES: ReadonlySet<string> = new Set(["keyring", "plain-file", "reference"]);
+
+/** A put-back vault tab that has read nothing yet, and the press that reads it (#1660). */
+function Waiting({ vault, onAsk }: { vault: string; onAsk?: () => void }) {
+  return (
+    <EmptyState
+      mark={KeyRound}
+      headline={`${vault} was open when purlis last quit`}
+      body={`Reading it uses its token, which macOS may ask you about, so purlis reads it only when you press Read ${vault}.`}
+      action={
+        <button type="button" tabIndex={0} onClick={onAsk}>
+          {`Read ${vault}`}
+        </button>
+      }
+      testid="vault-waits"
+    />
+  );
+}
 
 /** How long a note under the header stays: a copy's lasts as long as the value stays on the
  * clipboard (`vaults.rs`, `CLEAR_AFTER`), and a token move's as long. A refusal stays until the

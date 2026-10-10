@@ -242,7 +242,8 @@ export type Content =
        * opened by nobody at this launch — the record is a file in the plane, and a line in it
        * must not become a program run at every start. So a put-back tab waits, says so, and
        * asks on a press; one the operator opens is asked at once. charter's own views run no
-       * program and ignore it.
+       * program and ignore it, save a vault's: reading one that is more than files takes its
+       * token, which macOS may ask about, so it waits too (`VaultTab`, #1660).
        */
       waits?: boolean;
       /**

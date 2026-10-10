@@ -484,10 +484,16 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
         return Err(VaultError::new(why));
     }
     let service = format!("{base}/{id}");
+    let store = keyring::store(ctx);
     if let Some(token) = ctx.kept.get(&service, source) {
-        return Ok(Some(token));
+        // Still there? Asked of the item's attributes, never its value, so it asks the person
+        // nothing (#1660): a token deleted in the Keychain's own window is not used again.
+        if store.exists(&service, source) != keyring::Presence::Absent {
+            return Ok(Some(token));
+        }
+        ctx.kept.drop_item(&service, source);
     }
-    let token = keyring::store(ctx)
+    let token = store
         .get(&service, source)?
         .map(keyring::Secret::into_inner)
         .filter(|v| !v.is_empty());
@@ -513,7 +519,11 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
 /// **It fails closed.** It is asked only after the vault's record in the keyring is checked
 /// again, on every read ([`from_keyring`]): a token removed through purlis takes its record
 /// with it and is never answered from here, a replaced token is a new item, so it is never
-/// read stale, and an item purlis deletes is forgotten here too ([`forget`]). Only a token
+/// read stale, and an item purlis deletes is forgotten here too ([`forget`]). **Before each
+/// reuse the item is asked whether it is still there** ([`keyring::Store::exists`], #1660), a
+/// question of its attributes that reads no value: one deleted in Keychain Access is forgotten
+/// and read again, which finds none. A store that cannot say is taken at its last answer, and
+/// an item edited in place there is not seen. Only a token
 /// found is remembered; a read that found none, or failed, is made again. `Debug` names no
 /// token. A token is wiped from memory when it is dropped: in a command, when the last context
 /// holding it goes; in the app, when purlis deletes its item. The app's memory itself is never

@@ -8,10 +8,10 @@
 //!   `/dev/null`, never charter's own stdin: a CLI that reads it gets EOF instead of blocking
 //!   on a descriptor nobody will write to (#324).
 //! - **Output is captured, never inherited**, and callers never interpolate it into a message.
-//! - **A child handed a service-account token leaves the 1Password app's data alone**
-//!   ([`NO_APP_SETTINGS`], #1654): such a token never signs in through that app, and reading
-//!   the app's settings, which macOS keeps in its group container, made macOS ask the person
-//!   whether purlis may "access data from other apps" on every run.
+//! - **A child handed a service-account or Connect token leaves the 1Password app's data
+//!   alone** ([`NO_APP_SETTINGS`], #1654, #1660): such a token never signs in through that app,
+//!   and reading the app's settings, which macOS keeps in its group container, made macOS ask
+//!   the person whether purlis may "access data from other apps" on every run.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,19 +22,31 @@ use super::Env;
 
 /// The variable that tells the 1Password CLI not to read the 1Password app's own settings,
 /// which it otherwise reads from that app's group container on every run (#1654). Set for a
-/// child that is handed a service-account token, which never signs in through that app; a
-/// vault that signs in through the app is run as before, since the person chose that app.
+/// child that is handed a service-account token or a 1Password Connect token
+/// ([`TOKENS_NOT_THROUGH_THE_APP`]), neither of which signs in through that app; a vault that
+/// signs in through the app is run as before, since the person chose that app.
 pub const NO_APP_SETTINGS: &str = "OP_LOAD_DESKTOP_APP_SETTINGS";
 
-/// Whether the child run with `env` and `overlay` is handed a service-account token.
-fn hands_a_service_account_token(env: &Env, overlay: &[(String, String)]) -> bool {
-    overlay
-        .iter()
-        .rev()
-        .find(|(k, _)| k == super::identity::TOKEN_TARGET)
-        .map(|(_, v)| v.clone())
-        .or_else(|| env.get(super::identity::TOKEN_TARGET))
-        .is_some_and(|token| !token.is_empty())
+/// The variable a 1Password Connect server's token is handed to `op` in.
+pub const CONNECT_TOKEN: &str = "OP_CONNECT_TOKEN";
+
+/// The variables whose token `op` signs in with instead of the 1Password app: a service
+/// account's, and a 1Password Connect server's (#1660).
+const TOKENS_NOT_THROUGH_THE_APP: [&str; 2] = [super::identity::TOKEN_TARGET, CONNECT_TOKEN];
+
+/// Whether the child run with `env` and `overlay` is handed a token that signs in without the
+/// 1Password app ([`TOKENS_NOT_THROUGH_THE_APP`]). The overlay's last word on a variable wins,
+/// as it does in the child.
+fn hands_a_token_not_through_the_app(env: &Env, overlay: &[(String, String)]) -> bool {
+    TOKENS_NOT_THROUGH_THE_APP.iter().any(|name| {
+        overlay
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .or_else(|| env.get(name))
+            .is_some_and(|token| !token.is_empty())
+    })
 }
 
 /// What a CLI said and how it exited.
@@ -142,7 +154,7 @@ pub fn run(
     for (k, v) in overlay {
         command.env(k, v);
     }
-    if hands_a_service_account_token(env, overlay) {
+    if hands_a_token_not_through_the_app(env, overlay) {
         command.env(NO_APP_SETTINGS, "false");
     }
     command
