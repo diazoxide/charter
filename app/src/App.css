@@ -4146,6 +4146,20 @@ h2.sidebar-title .node-icon {
   cursor: pointer;
 }
 
+/* **A refusal's way to its setting** (`SaidLink.tsx`, #1201): beside the last action's words, on
+   the line under the strip and on the palette's line, a link in the line's own colour, as a
+   Notice's ways out are, set off by the space `SaidLink` draws before it. Its focus ring is the
+   window's own (`:focus-visible` above). */
+.said-link {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* **The Notices under the strip, stacked** (`NoticeBand`, V91i): two stand, and "+N more" is
    one quiet line under them, in the band's colour, that opens the rest as a list over the
    panes — the list is drawn over the work rather than pushing it down, because problems never
