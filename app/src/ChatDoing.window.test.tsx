@@ -289,6 +289,22 @@ describe("a working chat's card says what it is doing (#1493, #1675)", () => {
     expect(theTree().querySelector(".chat-doing")).toBeNull();
   });
 
+  it("is the tab menu's line, drawn readable: heard as part of the card, whole, with no tooltip of its own (#1687)", async () => {
+    const { move, tell } = await up();
+    move(2, "running");
+    const shown = await opened("devops 2");
+    tell(2, doing("command", "cargo"));
+
+    await waitFor(() => expect(said()).toBe("running cargo"));
+    const drawn = line() as HTMLElement;
+    // The one component the tab chip's menu draws too, a line of the card here.
+    expect(drawn.tagName).toBe("P");
+    expect(drawn.getAttribute("aria-hidden")).toBeNull();
+    expect(drawn.getAttribute("title")).toBeNull();
+    expect(drawn.getAttribute("id")).toBeNull();
+    expect(shown).toHaveTextContent("running cargo");
+  });
+
   it("says a tool in the present while it runs and in the past once it has come back", async () => {
     const { move, tell } = await up();
     move(2, "running");

@@ -26,7 +26,8 @@ import {
 import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
 import type { AtLimit, FinishedTask } from "./bindings";
 import { HelpersSaid } from "./ExplorerChats";
-import { useDoingSaid } from "./chatDoing";
+import { ChatDoingLine } from "./ChatRowActivity";
+import { cardDown, cardUp, skipsTheRest, useCardUp } from "./chatCard";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import { useTokensOnHover } from "./tasksUsed";
@@ -1096,6 +1097,8 @@ export const CARD_DELAY_MS = 500;
  */
 export const CARD_LEAVE_MS = 150;
 
+export { CARD_SKIP_MS } from "./chatCard";
+
 /**
  * One chat's row. Held on plain values, so only a row whose own facts changed is drawn again.
  *
@@ -1252,11 +1255,26 @@ const Row = memo(function Row({
   const state: ShownFacts = { session, shell, report, outcome, asking, harness };
   // **The card** (#1675). Up after the pointer rests on the row, or the keyboard does, for
   // `CARD_DELAY_MS`: a pointer running down the list, or the arrows going down the tree, bring
-  // up none. Down when the pointer leaves, the keyboard moves on, a press lands, or Escape.
-  const [carded, setCarded] = useState(false);
+  // up none. Down when the pointer leaves, the keyboard moves on, a press lands, or Escape,
+  // or when another row's comes up: one card at a time in the window (`chatCard.ts`, #1687).
+  const carded = useCardUp(session);
   const cardId = useId();
   const resting = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(resting.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(resting.current);
+      cardDown(session);
+    },
+    [session],
+  );
+  // A task's tokens are read while its card is up, however it came down: another row's card
+  // coming up takes this one down without a word to this row.
+  const { onPointerEnter: readTokens, onPointerLeave: stopReading } = used;
+  useEffect(() => {
+    if (!task) return;
+    if (carded) readTokens();
+    else stopReading();
+  }, [task, carded, readTokens, stopReading]);
   /** The pointer or the keyboard left, or a press landed, before the card came up. */
   const unrest = () => {
     window.clearTimeout(resting.current);
@@ -1264,21 +1282,21 @@ const Row = memo(function Row({
   };
   const card = (up: boolean) => {
     unrest();
-    setCarded(up);
-    if (!task) return;
-    if (up) used.onPointerEnter();
-    else used.onPointerLeave();
+    if (up) cardUp(session);
+    else cardDown(session);
   };
-  /** Brings the card up once the row has been rested on for `CARD_DELAY_MS`. */
-  const rest = () => {
+  /** Brings the card up once the row has been rested on for `CARD_DELAY_MS`; at once for the
+   *  pointer while another card is up or just went down (`chatCard.skipsTheRest`). */
+  const rest = (by: "pointer" | "keyboard") => {
     unrest();
-    resting.current = window.setTimeout(() => card(true), CARD_DELAY_MS);
+    if (by === "pointer" && skipsTheRest()) card(true);
+    else resting.current = window.setTimeout(() => card(true), CARD_DELAY_MS);
   };
   /** The keyboard came to the row. Only where the keyboard was used last: a focus a press
    *  gave the row, or gave back to it as a menu it pressed in closed, is no rest of it. */
   const rested = () => {
     if (pointedLast()) unrest();
-    else rest();
+    else rest("keyboard");
   };
   /** The pointer or the keyboard left the row: no card, now or after the wait. */
   const away = () => {
@@ -1346,7 +1364,7 @@ const Row = memo(function Row({
                   onOpen(session);
                 }}
                 onPointerEnter={(event) => {
-                  if (event.pointerType !== "touch") rest();
+                  if (event.pointerType !== "touch") rest("pointer");
                 }}
                 onPointerLeave={leave}
                 onFocus={rested}
@@ -1543,7 +1561,9 @@ function ChatCard({
         <span className="chat-card-name">{name}</span>
         <ChatShownState {...state} />
       </p>
-      <Doing session={session} />
+      {/* What a working chat is doing (#1493): read as a line of the card, where the row's own
+          line was out of the tree and named by the row's description. */}
+      <ChatDoingLine session={session} heard />
       <dl className="chat-card-facts">
         {persona !== null && <Fact term="Persona">{persona}</Fact>}
         {(runsOn ?? harness) !== null && <Fact term="Harness">{runsOn ?? harness}</Fact>}
@@ -1560,24 +1580,6 @@ function ChatCard({
       <HelpersSaid session={session} />
       {tokens !== undefined && <p>{tokens}</p>}
     </>
-  );
-}
-
-/** What a working chat is doing (#1493), in its card: read as a line of it, where the row's
- *  own line was out of the tree and named by the row's description. */
-function Doing({ session }: { session: number }) {
-  const says = useDoingSaid(session);
-  if (says === undefined) return null;
-  return (
-    <p className="chat-doing">
-      {says.words}
-      {says.name !== undefined && (
-        <>
-          {" "}
-          <bdi className="named">{says.name}</bdi>
-        </>
-      )}
-    </p>
   );
 }
 
