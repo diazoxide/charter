@@ -935,6 +935,57 @@ describe("a refused host answered in the Inbox (#1692)", () => {
     );
   });
 
+  it("owes the chat no restart when its proxy took the Allow live (#1666)", async () => {
+    let held = false;
+    const { asked } = await aChat({ live: true }, () => (held ? [ASKED] : []));
+    await act(() => emit("chat-moved", RUNNING));
+    held = true;
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    await screen.findByRole("status", { name: "Sandbox block" });
+    fireEvent.keyDown(document.body, {
+      key: "I",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const allow = await within(inbox).findByRole("button", { name: "Allow for this chat" });
+    held = false;
+    await userEvent.click(allow);
+
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    // The command that asked carried on: the turn's end restarts nothing.
+    await act(() => emit("chat-moved", WAITING));
+    await new Promise((settled) => setTimeout(settled, 50));
+    expect(asked("restart_chat")).toEqual([]);
+  });
+
+  it("keeps it blocked from the Inbox by the Notice's own command, which refuses what the proxy holds", async () => {
+    let held = false;
+    const { asked } = await aChat({}, () => (held ? [ASKED] : []));
+    await act(() => emit("chat-moved", WAITING));
+    held = true;
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    await screen.findByRole("status", { name: "Sandbox block" });
+    fireEvent.keyDown(document.body, {
+      key: "I",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const keep = await within(inbox).findByRole("button", { name: "Keep blocked" });
+    held = false;
+    await userEvent.click(keep);
+
+    await waitFor(() =>
+      expect(asked("keep_sandbox_block")).toEqual([
+        { plane: PLANE, session: 4, shown: ASKED.answer.shown },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    expect(asked("restart_chat")).toEqual([]);
+  });
+
   it("drops the Inbox's ask when the pane's Notice keeps it blocked", async () => {
     let held = false;
     await aChat({}, () => (held ? [ASKED] : []));

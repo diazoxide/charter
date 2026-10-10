@@ -4718,14 +4718,15 @@ export const PlaneView = memo(function PlaneView({
    * **An ask answered in the Inbox** (#1692): what its source's Notice does after the same
    * answer. A sandbox host answered there is put away on the chat's pane, only while the pane
    * still holds that very host, and an Allow owes the chat its restart, as the block Notice's
-   * does. A permission and a dispatch need nothing here: their Notices read the same source.
+   * does, unless the chat's proxy took it live and the command carried on (#1666). A permission
+   * and a dispatch need nothing here: their Notices read the same source.
    */
   const inboxAnswered = useCallback(
-    (ask: Shown, option: Offered) => {
+    (ask: Shown, option: Offered, live: boolean) => {
       if (ask.answer.via !== "sandbox-block") return;
       const block = blockHeldFor(sandboxBlocks, ask.session, ask.answer.shown);
       if (block !== undefined) blockAnswered(ask.session, block);
-      if (option.allows) oweRestart(ask.session);
+      if (option.allows && !live) oweRestart(ask.session);
     },
     [blockAnswered, oweRestart, sandboxBlocks],
   );

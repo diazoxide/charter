@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { IN_ITS_CHAT, answerThrough, asksMoved, useAsks } from "./asks";
+import { IN_ITS_CHAT, answerTaken, answerThrough, asksMoved, useAsks } from "./asks";
 import type { Shown } from "./bindings";
 
 /**
@@ -121,15 +121,29 @@ describe("answering through the path an ask names", () => {
     ]);
   });
 
-  it("allows a refused host bound to the block shown, and keeps it blocked by telling the core", async () => {
+  it("allows a refused host bound to the block shown, and keeps it blocked by the Notice's own command", async () => {
     const shown = { operation: "connect", kind: "host", what: "host", target: "api.example.com" };
-    const calls = sent({ allow_sandbox_block: { said: "Allowed." }, forget_sandbox_block: true });
+    const calls = sent({ allow_sandbox_block: { said: "Allowed.", live: false } });
     await answerThrough(PLANE, HOST, "chat");
     await answerThrough(PLANE, HOST, "keep");
+    // Keep blocked is `keep_sandbox_block`, as on the block's Notice (#1666): it answers the
+    // block and refuses what the chat's proxy holds on it, so the command waits no longer.
     expect(calls.map((one) => [one.cmd, one.args])).toEqual([
       ["allow_sandbox_block", { plane: PLANE, session: 5, shown, level: "chat" }],
-      ["forget_sandbox_block", { plane: PLANE, session: 5, shown }],
+      ["keep_sandbox_block", { plane: PLANE, session: 5, shown }],
     ]);
+  });
+
+  it("says whether the chat's proxy took a host's Allow live, so no restart is owed for it", async () => {
+    sent({ allow_sandbox_block: { said: "Allowed.", live: true } });
+    expect(await answerTaken(PLANE, HOST, "chat")).toEqual({ refused: undefined, live: true });
+    sent({ allow_sandbox_block: { said: "Allowed.", live: false } });
+    expect(await answerTaken(PLANE, HOST, "chat")).toEqual({ refused: undefined, live: false });
+    sent({ answer_ask: null });
+    expect(await answerTaken(PLANE, PERMISSION, "allow")).toEqual({
+      refused: undefined,
+      live: false,
+    });
   });
 
   it("says the source's own sentence when the source refuses", async () => {

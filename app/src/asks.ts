@@ -147,10 +147,28 @@ export async function answerThrough(
   ask: Shown,
   option: string,
 ): Promise<string | undefined> {
+  return (await answerTaken(plane, ask, option)).refused;
+}
+
+/**
+ * {@link answerThrough}, and **whether the chat took the answer live** (#1666): a sandbox
+ * host's Allow that the chat's proxy took while the command waited, so the command carries on
+ * and nothing restarts. What the block Notice does after an Allow, a window that answers
+ * through the registry does by this.
+ */
+export async function answerTaken(
+  plane: string,
+  ask: Shown,
+  option: string,
+): Promise<{ refused: string | undefined; live: boolean }> {
   const path = ask.answer;
-  if (path.via === "in-its-pane") return IN_ITS_CHAT;
+  if (path.via === "in-its-pane") return { refused: IN_ITS_CHAT, live: false };
   if (!ask.options.some((one) => one.id === option))
-    return `${JSON.stringify(option)} is not one of the answers this ask offers.`;
+    return {
+      refused: `${JSON.stringify(option)} is not one of the answers this ask offers.`,
+      live: false,
+    };
+  let live = false;
   const sent = async (): Promise<{ status: "ok" } | { status: "error"; error: string }> => {
     switch (path.via) {
       case "hook": {
@@ -163,9 +181,17 @@ export async function answerThrough(
         if (isLevel(option)) return commands.allowDispatch(plane, path.id, option, [], path.shown);
         break;
       case "sandbox-block":
-        if (option === "keep") return commands.forgetSandboxBlock(plane, ask.session, path.shown);
-        if (isLevel(option))
-          return commands.allowSandboxBlock(plane, ask.session, path.shown, option);
+        // Keep blocked as the block's Notice keeps it (#1666): for a host, what the chat's
+        // proxy holds on it is refused now and the chat is told, so its command waits no more.
+        if (option === "keep")
+          return path.shown.what === "host"
+            ? commands.keepSandboxBlock(plane, ask.session, path.shown)
+            : commands.forgetSandboxBlock(plane, ask.session, path.shown);
+        if (isLevel(option)) {
+          const allowed = await commands.allowSandboxBlock(plane, ask.session, path.shown, option);
+          if (allowed.status === "ok") live = allowed.data.live === true;
+          return allowed;
+        }
         break;
     }
     return { status: "error", error: `${JSON.stringify(option)} is no answer purlis sends.` };
@@ -174,5 +200,7 @@ export async function answerThrough(
     status: "error" as const,
     error: String(err),
   }));
-  return answer.status === "ok" ? undefined : answer.error;
+  return answer.status === "ok"
+    ? { refused: undefined, live }
+    : { refused: answer.error, live: false };
 }

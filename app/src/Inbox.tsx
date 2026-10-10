@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactEleme
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { useTabStop } from "./roving";
 import { commands, type Offered, type PlaneId, type Shown } from "./bindings";
-import { answerThrough, asksMoved } from "./asks";
+import { answerTaken, asksMoved } from "./asks";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import {
   askKey,
@@ -37,13 +37,13 @@ const timeSaid = (at: number) =>
  * An ask is gone from here the moment its source stops waiting, wherever it was answered (I-8).
  *
  * **Answered in place, through the ask's own path** (I-3): the registry names the command its
- * source's Notice answers with, and a button here sends exactly that (`asks.answerThrough`).
+ * source's Notice answers with, and a button here sends exactly that (`asks.answerTaken`).
  * Nothing new is opened, and an answer here clears its Notice on the chat's pane, because both
  * are drawn from the same source:
  *
  * - **a permission** prompt and a choice of several: each option the harness offered is a button;
  * - **a sandbox host**: Allow at each level policy leaves open, and Keep blocked; an Allow owes
- *   the chat its restart, as the block Notice's does (`onAnswered`);
+ *   the chat its restart, as the block Notice's does, unless its proxy took it live (`onAnswered`);
  * - **a dispatch grant** is its own Notice, drawn here whole (`DispatchGrantNotice`): the brief,
  *   what the target works with and the boxes its digest is bound to are read before any Allow,
  *   and it reads the very list the pane's copy reads, so answering one clears the other;
@@ -80,8 +80,9 @@ export function Inbox({
   onGo: (session: number) => void;
   /** Escape: the keyboard goes back to the chat in front. */
   onLeave: () => void;
-  /** An answer from here applied: what the source's Notice does after it is done here too. */
-  onAnswered?: (ask: Shown, option: Offered) => void;
+  /** An answer from here applied: what the source's Notice does after it is done here too.
+   *  `live`: the chat took it at once, so nothing restarts for it (#1666). */
+  onAnswered?: (ask: Shown, option: Offered, live: boolean) => void;
   /**
    * The queue's own Ignore for a chat waiting on a reply or in its terminal
    * (`needs.ignore:<session>`): put away until it asks again. Never offered on a decision.
@@ -281,7 +282,7 @@ function Ask({
   ask: Shown;
   shape: Shape;
   onGo: () => void;
-  onAnswered?: (ask: Shown, option: Offered) => void;
+  onAnswered?: (ask: Shown, option: Offered, live: boolean) => void;
   onIgnore?: (session: number) => void;
   /** A way out of the Notice drawn in the row was pressed, with its words. */
   onTouched: (answer: string) => void;
@@ -296,8 +297,8 @@ function Ask({
     if (busy) return;
     setBusy(true);
     setSaid(undefined);
-    void answerThrough(plane, ask, option.id)
-      .then((refused) => {
+    void answerTaken(plane, ask, option.id)
+      .then(({ refused, live }) => {
         if (refused !== undefined) {
           setSaid(refused);
           return;
@@ -308,7 +309,7 @@ function Ask({
           says: ask.says,
           answer: option.label,
         });
-        onAnswered?.(ask, option);
+        onAnswered?.(ask, option, live);
       })
       .finally(() => {
         setBusy(false);

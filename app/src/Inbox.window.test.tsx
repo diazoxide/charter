@@ -247,7 +247,9 @@ describe("answering in place", () => {
     );
     // What the block Notice does after an Allow, the window does too: its pane's copy is put
     // away and the chat is owed a restart to take the grant.
-    await waitFor(() => expect(props.onAnswered).toHaveBeenCalledWith(HOST, HOST.options[0]));
+    await waitFor(() =>
+      expect(props.onAnswered).toHaveBeenCalledWith(HOST, HOST.options[0], false),
+    );
   });
 
   it("says the source's own sentence when it refuses, and lists the ask still", async () => {
