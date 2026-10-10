@@ -1,4 +1,12 @@
-import { useId, useRef, type ReactNode, type Ref } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type Ref,
+} from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
@@ -34,7 +42,12 @@ export type GroupOffer = { id: string; label: string; sub?: boolean };
  * groups, and the chosen group beside them.
  *
  * The switcher is a Radix radio group, because a level is one choice of a few; it lists only
- * the levels it is handed, so a level with nothing to set is not offered. The nav is buttons in
+ * the levels it is handed, so a level with nothing to set is not offered. **An arrow goes to the
+ * next level** (D-626-4), as every {@link Choice} radio picks and the WAI-ARIA radio pattern
+ * asks, with `Choice`'s own repair ({@link useArrowPick}): a level is a view and writes nothing,
+ * so nothing holds the pick for a button. The caller may draw the new level with a layout of
+ * its own (`SettingsTab` does), so the switcher the arrow left is gone; the one drawn next takes
+ * the focus back on the level arrowed to, and only then. The nav is buttons in
  * one Tab stop, moved through with the arrow keys (`roving.ts`, as the explorer's rows are), and
  * the chosen one says so with `aria-current`.
  *
@@ -87,6 +100,16 @@ export function SettingsLayout({
     group,
     groups.map((one) => one.id),
   );
+  const { arrowing, listen } = useArrowPick();
+  const switcher = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (arrowedTo !== level) return;
+    arrowedTo = undefined;
+    const shown = switcher.current?.querySelector<HTMLElement>(
+      '[role="radio"][aria-checked="true"]',
+    );
+    if (shown && document.activeElement !== shown) shown.focus();
+  }, [level]);
   const words = filter.trim();
   const none =
     words !== "" && found === 0 ? `No setting at this level matches “${words}”.` : undefined;
@@ -98,14 +121,30 @@ export function SettingsLayout({
     <div className="ui-settings" ref={holder}>
       <div className="ui-settings-top">
         <RadioGroup.Root
+          ref={switcher}
           className="ui-levels"
           aria-label="Level"
           orientation="horizontal"
           value={level}
           onValueChange={onLevelChange}
+          {...listen}
         >
           {levels.map((one) => (
-            <RadioGroup.Item key={one.id} className="ui-level" value={one.id}>
+            <RadioGroup.Item
+              key={one.id}
+              className="ui-level"
+              value={one.id}
+              onFocus={() => {
+                if (!arrowing.current || one.id === level) return;
+                arrowedTo = one.id;
+                // Forgotten once this press is done, so a level the caller did not show never
+                // takes the focus later.
+                setTimeout(() => {
+                  if (arrowedTo === one.id) arrowedTo = undefined;
+                });
+                onLevelChange(one.id);
+              }}
+            >
               {one.label}
             </RadioGroup.Item>
           ))}
@@ -492,21 +531,49 @@ export type ChoiceProps = Tied &
 /** The keys a radio group moves its pick with (Radix's own list). */
 const ARROWS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
 
+/** The level an arrow went to, until the layout drawn at it takes the focus back (D-626-4). */
+let arrowedTo: string | undefined;
+
+/**
+ * **A radio group whose pick follows the arrow keys**: `arrowing` says whether an arrow key is
+ * down in the group, so the item the focus moves to is picked; `listen` goes on the group's
+ * `RadioGroup.Root`, and each item's `onFocus` picks while `arrowing` holds. Every radio group
+ * the set draws has it — {@link Choice}'s radios and {@link SettingsLayout}'s levels.
+ *
+ * Radix means a radio's pick to follow the arrow keys, and learns that one is down from a
+ * `keydown` listener on `document`, which hears the key only after React's handlers (on the
+ * root and on each portal, below `document`) have set the focus moving. So one press moved
+ * the focus and picked nothing, and only a held key picked (`docs/ui-primitives.md`, "A radio
+ * group's pick does not follow the arrow keys on its own"). Heard here, in the capture phase,
+ * it is known before the focus moves, and forgotten when the key comes up or the focus leaves
+ * the group. A choice that writes something with no Undo, or starts something, still holds
+ * the pick and acts on a button (DS-3b, DS-3d).
+ */
+function useArrowPick() {
+  const arrowing = useRef(false);
+  const listen = {
+    onKeyDownCapture: (event: KeyboardEvent) => {
+      if (ARROWS.includes(event.key)) arrowing.current = true;
+    },
+    onBlurCapture: (event: FocusEvent<HTMLElement>) => {
+      // Out of the group, an arrow held on the way out is no longer a move between options.
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+        arrowing.current = false;
+    },
+    onKeyUpCapture: () => {
+      // After the move, not before it: the roving focus moves on a timer of its own, set
+      // when the key went down, so a quick press is up before the focus arrives.
+      setTimeout(() => {
+        arrowing.current = false;
+      });
+    },
+  };
+  return { arrowing, listen };
+}
+
 export function Choice(props: ChoiceProps) {
   const { ids } = props;
-  /**
-   * Whether an arrow key is down in the radio group, so the option it moves to is picked.
-   *
-   * Radix means a radio's pick to follow the arrow keys, and learns that one is down from a
-   * `keydown` listener on `document`, which hears the key only after React's handlers (on the
-   * root and on each portal, below `document`) have set the focus moving. So one press moved
-   * the focus and picked nothing, and only a held key picked (`docs/ui-primitives.md`, "A radio
-   * group's pick does not follow the arrow keys on its own"). Heard here, in the capture phase,
-   * it is known before the focus moves, and forgotten when the key comes up or the focus leaves
-   * the group. A choice that writes something with no Undo, or starts something, still holds
-   * the pick and acts on a button (DS-3b, DS-3d).
-   */
-  const arrowing = useRef(false);
+  const { arrowing, listen } = useArrowPick();
   if (props.kind === "toggle")
     return (
       <Checkbox.Root
@@ -590,21 +657,7 @@ export function Choice(props: ChoiceProps) {
       disabled={props.disabled}
       aria-labelledby={ids.labelledBy}
       aria-describedby={ids.describedBy}
-      onKeyDownCapture={(event) => {
-        if (ARROWS.includes(event.key)) arrowing.current = true;
-      }}
-      onBlurCapture={(event) => {
-        // Out of the group, an arrow held on the way out is no longer a move between options.
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-          arrowing.current = false;
-      }}
-      onKeyUpCapture={() => {
-        // After the move, not before it: the roving focus moves on a timer of its own, set
-        // when the key went down, so a quick press is up before the focus arrives.
-        setTimeout(() => {
-          arrowing.current = false;
-        });
-      }}
+      {...listen}
     >
       {props.options.map((one, at) => (
         // By place, not by value: two options can share one (two owners' `api`, D-DS3e-10).

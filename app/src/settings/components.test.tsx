@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { Choice, SettingActions, SettingRow } from "./components";
+import { Choice, SettingActions, SettingGroup, SettingRow, SettingsLayout } from "./components";
 
 afterEach(cleanup);
 
@@ -65,6 +66,126 @@ describe("a radio choice and the arrow keys (docs/ui-primitives.md)", () => {
     await user.click(screen.getByRole("radio", { name: "Gamma" }));
 
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+});
+
+const LEVELS = [
+  { id: "you", label: "You" },
+  { id: "project", label: "Project" },
+  { id: "workspace", label: "Workspace" },
+];
+
+/**
+ * Settings as `SettingsTab` draws it: the caller holds the level, and a level is drawn by a
+ * layout of its own (`remount`), as You, Project and Workspace are three components there, so
+ * the switcher the arrow left is not the one the focus comes back to. `follows` false is a
+ * caller that does not move, as Workspace is when there is no workspace to be at.
+ */
+function levels({ remount = false, follows = true } = {}) {
+  const onLevelChange = vi.fn();
+  function Settings() {
+    const [level, setLevel] = useState("you");
+    return (
+      <>
+        <button type="button">before</button>
+        <button type="button" onClick={() => setLevel("workspace")}>
+          to workspace
+        </button>
+        <SettingsLayout
+          key={remount ? level : "one"}
+          levels={LEVELS}
+          level={level}
+          onLevelChange={(to) => {
+            onLevelChange(to);
+            if (follows) setLevel(to);
+          }}
+          groups={[{ id: "look", label: "Look" }]}
+          group="look"
+          onGroupChange={() => {}}
+          filter=""
+          onFilterChange={() => {}}
+        >
+          <SettingGroup label="Look">{null}</SettingGroup>
+        </SettingsLayout>
+      </>
+    );
+  }
+  render(<Settings />);
+  return { onLevelChange, user: userEvent.setup() };
+}
+
+const level = (name: string) => screen.getByRole("radio", { name });
+
+describe("the level switcher and the arrow keys (D-626-4)", () => {
+  it("is a radio group named Level, its level shown the one checked", () => {
+    levels();
+
+    expect(screen.getByRole("radiogroup", { name: "Level" })).toBeInTheDocument();
+    expect(level("You")).toHaveAttribute("aria-checked", "true");
+    expect(level("Project")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("goes to the next level on a single arrow, once, as a radio choice picks", async () => {
+    const { onLevelChange, user } = levels();
+
+    level("You").focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(level("Project")).toHaveFocus();
+    expect(onLevelChange).toHaveBeenCalledTimes(1);
+    expect(onLevelChange).toHaveBeenCalledWith("project");
+    expect(level("Project")).toHaveAttribute("aria-checked", "true");
+    // The roving stop moved with it: Tab comes back to the level shown.
+    expect(level("Project")).toHaveAttribute("tabindex", "0");
+    expect(level("You")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("goes back on the other arrow, and wraps", async () => {
+    const { onLevelChange, user } = levels();
+
+    level("You").focus();
+    await user.keyboard("{ArrowLeft}");
+
+    expect(level("Workspace")).toHaveFocus();
+    expect(onLevelChange).toHaveBeenCalledWith("workspace");
+  });
+
+  it("is one Tab stop, on the level shown, and picks nothing when Tab brings the keyboard in", async () => {
+    const { onLevelChange, user } = levels();
+
+    screen.getByRole("button", { name: "before" }).focus();
+    await user.tab();
+    await user.tab();
+
+    expect(level("You")).toHaveFocus();
+    expect(onLevelChange).not.toHaveBeenCalled();
+    await user.tab();
+    expect(screen.getByRole("searchbox", { name: "Filter settings" })).toHaveFocus();
+  });
+
+  it("keeps the keyboard on the switcher when the level is drawn by a layout of its own", async () => {
+    const { onLevelChange, user } = levels({ remount: true });
+
+    level("You").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(level("Project")).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(level("Workspace")).toHaveFocus();
+    expect(onLevelChange.mock.calls).toEqual([["project"], ["workspace"]]);
+  });
+
+  it("takes no focus later for an arrow whose level was not shown", async () => {
+    const { onLevelChange, user } = levels({ remount: true, follows: false });
+
+    level("You").focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(onLevelChange).toHaveBeenCalledWith("workspace");
+    const elsewhere = screen.getByRole("button", { name: "to workspace" });
+    await user.click(elsewhere);
+
+    expect(level("Workspace")).toHaveAttribute("aria-checked", "true");
+    expect(elsewhere).toHaveFocus();
   });
 });
 
