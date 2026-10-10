@@ -243,8 +243,9 @@ const BACKGROUND_TASKS_HARNESS: &str = "claude-code";
 /// wake the chat when they do: an agent, and a workflow of agents ([`helpers_at_work`]).
 const HELPER_KINDS: [&str; 2] = ["subagent", "workflow"];
 
-/// The statuses of work still in flight, as Claude Code's schema describes the list: running,
-/// or pending ([`helpers_at_work`]).
+/// The statuses of work still in flight: running, or pending ([`helpers_at_work`]). Read from
+/// the code that builds the list in Claude Code 2.1.296, which keeps only an entry with one of
+/// these two and drops one taken out of the background; any other word is no helper at work.
 const IN_FLIGHT: [&str; 2] = ["running", "pending"];
 
 /// The `notification_type` of the nudge a harness sends when a chat sits idle at its prompt, as
