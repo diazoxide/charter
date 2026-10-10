@@ -1064,8 +1064,9 @@ function AnsweredBlocks({
   // **A memory row's own rows** (SI-9b): Open, Edit and Delete for each memory this view lists
   // (`actions.listedMemoryOffers`, which a workspace's Memory section uses too).
   // And a Move into each of the project's other stores (#1190), which the window lends.
-  const stores = useLentMemoryStores();
-  const memories = useMemo(() => listedMemoryOffers(blocks, stores), [blocks, stores]);
+  // A Move into a LIVE workspace's journal says it is published, so the LIVE names come too.
+  const { stores, live } = useLentMemoryStores();
+  const memories = useMemo(() => listedMemoryOffers(blocks, stores, live), [blocks, stores, live]);
   const lookUp = (id: string) => memories.get(id) ?? offerFor?.(id);
   return (
     <>

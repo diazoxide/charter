@@ -2645,6 +2645,55 @@ describe("a memory's rows (SI-9b, ADR 0065)", () => {
       ]);
     });
 
+    it("says a move into a LIVE workspace's journal is published, and one into a LOCAL one nothing", () => {
+      const more: MemoryScope[] = [...stores, { kind: "workspace", name: "beta" }];
+      const rows = moves(memoryOffers(ref, "Defects go upstream", more, ["beta"]));
+
+      expect(rows.map((row) => [row.id, row.note])).toEqual([
+        [`memory.move:${key}:workspace/alpha`, undefined],
+        [`memory.move:${key}:persona/ops`, PUBLISHED_WITH_THE_PROJECT],
+        [`memory.move:${key}:shared`, PUBLISHED_WITH_THE_PROJECT],
+        [
+          `memory.move:${key}:workspace/beta`,
+          "beta is LIVE, so its journal is published with the project.",
+        ],
+      ]);
+    });
+
+    it("says it on a memory list's rows and an open memory tab's, from the LIVE names lent", () => {
+      const listed = listedMemoryOffers(
+        [
+          {
+            kind: "list",
+            empty: { headline: "", body: null, offer: null },
+            rows: [
+              {
+                key: "a",
+                text: "Defects go upstream",
+                note: null,
+                mark: "",
+                tone: "",
+                detail: null,
+                runs: `memory.open:${key}`,
+                actions: [],
+              },
+            ],
+          },
+        ],
+        stores,
+        ["alpha"],
+      );
+      expect(listed.get(`memory.move:${key}:workspace/alpha`)?.note).toBe(
+        "alpha is LIVE, so its journal is published with the project.",
+      );
+
+      const tabs = openView(noTabs(), memoryView(ref), "Defects go upstream", "alpha");
+      const offers = catalogue(now({ tabs, memoryStores: stores, live: ["alpha"] }));
+      expect(by(offers, `memory.move:${key}:workspace/alpha`)?.note).toBe(
+        "alpha is LIVE, so its journal is published with the project.",
+      );
+    });
+
     it("offers no Move while the stores are unread, and none where its own is the only one", () => {
       expect(moves(memoryOffers(ref, "Defects go upstream"))).toEqual([]);
       expect(moves(memoryOffers(ref, "Defects go upstream", [ref.scope]))).toEqual([]);

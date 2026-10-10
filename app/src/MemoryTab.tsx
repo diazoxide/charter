@@ -23,7 +23,8 @@ import {
   type Draft,
   type MemoryRef,
 } from "./memories";
-import { MOVES_WHOLE, PUBLISHED_WITH_THE_PROJECT, storeLabel } from "./memoryMoves";
+import { useLentMemoryStores } from "./MemoryEdits";
+import { MOVES_WHOLE, movesPublishSaid, storeLabel } from "./memoryMoves";
 
 /**
  * **One memory, in a tab of its own** (SI-9b, ADR 0065 Q2, Q3, Q10).
@@ -305,8 +306,10 @@ function Meta({ at, memory }: { at: MemoryRef; memory?: MemoryView }) {
  * **Move a memory to another store** (KN-3): a workspace's journal, a persona's memory or shared
  * memory. The file moves whole — its title and stamp with it, nothing copied — and the tab
  * follows it there (`onMoved`, which a save calls too). A journal name moved away and back
- * comes back to the minute. Persona and shared memory are published with the project, which
- * the help line says: a move out of a LOCAL journal publishes it with the next save.
+ * comes back to the minute. Persona and shared memory are published with the project, and so is
+ * a LIVE workspace's journal, which the help line says, naming the LIVE ones among the stores
+ * (`memoryMoves.movesPublishSaid`, as the Move rows say it): a move out of a LOCAL journal into
+ * one of them publishes it with the next save.
  *
  * **The pick is held, and only the button moves** (`docs/ui-primitives.md`'s held pick). A move
  * has an Undo now (`useMemoryEdits`, #1190), but only for a few seconds, and a move out of a
@@ -328,6 +331,8 @@ function MoveMemory({
   const [moving, setMoving] = useState(false);
   const [refused, setRefused] = useState<string>();
   const here = scopeKey(at.scope);
+  // Which workspaces are LIVE, as the window lends them: none outside a project's window.
+  const { live } = useLentMemoryStores();
 
   useEffect(() => {
     let gone = false;
@@ -368,7 +373,7 @@ function MoveMemory({
     <div className="memory-move">
       <SettingRow
         label="Move to"
-        help={`${MOVES_WHOLE} ${PUBLISHED_WITH_THE_PROJECT}`}
+        help={`${MOVES_WHOLE} ${movesPublishSaid(others, live)}`}
         control={(ids) => (
           <Choice
             ids={ids}

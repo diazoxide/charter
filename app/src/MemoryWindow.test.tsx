@@ -147,8 +147,11 @@ function core({
   gone = [] as string[],
   back,
   refuseMove,
+  alpha,
 }: {
   gone?: string[];
+  /** alpha's journal as a store a memory can move into, LIVE or LOCAL (#1190). */
+  alpha?: "live" | "local";
   /** What the core says to a move out to the shared store, refusing it. */
   refuseMove?: string;
   /** How a move back out of the shared store is answered: held until it settles, or refused. */
@@ -162,7 +165,13 @@ function core({
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "plane_sidebar") return SIDEBAR;
+    if (cmd === "plane_sidebar")
+      return alpha === undefined
+        ? SIDEBAR
+        : {
+            ...SIDEBAR,
+            workspaces: SIDEBAR.workspaces.map((ws) => ({ ...ws, live: alpha === "live" })),
+          };
     if (cmd === "opened_chats")
       return [{ ...CHAT, unreported: null, guessed: null, pinned: false }];
     if (cmd === "reopened_views") return [];
@@ -209,7 +218,12 @@ function core({
         ? inStore(slug, shared.has(slug))
         : null;
     }
-    if (cmd === "memory_scopes") return [{ kind: "persona", name: "steward" }, { kind: "shared" }];
+    if (cmd === "memory_scopes")
+      return [
+        ...(alpha === undefined ? [] : [{ kind: "workspace", name: "alpha" }]),
+        { kind: "persona", name: "steward" },
+        { kind: "shared" },
+      ];
     if (cmd === "memory_move") {
       const slug = String(given.slug);
       const toShared = (given.to as { kind: string }).kind === "shared";
@@ -496,6 +510,32 @@ describe("Move, from a memory row's menu (#1190)", () => {
     );
   });
 
+  it("says a move into a LIVE workspace's journal is published, as the tab's help does", async () => {
+    core({ alpha: "live" });
+    render(<App />);
+
+    const sub = await moveToFromTheRow("never-pkill");
+
+    const [alpha] = within(sub).getAllByRole("menuitem");
+    expect(alpha).toHaveAccessibleName("alpha — workspace");
+    await waitFor(() =>
+      expect(alpha).toHaveAccessibleDescription(
+        "alpha is LIVE, so its journal is published with the project.",
+      ),
+    );
+  });
+
+  it("says nothing of the audience on a move into a LOCAL workspace's journal", async () => {
+    core({ alpha: "local" });
+    render(<App />);
+
+    const sub = await moveToFromTheRow("never-pkill");
+
+    const [alpha] = within(sub).getAllByRole("menuitem");
+    expect(alpha).toHaveAccessibleName("alpha — workspace");
+    expect(alpha).toHaveAccessibleDescription("");
+  });
+
   it("moves it at the pick, asking nothing, and Undo moves it back", async () => {
     const { asked } = core();
     render(<App />);
@@ -570,19 +610,41 @@ describe("Move's Undo, when it does not simply land", () => {
         "already holds a memory named 'never-pkill', so nothing moved",
       ),
     );
+    // Refused, its Undo can be pressed again.
+    expect(within(line).getByRole("button", { name: "Undo" })).toBeEnabled();
     expect(screen.getByTestId("memory-meta")).toHaveTextContent(
       "personas/_shared/memory/never-pkill.md",
     );
     expect(screen.queryByTestId("view-gone")).toBeNull();
   });
 
-  it("sends one move back for two presses while the first is on its way", async () => {
+  it("names a LIVE workspace among the stores in the tab's Move help (#1190)", async () => {
+    core({ alpha: "live" });
+    render(<App />);
+    await userEvent.click(await memoryRowIn("never-pkill"));
+    await screen.findByTestId("memory-body");
+
+    const pick = await screen.findByRole("combobox", { name: "Move to" });
+    await waitFor(() =>
+      expect(pick).toHaveAccessibleDescription(
+        expect.stringContaining(
+          "Persona and shared memory, and the journal of alpha, which is LIVE, are published with the project.",
+        ),
+      ),
+    );
+  });
+
+  it("sends one move back for two presses while the first is on its way, its Undo disabled", async () => {
     let land = () => {};
     const { asked } = core({ back: new Promise<void>((resolve) => (land = resolve)) });
     const line = await moved();
 
-    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
-    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+    const undo = within(line).getByRole("button", { name: "Undo" });
+    await userEvent.click(undo);
+    // While the move back is on its way, its Undo cannot be pressed again (#1190).
+    await waitFor(() => expect(undo).toBeDisabled());
+    expect(undo).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(undo);
     await act(async () => {
       land();
       await new Promise((resolve) => setTimeout(resolve, 50));
