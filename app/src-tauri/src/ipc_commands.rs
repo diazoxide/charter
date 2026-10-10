@@ -125,6 +125,7 @@ macro_rules! app_commands {
                 inboxupdates::inbox_updates,
                 inboxupdates::note_inbox_updates,
                 inboxupdates::settle_inbox_updates,
+                asknotify::inbox_shown,
                 send_input,
                 send_input_bytes,
                 resize_session,

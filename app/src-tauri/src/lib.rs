@@ -20,6 +20,7 @@ mod about;
 mod activity;
 mod alerts;
 mod asking;
+mod asknotify;
 mod atlimit;
 mod autosave;
 mod branchwatch;
@@ -114,7 +115,6 @@ use purlis_core::reopen::{Chat, Fresh, Reopened};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::ipc::Channel;
-use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{Builder, collect_commands};
 
 use hooks::Moved;
@@ -316,88 +316,16 @@ fn bundled_plugin(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// resources alike.
 pub(crate) const PLUGIN_DIR: &str = "plugin";
 
-/// What the window is sent whenever a chat moves, and the one case that also interrupts.
+/// What the window is sent whenever a chat moves.
 ///
-/// The window is always told; the notification is the narrow part. It fires on the edge into
-/// the needs-you queue and only when the operator is not already looking at that chat — the
-/// window hidden, the window not focused, or a different chat in front. At fifty sessions a
-/// popup about the chat already on screen is noise, and noise is how a queue stops being read.
-///
-/// One wait cannot notify twice: a `Stop` that lands on a chat already waiting from a
-/// `Notification` is a move the window is told (the chat is no longer stopped on its prompt,
-/// #1601), and it raises nothing, so it sends no notification (`Moved::interrupts`).
+/// **Whether to interrupt the person is not this move's to say** (#1694, I-7): a move can
+/// bring an ask or take one away, so the asks notifier reads the registry again
+/// (`asknotify::moved`), and only an ask it has not told before raises a notification; a move
+/// that interrupts (`Moved::interrupts`) says the chat waits anew. A chat waiting on its
+/// background agents is not in the queue (#1626), so it raises none.
 fn told(app: &tauri::AppHandle, moved: Moved) {
     windows::emit_for_plane(app, &moved.plane.clone(), "chat-moved", &moved);
-    // Only a move of the chat's own interrupts (#1491): a task that finished changes what the
-    // chat that asked counts, and sends nothing (`Moved::interrupts`).
-    if moved.interrupts() && !already_looking_at(app, &moved) {
-        let name = chat_called(app, &moved).unwrap_or_else(|| format!("chat {}", moved.session));
-        // Best effort, always. A desktop that refuses notifications, or an operator who
-        // turned them off, is not a reason for anything else here to stop working.
-        let _ = app
-            .notification()
-            .builder()
-            .title(name)
-            .body("needs you")
-            .show();
-    }
-}
-
-/// What a chat that moved is called, asked of the plane it moved in.
-fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
-    app.try_state::<Planes>()?
-        .held(&moved.plane)
-        .ok()?
-        .chats()
-        .open_now()
-        .into_iter()
-        .find(|open| open.session == moved.session)
-        .map(|open| open.name)
-}
-
-/// Whether the operator is already looking at this chat.
-///
-/// **Three questions, and all three have to be yes.** The window is on screen and has the
-/// keyboard; the window has THIS chat's plane in front; and that plane has this chat on screen:
-/// in any pane of the tab in front, as that pane's own chat or as the task it shows in place of
-/// it (`Chats::looked_at`, #1486, #1489). So a task shown inside its session's tab, beside it
-/// or in a tab of its own is not notified about, and a session's own chat, hidden behind a
-/// task, is.
-///
-/// The middle one is the half #111 named as the opener's to close, and it was not pedantry:
-/// every plane numbers its chats from one, so "is session 3 in front" has as many answers as
-/// there are planes open, and a window showing plane B would have suppressed a notification
-/// for plane A's chat 3 on the strength of plane A's own answer. The window is the only thing
-/// that knows which plane it draws, so the window says (`window_shows_plane`), and
-/// [`Showing`] is where it is kept.
-///
-/// Every unanswered question reads as "not looking", so a notification is sent rather than
-/// suppressed. That is the cheap way round: one the operator did not need costs a glance, and
-/// one they needed and did not get costs a chat sitting unanswered.
-///
-/// **The window asked is the one holding the chat's plane** (charter#126). With a project split
-/// into a window of its own, "the window" is whichever one holds it, and asking the main window
-/// would suppress a notification because the operator was looking at a different window.
-fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
-    let Some(window) = app
-        .try_state::<Showing>()
-        .and_then(|showing| showing.holder(&moved.plane))
-        .and_then(|label| app.get_webview_window(&label))
-    else {
-        return false;
-    };
-    if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
-        return false;
-    }
-    if !app
-        .try_state::<Showing>()
-        .is_some_and(|showing| showing.is_showing(window.label(), &moved.plane))
-    {
-        return false;
-    }
-    app.try_state::<Planes>()
-        .and_then(|planes| planes.held(&moved.plane).ok())
-        .is_some_and(|held| held.chats().looks_at(moved.session))
+    asknotify::moved(app, &moved);
 }
 
 /// The event a second launch sends the window: the directory it was run in, for the window to
@@ -2837,6 +2765,8 @@ pub fn run() {
                     }
                     // And a vault set-up it began lets go of its token (#1527).
                     vaults::window_gone(window, window.label());
+                    // And it has no Inbox open to hold a notification back (#1694).
+                    asknotify::window_gone(window, window.label());
                     windows::destroyed(window);
                 }
                 // A window focused is the person coming back to it: the plane watches look at
@@ -3065,6 +2995,7 @@ pub fn run() {
                         dispatchgrants::NEEDED,
                         &needed,
                     );
+                    asknotify::poke(&window, &needed.plane);
                 })
             });
             // What waits of a project's dispatch grants moved: the window reads it again, at
@@ -3093,6 +3024,9 @@ pub fn run() {
                     );
                 })
             });
+            // What sends a system notification for an ask (#1694): managed before any plane is
+            // opened, since the first chat to move may bring one.
+            app.manage(asknotify::Notifier::start(app.handle()));
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
@@ -3136,6 +3070,7 @@ pub fn run() {
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |told: asking::Asking| {
                         windows::emit_for_plane(&window, &told.plane.clone(), asking::EVENT, &told);
+                        asknotify::poke(&window, &told.plane);
                     })
                 })
                 // A harness started by hand in a shell tab: the window draws a banner on that
@@ -3183,6 +3118,7 @@ pub fn run() {
                             hooks::SANDBOX_BLOCKED,
                             &told,
                         );
+                        asknotify::poke(&window, &told.plane);
                     })
                 })
                 // A vault a chat was refused for its persona: the window shows the ways
