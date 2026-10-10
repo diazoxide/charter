@@ -15,6 +15,8 @@ import {
 } from "react";
 import clsx from "clsx";
 import { listen } from "./here";
+import { QueueRead } from "./QueueRead";
+import { withQueue } from "./queueRows";
 import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
@@ -562,7 +564,11 @@ export const PlaneView = memo(function PlaneView({
   // **Only the shares this view draws from, each redrawing it only when it changes** (SC-3).
   // A chat's own state is not one of them: its tab, its explorer row and its pane read that
   // themselves, so a chat that only went from running to waiting redraws those and not this.
-  const needsYou = useChatsSelect(chats, (states) => states.needsYou);
+  //
+  // **Nor is the needs-you queue** (#1034). The counts, the chips' hands and the show-more
+  // counts read it where they are drawn (`QueueRead`), and the catalogue's rows for it and the
+  // title bar's list are put in as this view reports, off the store (`withQueue`, `queued`). A
+  // chat that starts asking for you redraws those and not every pane.
   /** The tab whose task menu the keyboard asked for, and a count of the asks (#1487): its
    *  chip opens when the count changes, so being drawn is never being asked. */
   const [tasksAsked, setTasksAsked] = useState<{ tab: number; count: number }>();
@@ -2185,8 +2191,8 @@ export const PlaneView = memo(function PlaneView({
   // **A chat is counted where its tab is** (#1486, V100-40): a task that works in another
   // workspace lives in the tab of the session that asked, so that session's workspace wears
   // it. A chat with no tab is counted where it works, as before.
-  const waitingIn = (workspace: string) =>
-    needsYou.filter((session) => {
+  const waitingIn = (queue: readonly number[], workspace: string) =>
+    queue.filter((session) => {
       const home = homeOf(tabs, session, askedBy);
       return (
         (home === undefined ? filedIn(session) : workspaceOf(tabs, home.tab, filedIn)) === workspace
@@ -2194,7 +2200,6 @@ export const PlaneView = memo(function PlaneView({
     }).length;
 
   const workspaceMarks = (workspace: string) => {
-    const waiting = waitingIn(workspace);
     const here = tabsIn(tabs, workspace, filedIn).length;
     const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
     const colour = colourOf(workspace);
@@ -2228,11 +2233,21 @@ export const PlaneView = memo(function PlaneView({
         {/* And how many of them are asking for you. Scoping the chats to a workspace would
             otherwise hide a chat that needs you behind a strip nobody is looking at — the
             same hole the project tabs close one scope up. */}
-        {waiting > 0 && (
-          <span className="workspace-needs" aria-label={`${waiting} chats need you in ${called}`}>
-            {waiting}
-          </span>
-        )}
+        <QueueRead>
+          {(queue) => {
+            const waiting = waitingIn(queue, workspace);
+            return (
+              waiting > 0 && (
+                <span
+                  className="workspace-needs"
+                  aria-label={`${waiting} chats need you in ${called}`}
+                >
+                  {waiting}
+                </span>
+              )
+            );
+          }}
+        </QueueRead>
       </>
     );
   };
@@ -2318,11 +2333,11 @@ export const PlaneView = memo(function PlaneView({
    */
   /** How many of a tab's chats need you: every one of its panes' that is in the queue, split
    *  or not. Its share of the chat strip's show-more count when the strip is not drawing it. */
-  const waitingOn = (id: number) =>
-    panesOf(tabs, id).filter((pane) => needsYou.includes(pane.session)).length +
+  const waitingOn = (queue: readonly number[], id: number) =>
+    panesOf(tabs, id).filter((pane) => queue.includes(pane.session)).length +
     // And its tasks that need you and are not on screen (#1486): the tab wears them. Its own
     // chat is counted above, shown or not.
-    hiddenNeeding(tabs, id, askedBy, needsYou).filter(
+    hiddenNeeding(tabs, id, askedBy, queue).filter(
       (session) => !panesOf(tabs, id).some((pane) => pane.session === session),
     ).length;
 
@@ -5566,12 +5581,13 @@ export const PlaneView = memo(function PlaneView({
   const asksHere = usePermissionAsks(planeOnly)[plane] ?? NO_ASKS;
   const refusedFor = useRefusedAmong(plane, living);
   /**
-   * **The chats waiting for the person**, the queue first and then every chat with a Notice
-   * that waits for an answer (#1486): a dispatch held for a grant, a vault it was refused, a
-   * sandbox block, a restart that is owed or did not happen. A held dispatch is not in the
-   * core's queue, so without this a chat stuck on one would say nothing anywhere.
+   * **The chats waiting for the person beside the queue**: every chat with a Notice that waits
+   * for an answer (#1486), a dispatch held for a grant, a vault it was refused, a sandbox block,
+   * a restart that is owed or did not happen. A held dispatch is not in the core's queue, so
+   * without this a chat stuck on one would say nothing anywhere. The queue goes first, where it
+   * is read (`hiddenIn`).
    */
-  const waitingForYou = useMemo(() => {
+  const othersWaiting = useMemo(() => {
     const restarts = Object.entries(restartsSaid)
       .filter(([, said]) => said.trouble !== undefined || said.notYet !== undefined || said.byHand)
       .map(([session]) => Number(session));
@@ -5579,27 +5595,27 @@ export const PlaneView = memo(function PlaneView({
       .filter(([, blocks]) => blocks.length > 0)
       .map(([session]) => Number(session));
     const prompted = asksHere.map((ask) => ask.session);
-    return [
-      ...new Set([...needsYou, ...prompted, ...heldFor, ...refusedFor, ...blocked, ...restarts]),
-    ];
-  }, [asksHere, heldFor, needsYou, refusedFor, restartsSaid, sandboxBlocks]);
+    return [...prompted, ...heldFor, ...refusedFor, ...blocked, ...restarts];
+  }, [asksHere, heldFor, refusedFor, restartsSaid, sandboxBlocks]);
   /**
-   * **Each tab's chats that are waiting for the person and are not on screen**, by name, the
+   * **Tab `id`'s chats that are waiting for the person and are not on screen**, by name, the
    * longest waiting first (#1486, V100-37): what the tab wears the hand for. A chat is on
    * screen only in the tab in front. Nothing switches a tab to one of them; going to it does.
+   * Asked with the queue where the chip is drawn (`QueueRead`, #1034).
    */
-  const hiddenByTab = useMemo(
-    () =>
-      new Map(
-        tabs.order.map((id) => [
-          id,
-          hiddenNeeding(tabs, id, askedBy, waitingForYou).flatMap((session): Needing[] => {
-            const chat = chatsByNumber.get(session);
-            return chat === undefined ? [] : [{ session, name: shownName(tabs, chat) }];
-          }),
-        ]),
-      ),
-    [askedBy, chatsByNumber, tabs, waitingForYou],
+  const hiddenIn = useCallback(
+    (queue: readonly number[], id: number): readonly Needing[] => {
+      if (!(id in tabs.byId)) return NO_NEEDS;
+      const waitingForYou = [...new Set([...queue, ...othersWaiting])];
+      const hidden = hiddenNeeding(tabs, id, askedBy, waitingForYou).flatMap(
+        (session): Needing[] => {
+          const chat = chatsByNumber.get(session);
+          return chat === undefined ? [] : [{ session, name: shownName(tabs, chat) }];
+        },
+      );
+      return hidden.length === 0 ? NO_NEEDS : hidden;
+    },
+    [askedBy, chatsByNumber, othersWaiting, tabs],
   );
   /**
    * **Each tab's tasks that have ended and still have a line** (#1487): they are not in the
@@ -5882,7 +5898,10 @@ export const PlaneView = memo(function PlaneView({
             // beside no other — with one removal per piece that is the difference between one
             // offer to throw work away and fifty.
             refused: report?.refused ? report.from : undefined,
-            needsYou,
+            // **With no queue, and no Smart closes that stopped** (#1034): their rows are put in
+            // as this view reports (`queued`), so a chat that starts asking for you neither
+            // rebuilds the catalogue nor redraws the panes.
+            needsYou: NO_QUEUE,
             quiet,
             nameOf,
             reportsTo: (session) => reports[session] ?? [],
@@ -5905,7 +5924,6 @@ export const PlaneView = memo(function PlaneView({
             commands: extensionCommands,
             curations,
             wrappingUp: [...wrapping],
-            stopped,
             workItems,
             // A chat filed in a workspace; one at the project root, or outside the project, is
             // offered no work link (ADR 0088 §4).
@@ -5938,7 +5956,6 @@ export const PlaneView = memo(function PlaneView({
       quiet,
       report,
       spot?.path,
-      needsYou,
       refusals,
       reports,
       needs,
@@ -5955,7 +5972,6 @@ export const PlaneView = memo(function PlaneView({
       extensionCommands,
       worktree,
       liveNames,
-      stopped,
       wrapping,
       workItems,
       filedIn,
@@ -6458,63 +6474,82 @@ export const PlaneView = memo(function PlaneView({
   // **And the chats whose Smart close stopped without a record** (SI-8f): each says why, beside
   // its name. One already in the queue is one item that says it; one that is not is an item of
   // its own, whose ✕ dismisses it.
-  const asking = useMemo<Asking[]>(() => {
-    const reportsTo = (session: number) => reports[session] ?? [];
-    const refusedIn = (session: number) => refusals[session] ?? [];
-    const neededFor = (session: number) => needs[session] ?? [];
-    const rows = catalogued([
-      ...needsYouRows(
-        needsYou,
-        nameOf,
-        tabs,
-        reportsTo,
-        refusedIn,
-        neededFor,
-        (session) => listedChats.some((chat) => chat.session === session),
-        (session) => stoppedBelow[session] ?? [],
-      ),
-      ...stoppedRows(stopped, needsYou, nameOf, tabs),
-    ]);
-    const item = (session: number, ignore: string): Asking => {
-      const filed = filedIn(session);
-      const persona = personaOf(session);
-      return {
-        session,
-        name: nameOf(session),
-        persona,
-        mark: persona === null ? null : (personaMarks.marks.get(persona) ?? null),
-        reported: reportsTo(session),
-        stoppedBelow: stoppedBelow[session] ?? [],
-        // What the app found the chat needs you for is said first (#1448).
-        needed: neededFor(session)[neededFor(session).length - 1],
-        // A Smart close that stopped says so; a refused commit (SQ-16) says its latest.
-        why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
-        workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
-        go: rows.get(showId(session)),
-        ignore: rows.get(ignore),
+  //
+  // **Asked with the queue as this view reports, and not as it draws** (#1034), with the
+  // catalogue's queue rows: the queue changes whenever a chat starts or stops asking for you,
+  // and nothing this view draws but the counts reads it.
+  const queued = useCallback(
+    (queue: readonly number[]): Pick<PlaneReport, "asking" | "offers"> => {
+      const reportsTo = (session: number) => reports[session] ?? [];
+      const refusedIn = (session: number) => refusals[session] ?? [];
+      const neededFor = (session: number) => needs[session] ?? [];
+      const rows = catalogued([
+        ...needsYouRows(
+          queue,
+          nameOf,
+          tabs,
+          reportsTo,
+          refusedIn,
+          neededFor,
+          (session) => listedChats.some((chat) => chat.session === session),
+          (session) => stoppedBelow[session] ?? [],
+        ),
+        ...stoppedRows(stopped, queue, nameOf, tabs),
+      ]);
+      const item = (session: number, ignore: string): Asking => {
+        const filed = filedIn(session);
+        const persona = personaOf(session);
+        return {
+          session,
+          name: nameOf(session),
+          persona,
+          mark: persona === null ? null : (personaMarks.marks.get(persona) ?? null),
+          reported: reportsTo(session),
+          stoppedBelow: stoppedBelow[session] ?? [],
+          // What the app found the chat needs you for is said first (#1448).
+          needed: neededFor(session)[neededFor(session).length - 1],
+          // A Smart close that stopped says so; a refused commit (SQ-16) says its latest.
+          why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
+          workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
+          go: rows.get(showId(session)),
+          ignore: rows.get(ignore),
+        };
       };
-    };
-    const alsoStopped = Object.keys(stopped)
-      .map(Number)
-      .filter((session) => rows.has(dismissId(session)));
-    return [
-      ...needsYou.map((session) => item(session, ignoreId(session))),
-      ...alsoStopped.map((session) => item(session, dismissId(session))),
-    ];
-  }, [
-    filedIn,
-    listedChats,
-    nameOf,
-    needs,
-    needsYou,
-    personaMarks.marks,
-    personaOf,
-    refusals,
-    reports,
-    stopped,
-    stoppedBelow,
-    tabs,
-  ]);
+      const alsoStopped = Object.keys(stopped)
+        .map(Number)
+        .filter((session) => rows.has(dismissId(session)));
+      return {
+        asking: [
+          ...queue.map((session) => item(session, ignoreId(session))),
+          ...alsoStopped.map((session) => item(session, dismissId(session))),
+        ],
+        offers: withQueue(offers, queue, {
+          tabs,
+          nameOf,
+          reportsTo,
+          refusedIn,
+          neededFor,
+          listed: listedChats,
+          stoppedBelow: (session) => stoppedBelow[session] ?? [],
+          stopped,
+        }),
+      };
+    },
+    [
+      filedIn,
+      listedChats,
+      nameOf,
+      needs,
+      offers,
+      personaMarks.marks,
+      personaOf,
+      refusals,
+      reports,
+      stopped,
+      stoppedBelow,
+      tabs,
+    ],
+  );
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -6527,12 +6562,11 @@ export const PlaneView = memo(function PlaneView({
   //
   // **Without what its chats are doing**, which is added as it is reported, below: that changes
   // with every move, and a report rebuilt here for each one was the whole view redrawn for each.
-  const mine = useMemo<Omit<PlaneReport, "ending" | "moved">>(
+  // **Nor the queue** (#1034), for the same reason: what reads it is added there too (`queued`).
+  const mine = useMemo<Omit<PlaneReport, "ending" | "moved" | "asking" | "offers">>(
     () => ({
-      asking,
       quiet,
       settled,
-      offers,
       run,
       said: report,
       // Whether the plane has been read: until it has, the window does not know which
@@ -6547,7 +6581,7 @@ export const PlaneView = memo(function PlaneView({
       // explorer picked (FM-5).
       branch: nearBranch,
     }),
-    [asking, nearBranch, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
+    [nearBranch, ofWorkspace, quiet, report, run, saving, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -6573,6 +6607,9 @@ export const PlaneView = memo(function PlaneView({
         quitting: Leaving[];
         doing: State[];
         moved: number;
+        queued: typeof queued;
+        queue: readonly number[];
+        fromQueue: ReturnType<typeof queued>;
       }
     | undefined
   >(undefined);
@@ -6581,26 +6618,42 @@ export const PlaneView = memo(function PlaneView({
       const states = chats.store.statesFor(chats.plane);
       const doing = quitting.map((chat) => stateOf(states, chat.session));
       const moved = Math.max(0, ...Object.values(states.movedAt));
+      const queue = states.needsYou;
       const was = reported.current;
+      const sameQueue = was?.queued === queued && sameList(was.queue, queue);
       if (
         was?.to === onReport &&
         was.plane === plane &&
         was.mine === mine &&
         was.quitting === quitting &&
         was.moved === moved &&
-        sameList(was.doing, doing)
+        sameList(was.doing, doing) &&
+        sameQueue
       )
         return;
-      reported.current = { to: onReport, plane, mine, quitting, doing, moved };
+      // The queue's rows are built again only when the queue, or what words them, changed.
+      const fromQueue = sameQueue ? was.fromQueue : queued(queue);
+      reported.current = {
+        to: onReport,
+        plane,
+        mine,
+        quitting,
+        doing,
+        moved,
+        queued,
+        queue,
+        fromQueue,
+      };
       onReport(plane, {
         ...mine,
+        ...fromQueue,
         ending: quitting.map(({ chat }, at) => ({ ...chat, state: doing[at] })),
         moved,
       });
     };
     report();
     return chats.store.subscribe(report);
-  }, [chats, quitting, mine, onReport, plane]);
+  }, [chats, quitting, mine, onReport, plane, queued]);
 
   const frontChat = frontTab && reopened.find((chat) => chat.session === chatOf(tabs, frontTab.id));
 
@@ -6813,16 +6866,20 @@ export const PlaneView = memo(function PlaneView({
               what the strip lists, which an operator learns once for all three. */}
           <div className="strip-doing">
             <Doer offer={by("workspace.create")} onPress={press} iconOnly />
-            <ShowMore
-              noun="workspace"
-              hidden={workspacesNotShowing.map((workspace) => ({
-                key: workspace,
-                offer: by(`workspace.focus:${workspace}`),
-                needs: waitingIn(workspace),
-                children: workspaceMarks(workspace),
-              }))}
-              onPress={press}
-            />
+            <QueueRead>
+              {(queue) => (
+                <ShowMore
+                  noun="workspace"
+                  hidden={workspacesNotShowing.map((workspace) => ({
+                    key: workspace,
+                    offer: by(`workspace.focus:${workspace}`),
+                    needs: waitingIn(queue, workspace),
+                    children: workspaceMarks(workspace),
+                  }))}
+                  onPress={press}
+                />
+              )}
+            </QueueRead>
           </div>
         </div>
       )}
@@ -7079,28 +7136,33 @@ export const PlaneView = memo(function PlaneView({
                                 hand where one waits off screen, and the menu to switch
                                 between them. Beside the tab's button: a button holds no
                                 button. Nothing for a tab with no tasks. */}
-                            <TabTasks
-                              id={tasksIdOf(id)}
-                              name={tabs.byId[id].name}
-                              rows={chatsByTab.get(id) ?? NO_ROWS}
-                              ended={endedByTab.get(id) ?? NO_ENDED}
-                              current={
-                                shownIn(tabs, id).find((one) => one.pane === tabs.byId[id].focused)
-                                  ?.session ?? chatShownBy(tabs, id)
-                              }
-                              needs={hiddenByTab.get(id) ?? NO_NEEDS}
-                              asked={tasksAsked?.tab === id ? tasksAsked.count : 0}
-                              clock={chatClock}
-                              dragging={isDragging}
-                              onShow={showFromChip}
-                              ends={taskEndsOf}
-                              onPress={pressTaskEnd}
-                              onPlace={placeFromChip}
-                              used={usedFromChip}
-                              limits={runningOfTab.get(id)}
-                              stopAll={stopAllOf}
-                              onActivity={activityFromChip}
-                            />
+                            <QueueRead>
+                              {(queue) => (
+                                <TabTasks
+                                  id={tasksIdOf(id)}
+                                  name={tabs.byId[id].name}
+                                  rows={chatsByTab.get(id) ?? NO_ROWS}
+                                  ended={endedByTab.get(id) ?? NO_ENDED}
+                                  current={
+                                    shownIn(tabs, id).find(
+                                      (one) => one.pane === tabs.byId[id].focused,
+                                    )?.session ?? chatShownBy(tabs, id)
+                                  }
+                                  needs={hiddenIn(queue, id)}
+                                  asked={tasksAsked?.tab === id ? tasksAsked.count : 0}
+                                  clock={chatClock}
+                                  dragging={isDragging}
+                                  onShow={showFromChip}
+                                  ends={taskEndsOf}
+                                  onPress={pressTaskEnd}
+                                  onPlace={placeFromChip}
+                                  used={usedFromChip}
+                                  limits={runningOfTab.get(id)}
+                                  stopAll={stopAllOf}
+                                  onActivity={activityFromChip}
+                                />
+                              )}
+                            </QueueRead>
                             <FreshMark
                               id={freshMarkOf(id)}
                               // **Never on a task's own tab** (#1489): nothing drawn on
@@ -7130,29 +7192,33 @@ export const PlaneView = memo(function PlaneView({
             full (charter-app#130/#131) — and now that the strip collapses rather than
             scrolls, "inside" would mean the `+` could be collapsed away. */}
         <div className="more">
-          <ShowMore
-            noun="tab"
-            hidden={notShowing.map((id) => ({
-              key: String(id),
-              offer: by(`tab.select:${id}`),
-              needs: waitingOn(id),
-              children: (
-                <TabMarks
-                  tabs={tabs}
-                  id={id}
-                  persona={personaOf(chatOf(tabs, id))}
-                  updates={planeUpdates}
-                  shells={shells}
-                  wrapping={wrapping}
-                  stopping={stopping}
-                  task={taskNameOf(id)}
-                  taskOf={taskTabOf(id)}
-                  needs={hiddenByTab.get(id)?.map((chat) => chat.name)}
-                />
-              ),
-            }))}
-            onPress={press}
-          />
+          <QueueRead>
+            {(queue) => (
+              <ShowMore
+                noun="tab"
+                hidden={notShowing.map((id) => ({
+                  key: String(id),
+                  offer: by(`tab.select:${id}`),
+                  needs: waitingOn(queue, id),
+                  children: (
+                    <TabMarks
+                      tabs={tabs}
+                      id={id}
+                      persona={personaOf(chatOf(tabs, id))}
+                      updates={planeUpdates}
+                      shells={shells}
+                      wrapping={wrapping}
+                      stopping={stopping}
+                      task={taskNameOf(id)}
+                      taskOf={taskTabOf(id)}
+                      needs={hiddenIn(queue, id).map((chat) => chat.name)}
+                    />
+                  ),
+                }))}
+                onPress={press}
+              />
+            )}
+          </QueueRead>
         </div>
         {/* **Outside the strip, and now the `+` at the end of it rather than a labelled
             button** — the operator's words: *"open-project button is not looks like separate
@@ -8490,6 +8556,8 @@ function listedMenuOf(session: number, offerFor: (id: string) => Offer | undefin
 const NO_ROWS: readonly ChatRow[] = [];
 const NO_ENDED: readonly Ended[] = [];
 const NO_NEEDS: readonly Needing[] = [];
+/** The queue the catalogue is built with: none (#1034, `withQueue`). */
+const NO_QUEUE: readonly number[] = [];
 const NO_ASKS: readonly Shown[] = [];
 
 /**
