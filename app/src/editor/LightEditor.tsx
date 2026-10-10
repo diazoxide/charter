@@ -24,9 +24,12 @@ import { changesOf, type GitHunk } from "./hunks";
 import { grammarFor } from "./languages";
 import { look } from "./look";
 
-/** What every view of a file has: line numbers, the theme, read only. */
-function reading(language: Compartment): Extension[] {
+/** What every view of a file has: line numbers, the theme, read only, and a name. CodeMirror
+ *  draws its text as a `textbox`, which a screen reader says by its name and nothing else, so
+ *  each one is named for the file it shows (DS-6, #629). */
+function reading(language: Compartment, name: string): Extension[] {
   return [
+    EditorView.contentAttributes.of({ "aria-label": name }),
     lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
@@ -102,7 +105,7 @@ export function LightEditor({
     });
     const view = new EditorView({
       parent: host.current,
-      state: EditorState.create({ doc: text, extensions: [reading(language), cursor] }),
+      state: EditorState.create({ doc: text, extensions: [reading(language, path), cursor] }),
     });
     if (line !== undefined && line >= 1 && line <= view.state.doc.lines) {
       const at = view.state.doc.line(line).from;
@@ -148,8 +151,8 @@ export function MergeViewer({
     const changes = changesOf(base, head, hunks);
     const merge = new MergeView({
       parent: host.current,
-      a: { doc: base, extensions: reading(language) },
-      b: { doc: head, extensions: reading(language) },
+      a: { doc: base, extensions: reading(language, `${path}, before`) },
+      b: { doc: head, extensions: reading(language, `${path}, after`) },
       gutter: true,
       collapseUnchanged: { margin: 3, minSize: 4 },
       diffConfig: { override: () => changes },

@@ -87,6 +87,14 @@ The one exemption is `terminal.ansi.black`, held to 1.5:1 — ANSI black on a da
 in every theme there has ever been, because it is the colour a program picks when it means
 _recede_; it still has to be visible, and charter-dark measures 2.14:1.
 
+**The pairs are read from the stylesheets too** (DS-6, #629). A rule in `App.css` or
+`styles.css` that sets one token as its text and another as its background draws one on the
+other, and `contrast.test.ts` fails, naming the rule, until that pair is in its list at the floor
+its use asks for. A background that is a wash (a token with alpha) is measured laid over what it
+sits on. The check reads one rule at a time, so a colour taken from a parent's background, or a
+`:hover` rule that sets only a background, is still listed by hand. Every colour theme file in
+`app/src/theme/` is run, as it ships and tinted by every palette colour.
+
 **The `layer.*` tokens are a shade that means _depth_, and nothing louder.** purlis#171
 said which of the three strips you were looking at with an indent; purlis#193 took the
 indent away on the operator's reading of it. Coloured rules under each strip replaced it for one
@@ -676,6 +684,16 @@ and no call site passes a `size`. Lucide also adds `aria-hidden="true"` to any i
 accessible name of its own, which is what keeps a button's name its words: `New tab` with a `+`
 beside it is still `New tab` to a screen reader and to `pressOnly("New tab")`. Both facts are
 pinned in `icons.test.tsx`, because the whole window leans on them and neither is ours.
+
+**Every control has a name, and a test holds it** (DS-6, #629). `a11y.testkit.ts`'s
+`expectEveryControlNamed` fails on any button, link, text box, checkbox, radio, switch, tab,
+combobox, option, slider or menu item in the accessibility tree whose accessible name is empty.
+`settings/Names.test.tsx` runs it on every group of every Settings level, and
+`editor/Names.test.tsx` on every editor tab. A nameless control found in a file that cannot be
+mended yet goes on that test's named debt list, and a debt no surface draws any more fails, so the
+list only shrinks. CodeMirror draws a file's text as a text box, so the light editor names it
+for the file, and each side of a comparison for its side. It is the rule axe's `button-name`,
+`link-name`, `label` and `aria-input-field-name` check, without axe as a dependency.
 
 The rules an icon has to meet here:
 
