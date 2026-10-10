@@ -31,11 +31,7 @@ const NEXT = "needs.next";
  * have built with the queue (`queueRows.test.ts` holds it to that). A catalogue that was not built
  * (a project not in front has none) is handed back as it is.
  */
-export function withQueue(
-  offers: Offer[],
-  queue: readonly number[],
-  now: QueueNow,
-): Offer[] {
+export function withQueue(offers: Offer[], queue: readonly number[], now: QueueNow): Offer[] {
   const at = offers.findIndex((offer) => offer.id === NEXT);
   if (at < 0) return offers;
   const was = offers[at];
