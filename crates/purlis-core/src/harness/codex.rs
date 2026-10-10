@@ -31,9 +31,9 @@ impl HarnessAdapter for Codex {
     ///   which is the falling edge `Stop` means for Claude Code.
     /// * There is no `Notification`. Codex tells a hook it is asking for approval only
     ///   through `PermissionRequest` — which fired exactly when the prompt appeared,
-    ///   and not for a command that needed none — but that is a hook that DECIDES a
-    ///   permission, and the app arms no such hook. So a Codex chat that stops
-    ///   mid-turn for approval cannot say so.
+    ///   and not for a command that needed none. That hook DECIDES a permission, so the
+    ///   app arms it as Claude Code's is (#1691, [`permission_flag`]): it decides only
+    ///   what the person chose in the window, and otherwise nothing, and Codex asks.
     /// * **And there is no second way round it** (charter-app#52, read out of the same
     ///   0.147.0 binary the measurements above were taken on). The binary carries
     ///   eleven hook events and no more — `PreToolUse`, `PermissionRequest`,
@@ -79,6 +79,7 @@ impl HarnessAdapter for Codex {
         _sandbox: Sandbox<'_>,
     ) -> StateHooks {
         let mut args = session_flags(kit.binary);
+        args.extend(permission_flag(kit.binary));
         // charter's MCP server (HP-7), for this session beside the operator's own servers.
         args.extend(["-c".to_owned(), crate::chattools::codex_flag(kit.binary)]);
         StateHooks::ThisSessionOnly {
@@ -237,6 +238,34 @@ impl HarnessAdapter for Codex {
             .concat(),
         })
     }
+}
+
+/// **The `-c` pair that arms Codex's `PermissionRequest`** (#1691): `purlis hook
+/// permissionrequest`, for every tool, with the timeout the ask's deadline sits below. Its
+/// prompt is then also an ask in the window, answered back on the hook
+/// ([`crate::harness::hooked`]); unanswered, the hook decides nothing and Codex asks.
+///
+/// Not from the registry, as Claude Code's is not from the plugin: a hook that can allow a
+/// permission rides only on the argument, never in a file a chat can write. Codex asks the
+/// operator to trust it once, as it does each of purlis's hooks.
+fn permission_flag(binary: &std::path::Path) -> [String; 2] {
+    let mut hook = toml::Table::new();
+    hook.insert("type".to_owned(), toml::Value::from("command"));
+    hook.insert(
+        "command".to_owned(),
+        toml::Value::from(crate::plugin::command_at(binary, super::hooked::WORD)),
+    );
+    hook.insert(
+        "timeout".to_owned(),
+        toml::Value::from(i64::try_from(super::hooked::HOOK_TIMEOUT.as_secs()).unwrap_or(i64::MAX)),
+    );
+    let mut group = toml::Table::new();
+    group.insert(
+        "hooks".to_owned(),
+        toml::Value::Array(vec![toml::Value::Table(hook)]),
+    );
+    let value = toml::Value::Array(vec![toml::Value::Table(group)]);
+    ["-c".to_owned(), format!("hooks.PermissionRequest={value}")]
 }
 
 /// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::codex_handlers`].

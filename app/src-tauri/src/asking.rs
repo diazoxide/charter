@@ -15,7 +15,8 @@
 //!   the block Notice's own `allow_sandbox_block`, or put away by [`forget_sandbox_block`].
 //! - **A prompt in a harness's own terminal** that purlis holds nothing for ([`terminal`]),
 //!   and **a chat waiting on the person's reply** ([`question`]): named, with no choices; the
-//!   person goes to the chat. (#1691 detects more of the first.)
+//!   person goes to the chat. A terminal prompt says which prompt it is, as the harness's
+//!   nudge named it (#1691); where a harness's hook can answer it, it is a permission ask.
 //!
 //! **Each ask names the existing path that answers it** ([`AnswerPath`]): the window calls that
 //! path's own command, checked and audited as it is from its Notice, so the registry opens no
@@ -395,12 +396,13 @@ pub fn sandbox_host(
 
 /// **The harness-terminal adapter**: chat `session` is stopped on a prompt it asked mid-turn,
 /// shown in its own terminal, and purlis holds nothing it could answer it by. Named, so it
-/// does not wait unseen; the person answers it in the chat. #1691 detects more of these.
-pub fn terminal(session: u32) -> Shown {
+/// does not wait unseen, with the kind of prompt its harness's nudge said (#1691); the person
+/// answers it in the chat.
+pub fn terminal(session: u32, prompt: purlis_core::harness::model::Prompt) -> Shown {
     Shown {
         session,
         ask: format!("terminal:{session}"),
-        says: "Waiting in its terminal".to_owned(),
+        says: prompt.says().to_owned(),
         options: Vec::new(),
         source: AskSource::Terminal,
         chain: Vec::new(),
@@ -457,8 +459,9 @@ pub struct Waiting<'a> {
     pub permissions: Vec<Raised>,
     /// The needs-you queue: the chats the board says need the person.
     pub queue: Vec<u32>,
-    /// Whether a chat is stopped on a prompt it asked mid-turn (`Glance::waits_on_its_prompt`).
-    pub at_its_prompt: &'a dyn Fn(u32) -> bool,
+    /// The prompt a chat is stopped on in its terminal, asked mid-turn, where it is
+    /// (`Glance::prompt`, #1691).
+    pub at_its_prompt: &'a dyn Fn(u32) -> Option<purlis_core::harness::model::Prompt>,
     /// The dispatches held for the person, as their Notices are told them.
     pub dispatches: Vec<crate::dispatchgrants::DispatchPending>,
     /// The blocks each chat is held on now.
@@ -489,12 +492,9 @@ pub fn derive(waiting: &Waiting<'_>) -> Vec<Shown> {
             .queue
             .iter()
             .filter(|session| !said.contains(session))
-            .map(|&session| {
-                if (waiting.at_its_prompt)(session) {
-                    terminal(session)
-                } else {
-                    question(session)
-                }
+            .map(|&session| match (waiting.at_its_prompt)(session) {
+                Some(prompt) => terminal(session, prompt),
+                None => question(session),
             }),
     );
     asks.extend(
@@ -532,7 +532,7 @@ pub fn every_ask(held: &crate::planes::Held) -> Asking {
     let waiting = Waiting {
         permissions: held.hooks().asks().pending(Instant::now()),
         queue,
-        at_its_prompt: &|session| board.glance(session).waits_on_its_prompt(),
+        at_its_prompt: &|session| board.glance(session).prompt,
         dispatches: store
             .every_waiting()
             .iter()

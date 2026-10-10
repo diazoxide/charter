@@ -536,8 +536,9 @@ impl Harness {
             Self::ClaudeCode => None,
             Self::Codex => Some(
                 "Codex says nothing until your first prompt, and nothing at all until you \
-                 trust purlis's hooks when Codex asks; it never says when it stops mid-turn \
-                 for your approval, and a helper reads working until the chat ends.",
+                 trust purlis's hooks when Codex asks; it says when it stops mid-turn for your \
+                 approval and for nothing else, and a helper reads working until the chat \
+                 ends.",
             ),
             Self::Opencode => Some(
                 "opencode says nothing until your first prompt, and nothing when it quits; once \
@@ -1757,10 +1758,15 @@ mod tests {
                 "hooks.UserPromptSubmit",
                 "hooks.PreToolUse",
                 "hooks.Stop",
-                "hooks.SessionEnd"
+                "hooks.SessionEnd",
+                "hooks.PermissionRequest"
             ]
         );
-        for (key, value) in &flags {
+        // The permission hook is purlis's own, never the registry's (#1691).
+        for (key, value) in flags
+            .iter()
+            .filter(|(key, _)| key != "hooks.PermissionRequest")
+        {
             let hook = &value[0]["hooks"][0];
             assert_eq!(hook["type"].as_str(), Some("command"), "{key}");
             let word = crate::plugin::codex_handlers()
@@ -1782,6 +1788,28 @@ mod tests {
     }
 
     #[test]
+    fn codex_s_permission_prompt_is_also_an_ask_in_the_window() {
+        // #1691: Codex fires `PermissionRequest` exactly when its prompt appears (measured on
+        // 0.147.0). Armed on the session's own flags, never a file a chat can write, for every
+        // tool, with the timeout the ask's deadline sits below.
+        let flags = codex_flags("/bin/charter");
+        let (_, asks) = flags
+            .iter()
+            .find(|(key, _)| key == "hooks.PermissionRequest")
+            .expect("the permission hook is armed");
+        assert!(asks[0].get("matcher").is_none(), "every tool's prompt");
+        let hook = &asks[0]["hooks"][0];
+        assert_eq!(
+            hook["command"].as_str(),
+            Some(format!("'/bin/charter' hook {}", crate::harness::hooked::WORD).as_str())
+        );
+        assert_eq!(
+            hook["timeout"].as_integer(),
+            i64::try_from(crate::harness::hooked::HOOK_TIMEOUT.as_secs()).ok()
+        );
+    }
+
+    #[test]
     fn codex_gets_the_bash_guard_under_its_matcher() {
         // The guard used to reach a Codex chat through the Python charter's Codex plugin. It
         // rides on the session's own flags now, under the matcher the plugin gave it.
@@ -1799,8 +1827,8 @@ mod tests {
 
     #[test]
     fn a_codex_chat_says_it_cannot_report_a_question_asked_mid_turn() {
-        // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
-        // approval — measured — but that hook decides a permission, and nothing arms it.
+        // Codex has no `Notification`. Its `PermissionRequest` is armed (#1691), so an
+        // approval is an ask; anything else it stops on mid-turn says nothing.
         let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new(), None);
 
         let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
@@ -1936,12 +1964,20 @@ mod tests {
     }
 
     #[test]
-    fn no_permission_hook_is_ever_armed_on_codex() {
-        // `PermissionRequest` is where Codex would say it is asking for approval, and it
-        // is armed nowhere: a hook there can ALLOW or DENY a permission.
-        for (key, _) in codex_flags("/bin/charter") {
-            for guarded in ["PostToolUse", "PermissionRequest"] {
-                assert!(!key.contains(guarded), "{key} is armed by the app");
+    fn the_one_permission_hook_armed_on_codex_is_purlis_s_window_ask() {
+        // `PermissionRequest` is where Codex says it is asking for approval, and a hook there
+        // can ALLOW or DENY a permission. Since #1691 it is armed as Claude Code's is (HP-6):
+        // `purlis hook permissionrequest` alone, which decides only what the person chose in
+        // the window, and otherwise nothing. No other hook of that event, and no `PostToolUse`.
+        for (key, value) in codex_flags("/bin/charter") {
+            assert!(!key.contains("PostToolUse"), "{key} is armed by the app");
+            if key.contains("PermissionRequest") {
+                let hooks = value[0]["hooks"].as_array().expect("hooks");
+                assert_eq!(hooks.len(), 1, "{value}");
+                assert_eq!(
+                    hooks[0]["command"].as_str(),
+                    Some(format!("'/bin/charter' hook {}", crate::harness::hooked::WORD).as_str())
+                );
             }
         }
     }

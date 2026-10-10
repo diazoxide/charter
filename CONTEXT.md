@@ -696,7 +696,10 @@ prompt of a chat or a task, a dispatch grant, a host a chat's sandbox refused, a
 in a harness's own terminal, a chat waiting on the person's reply. Each is derived from the
 source that waits, keeps no record of its own, and is gone the moment its source stops waiting.
 Each names its chain (the session first, the chat that asked last) and the path that answers it,
-which is its source's own. The title bar's ✋ counts asks. Not an **Update**.
+which is its source's own. The title bar's ✋ counts asks. Not an **Update**. A prompt in a
+harness's terminal is answered from the window where the harness's hook can carry the answer (a
+permission prompt of Claude Code, Codex or opencode); otherwise it is listed as waiting in its
+terminal, naming the kind of prompt, with Go to chat.
 _Avoid_: prompt (that is what the operator types), approval (that is one kind of answer)
 
 **Inbox**:

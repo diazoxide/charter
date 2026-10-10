@@ -207,6 +207,8 @@ pub struct Glance {
     pub asking: bool,
     /// How many turns it has taken this run.
     pub turns: u32,
+    /// The prompt it is stopped on in its terminal, where it is (#1691).
+    pub prompt: Option<purlis_core::harness::model::Prompt>,
 }
 
 impl Glance {
