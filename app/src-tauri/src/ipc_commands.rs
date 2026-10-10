@@ -345,6 +345,7 @@ macro_rules! app_commands {
                 windowprefs::see_on_this_machine,
                 windowprefs::seen_on_this_machine,
                 windowprefs::use_built_in_theme,
+                windowprefs::use_default_layout,
             ],
             vault_values: [
                 vaults::vault_secret_reveal,

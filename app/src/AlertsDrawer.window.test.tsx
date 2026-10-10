@@ -100,7 +100,7 @@ beforeEach(() => {
   forgetThisLaunch();
   forgetTheirTheme();
   // What `main.tsx` says about this machine at a launch, unsaid between tests.
-  for (const subject of ["theme", "layout"]) sayAboutThisMachine(subject, undefined);
+  for (const subject of ["theme", "layout", "dismissed"]) sayAboutThisMachine(subject, undefined);
   rows = [];
   asked = [];
   fixAnswer = { fix: "workspace-reinit", refused: null, said: ["✓ ide: healed"], complete: true };
@@ -139,6 +139,7 @@ beforeEach(() => {
       }
       if (cmd === "open_plane") return { plane: null, ask: null };
       if (cmd === "use_built_in_theme") return "/home/op/.config/charter/theme.aside.json";
+      if (cmd === "use_default_layout") return "/home/op/.config/charter/layout.aside.json";
       return null;
     },
     { shouldMockEvents: true },
@@ -346,5 +347,65 @@ describe("a row about this machine", () => {
     await waitFor(() =>
       expect(screen.queryByRole("region", { name: "Alerts about this machine" })).toBeNull(),
     );
+    expect(calls("use_default_layout")).toHaveLength(0);
+  });
+
+  it("uses the default layout once asked, saying what goes aside with the file, and the row goes", async () => {
+    // #1289: a layout file purlis could not use had only Dismiss.
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      layout: {
+        path: "/home/op/.config/charter/layout.json",
+        found: true,
+        document: null,
+        trouble: "/home/op/.config/charter/layout.json is not valid JSON",
+      },
+      theme: { path: "", found: false, document: null, trouble: null },
+    };
+    await settleLayout();
+    const open = await drawer();
+    const machine = within(open).getByRole("region", { name: "Alerts about this machine" });
+    const layoutRow = () => machine.querySelector('[data-cause="alert:layout"]') as HTMLElement;
+
+    await userEvent.click(
+      within(layoutRow()).getByRole("button", { name: "Use the default layout…" }),
+    );
+    expect(calls("use_default_layout")).toHaveLength(0);
+    // The question says what the file keeps besides the arrangement (D-1289-1).
+    expect(layoutRow().textContent).toMatch(/layout\.aside\.json/);
+    expect(layoutRow().textContent).toMatch(/Notices you dismissed, which can show again/);
+    expect(layoutRow().textContent).toMatch(/pins/);
+    await userEvent.click(within(layoutRow()).getByRole("button", { name: "Keep it" }));
+    expect(calls("use_default_layout")).toHaveLength(0);
+
+    await userEvent.click(
+      within(layoutRow()).getByRole("button", { name: "Use the default layout…" }),
+    );
+    await userEvent.click(
+      within(layoutRow()).getByRole("button", { name: "Use the default layout" }),
+    );
+
+    await waitFor(() => expect(calls("use_default_layout")).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Alerts about this machine" })).toBeNull(),
+    );
+    expect(calls("use_built_in_theme")).toHaveLength(0);
+  });
+
+  it("offers the default layout where a dismissal could not be kept", async () => {
+    sayAboutThisMachine("dismissed", {
+      severity: "warn",
+      detail: "purlis could not keep what you dismissed: the layout is not JSON",
+      remedy: "use the default layout, which moves it aside",
+      defaultLayout: true,
+    });
+    const open = await drawer();
+    const machine = within(open).getByRole("region", { name: "Alerts about this machine" });
+    const kept = machine.querySelector('[data-cause="alert:dismissed"]') as HTMLElement;
+
+    expect(
+      within(kept)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(expect.arrayContaining(["Use the default layout…"]));
   });
 });
