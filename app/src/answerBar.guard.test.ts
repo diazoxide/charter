@@ -73,9 +73,17 @@ export function handBuilt({ name, text }: { name: string; text: string }): strin
   ].map((one) => `${name}: ${one}`);
 }
 
-/** The text of every `<SettingActions>` row in `source`: a form's buttons, as the form writes them. */
+/**
+ * The text of every form's row in `source`: a `<SettingActions …>` element, whatever its props
+ * (an expression's `>` included), or a `div` that names its class by hand.
+ */
 const formRows = (source: string) =>
-  [...source.matchAll(/<SettingActions>([\s\S]*?)<\/SettingActions>/g)].map(([, row]) => row ?? "");
+  [
+    ...source.matchAll(
+      /<SettingActions\b(?:[^>{}]|\{(?:[^{}]|\{[^{}]*\})*\})*>([\s\S]*?)<\/SettingActions>/g,
+    ),
+    ...source.matchAll(/<div\b[^>]*\bui-setting-actions\b[^>]*>([\s\S]*?)<\/div>/g),
+  ].map(([, row]) => row ?? "");
 
 /**
  * **What ends something is asked, never filled in** (D-1210-8). A confirm whose only field is the
@@ -180,6 +188,19 @@ describe("a question dialog's answer bar", () => {
         text: `${dialog}${row(`<button type="submit">Rename</button>`)}<AnswerBar>${ends}</AnswerBar>`,
       }),
     ).toEqual([]);
+    // A row given props, even one whose expression holds a `>`, or built by hand, is still a row.
+    expect(
+      endsInAForm({
+        name: "X.tsx",
+        text: `${dialog}<SettingActions trouble={busy ? <b>x</b> : null} onX={() => a > b}>\n${ends}\n</SettingActions>`,
+      }),
+    ).toEqual(["X.tsx: ends-it"]);
+    expect(
+      endsInAForm({
+        name: "X.tsx",
+        text: `${dialog}<div className="ui-setting-actions">\n${ends}\n</div>`,
+      }),
+    ).toEqual(["X.tsx: ends-it"]);
     // A page, not a dialog, keeps its own rows: NotCloned and WorkspaceRepos draw none.
     expect(endsInAForm({ name: "NotCloned.tsx", text: row(ends) })).toEqual([]);
   });
