@@ -191,9 +191,10 @@ pub fn pending_dir(plane: &Path, ws: &str) -> PathBuf {
     log_dir(plane, ws).join(PENDING_DIRNAME)
 }
 
-/// Append `line` to `host`'s file. `None` when containment or the disk refused it.
-pub fn append(plane: &Path, ws: &str, host: &str, line: &Pending) -> Option<PathBuf> {
-    let path = pending_dir(plane, ws).join(format!("{host}.jsonl"));
+/// Append `line` to `device`'s file ([`crate::machine::log_name`], FD-25). `None` when
+/// containment or the disk refused it.
+pub fn append(plane: &Path, ws: &str, device: &str, line: &Pending) -> Option<PathBuf> {
+    let path = pending_dir(plane, ws).join(format!("{device}.jsonl"));
     super::store::append_line(
         plane,
         ws,
@@ -203,7 +204,7 @@ pub fn append(plane: &Path, ws: &str, host: &str, line: &Pending) -> Option<Path
     )
 }
 
-/// The latest pending line for each member of `slug`, from every host's file.
+/// The latest pending line for each member of `slug`, from every device's file.
 pub fn pendings(plane: &Path, ws: &str, slug: &str) -> Pendings {
     let dir = pending_dir(plane, ws);
     let mut out = BTreeMap::new();
@@ -244,6 +245,32 @@ mod tests {
 
     fn at(second: u32) -> DateTime<Utc> {
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 10, 2, 9, 0, second).unwrap()
+    }
+
+    /// FD-25 (#985): a pending landing is filed under the device id the machine store keeps,
+    /// never under the hostname, once there is one.
+    #[test]
+    fn a_pending_landing_is_filed_under_the_device_id_and_not_the_hostname() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let id = crate::machine::device_id(config.path()).unwrap();
+
+        let device = crate::machine::log_name(Some(config.path()), "MacBook-Pro");
+        let asked = Pending::new("api-2", "web", 7, "h1", Via::Queue, Stage::Asked, at(1));
+        let path = append(&root, "alpha", &device, &asked).expect("written");
+
+        assert_eq!(
+            path,
+            pending_dir(&root, "alpha").join(format!("{id}.jsonl"))
+        );
+        assert!(
+            !pending_dir(&root, "alpha")
+                .join("MacBook-Pro.jsonl")
+                .exists()
+        );
+        assert!(pendings(&root, "alpha", "api-2").contains_key("web"));
     }
 
     /// The latest line per member wins, a refused one no longer stands, and none of it is read

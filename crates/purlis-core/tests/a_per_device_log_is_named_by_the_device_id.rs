@@ -43,7 +43,7 @@ fn two_machines_with_the_same_hostname_write_separate_logs() {
     let b = machine::device_id(laptop_b.path()).unwrap();
 
     for config in [laptop_a.path(), laptop_b.path()] {
-        let name = dispatch::log_name(Some(config), "MacBook-Pro");
+        let name = machine::log_name(Some(config), "MacBook-Pro");
         dispatch::record_handoff(
             plane.path(),
             dispatch::Placement::Here,
@@ -87,7 +87,7 @@ fn a_renamed_machine_keeps_one_log() {
     let id = machine::device_id(laptop.path()).unwrap();
 
     for host in ["MacBook-Pro", "aarons-laptop"] {
-        let name = dispatch::log_name(Some(laptop.path()), host);
+        let name = machine::log_name(Some(laptop.path()), host);
         dispatch::record_handoff(
             plane.path(),
             dispatch::Placement::Here,
@@ -125,7 +125,7 @@ fn the_hostname_stays_on_a_claim_as_its_label() {
         session: None,
         persona: None,
         host: "MacBook-Pro".into(),
-        log: dispatch::log_name(Some(laptop.path()), "MacBook-Pro"),
+        log: machine::log_name(Some(laptop.path()), "MacBook-Pro"),
     };
     pieces::record(
         plane.path(),
@@ -155,15 +155,15 @@ fn a_log_name_never_mints_a_device_id_and_names_the_host_until_one_is() {
     let laptop = tempfile::tempdir().unwrap();
 
     assert_eq!(
-        dispatch::log_name(Some(laptop.path()), "MacBook-Pro"),
+        machine::log_name(Some(laptop.path()), "MacBook-Pro"),
         "MacBook-Pro"
     );
-    assert_eq!(dispatch::log_name(None, "MacBook-Pro"), "MacBook-Pro");
+    assert_eq!(machine::log_name(None, "MacBook-Pro"), "MacBook-Pro");
     assert!(
         !machine::file(laptop.path()).exists(),
         "asking for a log's name wrote the machine store"
     );
 
     let id = machine::device_id(laptop.path()).unwrap();
-    assert_eq!(dispatch::log_name(Some(laptop.path()), "MacBook-Pro"), id);
+    assert_eq!(machine::log_name(Some(laptop.path()), "MacBook-Pro"), id);
 }

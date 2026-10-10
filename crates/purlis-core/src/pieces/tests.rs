@@ -458,6 +458,55 @@ fn a_recorded_line_is_the_one_pythons_pieces_record_wrote() {
 }
 
 #[test]
+fn who_here_files_its_line_under_the_device_id_and_keeps_the_hostname_as_its_label() {
+    // FD-25 (#985): one constructor for this machine's `Who`, so no caller pairs a hostname
+    // with a log name by hand. Before an id is minted the log keeps the hostname's name, and
+    // asking writes no id.
+    let (_held, root) = a_plane();
+    let config = tempfile::tempdir().unwrap();
+    let host = crate::dispatch::host();
+
+    let before = Who::here(Some(config.path()), None, None);
+    assert_eq!(
+        (before.host.as_str(), before.log.as_str()),
+        (host.as_str(), host.as_str())
+    );
+    assert_eq!(Who::here(None, None, None).log, host);
+    assert!(
+        !crate::machine::file(config.path()).exists(),
+        "naming the log minted a device id"
+    );
+
+    let id = crate::machine::device_id(config.path()).unwrap();
+    let who = Who::here(Some(config.path()), Some("s-1".into()), Some("ops".into()));
+    assert_eq!(
+        who,
+        Who {
+            session: Some("s-1".into()),
+            persona: Some("ops".into()),
+            host: host.clone(),
+            log: id.clone(),
+        }
+    );
+
+    let path = record(
+        &root,
+        "alpha",
+        Event::Claimed,
+        "svc",
+        "p1",
+        None,
+        &who,
+        now(),
+    )
+    .unwrap();
+    assert_eq!(path, dir_for(&root, "alpha").join(format!("{id}.jsonl")));
+    let line: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
+    assert_eq!(line["host"], host.as_str());
+}
+
+#[test]
 fn a_log_that_is_a_link_is_not_written_through() {
     let (_held, root) = a_plane();
     let outside = tempfile::tempdir().unwrap();
@@ -466,9 +515,10 @@ fn a_log_that_is_a_link_is_not_written_through() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&target, dir_for(&root, "alpha").join("box.jsonl")).unwrap();
     let who = Who {
+        session: None,
+        persona: None,
         host: "box".into(),
         log: "box".into(),
-        ..Who::default()
     };
 
     let wrote = record(&root, "alpha", Event::Done, "svc", "p1", None, &who, now());

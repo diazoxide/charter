@@ -75,8 +75,8 @@ pub(crate) struct Reach<'a> {
     pub backend_of: &'a dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
     /// The URL git is handed for each destination printed (`push::push_with`'s route).
     pub route: &'a dyn Fn(&str) -> String,
-    /// The machine the landing log names.
-    pub host: &'a str,
+    /// The device the landing log is filed under ([`purlis_core::machine::log_name`]).
+    pub device: &'a str,
 }
 
 /// One member's destination, as the question names it and the yes hands it back.
@@ -378,7 +378,7 @@ pub(crate) fn land_question_in(
         slug,
         repo,
         reach.backend_of,
-        reach.host,
+        reach.device,
         chrono::Utc::now(),
         &mut |l| said.push(l),
     );
@@ -414,7 +414,7 @@ pub(crate) fn land_in(
         &confirmed,
         how,
         reach.backend_of,
-        reach.host,
+        reach.device,
         chrono::Utc::now(),
         &mut |l| said.push(l),
     );
@@ -424,11 +424,11 @@ pub(crate) fn land_in(
 /// The real forges and remotes, logged under this device's id from the store at `config`
 /// (FD-25).
 fn real<T>(config: Option<&Path>, then: impl FnOnce(&Reach) -> T) -> T {
-    let host = purlis_core::dispatch::log_name(config, &purlis_core::dispatch::host());
+    let device = purlis_core::machine::log_name(config, &purlis_core::dispatch::host());
     then(&Reach {
         backend_of: &|repo: &Repo| repo.backend(),
         route: &|https: &str| https.to_owned(),
-        host: &host,
+        device: &device,
     })
 }
 

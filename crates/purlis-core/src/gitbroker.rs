@@ -272,12 +272,11 @@ pub fn hosts(root: &Path, asker: &Asker) -> Result<Option<Vec<String>>, String> 
 
 /// Who the piece log credits: the chat, by the app's number for it, and its persona (D-4).
 pub fn who(asker: &Asker) -> Who {
-    Who {
-        session: Some(asker.chat.to_string()),
-        persona: asker.persona.clone(),
-        host: crate::dispatch::host(),
-        log: crate::dispatch::log_name(asker.config.as_deref(), &crate::dispatch::host()),
-    }
+    Who::here(
+        asker.config.as_deref(),
+        Some(asker.chat.to_string()),
+        asker.persona.clone(),
+    )
 }
 
 /// The most an answer's lines may take as JSON, under the 64 KiB an asker reads one answer in

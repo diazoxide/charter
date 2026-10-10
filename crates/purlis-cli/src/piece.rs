@@ -93,12 +93,11 @@ pub enum WorktreeCommand {
 pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
     let root = here.plane.root().to_path_buf();
     let now = chrono::Utc::now();
-    let who = Who {
-        session: here.ids.session.clone(),
-        persona: here.active_persona(None),
-        host: purlis_core::dispatch::host(),
-        log: purlis_core::dispatch::this_log_name(),
-    };
+    let who = Who::here(
+        purlis_core::machine::config_root_if_there().as_deref(),
+        here.ids.session.clone(),
+        here.active_persona(None),
+    );
     let mut say = crate::speak;
     let code = match command {
         WorktreeCommand::Add {

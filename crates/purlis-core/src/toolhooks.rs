@@ -49,7 +49,7 @@ use std::sync::OnceLock;
 
 use crate::hookstate::State;
 use crate::toolgate::Verdict;
-use crate::{dispatch, leakguard, personagate, pieces, pypath};
+use crate::{leakguard, personagate, pieces, pypath};
 
 /// What a handler decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,16 +75,16 @@ pub struct Hook<'a> {
     /// The process's directory — the ladders' cwd rung.
     pub cwd: &'a Path,
     pub now: DateTime<Utc>,
-    /// This machine's name ([`dispatch::host`]): a label, and the name its logs are filed
+    /// This machine's name ([`crate::dispatch::host`]): a label, and the name its logs are filed
     /// under only until a device id is minted ([`Hook::log_name`]).
     pub host: &'a str,
 }
 
 impl Hook<'_> {
     /// The name this device's logs are filed under: its device id, read from the machine store
-    /// the environment names and never minted here (FD-25, [`dispatch::log_name`]).
+    /// the environment names and never minted here (FD-25, [`crate::machine::log_name`]).
     fn log_name(&self) -> String {
-        dispatch::log_name(
+        crate::machine::log_name(
             crate::machine::config_root_in(self.env).as_deref(),
             self.host,
         )

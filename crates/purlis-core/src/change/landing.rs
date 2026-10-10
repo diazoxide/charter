@@ -105,19 +105,19 @@ pub fn log_dir(plane: &Path, ws: &str) -> PathBuf {
 }
 
 /// `workspaces/<ws>/changes/log/<device>.jsonl`: this device's log, named by
-/// [`crate::dispatch::log_name`] (FD-25).
-pub fn log_path(plane: &Path, ws: &str, host: &str) -> PathBuf {
-    log_dir(plane, ws).join(format!("{host}.jsonl"))
+/// [`crate::machine::log_name`] (FD-25).
+pub fn log_path(plane: &Path, ws: &str, device: &str) -> PathBuf {
+    log_dir(plane, ws).join(format!("{device}.jsonl"))
 }
 
-/// Append `landing` to `host`'s log: keys sorted, ASCII only, as the Python charter wrote it.
+/// Append `landing` to `device`'s log: keys sorted, ASCII only, as the Python charter wrote it.
 /// `None` when containment refuses the path or the disk does.
-pub fn append(plane: &Path, ws: &str, host: &str, landing: &Landing) -> Option<PathBuf> {
-    let path = log_path(plane, ws, host);
+pub fn append(plane: &Path, ws: &str, device: &str, landing: &Landing) -> Option<PathBuf> {
+    let path = log_path(plane, ws, device);
     store::append_line(plane, ws, &[LOG_DIRNAME], path, &landing.to_value())
 }
 
-/// The last landing declared for each member of `slug`, by its `ts`, read from every host's
+/// The last landing declared for each member of `slug`, by its `ts`, read from every device's
 /// log: a change worked from two machines is still one change. A line that is not a landing,
 /// and a file or directory containment refuses, is skipped: this is bookkeeping beside git.
 pub fn landings(plane: &Path, ws: &str, slug: &str) -> Landings {
@@ -169,6 +169,25 @@ mod tests {
 
     fn at(second: u32) -> DateTime<Utc> {
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 10, 2, 9, 0, second).unwrap()
+    }
+
+    /// FD-25 (#985): a landing is filed under the device id the machine store keeps, never
+    /// under the hostname, once there is one.
+    #[test]
+    fn a_landing_is_filed_under_the_device_id_and_not_the_hostname() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let id = crate::machine::device_id(config.path()).unwrap();
+
+        let device = crate::machine::log_name(Some(config.path()), "MacBook-Pro");
+        let landing = Landing::new("api-2", "web", 7, "h1", "m1", at(1));
+        let path = append(&root, "alpha", &device, &landing).expect("written");
+
+        assert_eq!(path, log_dir(&root, "alpha").join(format!("{id}.jsonl")));
+        assert!(!log_path(&root, "alpha", "MacBook-Pro").exists());
+        assert_eq!(landings(&root, "alpha", "api-2")["web"], landing);
     }
 
     /// The line on disk is the plane format's: exactly `LOG_FIELDS`, written in that order,
