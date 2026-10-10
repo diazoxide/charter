@@ -8,6 +8,7 @@ import {
   type RepoSaving,
   type SaveEntry,
 } from "./bindings";
+import { EmptyState } from "./EmptyState";
 import {
   askWayOut,
   behindness,
@@ -281,7 +282,12 @@ export function SavingView({
           )}
           <h3 className="saving-recent">Recent saves</h3>
           {saving.journal.length === 0 ? (
-            <p className="none">No saves recorded yet.</p>
+            <EmptyState
+              size="panel"
+              headline="No saves recorded yet"
+              body="Each save is listed here, the newest first, with what started it and how it ended."
+              testid="saving-empty"
+            />
           ) : (
             <ul className="saving-journal" aria-label="Recent saves">
               {saving.journal.map((one, n) => (

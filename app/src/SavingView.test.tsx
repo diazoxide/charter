@@ -270,6 +270,16 @@ describe("SavingView", () => {
     expect(rows[1].textContent).toContain("1f488c6");
   });
 
+  it("says under Recent saves what goes there when nothing was saved yet", async () => {
+    core([standing()]);
+    render(<SavingView plane={PLANE} />);
+
+    const empty = await screen.findByTestId("saving-empty");
+    expect(within(empty).getByText("No saves recorded yet")).toBeInTheDocument();
+    expect(empty).toHaveTextContent(/Each save is listed here, the newest first/);
+    expect(screen.queryByRole("list", { name: "Recent saves" })).toBeNull();
+  });
+
   it("asks a project nobody has chosen a mode for how it is saved, once, and writes the answer", async () => {
     core([standing({ mode: null, modeFrom: "default" }), standing({ mode: "commit" })]);
     render(<SavingView plane={PLANE} />);
