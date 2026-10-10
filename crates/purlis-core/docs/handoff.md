@@ -1003,9 +1003,16 @@ the two numbers are both on screen. Name long material by its path instead of pa
 - A handed-off chat may hand off in its turn, decided the same way. A chain is as deep as its
   dispatches, whichever kind each was, and the project's depth limit holds it (3 unless the
   project sets another).
-- A handed-off chat that comes back with no conversation is not shown its brief again; that is
-  not in this version yet (#1609). A Claude Code chat that resumes is already reading the brief in its
-  own transcript.
+- **A handed-off chat started again with no conversation is handed its brief again** (#1609):
+  Start fresh, or the fresh start that follows a resume its harness could not bring back. The
+  brief is read from purlis's own record of the dispatch, under a line of purlis's saying it is a
+  fresh start of a dispatched chat and not a new request, then the line a first brief has. It is
+  handed only where it is the brief the dispatch was sent while this app has been running, and
+  only where it still passes the checks a first brief passes, a credential's shape included. A
+  brief the record cut, one it does not hold, one purlis cannot confirm (a dispatch from before
+  the app was started again), and one that fails a check is not handed: the chat is told why in
+  one line, and the person can read what was kept in the Dispatches tab. A chat that resumes is
+  already reading the brief in its own transcript.
 
 ## Limits
 

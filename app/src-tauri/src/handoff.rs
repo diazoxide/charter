@@ -11204,6 +11204,55 @@ mod tests {
     }
 
     #[test]
+    fn a_handoff_started_fresh_is_handed_its_brief_again_and_a_person_s_chat_nothing() {
+        // #1609: a fresh start has no conversation, and a handed-off chat's brief was the whole
+        // of what it was asked. It is handed again from the dispatch's record, under purlis's
+        // stamp; a chat the person started is handed nothing.
+        let plane = Plane::new();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None).expect("opened");
+
+        let again = held
+            .start_chat_fresh(child, STARTING)
+            .expect("it starts again");
+
+        assert_ne!(again, child);
+        let opening = host.openings().pop().expect("opened");
+        let told = opening.args.last().cloned().unwrap_or_default();
+        assert!(
+            told.starts_with("⟨purlis started this chat again with no conversation"),
+            "{told:?}"
+        );
+        assert!(
+            told.contains(purlis_core::handoff::HANDOFF_NOTE),
+            "{told:?}"
+        );
+        assert!(
+            told.ends_with("\n\n# Ship it\nnow"),
+            "the brief, verbatim: {told:?}"
+        );
+
+        let person_s = held
+            .start_chat_fresh(asking, STARTING)
+            .expect("it starts again");
+        let opening = host.openings().pop().expect("opened");
+        assert!(
+            !opening
+                .args
+                .iter()
+                .any(|arg| arg.contains("started this chat again")),
+            "a chat no dispatch started is told nothing: {:?}",
+            opening.args
+        );
+        let _ = held.close_chat(person_s);
+    }
+
+    #[test]
     fn stopping_every_agent_fails_no_task_and_each_reports_once_it_is_started_again() {
         // D-1443-10: the stop-all switch ends every program at once. That is the person
         // stopping the machine, not a task failing, and "failed" is final.
