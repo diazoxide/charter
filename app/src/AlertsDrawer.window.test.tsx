@@ -373,7 +373,11 @@ describe("a row about this machine", () => {
     // The question says what the file keeps besides the arrangement (D-1289-1).
     expect(layoutRow().textContent).toMatch(/layout\.aside\.json/);
     expect(layoutRow().textContent).toMatch(/Notices you dismissed, which can show again/);
-    expect(layoutRow().textContent).toMatch(/pins/);
+    // Only what the file holds: pins are not in it (they are the machine store's).
+    expect(layoutRow().textContent).toMatch(/text sizes, your editor, how chats are listed/);
+    expect(layoutRow().textContent).not.toMatch(/pins/);
+    // And what the window does until then, which a change the person makes writes again.
+    expect(layoutRow().textContent).toMatch(/next change you make writes a new file/);
     await userEvent.click(within(layoutRow()).getByRole("button", { name: "Keep it" }));
     expect(calls("use_default_layout")).toHaveLength(0);
 

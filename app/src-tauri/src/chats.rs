@@ -1045,10 +1045,11 @@ impl Chats {
         self.start_ready_as(&again, &ready, size, Why::Again)
     }
 
-    /// The dispatch `id` started its chat on `brief` (#1609): kept, as a digest, for a start
-    /// of that chat again with no conversation ([`crate::rebrief`]).
-    pub(crate) fn brief_was_sent(&self, id: &str, brief: &str) {
-        self.briefs.note(id, brief);
+    /// The dispatch of `record`, as the store wrote it, started its chat on `brief` (#1609):
+    /// kept, as a digest of it and of what frames it, for a start of that chat again with no
+    /// conversation ([`crate::rebrief`]).
+    pub(crate) fn brief_was_sent(&self, record: &purlis_core::dispatchrecord::Record, brief: &str) {
+        self.briefs.note(record, brief);
     }
 
     /// What `chat` is told as it starts again with no conversation (#1609): its brief, where a
@@ -7438,7 +7439,7 @@ pub(crate) mod tests {
             chrono::Utc::now(),
         )
         .unwrap();
-        chats.brief_was_sent(&record.id, BRIEF);
+        chats.brief_was_sent(&record, BRIEF);
 
         let again = chats
             .start_ready_instead_of(first, &worker, &a_claude_ready(), SIZE)

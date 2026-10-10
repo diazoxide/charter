@@ -4,4 +4,5 @@
   dismissal it could not keep there, could only be dismissed for one launch. The row now offers
   *Use the default layout…*, which asks first and then moves the file aside to
   `layout.aside.json` (or the next free name), never over a file. The question says what goes
-  aside with it: your pins, the Notices you dismissed and the ones seen once (#1289).
+  aside with it: the arrangement, the text sizes, your editor, how chats are listed, the
+  Notices you dismissed and the ones seen once (#1289).

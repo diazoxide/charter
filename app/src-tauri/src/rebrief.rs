@@ -11,8 +11,8 @@
 //!   (`purlis_core::dispatchrecord`), which the app wrote as it started the chat, found by the
 //!   chat's id and never its number (a number is dealt again in another launch).
 //! - **It is handed only where it is the brief the dispatch was sent** ([`Sent`]): the app keeps
-//!   a digest of each brief it starts a chat on, in its own memory, and a record's brief that
-//!   does not match one is not handed. The store is the app's to write, and a file in it is
+//!   a digest of each brief it starts a chat on, with what frames it (the worker, the mode, who
+//!   asked), in its own memory, and a record that does not match one is not handed. The store is the app's to write, and a file in it is
 //!   still whatever is on the disk. A record from before this launch has no digest here, and is
 //!   not handed either: the chat is told its brief could not be confirmed, and where the person
 //!   can read it.
@@ -30,42 +30,99 @@
 //! A chat no record names as a dispatch's worker is answered `None`, and starts as it always
 //! did: with nothing told.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use purlis_core::dispatchrecord::{self, BriefKept, ChatRef, Mode, Record};
+use purlis_core::dispatchrecord::{self, BriefKept, Mode, Record};
 use purlis_core::handoff;
 use purlis_core::reopen::Chat;
 use sha2::Digest as _;
 
-/// **The briefs this app started a chat on, by their dispatch's id**, as a digest of each: what
-/// [`again`] holds a record's brief to. In memory only, so it is this launch's alone, and nothing
-/// a chat writes reaches it.
+/// **The briefs this app started a chat on, by their dispatch's id**, as a digest of each and of
+/// what frames it ([`digest`]): what [`again`] holds a record to. In memory only, so it is this
+/// launch's alone, and nothing a chat writes reaches it. **At most [`MOST_KEPT`]**, the oldest let
+/// go first: a dispatch let go is one whose brief is not handed again, as after a relaunch.
 #[derive(Default)]
-pub(crate) struct Sent(Mutex<HashMap<String, [u8; 32]>>);
+pub(crate) struct Sent(Mutex<Kept>);
+
+/// [`Sent`]'s digests, and the order they were noted in.
+#[derive(Default)]
+struct Kept {
+    by_id: HashMap<String, [u8; 32]>,
+    order: VecDeque<String>,
+}
+
+/// How many dispatches' briefs [`Sent`] keeps a digest of: more than a launch starts, and a
+/// bound on what a chat that dispatches in a loop can make the app hold.
+pub(crate) const MOST_KEPT: usize = 4096;
 
 impl Sent {
-    /// The dispatch `id` started its chat on `brief`.
-    pub(crate) fn note(&self, id: &str, brief: &str) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id.to_owned(), digest(brief));
+    /// `record`'s dispatch started its chat on `brief`, the bytes it was sent. `record` is the
+    /// one the store wrote, so its names are as a read gives them back.
+    pub(crate) fn note(&self, record: &Record, brief: &str) {
+        let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if kept
+            .by_id
+            .insert(record.id.clone(), digest(record, brief))
+            .is_none()
+        {
+            kept.order.push_back(record.id.clone());
+        }
+        while kept.order.len() > MOST_KEPT {
+            if let Some(oldest) = kept.order.pop_front() {
+                kept.by_id.remove(&oldest);
+            }
+        }
     }
 
-    /// Whether `brief` is the one dispatch `id` started its chat on.
-    fn confirms(&self, id: &str, brief: &str) -> bool {
+    /// Whether `brief`, under what `record` says of who asked whom and how, is what its
+    /// dispatch started its chat on.
+    fn confirms(&self, record: &Record, brief: &str) -> bool {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(id)
-            .is_some_and(|sent| *sent == digest(brief))
+            .by_id
+            .get(&record.id)
+            .is_some_and(|sent| *sent == digest(record, brief))
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .by_id
+            .len()
     }
 }
 
-fn digest(brief: &str) -> [u8; 32] {
-    sha2::Sha256::digest(brief.as_bytes()).into()
+/// The digest of `brief` and of everything of `record` a brief handed again is framed by: the
+/// worker it is handed to, the mode, whether the person asked, and the asker's name. A record
+/// rewritten since in any of them is not the dispatch the app sent, though its brief is.
+fn digest(record: &Record, brief: &str) -> [u8; 32] {
+    let mode = match record.mode {
+        Mode::Task => "task",
+        Mode::Handoff => "handoff",
+    };
+    let by = if record.asker.by_person {
+        "person"
+    } else {
+        "chat"
+    };
+    let mut hash = sha2::Sha256::new();
+    for part in [
+        record.worker.chat.id.as_deref().unwrap_or_default(),
+        mode,
+        by,
+        record.asker.chat.name.as_str(),
+        brief,
+    ] {
+        // Each part's length first, so no two sets of parts hash as one.
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    hash.finalize().into()
 }
 
 /// The first message a dispatched chat started again with no conversation is given.
@@ -114,16 +171,11 @@ fn not_handed(why: &str) -> String {
 /// conversation** (#1609), or `None` for a chat no dispatch record names as its worker.
 pub(crate) fn again(root: &Path, chat: &Chat, sent: &Sent) -> Option<Again> {
     let id = chat.identity.id.as_deref()?;
-    let me = ChatRef {
-        chat: chat.number.unwrap_or_default(),
-        id: Some(id.to_owned()),
-        name: chat.name.clone(),
-        persona: chat.persona.clone(),
-    };
-    // By its id alone: a record that names its worker by number only names a number another
-    // launch may have dealt to this chat.
-    let record = dispatchrecord::latest_for(root, &me)
-        .filter(|record| record.worker.chat.id.as_deref() == Some(id))?;
+    // By its id alone, the newest first: a record that names its worker by number only names a
+    // number another launch may have dealt to this chat, and is not one to stand in front of it.
+    let record = dispatchrecord::list(root).into_iter().find(|record| {
+        !dispatchrecord::never_a_chat(record) && record.worker.chat.id.as_deref() == Some(id)
+    })?;
     Some(told(&record, sent))
 }
 
@@ -143,7 +195,7 @@ fn told(record: &Record, sent: &Sent) -> Again {
         BriefKept::Cut => return refused(CUT),
         BriefKept::Whole => {}
     }
-    if !sent.confirms(&record.id, &brief.text) {
+    if !sent.confirms(record, &brief.text) {
         return refused(UNCONFIRMED);
     }
     // The kind, never the matched text, as the handoff command says it.
@@ -177,7 +229,7 @@ fn stamped(record: &Record) -> String {
 
 #[cfg(test)]
 mod tests {
-    use purlis_core::dispatchrecord::{Asker, Opening, Place, Worker};
+    use purlis_core::dispatchrecord::{Asker, ChatRef, Opening, Place, Worker};
     use purlis_core::reopen::Identity;
 
     use super::*;
@@ -233,7 +285,7 @@ mod tests {
     fn dispatched(root: &Path, opening: Opening, sent: &Sent) -> Record {
         let brief = opening.brief.clone();
         let record = dispatchrecord::open(root, opening, chrono::Utc::now()).unwrap();
-        sent.note(&record.id, &brief);
+        sent.note(&record, &brief);
         record
     }
 
@@ -362,6 +414,123 @@ mod tests {
         assert!(!again.handed, "{again:?}");
         assert_eq!(again.message, not_handed(UNCONFIRMED));
         assert!(!again.message.contains("Delete the rollout"));
+    }
+
+    /// Rewrites field `key` of record `record`'s `part` ("asker", "worker" or the top level) on
+    /// the disk, as a chat that can write the store could.
+    fn rewrite(root: &Path, record: &Record, part: Option<&str>, key: &str, to: serde_json::Value) {
+        let path = dispatchrecord::dir(root).join(format!("{}.json", record.id));
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let object = match part {
+            Some(part) => &mut json[part],
+            None => &mut json,
+        };
+        assert!(
+            object.get(key).is_some(),
+            "{key} is in the record: {object}"
+        );
+        object[key] = to;
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_chat_s_brief_rewritten_as_the_person_s_is_not_handed() {
+        // The brief is the one sent, but the record now says the person asked it: handed, it
+        // would read as the person's word. What frames the brief is held to the digest too.
+        let (_d, root) = project();
+        let sent = Sent::default();
+        let record = dispatched(&root, a_dispatch(Mode::Task, false, BRIEF), &sent);
+        rewrite(&root, &record, Some("asker"), "by_person", true.into());
+
+        let again = again(&root, &the_worker(), &sent).unwrap();
+
+        assert!(!again.handed, "{again:?}");
+        assert_eq!(again.message, not_handed(UNCONFIRMED));
+    }
+
+    #[test]
+    fn a_task_s_brief_rewritten_as_a_handoff_or_under_another_asker_is_not_handed() {
+        let (_d, root) = project();
+        let sent = Sent::default();
+        let record = dispatched(&root, a_dispatch(Mode::Task, false, BRIEF), &sent);
+        rewrite(&root, &record, None, "mode", "handoff".into());
+        assert_eq!(
+            again(&root, &the_worker(), &sent).unwrap().message,
+            not_handed(UNCONFIRMED)
+        );
+
+        let (_d, root) = project();
+        let record = dispatched(&root, a_dispatch(Mode::Task, false, BRIEF), &sent);
+        rewrite(&root, &record, Some("asker"), "name", "the person".into());
+        assert_eq!(
+            again(&root, &the_worker(), &sent).unwrap().message,
+            not_handed(UNCONFIRMED)
+        );
+    }
+
+    #[test]
+    fn another_chat_s_brief_moved_onto_this_chat_is_not_handed() {
+        // The dispatch was another chat's: its record rewritten to name this one as its worker
+        // hands this one nothing of it.
+        let (_d, root) = project();
+        let sent = Sent::default();
+        let mut theirs = a_dispatch(Mode::Task, false, BRIEF);
+        theirs.worker.chat.id = Some("01K6OTHER0000000000000000D".to_owned());
+        let record = dispatched(&root, theirs, &sent);
+        rewrite(&root, &record, Some("worker"), "id", WORKER.into());
+
+        let again = again(&root, &the_worker(), &sent).unwrap();
+
+        assert!(!again.handed, "{again:?}");
+        assert!(!again.message.contains("Say which pods restart"));
+    }
+
+    #[test]
+    fn a_newer_record_naming_a_chat_by_number_only_does_not_hide_this_chat_s_own() {
+        // A number is dealt again in another launch: a record that names its worker by number
+        // alone is not this chat's, and does not stand in front of the one that names it by id.
+        let (_d, root) = project();
+        let sent = Sent::default();
+        dispatched(&root, a_dispatch(Mode::Task, false, BRIEF), &sent);
+        let mut by_number = a_dispatch(Mode::Task, false, "# Other\n");
+        by_number.worker.chat.id = None;
+        by_number.worker.chat.chat = the_worker().number.unwrap();
+        let later = chrono::Utc::now() + chrono::Duration::seconds(5);
+        dispatchrecord::open(&root, by_number, later).unwrap();
+
+        let again = again(&root, &the_worker(), &sent).expect("its own record");
+
+        assert!(again.handed, "{again:?}");
+        assert!(again.message.ends_with(BRIEF));
+    }
+
+    #[test]
+    fn the_digests_kept_are_bounded_and_the_oldest_go_first() {
+        let (_d, root) = project();
+        let sent = Sent::default();
+        let record = dispatchrecord::open(
+            &root,
+            a_dispatch(Mode::Task, false, BRIEF),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let numbered = |n: usize| Record {
+            id: format!("{}{n:06}", &record.id[..20]),
+            ..record.clone()
+        };
+        for n in 0..=MOST_KEPT {
+            sent.note(&numbered(n), BRIEF);
+        }
+
+        assert!(!sent.confirms(&numbered(0), BRIEF), "the oldest is let go");
+        assert!(sent.confirms(&numbered(1), BRIEF));
+        assert!(sent.confirms(&numbered(MOST_KEPT), BRIEF));
+        assert_eq!(sent.len(), MOST_KEPT);
+        // Noted twice, it is kept once.
+        sent.note(&numbered(MOST_KEPT), BRIEF);
+        assert_eq!(sent.len(), MOST_KEPT);
+        assert!(sent.confirms(&numbered(1), BRIEF));
     }
 
     #[test]

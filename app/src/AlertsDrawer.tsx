@@ -444,14 +444,16 @@ const THEME_ASIDE: Aside = {
 
 /**
  * **What moving the layout aside loses is said in the question** (D-1289-1): the file keeps more
- * than the arrangement. The pins, the Notices dismissed in each project and the ones seen once on
- * this machine go aside with it, so a Notice a dismissal was hiding can show again.
+ * than the arrangement. The text sizes, your editor, how chats are listed, the Notices dismissed
+ * in each project and the ones seen once on this machine go aside with it, so a Notice a
+ * dismissal was hiding can show again. The window keeps drawing what it has, and its next change
+ * writes a new file from it, so the question says that too.
  */
 const LAYOUT_ASIDE: Aside = {
   ask: "Use the default layout…",
   yes: "Use the default layout",
   question:
-    "Use the default layout? purlis moves the layout file aside to layout.aside.json (or the next free layout.aside-N.json), never over a file, and the next launch starts from the default layout. What the file kept goes aside with it: your pins, the Notices you dismissed, which can show again, and the ones seen once on this machine.",
+    "Use the default layout? purlis moves the layout file aside to layout.aside.json (or the next free layout.aside-N.json), never over a file. What the file kept goes aside with it: the arrangement, the text sizes, your editor, how chats are listed, the Notices you dismissed, which can show again, and the ones seen once on this machine. The window keeps what it draws now, and the next change you make writes a new file; with none, the next launch starts from the defaults.",
   move: () => commands.useDefaultLayout(),
   moved: usingTheDefaultLayout,
 };
