@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791615681087,
+  "lastUpdate": 1791616805775,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5544,6 +5544,48 @@ window.BENCHMARK_DATA = {
             "value": 101.6764485,
             "unit": "ms",
             "extra": "median of 5 runs: 101.119, 101.661, 101.676, 102.046, 102.345 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "93cab5f3c21aac3f2aed2093529db14a048ab725",
+          "message": "Fail a licence an npm exception allows that none of its packages is under\n\nAn exception that lets one package pass under CC-BY-4.0 but also lists\nanother licence would let a later release of that package pass under the\nother one without anyone looking again. Each licence an exception lists\nmust now be named by one of the package entries it lets pass, or the\ncheck fails with that part called stale. An OR expression counts every\nlicence it names, so no false failure arises there.\n\nRefs #1145\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T11:01:05+04:00",
+          "tree_id": "c000f5b3af4651863c9d42263f999ceda2c8f211",
+          "url": "https://github.com/purlis/purlis/commit/93cab5f3c21aac3f2aed2093529db14a048ab725"
+        },
+        "date": 1791616804782,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.497049,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.485, 0.493, 0.497, 0.518, 0.531 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8562265,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.287, 16.537, 16.856, 17.192, 17.198 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.806816,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.493, 104.430, 104.807, 104.818, 105.915 ms"
           }
         ]
       }
