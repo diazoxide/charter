@@ -142,6 +142,25 @@ fn a_piece_cut_through_the_cli_is_claimed_and_counted() {
 }
 
 #[test]
+fn a_cut_files_its_claim_under_the_device_id_and_not_the_hostname() {
+    // FD-25 (#985): `wt` names its piece log the way every per-device log is named, by the id
+    // the machine store under the config home keeps, once one is minted.
+    let p = Plane::new();
+    let id = purlis_core::machine::device_id(&p.home.join(".config")).unwrap();
+
+    p.cut("p1");
+
+    let logs: Vec<String> = std::fs::read_dir(pieces::dir_for(&p.root, "alpha"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(logs, vec![format!("{id}.jsonl")]);
+    let claims = pieces::claims(&p.root, "alpha");
+    assert_eq!(claims[&key("p1")]["host"], purlis_core::dispatch::host());
+}
+
+#[test]
 fn a_piece_already_held_is_refused_with_its_own_exit_code() {
     let p = Plane::new();
     p.cut("p1");

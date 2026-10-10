@@ -135,7 +135,7 @@ impl World {
                 let path = https.strip_prefix("https://github.com/").unwrap();
                 format!("file://{}/forge/{path}", top.display())
             },
-            host: "laptop",
+            device: "laptop",
         });
         (answer, recorded)
     }

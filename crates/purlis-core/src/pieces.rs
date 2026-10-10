@@ -72,27 +72,37 @@ impl Event {
 /// Who a line in the log is from: the session, the persona and the machine.
 ///
 /// Passed in rather than read here, so this module never reads the process environment and
-/// a test names exactly who it is recording as.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// a test names exactly who it is recording as. **No `Default`:** a `Who` names the file its
+/// line goes to, and there is no file a default could honestly name. [`Who::here`] is this
+/// machine's.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Who {
     pub session: Option<String>,
     pub persona: Option<String>,
     /// The filename-safe host ([`crate::dispatch::host`]): the label a line carries as `host`.
     pub host: String,
-    /// The name this device's log is filed under ([`crate::dispatch::log_name`]): its device
+    /// The name this device's log is filed under ([`crate::machine::log_name`]): its device
     /// id, never a hostname once it has one (FD-25). The log is one file per device.
     pub log: String,
 }
 
 impl Who {
-    /// The name its log file takes: [`Who::log`], or the host for a `Who` built without one,
-    /// as every log was named before FD-25.
-    pub fn file(&self) -> &str {
-        if self.log.is_empty() {
-            &self.host
-        } else {
-            &self.log
+    /// `session` and `persona` on this machine: its [`crate::dispatch::host`] as the label,
+    /// and its log named by the device id the machine store at `config` keeps
+    /// ([`crate::machine::log_name`]). Mints no id.
+    pub fn here(config: Option<&Path>, session: Option<String>, persona: Option<String>) -> Who {
+        let host = crate::dispatch::host();
+        Who {
+            session,
+            persona,
+            log: crate::machine::log_name(config, &host),
+            host,
         }
+    }
+
+    /// The name its log file takes: [`Who::log`].
+    pub fn file(&self) -> &str {
+        &self.log
     }
 }
 
@@ -551,7 +561,7 @@ pub fn events(plane: &Path, ws: &str) -> Vec<Value> {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .collect();
-    // `sorted(d.glob("*.jsonl"))` — by path, so one host's log is read whole before the next.
+    // `sorted(d.glob("*.jsonl"))` — by path, so one device's log is read whole before the next.
     files.sort();
 
     let mut out: Vec<Value> = Vec::new();

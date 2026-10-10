@@ -2,8 +2,9 @@
 //! `charter/dispatch.py` the README's persona roster reads — [`tally`].
 //!
 //! `personas/_dispatch/<month>.<device>.jsonl` is append-only, one JSON object a line, one
-//! file per month per device ([`log_name`], FD-25). It is **committed**, which is what makes the roster block a
-//! fact every engineer sees the same way rather than a reading of one laptop.
+//! file per month per device ([`crate::machine::log_name`], FD-25). It is **committed**, which
+//! is what makes the roster block a fact every engineer sees the same way rather than a reading
+//! of one laptop.
 //!
 //! Three kinds of row are read here. Two were written by a hook while a persona could be sent
 //! out as a sub-agent: a dispatch, when a `Task`/`Agent` call returned, and a [`RESUME`], when
@@ -130,29 +131,10 @@ pub fn host_of(raw: &str) -> String {
     }
 }
 
-/// The name this device's logs are filed under (FD-25, ADR 0066): its device id from the
-/// machine store at `config`, so two machines that share a hostname write two files and a
-/// renamed machine keeps its one. `host` ([`host`]) only where no id has been minted yet, or
-/// can be (ADR 0031): there it is the name the file had before.
-///
-/// Never mints the id: asking for a log's name writes nothing outside the project. The
-/// hostname stays a label wherever a line shows one (the piece claim log's `host`).
-pub fn log_name(config: Option<&Path>, host: &str) -> String {
-    config
-        .and_then(crate::machine::known_device_id)
-        .unwrap_or_else(|| host.to_string())
-}
-
-/// [`log_name`] for this process: the config home's store, if there is one, and this
-/// machine's [`host`].
-pub fn this_log_name() -> String {
-    log_name(crate::machine::config_root_if_there().as_deref(), &host())
-}
-
 /// `personas/_dispatch/<YYYY-MM>.<device>.jsonl` for the month `when` falls in (UTC) —
 /// `dispatch.path_for`.
-pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) -> PathBuf {
-    dir(root).join(format!("{}.{host}.jsonl", when.format("%Y-%m")))
+pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, device: &str) -> PathBuf {
+    dir(root).join(format!("{}.{device}.jsonl", when.format("%Y-%m")))
 }
 
 /// Append one row, keys sorted, as `json.dumps(…, sort_keys=True)` writes it — the three
@@ -239,10 +221,10 @@ pub fn record_handoff(
     placement: Placement,
     created: bool,
     when: chrono::DateTime<chrono::Utc>,
-    host: &str,
+    device: &str,
 ) -> io::Result<PathBuf> {
     try_append(
-        &path_for(root, when, host),
+        &path_for(root, when, device),
         root,
         &serde_json::json!({
             "created": created,
