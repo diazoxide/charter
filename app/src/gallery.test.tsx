@@ -352,12 +352,11 @@ describe("the gallery by keyboard", () => {
 
     // A radio choice picks on a single arrow (`Choice`'s repair, docs/ui-primitives.md).
     expect(await doing(() => press("radio", "Alpha", "{ArrowDown}"))).toEqual(["radio=b"]);
-    // The level switcher moves on an arrow and picks on Space, as Radix's own radio group does.
+    // The level switcher goes to a level on a single arrow, with the same repair (D-626-4).
     expect(
       await doing(async () => {
         await press("radio", "You", "{ArrowRight}");
         expect(screen.getByRole("radio", { name: "Project" })).toHaveFocus();
-        await user.keyboard(" ");
       }),
     ).toEqual(["level=project"]);
     // The nav goes to a group on Enter.
