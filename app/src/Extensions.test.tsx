@@ -201,6 +201,50 @@ describe("what a contributed icon theme got wrong (#1145)", () => {
 });
 
 describe("the extension registry", () => {
+  it("says it is reading while the list is asked for (#630)", async () => {
+    mockIPC(() => new Promise(() => undefined));
+    render(<Extensions onClose={() => undefined} />);
+    expect(await screen.findByText("Reading the installed extensions…")).toBeInTheDocument();
+  });
+
+  it("says why the list could not be read when the ask itself fails (#630)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "installed_extensions") throw new Error("the core is gone");
+      return [];
+    });
+    render(<Extensions onClose={() => undefined} />);
+    expect(
+      await screen.findByText(/purlis could not read the installed extensions: .*the core is gone/),
+    ).toHaveClass("trouble");
+  });
+
+  it("says none is installed as a claim, with the way to add one (#630)", async () => {
+    core({ rows: [] });
+    render(<Extensions onClose={() => undefined} />);
+    expect(await screen.findByText("No extensions installed yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Add an extension… points purlis at the directory that holds one."),
+    ).toBeInTheDocument();
+  });
+
+  it("says a refused remove as trouble (#630)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "installed_extensions")
+        return {
+          built_in_themes: [],
+          extensions: [{ ...newRow, standing: "approved", ask: null }],
+          unreadable: null,
+          dropped: [],
+        };
+      if (cmd === "forget_extension")
+        throw "purlis could not forget Solarized: the record is read-only";
+      return [];
+    });
+    render(<Extensions onClose={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(await screen.findByText(/could not forget Solarized/)).toHaveClass("trouble");
+  });
+
   it("marks a built-in extension built-in, with no Remove and no question to ask", async () => {
     core({ rows: [builtInRow, { ...newRow, standing: "approved", ask: null }] });
     render(<Extensions onClose={() => undefined} />);

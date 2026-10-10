@@ -97,7 +97,7 @@ describe("approving a profile and starting on it", () => {
     render(<App />);
 
     await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
-    await userEvent.click(await screen.findByRole("radio", { name: /none/ }));
+    await userEvent.click(await screen.findByRole("radio", { name: "None" }));
     await userEvent.click(screen.getByRole("button", { name: "Approve and start" }));
 
     const started = await vi.waitFor(() => {

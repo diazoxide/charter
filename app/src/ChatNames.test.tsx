@@ -177,7 +177,7 @@ describe("a new chat's name", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
     const picker = await screen.findByRole("dialog", { name: "Start a chat" });
-    await userEvent.click(within(picker).getByRole("radio", { name: "none" }));
+    await userEvent.click(within(picker).getByRole("radio", { name: "None" }));
     await userEvent.click(within(picker).getByRole("button", { name: "Start" }));
 
     await waitFor(() => expect(tabNames()).toEqual(["claude 1"]));

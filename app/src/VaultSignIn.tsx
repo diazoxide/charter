@@ -469,18 +469,19 @@ export function VaultSignIn({
         </p>
       )}
 
+      {/* Each act names what it acts on, the sign-in (`docs/ui-copy.md`, #630). */}
       <SettingActions>
         {begun !== undefined && !refusedAtSignIn && (
           <button type="button" tabIndex={0} disabled={!ready} onClick={() => void test()}>
-            {tested === undefined ? "Test" : "Test again"}
+            {tested === undefined ? "Test sign-in" : "Test sign-in again"}
           </button>
         )}
         {begun !== undefined && tested !== undefined && (
           <button type="button" tabIndex={0} disabled={!ready} onClick={() => void store()}>
             {existing
               ? tested.failed
-                ? "Store anyway"
-                : "Store"
+                ? "Store sign-in anyway"
+                : "Store sign-in"
               : tested.failed
                 ? "Create anyway"
                 : "Create vault"}

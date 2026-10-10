@@ -47,6 +47,18 @@ describe("the repo picker", () => {
     expect(picked).toEqual([new Set(["api"])]);
   });
 
+  it("says a filter matched nothing, rather than drawing an empty list (#630)", async () => {
+    mockIPC((cmd) =>
+      cmd === "reachable_repos"
+        ? { repos: [{ name: "api", path: "a/api", description: "" }], trouble: [] }
+        : null,
+    );
+    render(<RepoPicker plane={"p1" as PlaneId} picked={new Set()} onPicked={() => undefined} />);
+    await screen.findByRole("checkbox", { name: "api" });
+    await userEvent.type(screen.getByPlaceholderText("Filter"), "zzz");
+    expect(screen.getByText("No repo you can reach matches zzz.")).toBeInTheDocument();
+  });
+
   describe("a forge that did not answer (NO-8, #1233)", () => {
     function answering(trouble: { said: string; login: string | null }[]) {
       mockIPC((cmd) => (cmd === "reachable_repos" ? { repos: [], trouble } : null));

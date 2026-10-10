@@ -22,7 +22,10 @@ function draw(over: { trouble?: string; making?: boolean } = {}) {
     create,
     cancel,
     dialog,
-    button: within(dialog).getByRole("button", { name: "Create persona" }),
+    // While it runs the act says so (#630).
+    button: within(dialog).getByRole("button", {
+      name: over.making ? "Creating…" : "Create persona",
+    }),
   };
 }
 

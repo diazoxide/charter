@@ -76,7 +76,7 @@ export function RemovePersona({
               disabled={deleting}
               onClick={onDelete}
             >
-              Delete persona
+              {deleting ? "Deleting…" : "Delete persona"}
             </button>
           </AnswerBar>
         </AlertDialog.Content>

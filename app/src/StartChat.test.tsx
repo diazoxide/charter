@@ -155,7 +155,7 @@ describe("a persona's own profile (#1445)", () => {
     const { user } = show(TWO);
 
     await user.click(screen.getByRole("radio", { name: /^release/ }));
-    await user.click(screen.getByRole("radio", { name: "none" }));
+    await user.click(screen.getByRole("radio", { name: "None" }));
 
     expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
   });
@@ -190,7 +190,8 @@ describe("a chat that starts in a repo (GL-1)", () => {
   it("starts on a new branch in that repo unless told otherwise", async () => {
     const { onStart, user } = show({}, "api");
 
-    expect(screen.getByRole("checkbox", { name: /new branch in api/ })).toBeChecked();
+    // Sentence case, as every label in the window (`docs/ui-copy.md`, #630).
+    expect(screen.getByRole("checkbox", { name: "Start on a new branch in api" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, true, null);
@@ -352,7 +353,7 @@ describe("the picker a chat starts from", () => {
   it("can start a chat that adopts no persona at all", async () => {
     const { onStart, user } = show();
 
-    await user.click(screen.getByRole("radio", { name: "none" }));
+    await user.click(screen.getByRole("radio", { name: "None" }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false, null);
@@ -626,7 +627,7 @@ describe("the picker a chat starts from", () => {
     // legitimately have nothing to list here. The picker still starts a chat.
     const { onStart, user } = show({ personas: [], persona: null });
 
-    expect(screen.getByRole("radio", { name: "none" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "None" })).toBeChecked();
 
     return user.click(screen.getByRole("button", { name: "Start" })).then(() => {
       expect(onStart).toHaveBeenCalledWith("claude", null, false, null, false, null);
@@ -806,7 +807,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
       locked: null,
     });
 
-    expect(screen.getByRole("checkbox", { name: "start without the sandbox" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Start without the sandbox" })).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
@@ -820,7 +821,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
       locked: null,
     });
 
-    await user.click(screen.getByRole("checkbox", { name: "start without the sandbox" }));
+    await user.click(screen.getByRole("checkbox", { name: "Start without the sandbox" }));
     await user.type(
       screen.getByRole("textbox", { name: "Why, if you want it recorded" }),
       "the build needs the network",
@@ -840,7 +841,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
       locked: null,
     });
 
-    await user.click(screen.getByRole("checkbox", { name: "start without the sandbox" }));
+    await user.click(screen.getByRole("checkbox", { name: "Start without the sandbox" }));
     await user.click(screen.getByRole("button", { name: "Start without the sandbox" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, {
@@ -901,7 +902,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
     const { onStart, user } = showWith({ state: "sandboxed", said: "", install: null, locked });
 
     expect(
-      screen.queryByRole("checkbox", { name: "start without the sandbox" }),
+      screen.queryByRole("checkbox", { name: "Start without the sandbox" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Sandbox" })).toHaveTextContent(locked);
     await user.click(screen.getByRole("button", { name: "Start" }));
@@ -939,7 +940,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
     expect(sandbox).toHaveTextContent(locked);
     expect(sandbox.textContent?.split("Locked by policy")).toHaveLength(2);
     expect(sandbox).not.toHaveTextContent("new-chat picker");
-    expect(screen.queryByRole("checkbox", { name: "start without the sandbox" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Start without the sandbox" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start without the sandbox" })).toBeNull();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
     expect(onStart).not.toHaveBeenCalled();

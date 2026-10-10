@@ -156,7 +156,7 @@ describe("closing a chat with chats at work below it", () => {
   it("asks once, with both choices, and starts on keeping them", async () => {
     const { asking, asked } = await closingTheStewardChat(ONE_RUNNING);
 
-    const question = within(asking).getByRole("group", {
+    const question = within(asking).getByRole("radiogroup", {
       name: "1 chat it started is still at work: check prod.",
     });
     expect(within(question).getAllByRole("radio")).toHaveLength(2);
@@ -236,7 +236,7 @@ describe("closing a chat with chats at work below it", () => {
     );
 
     expect(
-      within(asking).getByRole("group", {
+      within(asking).getByRole("radiogroup", {
         name: "2 chats it started are still at work: read the logs, moved on.",
       }),
     ).toBeInTheDocument();
@@ -263,7 +263,7 @@ describe("closing a chat with nothing at work below it", () => {
       ),
     );
 
-    expect(within(asking).queryByRole("group")).toBeNull();
+    expect(within(asking).queryByRole("radiogroup")).toBeNull();
     expect(within(asking).queryByRole("radio")).toBeNull();
     expect(asking).toHaveTextContent(
       "1 reported task closes with it, each once its session record is written: check prod.",

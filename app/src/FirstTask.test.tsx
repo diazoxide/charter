@@ -146,7 +146,7 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
 async function openTheFirstTask() {
   const person = userEvent.setup();
   await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
-  await person.click(screen.getByRole("button", { name: "Open" }));
+  await person.click(screen.getByRole("button", { name: "Open repo" }));
   const strip = stripNamed("Tabs");
   await person.click(await within(strip).findByRole("tab", { name: /First task · widget/ }));
   const pane = await screen.findByRole("region", { name: "First task · widget" });
@@ -165,7 +165,7 @@ describe("the first task", () => {
     render(<App />);
     const person = userEvent.setup();
     await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
-    await person.click(screen.getByRole("button", { name: "Open" }));
+    await person.click(screen.getByRole("button", { name: "Open repo" }));
 
     await waitFor(() => expect(calls("start_chat")).toHaveLength(1));
     const strip = stripNamed("Tabs");
@@ -368,7 +368,7 @@ describe("the first task", () => {
     render(<App />);
     const person = userEvent.setup();
     await person.type(await screen.findByLabelText("Or type the repo's path"), REPO);
-    await person.click(screen.getByRole("button", { name: "Open" }));
+    await person.click(screen.getByRole("button", { name: "Open repo" }));
     const strip = stripNamed("Tabs");
     const offer = await within(strip).findByRole("tab", { name: /First task · widget/ });
     refusing = true;

@@ -94,7 +94,7 @@ export function NewBranch({
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
             <SettingActions>
               <button type="submit" tabIndex={0} disabled={making}>
-                Create branch
+                {making ? "Creating…" : "Create branch"}
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel

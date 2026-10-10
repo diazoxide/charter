@@ -62,7 +62,8 @@ describe("cutting a new branch from the window (GL-1)", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(TAKEN);
     expect(screen.getByRole("dialog").textContent ?? "").not.toMatch(/worktree|piece/i);
-    expect(screen.getByRole("button", { name: "Create branch" })).toBeDisabled();
+    // While it runs the act says so (#630).
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
   });
 
   it("says branch, and none of the words the first hour keeps out (ADR 0072 §3)", () => {

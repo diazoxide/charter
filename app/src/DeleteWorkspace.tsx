@@ -177,7 +177,7 @@ export function DeleteWorkspace({
                 disabled={deleting}
                 onClick={() => onDelete(false)}
               >
-                Delete workspace
+                {deleting ? "Deleting…" : "Delete workspace"}
               </button>
             ) : (
               <button
@@ -187,7 +187,7 @@ export function DeleteWorkspace({
                 disabled={deleting}
                 onClick={() => onDelete(true)}
               >
-                {discarding(risky)}
+                {deleting ? "Deleting…" : discarding(risky)}
               </button>
             )}
           </AnswerBar>

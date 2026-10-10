@@ -191,23 +191,18 @@ describe("making a project", () => {
     core();
     render(<App />);
     const dialog = await askForOne();
-    for (const name of [
-      "Repo",
-      "Folder",
-      "Repository to adopt",
-      "Make this repo itself the project",
-    ])
+    for (const name of ["Repo", "Folder", "Repo to adopt", "Make this repo itself the project"])
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 
     expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(
       "It does not have to exist yet. purlis makes it, and writes the project into it.",
     );
-    expect(within(dialog).getByLabelText("Repository to adopt")).toHaveAccessibleDescription(
+    expect(within(dialog).getByLabelText("Repo to adopt")).toHaveAccessibleDescription(
       /^Optional: the project goes in the folder above/,
     );
     expect(
       within(dialog).getByLabelText("Make this repo itself the project"),
-    ).toHaveAccessibleDescription(/^Only for a folder that is the top of a git repository/);
+    ).toHaveAccessibleDescription(/^Only for a folder that is the top of a git repo/);
   });
 
   it("keeps a refused repository's words in the dialog", async () => {
@@ -243,7 +238,7 @@ describe("making a project", () => {
     const dialog = await askForOne();
 
     await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
-    await userEvent.type(within(dialog).getByLabelText("Repository to adopt"), REPO);
+    await userEvent.type(within(dialog).getByLabelText("Repo to adopt"), REPO);
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project").map((one) => one.args)).toEqual([
@@ -259,11 +254,11 @@ describe("making a project", () => {
     render(<App />);
     const dialog = await askForOne();
 
-    await userEvent.type(within(dialog).getByLabelText("Repository to adopt"), REPO);
+    await userEvent.type(within(dialog).getByLabelText("Repo to adopt"), REPO);
     await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
     await userEvent.click(within(dialog).getByLabelText("Make this repo itself the project"));
 
-    expect(within(dialog).getByLabelText("Repository to adopt")).toBeDisabled();
+    expect(within(dialog).getByLabelText("Repo to adopt")).toBeDisabled();
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
