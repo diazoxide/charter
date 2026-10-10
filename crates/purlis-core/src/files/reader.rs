@@ -310,7 +310,7 @@ pub enum Ask {
 /// What the child answers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Answer {
-    Root(PathBuf),
+    Root(super::watch::Rooted),
     Status(Status),
     Folders(Vec<PathBuf>),
     Matters(bool),
