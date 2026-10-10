@@ -1,5 +1,4 @@
-import { useSyncExternalStore } from "react";
-import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
+import { layoutPref } from "./layoutPref";
 
 /**
  * **How the Chats list is drawn** (#1499, V100-73): whether the sessions of one workspace
@@ -70,60 +69,32 @@ export function isDefaultChatsList(prefs: ChatsListPrefs): boolean {
   );
 }
 
-/** What this launch changed them to, if anything. */
-let changed: ChatsListPrefs | undefined;
-/** What the launch started from, read once. */
-let started: ChatsListPrefs | undefined;
-const listeners = new Set<(prefs: ChatsListPrefs) => void>();
-
-function startingChatsList(layout: Reading = atCreation().layout): ChatsListPrefs {
-  if (started !== undefined) return started;
-  // A layout file purlis refused is said once, by `regions.ts`, and is the defaults here too.
-  const { prefs, said } =
-    layout.found && layout.trouble === null
-      ? loadChatsList(layout.document)
-      : { prefs: DEFAULT_CHATS_LIST, said: [] };
-  if (said.length > 0) {
-    const where = layout.path || "the layout file";
-    sayAboutThisMachine("chats", {
-      severity: "warn",
-      detail: `${where}: ${said.join("; ")}`,
-      remedy: `fix ${where}, or change the Chats list in Settings, which rewrites it`,
-      settings: "you.chats",
-    });
-  }
-  started = prefs;
-  return prefs;
-}
+/** The store (`layoutPref.ts`), under `chats`. */
+export const CHATS_LIST = layoutPref<ChatsListPrefs>({
+  key: "chats",
+  fallback: DEFAULT_CHATS_LIST,
+  load: (raw) => {
+    const { prefs, said } = loadChatsList(raw);
+    return { value: prefs, said };
+  },
+  same: (one, other) =>
+    one.grouped === other.grouped && one.tabbed === other.tabbed && one.away === other.away,
+  written: (prefs) => (isDefaultChatsList(prefs) ? undefined : prefs),
+  remedy: (where) => `fix ${where}, or change the Chats list in Settings, which rewrites it`,
+  settings: "you.chats",
+});
 
 /** How the Chats list is drawn now. */
 export function chatsListPrefs(): ChatsListPrefs {
-  return changed ?? startingChatsList();
+  return CHATS_LIST.value();
 }
 
 /** Changes how the Chats list is drawn; tells every listener when it changed. */
 export function setChatsListPrefs(to: Partial<ChatsListPrefs>): void {
-  const was = chatsListPrefs();
-  const now = { ...was, ...to };
-  if (now.grouped === was.grouped && now.tabbed === was.tabbed && now.away === was.away) return;
-  changed = now;
-  sayAboutThisMachine("chats", undefined);
-  for (const listener of listeners) listener(now);
-}
-
-/** Calls `listener` whenever the preferences change. Answers the way to stop. */
-export function onChatsListPrefs(listener: (prefs: ChatsListPrefs) => void): () => void {
-  listeners.add(listener);
-  return () => void listeners.delete(listener);
+  CHATS_LIST.set({ ...chatsListPrefs(), ...to });
 }
 
 /** {@link chatsListPrefs}, for a component that redraws when they change. */
 export function useChatsListPrefs(): ChatsListPrefs {
-  return useSyncExternalStore(onChatsListPrefs, chatsListPrefs);
-}
-
-/** Forgets what this launch chose and read, as a new launch would. For tests. */
-export function forgetChatsListPrefs(): void {
-  changed = undefined;
-  started = undefined;
+  return CHATS_LIST.use();
 }
