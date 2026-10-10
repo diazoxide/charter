@@ -259,6 +259,65 @@ describe("a grant is never sent from a row that just moved", () => {
     expect(answered).toEqual(["allow reviewer"]);
   });
 
+  it("sends no Allow reached and pressed from the keyboard just after the row was drawn", async () => {
+    const answered: string[] = [];
+    render(<Updated refused={[refusal()]} answer={(_, how) => answered.push(how)} />);
+    await user.tab();
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: ALLOW }));
+    await user.keyboard("{Enter}");
+    expect(answered).toEqual([]);
+    expect(screen.getByRole("status")).toHaveTextContent("nothing was allowed");
+
+    await read();
+    await user.keyboard("{Enter}");
+    expect(answered).toEqual(["allow"]);
+  });
+
+  it("sends no Allow pressed just after what it would allow changed under the pointer", async () => {
+    const answered: string[] = [];
+    function Changing() {
+      const [allows, setAllows] = useState(ALLOWS);
+      return (
+        <>
+          <Updated refused={[refusal({ allows })]} answer={(_, how) => answered.push(how)} />
+          <button
+            type="button"
+            data-testid="changed"
+            onClick={() => setAllows(`${ALLOWS} It reaches more now.`)}
+          />
+        </>
+      );
+    }
+    render(<Changing />);
+    await read();
+    await user.click(screen.getByTestId("changed"));
+    await user.click(screen.getByRole("button", { name: ALLOW }));
+    expect(answered).toEqual([]);
+
+    await read();
+    await user.click(screen.getByRole("button", { name: ALLOW }));
+    expect(answered).toEqual(["allow"]);
+  });
+
+  it("sends no Allow pressed just after the row was laid out lower, though nothing it lists moved", async () => {
+    const answered: string[] = [];
+    render(<Updated refused={[refusal()]} answer={(_, how) => answered.push(how)} />);
+    await read();
+    // Something above grew without drawing this row again: only its place says so.
+    const top = vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(48);
+    try {
+      await user.click(screen.getByRole("button", { name: ALLOW }));
+      expect(answered).toEqual([]);
+
+      await read();
+      await user.click(screen.getByRole("button", { name: ALLOW }));
+      expect(answered).toEqual(["allow"]);
+    } finally {
+      top.mockRestore();
+    }
+  });
+
   it("never lands the keyboard on Allow by itself: it comes in on the update", async () => {
     const answered: string[] = [];
     render(<Updated refused={[refusal()]} answer={(_, how) => answered.push(how)} />);

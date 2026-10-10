@@ -245,6 +245,52 @@ fn a_record_that_cannot_be_read_reads_as_none_and_is_written_over() {
     assert_eq!(keys(&store.read(&root, NOW)), ["a"]);
 }
 
+#[test]
+fn a_record_larger_than_any_this_store_writes_is_not_read_and_is_written_over() {
+    let (_dir, root, store) = project();
+    std::fs::create_dir_all(store.file(&root).parent().expect("a folder")).expect("folder");
+    let one = serde_json::to_string(&update("big", Kind::TaskDone, NOW)).expect("json");
+    let mut text = String::from("[");
+    while (text.len() as u64) <= MOST_BYTES {
+        text.push_str(&one);
+        text.push(',');
+    }
+    text.push_str(&one);
+    text.push(']');
+    std::fs::write(store.file(&root), text).expect("written");
+
+    assert!(store.read(&root, NOW).is_empty());
+    store
+        .note(&root, vec![update("a", Kind::TaskDone, NOW)], NOW)
+        .expect("noted");
+    assert_eq!(keys(&store.read(&root, NOW)), ["a"]);
+}
+
+#[test]
+fn the_most_this_store_writes_is_read_back_whole() {
+    let (_dir, root, store) = project();
+    // Every bound at its most, in characters JSON writes six bytes for.
+    let wide = |most: usize| "\u{1}".repeat(most + 5);
+    let all: Vec<Update> = (0..AT_MOST_KEPT + 3)
+        .map(|at| Update {
+            key: format!("{at:03}{}", wide(MOST_KEY)),
+            kind: Kind::Sandbox,
+            at: NOW - 1000 + at as u64,
+            session: Some(1),
+            chain: (0..MOST_CHAIN + 2).map(|_| wide(MOST_NAME)).collect(),
+            says: wide(MOST_SAID),
+            read: false,
+            dismissed: false,
+        })
+        .collect();
+    store.note(&root, all, NOW).expect("noted");
+    let size = std::fs::metadata(store.file(&root))
+        .expect("the file")
+        .len();
+    assert!(size <= MOST_BYTES, "{size}");
+    assert_eq!(store.read(&root, NOW).len(), AT_MOST_KEPT);
+}
+
 #[cfg(unix)]
 #[test]
 fn the_record_is_the_person_s_alone_to_read() {

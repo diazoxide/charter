@@ -16,8 +16,8 @@
 //! `<data>/inbox/<project key>.json` (the key is the digest the sandbox's cache homes and the
 //! network record are named by), one JSON array, rewritten whole under a lock on its folder,
 //! 0600. A write lets go of what is older than [`KEPT_FOR_SECS`] and past [`AT_MOST_KEPT`].
-//! A file this build cannot read reads as no updates and is written over: an update is
-//! information, and losing a day of it loses nothing that waits.
+//! A file this build cannot read, or one larger than [`MOST_BYTES`], reads as no updates and is
+//! written over: an update is information, and losing a day of it loses nothing that waits.
 //!
 //! **What a chat named is data.** A chain names chats, and an update says what its source said
 //! of them; each is held to a bound here ([`MOST_SAID`], [`MOST_NAME`], [`MOST_CHAIN`],
@@ -46,6 +46,9 @@ pub const MOST_CHAIN: usize = 8;
 
 /// The most characters of a key.
 pub const MOST_KEY: usize = 200;
+
+/// The most bytes a project's file is read to: past every bound above, kept whole, with room.
+pub const MOST_BYTES: u64 = 4 * 1024 * 1024;
 
 /// What kind of thing happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -175,12 +178,20 @@ impl Store {
         })
     }
 
-    /// Every update the file holds, dismissed ones too; none where it cannot be read.
+    /// Every update the file holds, dismissed ones too; none where it cannot be read, or where
+    /// it is larger than [`MOST_BYTES`]: no write of this store makes one so large.
     fn everything(&self, root: &Path) -> Vec<Update> {
-        std::fs::read_to_string(self.file(root))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        use std::io::Read as _;
+        let Ok(file) = std::fs::File::open(self.file(root)) else {
+            return Vec::new();
+        };
+        let mut text = Vec::new();
+        if file.take(MOST_BYTES + 1).read_to_end(&mut text).is_err()
+            || text.len() as u64 > MOST_BYTES
+        {
+            return Vec::new();
+        }
+        serde_json::from_slice(&text).unwrap_or_default()
     }
 
     /// Reads, lets `change` edit, and writes back what is kept, under a lock on the folder.

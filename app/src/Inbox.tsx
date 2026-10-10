@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { useTabStop } from "./roving";
 import { commands, type InboxUpdate, type Offered, type PlaneId, type Shown } from "./bindings";
@@ -618,12 +626,33 @@ function UpdateItem({ row, above }: { row: UpdateRow; above: string }) {
    * dispatch's Notice sets its own (`TaskBlocksNotice`), so no press lands on a place whose
    * time is not known yet.
    */
-  const [placed, setPlaced] = useState(() => ({ above, at: placedAt() }));
-  if (placed.above !== above) setPlaced({ above, at: placedAt() });
+  // What the row offers is part of where it stands: an answer whose words or tooltip changed
+  // under the pointer is a new place, though nothing above it moved.
+  const here = [above, more ?? "", ...answers.map(({ name, title }) => `${name}\t${title}`)].join(
+    "\n",
+  );
+  const [placed, setPlaced] = useState(() => ({ here, at: placedAt() }));
+  if (placed.here !== here) setPlaced({ here, at: placedAt() });
+  /**
+   * **Where the row was last laid out, and since when.** Something above it can grow without
+   * a stop of its own changing (a sentence said under another row, the recent answers of an
+   * empty list), and that render need not reach this row. So the place it is drawn at is read
+   * after each of its own renders and again at the press: one that differs is a move.
+   */
+  const drawn = useRef<HTMLLIElement>(null);
+  const laidOut = useRef<{ top: number; at: number }>(undefined);
+  const movedAt = () => {
+    const top = drawn.current?.offsetTop ?? 0;
+    if (laidOut.current?.top !== top) laidOut.current = { top, at: placedAt() };
+    return laidOut.current.at;
+  };
+  useLayoutEffect(() => {
+    movedAt();
+  });
   /** An answer that allows something, pressed too soon after the update was drawn or moved,
    *  is not sent: what is under the pointer may not be what the person read. */
   const press = (answer: UpdateAnswer) => {
-    if (answer.allows && placedAt() - placed.at < SETTLE_MS) {
+    if (answer.allows && placedAt() - Math.max(placed.at, movedAt()) < SETTLE_MS) {
       setSaid(
         "This update was drawn or moved just now, so nothing was allowed. Read it and press again.",
       );
@@ -638,6 +667,7 @@ function UpdateItem({ row, above }: { row: UpdateRow; above: string }) {
   return (
     <Stop id={key}>
       <li
+        ref={drawn}
         className="inbox-update"
         data-kind={update.kind}
         data-read={update.read || undefined}
