@@ -334,16 +334,14 @@ describe("every way into Settings leaves the keyboard on the nav's current group
     await onTheCurrentGroup();
   });
 
-  it("the start dialog's link to Settings › Harness & profiles", async () => {
+  it("the start dialog's link to a refused profile in Settings", async () => {
     core(PLANE);
     render(<App />);
     await screen.findByRole("tab", { name: /plane/ });
     await userEvent.click(screen.getAllByRole("button", { name: "New tab" })[0]);
     await userEvent.click(await screen.findByText("1 refused"));
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Open Settings › Harness & profiles" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Open bad in Settings" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument(),

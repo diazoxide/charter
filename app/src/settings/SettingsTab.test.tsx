@@ -272,3 +272,24 @@ describe("a link that names a setting (NO-7, #1292)", () => {
     expect(screen.getByRole("button", { name: "In the other tab" })).not.toHaveFocus();
   });
 });
+
+describe("a link to a group the level does not draw (#1296)", () => {
+  afterEach(() => forgetGroups());
+
+  it("lands a sub-page that is not there on the group its address is under", () => {
+    render(<SettingsTab />);
+
+    act(() => linkToGroup("you", "you.editor.gone"));
+
+    expect(shown()).toHaveAccessibleName("Editor");
+  });
+
+  it("lands an address under no group on the level's first group", () => {
+    render(<SettingsTab />);
+
+    // Shares letters with Editor's address, not a part of it.
+    act(() => linkToGroup("you", "you.editorial"));
+
+    expect(shown()).toHaveAccessibleName("Text");
+  });
+});

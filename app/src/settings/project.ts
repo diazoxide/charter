@@ -46,6 +46,7 @@ import {
 } from "./driver";
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { EXTENSIONS_LINK } from "./links";
+import { profilePage } from "./profileAddress";
 import { askIconThemes, iconsControl, iconsHeld, iconsNotes } from "./iconsPick";
 import { discoverRow } from "./discover";
 import { settled } from "../PlaneEdits";
@@ -268,11 +269,6 @@ function hostsCollection(file: SettingsFile, name: "hosts" | "myHosts"): Collect
       },
     ],
   };
-}
-
-/** The address of the profile `name`'s own page (ST-4): a sub-page of Harness & profiles. */
-export function profilePage(name: string): string {
-  return `project.profile.${name}`;
 }
 
 /**
