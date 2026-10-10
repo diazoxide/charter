@@ -462,12 +462,26 @@ describe("a file or folder row's menu (FM-10)", () => {
     ]);
   });
 
-  it("gives the branch's own Files row no menu of its own", async () => {
+  it("gives the branch's own Files row its folder's absolute path, a reveal and a shell (#1143)", async () => {
     core({ "one:": [] });
-    draw();
+    const pressed: Offer[] = [];
+    draw(vi.fn(), (offer) => pressed.push(offer));
 
     fireEvent.contextMenu(row("file:svc/one:"));
+    const menu = await screen.findByRole("menu");
+    const rows = within(menu)
+      .getAllByRole("menuitem")
+      .map((one) => one.getAttribute("aria-label"));
 
-    expect(screen.queryByRole("menu")).toBeNull();
+    // No relative path: the folder's path relative to itself says nothing (D-1143-1).
+    expect(rows).toEqual([
+      "Copy absolute path",
+      expect.stringMatching(/^Reveal in /),
+      "Open a shell tab here",
+    ]);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Open a shell tab here" }));
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "shellInFolder", at: { workspace: "alpha", repo: "svc", piece: "one", path: "" } },
+    ]);
   });
 });

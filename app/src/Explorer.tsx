@@ -1495,15 +1495,11 @@ function FilesRow({
   );
   return (
     <>
-      {/* A folder's menu (FM-10); the branch's own *Files* row has none, its branch's row
-          being where that folder is acted on. */}
-      {branch.folder === "" ? (
-        row
-      ) : (
-        <FileMenu on={{ on: "file", at: pathOn(at, branch.folder), kind: "folder" }} at={at}>
-          {row}
-        </FileMenu>
-      )}
+      {/* A folder's menu (FM-10). The branch's own *Files* row has one too (#1143): its
+          folder placed whole, the rows its branch's row offers (`actions.fileRows`). */}
+      <FileMenu on={{ on: "file", at: pathOn(at, branch.folder), kind: "folder" }} at={at}>
+        {row}
+      </FileMenu>
       {level !== undefined &&
         ("pending" in level ? (
           <Pending>Reading…</Pending>

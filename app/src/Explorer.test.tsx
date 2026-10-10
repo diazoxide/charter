@@ -597,6 +597,10 @@ describe("a piece row's menu", () => {
     ).toEqual([
       "Focus on branch one",
       "Browse the files of one",
+      // The branch's own folder (#1143).
+      "Copy the absolute path of branch one",
+      expect.stringMatching(/^Reveal branch one in /),
+      "Open a shell tab in branch one",
       "Merge branch one into svc",
       "Remove folder one in svc",
     ]);
