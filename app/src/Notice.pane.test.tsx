@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { Notice, NoticePaneRow } from "./Notice";
@@ -195,6 +195,40 @@ describe("a pane's row of Notices", () => {
     expect(screen.getByRole("button", { name: "+1 more" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "+1 more" }));
     expect(seen()).toEqual(["allowed", "second", "third"]);
+  });
+
+  it("stands a Notice that comes to ask something where it stood behind +N more", async () => {
+    // The same Notice, the same box: it only said something, and now it asks. It is the box's
+    // `data-asks` that changes, not the stack's children.
+    let ask: () => void = () => undefined;
+    function Pane() {
+      const [asking, setAsking] = useState(false);
+      ask = () => setAsking(true);
+      return (
+        <NoticePaneRow>
+          <Notice cause="said:1" at="pane" label="first said" onDismiss={() => undefined}>
+            Said first.
+          </Notice>
+          <Notice cause="said:2" at="pane" label="second said" onDismiss={() => undefined}>
+            Said second.
+          </Notice>
+          <Notice
+            cause="later:1"
+            at="pane"
+            label="later"
+            fixes={asking ? [{ label: "Answer later", onPress: () => undefined }] : undefined}
+            onDismiss={() => undefined}
+          >
+            Later.
+          </Notice>
+        </NoticePaneRow>
+      );
+    }
+    render(<Pane />);
+    await waitFor(() => expect(seen()).toEqual(["first said", "second said"]));
+
+    act(() => ask());
+    await waitFor(() => expect(seen()).toEqual(["first said", "later"]));
   });
 
   it("follows Notices that come and go, and never hides the one the keyboard is on", async () => {
