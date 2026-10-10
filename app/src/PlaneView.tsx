@@ -5217,6 +5217,11 @@ export const PlaneView = memo(function PlaneView({
       // The explorer becomes that branch's cockpit (FM-5).
       focusBranch: (cut) =>
         setFocusedBranch({ workspace: cut.workspace, repo: cut.repo, piece: cut.piece }),
+      // A clone's own folder, the same cockpit with no Merge or Done (#1152).
+      focusRepo: (repo: string) => {
+        if (ofWorkspace !== undefined)
+          setFocusedBranch({ workspace: ofWorkspace, repo, piece: null });
+      },
       newBranch,
       cloneMissing,
       askDropMembership: (workspace: string, repo: string) => setMembershipAsk({ workspace, repo }),
@@ -5275,6 +5280,7 @@ export const PlaneView = memo(function PlaneView({
       startChatHere,
       plane,
       focusWorkspace,
+      ofWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
       newBranch,
@@ -8679,14 +8685,14 @@ const NO_NEEDS: readonly Needing[] = [];
 /**
  * Whether the listing of `focus`'s workspace has answered without its branch (#1152): its repo's
  * branches were listed and it is not among them, or the workspace no longer holds the repo. A
- * listing still being read, or refused, has not said so. A focus on a repo's own folder is not
- * judged here: it is no branch (`focusStands`).
+ * listing still being read, or refused, has not said so. A focus on a repo's own folder (#1152)
+ * is gone once the workspace no longer holds the repo.
  */
 function focusGone(state: WorkspaceState, focus: Place): boolean {
-  if (focus.piece === null) return false;
-  if (state.piecesRefused[focus.repo] !== undefined) return false;
   const repos = state.panels?.repos;
   if (repos !== undefined && !repos.includes(focus.repo)) return true;
+  if (focus.piece === null) return false;
+  if (state.piecesRefused[focus.repo] !== undefined) return false;
   const listed = state.pieces[focus.repo];
   return listed !== undefined && !listed.some((one) => one.piece === focus.piece);
 }
