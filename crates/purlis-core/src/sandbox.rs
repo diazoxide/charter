@@ -3,7 +3,8 @@
 //! [`Plane`] reads a plane's `charter.toml` once; [`Said`] is what it says about the sandbox;
 //! [`Denied`] resolves the denial classes to this machine; [`Compiled`] is the neutral answer
 //! every harness's compiler reads; and [`for_start`] is the one place a chat is sandboxed or
-//! refused. Each harness has one compiler, chosen in one match ([`compiler`]).
+//! refused. Each harness's compiler is its adapter's
+//! ([`crate::harness::HarnessAdapter::sandbox_compiler`], asked through [`compiler`]).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -1689,16 +1690,14 @@ impl Applied {
         &self.form
     }
 
-    /// The chat's whole line under this sandbox, from `words` — the program, the profile's
-    /// `command`, then `armed`, the arguments that arm the harness, then `charters`, charter's
-    /// own words — where it opens, `at`; or the one sentence saying why it may not start.
+    /// The chat's whole line under this sandbox, from `words` ([`Words`]), where it opens,
+    /// `at`; or the one sentence saying why it may not start.
     ///
-    /// **Fail closed** (ADR 0067). A flag of the harness's own, in the chat's own words, can
-    /// outrank the sandbox it is handed, so such a chat is refused, naming where the flag is.
-    /// A harness that carries its sandbox as flags has them last among the flags, where they
-    /// win, and in front of the subcommand, session id and first message that end the line.
-    /// A harness charter wraps runs as the wrap's program, with the whole of its own line
-    /// after it, and is refused without the [`Confinement`] [`Self::confine`] started.
+    /// **Fail closed** (ADR 0067). What is checked here holds for every harness: a folder to
+    /// open in, never one reached through a link, and none the sandbox denies at or above it;
+    /// and the project's package caches. Where the sandbox goes on the line, and which of the
+    /// chat's own words refuse it, is each harness's own: its adapter's
+    /// [`crate::harness::HarnessAdapter::sandboxed_line`].
     pub fn line(&self, words: Words, at: &At<'_>) -> Result<Line, String> {
         // Ruling of 2026-10-03, every harness: a folder reached through a link is not the
         // folder the rules name, so no sandboxed chat starts in one.
