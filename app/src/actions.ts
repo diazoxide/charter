@@ -96,6 +96,11 @@ import {
  */
 export type SettingsWay = { label: string; link: SettingsLink };
 
+/** A finished task's Merge… on its row's menu (#1534), by its dispatch's id. */
+export const taskMergeId = (id: string) => `task.merge:${id}`;
+/** A finished task's Discard branch… on its row's menu (#1534), by its dispatch's id. */
+export const taskDiscardId = (id: string) => `task.discard:${id}`;
+
 /** The row that asks the focused workspace's refused reads again (#1244). */
 export const READ_AGAIN = "workspace.readagain";
 
@@ -469,6 +474,7 @@ export type Does =
    *  a Project group carries its project, and a Workspace group its project and workspace. */
   | { verb: "openSettingsGroup"; group: string; plane?: string; workspace?: string }
   | { verb: "readAgain" }
+  | { verb: "taskBranch"; id: string; act: "merge" | "discard" }
   /** Opens a new chat for one curation action on one subject, with the action's prompt typed
    *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
@@ -917,6 +923,9 @@ export type Doing = {
   /** Asks the focused workspace's reads again — the plane's, git's and the forge cache's —
    *  after one was refused (#1244): the explorer's Read again. */
   readAgain: () => void;
+  /** Asks about a finished task's Merge or Discard of its own branch (#1534), by its dispatch's
+   *  id: the Changes tab's own question, answered in the window. Nothing changes until then. */
+  taskBranch: (id: string, act: "merge" | "discard") => void;
   /** Opens a curation chat. The core can refuse — the action gone, a harness that cannot be
    *  typed into — so it answers a `Ran`. */
   curate: (subject: string, action: string) => Promise<Ran>;
@@ -1788,6 +1797,30 @@ export function catalogue(now: Now): Offer[] {
     note: "Your text sizes and your editor, on this machine.",
   });
   offers.push(...settingsGroupRows(now.plane, now.focused === OUTSIDE ? undefined : now.focused));
+
+  // **A finished task's Merge… and Discard branch…, on its row's menu** (#1534): for a task
+  // that worked on a branch purlis cut for it. Each opens the task's Changes tab's own
+  // question, which reads what the core says now; nothing is merged or discarded until it is
+  // answered, and a merge the core would refuse is said instead. In the row's menu only
+  // (D-1534-8): the Changes tab and the Dispatches row are where the palette's keyboard has them.
+  for (const tasks of now.finished?.values() ?? [])
+    for (const task of tasks) {
+      if (task.branch === null || task.waits !== null) continue;
+      offers.push({
+        ...can(taskMergeId(task.id), "Merge…", { verb: "taskBranch", id: task.id, act: "merge" }),
+        note: `Merge ${task.branch}, the branch of ${task.name}, into the branch it was cut from.`,
+        menuOnly: true,
+      });
+      offers.push({
+        ...can(taskDiscardId(task.id), "Discard branch…", {
+          verb: "taskBranch",
+          id: task.id,
+          act: "discard",
+        }),
+        note: `Discard the folder of ${task.branch}, the branch of ${task.name}.`,
+        menuOnly: true,
+      });
+    }
 
   // **Read again, while a read of the focused workspace stands refused** (#1244). ADR 0038 keeps
   // the bottom region unpressable, so its refusals had their way out only on the explorer's
@@ -2738,6 +2771,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "readAgain":
       doing.readAgain();
+      return DID;
+    case "taskBranch":
+      doing.taskBranch(does.id, does.act);
       return DID;
     case "openSettingsGroup":
       // Through the window's link into Settings (SE-22), which brings the level's tab forward
@@ -3986,7 +4022,9 @@ export type MenuOn =
   | { on: "pane" }
   /** A refused read of the focused workspace, on the bottom region's line that says it
    *  (#1244). */
-  | { on: "refusal" };
+  | { on: "refusal" }
+  /** A finished task's row in the chats list, by its dispatch's id (#1534). */
+  | { on: "finished"; id: string };
 
 /**
  * Which rows a context menu on that item lists, **by catalogue id and in order**.
@@ -4167,6 +4205,9 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       };
     case "refusal":
       return { above: [READ_AGAIN], below: [] };
+    case "finished":
+      // Merge above; Discard, which removes the folder, below the line.
+      return { above: [taskMergeId(what.id)], below: [taskDiscardId(what.id)] };
     case "absent":
       // Clone above; taking the repo out of the workspace below the line (#1228).
       return { above: [cloneMissingId(what.repo)], below: [dropMembershipId(what.repo)] };

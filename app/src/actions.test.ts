@@ -245,6 +245,7 @@ function doing(): Doing & { calls: string[] } {
     openSettingsTab: note("openSettingsTab"),
     openYourSettings: note("openYourSettings"),
     readAgain: note("readAgain"),
+    taskBranch: note("taskBranch"),
     openMemory: vi.fn((ref: MemoryRef, title: string, keep: boolean) => {
       calls.push(`openMemory:${memoryKey(ref)},${title},${keep}`);
     }),
@@ -1238,6 +1239,15 @@ describe("the one list of actions", () => {
       expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
         above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc", READ_AGAIN],
         below: [],
+      });
+    });
+  });
+
+  describe("a finished task's row (#1534)", () => {
+    it("lists Merge… above the line and Discard branch… below it", () => {
+      expect(menuOn({ on: "finished", id: "01K6" })).toEqual({
+        above: ["task.merge:01K6"],
+        below: ["task.discard:01K6"],
       });
     });
   });

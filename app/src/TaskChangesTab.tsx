@@ -1,26 +1,21 @@
 import { useEffect, useState } from "react";
 import { GitCompare, LoaderCircle } from "lucide-react";
 import { ChatAsk } from "./ChatAsk";
-import { Loss } from "./DispatchesTab";
 import { Notice } from "./Notice";
 import {
   commands,
-  type BranchMerge,
   type ChangedIn,
   type PlaneId,
   type TaskChanges,
   type TaskFile,
-  type WorktreeLoss,
 } from "./bindings";
-import { discardSays } from "./dispatches";
 import { pieceDiffTitle, pieceDiffView } from "./pieceViews";
 import type { ViewRef } from "./tabs";
+import { useTaskBranchActs, type BranchTold } from "./taskBranchActs";
 import {
   deleteSays,
   filesIn,
   leftSaid,
-  mergeBlocked,
-  mergeSays,
   ownSaid,
   pastTheCap,
   placeOf,
@@ -53,7 +48,8 @@ const MARKS: Record<TaskFile["mark"], string> = {
  * what would happen, from what the core read now; the answer hands that back, and the core
  * does nothing where the branch holds anything else by then. A merge is a fast-forward or a
  * refusal that says why, and changes nothing when refused. Both are commands of the window
- * alone: no chat reaches either.
+ * alone: no chat reaches either. The asks are `taskBranchActs.tsx`'s, which the finished row's
+ * menu and the Dispatches tab's row ask through too (#1534).
  *
  * Everything the task wrote (its name, file names, its own words for what it changed) is drawn
  * as text.
@@ -73,16 +69,17 @@ export function TaskChangesTab({
 }) {
   const [said, setSaid] = useState<{ read?: TaskChanges; trouble?: string }>();
   const [again, setAgain] = useState(0);
-  /** The merge being asked about, with the core's refusal of the last answer. */
-  const [merging, setMerging] = useState<{ merge: BranchMerge; trouble?: string }>();
-  /** The discard being asked about, with the core's refusal of the last answer. */
-  const [discarding, setDiscarding] = useState<{ loss: WorktreeLoss; trouble?: string }>();
   /** The delete of a merged branch whose folder is gone being asked about (#1472): the commit
    *  it was shown at, with the core's refusal of the last answer. */
   const [deleting, setDeleting] = useState<{ tip: string; trouble?: string }>();
   /** What the last press could not do, or what it did, until it is put away. */
-  const [told, setTold] = useState<{ tone: "news" | "trouble"; says: string }>();
+  const [told, setTold] = useState<BranchTold>();
   const [busy, setBusy] = useState(false);
+  const acts = useTaskBranchActs({
+    plane,
+    told: setTold,
+    changed: () => setAgain((was) => was + 1),
+  });
 
   useEffect(() => {
     let gone = false;
@@ -100,53 +97,13 @@ export function TaskChangesTab({
     };
   }, [plane, id, changed, again]);
 
-  const askToMerge = async () => {
+  const askToMerge = () => {
     setTold(undefined);
-    const answer = await commands
-      .taskBranchMergeQuestion(plane, id)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (answer.status === "error") return setTold({ tone: "trouble", says: answer.error });
-    // A merge the core would refuse is said, and not asked about: the press would change
-    // nothing.
-    const blocked = mergeBlocked(answer.data);
-    if (blocked !== undefined) return setTold({ tone: "trouble", says: blocked });
-    setMerging({ merge: answer.data });
+    void acts.askToMerge(id);
   };
-  const merge = async () => {
-    if (merging === undefined) return;
-    setBusy(true);
-    const answer = await commands
-      .taskBranchMerge(plane, id, merging.merge)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    setBusy(false);
-    if (answer.status === "error") return setMerging({ ...merging, trouble: answer.error });
-    setMerging(undefined);
-    setTold({
-      tone: "news",
-      says: answer.data.folder_removed
-        ? `${answer.data.branch} is merged, and its folder is removed: it held nothing else.`
-        : `${answer.data.branch} is merged. Its folder is kept: it holds something git does not track.`,
-    });
-    setAgain((was) => was + 1);
-  };
-  const askToDiscard = async () => {
+  const askToDiscard = () => {
     setTold(undefined);
-    const answer = await commands
-      .dispatchWorktreeLoss(plane, id)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (answer.status === "error") return setTold({ tone: "trouble", says: answer.error });
-    setDiscarding({ loss: answer.data });
-  };
-  const discard = async () => {
-    if (discarding === undefined) return;
-    setBusy(true);
-    const answer = await commands
-      .dispatchWorktreeDiscard(plane, id, discarding.loss)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    setBusy(false);
-    if (answer.status === "error") return setDiscarding({ ...discarding, trouble: answer.error });
-    setDiscarding(undefined);
-    setAgain((was) => was + 1);
+    void acts.askToDiscard(id);
   };
 
   const deleteBranch = async () => {
@@ -207,10 +164,10 @@ export function TaskChangesTab({
       )}
       {own?.acts === true && (
         <div className="task-changes-acts">
-          <button type="button" tabIndex={0} onClick={() => void askToMerge()}>
+          <button type="button" tabIndex={0} onClick={askToMerge}>
             Merge…
           </button>
-          <button type="button" tabIndex={0} onClick={() => void askToDiscard()}>
+          <button type="button" tabIndex={0} onClick={askToDiscard}>
             Discard branch…
           </button>
         </div>
@@ -267,17 +224,7 @@ export function TaskChangesTab({
           <pre>{read.said}</pre>
         </>
       )}
-      {merging !== undefined && (
-        <ChatAsk
-          title="Merge this task's branch?"
-          says={mergeSays(merging.merge)}
-          answer="Merge"
-          trouble={merging.trouble}
-          busy={busy}
-          onAnswer={() => void merge()}
-          onCancel={() => setMerging(undefined)}
-        />
-      )}
+      {acts.asking}
       {deleting !== undefined && own !== null && (
         <ChatAsk
           title="Delete this task's branch?"
@@ -288,19 +235,6 @@ export function TaskChangesTab({
           onAnswer={() => void deleteBranch()}
           onCancel={() => setDeleting(undefined)}
         />
-      )}
-      {discarding !== undefined && (
-        <ChatAsk
-          title="Discard this branch's folder?"
-          says={discardSays(discarding.loss)}
-          answer="Discard"
-          trouble={discarding.trouble}
-          busy={busy}
-          onAnswer={() => void discard()}
-          onCancel={() => setDiscarding(undefined)}
-        >
-          <Loss loss={discarding.loss} />
-        </ChatAsk>
       )}
     </div>
   );
