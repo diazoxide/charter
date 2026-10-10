@@ -515,12 +515,7 @@ export function Explorer({
             </ReadRefused>
           )}
           {filterBox}
-          <div
-            className="tree"
-            role="tree"
-            aria-label={`Files of ${name}`}
-            onKeyDown={onTreeKey}
-          >
+          <div className="tree" role="tree" aria-label={`Files of ${name}`} onKeyDown={onTreeKey}>
             <ul className="files" role="group">
               <li role="none" data-testid={`files-${ref.repo}-${ref.piece}`}>
                 {filesOf(ref.repo, ref.piece)}

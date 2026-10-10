@@ -1479,7 +1479,8 @@ describe("one tree style, in the Chats tree and the explorer (#1672)", () => {
     await waitFor(() =>
       expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 steward 3"]),
     );
-    const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+    // The Explorer view is mounted beside Chats and hidden while Chats is open (#1673).
+    const explorer = await screen.findByRole("tree", { name: "Repos and branches", hidden: true });
     expect(tree).toHaveClass("tree");
     expect(explorer).toHaveClass("tree");
 
@@ -1493,11 +1494,10 @@ describe("one tree style, in the Chats tree and the explorer (#1672)", () => {
       "calc(var(--tree-depth) * var(--tree-indent))",
     );
 
-    // The explorer is nested: a level is a group, and the group's edge is the guide.
-    const groups = explorer.querySelectorAll('[role="group"]');
-    expect(groups.length).toBeGreaterThan(0);
-    for (const group of groups)
-      expect(drawnWith(group, "border-inline-start")).toBe("1px solid var(--tree-guide)");
+    // The explorer is nested: a level is a group, and the group's edge is the guide. Its levels
+    // were this fixture's chats until the explorer stopped drawing chats (#1673), and a chat
+    // fixture has no clones, so the nested guide is held where there are levels to draw:
+    // `Explorer.test.tsx` (the rules) and `editor/BranchTree.test.tsx` (a drawn tree).
   });
 });
 
