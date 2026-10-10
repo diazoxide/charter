@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { useTabStop } from "./roving";
-import { commands, type Offered, type PlaneId, type Shown } from "./bindings";
+import { commands, type InboxUpdate, type Offered, type PlaneId, type Shown } from "./bindings";
 import { answerThrough, asksMoved } from "./asks";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import {
@@ -14,6 +14,8 @@ import {
   useAnswered,
   type Answered,
 } from "./inboxRules";
+import { KIND_SAID } from "./inboxUpdates";
+import { SETTLE_MS } from "./TaskBlocksNotice";
 
 /** What an empty Inbox says (I-12). */
 export const NOTHING_WAITS = "Nothing is waiting on you";
@@ -24,7 +26,7 @@ export const NOT_READ_YET = "Reading what waits on you…";
 /** What a chain is drawn as: the session first, the chat that asked last (I-9). */
 export const chainSaid = (chain: readonly string[]) => chain.join(" › ");
 
-/** The time an answer was given, as the list says it. */
+/** The time an answer was given, or an update happened, as the list says it. */
 const timeSaid = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -62,6 +64,12 @@ const timeSaid = (at: number) =>
  *
  * **Empty, it says so** (I-12) — "Nothing is waiting on you" — and lists what was answered here
  * lately, read-only: when, which chat, what it asked and the answer.
+ *
+ * **Updates follow the asks, newest first** (#1693, I-6): a task that finished or failed, a
+ * doctor finding, a chat that came back, a sandbox change, a dispatch refused while nobody was
+ * there, a Smart close that stopped. Each has Dismiss, and Go to chat where it is about one; a
+ * refused dispatch has its own three answers. **Mark all read and Dismiss all act on updates
+ * alone** (I-10): an ask is never answered in bulk, so neither button is drawn among them.
  */
 export function Inbox({
   plane,
@@ -70,8 +78,8 @@ export function Inbox({
   onLeave,
   onAnswered,
   onIgnore,
-  onShowList,
   whyOf,
+  updates,
 }: {
   plane: PlaneId;
   /** The project's asks, as the registry derived them last; nothing before the first read. */
@@ -88,18 +96,14 @@ export function Inbox({
    */
   onIgnore?: (session: number) => void;
   /**
-   * Opens the title bar's list, where it still holds what is no ask yet: a dispatch refused
-   * while nobody was there, a chat whose Smart close stopped (#1693 and #1695 move them here).
-   * Absent while it holds nothing more.
-   */
-  onShowList?: () => void;
-  /**
-   * Why a chat in the queue waits, where it is not that it asked anything (#1448, SI-8f): a
-   * task that failed, a report with nowhere to go, a Smart close that stopped. Said in place of
-   * "Waiting on your reply", and such a chat gets no reply box, since nothing it asked is
-   * answered by typing (#1700, until #1693 makes them updates).
+   * Why a chat in the queue waits, where it is not that it asked anything (#1448): a report
+   * with nowhere to go. Said in place of "Waiting on your reply", and such a chat gets no reply
+   * box, since nothing it asked is answered by typing (#1700). A task that failed and a Smart
+   * close that stopped are updates (#1693).
    */
   whyOf?: (session: number) => string | undefined;
+  /** The project's updates, drawn after the asks (#1693); none before they were read. */
+  updates?: Updates;
 }) {
   if (asks !== undefined) noteSeen(plane, asks);
   const groups = asks === undefined ? [] : byChat(asks, (ask) => seenOrder(plane, ask));
@@ -137,9 +141,20 @@ export function Inbox({
         const shape = shapes.get(askKey(ask)) ?? shapeOf(ask, whyOf, onIgnore);
         return stopIds(askKey(ask), shape, shape.answers ? ask.options : []);
       }),
-    ...(onShowList === undefined ? [] : [LIST_STOP]),
+    ...updateStops(updates),
   ];
-  const stop = useTabStop(undefined, stops);
+  // The keyboard comes in on the first ask, or the first update where none asks: an item, and
+  // never one of its buttons or Mark all read.
+  const firstAsk = rows[0]?.asks[0];
+  const firstUpdate = updates?.rows?.[0]?.update;
+  const stop = useTabStop(
+    firstAsk !== undefined
+      ? askKey(firstAsk)
+      : firstUpdate === undefined
+        ? undefined
+        : `update:${firstUpdate.key}`,
+    stops,
+  );
 
   const leave = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape") return;
@@ -182,24 +197,12 @@ export function Inbox({
               </section>
             ))
           )}
-          {onShowList !== undefined && (
-            <p className="inbox-none">
-              More waits in the title bar's list.{" "}
-              <Stop id={LIST_STOP}>
-                <button type="button" className="inbox-list-link" onClick={onShowList}>
-                  Show the list
-                </button>
-              </Stop>
-            </p>
-          )}
+          {updates !== undefined && <UpdateList updates={updates} stops={stops} />}
         </div>
       </RovingFocusGroup.Root>
     </section>
   );
 }
-
-/** The list's link to the title bar's list, as a stop. */
-const LIST_STOP = "inbox:list";
 
 /** What one ask's row offers, decided once for its stops and its drawing. */
 type Shape = {
@@ -492,5 +495,214 @@ function Empty({ recent }: { recent: readonly Answered[] }) {
         </section>
       )}
     </>
+  );
+}
+
+/** One update as the Inbox draws it, with what can be done with it there. */
+export type UpdateRow = {
+  update: InboxUpdate;
+  /** Go to chat, where it is about a chat that is still there. */
+  go?: () => void;
+  /** A sentence of the source's own under it, before its answers. */
+  more?: string;
+  /** Its source's own answers, in their order: a refused dispatch's three. */
+  answers?: readonly UpdateAnswer[];
+  /** Put it away: and, where its source lists it, put away there too. */
+  dismiss: () => void;
+  /** What Dismiss does, as its tooltip, where it does more than put the update away. */
+  dismissSays?: string;
+};
+
+/** One of an update's answers. */
+export type UpdateAnswer = {
+  label: string;
+  /** Its accessible name: what it does, whole. */
+  name: string;
+  /** What it does, as its tooltip. */
+  title: string;
+  /** Whether it allows something: drawn as an Allow is. */
+  allows?: boolean;
+  press: () => void;
+};
+
+/** The project's updates and the two acts on all of them. */
+export type Updates = {
+  /** Newest first; nothing before they were read. */
+  rows: readonly UpdateRow[] | undefined;
+  /** Every update listed, marked read: none is put away. */
+  onMarkAllRead: () => void;
+  /** Every update listed, put away. No ask is touched. */
+  onDismissAll: () => void;
+};
+
+/** The stops of the updates' section, in the order it draws them. */
+function updateStops(updates: Updates | undefined): string[] {
+  const rows = updates?.rows ?? [];
+  if (rows.length === 0) return [];
+  return [
+    READ_ALL_STOP,
+    DISMISS_ALL_STOP,
+    ...rows.flatMap(({ update, go, answers = [] }) => {
+      const key = `update:${update.key}`;
+      return [
+        key,
+        ...answers.map((_, at) => `${key}:${at}`),
+        ...(go === undefined ? [] : [`${key}:go`]),
+        `${key}:dismiss`,
+      ];
+    }),
+  ];
+}
+
+/** The time now: when an update was drawn where it stands, or when an answer was pressed. */
+const placedAt = () => Date.now();
+
+const READ_ALL_STOP = "inbox:read-all";
+const DISMISS_ALL_STOP = "inbox:dismiss-all";
+
+/** What the updates' section is called. */
+export const UPDATES = "Updates";
+
+/** The updates, after the asks: newest first, each with Dismiss (#1693). */
+function UpdateList({ updates, stops }: { updates: Updates; stops: readonly string[] }) {
+  const rows = updates.rows ?? [];
+  if (rows.length === 0) return null;
+  const unread = rows.some(({ update }) => !update.read);
+  return (
+    <section className="inbox-updates" aria-label={UPDATES}>
+      <div className="inbox-updates-head">
+        <h3 className="inbox-chain">{UPDATES}</h3>
+        <Stop id={READ_ALL_STOP} focusable={unread}>
+          <button
+            type="button"
+            className="inbox-go"
+            disabled={!unread}
+            title="Mark every update read. Nothing that waits on you is answered."
+            onClick={updates.onMarkAllRead}
+          >
+            Mark all read
+          </button>
+        </Stop>
+        <Stop id={DISMISS_ALL_STOP}>
+          <button
+            type="button"
+            className="inbox-go"
+            title="Put every update away. Nothing that waits on you is answered."
+            onClick={updates.onDismissAll}
+          >
+            Dismiss all
+          </button>
+        </Stop>
+      </div>
+      <ul>
+        {rows.map((row) => (
+          <UpdateItem
+            key={row.update.key}
+            row={row}
+            above={stops.slice(0, stops.indexOf(`update:${row.update.key}`)).join("\n")}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function UpdateItem({ row, above }: { row: UpdateRow; above: string }) {
+  const { update, go, more, answers = [], dismiss, dismissSays } = row;
+  const id = useId();
+  const [said, setSaid] = useState<string>();
+  /**
+   * **When this update was last drawn where it stands**: at its first drawing, and whenever
+   * what stands above it changes, which moves it. Set in the very render that draws it, as a
+   * dispatch's Notice sets its own (`TaskBlocksNotice`), so no press lands on a place whose
+   * time is not known yet.
+   */
+  const [placed, setPlaced] = useState(() => ({ above, at: placedAt() }));
+  if (placed.above !== above) setPlaced({ above, at: placedAt() });
+  /** An answer that allows something, pressed too soon after the update was drawn or moved,
+   *  is not sent: what is under the pointer may not be what the person read. */
+  const press = (answer: UpdateAnswer) => {
+    if (answer.allows && placedAt() - placed.at < SETTLE_MS) {
+      setSaid(
+        "This update was drawn or moved just now, so nothing was allowed. Read it and press again.",
+      );
+      return;
+    }
+    setSaid(undefined);
+    answer.press();
+  };
+  const key = `update:${update.key}`;
+  const who = chainSaid(update.chain);
+  const about = who === "" ? update.says : `${who}: ${update.says}`;
+  return (
+    <Stop id={key}>
+      <li
+        className="inbox-update"
+        data-kind={update.kind}
+        data-read={update.read || undefined}
+        aria-labelledby={`${id}-says`}
+        aria-describedby={`${id}-kind`}
+      >
+        <p className="inbox-says">
+          <span id={`${id}-kind`} className="inbox-source">
+            {KIND_SAID[update.kind]}
+            {!update.read && <span className="inbox-unread"> · new</span>}
+          </span>
+          <time dateTime={new Date(update.at * 1000).toISOString()}>
+            {timeSaid(update.at * 1000)}
+          </time>
+          {/* Every word here is its source's, drawn as text and never as a control. */}
+          <span id={`${id}-says`} className="ask-says">
+            {about}
+          </span>
+        </p>
+        {more !== undefined && <p className="inbox-more">{more}</p>}
+        {answers.length > 0 && (
+          <div className="inbox-answers" role="group" aria-label={`Answers to ${update.says}`}>
+            {answers.map((answer, at) => (
+              <Stop key={answer.label} id={`${key}:${at}`}>
+                <button
+                  type="button"
+                  className={answer.allows ? "inbox-answer allows" : "inbox-answer"}
+                  aria-label={answer.name}
+                  title={answer.title}
+                  onClick={() => press(answer)}
+                >
+                  {answer.label}
+                </button>
+              </Stop>
+            ))}
+          </div>
+        )}
+        {said !== undefined && (
+          <p className="inbox-refused" role="status">
+            {said}
+          </p>
+        )}
+        {go !== undefined && (
+          <Stop id={`${key}:go`}>
+            <button
+              type="button"
+              className="inbox-go"
+              aria-label={`Go to chat ${who}`}
+              onClick={go}
+            >
+              Go to chat
+            </button>
+          </Stop>
+        )}
+        <Stop id={`${key}:dismiss`}>
+          <button
+            type="button"
+            className="inbox-go"
+            aria-label={`Dismiss: ${about}`}
+            title={dismissSays ?? "Put this update away"}
+            onClick={dismiss}
+          >
+            Dismiss
+          </button>
+        </Stop>
+      </li>
+    </Stop>
   );
 }

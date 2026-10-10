@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Inbox, NOTHING_WAITS } from "./Inbox";
+import { Inbox, NOTHING_WAITS, UPDATES, type UpdateRow, type Updates } from "./Inbox";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { forgetInbox, replyBytes } from "./inboxRules";
-import type { DispatchPending, Shown } from "./bindings";
+import type { DispatchPending, InboxUpdate, Shown } from "./bindings";
 
 /**
  * **The Inbox** (#1692, spec #1688): a project's asks grouped by chat, oldest first, each under
@@ -379,20 +379,131 @@ describe("ignoring a chat that waits on a reply", () => {
   });
 });
 
-describe("what the title bar's list still holds", () => {
-  it("points to the list for what is not an ask yet, and opens it", async () => {
-    core();
-    const shown = vi.fn();
-    draw([], { onShowList: shown });
-    expect(screen.getByText(NOTHING_WAITS)).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Show the list" }));
-    expect(shown).toHaveBeenCalledOnce();
+describe("updates, after the asks (#1693)", () => {
+  const update = (key: string, at: number, more: Partial<InboxUpdate> = {}): InboxUpdate => ({
+    key,
+    kind: "task-done",
+    at,
+    session: 3,
+    chain: ["steward 3"],
+    says: `${key}: done`,
+    read: false,
+    ...more,
+  });
+  const rows = (list: InboxUpdate[], more: Partial<UpdateRow> = {}): UpdateRow[] =>
+    list.map((one) => ({ update: one, dismiss: vi.fn(), ...more }));
+  const updates = (list: UpdateRow[]): Updates => ({
+    rows: list,
+    onMarkAllRead: vi.fn(),
+    onDismissAll: vi.fn(),
   });
 
-  it("says nothing of the list when it holds nothing more", () => {
+  it("lists them after the asks, in the order given, newest first, each with its kind and words", () => {
     core();
-    draw([]);
-    expect(screen.queryByRole("button", { name: "Show the list" })).toBeNull();
+    draw([permission(3, "a1", ["steward 3"])], {
+      updates: updates(
+        rows([
+          update("task:b", 2_000, { kind: "task-failed", says: "drill: failed" }),
+          update("doctor:git:fail", 1_000, { kind: "doctor", chain: [], says: "git: no identity" }),
+        ]),
+      ),
+    });
+    const list = screen.getByRole("region", { name: UPDATES });
+    // After the asks: the ask's group comes first in the list.
+    expect(chats()).toEqual(["steward 3", UPDATES]);
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((row) => row.getAttribute("data-kind")),
+    ).toEqual(["task-failed", "doctor"]);
+    expect(within(list).getByText("steward 3: drill: failed")).toBeTruthy();
+    expect(within(list).getByText("git: no identity")).toBeTruthy();
+    expect(within(list).getAllByText(/Task failed|Doctor/).length).toBe(2);
+  });
+
+  it("draws an update's words as text, never as a control", () => {
+    core();
+    draw([], {
+      updates: updates(rows([update("x", 1, { says: "<button>Allow</button>" })])),
+    });
+    expect(screen.getByText("steward 3: <button>Allow</button>")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+  });
+
+  it("stands under the empty Inbox's sentence: an update is nothing that waits", () => {
+    core();
+    draw([], { updates: updates(rows([update("task:a", 1)])) });
+    expect(screen.getByText(NOTHING_WAITS)).toBeTruthy();
+    expect(screen.getByRole("region", { name: UPDATES })).toBeTruthy();
+  });
+
+  it("marks every update read and dismisses every one, and answers no ask doing either", async () => {
+    const calls = core();
+    const these = updates(rows([update("task:a", 1)]));
+    draw([permission(3, "a1", ["steward 3"])], { updates: these });
+    await userEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss all" }));
+    expect(these.onMarkAllRead).toHaveBeenCalledOnce();
+    expect(these.onDismissAll).toHaveBeenCalledOnce();
+    // No ask was answered in bulk: nothing went to any source.
+    expect(calls.filter((one) => one.cmd === "answer_ask")).toEqual([]);
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+  });
+
+  it("offers Mark all read only while something is unread", () => {
+    core();
+    draw([], { updates: updates(rows([update("task:a", 1, { read: true })])) });
+    expect(
+      (screen.getByRole("button", { name: "Mark all read" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/· new/)).toBeNull();
+  });
+
+  it("says nothing of updates while there are none", () => {
+    core();
+    draw([], { updates: updates([]) });
+    expect(screen.queryByRole("region", { name: UPDATES })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss all" })).toBeNull();
+  });
+
+  it("dismisses one, goes to its chat, and presses a source's own answers", async () => {
+    core();
+    const go = vi.fn();
+    const never = vi.fn();
+    const [row] = rows([update("away:steward#devops#", 1, { kind: "refused-away", chain: [] })], {
+      go,
+      more: "devops works with its own access.",
+      answers: [
+        {
+          label: "Never for this pair",
+          name: "Never for this pair: steward",
+          title: "",
+          press: never,
+        },
+      ],
+    });
+    draw([], { updates: updates([row]) });
+    expect(screen.getByText("devops works with its own access.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Never for this pair: steward" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Go to chat/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Dismiss: / }));
+    expect(never).toHaveBeenCalledOnce();
+    expect(go).toHaveBeenCalledOnce();
+    expect(row.dismiss).toHaveBeenCalledOnce();
+  });
+
+  it("is reached by ↓ from the last ask, its two buttons first, and Enter presses one", async () => {
+    core();
+    const these = updates(rows([update("task:a", 1)]));
+    draw([permission(3, "a1", ["steward 3"])], { updates: these });
+    const ask = screen.getAllByRole("listitem")[0];
+    act(() => ask.focus());
+    // The ask, its two answers and Go to chat; then the updates' two buttons.
+    for (let step = 0; step < 4; step += 1) await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement?.textContent).toBe("Mark all read");
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Enter}");
+    expect(these.onDismissAll).toHaveBeenCalledOnce();
   });
 });
 

@@ -65,7 +65,6 @@ import {
 import {
   catalogue,
   catalogued,
-  dismissId,
   ignoreId,
   needsYouRows,
   besideId,
@@ -178,7 +177,21 @@ import { heldFor as blockHeldFor, noticeKey, useSandboxBlocks, type Blocks } fro
 import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
 import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
-import { Inbox } from "./Inbox";
+import { Inbox, type UpdateRow } from "./Inbox";
+import { awayRow } from "./AwayRefusals";
+import {
+  LIVE,
+  awayUpdateKey,
+  awayUpdates,
+  doctorUpdates,
+  seenAt,
+  resumeUpdates,
+  sandboxUpdates,
+  smartCloseKey,
+  smartCloseUpdates,
+  taskUpdates,
+  useInboxUpdates,
+} from "./inboxUpdates";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
 import {
@@ -517,7 +530,7 @@ export const PlaneView = memo(function PlaneView({
   shellAsked,
   fileAsked,
   awayRefused,
-  onShowNeedsYou,
+  onAway,
   waiting,
   inboxAsked,
 }: {
@@ -566,10 +579,11 @@ export const PlaneView = memo(function PlaneView({
    *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
   fileAsked?: { place: Place; path: string; line?: number; at: number };
   /** This project's dispatches refused while nobody was at their chat (#1507), which the
-   *  window holds for the title bar's needs-you list: a part of the away summary (#1551). */
+   *  window holds: updates in the Inbox (#1693), and a part of the away summary (#1551). */
   awayRefused?: readonly AwayRefusal[];
-  /** Opens the title bar's needs-you list, where those are answered. */
-  onShowNeedsYou?: () => void;
+  /** Answers one of those in this project, as its update's buttons do: the window holds the
+   *  answers. One callback for every project, so this view is not drawn again for it. */
+  onAway?: (plane: PlaneId, item: AwayRefusal, how: "allow" | "dismiss" | "never") => void;
   /** This project's asks, as the window's registry derived them last (#1690): what the Inbox
    *  lists and its tab counts (#1692). Nothing before the first read. */
   waiting?: readonly Shown[];
@@ -3664,15 +3678,18 @@ export const PlaneView = memo(function PlaneView({
     // No chat in front to go back to: the keyboard leaves the list all the same.
     else if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }, [frontSession, plane]);
-  /** Why a queued chat waits, where it is not that it asked (#1448, SI-8f), as the hand's list
-   *  says it: the Inbox says it in place of a reply box (#1692). */
+  /** Why a queued chat waits, where it is not that it asked (#1448), as the hand's list says
+   *  it: the Inbox says it in place of a reply box (#1692). Not a task of its that failed, nor a
+   *  Smart close that stopped: each is an update of its own (#1693). The core lists what it
+   *  found before the failures (`hooks::seen_by`), so those are the reasons left at the front. */
   const inboxWhy = useCallback(
     (session: number) =>
-      needs[session]?.at(-1) ??
+      (needs[session] ?? [])
+        .slice(0, Math.max(0, (needs[session] ?? []).length - (failedTasks[session] ?? []).length))
+        .at(-1) ??
       backSaid(reports[session] ?? [], stoppedBelow[session] ?? []) ??
-      stopped[session] ??
       refusals[session]?.at(-1),
-    [needs, refusals, reports, stopped, stoppedBelow],
+    [failedTasks, needs, refusals, reports, stoppedBelow],
   );
   // Where that chat is working. The sidebar's chats carry it, and so does the record the
   // core put back at this launch; a chat the operator just opened is in the first.
@@ -6739,9 +6756,8 @@ export const PlaneView = memo(function PlaneView({
   // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
   // asked on their own because the catalogue is built only for the project in front.
   //
-  // **And the chats whose Smart close stopped without a record** (SI-8f): each says why, beside
-  // its name. One already in the queue is one item that says it; one that is not is an item of
-  // its own, whose ✕ dismisses it.
+  // **A chat whose Smart close stopped without a record** (SI-8f) is no item here: it is an
+  // update in the Inbox (#1693). The palette keeps its Show and Dismiss rows (`stoppedRows`).
   //
   // **Asked with the queue as this view reports, and not as it draws** (#1034), with the
   // catalogue's queue rows: the queue changes whenever a chat starts or stops asking for you,
@@ -6776,21 +6792,15 @@ export const PlaneView = memo(function PlaneView({
           stoppedBelow: stoppedBelow[session] ?? [],
           // What the app found the chat needs you for is said first (#1448).
           needed: neededFor(session)[neededFor(session).length - 1],
-          // A Smart close that stopped says so; a refused commit (SQ-16) says its latest.
-          why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
+          // A refused commit (SQ-16) says its latest.
+          why: refusedIn(session)[refusedIn(session).length - 1],
           workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
           go: rows.get(showId(session)),
           ignore: rows.get(ignore),
         };
       };
-      const alsoStopped = Object.keys(stopped)
-        .map(Number)
-        .filter((session) => rows.has(dismissId(session)));
       return {
-        asking: [
-          ...queue.map((session) => item(session, ignoreId(session))),
-          ...alsoStopped.map((session) => item(session, dismissId(session))),
-        ],
+        asking: queue.map((session) => item(session, ignoreId(session))),
         offers: withQueue(offers, queue, {
           tabs,
           nameOf,
@@ -6974,6 +6984,86 @@ export const PlaneView = memo(function PlaneView({
     nameOf,
     refusedAway: awayRefused,
   });
+
+  /**
+   * **The Inbox's updates** (#1693): derived from the sources that already say each, noted
+   * and kept a day on this machine whether or not the project is in front, and drawn after the
+   * asks with what each source offers on it.
+   */
+  const derivedUpdates = useMemo(() => {
+    const at = seenAt();
+    return [
+      ...taskUpdates([...finishedTasks.values()].flat(), nameOf, at),
+      ...doctorUpdates(doctor.report, at),
+      ...resumeUpdates(reopened, at),
+      ...sandboxUpdates(sandboxBlocks, nameOf, at),
+      ...awayUpdates(awayRefused ?? []),
+      ...smartCloseUpdates(stopped, nameOf, at),
+    ];
+  }, [finishedTasks, nameOf, doctor.report, reopened, sandboxBlocks, awayRefused, stopped]);
+  const { updates: keptUpdates, settle: settleUpdates } = useInboxUpdates(plane, derivedUpdates);
+  const inboxUpdates = useMemo(() => {
+    const tasks = new Map(
+      [...finishedTasks.values()].flat().map((task) => [`task:${task.id}`, task]),
+    );
+    const away = new Map((awayRefused ?? []).map((one) => [awayUpdateKey(one), one]));
+    const open = (session: number | null) =>
+      session !== null && tabHolding(tabs, session) !== undefined ? session : undefined;
+    const rows = keptUpdates?.map((update): UpdateRow => {
+      const read = () => settleUpdates([update.key], "read");
+      const put = () => settleUpdates([update.key], "dismissed");
+      const task = tasks.get(update.key);
+      const session = open(update.session);
+      const go =
+        task !== undefined
+          ? () => (showFinished(task), read())
+          : session !== undefined
+            ? () => (showChat(session), read())
+            : undefined;
+      const refused = away.get(update.key);
+      if (update.kind === "refused-away" && refused !== undefined)
+        return { update, ...awayRow(refused, (one, how) => onAway?.(plane, one, how), put) };
+      if (update.kind === "smart-close" && update.session !== null) {
+        const stoppedChat = update.session;
+        return { update, go, dismiss: () => (stoppedFor(stoppedChat, undefined), put()) };
+      }
+      return { update, go, dismiss: put };
+    });
+    return {
+      rows,
+      onMarkAllRead: () => settleUpdates(null, "read"),
+      onDismissAll: () => {
+        // Each update a source lists is put away there too, as its own Dismiss would.
+        for (const one of keptUpdates ?? []) {
+          if (!LIVE.has(one.kind)) continue;
+          const refused = away.get(one.key);
+          if (refused !== undefined) onAway?.(plane, refused, "dismiss");
+          if (
+            one.kind === "smart-close" &&
+            one.session !== null &&
+            stopped[one.session] !== undefined &&
+            smartCloseKey(one.session, stopped[one.session]) === one.key
+          )
+            stoppedFor(one.session, undefined);
+        }
+        settleUpdates(null, "dismissed");
+      },
+    };
+  }, [
+    keptUpdates,
+    settleUpdates,
+    finishedTasks,
+    awayRefused,
+    tabs,
+    showFinished,
+    showChat,
+    onAway,
+    plane,
+    stoppedFor,
+    stopped,
+  ]);
+  /** The Inbox, shown: where the away summary's refused dispatches are answered (#1693). */
+  const showInbox = useCallback(() => showSideView("inbox"), [showSideView]);
 
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
@@ -7730,7 +7820,7 @@ export const PlaneView = memo(function PlaneView({
           away={awayNow}
           onShowChat={showChat}
           onShowFinished={showFinished}
-          onShowNeedsYou={onShowNeedsYou}
+          onShowInbox={showInbox}
         />
       </NoticeBand>
 
@@ -7839,11 +7929,7 @@ export const PlaneView = memo(function PlaneView({
                 if (go?.available) press(go);
                 else showChat(session);
               }}
-              onShowList={
-                (awayRefused?.length ?? 0) + Object.keys(stopped).length > 0
-                  ? onShowNeedsYou
-                  : undefined
-              }
+              updates={inboxUpdates}
               onLeave={leaveInbox}
               whyOf={inboxWhy}
               onAnswered={inboxAnswered}

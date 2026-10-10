@@ -12,7 +12,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { FinishedTask, Moved, Need, OpenChat } from "./bindings";
+import type { FinishedTask, InboxUpdate, Moved, Need, OpenChat, UpdateNoted } from "./bindings";
 import type { State } from "./chatState";
 import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetThisLaunch } from "./regions";
@@ -206,6 +206,11 @@ function core(open: OpenChat[], rows: FinishedTask[] = [], other?: Project) {
     if (cmd === "vault_refusals") return [];
     if (cmd === "owed_restarts") return [];
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
+    // The Inbox's updates (#1693): kept as the core keeps them, where a test gives a store.
+    if (keeps !== null && cmd === "inbox_updates") return keeps.shown();
+    if (keeps !== null && cmd === "note_inbox_updates") return keeps.note(a.noted as UpdateNoted[]);
+    if (keeps !== null && cmd === "settle_inbox_updates")
+      return keeps.settle(a.keys as string[] | null, a.how as string);
     return null;
   });
   const send = async (event: string, payload: unknown) => {
@@ -327,7 +332,35 @@ async function whileAway(held: Awaited<ReturnType<typeof drawn>>) {
   await held.move(4, "waiting", [1, 2, 4]);
 }
 
+/** A machine's updates, as the core keeps them (`inboxupdates`): `null` for a core that keeps
+ *  none, as most tests here have. */
+let keeps: ReturnType<typeof keeping> | null = null;
+
+function keeping(kept: InboxUpdate[] = []) {
+  const dismissed = new Set<string>();
+  const shown = () =>
+    kept.filter((one) => !dismissed.has(one.key)).sort((one, other) => other.at - one.at);
+  return {
+    kept,
+    shown,
+    note: (noted: UpdateNoted[]) => {
+      for (const one of noted)
+        if (!kept.some((was) => was.key === one.key)) kept.push({ ...one, read: false });
+      return shown();
+    },
+    settle: (keys: string[] | null, how: string) => {
+      for (const one of kept)
+        if (keys === null || keys.includes(one.key)) {
+          one.read = true;
+          if (how === "dismissed") dismissed.add(one.key);
+        }
+      return shown();
+    },
+  };
+}
+
 beforeEach(() => {
+  keeps = null;
   globalThis.localStorage.clear();
   forgetThisLaunch();
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -411,8 +444,9 @@ describe("while you were away (#1514)", () => {
     expect(said(await theSummary())).toBe("While you were away: 1 task failed");
   });
 
-  it("counts a dispatch refused while nobody was there, and opens the list it is answered in", async () => {
-    // #1551: #1507's item joins the summary as a part of its own.
+  it("counts a dispatch refused while nobody was there, and opens the Inbox it is answered in", async () => {
+    // #1551: #1507's item joins the summary as a part of its own; #1693: it is an update in
+    // the Inbox, answered there.
     const held = await drawn();
     await leave();
     await held.refuse(["steward"], LEFT + 10 * MINUTE);
@@ -420,19 +454,20 @@ describe("while you were away (#1514)", () => {
 
     const notice = await theSummary();
     expect(said(notice)).toBe("While you were away: 1 dispatch refused");
-    const reads = held.asked("dispatch_away").length;
     await userEvent.click(
       within(notice).getByRole("button", { name: "1 dispatch refused: steward wanted devops" }),
     );
 
-    // The title bar's needs-you list, open where its Allow, Never and Dismiss answer it.
-    const listed = await screen.findByText("steward wanted devops while you were away");
-    expect(listed.closest('[role="menu"]')).not.toBeNull();
-    // Read again as it opens, as a press on the hand reads it.
-    await waitFor(() => expect(held.asked("dispatch_away").length).toBeGreaterThan(reads));
+    // The Inbox, shown, and its updates, where its Allow, Never and Dismiss answer it.
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const updates = within(inbox).getByRole("region", { name: "Updates" });
+    expect(within(updates).getByText("steward wanted devops while you were away")).toBeTruthy();
+    expect(
+      within(updates).getByRole("button", { name: /^Allow from now on: steward chats/ }),
+    ).toBeTruthy();
   });
 
-  it("draws several refused dispatches as one link to the list, which stays open", async () => {
+  it("draws several refused dispatches as one link to the Inbox, which lists each", async () => {
     const held = await drawn();
     await leave();
     await held.refuse(["steward", "lead"], LEFT + 10 * MINUTE);
@@ -446,10 +481,11 @@ describe("while you were away (#1514)", () => {
     expect(part.getAttribute("aria-haspopup")).toBeNull();
     await userEvent.click(part);
 
-    const listed = await screen.findByText("lead wanted devops while you were away");
-    expect(listed.closest('[role="menu"]')).not.toBeNull();
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const updates = within(inbox).getByRole("region", { name: "Updates" });
+    expect(within(updates).getByText("lead wanted devops while you were away")).toBeTruthy();
     await settle();
-    expect(screen.getByText("steward wanted devops while you were away")).toBeInTheDocument();
+    expect(within(updates).getByText("steward wanted devops while you were away")).toBeTruthy();
   });
 
   it("goes from each part to the chats it counts", async () => {
@@ -655,3 +691,103 @@ function projectTab(name: string): HTMLElement {
   if (!tab) throw new Error(`no project tab called ${name}`);
   return tab;
 }
+
+/**
+ * **The Inbox's updates** (#1693), in the window: what finished or failed, kept by the core a
+ * day on this machine, listed after the asks, and Dismiss all and Mark all read on them alone.
+ */
+describe("the Inbox's updates (#1693)", () => {
+  const openInbox = async () => {
+    // Pressed only where it is not shown already: a press on the view in front puts it away.
+    if (screen.queryByRole("tabpanel", { name: "Inbox" }) === null)
+      await userEvent.click(
+        within(screen.getByRole("tablist", { name: "Attention" })).getByRole("tab", {
+          name: "Inbox",
+        }),
+      );
+    return screen.findByRole("tabpanel", { name: "Inbox" });
+  };
+
+  it("notes a task that finished and one that failed, and lists both newest first", async () => {
+    keeps = keeping();
+    const done = finished("01K7DONE", "check alpha", { ended: iso(LEFT - 2 * MINUTE) });
+    const failed = { ...FAILED, ended: iso(LEFT - MINUTE) };
+    const held = await drawn([done, failed]);
+
+    await waitFor(() =>
+      expect(keeps?.kept.map((one) => [one.key, one.kind])).toEqual([
+        ["task:01K7DONE", "task-done"],
+        ["task:01K7FAILED", "task-failed"],
+      ]),
+    );
+    // Noted once each, however often the rows are read again.
+    await held.finish();
+    await settle();
+    const noted = held.asked("note_inbox_updates").flatMap((one) => one.noted as UpdateNoted[]);
+    expect(noted.filter((one) => one.key === "task:01K7DONE")).toHaveLength(1);
+
+    const updates = within(await openInbox()).getByRole("region", { name: "Updates" });
+    expect(
+      within(updates)
+        .getAllByRole("listitem")
+        .map((row) => row.getAttribute("data-kind")),
+    ).toEqual(["task-failed", "task-done"]);
+  });
+
+  it("lists what the core kept across a relaunch, though no source says it now", async () => {
+    keeps = keeping([
+      {
+        key: "doctor:git:fail",
+        kind: "doctor",
+        at: LEFT / 1000 - 3600,
+        session: null,
+        chain: [],
+        says: "git: no identity is set",
+        read: true,
+      },
+    ]);
+    await drawn();
+    const updates = within(await openInbox()).getByRole("region", { name: "Updates" });
+    expect(within(updates).getByText("git: no identity is set")).toBeTruthy();
+  });
+
+  it("dismisses every update and marks every one read on the core, and answers no ask", async () => {
+    keeps = keeping();
+    const held = await drawn([{ ...FAILED, ended: iso(LEFT - MINUTE) }]);
+    const inbox = await openInbox();
+    await waitFor(() => within(inbox).getByRole("region", { name: "Updates" }));
+
+    await userEvent.click(within(inbox).getByRole("button", { name: "Mark all read" }));
+    await waitFor(() =>
+      expect(held.asked("settle_inbox_updates")).toEqual([
+        { plane: PLANE, keys: null, how: "read" },
+      ]),
+    );
+    await userEvent.click(within(inbox).getByRole("button", { name: "Dismiss all" }));
+    await waitFor(() =>
+      expect(within(inbox).queryByRole("region", { name: "Updates" })).toBeNull(),
+    );
+    expect(held.asked("settle_inbox_updates").at(-1)).toEqual({
+      plane: PLANE,
+      keys: null,
+      how: "dismissed",
+    });
+    expect(held.commands()).not.toContain("answer_ask");
+  });
+
+  it("goes from a task's update to its finished row, and marks that one read", async () => {
+    keeps = keeping();
+    const held = await drawn([{ ...FAILED, ended: iso(LEFT - MINUTE) }]);
+    const updates = await waitFor(async () =>
+      within(await openInbox()).getByRole("region", { name: "Updates" }),
+    );
+    await userEvent.click(within(updates).getByRole("button", { name: /^Go to chat/ }));
+    await waitFor(() =>
+      expect(held.asked("settle_inbox_updates")).toContainEqual({
+        plane: PLANE,
+        keys: ["task:01K7FAILED"],
+        how: "read",
+      }),
+    );
+  });
+});

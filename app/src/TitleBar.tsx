@@ -11,7 +11,6 @@ import {
   type PermissionAsk,
   type Quiet,
 } from "./NeedsYou";
-import type { AwayItem } from "./AwayRefusals";
 import { KillSwitch } from "./KillSwitch";
 import type { Offer } from "./actions";
 
@@ -137,14 +136,7 @@ export function TitleBar({
     asks?: readonly PermissionAsk[];
     onAnswer?: (ask: PermissionAsk, option: string) => void;
     onOpen?: (ask: PermissionAsk) => void;
-    /** The dispatches refused while nobody was there (#1507), and their two answers. */
-    away?: readonly AwayItem[];
-    onAllowAway?: (item: AwayItem) => void;
-    onDismissAway?: (item: AwayItem) => void;
-    onNeverAway?: (item: AwayItem) => void;
     onLook?: () => void;
-    /** Goes up each time the list is asked open from elsewhere (an away summary, #1551). */
-    openAsked?: number;
     /** The asks registry's count (#1690): the number on the hand. */
     asked?: number;
     /** The registry's other asks, with Go to each one's chat. */

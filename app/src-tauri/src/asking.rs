@@ -472,12 +472,16 @@ pub struct Waiting<'a> {
     pub name_of: &'a dyn Fn(u32) -> Option<String>,
     /// The chat that asked for a chat as a task, by the app's own record.
     pub asker_of: &'a dyn Fn(u32) -> Option<u32>,
+    /// Whether a chat is in the queue only for tasks of its that came to nothing: each is an
+    /// update in the Inbox (#1693), and nothing of it waits on the person.
+    pub only_failed: &'a dyn Fn(u32) -> bool,
 }
 
 /// **The asks of one project, one per thing that waits** (#1690): each source's adapter, then
 /// each ask's chain. A chat in the needs-you queue is no ask of its own where a structured ask
 /// of its says why it waits: its held permission prompt is that prompt, and a held dispatch is
-/// what its turn waits on. The rest of the queue is a prompt in its terminal or a question.
+/// what its turn waits on. A chat there only for tasks that came to nothing asks nothing: each
+/// failure is an update (#1693). The rest of the queue is a prompt in its terminal or a question.
 pub fn derive(waiting: &Waiting<'_>) -> Vec<Shown> {
     let mut asks: Vec<Shown> = waiting
         .permissions
@@ -491,7 +495,7 @@ pub fn derive(waiting: &Waiting<'_>) -> Vec<Shown> {
         waiting
             .queue
             .iter()
-            .filter(|session| !said.contains(session))
+            .filter(|session| !said.contains(session) && !(waiting.only_failed)(**session))
             .map(|&session| match (waiting.at_its_prompt)(session) {
                 Some(prompt) => terminal(session, prompt),
                 None => question(session),
@@ -542,6 +546,10 @@ pub fn every_ask(held: &crate::planes::Held) -> Asking {
         locks: &locks,
         name_of: &|session| chats.shown_name(session),
         asker_of: &|session| asker_in(chats, session),
+        only_failed: &|session| {
+            let board = held.hooks().board();
+            !board.failed_tasks(session).is_empty() && !board.needs_you_for_itself(session)
+        },
     };
     Asking {
         plane: plane.clone(),
