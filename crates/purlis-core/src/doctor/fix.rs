@@ -121,7 +121,8 @@ pub enum FixId {
     /// removes only layer files charter generated and the project no longer declares, as
     /// recorded in charter's own record; a file charter did not write is left untouched. Not
     /// [`FixId::Reinit`], which is the project root's baseline and never looks inside a
-    /// workspace. Offered by the Alerts drawer's `reinit` row; no doctor row offers it yet.
+    /// workspace. Offered by the doctor's `workspace layout` row and the Alerts drawer's
+    /// `reinit` row, which read the same workspaces (#1289).
     WorkspaceReinit,
     /// **`handoff-rule`** (#1444): removes the ask rule `purlis init` wrote for a handoff,
     /// now that a handoff is a dispatch and its consent is the dispatch grant. Exactly

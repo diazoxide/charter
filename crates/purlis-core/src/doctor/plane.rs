@@ -1,5 +1,6 @@
-//! `nested plane`, `renamed leftovers` and `front door`: which plane answered, under which
-//! name, and whose identity it opens with.
+//! `nested plane`, `renamed leftovers`, `workspace layout` and `front door`: which plane
+//! answered, under which name, whether its workspaces are at its layout, and whose identity it
+//! opens with.
 
 use std::path::{Path, PathBuf};
 
@@ -295,4 +296,46 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
             ),
         )
     })
+}
+
+/// `workspace layout` (#1289): the workspaces behind the current layout, offering the
+/// `workspace-reinit` fix the Alerts drawer's `reinit` row offers.
+///
+/// **One reading with the drawer** ([`crate::alerts::behind_the_layout`]), and in its words,
+/// so the two never name different workspaces or say it differently. The doctor asks for every
+/// workspace, as the app does: no workspace is flagged by a row of its own here.
+///
+/// **But not one it cannot read.** A workspace whose folder cannot be listed has a stamp
+/// nobody can read, and the shared reading counts that as behind. The doctor's rows that look
+/// inside a workspace already say it cannot be checked, and a reinit could not reach it
+/// either, so naming it here would offer a fix that cannot work.
+///
+/// **No row unless a workspace is behind**, so a plane at its layout prints exactly what it
+/// printed before this row existed.
+pub(super) fn behind_the_layout(d: &Doctor) -> Option<Row> {
+    if !d.has_plane {
+        return None;
+    }
+    let workspaces = d.root.join("workspaces");
+    let stale: Vec<String> = crate::alerts::behind_the_layout(&d.root, None)
+        .ok()?
+        .into_iter()
+        .filter(|ws| std::fs::read_dir(workspaces.join(ws)).is_ok())
+        .collect();
+    if stale.is_empty() {
+        return None;
+    }
+    let shown = crate::alerts::Alert::Reinit { stale }.shown();
+    Some(
+        Row::warn(
+            "workspace layout",
+            shown.detail,
+            format!(
+                "`{}` brings each one up to it and never removes your content; `purlis doctor \
+                 --fix` runs it for you.",
+                shown.remedy
+            ),
+        )
+        .fixed_by(super::fix::FixId::WorkspaceReinit),
+    )
 }
