@@ -236,8 +236,11 @@ past 4,096 bytes, or holds a control character other than a line break or an inv
 
 **If the chat that asked has closed**, the report is kept for the workspace it asked from, and
 the next chat to start there learns it at its `SessionStart`. A report that was still waiting
-when its chat closed goes the same way. A report with nowhere to go is the one that needs you:
-the chat that wrote it becomes a needs-you item that says so.
+when its chat closed goes the same way. The task still ends at its report, as every other task
+does (#1510): it is told it is finished and where its report is kept, and it raises no item.
+Only a report from a chat that stays open has nowhere to go and needs you (a task you started
+from a tab, a blocked task, a handoff's chat, a task you took up again): the chat that wrote it
+becomes a needs-you item that says so.
 
 **A chat you stop from the window** gets one short turn to write what it did, and may send one
 report in it with `purlis dispatch report`, whatever it owed before: a handed-off chat too,
@@ -847,9 +850,10 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   wait that runs out while the task has a permission ask open in your needs-you list starts
   again when you answer it there, since the turn that reported goes on. Answering in the task's
   own pane is a key of yours, and keeps the chat for good. Never while a task of its own is
-  still at work. **Three reports end nothing**: one that came out blocked (the task is waiting
-  on something), the report of a persona chat you started yourself with Ask from a tab (it is
-  your conversation), and one whose asking chat has gone. A task that had reported when the app
+  still at work. **Two reports end nothing**: one that came out blocked (the task is waiting
+  on something), and the report of a persona chat you started yourself with Ask from a tab (it
+  is your conversation). A report whose asking chat has gone ends its task as any other does,
+  and is kept for the workspace (#1510). A task that had reported when the app
   quit is not started again at the next launch: it is a finished row. Its row stays under the
   chat that asked as a finished entry, with how it ended and its report; done and cancelled
   fold into one **Finished (n)** line with **Clear finished**, and every other end stays a row
