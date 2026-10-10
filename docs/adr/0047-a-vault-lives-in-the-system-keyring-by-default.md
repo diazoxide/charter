@@ -496,5 +496,25 @@ panel, which every project window draws as it opens, ran `op` with the token to 
   every run, which made macOS ask whether purlis may "access data from other apps". A vault that
   signs in through the 1Password app reads them as before.
 
+**Follow-up (delegated, 2026-10-10, #1660; flagged for the operator).**
+
+- **The re-check is built.** Before the app reuses a token it remembers, it asks the Keychain
+  whether the item is still there. The search returns the item's attributes and never its data,
+  the same question `security find-generic-password` asks without `-w`, so the Keychain
+  decrypts nothing and has nothing to ask the person about. A token deleted in Keychain Access is
+  then forgotten, and the read that follows finds none. An answer other than found or not found
+  keeps the remembered token, as before. A token edited in place in Keychain Access keeps its
+  item, so the app still uses the old value until it quits; revoking the token in 1Password
+  stops it. Only macOS is asked; on other systems a deleted token is still used until the app
+  quits. This picks the second option above. Whether the search
+  ever asks the person still has to be confirmed on a real Mac after an update. If it does ask,
+  revert to the first option.
+- **A 1Password Connect token gets the same treatment as a service-account token.** An `op`
+  handed `OP_CONNECT_TOKEN` is told not to read the 1Password app's settings, because a Connect
+  sign-in never goes through that app either.
+- **A vault tab that a launch puts back reads nothing until the person presses *Read*.** This
+  applies to every provider except those read from the project's files alone (keyring,
+  plain-file, reference). It is the same rule as an extension's put-back view.
+
 The lasting fix for questions after every update is a stable code-signing identity (Developer
 ID, #606).

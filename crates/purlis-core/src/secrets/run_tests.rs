@@ -72,6 +72,37 @@ fn a_cli_is_found_on_the_vaults_path_and_hears_only_its_input_and_overlay() {
 }
 
 #[test]
+fn a_child_handed_a_connect_token_leaves_the_1password_apps_data_alone() {
+    // A 1Password Connect sign-in never goes through the 1Password app, as a service-account
+    // token does not, so its `op` is told not to read that app's settings either (#1660).
+    let said = sh(&format!("printf '%s' \"${{{NO_APP_SETTINGS}-unset}}\""));
+    let host = (
+        "OP_CONNECT_HOST".to_string(),
+        "https://connect.invalid".to_string(),
+    );
+    let token = (
+        "OP_CONNECT_TOKEN".to_string(),
+        "connect-fixture".to_string(),
+    );
+
+    let bound = run(&Env::of(&[]), &said, None, &[host.clone(), token], None).unwrap();
+    assert_eq!(bound.stdout, "false", "a Connect token in the overlay");
+
+    let ambient = Env::of(&[("OP_CONNECT_TOKEN", "connect-fixture")]);
+    assert_eq!(
+        run(&ambient, &said, None, &[], None).unwrap().stdout,
+        "false"
+    );
+
+    let empty = ("OP_CONNECT_TOKEN".to_string(), String::new());
+    let none = run(&Env::of(&[]), &said, None, &[host, empty], None).unwrap();
+    assert_eq!(
+        none.stdout, "unset",
+        "no token is the 1Password app's sign-in, as before"
+    );
+}
+
+#[test]
 fn a_cli_that_finishes_inside_its_timeout_is_answered_not_stopped() {
     let ran = run(
         &Env::of(&[]),

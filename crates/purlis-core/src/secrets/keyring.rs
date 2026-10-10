@@ -122,6 +122,17 @@ pub enum Held {
     NotYet,
 }
 
+/// Whether a store holds an entry, as [`Store::exists`] answers without reading its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    /// The store holds it.
+    Present,
+    /// The store provably holds none.
+    Absent,
+    /// The store cannot say without reading the value, or did not say.
+    Unknown,
+}
+
 /// A credential store: one entry per `(service, account)`, read, written and deleted by name.
 ///
 /// **An error never carries a value**, and never an entry the store returned: an
@@ -134,6 +145,12 @@ pub trait Store: Send + Sync {
     fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError>;
     /// Delete the entry. `false` when there was none.
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError>;
+    /// Whether the entry is there, asked of its attributes and **never of its value** (#1660),
+    /// so asking it never makes the store ask the person. [`Presence::Unknown`] where this
+    /// store cannot say without reading the value, or did not say.
+    fn exists(&self, _service: &str, _account: &str) -> Presence {
+        Presence::Unknown
+    }
     /// Whether this store holds an item to charter's app, so an item written before it did is
     /// written again when read (ruling V90d).
     fn holds(&self) -> bool {
@@ -221,6 +238,10 @@ impl Store for OsStore {
         }
     }
 
+    fn exists(&self, service: &str, account: &str) -> Presence {
+        exists_here(service, account)
+    }
+
     fn holds(&self) -> bool {
         cfg!(target_os = "macos")
     }
@@ -255,6 +276,38 @@ pub(super) fn set_here(service: &str, account: &str, value: &str) -> Result<(), 
         .set_password(value)
         .map_err(|e| failure("write", service, &e))
 }
+
+/// Whether the login keychain holds a generic password under `service` and `account`, from a
+/// search that returns the item's attributes and not its data (#1660). The Keychain decrypts
+/// nothing for it, so it has nothing to ask the person about: the same question as `security
+/// find-generic-password` without `-w`. Any answer but found or not found is unknown.
+#[cfg(target_os = "macos")]
+fn exists_here(service: &str, account: &str) -> Presence {
+    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+    let found = ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(service)
+        .account(account)
+        .load_attributes(true)
+        .limit(Limit::Max(1))
+        .search();
+    match found {
+        Ok(items) if items.is_empty() => Presence::Absent,
+        Ok(_) => Presence::Present,
+        Err(e) if e.code() == ITEM_NOT_FOUND => Presence::Absent,
+        Err(_) => Presence::Unknown,
+    }
+}
+
+/// Elsewhere purlis asks nothing it does not need: the store reads as it did before #1660.
+#[cfg(not(target_os = "macos"))]
+fn exists_here(_service: &str, _account: &str) -> Presence {
+    Presence::Unknown
+}
+
+/// `errSecItemNotFound`: a search found no item.
+#[cfg(target_os = "macos")]
+const ITEM_NOT_FOUND: i32 = -25300;
 
 /// A keyring failure as charter says it: the operation, the service, and the store's reason.
 ///
@@ -429,6 +482,16 @@ impl Store for FileStore {
         );
         self.save(map)?;
         Ok(Held::NoRule)
+    }
+
+    /// From the file's slots, and not counted as a read ([`STUB_READS`]): the question reads no
+    /// value.
+    fn exists(&self, service: &str, account: &str) -> Presence {
+        match self.load() {
+            Ok(map) if map.contains_key(&Self::slot(service, account)) => Presence::Present,
+            Ok(_) => Presence::Absent,
+            Err(_) => Presence::Unknown,
+        }
     }
 
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {

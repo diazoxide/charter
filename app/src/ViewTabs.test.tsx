@@ -129,13 +129,16 @@ const STATISTICS = {
 /** The plane's vaults, as the core holds them in these tests: `ops`, and whatever was made. */
 let held: string[] = [];
 let made: string[] = [];
+/** What `ops` is: a keyring vault, unless a test says otherwise. */
+let opsProvider = "keyring";
 beforeEach(() => {
   held = ["API_TOKEN"];
   made = [];
+  opsProvider = "keyring";
 });
 const vaultOf = (name: string): VaultContents => ({
   name,
-  provider: "keyring",
+  provider: name === "ops" ? opsProvider : "keyring",
   count: name === "ops" ? held.length : 0,
   health: { ok: true, detail: "" },
   secrets:
@@ -574,6 +577,33 @@ describe("a vault's own tab (charter-app#235)", () => {
 
     expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
     expect(tabNames()).toEqual(["steward 1", "ops"]);
+  });
+
+  it("comes back in front without reading a 1Password vault, and reads it on Read (#1660)", async () => {
+    opsProvider = "1password";
+    const { asked } = core({
+      reopened: [
+        {
+          from: null,
+          view: "vault",
+          key: "ops",
+          title: "ops",
+          workspace: "alpha",
+          at: 1,
+          active: true,
+          pinned: false,
+        },
+      ],
+      chats: [{ ...OPEN_CHAT, in_front: false }],
+    });
+    render(<App />);
+
+    const read = await screen.findByRole("button", { name: "Read ops" });
+    expect(asked.some((one) => one.cmd === "vault_open")).toBe(false);
+
+    await userEvent.click(read);
+    expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
+    expect(asked.filter((one) => one.cmd === "vault_open")).toHaveLength(1);
   });
 
   it("has the Vaults panel count again after a secret is added in it", async () => {
