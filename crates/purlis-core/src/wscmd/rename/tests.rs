@@ -145,12 +145,7 @@ fn a_plane() -> Plane {
             chats: vec![chat(&svc, "1"), elsewhere],
             views: vec![
                 view("alpha", "persona", "steward", "steward"),
-                view(
-                    "alpha",
-                    "workspace-settings",
-                    "alpha",
-                    "Workspace settings · alpha",
-                ),
+                view("alpha", "workspace-settings", "alpha", "Settings · alpha"),
                 // Keyed by the workspace's name too (#1248): its changes, and a piece's files.
                 view("alpha", "changes", "alpha", "Changes · alpha"),
                 view("alpha", "piece-files", "alpha/svc/p1", "Files · p1"),
@@ -305,7 +300,7 @@ fn everything_follows(plane: &Plane) {
     );
     assert_eq!(record.views[0].workspace.as_deref(), Some("beta"));
     assert_eq!(record.views[1].key, "beta");
-    assert_eq!(record.views[1].title, "Workspace settings · beta");
+    assert_eq!(record.views[1].title, "Settings · beta");
     assert_eq!(record.views[2].key, "beta");
     assert_eq!(record.views[2].title, "Changes · beta");
     assert_eq!(record.views[3].key, "beta/svc/p1");
@@ -674,6 +669,13 @@ fn a_move_rekeys_every_view_keyed_by_the_workspaces_name() {
     );
     moved.view(&mut archive);
     assert_eq!(archive.title, "Archived memory · beta");
+    // Settings at a workspace's level is "Settings · <ws>" (D-1192-1), and a title from a launch
+    // before that, "Workspace settings · <ws>", still follows: it says the new name the new way.
+    for title in ["Settings · alpha", "Workspace settings · alpha"] {
+        let mut settings = view("other", "workspace-settings", "alpha", title);
+        moved.view(&mut settings);
+        assert_eq!(settings.title, "Settings · beta", "{title}");
+    }
     let mut named = view("other", "repo-instructions", "alpha", "Mine");
     moved.view(&mut named);
     assert_eq!(named.title, "Mine");

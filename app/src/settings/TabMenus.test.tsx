@@ -213,7 +213,7 @@ describe("a workspace tab's menu", () => {
     await fromItsMenu(tab(/beta/), "Workspace settings…");
 
     await waitFor(() => expect(level()).toBe("Workspace"));
-    expect(inFront()).toHaveTextContent("Workspace settings · beta");
+    expect(inFront()).toHaveTextContent("Settings · beta");
     // Beta's strip is the one in front now, and the only one.
     expect(within(workspaces()).getByRole("tab", { selected: true })).toBe(tab(/beta/));
   });
@@ -251,7 +251,7 @@ describe("a workspace tab's menu", () => {
     );
 
     await waitFor(() => expect(inFront()).toBe(workspace));
-    expect(inFront()).toHaveTextContent("Workspace settings · alpha");
+    expect(inFront()).toHaveTextContent("Settings · alpha");
     expect(tabs()).toHaveLength(opened);
   });
 });

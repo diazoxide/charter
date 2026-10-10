@@ -1031,9 +1031,7 @@ describe("Settings at a workspace's level, as a view", () => {
       />,
     );
 
-    expect(
-      await screen.findByRole("heading", { name: "Workspace settings · alpha" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Settings · alpha" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Workspace" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -1088,7 +1086,7 @@ describe("Settings at a workspace's level, as a view", () => {
 
     await userEvent.click(await screen.findByRole("radio", { name: "Workspace" }));
 
-    expect(moved).toEqual([["workspace-settings/alpha", "Workspace settings · alpha"]]);
+    expect(moved).toEqual([["workspace-settings/alpha", "Settings · alpha"]]);
   });
 });
 
