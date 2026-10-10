@@ -2,8 +2,9 @@
 
 - **Reopening the app no longer floods macOS with Keychain questions.** The Vaults panel, which
   every project window draws as it opens, no longer runs the 1Password CLI, so it reads no
-  token kept in the keyring and no 1Password app data; a vault's tab still checks it. The app also reads each kept token once per run rather
-  than once per request, so several chats that reopen after an update ask once per token.
+  token kept in the keyring and no 1Password app data; a vault's tab still checks it. The app
+  also reads each kept token once per run rather than once per request, so several chats that
+  reopen after an update ask once per token.
   `purlis persona list` and `persona show` no longer read a kept token to show a persona's
   vault either (#1654).
 - **purlis no longer makes macOS ask whether it may "access data from other apps" for a
