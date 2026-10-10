@@ -245,6 +245,7 @@ macro_rules! app_commands {
                 extensions::approve_extension,
                 extensions::forget_extension,
                 extensions::set_extension_on,
+                extensions::open_extension_record,
                 extensions::extension_themes,
                 extensions::extension_icon_themes,
                 extensions::extension_panels,

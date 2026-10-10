@@ -3246,3 +3246,42 @@ fn an_icon_theme_file_that_is_not_there_refuses_the_extension() {
     let refused = read_at(&made.at()).expect_err("a declared file that is missing");
     assert!(refused.contains("is not there"), "{refused}");
 }
+
+/// #1296: the Extensions dialog's unreadable-record line opens the record, and only the record,
+/// in your editor: the path is this machine's own, never one the window names.
+#[test]
+fn the_record_opens_in_your_editor_at_its_own_path_and_a_link_does_not() {
+    let config = tempfile::tempdir().unwrap();
+    let editor = |_: &str| Some("ed".to_owned());
+    let record = file(config.path());
+    assert!(
+        record_in_your_editor(config.path(), crate::youreditor::Editor::Variable, &editor)
+            .unwrap_err()
+            .contains("is not there"),
+    );
+
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, "{ not json").unwrap();
+    match record_in_your_editor(config.path(), crate::youreditor::Editor::Variable, &editor) {
+        Ok(crate::youreditor::Launch::Program { program, args }) => {
+            assert_eq!(program, "ed");
+            assert_eq!(
+                args.last().map(Path::new),
+                Some(record.as_path())
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(&record).unwrap();
+        let elsewhere = config.path().join("elsewhere.json");
+        std::fs::write(&elsewhere, "{}").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &record).unwrap();
+        let refused =
+            record_in_your_editor(config.path(), crate::youreditor::Editor::Variable, &editor)
+                .unwrap_err();
+        assert!(refused.contains("is not a plain file"), "{refused}");
+    }
+}

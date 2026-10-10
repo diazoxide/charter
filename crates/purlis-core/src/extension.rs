@@ -2110,6 +2110,32 @@ pub fn file(config_root: &Path) -> PathBuf {
     crate::machine::dir(config_root).join(RECORD)
 }
 
+/// **The record, opened in your editor** (#1296): the Extensions dialog's way to mend a record
+/// purlis could not read. Only this machine's own record, at its own path: the window names no
+/// file. Refused for a record that is not there, or that is not a plain file (a link is not
+/// followed to whatever it names).
+pub fn record_in_your_editor(
+    config_root: &Path,
+    editor: crate::youreditor::Editor,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<crate::youreditor::Launch, String> {
+    let record = file(config_root);
+    let shown = record.display();
+    match std::fs::symlink_metadata(&record) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(format!(
+                "{shown} is not a plain file, so purlis does not hand it to your editor"
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("{shown} is not there, so there is nothing to open"));
+        }
+        Err(e) => return Err(format!("purlis cannot read {shown}: {e}")),
+    }
+    crate::youreditor::launch(editor, &record, 1, var).map_err(|refused| refused.to_string())
+}
+
 /// Whether charter keeps an extension record on this platform at all. See the module
 /// docstring, and [`crate::machine`]'s, and ADR 0031.
 ///

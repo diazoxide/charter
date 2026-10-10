@@ -24,6 +24,7 @@ import {
 } from "./theme/theme";
 import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
 import { AnswerBar } from "./AnswerBar";
+import { yourEditor } from "./yourEditor";
 
 /**
  * What has contributed what to this window, and the question charter asks before anything new
@@ -133,6 +134,16 @@ export function Extensions({ onClose }: { onClose: () => void }) {
     await reread();
   };
 
+  /** The record, in your editor (#1296): the core opens this machine's own record and no
+   *  other file, so the window names the editor and nothing else. */
+  const openRecord = async () => {
+    const editor = yourEditor();
+    if (editor === undefined)
+      return setWent("Choose your editor in Settings › You › Editor first, then open it here.");
+    const said = await commands.openExtensionRecord(editor);
+    setWent(said.status === "error" ? said.error : null);
+  };
+
   const turn = async (id: string, on: boolean) => {
     const said = await commands.setExtensionOn(id, on);
     if (said.status === "error") return setWent(said.error);
@@ -169,9 +180,13 @@ export function Extensions({ onClose }: { onClose: () => void }) {
               declares is in force: {listed.unreadable}{" "}
               {/* The sentence names the file; once it is mended, one press reads it again
                   rather than closing and reopening the dialog (NO-8, #1233). Approving writes
-                  nothing over a record purlis could not read, so reading is the only fix. */}
+                  nothing over a record purlis could not read, so reading is the only fix, and
+                  Open in your editor is where it is mended (#1296). */}
               <button type="button" tabIndex={0} onClick={() => void reread()}>
                 Read again
+              </button>{" "}
+              <button type="button" tabIndex={0} onClick={() => void openRecord()}>
+                Open in your editor
               </button>
             </p>
           )}
