@@ -5,6 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
 import type { GoneProject, MachineProject, ThisMachine } from "../bindings";
 import { forgetThisLaunch } from "../regions";
+import { machineChanged } from "./thisMachine";
 import { GLOBAL } from "../windowprefs";
 
 /**
@@ -461,5 +462,16 @@ describe("This machine follows the store when it changes elsewhere (#1240)", () 
     await waitFor(() => expect(entries("Pins")).toHaveLength(5));
     expect(entries("Pins")).toContain("old/mnt/usb/oldgoneUnpin");
     await waitFor(() => expect(screen.getByRole("radio", { name: "dev" })).toBeChecked());
+  });
+
+  it("reads the store again when the window says it changed it, with the focus kept", async () => {
+    await thisMachine();
+    await waitFor(() => expect(entries("Pins")).toHaveLength(4));
+    // A pin on the workspace strip, which tells the group (`PlaneView`'s `pinWorkspace`).
+    store[1].pinned = true;
+
+    inReact(() => machineChanged());
+
+    await waitFor(() => expect(entries("Pins")).toHaveLength(5));
   });
 });

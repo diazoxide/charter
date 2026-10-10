@@ -23,6 +23,19 @@ vi.mock("./SessionPane", () => ({
   ),
 }));
 
+/** How often the window told Settings › You › This machine that the store changed (#1240). */
+const machine = vi.hoisted(() => ({ changed: 0 }));
+vi.mock("./settings/thisMachine", async (original) => {
+  const real = await original<typeof import("./settings/thisMachine")>();
+  return {
+    ...real,
+    machineChanged: () => {
+      machine.changed += 1;
+      real.machineChanged();
+    },
+  };
+});
+
 const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMode>);
 
 const PLANE = "/home/dev/plane";
@@ -106,6 +119,7 @@ afterEach(() => {
   cleanup();
   clearMocks();
   vi.restoreAllMocks();
+  machine.changed = 0;
 });
 
 /** The names on one strip's tabs, in the order it draws them. */
@@ -305,6 +319,31 @@ describe("dragging a workspace tab with the keyboard", () => {
       within(tabOn("Workspaces", "alpha")).getByRole("img", { name: /^pinned / }),
     ).toBeTruthy();
     answer(null);
+  });
+
+  it("tells This machine the store changed once the pin and the order are written (#1240)", async () => {
+    let answer: (said: unknown) => void = () => undefined;
+    const window = core({
+      pinned: ["beta"],
+      pinWorkspace: () => new Promise((resolve) => (answer = resolve)),
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(namesOn("Workspaces").map((name) => name?.match(/alpha|beta/)?.[0])).toEqual([
+        "beta",
+        "alpha",
+      ]),
+    );
+    const before = machine.changed;
+
+    tabOn("Workspaces", "alpha").focus();
+    await dragWithTheKeyboard("{ArrowLeft}");
+    // Not while the core is still writing the pin: This machine would read the store as it was.
+    expect(machine.changed).toBe(before);
+
+    answer(null);
+    await waitFor(() => expect(window.last("arrange_workspace_pins")).toBeDefined());
+    await vi.waitFor(() => expect(machine.changed).toBe(before + 1));
   });
 
   it("never moves anything in front of the plane root, nor the root itself (SI-1)", async () => {

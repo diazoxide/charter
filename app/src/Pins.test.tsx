@@ -25,11 +25,25 @@ vi.mock("./SessionPane", () => ({
   ),
 }));
 
+/** How often the window told Settings › You › This machine that the store changed (#1240). */
+const machine = vi.hoisted(() => ({ changed: 0 }));
+vi.mock("./settings/thisMachine", async (original) => {
+  const real = await original<typeof import("./settings/thisMachine")>();
+  return {
+    ...real,
+    machineChanged: () => {
+      machine.changed += 1;
+      real.machineChanged();
+    },
+  };
+});
+
 const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMode>);
 
 afterEach(() => {
   cleanup();
   clearMocks();
+  machine.changed = 0;
 });
 
 const PLANE = "/home/dev/plane";
@@ -275,6 +289,17 @@ describe("a pinned workspace", () => {
     // The store is what says what is pinned, so the window asks it rather than assuming its
     // own write landed as it expected.
     await vi.waitFor(() => expect(asked(asks, "plane_pins").length).toBeGreaterThan(before));
+  });
+
+  it("tells This machine the store changed, so its pins read again if it is on screen (#1240)", async () => {
+    core([chat(1, "one", "alpha")]);
+    render(<App />);
+    await waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+    const before = machine.changed;
+
+    await runFromPalette("Pin workspace beta");
+
+    await vi.waitFor(() => expect(machine.changed).toBe(before + 1));
   });
 
   it("is never offered for the chats outside every workspace", async () => {
