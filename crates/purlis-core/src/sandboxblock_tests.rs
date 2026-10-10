@@ -1296,17 +1296,20 @@ fn a_refused_lookup_is_said_as_a_program_past_the_proxy_never_as_a_host_not_allo
     );
 }
 
-/// Docker's client refused its socket (#1631): a local socket, which no grant names.
+/// Docker's client refused its socket (#1631): a local socket, which no grant names. Docker's
+/// sentence alone counts only on macOS (#1637, below).
 #[test]
 fn a_refused_docker_socket_is_a_connection_to_a_local_socket() {
-    for line in [
+    let alone = cfg!(target_os = "macos").then_some(
         "permission denied while trying to connect to the docker API at \
          unix:///Users/dev/.docker/run/docker.sock",
+    );
+    for line in alone.into_iter().chain([
         "Got permission denied while trying to connect to the Docker daemon socket at \
          unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.47/info\": dial \
          unix /var/run/docker.sock: connect: operation not permitted",
         "dial unix /Users/dev/.colima/default/docker.sock: connect: operation not permitted",
-    ] {
+    ]) {
         assert_eq!(
             detect_with_targets(&came_back("docker info", "", line), &place()),
             vec![(block(Operation::Connect, Kind::LocalSocket, false), None)],
@@ -1325,6 +1328,50 @@ fn a_refused_docker_socket_is_a_connection_to_a_local_socket() {
             &place()
         )
         .is_empty()
+    );
+}
+
+/// Docker's own "permission denied" sentence is the sandbox's only where the sandbox can refuse
+/// a socket that way (#1637): on macOS, Seatbelt's refusal reads so. Elsewhere it is a user
+/// outside the docker group, which no Start without the sandbox mends. The socket's `EPERM`
+/// (Go's `connect: operation not permitted`) is the sandbox's everywhere, and `EACCES`
+/// (`connect: permission denied`) is a socket's own file mode everywhere.
+#[test]
+fn dockers_permission_words_are_a_block_only_where_the_sandbox_can_say_them() {
+    let docker_alone = "permission denied while trying to connect to the docker API at \
+                        unix:///Users/dev/.docker/run/docker.sock";
+    let docker_eperm = "Got permission denied while trying to connect to the Docker daemon socket \
+                        at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/\
+                        v1.47/info\": dial unix /var/run/docker.sock: connect: operation not \
+                        permitted";
+    let docker_eacces = "permission denied while trying to connect to the Docker daemon socket \
+                         at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/\
+                         v1.47/info\": dial unix /var/run/docker.sock: connect: permission denied";
+    let go_eperm = "dial unix /Users/dev/.colima/default/docker.sock: connect: operation not \
+                    permitted";
+    let socket = Some((Operation::Connect, Kind::LocalSocket, None));
+    // Where the sandbox says Docker's words (macOS).
+    assert_eq!(network_refusal_on(docker_alone, true), socket);
+    assert_eq!(network_refusal_on(docker_eperm, true), socket);
+    assert_eq!(network_refusal_on(go_eperm, true), socket);
+    assert_eq!(network_refusal_on(docker_eacces, true), None, "a file mode");
+    // Where it does not (Linux): only the socket's own `EPERM` is the sandbox's.
+    assert_eq!(
+        network_refusal_on(docker_alone, false),
+        None,
+        "the docker group"
+    );
+    assert_eq!(network_refusal_on(docker_eperm, false), socket);
+    assert_eq!(network_refusal_on(go_eperm, false), socket);
+    assert_eq!(
+        network_refusal_on(docker_eacces, false),
+        None,
+        "a file mode"
+    );
+    // This build reads them as its own platform does.
+    assert_eq!(
+        network_refusal(docker_alone),
+        cfg!(target_os = "macos").then_some((Operation::Connect, Kind::LocalSocket, None))
     );
 }
 

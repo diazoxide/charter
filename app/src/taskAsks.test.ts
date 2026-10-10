@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatBlocked } from "./bindings";
 import type { ListedChat } from "./chatsTree";
-import { putAway } from "./sandboxBlocks";
+import { blocked, hostsOf, putAway } from "./sandboxBlocks";
 import { listed, matched, named, taskBlockGroups, whoseOf, withoutGrouped } from "./taskAsks";
 
 /** A chat as the core lists it: `parent` asked for it as a task, where there is one. */
@@ -142,8 +142,34 @@ describe("an answered block", () => {
     const newer = hostBlock(7, "api.example.com");
     expect(putAway({ 7: [newer] }, 7, answered, true)).toEqual({ 7: [newer] });
     expect(putAway({ 7: [answered] }, 7, answered, true)).toEqual({});
-    // Dismiss puts away whatever the chat shows of that kind.
-    expect(putAway({ 7: [newer] }, 7, answered)).toEqual({});
+    // Dismiss puts away what the Notice showed: a host that joined it since stays up (#1637).
+    expect(putAway({ 7: [newer] }, 7, answered)).toEqual({ 7: [newer] });
+    const write = { ...hostBlock(7), offer: "write" as const, kind: "home", target: "/a" };
+    expect(putAway({ 7: [{ ...write, target: "/b" }] }, 7, write)).toEqual({});
+  });
+});
+
+describe("several hosts one task was refused (#1637)", () => {
+  const tasks = [
+    { session: 7, whose: "talk" },
+    { session: 8, whose: "sweep" },
+  ];
+
+  it("are each asked with the other tasks held on that host, and the rest stay the task's own", () => {
+    let held = blocked({}, hostBlock(7));
+    held = blocked(held, hostBlock(7, "api.example.com"));
+    held = blocked(held, hostBlock(8));
+    expect(held[7]).toHaveLength(1);
+    const groups = taskBlockGroups(held, 4, tasks);
+    expect(groups.map((group) => [group.target, group.members.map((one) => one.session)])).toEqual([
+      ["registry.npmjs.org", [7, 8]],
+    ]);
+    expect(groups[0].members[0].block.target).toBe("registry.npmjs.org");
+    // The group asks npm; talk's own Notice keeps the host no group asks.
+    const left = withoutGrouped(held, groups);
+    expect(left[8]).toBeUndefined();
+    expect(left[7]?.map(hostsOf)).toEqual([["api.example.com"]]);
+    expect(left[7]?.[0].target).toBe("api.example.com");
   });
 });
 
