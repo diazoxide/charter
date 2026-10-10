@@ -146,6 +146,7 @@ import { isSearch, searchFromFocus, searchTitle, searchView } from "./contentSea
 import { opensSearch } from "./searchKey";
 import { BottomBar } from "./BottomBar";
 import { readRefusedIn, useWorkspaceState, type WorkspaceState } from "./workspaceState";
+import { useTaskBranchActs } from "./taskBranchActs";
 import {
   heardFrom,
   lostOnResume,
@@ -4444,6 +4445,22 @@ export const PlaneView = memo(function PlaneView({
   useEffect(() => {
     finishedNow.current = finishedTasks;
   }, [finishedTasks]);
+  /**
+   * **A finished task's Merge… and Discard branch…, from its row's menu** (#1534): the Changes
+   * tab's own asks (`taskBranchActs.tsx`), drawn here, with what a press came to said on the
+   * window's line. The asks are held in a ref so the catalogue's doing is not rebuilt on every
+   * draw.
+   */
+  const taskBranchActs = useTaskBranchActs({
+    plane,
+    told: (said) =>
+      setReport({ from: "task.branch", refused: said.tone === "trouble", words: said.says }),
+    changed: rereadFinished,
+  });
+  const branchActs = useRef(taskBranchActs);
+  useEffect(() => {
+    branchActs.current = taskBranchActs;
+  });
   /** Clear finished: the rows go, and nothing else does. */
   const clearFinished = useCallback(
     (ids: string[]) => {
@@ -5221,6 +5238,10 @@ export const PlaneView = memo(function PlaneView({
       openSettingsTab: windowDoes.openSettingsTab,
       openYourSettings: windowDoes.openYourSettings,
       readAgain: rereadPanels,
+      taskBranch: (id: string, act: "merge" | "discard") =>
+        void (act === "merge"
+          ? branchActs.current.askToMerge(id)
+          : branchActs.current.askToDiscard(id)),
       curate,
       quit: windowDoes.quit,
       ...fileDoing,
@@ -8000,6 +8021,8 @@ export const PlaneView = memo(function PlaneView({
 
       {/* The one question charter asks before it ends a chat, wherever the row was pressed
           (the operator: *"closing session should ask confirmation"*). */}
+      {/* A finished task's Merge… or Discard branch…, asked from its row's menu (#1534). */}
+      {taskBranchActs.asking}
       {/* NO-3's two questions: a chat's record dropped, and a chat started again. */}
       {forgetting && (
         <ChatAsk

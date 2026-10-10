@@ -1,6 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -226,6 +233,18 @@ function core({
         if (deleted !== undefined) throw new Error(deleted);
         return null;
       }
+      if (cmd === "dispatch_worktree_loss")
+        return {
+          task: ON_ITS_BRANCH.name,
+          repo: "api",
+          branch: BRANCH,
+          on: BRANCH,
+          changes: ["src/queue.rs"],
+          ignored: [],
+          nested: [],
+          seal: "seal",
+          unmerged: 0,
+        };
       if (cmd === "task_branch_merge_question") return merge;
       if (cmd === "task_branch_merge") {
         if (merged !== undefined) throw new Error(merged);
@@ -425,6 +444,87 @@ describe("what a task changed", () => {
       `The branch ${LEFT_BRANCH} is still in api, holding 2 commits main does not have. git does not find it merged into the branch api is on, so it stays: merge it, or delete it with git, yourself.`,
     );
     expect(within(tab).queryByRole("button", { name: "Delete branch…" })).toBeNull();
+  });
+
+  /** Right-clicks the finished row of `name` and waits for its menu. */
+  async function menuOfRow(name: string) {
+    const group = await theirs();
+    const row = group.querySelector(`[data-task-id="${name}"]`);
+    if (row === null) throw new Error(`no finished row for ${name}`);
+    fireEvent.contextMenu(row);
+    return screen.findByRole("menu");
+  }
+
+  it("offers Merge… and Discard branch… on the finished row's menu, through the same asks (#1534)", async () => {
+    const said = core();
+    render(<App />);
+
+    const menu = await menuOfRow(ON_ITS_BRANCH.id);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Merge…" }));
+
+    // The Changes tab's own question, from what the core reads now.
+    const question = await screen.findByRole("alertdialog", { name: "Merge this task's branch?" });
+    expect(question).toHaveTextContent(
+      `This lands 2 commits of ${BRANCH}, which purlis cut for fix the queue, in main in api.`,
+    );
+    expect(said.asked("task_branch_merge")).toEqual([]);
+    await userEvent.click(within(question).getByRole("button", { name: "Merge" }));
+    await waitFor(() =>
+      expect(said.asked("task_branch_merge")).toEqual([
+        expect.objectContaining({ id: ON_ITS_BRANCH.id, seen: MERGE }),
+      ]),
+    );
+    expect(
+      await screen.findByText(
+        `${BRANCH} is merged, and its folder is removed: it held nothing else.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("asks before a finished row's Discard branch… discards anything", async () => {
+    const said = core();
+    render(<App />);
+
+    const menu = await menuOfRow(ON_ITS_BRANCH.id);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Discard branch…" }));
+
+    await waitFor(() =>
+      expect(said.asked("dispatch_worktree_loss")).toEqual([
+        { plane: PLANE, id: ON_ITS_BRANCH.id },
+      ]),
+    );
+    const question = await screen.findByRole("alertdialog", {
+      name: "Discard this branch's folder?",
+    });
+    expect(question).toHaveTextContent("src/queue.rs");
+    expect(said.asked("dispatch_worktree_discard")).toEqual([]);
+  });
+
+  it("says why a finished row's merge would be refused, and asks nothing", async () => {
+    const said = core({ merge: { ...MERGE, behind: 3 } });
+    render(<App />);
+
+    const menu = await menuOfRow(ON_ITS_BRANCH.id);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Merge…" }));
+
+    expect(
+      await screen.findByText(/so the branch no longer fast-forwards/, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(said.asked("task_branch_merge")).toEqual([]);
+  });
+
+  it("has no Merge or Discard on a task that had no branch of its own", async () => {
+    core();
+    render(<App />);
+    const group = await theirs();
+    const row = group.querySelector(`[data-task-id="${BESIDE.id}"]`);
+    if (row === null) throw new Error("no finished row for tidy the docs");
+
+    fireEvent.contextMenu(row);
+
+    await new Promise((settle) => setTimeout(settle, 20));
+    expect(screen.queryByRole("menuitem", { name: "Merge…" })).toBeNull();
   });
 
   it("names both tasks on the asking chat's pane when two work in one folder", async () => {

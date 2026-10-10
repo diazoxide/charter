@@ -1339,6 +1339,8 @@ function App() {
       openYourSettings: windowDoes.openYourSettings,
       // No workspace is focused with no project, so there is nothing to read again.
       readAgain: () => undefined,
+      // Nor a finished task, which is a project's.
+      taskBranch: () => undefined,
       // A curation chat is opened in a project, and there is no project here.
       curate: async () => nowhere(),
       quit: windowDoes.quit,

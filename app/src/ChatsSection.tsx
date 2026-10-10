@@ -819,6 +819,8 @@ export function ChatsSection({
                         onReopen={onReopen}
                         onLook={onLookFinished}
                         onChanges={onChanges}
+                        offers={offers}
+                        onPress={press}
                       />
                     )),
                   ];
