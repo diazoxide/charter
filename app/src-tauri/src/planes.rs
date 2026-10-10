@@ -321,7 +321,8 @@ pub struct PlaneUpdated {
     pub files: Vec<String>,
 }
 
-/// Why a task is not started fresh (#1489): what the window's question and the row say.
+/// Why a task is not started fresh (#1489): what the window's question and the row say. Said
+/// only where its brief cannot be handed to it again (#1609, [`Held::start_chat_fresh`]).
 pub const A_TASK_IS_NOT_STARTED_FRESH: &str = "This chat is a task, and a fresh start would drop the brief it was given. Restart chat keeps its conversation. To change what it was asked, stop it and ask again.";
 
 impl Held {
@@ -962,24 +963,29 @@ impl Held {
     }
 
     /// **Start fresh** (NO-3): chat `session` started again on the plane as it is now
-    /// ([`crate::chats::Chats::start_fresh`]), and then the old one ended here, as a close ends
-    /// it — off the board, its program gone — so nothing the window does or fails to do can leave
-    /// it running. A refused start ends nothing. The new one takes the old one's place in front.
+    /// ([`crate::chats::Chats::start_fresh_unless`]), and then the old one ended here, as a close
+    /// ends it — off the board, its program gone — so nothing the window does or fails to do can
+    /// leave it running. A refused start ends nothing. The new one takes the old one's place in
+    /// front.
     ///
-    /// **Refused for a task** (#1489): a fresh start is a new conversation, and a task's brief
-    /// is in the one it has. Started fresh it would still be its asker's task, still owing its
-    /// report, with nothing to say what it was asked. So nothing is started and nothing ends,
-    /// from whichever surface it was asked.
+    /// **A task starts fresh only when it is handed its brief again** (#1609, lifting #1489's
+    /// refusal): a fresh start is a new conversation, and it is still its asker's task, still
+    /// owing its report. So it starts only where [`crate::rebrief`] hands it the brief its
+    /// dispatch was sent, confirmed against the digest this app kept. Where that cannot be
+    /// confirmed (a dispatch from before this launch, a record rewritten since, none kept, or
+    /// one that no longer passes a first message's checks), it is refused as before
+    /// ([`A_TASK_IS_NOT_STARTED_FRESH`]): nothing is started and nothing ends, from whichever
+    /// surface it was asked.
     pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
         self.not_while_stopping(session)?;
-        if self
+        let task = self
             .chats
             .handed_from(session)
-            .is_some_and(|from| from.mode == purlis_core::reopen::Mode::Task)
-        {
-            return Err(A_TASK_IS_NOT_STARTED_FRESH.to_owned());
-        }
-        let started = self.chats.start_fresh(session, size)?;
+            .is_some_and(|from| from.mode == purlis_core::reopen::Mode::Task);
+        let started = self.chats.start_fresh_unless(session, size, |told| {
+            (task && !told.is_some_and(|told| told.handed))
+                .then(|| A_TASK_IS_NOT_STARTED_FRESH.to_owned())
+        })?;
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat
         // must still reach the window.

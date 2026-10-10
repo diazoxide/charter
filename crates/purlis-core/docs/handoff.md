@@ -1017,6 +1017,10 @@ the two numbers are both on screen. Name long material by its path instead of pa
   the app was started again), and one that fails a check is not handed: the chat is told why in
   one line, and the person can read what was kept in the Dispatches tab. A chat that resumes is
   already reading the brief in its own transcript.
+- **A task starts fresh only where its brief is handed again** (#1609, #1489). It is still its
+  asker's task after a fresh start, and still owes its report, so a Start fresh whose brief
+  cannot be handed is refused for a task, with the same sentence as before: nothing starts and
+  nothing ends. Restart chat keeps its conversation, and with it the brief.
 
 ## Limits
 
