@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "./here";
-import type { ChatBlocked, PlaneId } from "./bindings";
+import { commands, type BlockShown, type ChatBlocked, type PlaneId } from "./bindings";
 
 /** The most blocks one chat holds at once. */
 export const AT_MOST_PER_CHAT = 5;
@@ -157,6 +157,21 @@ export function putAway(
   return left.length === 0 ? others : { ...others, [session]: left };
 }
 
+/**
+ * **What putting `block` away tells the core** (#1690): each host it lists, or the one thing
+ * it names, as the block shown, so the asks registry stops listing what the person kept
+ * blocked. It grants nothing; a block the core no longer holds is nothing to forget.
+ */
+export function forgotten(block: HeldBlock): BlockShown[] {
+  if (block.offer !== "host" && block.offer !== "write") return [];
+  return eachHost(block).map((one) => ({
+    operation: one.operation,
+    kind: one.kind,
+    what: block.offer as "host" | "write",
+    target: one.target ?? "",
+  }));
+}
+
 /** What `plane`'s chats' sandboxes blocked, and how one is put away. */
 export function useSandboxBlocks(plane: PlaneId | undefined): {
   blocks: Blocks;
@@ -195,9 +210,16 @@ export function useSandboxBlocks(plane: PlaneId | undefined): {
   }, [plane]);
 
   const dismiss = useCallback(
-    (session: number, block: HeldBlock) =>
-      setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block) })),
-    [],
+    (session: number, block: HeldBlock) => {
+      setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block) }));
+      // Keep blocked, told to the core, so the block is no longer an ask (#1690).
+      if (plane !== undefined)
+        for (const shown of forgotten(block))
+          void Promise.resolve()
+            .then(() => commands.forgetSandboxBlock(plane, session, shown))
+            .catch(() => undefined);
+    },
+    [plane],
   );
   const answered = useCallback(
     (session: number, block: HeldBlock) =>
