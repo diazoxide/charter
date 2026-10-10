@@ -233,6 +233,24 @@ fn a_pick_is_read_back_as_it_was_written() {
     }
 }
 
+/// #1145: a pick names a theme by the rule an extension's manifest holds a theme's name to, so a
+/// name no extension can contribute is not a pick, for the colour theme and the icon theme.
+#[test]
+fn a_pick_whose_theme_name_purlis_would_not_draw_is_not_a_pick() {
+    let longest = format!("solarized/{}", "L".repeat(40));
+    assert!(Pick::parse(&longest).is_some());
+    assert!(Pick::parse_icons(&longest).is_some());
+    for value in [
+        format!("solarized/{}", "L".repeat(41)),
+        "solarized/Dark\u{202e}".to_owned(),
+        "solarized/Dark\u{200b}".to_owned(),
+        "solarized/Da\u{7}rk".to_owned(),
+    ] {
+        assert_eq!(Pick::parse(&value), None, "{value:?}");
+        assert_eq!(Pick::parse_icons(&value), None, "{value:?}");
+    }
+}
+
 // -------------------------------------------------------------------------------------
 // A workspace's theme and colour (charter-app#281)
 // -------------------------------------------------------------------------------------

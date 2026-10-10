@@ -85,6 +85,11 @@ pub enum Pick {
 
 impl Pick {
     /// `value` as a pick, or `None` when it is not one of the shapes.
+    ///
+    /// A theme's name is held to the rule an extension's manifest holds it to
+    /// (`facts::drawable_label`, #1145): no extension can contribute a longer name or one with a
+    /// control or invisible formatting character, so a pick of one could never be drawn, and it
+    /// would only carry that name into the sentence that says so.
     pub fn parse(value: &str) -> Option<Self> {
         if value == SYSTEM {
             return Some(Self::System);
@@ -93,7 +98,10 @@ impl Pick {
             return Some(Self::BuiltIn(built));
         }
         let (id, name) = value.split_once('/')?;
-        (super::id_ok(id) && !name.trim().is_empty()).then(|| Self::Extension {
+        (super::id_ok(id)
+            && !name.trim().is_empty()
+            && crate::extension::facts::drawable_label(name))
+        .then(|| Self::Extension {
             id: id.to_owned(),
             name: name.to_owned(),
         })
