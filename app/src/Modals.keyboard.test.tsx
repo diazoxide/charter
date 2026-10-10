@@ -388,8 +388,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
   });
 
   it("reaches Check again in the doctor, past the summary that was hiding it", async () => {
-    // Three tabbables whenever a row is unchecked — the `<summary>`, `Check again`, `Close` —
-    // and `Check again` was the one in the middle. The `<summary>` is what makes this dialog
+    // Three tabbables whenever a row is unchecked — the `<summary>`, then the answer bar's
+    // `Close` and `Check again` (#1210) — and `Check again` was once the one in the middle. The `<summary>` is what makes this dialog
     // a good witness: it is not a form control, so the engine always stopped at it, and the
     // hole was on the far side of it.
     const rows = [
@@ -426,8 +426,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
 
     expect(await reachableByKeyboard()).toEqual([
       'summary "Not checked by this build (1)"',
-      'button "Check again"',
       'button "Close"',
+      'button "Check again"',
     ]);
   });
 
@@ -463,8 +463,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
 
     expect(await reachableByKeyboard()).toEqual([
       'button "Fix it in Settings"',
-      'button "Check again"',
       'button "Close"',
+      'button "Check again"',
     ]);
   });
 

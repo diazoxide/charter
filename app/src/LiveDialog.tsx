@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { Radio } from "lucide-react";
 import { commands, type LivePreview, type PlaneId, type RemoteReaders } from "./bindings";
 import { askSavingTab, tellSaved } from "./saving";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **Make a workspace LIVE or LOCAL** (charter-app#301, ADR 0051): what it publishes, where it
@@ -155,7 +156,10 @@ export function LiveDialog({
             </p>
           )}
           {switched !== null ? (
-            <div className="doing">
+            <AnswerBar>
+              <button type="button" tabIndex={0} ref={cancel} onClick={() => onDone(switched.said)}>
+                Close
+              </button>
               {/* Where a save that did not happen is mended (NO-8's follow-up, #1296): the
                   Saving tab says why, and has the save, the mode and the ways out. */}
               <button
@@ -168,12 +172,14 @@ export function LiveDialog({
               >
                 Go to Saving
               </button>
-              <button type="button" tabIndex={0} ref={cancel} onClick={() => onDone(switched.said)}>
-                Close
-              </button>
-            </div>
+            </AnswerBar>
           ) : (
-            <div className="doing">
+            <AnswerBar>
+              <AlertDialog.Cancel asChild>
+                <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
+                  Cancel
+                </button>
+              </AlertDialog.Cancel>
               <button
                 type="button"
                 className="ends-it"
@@ -183,12 +189,7 @@ export function LiveDialog({
               >
                 {`Make ${word}`}
               </button>
-              <AlertDialog.Cancel asChild>
-                <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
-                  Cancel
-                </button>
-              </AlertDialog.Cancel>
-            </div>
+            </AnswerBar>
           )}
         </AlertDialog.Content>
       </AlertDialog.Portal>

@@ -7,6 +7,7 @@ import { HeadingOffer, PanelSection } from "./PanelSection";
 import { Notice } from "./Notice";
 import type { Catalogued, Offer } from "./actions";
 import { commands, type PanelRow, type VaultSummary } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * The plane's vaults, in the Attention region: each vault with its provider and how many
@@ -173,11 +174,11 @@ export function OpenVault({
               }}
             />
           </div>
-          <div className="doing">
+          <AnswerBar>
             <button type="button" tabIndex={0} onClick={onCancel}>
               Cancel
             </button>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

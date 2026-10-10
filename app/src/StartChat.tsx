@@ -5,6 +5,7 @@ import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import type { StartOptions, WithoutSandbox } from "./bindings";
 import { Choice, Field, SettingActions, SettingGroup, SettingRow } from "./settings/components";
+import { AnswerBar } from "./AnswerBar";
 
 /** Settings › Harness, where a harness profile is declared (SE-22's address). */
 const HARNESS = "project.harness";
@@ -507,7 +508,7 @@ export function StartChat({
               keyboard that left it could not come back. ADR 0022 makes this dialog the only
               way a chat starts, so that was the keyboard-only path to starting one.
               `docs/ui-primitives.md` holds the measurement and the engine's own rule. */}
-          <div className="answer">
+          <AnswerBar>
             {/* Cancel first and focused: see `onOpenAutoFocus` above. */}
             <button ref={cancel} tabIndex={0} onClick={leave}>
               Cancel
@@ -542,7 +543,7 @@ export function StartChat({
                 {starting ? "Starting…" : startWord}
               </button>
             )}
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

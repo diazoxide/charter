@@ -23,6 +23,7 @@ import {
   type Theme,
 } from "./theme/theme";
 import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What has contributed what to this window, and the question charter asks before anything new
@@ -253,11 +254,11 @@ export function Extensions({ onClose }: { onClose: () => void }) {
             />
           )}
 
-          <div className="doing">
+          <AnswerBar>
             <button type="button" tabIndex={0} onClick={onClose}>
               Done
             </button>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

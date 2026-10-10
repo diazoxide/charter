@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import type { RelaunchChoice, RelaunchQuestion } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What a launch asks before it puts anything back (charter-app#250): reopen every session, or
@@ -70,7 +71,7 @@ export function RelaunchAsk({
               </li>
             ))}
           </ul>
-          <div className="answer">
+          <AnswerBar>
             <Alert.Cancel asChild>
               <button ref={reopen} tabIndex={0}>
                 Reopen all sessions
@@ -81,7 +82,7 @@ export function RelaunchAsk({
             <button tabIndex={0} onClick={() => onAnswer("StartFresh")}>
               Start fresh
             </button>
-          </div>
+          </AnswerBar>
         </Alert.Content>
       </Alert.Portal>
     </Alert.Root>

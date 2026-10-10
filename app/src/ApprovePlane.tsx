@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { Ask } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What opening this project will put in force, and the question about it.
@@ -184,14 +185,14 @@ export function ApprovePlane({
               leaves a `<button>` out of the tab sequence unless its `tabindex` is written
               down, and a dialog should not depend on having exactly two answers to be
               reachable. */}
-          <div className="doing">
-            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
-              {ask.first ? "Open project" : "Open it anyway"}
-            </button>
+          <AnswerBar>
             <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
               Cancel
             </button>
-          </div>
+            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
+              {ask.first ? "Open project" : "Open it anyway"}
+            </button>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

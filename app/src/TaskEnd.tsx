@@ -11,6 +11,7 @@ import {
 import type { Offer, TaskEndWay } from "./actions";
 import type { TaskEnding } from "./bindings";
 import { fitWaysOn } from "./wholeWays";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **Ending a task by hand** (#1488, V100-5, V100-18): the second step every ending takes, and
@@ -201,7 +202,7 @@ export function TaskEndAsk({
               {asked.trouble}
             </p>
           )}
-          <div className="answer">
+          <AnswerBar>
             <AlertDialog.Cancel asChild>
               <button type="button" ref={cancel} tabIndex={0} disabled={asked.busy}>
                 Cancel
@@ -228,7 +229,7 @@ export function TaskEndAsk({
                 Stop and get its report
               </button>
             )}
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

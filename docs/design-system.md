@@ -523,6 +523,25 @@ SettingActions in `app/src/settings/components.tsx`, six thin pieces over the Ra
 and native elements already in use, drawn in tokens. `docs/ui-primitives.md` gives the reasons. Nothing else joins it without a new
 amendment.
 
+**The answer bar** (`app/src/AnswerBar.tsx`, #1210) is the one row a question dialog is answered
+from: the quit warning, a delete's confirm, approving a project, Restart to update, About. A
+question with a way out and an act or two and nothing to fill in ends in it, as a form ends in
+`SettingActions`. It is a `<div className="answer">` and no more, so it is neither a settings
+piece nor an API in front of a primitive: the buttons inside it are native `<button>`s, or
+Radix's own `Cancel`, `Action` and `Close` around one, written by the dialog. The rules it
+carries are the dialog's to keep, and every question keeps the same ones:
+
+- **At the trailing edge.** `.answer` is a flex row pushed to the end, with a gap, so every
+  question's answers stand where the reader's eye ends the dialog.
+- **The way out first, then the acts**, and the answer that moves things on last, at the edge:
+  Cancel then Delete, Close then Read again, Cancel then Close then Smart close.
+- **What cannot be taken back says so** with `ends-it`, and it is never the one Return finds:
+  the dialog focuses its way out (or, for Reopen your sessions, the answer that loses nothing).
+- **Focus and Escape stay the dialog's.** The bar handles no key. Escape is the dialog's Cancel,
+  or whatever that dialog says it is.
+
+`answerBar.guard.test.ts` fails on a dialog that builds an `answer` or `doing` row by hand.
+
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
 and a theme reaches it without an icon ever naming a colour. `app/src/lib/icons.test.tsx` pins

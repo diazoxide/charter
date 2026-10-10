@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import { ENDS_IT, type Offer } from "./actions";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What charter asks before it ends a chat.
@@ -206,7 +207,7 @@ export function EndingChat({
           )}
           {/* `tabIndex={0}` on each, per `docs/ui-primitives.md` (charter-app#186). Cancel
               first and Smart close last, at the edge where a primary answer sits. */}
-          <div className="answer">
+          <AnswerBar>
             <Alert.Cancel asChild>
               <button ref={cancel} tabIndex={0}>
                 Cancel
@@ -229,7 +230,7 @@ export function EndingChat({
                 Smart close
               </button>
             </Alert.Action>
-          </div>
+          </AnswerBar>
         </Alert.Content>
       </Alert.Portal>
     </Alert.Root>

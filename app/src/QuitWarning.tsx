@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChatState } from "./NeedsYou";
 import { type State } from "./chatState";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * One chat a quit is about to end, whichever project it is in.
@@ -92,7 +93,7 @@ export function QuitWarning({
               focus scope handles — but "reachable because there are only two of them" is a
               property that goes away the moment a third control arrives, and the attribute is
               what makes it not depend on the count. */}
-          <div className="answer">
+          <AnswerBar>
             {/* Cancel first, and focused: the destructive answer is never the one a stray
               Return key finds. */}
             <button ref={cancel} tabIndex={0} onClick={onCancel}>
@@ -101,7 +102,7 @@ export function QuitWarning({
             <button className="ends-it" tabIndex={0} onClick={onQuit}>
               Quit purlis
             </button>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -229,7 +230,7 @@ export function MidTurn({
             </div>
           </AlertDialog.Description>
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-          <div className="answer">
+          <AnswerBar>
             <AlertDialog.Cancel asChild>
               <button type="button" tabIndex={0}>
                 Wait
@@ -238,7 +239,7 @@ export function MidTurn({
             <button type="button" className="ends-it" tabIndex={0} onClick={onRestart}>
               Restart now
             </button>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

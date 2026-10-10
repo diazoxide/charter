@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * Deleting a persona (SI-3): what goes, what stays, and one answer.
@@ -61,7 +62,12 @@ export function RemovePersona({
             </p>
           )}
 
-          <div className="doing">
+          <AnswerBar>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
             <button
               type="button"
@@ -72,12 +78,7 @@ export function RemovePersona({
             >
               Delete persona
             </button>
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>
