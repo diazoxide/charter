@@ -613,8 +613,10 @@ pub(crate) async fn task_branch_delete(
 // Two tasks in one folder
 // ---------------------------------------------------------------------------------------
 
-/// One open task, as the same-folder question reads it: the chat that asked for it, and it.
+/// One open task, as the same-folder question reads it: its own chat, the chat that asked for
+/// it, and it.
 struct OpenTask {
+    session: u32,
     asker: u32,
     working: Working,
 }
@@ -637,6 +639,7 @@ fn open_tasks(held: &Held, but: Option<u32>) -> Vec<OpenTask> {
     open.into_iter()
         .filter_map(|(asker, chat)| {
             Some(OpenTask {
+                session: chat.session,
                 asker,
                 working: Working {
                     name: held
@@ -653,6 +656,52 @@ fn open_tasks(held: &Held, but: Option<u32>) -> Vec<OpenTask> {
 /// What `tasks` are, as the core's same-folder rules read them.
 fn working(tasks: Vec<OpenTask>) -> Vec<Working> {
     tasks.into_iter().map(|task| task.working).collect()
+}
+
+/// `path` with its links resolved, or as it is where it cannot be.
+fn real(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The chats above chat `asker` along who asked for whom, nearest first, as far as the open
+/// tasks reach: the chat that asked for it where it is an open task, then that chat's asker,
+/// and so on.
+fn above(asker: u32, tasks: &[OpenTask]) -> Vec<u32> {
+    let mut chain = Vec::new();
+    let mut at = asker;
+    while let Some(task) = tasks.iter().find(|task| task.session == at) {
+        if task.asker == asker || chain.contains(&task.asker) {
+            break;
+        }
+        chain.push(task.asker);
+        at = task.asker;
+    }
+    chain
+}
+
+/// **The folders chat `asker`'s tab says** (#1645): each folder where an open task of
+/// `asker` works beside another open task, of that chat or of any other (#1534), unless a
+/// chat above `asker` ([`above`]) also asked for a task working there. A pane draws the
+/// Notices of every chat in its tab, a session and its tasks together, so a folder a lineage
+/// shares is said once, by the topmost chat of it that asked for a task there.
+fn said_by(asker: u32, tasks: &[OpenTask]) -> Vec<core::Shared> {
+    let up = above(asker, tasks);
+    let askers_in = |folder: &std::path::Path| -> Vec<u32> {
+        let folder = real(folder);
+        tasks
+            .iter()
+            .filter(|task| real(&task.working.cwd) == folder)
+            .map(|task| task.asker)
+            .collect()
+    };
+    let all: Vec<Working> = tasks.iter().map(|task| task.working.clone()).collect();
+    core::shared(&all)
+        .into_iter()
+        .filter(|shared| {
+            let here = askers_in(&shared.folder);
+            here.contains(&asker) && !up.iter().any(|chat| here.contains(chat))
+        })
+        .collect()
 }
 
 /// **What is said beside the start of task `new`, where another open task already works in its
@@ -692,18 +741,11 @@ pub(crate) struct SharedFolder {
 }
 
 /// The folders where an open task of chat `asker` works beside another open task, of that chat
-/// or of any other (#1534).
+/// or of any other (#1534), and no chat above `asker`, along who asked for whom, also asked
+/// for a task there: such a folder is said once, by the topmost of them (#1645, [`said_by`]).
 pub(crate) fn shared_by(held: &Held, asker: u32) -> Vec<SharedFolder> {
-    let tasks = open_tasks(held, None);
-    let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or(path.to_path_buf());
-    let mine: Vec<_> = tasks
-        .iter()
-        .filter(|task| task.asker == asker)
-        .map(|task| real(&task.working.cwd))
-        .collect();
-    core::shared(&working(tasks))
+    said_by(asker, &open_tasks(held, None))
         .into_iter()
-        .filter(|shared| mine.contains(&real(&shared.folder)))
         .map(|shared| {
             let folder = crate::dispatches::folder(held.root(), &shared.folder);
             SharedFolder {
@@ -795,6 +837,101 @@ mod tests {
             NOT_KEPT.contains(&format!("more than {} chats", core::CHATS_KEPT)),
             "{NOT_KEPT}"
         );
+    }
+
+    /// Open task `session`, asked for by chat `asker`, working in `cwd`.
+    fn task(session: u32, asker: u32, name: &str, cwd: &str) -> OpenTask {
+        OpenTask {
+            session,
+            asker,
+            working: Working {
+                name: name.to_owned(),
+                cwd: std::path::PathBuf::from(cwd),
+            },
+        }
+    }
+
+    /// The folders chat `asker`'s tab says, each with its tasks' names.
+    fn said(asker: u32, tasks: &[OpenTask]) -> Vec<(String, Vec<String>)> {
+        said_by(asker, tasks)
+            .into_iter()
+            .map(|shared| (shared.folder.display().to_string(), shared.tasks))
+            .collect()
+    }
+
+    #[test]
+    fn a_folder_a_session_and_its_task_both_asked_for_tasks_in_is_said_by_the_session_alone() {
+        // The operator's screenshot: 'steward 12' asked for #2962 and #3046, #3046 asked for
+        // "log watch", and all three work in one folder.
+        let tasks = [
+            task(20, 12, "#2962", "/nowhere/ws/ai"),
+            task(21, 12, "#3046", "/nowhere/ws/ai"),
+            task(22, 21, "log watch", "/nowhere/ws/ai"),
+        ];
+
+        assert_eq!(
+            said(12, &tasks),
+            [(
+                "/nowhere/ws/ai".to_owned(),
+                vec![
+                    "#2962".to_owned(),
+                    "#3046".to_owned(),
+                    "log watch".to_owned()
+                ]
+            )]
+        );
+        assert_eq!(said(21, &tasks), [], "the task's own Notice says it again");
+        assert_eq!(said(20, &tasks), [], "it asked for no task");
+    }
+
+    #[test]
+    fn a_chat_further_up_the_chain_that_asked_for_a_task_there_says_it_instead() {
+        let tasks = [
+            task(10, 1, "a", "/nowhere/x"),
+            task(11, 10, "b", "/nowhere/y"),
+            task(12, 11, "c", "/nowhere/x"),
+        ];
+
+        assert_eq!(said(1, &tasks).len(), 1);
+        assert_eq!(said(11, &tasks), [], "chat 1, two steps up, says it");
+    }
+
+    #[test]
+    fn two_unrelated_chats_whose_tasks_share_a_folder_each_say_it() {
+        let tasks = [
+            task(10, 1, "a", "/nowhere/x"),
+            task(11, 2, "b", "/nowhere/x"),
+        ];
+
+        assert_eq!(said(1, &tasks).len(), 1);
+        assert_eq!(said(2, &tasks).len(), 1);
+    }
+
+    #[test]
+    fn a_task_whose_own_tasks_share_a_folder_no_chat_above_it_works_in_says_it() {
+        let tasks = [
+            task(21, 12, "#3046", "/nowhere/ws/ai"),
+            task(30, 21, "one", "/nowhere/ws/b"),
+            task(31, 21, "two", "/nowhere/ws/b"),
+        ];
+
+        assert_eq!(
+            said(21, &tasks),
+            [(
+                "/nowhere/ws/b".to_owned(),
+                vec!["one".to_owned(), "two".to_owned()]
+            )]
+        );
+        assert_eq!(said(12, &tasks), [], "its one task works alone");
+    }
+
+    #[test]
+    fn a_chain_that_comes_back_on_itself_still_answers() {
+        // Not a state the app makes, but the walk must end on it.
+        let tasks = [task(1, 2, "a", "/nowhere/x"), task(2, 1, "b", "/nowhere/x")];
+
+        assert!(said(1, &tasks).len() <= 1);
+        assert!(said(2, &tasks).len() <= 1);
     }
 
     #[test]
