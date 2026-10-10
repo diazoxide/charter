@@ -146,8 +146,12 @@ pub struct OpenHosts {
 /// and how often.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct BlockedLately {
-    /// The host and port, where the block named one.
+    /// The host and port, where the block named one: a refused connection's, the one Allow
+    /// may name.
     pub target: Option<String>,
+    /// For a refused lookup, the host the program said it looked up (#1663): shown as text,
+    /// **never offered to allow**, since a program's own printed words named it.
+    pub looked_up: Option<String>,
     /// What was blocked, as the block's Notice says it.
     pub said: String,
     /// The chat it was, by the name it was shown under, where the record has it.
@@ -267,7 +271,9 @@ fn levels_for(target: &Host, locks: &sandbox::policy::Locks) -> Vec<GrantLevel> 
 }
 
 /// The rows `entries` make, newest first: one per host refused (or per kind of refusal where
-/// none was named), with how often, judged against `reached` and `locks`.
+/// none was named), with how often, judged against `reached` and `locks`. Only a refused
+/// connection's host is ever offered to allow; a refused lookup's is shown and offered nothing
+/// (#1663).
 fn rows_of(
     entries: &[Entry],
     reached: &[String],
@@ -278,10 +284,9 @@ fn rows_of(
         let Some(block) = entry.block else { continue };
         let said = block.said();
         let at = u32::try_from(entry.at).unwrap_or(u32::MAX);
-        if let Some(row) = rows
-            .iter_mut()
-            .find(|row| row.target == entry.target && row.said == said)
-        {
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.target == entry.target && row.looked_up == entry.looked_up && row.said == said
+        }) {
             row.times = row.times.saturating_add(1);
             continue;
         }
@@ -293,6 +298,7 @@ fn rows_of(
         let is_reached = host.as_ref().is_some_and(|host| covered(reached, host));
         rows.push(BlockedLately {
             target: entry.target.clone(),
+            looked_up: entry.looked_up.clone(),
             said,
             chat: entry.chat.name.clone(),
             at,

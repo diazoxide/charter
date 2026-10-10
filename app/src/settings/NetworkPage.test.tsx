@@ -24,6 +24,7 @@ const NETWORK: SandboxNetwork = {
   blocked: [
     {
       target: "db.example.com:5432",
+      looked_up: null,
       said: "a connection to an internet host this project does not allow",
       chat: "fix the build",
       at: 1_790_000_000,
@@ -33,6 +34,7 @@ const NETWORK: SandboxNetwork = {
     },
     {
       target: "registry.internal:443",
+      looked_up: null,
       said: "a connection to an internet host this project does not allow",
       chat: "claude 2",
       at: 1_789_000_000,
@@ -42,6 +44,7 @@ const NETWORK: SandboxNetwork = {
     },
     {
       target: null,
+      looked_up: "db.prod.example.com",
       said: "a lookup of an internet host by a program that does not go through the sandbox's proxy",
       chat: "claude 2",
       at: 1_788_000_000,
@@ -143,6 +146,9 @@ describe("the Network page", () => {
     expect(reached).toHaveTextContent("Reached now.");
     expect(within(reached).queryByRole("button")).toBeNull();
     expect(within(lookup).queryByRole("button")).toBeNull();
+    // A refused lookup's host is a program's printed words: shown, never offered (#1663).
+    expect(lookup).toHaveTextContent("db.prod.example.com");
+    expect(lookup).toHaveTextContent("Looked up by a program, not offered.");
 
     await userEvent.click(within(db).getByRole("button", { name: "Allow: db.example.com:5432" }));
     await waitFor(() =>
@@ -159,6 +165,23 @@ describe("the Network page", () => {
         name: "Allow for everyone in the project: db.example.com:5432",
       }),
     ).toBeVisible();
+  });
+
+  it("never draws Allow on a looked-up host, whatever scopes the row carries", async () => {
+    core({
+      ...NETWORK,
+      blocked: [
+        {
+          ...NETWORK.blocked[2],
+          target: "db.prod.example.com",
+          levels: ["you", "project"],
+        },
+      ],
+    });
+    render(<Row id="blocked" />);
+    const list = await screen.findByRole("list", { name: "Blocked lately" });
+    expect(list).toHaveTextContent("Looked up by a program, not offered.");
+    expect(within(list).queryByRole("button")).toBeNull();
   });
 
   it("says when nothing was blocked lately", async () => {
@@ -231,7 +254,7 @@ describe("a chat's Network view", () => {
         { host: "db.internal:5432", by: "persona" },
         { host: "extra.example:443", by: "allowed" },
       ],
-      refused: [REFUSED],
+      refused: [REFUSED, { ...NETWORK.blocked[2], chat: null }],
     });
     render(<ChatNetworkTab plane={PLANE} session={3} />);
     expect(await screen.findByRole("list", { name: "Open hosts" })).toHaveTextContent(
@@ -248,6 +271,10 @@ describe("a chat's Network view", () => {
     expect(
       within(refused).getByRole("button", { name: "Allow: db.example.com:5432" }),
     ).toBeVisible();
+    const lookup = within(refused).getAllByRole("listitem")[1];
+    expect(lookup).toHaveTextContent("db.prod.example.com");
+    expect(lookup).toHaveTextContent("Looked up by a program, not offered.");
+    expect(within(lookup).queryByRole("button")).toBeNull();
   });
 
   it("says a chat that is not open has nothing to show", async () => {

@@ -181,6 +181,55 @@ fn blocked_lately_offers_no_allow_policy_forbids() {
     assert_eq!(shown.blocked[0].levels, Vec::new());
 }
 
+/// A refused lookup's host (#1663) is a program's own printed words: Blocked lately and a
+/// chat's Network view show it as text and offer no Allow on it, whatever it names.
+#[test]
+fn a_looked_up_host_is_shown_and_never_offered_to_allow() {
+    let dir = tempfile::tempdir().expect("a home");
+    let root = dir.path().join("project");
+    std::fs::create_dir_all(&root).expect("a project");
+    let record = Record::in_data(&dir.path().join("data"));
+    let lookup = Block {
+        operation: Operation::Lookup,
+        kind: Kind::Host,
+        ours: false,
+    };
+    for at in [10, 20] {
+        record
+            .write(
+                &root,
+                &Entry::blocked(&lookup, Some("db.example.com"), chat("one"), None, at),
+            )
+            .expect("written");
+    }
+    record
+        .write(
+            &root,
+            &Entry::blocked(&lookup, Some("other.example.com"), chat("one"), None, 30),
+        )
+        .expect("written");
+    let shown = network_of(
+        &root,
+        &plane("[sandbox]\nmode = \"on\"\negress = []\n"),
+        Some(&record),
+        40,
+    );
+    let rows: Vec<(Option<&str>, Option<&str>, u32)> = shown
+        .blocked
+        .iter()
+        .map(|row| (row.target.as_deref(), row.looked_up.as_deref(), row.times))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (None, Some("other.example.com"), 1),
+            (None, Some("db.example.com"), 2),
+        ]
+    );
+    assert!(shown.blocked.iter().all(|row| row.levels.is_empty()));
+    assert!(shown.blocked.iter().all(|row| !row.reached));
+}
+
 fn audited_into(
     seen: &std::sync::Mutex<Vec<(bool, String, String)>>,
 ) -> impl Fn(Option<u32>, &grant::Audited<'_>) -> Result<(), String> + '_ {
