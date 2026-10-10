@@ -998,7 +998,7 @@ fn resolve(
 /// How often a branch is asked while the reader's gate stays full: enough for every branch a
 /// window may watch to have had its turn, [`purlis_core::files::AT_ONCE`] at a time, and once
 /// more.
-const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
+pub(crate) const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
 
 /// What `ask` answers, asked again while it finds every reader place taken, at most
 /// [`BUSY_TRIES`] times; nothing once it fails otherwise.
@@ -1007,16 +1007,26 @@ const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
 /// automatic read nobody will ask for again, such as a watch finding its folder, uses it rather
 /// than going without.
 pub(crate) fn past_busy<T>(
-    mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
+    ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
 ) -> Option<T> {
-    for _ in 0..BUSY_TRIES {
+    asked_past_busy(BUSY_TRIES, ask).ok()
+}
+
+/// What `ask` answers, asked again while it finds every reader place taken, `tries` times in
+/// all (at least once); otherwise its last refusal. [`past_busy`] for a read someone waits on
+/// and should be told about: each busy answer has already waited the reader's deadline.
+pub(crate) fn asked_past_busy<T>(
+    tries: usize,
+    mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
+) -> Result<T, purlis_core::files::Refused> {
+    let mut left = tries.max(1);
+    loop {
+        left -= 1;
         match ask() {
-            Ok(answer) => return Some(answer),
-            Err(why) if purlis_core::files::was_busy(&why) => {}
-            Err(_) => return None,
+            Err(why) if left > 0 && purlis_core::files::was_busy(&why) => {}
+            answered => return answered,
         }
     }
-    None
 }
 
 /// `each` of `asked`, every one on a thread of its own, answered in `asked`'s order; one that
