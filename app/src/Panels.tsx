@@ -273,8 +273,12 @@ function Contributed({
   // **A memory row's own rows** (SI-9c): Open, Edit and Delete for each memory this panel
   // lists, by the one function a persona's tab makes them with.
   // A Move row per store (#1190), from the stores the window lends.
-  const stores = useLentMemoryStores();
-  const memories = useMemo(() => listedMemoryOffers(panel.blocks, stores), [panel.blocks, stores]);
+  // And the LIVE names, for what a Move into a LIVE workspace's journal says.
+  const { stores, live } = useLentMemoryStores();
+  const memories = useMemo(
+    () => listedMemoryOffers(panel.blocks, stores, live),
+    [panel.blocks, stores, live],
+  );
   const lookUp = (id: string) => memories.get(id) ?? offers.get(id);
 
   return (

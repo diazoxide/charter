@@ -59,7 +59,6 @@ import {
   type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
-  type MemoryScope,
   type MemoryView,
   type ViewTab,
 } from "./bindings";
@@ -313,6 +312,7 @@ import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
 import { MemoryStores, useMemoryEdits, useMemoryStores } from "./MemoryEdits";
+import type { MemoryTargets } from "./memoryMoves";
 import { AddToAChat } from "./AddToAChat";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewPane } from "./Views";
@@ -5927,6 +5927,12 @@ export const PlaneView = memo(function PlaneView({
       ...(personas ?? []),
     ].join("\n"),
   );
+  /** The stores and the LIVE names a memory list's Move rows and a memory tab's Move are worded
+   *  from (#1190): a move into a LIVE workspace's journal is published with the project. */
+  const memoryTargets = useMemo<MemoryTargets>(
+    () => ({ stores: memoryStores, live: liveNames }),
+    [memoryStores, liveNames],
+  );
   /** What Ask {persona}… offers on this project's chats, as the core answers. */
   const askOffer = useAskOffer(
     plane,
@@ -6809,7 +6815,7 @@ export const PlaneView = memo(function PlaneView({
       tasksBelow={tasksBelow}
       doings={doings}
       references={referenceChats}
-      memoryStores={memoryStores}
+      memoryTargets={memoryTargets}
       personas={personaMarks}
       askPersona={openAskPersona}
       brief={openBrief}
@@ -8206,7 +8212,7 @@ function Lent({
   tasksBelow,
   doings,
   references,
-  memoryStores,
+  memoryTargets,
   personas,
   askPersona,
   brief,
@@ -8219,8 +8225,8 @@ function Lent({
   /** What each working chat is doing, for the one line under its name (#1493). */
   doings: DoingsOf;
   references: ChatsForReferences;
-  /** The project's memory stores, for the memory lists' Move rows (#1190). */
-  memoryStores: readonly MemoryScope[];
+  /** The project's memory stores and LIVE workspaces, for the memory lists' Move (#1190). */
+  memoryTargets: MemoryTargets;
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
   askPersona: OpenAskPersona;
@@ -8235,7 +8241,7 @@ function Lent({
       <TasksBelowLent below={tasksBelow}>
         <DoingsHere.Provider value={doings}>
           <ReferenceChats.Provider value={references}>
-            <MemoryStores.Provider value={memoryStores}>
+            <MemoryStores.Provider value={memoryTargets}>
               <PersonaMarks.Provider value={personas.marks}>
                 <ReloadPersonaMarks.Provider value={personas.reload}>
                   <AskPersonaOpener value={askPersona}>

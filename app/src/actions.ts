@@ -57,7 +57,7 @@ import {
   scopeKey,
   type MemoryRef,
 } from "./memories";
-import { PUBLISHED_WITH_THE_PROJECT, publishedStore } from "./memoryMoves";
+import { publishedSaid } from "./memoryMoves";
 import { searchFromFocus, searchTitle, searchView, type SearchAsk } from "./contentSearch";
 import { pieceFilesTitle, pieceFilesView, type Place } from "./pieceViews";
 import { searchKeySaid } from "./searchKey";
@@ -2071,7 +2071,9 @@ export function catalogue(now: Now): Offer[] {
       const ref = memoryRefOf(content.view.key);
       if (ref === undefined || ref.slug === DRAFT) continue;
       memories.add(content.view.key);
-      offers.push(...memoryOffers(ref, now.tabs.byId[id]?.name ?? ref.slug, now.memoryStores));
+      offers.push(
+        ...memoryOffers(ref, now.tabs.byId[id]?.name ?? ref.slug, now.memoryStores, now.live),
+      );
     }
   }
 
@@ -3566,14 +3568,17 @@ export function memoryMoveId(key: string, to: MemoryScope): string {
  * carries them for every open memory tab; a list of memories adds them for its own rows, whose
  * titles it has — a persona's tab, and SI-9c's workspace and shared lists.
  *
- * **A Move row says who reads the store it moves into** where the project publishes that store
- * (`PUBLISHED_WITH_THE_PROJECT`, the sentence the tab's Move says), and asks nothing more than
- * the tab's Move asks: a pick of the store, then the move, with Undo after.
+ * **A Move row says who reads the store it moves into** where the project publishes that store:
+ * a persona's, shared memory, or the journal of one of the `live` workspaces
+ * (`memoryMoves.publishedSaid`, worded with the tab's Move help). It asks nothing more than the
+ * tab's Move asks: a pick of the store, then the move, with Undo after.
  */
 export function memoryOffers(
   ref: MemoryRef,
   title: string,
   stores: readonly MemoryScope[] = [],
+  /** The project's LIVE workspaces, whose journals it publishes (#1190). */
+  live: readonly string[] = [],
 ): Offer[] {
   const key = memoryKey(ref);
   const here = scopeKey(ref.scope);
@@ -3586,7 +3591,8 @@ export function memoryOffers(
         { verb: "moveMemory", ref, title, to },
         title,
       );
-      return publishedStore(to) ? { ...row, note: PUBLISHED_WITH_THE_PROJECT } : row;
+      const said = publishedSaid(to, live);
+      return said === undefined ? row : { ...row, note: said };
     });
   return [
     can(
@@ -3637,6 +3643,8 @@ export function listedMemoryOffers(
   blocks: readonly PanelBlock[],
   /** The project's stores, for each row's Move rows (#1190): none while they are unread. */
   stores: readonly MemoryScope[] = [],
+  /** The project's LIVE workspaces, for what a Move row into one's journal says (#1190). */
+  live: readonly string[] = [],
 ): Catalogued {
   return catalogued(
     blocks.flatMap((block) =>
@@ -3644,7 +3652,7 @@ export function listedMemoryOffers(
         ? []
         : block.rows.flatMap((row) => {
             const ref = memoryRefOf(memoryKeyRun(row.runs) ?? "");
-            return ref === undefined ? [] : memoryOffers(ref, row.text, stores);
+            return ref === undefined ? [] : memoryOffers(ref, row.text, stores, live);
           }),
     ),
   );

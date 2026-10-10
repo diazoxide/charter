@@ -56,6 +56,9 @@ export type NoticeAction = {
   /** For a press that opens something under the line (a fix's form, #1250): the id of what
    *  it opens and whether it is open, said to a screen reader as the button's state. */
   opens?: { id: string; open: boolean };
+  /** While what the press started is on its way: the button is disabled, so a second press
+   *  sends nothing (an Undo in flight, #1190). */
+  busy?: boolean;
 };
 
 type Ways = {
@@ -161,6 +164,8 @@ export function Notice(props: NoticeProps) {
           tabIndex={0}
           aria-expanded={fix.opens?.open}
           aria-controls={fix.opens?.open ? fix.opens.id : undefined}
+          disabled={fix.busy}
+          aria-busy={fix.busy}
           onClick={fix.onPress}
         >
           {fix.label}
