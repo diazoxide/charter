@@ -274,9 +274,10 @@ pub async fn files_watch(
             let named: Vec<&str> = of.iter().map(|folder| folder.folder.as_str()).collect();
             // The branch's folder is found by the bounded reader's child, so this process
             // starts no git for it (#1189); a branch it does not find has nothing watched.
-            let dirs = purlis_core::files::root(&crate::reader(), &root, branch)
-                .map(|found| found.resolve(&named))
-                .unwrap_or_default();
+            let dirs = folders_found(
+                || purlis_core::files::root(&crate::reader(), &root, branch),
+                &named,
+            );
             for (folder, dir) in of.iter().zip(dirs) {
                 if let Ok(dir) = dir {
                     resolved.push((folder.clone(), dir));
@@ -292,6 +293,19 @@ pub async fn files_watch(
         .set_from(window.label(), ticket, resolved)
 }
 
+/// The `named` folders of the branch `find` finds, each resolved; none when it is not found. A
+/// find that met every reader place taken is asked again ([`crate::branchwatch::past_busy`],
+/// #1189): the window asks for its folders only when they change, so a branch left out for that
+/// would go unwatched with nothing said.
+fn folders_found(
+    find: impl FnMut() -> Result<purlis_core::files::Root, purlis_core::files::Refused>,
+    named: &[&str],
+) -> Vec<Result<PathBuf, purlis_core::files::Refused>> {
+    crate::branchwatch::past_busy(find)
+        .map(|found| found.resolve(named))
+        .unwrap_or_default()
+}
+
 /// Whether two folders are of one branch of one project.
 fn same_branch(a: &BranchFolder, b: &BranchFolder) -> bool {
     a.plane == b.plane && a.workspace == b.workspace && a.repo == b.repo && a.piece == b.piece
@@ -305,6 +319,44 @@ mod tests {
     use std::time::Instant;
 
     const PATIENCE: Duration = Duration::from_secs(10);
+
+    /// #1189: a branch whose folder found every reader place taken is asked again, as the
+    /// branch watch asks, rather than left unwatched with nothing said; one whose read failed
+    /// otherwise is asked once.
+    #[test]
+    fn a_folder_that_found_the_readers_busy_is_asked_again() {
+        let busy = || {
+            purlis_core::files::Refused::Read(format!(
+                "{}it was busy reading other branches for 30 seconds",
+                purlis_core::files::READ_FAILED
+            ))
+        };
+        let mut asks = 0;
+        let dirs = folders_found(
+            || {
+                asks += 1;
+                if asks < 3 {
+                    Err(busy())
+                } else {
+                    Err(purlis_core::files::Refused::Read("gone".into()))
+                }
+            },
+            &["src"],
+        );
+        assert!(dirs.is_empty());
+        assert_eq!(asks, 3);
+
+        let mut asks = 0;
+        let never = folders_found(
+            || {
+                asks += 1;
+                Err(busy())
+            },
+            &["src"],
+        );
+        assert!(never.is_empty());
+        assert_eq!(asks, crate::branchwatch::BUSY_TRIES);
+    }
 
     /// The poller on macOS, where FSEvents gives no bound on when it delivers (#577); the
     /// platform's own watcher elsewhere. As `planewatch.rs`'s tests choose.
