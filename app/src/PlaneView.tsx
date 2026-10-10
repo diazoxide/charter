@@ -6820,6 +6820,29 @@ export const PlaneView = memo(function PlaneView({
     ],
   );
 
+  /**
+   * **One queued chat's own rows** (`needs.show:<session>`, `needs.ignore:<session>`), by id:
+   * the Inbox's Go to chat and Ignore (#1692). They are not in this view's catalogue, which
+   * holds no queue rows (`queued` builds them for the window), so they are built here as
+   * `queued` builds them.
+   */
+  const queueRow = useCallback(
+    (id: string, session: number): Offer | undefined =>
+      catalogued(
+        needsYouRows(
+          [session],
+          nameOf,
+          tabs,
+          (one) => reports[one] ?? [],
+          (one) => refusals[one] ?? [],
+          (one) => needs[one] ?? [],
+          (one) => listedChats.some((chat) => chat.session === one),
+          (one) => stoppedBelow[one] ?? [],
+        ),
+      ).get(id),
+    [listedChats, nameOf, needs, refusals, reports, stoppedBelow, tabs],
+  );
+
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
   //
@@ -7836,7 +7859,7 @@ export const PlaneView = memo(function PlaneView({
               onGo={(session) => {
                 // A chat in the queue goes as the hand's Go did: the catalogue's own row, which
                 // knows a failed task's row and a report with nowhere to go (#1448, #1491).
-                const go = by(showId(session));
+                const go = queueRow(showId(session), session);
                 if (go?.available) press(go);
                 else showChat(session);
               }}
@@ -7850,7 +7873,7 @@ export const PlaneView = memo(function PlaneView({
               onAnswered={inboxAnswered}
               onIgnore={(session) => {
                 // The queue's own row, as the palette and the hand's list press it.
-                const ignore = by(ignoreId(session));
+                const ignore = queueRow(ignoreId(session), session);
                 if (ignore?.available) press(ignore);
               }}
             />

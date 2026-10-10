@@ -457,6 +457,23 @@ describe("a list is one Tab stop", () => {
     await userEvent.keyboard("{ArrowDown}");
     expect(within(asks[0]).getByRole("textbox", { name: "Reply to steward three" })).toHaveFocus();
   });
+
+  it("the Inbox's Ignore is the queue's own row, which tells the core (#1692)", async () => {
+    const { asked } = core({ waiting: [3], registry: true });
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    const hand = await within(screen.getByTestId("title-bar")).findByRole("button", {
+      name: "1 thing waits on you",
+    });
+    await userEvent.click(hand);
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+
+    await userEvent.click(
+      within(inbox).getByRole("button", { name: "Ignore steward three until it asks again" }),
+    );
+
+    await waitFor(() => expect(asked).toContain("ignore_needs_you"));
+  });
 });
 
 /**
