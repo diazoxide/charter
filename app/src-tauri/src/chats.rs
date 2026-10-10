@@ -1904,6 +1904,14 @@ impl Chats {
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
         // command, finds the one this app shipped, from a Finder launch too (charter-app#136).
         let env = purlis_core::start::with_chat_path(env, self.shipped.binary.as_deref());
+        // ssh through the chat's SOCKS port (#1667): its route's `ssh` first on the chat's PATH.
+        let env = match confinement
+            .as_ref()
+            .and_then(purlis_core::sandbox::Confinement::ssh_route)
+        {
+            Some(route) => route.first_on_path(env),
+            None => env,
+        };
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
@@ -2789,6 +2797,24 @@ impl Chats {
         lock(&self.open)
             .get(&session)
             .and_then(|running| running.confines.clone())
+    }
+
+    /// What hears each connection a command run for chat `session` makes (#1667): a brokered
+    /// `secret exec`'s, through its proxy and through a tunnel to a database host. Told as the
+    /// chat's own proxy tells its connections, under the chat and the persona it started as.
+    pub fn reached_for(
+        &self,
+        session: u32,
+        persona: Option<String>,
+    ) -> purlis_core::sandbox::egress::Reached {
+        let id = lock(&self.open)
+            .get(&session)
+            .and_then(|running| running.chat.identity.id.clone());
+        reached_by_the_proxy(
+            Arc::clone(&self.reached),
+            Arc::new(std::sync::atomic::AtomicU32::new(session)),
+            ReachedAs { id, persona },
+        )
     }
 
     /// Marks `folder` as going while a discard takes it away (#1472), until what this answers

@@ -1853,6 +1853,13 @@ impl Applied {
             .adapter()
             .sandboxed_line(&self.with(chain), words, at)
             .map_err(under)?;
+        // ssh, and git over ssh, through the chat's SOCKS port (#1667): every harness.
+        if let Some(route) = at.confinement.and_then(Confinement::ssh_route) {
+            let gained = route.env();
+            line.env
+                .retain(|(key, _)| !gained.iter().any(|(set, _)| set == key));
+            line.env.extend(gained);
+        }
         // The project's package caches (D-1337-6): made here, outside the sandbox, with any link
         // a chat planted in them taken out; refused, naming the path, only where one stays.
         if let Some(caches) = &self.caches {
@@ -1987,6 +1994,9 @@ pub struct Line {
 pub struct Confinement {
     proxy: egress::Proxy,
     tmp: tempfile::TempDir,
+    /// Its ssh route through its SOCKS port (#1667), in its temp directory; none where it
+    /// could not be written, and ssh then reaches nothing, as before.
+    ssh: Option<tunnel::SshRoute>,
 }
 
 impl Confinement {
@@ -2005,10 +2015,19 @@ impl Confinement {
 
     /// A proxy serving `serving` on a pair of ports of its own (#1664), and a new temp directory.
     pub fn serving(serving: egress::Serving) -> std::io::Result<Self> {
-        Ok(Self {
-            proxy: egress::Proxy::serving(serving)?,
-            tmp: tempfile::Builder::new().prefix("charter-chat-").tempdir()?,
-        })
+        let proxy = egress::Proxy::serving(serving)?;
+        let tmp = tempfile::Builder::new().prefix("charter-chat-").tempdir()?;
+        let ssh = tunnel::SshRoute::write(tmp.path(), proxy.socks_port())
+            .inspect_err(|err| {
+                tracing::warn!("purlis: a chat's ssh route was not written ({err})");
+            })
+            .ok();
+        Ok(Self { proxy, tmp, ssh })
+    }
+
+    /// Its ssh route through its SOCKS port (#1667), where it was written.
+    pub fn ssh_route(&self) -> Option<&tunnel::SshRoute> {
+        self.ssh.as_ref()
     }
 
     /// The loopback port of its proxy's HTTP side.
@@ -3421,6 +3440,7 @@ pub mod policy;
 pub mod program;
 pub mod reach;
 pub mod seatbelt;
+pub mod tunnel;
 
 #[cfg(test)]
 mod claude_tests;
@@ -3438,3 +3458,5 @@ mod persona_tests;
 mod reach_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tunnel_tests;

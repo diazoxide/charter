@@ -674,6 +674,29 @@ pub fn serve(
     serve_in(asker, wanted, reader, writer, Wrap::Seatbelt, told);
 }
 
+/// [`serve`], telling `reached` each connection the run made (#1667): through its proxy, and
+/// through a tunnel to a database host its values point at ([`crate::sandbox::tunnel`]). The
+/// network record keeps them under the asking chat. A host that carries one of the run's values
+/// is counted and never named.
+pub fn serve_recording(
+    asker: &Asker,
+    wanted: Wanted,
+    reader: Box<dyn BufRead + Send>,
+    writer: Box<dyn Write + Send>,
+    told: Told,
+    reached: crate::sandbox::egress::Reached,
+) {
+    serve_recorded(
+        asker,
+        wanted,
+        reader,
+        writer,
+        Wrap::Seatbelt,
+        told,
+        Some(reached),
+    );
+}
+
 /// [`serve`] in `wrap`, telling nothing of what its proxy refused.
 #[cfg(test)]
 pub(crate) fn serve_wrapped(
@@ -778,9 +801,21 @@ pub(crate) fn serve_in(
     asker: &Asker,
     wanted: Wanted,
     reader: Box<dyn BufRead + Send>,
+    writer: Box<dyn Write + Send>,
+    wrap: Wrap,
+    told: Told,
+) {
+    serve_recorded(asker, wanted, reader, writer, wrap, told, None);
+}
+
+pub(crate) fn serve_recorded(
+    asker: &Asker,
+    wanted: Wanted,
+    reader: Box<dyn BufRead + Send>,
     mut writer: Box<dyn Write + Send>,
     wrap: Wrap,
     told: Told,
+    reached: Option<crate::sandbox::egress::Reached>,
 ) {
     let refuse = |writer: &mut dyn Write, code: i32, why: String| {
         tracing::warn!(
@@ -860,7 +895,20 @@ pub(crate) fn serve_in(
             }
         })
     });
-    let beside = match Beside::start(wrap, confines, refusals.clone()) {
+    // Each connection the run makes, told under the chat; a host that carries one of the
+    // run's values counted with no name, as the record never keeps a value.
+    let reached = reached.map(|reached| -> crate::sandbox::egress::Reached {
+        let values = Arc::clone(&values);
+        Arc::new(move |target: Option<&str>, by: &'static str, times: u64| {
+            let named = target.filter(|target| {
+                values
+                    .get()
+                    .is_some_and(|values| !carries_a_value(target, values))
+            });
+            reached(named, by, times);
+        })
+    });
+    let beside = match Beside::start(wrap, confines, refusals.clone(), reached.clone()) {
         Ok(beside) => beside,
         Err(e) => {
             return refuse(
@@ -880,6 +928,21 @@ pub(crate) fn serve_in(
         .collect();
     for (k, v) in crate::sandbox::seatbelt::env(&beside.proxy_url(), beside.tmp()) {
         exec::set_var(&mut base, &k, v);
+    }
+    // ssh, and git over ssh, through the run's own SOCKS port (#1667): the chat's route names
+    // the chat's port, which the run's sandbox does not reach.
+    if let Some(route) = beside.ssh_route() {
+        for (k, v) in route.env() {
+            exec::set_var(&mut base, &k, v);
+        }
+        let path = base
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "PATH")
+            .and_then(|(_, v)| v.to_str())
+            .unwrap_or("")
+            .to_owned();
+        exec::set_var(&mut base, "PATH", route.on_path(&path));
     }
     let base = match exec::child_env_of(&ctx, &wanted.vault, &base) {
         Ok(base) => base,
@@ -910,6 +973,19 @@ pub(crate) fn serve_in(
         Err(Stopped::Signal(code)) => return refuse(&mut *writer, code, "stopped".to_owned()),
     };
     let _ = values.set(prepared.secret_values.clone());
+    let mut prepared = prepared;
+    // A value that points at a host the chat may reach goes through a tunnel to exactly it, and
+    // one the chat may not reach is refused as the proxy refuses one (#1667).
+    let (tunnels, notes) = match tunnelled(&mut prepared, &req.env, confines, &refusals, reached) {
+        Ok(opened) => opened,
+        Err(e) => {
+            return refuse(
+                &mut *writer,
+                1,
+                format!("purlis could not open the tunnel the command reaches its host by ({e})"),
+            );
+        }
+    };
     #[cfg(test)]
     if let Wrap::Refusing(target) = wrap {
         let (host, port) = target.rsplit_once(':').expect("host:port");
@@ -927,13 +1003,10 @@ pub(crate) fn serve_in(
     };
     let mut child = match wrap {
         Wrap::Seatbelt => {
-            let profile = match profile_on(
-                confines,
-                &prepared.files,
-                &folder,
-                beside.tmp(),
-                beside.proxy_port(),
-            ) {
+            let mut ports = beside.proxy_ports();
+            ports.extend(tunnels.iter().map(crate::sandbox::tunnel::Tunnel::port));
+            let profile = match profile_on(confines, &prepared.files, &folder, beside.tmp(), &ports)
+            {
                 Ok(profile) => profile,
                 Err(why) => return refuse(&mut *writer, 1, why.to_owned()),
             };
@@ -1002,6 +1075,9 @@ pub(crate) fn serve_in(
     };
     let group = Live::hold(spawned.id());
     if cmd_said_note(&ctx, &v, &mut *writer).is_err()
+        || notes
+            .iter()
+            .any(|note| send(&mut *writer, &Frame::Note(note.clone())).is_err())
         || send(&mut *writer, &Frame::Started).is_err()
     {
         group.kill();
@@ -1027,8 +1103,79 @@ pub(crate) fn serve_in(
         let _ = send(&mut *writer, &Frame::Note(WITHHELD_NOTE.to_owned()));
     }
     let _ = send(&mut *writer, &Frame::Exit(code));
+    drop(tunnels);
     drop(prepared);
     drop(beside);
+}
+
+/// Points each `--env` value of `prepared` that names a host and port at a tunnel to it, where
+/// the chat may reach that exact host and port ([`crate::sandbox::tunnel::route`]): the value is
+/// swapped in the child's environment and masked as the value is. A host the chat may not reach
+/// is told to `refusals`, as the proxy tells one, so the chat's Notice offers Allow; one on this
+/// machine is said in a note naming the variable alone. Answers the tunnels, which live as long
+/// as the run, and the notes.
+fn tunnelled(
+    prepared: &mut exec::Prepared,
+    specs: &[String],
+    confines: &Confines,
+    refusals: &crate::sandbox::egress::Refusals,
+    reached: Option<crate::sandbox::egress::Reached>,
+) -> std::io::Result<(Vec<crate::sandbox::tunnel::Tunnel>, Vec<String>)> {
+    use crate::sandbox::tunnel::{Route, TUNNELS_AT_MOST, Tunnel, route};
+    let reach = crate::sandbox::reach::Reach::open(confines.hosts.clone());
+    let own = crate::sandbox::hosts::own_addresses();
+    let mut tunnels: Vec<Tunnel> = Vec::new();
+    let mut notes = Vec::new();
+    for name in specs
+        .iter()
+        .filter_map(|spec| spec.split_once('=').map(|(n, _)| n))
+    {
+        let Some(value) = prepared
+            .env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .and_then(|(_, v)| v.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        match route(&value, &reach, &own) {
+            Route::Through(pointed, decision) => {
+                let at = match tunnels.iter().find(|t| t.target() == pointed.target()) {
+                    Some(open) => open.port(),
+                    None if tunnels.len() >= TUNNELS_AT_MOST => {
+                        notes.push(format!(
+                            "purlis opens at most {TUNNELS_AT_MOST} tunnels for one command, so \
+                             {name} was handed as it is."
+                        ));
+                        continue;
+                    }
+                    None => {
+                        let tunnel =
+                            Tunnel::open(&pointed, &decision, reach.clone(), reached.clone())?;
+                        let port = tunnel.port();
+                        tunnels.push(tunnel);
+                        port
+                    }
+                };
+                let swapped = pointed.at(at);
+                exec::set_var(&mut prepared.env, name, swapped.clone());
+                prepared.secret_values.push(swapped);
+                tracing::info!(
+                    "purlis: {name} of a brokered `secret exec` reaches its host through a \
+                     tunnel on port {at}"
+                );
+            }
+            Route::Refused(pointed) => refusals.heard(pointed.host(), pointed.port()),
+            Route::Local(_) => notes.push(format!(
+                "{name} points at this machine, a link-local address or a cloud metadata \
+                 service, which purlis's sandbox never reaches, so it was handed as it is."
+            )),
+            Route::Untouched => {}
+        }
+    }
+    Ok((tunnels, notes))
 }
 
 /// What runs beside a brokered child: the chat's egress proxy and a temp directory of its own,
@@ -1044,11 +1191,18 @@ impl Beside {
         wrap: Wrap,
         confines: &Confines,
         refusals: crate::sandbox::egress::Refusals,
+        reached: Option<crate::sandbox::egress::Reached>,
     ) -> std::io::Result<Self> {
         match wrap {
             Wrap::Seatbelt => {
-                crate::sandbox::Confinement::start_keeping(confines.hosts.clone(), refusals)
-                    .map(Self::Confined)
+                crate::sandbox::Confinement::serving(crate::sandbox::egress::Serving {
+                    refusals,
+                    reached,
+                    ..crate::sandbox::egress::Serving::of(crate::sandbox::reach::Reach::open(
+                        confines.hosts.clone(),
+                    ))
+                })
+                .map(Self::Confined)
             }
             #[cfg(test)]
             Wrap::Unwrapped => tempfile::tempdir().map(Self::Pretend),
@@ -1068,11 +1222,21 @@ impl Beside {
         }
     }
 
-    fn proxy_port(&self) -> u16 {
+    /// Its proxy's ports, HTTP then SOCKS5: what the child may connect to besides its tunnels.
+    fn proxy_ports(&self) -> Vec<u16> {
         match self {
-            Self::Confined(confinement) => confinement.proxy_port(),
+            Self::Confined(confinement) => confinement.proxy_ports().to_vec(),
             #[cfg(test)]
-            Self::Pretend(_) => 9,
+            Self::Pretend(_) => vec![9],
+        }
+    }
+
+    /// Its ssh route through its own SOCKS port (#1667), where it has one.
+    fn ssh_route(&self) -> Option<&crate::sandbox::tunnel::SshRoute> {
+        match self {
+            Self::Confined(confinement) => confinement.ssh_route(),
+            #[cfg(test)]
+            Self::Pretend(_) => None,
         }
     }
 
@@ -1292,15 +1456,15 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// The child's Seatbelt profile: the chat's own ([`crate::sandbox::seatbelt::profile`]) for
-/// its folder, a temp directory of the child's own and the proxy on `proxy_port` carrying the
-/// chat's hosts, with a read of each credential file in `files` given back after every denial,
-/// and nothing else of the vaults class.
+/// its folder, a temp directory of the child's own, and `ports` on loopback (its proxy's two,
+/// carrying the chat's hosts, and each tunnel's, #1667), with a read of each credential file in
+/// `files` given back after every denial, and nothing else of the vaults class.
 pub(crate) fn profile_on(
     confines: &Confines,
     files: &[PathBuf],
     folder: &Path,
     tmp: &Path,
-    proxy_port: u16,
+    ports: &[u16],
 ) -> Result<String, &'static str> {
     use crate::sandbox::seatbelt;
     let denied: &[Denial] = &confines.denied;
@@ -1314,7 +1478,7 @@ pub(crate) fn profile_on(
             seatbelt::quote(file)?
         ));
     }
-    seatbelt::profile(denied, &own, folder, tmp, &[proxy_port], None)
+    seatbelt::profile(denied, &own, folder, tmp, ports, None)
 }
 
 /// What [`run`] hears from the child's pipes and the asker.
