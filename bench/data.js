@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791622847294,
+  "lastUpdate": 1791624200263,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5754,6 +5754,48 @@ window.BENCHMARK_DATA = {
             "value": 104.654235,
             "unit": "ms",
             "extra": "median of 5 runs: 103.250, 103.846, 104.654, 104.910, 105.321 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f123f5601c1fb20b6843435305993f348e77d613",
+          "message": "ci: annotate each failed scenario test on its spec's line\n\nThe scenario configs' afterTest and afterHook write each failure to\napp/logs/failures.jsonl, and a failure() step turns them into GitHub\nannotations with the assertion message (tools/e2e-annotations.mjs):\nten errors, ten warnings, then a notice counting the rest. A failed job\nwith no test recorded gets one annotation saying so. The checks API\ncarries annotations, so a failure reads there without the job's log.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T13:09:45+04:00",
+          "tree_id": "4b12f325c489810651e8df6e10cb5ab7c8943400",
+          "url": "https://github.com/purlis/purlis/commit/f123f5601c1fb20b6843435305993f348e77d613"
+        },
+        "date": 1791624199123,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5206035,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.510, 0.517, 0.521, 0.531, 0.562 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.124346,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.861, 16.891, 17.124, 17.137, 18.109 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.6598365,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.375, 103.536, 103.660, 104.039, 105.508 ms"
           }
         ]
       }
