@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791659336889,
+  "lastUpdate": 1791662322526,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6342,6 +6342,48 @@ window.BENCHMARK_DATA = {
             "value": 104.60386700000001,
             "unit": "ms",
             "extra": "median of 5 runs: 102.911, 103.869, 104.604, 105.113, 109.945 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "9b3a1195051116b73879793c2133f6f55d0af331",
+          "message": "ci: annotate the rust job with its slowest tests and test binaries\n\nnextest's ci profile writes a JUnit report; tools/slowest-tests.mjs reads it and\nprints two notices, the 30 slowest tests and the 30 binaries whose tests took\nlongest in all, so what makes \"Run the tests\" take ~460 s is readable through\nthe checks API without the job's log. Step 1 of the next CI speed-up round: it\ndecides which tests to fix before splitting the job across runners.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T23:38:37+04:00",
+          "tree_id": "e321c1a04d9e82e2020eab6d6bc80be17418b459",
+          "url": "https://github.com/purlis/purlis/commit/9b3a1195051116b73879793c2133f6f55d0af331"
+        },
+        "date": 1791662321344,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.41330100000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.405, 0.408, 0.413, 0.428, 0.442 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.6557495,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.246, 16.624, 16.656, 16.782, 16.792 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.8031455,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.544, 101.697, 101.803, 102.254, 103.217 ms"
           }
         ]
       }
