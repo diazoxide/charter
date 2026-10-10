@@ -363,6 +363,10 @@ export const commands = {
 	 *  (it, or a folder above it, was swapped for a link since: R8), for Settings to say.
 	 */
 	grantableFolders: (plane: PlaneId) => typedError<GrantableFolders, string>(__TAURI_INVOKE("grantable_folders", { plane })),
+	/**  **Open hosts and Blocked lately** for Settings' Network page (#1662). */
+	sandboxNetwork: (plane: PlaneId) => typedError<SandboxNetwork, string>(__TAURI_INVOKE("sandbox_network", { plane })),
+	/**  **A chat's Network view** (#1662): what chat `session` reaches now, and what it was refused. */
+	chatNetwork: (plane: PlaneId, session: number) => typedError<ChatNetwork, string>(__TAURI_INVOKE("chat_network", { plane, session })),
 	/**
 	 *  Lists `folder` as one chats here may be granted (D-1342-10), this machine only: every refusal
 	 *  a write grant makes, but the allowlist it adds to. Answers the list as it is now, and what
@@ -2281,6 +2285,30 @@ export type BlockShown = {
 };
 
 /**
+ *  One row of **Blocked lately**, or of a chat's refusals: what was refused, the newest time,
+ *  and how often.
+ */
+export type BlockedLately = {
+	/**  The host and port, where the block named one. */
+	target: string | null,
+	/**  What was blocked, as the block's Notice says it. */
+	said: string,
+	/**  The chat it was, by the name it was shown under, where the record has it. */
+	chat: string | null,
+	/**  When it was last refused, in seconds since 1970. */
+	at: number,
+	/**  How many times it was refused in the record. */
+	times: number,
+	/**  Whether a chat reaches it now: it is an Open host, or allowed since. */
+	reached: boolean,
+	/**
+	 *  The scopes Allow may keep it at here: none where there is nothing to allow (no host
+	 *  named, reached already, not a host a proxy refuses) or policy forbids it.
+	 */
+	levels: GrantLevel[],
+};
+
+/**
  *  The picker's two boxes, as the start reads them.
  * 
  *  A struct because tauri-specta types a command of at most ten arguments, and `start_chat` grew
@@ -2514,6 +2542,21 @@ export type ChatDoing = {
 	sequence: number,
 	/**  What it is doing, or null: its turn ended, it is asking the person, or it is gone. */
 	doing: Doing | null,
+};
+
+/**  **A chat's Network view** (#1662): what it can reach now and what it was refused. */
+export type ChatNetwork = {
+	/**  Whether the chat is open in this app. A closed one has nothing to say. */
+	open: boolean,
+	/**
+	 *  Whether this run of the chat is sandboxed. One that is not can reach anything, and
+	 *  purlis records nothing of it.
+	 */
+	sandboxed: boolean,
+	/**  What its sandbox lets it reach, as it was started. */
+	reach: Reached[],
+	/**  What it was refused, newest first. */
+	refused: BlockedLately[],
 };
 
 /**
@@ -4781,6 +4824,14 @@ export type OpenChat = {
 	from: HandedFromNote | null,
 };
 
+/**  One group of **Open hosts**: a preset's, or the project's own. */
+export type OpenHosts = {
+	/**  The preset's name in the window ("AI providers"), or "This project's hosts". */
+	title: string,
+	/**  Each host, spelled out. */
+	hosts: string[],
+};
+
 /**
  *  What came of asking to open a plane: it is open, or there is a question to answer first.
  * 
@@ -5720,6 +5771,21 @@ export type ReachableRepos = {
 	trouble: ForgeTrouble[],
 };
 
+/**  One host a chat reaches, and why. */
+export type Reached = {
+	host: string,
+	by: ReachedBy,
+};
+
+/**  Why a chat reaches a host. */
+export type ReachedBy = 
+/**  An Open host: a preset's, or the project's own. */
+"open" | 
+/**  One of its persona's hosts, allowed on this machine. */
+"persona" | 
+/**  An Allowed host: for this chat, this project on this machine, or everyone in it. */
+"allowed";
+
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
 export type Rebuilds = {
 	count: number,
@@ -6078,6 +6144,17 @@ export type SandboxGrant = {
 	 *  that names no persona too.
 	 */
 	for_no_persona: boolean,
+};
+
+/**
+ *  **Settings' Network page** (#1662): Open hosts and Blocked lately. Allowed is the list
+ *  `sandbox_grants` answers.
+ */
+export type SandboxNetwork = {
+	/**  Whether chats here run sandboxed. Where they do not, nothing is open or blocked. */
+	on: boolean,
+	open: OpenHosts[],
+	blocked: BlockedLately[],
 };
 
 /**

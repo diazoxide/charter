@@ -457,7 +457,7 @@ function canChange(caches: boolean): Reason[] {
     },
     {
       what: "Folders and hosts you allow",
-      why: "From a block's Allow, each listed under Granted, where you can revoke it. A folder is only ever one inside the project, or one you list there, never a temp folder.",
+      why: "From a block's Allow, each listed under Network, where you can remove it. A folder is only ever one inside the project, or one you list there, never a temp folder.",
     },
   ];
 }

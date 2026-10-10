@@ -223,6 +223,8 @@ function core({
           return [];
         case "grantable_folders":
           return { folders: [], dropped: [] };
+        case "sandbox_network":
+          return { on: true, open: [], blocked: [] };
         case "project_theme":
         case "project_theme_drawn":
           return null;
@@ -712,12 +714,12 @@ describe("values an administrator's policy locks (#1343)", () => {
     expect(within(page).queryByRole("textbox")).toBeNull();
   });
 
-  it("shows the folders chats may be granted as locked where policy forbids write grants", async () => {
+  it("shows the folders a block's Allow may name as locked where policy forbids write grants", async () => {
     core({ sandbox: state({ policy: policy({ write_grants: true }) }) });
     render(<SettingsTab plane={PLANE} level="project" />);
     const nav = await screen.findByRole("navigation", { name: "Groups" });
-    await userEvent.click(await within(nav).findByRole("button", { name: "Granted" }));
-    const page = await screen.findByRole("region", { name: "Granted" });
+    await userEvent.click(await within(nav).findByRole("button", { name: "Network" }));
+    const page = await screen.findByRole("region", { name: "Network" });
 
     await waitFor(() =>
       expect(page).toHaveTextContent(`Policy forbids allowing a chat to write a folder. ${LOCKED}`),

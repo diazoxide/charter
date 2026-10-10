@@ -510,11 +510,14 @@ pub fn allow_persona_hosts(
 ) -> Result<SandboxState, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
+    let audit = |number, audited: &sandbox::grant::Audited<'_>| {
+        held.hooks().record_grant(&root, number, audited)
+    };
     allow_persona(
         &root,
         &persona,
         &digest,
-        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        &crate::network::recorded(&audit, planes.network(), &root, held.chats()),
         now_secs(),
     )?;
     Ok(state_of(&root))
@@ -886,14 +889,35 @@ pub(crate) fn kept(
     root: &std::path::Path,
     chats: &crate::chats::Chats,
     session: u32,
+    grant: (&sandbox::grant::What, sandbox::grant::Level),
+    audit: Audit<'_>,
+    at: u64,
+) -> Result<(), String> {
+    kept_for(root, chats, Some(session), grant, audit, at)
+}
+
+/// [`kept`] for chat `session`, or for no chat (#1662, Allow on Settings' Blocked lately): then
+/// nothing is kept for one chat alone, and no chat is owed a restart, so each takes it from its
+/// next start.
+pub(crate) fn kept_for(
+    root: &std::path::Path,
+    chats: &crate::chats::Chats,
+    session: Option<u32>,
     (what, level): (&sandbox::grant::What, sandbox::grant::Level),
     audit: Audit<'_>,
     at: u64,
 ) -> Result<(), String> {
     use sandbox::grant::{self, Level, What};
     let target = what.target();
+    if session.is_none() && level == Level::Chat {
+        return Err(
+            "purlis allows a host for one chat from that chat's own Notice, not from Blocked \
+             lately."
+                .to_owned(),
+        );
+    }
     audit(
-        Some(session),
+        session,
         &grant::Audited {
             granted: true,
             what: what.word(),
@@ -902,16 +926,22 @@ pub(crate) fn kept(
         },
     )?;
     let told = grant::told(what, level);
-    match (what, level) {
-        (_, Level::Chat) => chats.grant(session, what.clone(), at, told)?,
-        (What::Host(host), Level::You | Level::Project) => {
-            purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
+    let owe = |told: String| {
+        if let Some(session) = session {
             chats.owe_restart(session, told);
         }
-        (What::Write(folder), _) => {
+    };
+    match (what, level, session) {
+        (_, Level::Chat, Some(session)) => chats.grant(session, what.clone(), at, told)?,
+        (_, Level::Chat, None) => {}
+        (What::Host(host), Level::You | Level::Project, _) => {
+            purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
+            owe(told);
+        }
+        (What::Write(folder), _, _) => {
             sandbox::local::grant_write(root, folder)
                 .map_err(|why| format!("purlis could not keep {}: {why}", folder.display()))?;
-            chats.owe_restart(session, told);
+            owe(told);
         }
     }
     if level != Level::Chat
@@ -949,13 +979,16 @@ pub fn allow_sandbox_block(
     let block = crate::taskblocks::shown_one(held.chats().blocks(), session, &shown)?;
     let (what, target) = (shown.what, shown.target);
     let root = held.root().to_path_buf();
+    let audit = |number, audited: &sandbox::grant::Audited<'_>| {
+        held.hooks().record_grant(&root, number, audited)
+    };
     let allowed = allow(
         &root,
         &sandbox::Machine::this(),
         held.chats(),
         session,
         (what, &target, level),
-        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        &crate::network::recorded(&audit, planes.network(), &root, held.chats()),
         now_secs(),
     )?;
     // Answered: neither this Notice nor a question for several tasks answers it again.
@@ -1170,7 +1203,7 @@ fn revoke(
     audit: Audit<'_>,
 ) -> Result<(), String> {
     use sandbox::grant::{Audited, Level, What};
-    let gone = || "purlis did not revoke it: that grant is no longer there.".to_owned();
+    let gone = || "purlis did not remove it: it is no longer there.".to_owned();
     let parts: Vec<&str> = id.split(SEP).collect();
     if let ["you", sandbox::local::VAULT, vault, persona] = parts.as_slice() {
         return revoke_vault(root, vault, persona, audit);
@@ -1226,7 +1259,7 @@ fn revoke(
         }
         (What::Write(folder), None) => {
             sandbox::local::revoke_write(root, folder)
-                .map_err(|why| format!("purlis could not revoke {}: {why}", folder.display()))?;
+                .map_err(|why| format!("purlis could not remove {}: {why}", folder.display()))?;
         }
     }
     if let Err(why) = sandbox::local::forget_made(root, what, target, level.word()) {
@@ -1249,7 +1282,7 @@ fn revoke_vault(
         persona: persona.to_owned(),
     };
     if !sandbox::local::granted_vaults(root).contains(&grant) {
-        return Err("purlis did not revoke it: that grant is no longer there.".to_owned());
+        return Err("purlis did not remove it: it is no longer there.".to_owned());
     }
     audit(
         None,
@@ -1261,14 +1294,14 @@ fn revoke_vault(
         },
     )?;
     sandbox::local::revoke_vault(root, vault, persona)
-        .map_err(|why| format!("purlis could not revoke vault {vault} for {persona}: {why}"))
+        .map_err(|why| format!("purlis could not remove vault {vault} for {persona}: {why}"))
 }
 
 /// **Revokes your Allow of `persona`'s hosts** in the project at `root` (#1362): checked to be
 /// there, audited, then taken off this machine's record. Chats as `persona` reach them no more
 /// from their next start, and the Notice asks again.
 fn revoke_persona(root: &std::path::Path, persona: &str, audit: Audit<'_>) -> Result<(), String> {
-    let gone = || "purlis did not revoke it: that grant is no longer there.".to_owned();
+    let gone = || "purlis did not remove it: it is no longer there.".to_owned();
     if !sandbox::local::allowed_persona_hosts(root)
         .iter()
         .any(|kept| kept.persona == persona)
@@ -1285,7 +1318,7 @@ fn revoke_persona(root: &std::path::Path, persona: &str, audit: Audit<'_>) -> Re
         },
     )?;
     sandbox::local::revoke_persona_hosts(root, persona)
-        .map_err(|why| format!("purlis could not revoke {persona}'s hosts: {why}"))
+        .map_err(|why| format!("purlis could not remove {persona}'s hosts: {why}"))
         .map(|_| ())
 }
 
@@ -1314,12 +1347,19 @@ pub async fn revoke_sandbox_grant(
     id: String,
 ) -> Result<Vec<SandboxGrant>, String> {
     let held = planes.held(&plane)?;
+    let network = planes.network().cloned();
     // On a blocking thread, as `sandbox_grants` is: the list it answers asks git (#1543).
     crate::off_the_window("revoking a sandbox grant", move || {
         let root = held.root().to_path_buf();
-        revoke(&root, held.chats(), &id, &|number, audited| {
+        let audit = |number, audited: &sandbox::grant::Audited<'_>| {
             held.hooks().record_grant(&root, number, audited)
-        })?;
+        };
+        revoke(
+            &root,
+            held.chats(),
+            &id,
+            &crate::network::recorded(&audit, network.as_ref(), &root, held.chats()),
+        )?;
         Ok(grants_of(&root, held.chats()))
     })
     .await

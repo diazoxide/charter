@@ -570,7 +570,12 @@ pub fn allow_sandbox_block_for_tasks(
         &purlis_core::sandbox::Machine::this(),
         held.chats(),
         (session, &seen, level),
-        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        &crate::network::recorded(
+            &|number, audited| held.hooks().record_grant(&root, number, audited),
+            planes.network(),
+            &root,
+            held.chats(),
+        ),
         crate::sandboxing::now_secs(),
     )
 }

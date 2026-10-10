@@ -1364,7 +1364,8 @@ pub struct Planes {
     touches: hooks::TouchTeller,
     /// Told what a working chat is doing, each time its one line changes (#1493).
     doings: crate::doing::Teller,
-    /// Told each sandbox block a chat's hook found, once kept for the doctor (#1338).
+    /// Told each sandbox block a chat's hook found, once kept in the network record (#1338,
+    /// #1662).
     blocks: hooks::BlockTeller,
     /// Told each vault a chat was refused for its persona (#1430).
     vault_refused: crate::vaultroute::Teller,
@@ -1395,6 +1396,9 @@ pub struct Planes {
     opening: Mutex<HashSet<PlaneId>>,
     /// Told each time an open of a project ends, for an open of the same one waiting on it.
     opened: Condvar,
+    /// This machine's network record (#1662), shared by every project. None until the app
+    /// opens it, and on a machine that has no data home: then nothing is recorded or listed.
+    network: Option<purlis_core::sandboxblock::record::Record>,
 }
 
 /// One open of a project, from before its sweep until it holds the project or finds it held
@@ -1514,6 +1518,7 @@ impl Planes {
             }),
             opening: Mutex::new(HashSet::new()),
             opened: Condvar::new(),
+            network: None,
         }
     }
 
@@ -1535,6 +1540,21 @@ impl Planes {
     pub(crate) fn sweeping_with(mut self, sweep: Sweep) -> Self {
         self.sweep = sweep;
         self
+    }
+
+    /// Records every block and Allow of every project this registry holds into `network`
+    /// (#1662).
+    pub fn recording_network(
+        mut self,
+        network: Option<purlis_core::sandboxblock::record::Record>,
+    ) -> Self {
+        self.network = network;
+        self
+    }
+
+    /// This machine's network record, where the app keeps one (#1662).
+    pub(crate) fn network(&self) -> Option<&purlis_core::sandboxblock::record::Record> {
+        self.network.as_ref()
     }
 
     /// Runs every plane's sessions on the hosts `hosting` makes, rather than in this process.
@@ -1933,17 +1953,28 @@ impl Planes {
         // What a working chat is doing (#1493): already a kind and one passed name, held in
         // memory and written nowhere.
         held.hooks.doings().tell_to(Arc::clone(&self.doings));
-        // A sandbox block a chat's hook found (#1338): the window shows it on the chat's tab.
-        // It carries no path, so there is nothing to confine.
+        // A sandbox block a chat's hook found (#1338): kept in this machine's network record
+        // with the chat it came from (#1662), then shown on the chat's tab. Of what the line
+        // named, only a refused host is kept.
         held.hooks.when_blocked({
             let plane = id.clone();
             let blocks = Arc::clone(&self.blocks);
+            let network = self.network.clone();
             // Weak for the handoff's reason. The block is held for the chat before the window
             // is told of it, so an answer to it can be checked against what was heard (#1508).
             let held = Arc::downgrade(&held);
             Arc::new(move |block| {
                 let told = hooks::blocked(&plane, &block);
                 if let Some(strong) = held.upgrade() {
+                    if let Some(network) = &network {
+                        crate::network::record_block(
+                            network,
+                            plane.root(),
+                            strong.chats(),
+                            &block,
+                            crate::sandboxing::now_secs(),
+                        );
+                    }
                     crate::taskblocks::heard(strong.chats(), &told);
                 }
                 blocks(told);

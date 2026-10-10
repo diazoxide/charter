@@ -29,9 +29,10 @@ pub(super) fn sandbox(d: &Doctor) -> Option<Row> {
 }
 
 /// The `sandbox blocks` row (#1338): what chats' sandboxes blocked in this project on this
-/// machine over the last seven days, counted per operation, as the app heard each one
-/// ([`crate::sandboxblock`]). Only where something was blocked: a project with none prints the
-/// rows it always printed.
+/// machine over the last seven days, counted per operation, as the app heard each one, and the
+/// hosts refused most (#1662), read from this machine's network record
+/// ([`crate::sandboxblock::record`]). Only where something was blocked: a project with none
+/// prints the rows it always printed.
 ///
 /// **A block of purlis's own operation is a purlis bug**, so any makes the row a warning that
 /// says how to report it. Every other block is the chat's own work meeting the sandbox: counted,
@@ -46,9 +47,17 @@ fn now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
+/// How many refused hosts the `sandbox blocks` row names.
+const HOSTS_NAMED: usize = 3;
+
 pub(super) fn blocks_at(d: &Doctor, now: u64) -> Option<Row> {
     const NAME: &str = "sandbox blocks";
-    let counts = crate::sandboxblock::counts(&d.root, now);
+    let entries = d
+        .network
+        .as_ref()
+        .map(|record| record.read(&d.root, now))
+        .unwrap_or_default();
+    let counts = crate::sandboxblock::record::counts(&entries, now);
     if counts.is_empty() {
         return None;
     }
@@ -63,7 +72,22 @@ pub(super) fn blocks_at(d: &Doctor, now: u64) -> Option<Row> {
             format!("{} {}{ours}", count.operation.word(), count.blocks)
         })
         .collect();
-    let detail = format!("{} in the last 7 days", said.join(", "));
+    let hosts = crate::sandboxblock::record::hosts_refused(&entries, now);
+    let named: Vec<String> = hosts
+        .iter()
+        .take(HOSTS_NAMED)
+        .map(|(host, times)| format!("{host} ({times})"))
+        .collect();
+    let more = match hosts.len().saturating_sub(HOSTS_NAMED) {
+        0 => String::new(),
+        n => format!(" and {n} more"),
+    };
+    let refused = if named.is_empty() {
+        String::new()
+    } else {
+        format!("; hosts refused most: {}{more}", named.join(", "))
+    };
+    let detail = format!("{} in the last 7 days{refused}", said.join(", "));
     if counts.iter().any(|count| count.ours > 0) {
         Some(Row::warn(
             NAME,

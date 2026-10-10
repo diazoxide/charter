@@ -893,6 +893,30 @@ blocked and shown (ADR 0067 §1, §3).
 _Avoid_: hosts it may reach, egress (in UI text), allowlist (that is the commit scan's), network
 policy
 
+**Open hosts**:
+The hosts every sandboxed chat in a project reaches without asking: each **Internet access**
+preset's hosts and the project's own hosts. Settings' Network page spells them out host by host
+(spec #1661).
+_Avoid_: allowlist, egress (in UI text), default hosts
+
+**Persona hosts**:
+The hosts only one persona's chats reach, once the person has allowed that persona's list on
+this machine. The project commits the list with the persona; each machine allows it on its own.
+_Avoid_: persona grants (in UI text), persona allowlist
+
+**Allowed host**:
+A person's yes to one host and port at one scope: *this chat*, *this project on this machine*,
+or *everyone in the project*, which is committed so teammates follow it. It is shown in full,
+never as a wildcard, and every one can be removed from Settings' Network page.
+_Avoid_: grant (in UI text; that is a runner's **Grant**), exception, allowlist entry
+
+**Block**:
+One refused reach: a sandboxed chat was refused a host and port, a local socket, a lookup or a
+file. purlis records the chat, what was refused, the time and why in this machine's network
+record, kept 30 days and never committed, shows a **Notice** on the chat's tab, and lists it
+under Blocked lately.
+_Avoid_: denial, violation (that is the sandbox's own report), egress refusal
+
 **Policy**:
 An admin's locks on settings, kept on this machine or for the organisation. A locked value
 cannot be changed at any **level**, the strictest value wins, and Settings shows it as "locked

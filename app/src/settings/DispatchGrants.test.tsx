@@ -5,7 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { DispatchGrant, DispatchGrants, DispatchStanding } from "../bindings";
 import { DispatchGrantsList, dispatchSourceSaid, dispatchWorkspaceSaid } from "./DispatchGrants";
-import { grantedGroup } from "./GrantedList";
+import { networkGroup } from "./GrantedList";
 import type { LiveSetting } from "./groups";
 import {
   forgetGroups,
@@ -1648,11 +1648,11 @@ describe("what policy locks", () => {
   });
 });
 
-describe("Settings' Granted page", () => {
+describe("Settings' Network page", () => {
   it("says where the dispatch grants are with a link there, and lists and changes none itself", async () => {
     const fake = core({ grants: [MINE] });
-    const setting = grantedGroup(PLANE, FILE).settings.find(
-      (one) => one.id === "project.sandbox.granted.dispatch",
+    const setting = networkGroup(PLANE, FILE).settings.find(
+      (one) => one.id === "project.sandbox.network.dispatch",
     ) as LiveSetting;
     expect(setting.label).toBe("Who may dispatch to whom");
     function Row() {
@@ -1668,7 +1668,7 @@ describe("Settings' Granted page", () => {
     render(<Row />);
 
     expect(
-      screen.getByText(/Dispatch grants are listed, revoked and lifted on the Dispatch page\./),
+      screen.getByText(/Who may dispatch to whom is listed and changed on the Dispatch page\./),
     ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("nowhere yet");
     expect(screen.queryByRole("table")).toBeNull();

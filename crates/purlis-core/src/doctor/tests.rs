@@ -3120,11 +3120,23 @@ fn the_sandbox_row_sits_after_the_version_lock() {
 
 // ---- sandbox blocks (#1338) --------------------------------------------------------------------
 
-/// A project with no manifest of its own: the blocks file is all the row reads.
+/// A project with no manifest of its own: the network record is all the row reads, kept under
+/// a data home beside it.
 fn bare() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap().join("project");
+    std::fs::create_dir_all(&root).unwrap();
     (dir, root)
+}
+
+/// The data home beside a [`bare`] project.
+fn data_of(root: &Path) -> PathBuf {
+    root.parent().unwrap().join("data")
+}
+
+/// The doctor of a [`bare`] project, reading the network record beside it.
+fn recorded(root: &Path) -> Doctor {
+    doctor(root).reading_network_in(&data_of(root))
 }
 
 /// Recorded violation lines, fed through what the hook reads and what the app keeps.
@@ -3141,8 +3153,16 @@ fn blocked(root: &Path, command: &str, error: &str, at: u64) {
         cwd: &cwd,
         home: Some(Path::new("/Users/dev")),
     };
-    for block in crate::sandboxblock::detect(&payload, &place) {
-        crate::sandboxblock::record(root, &block, at).unwrap();
+    let record = crate::sandboxblock::record::Record::in_data(&data_of(root));
+    for (block, target) in crate::sandboxblock::detect_with_targets(&payload, &place) {
+        let entry = crate::sandboxblock::record::Entry::blocked(
+            &block,
+            target.as_deref(),
+            crate::sandboxblock::record::Chat::default(),
+            None,
+            at,
+        );
+        record.write(root, &entry).unwrap();
     }
 }
 
@@ -3184,7 +3204,7 @@ fn the_sandbox_blocks_row_counts_seven_days_of_blocks_per_operation() {
         now - 60,
     );
     assert_eq!(
-        super::sandbox::blocks_at(&doctor(&root), now),
+        super::sandbox::blocks_at(&recorded(&root), now),
         Some(Row::warn(
             "sandbox blocks",
             "write 2 (1 purlis's own), lookup 1 in the last 7 days",
@@ -3195,15 +3215,47 @@ fn the_sandbox_blocks_row_counts_seven_days_of_blocks_per_operation() {
     );
     // Once purlis's own has left the window, what is left is the chats' own work: no fault.
     assert_eq!(
-        super::sandbox::blocks_at(&doctor(&root), now + 5 * day + day / 2),
+        super::sandbox::blocks_at(&recorded(&root), now + 5 * day + day / 2),
         Some(Row::ok(
             "sandbox blocks",
             "write 1, lookup 1 in the last 7 days"
         ))
     );
     assert_eq!(
-        super::sandbox::blocks_at(&doctor(&root), now + 30 * day),
+        super::sandbox::blocks_at(&recorded(&root), now + 30 * day),
         None
+    );
+}
+
+/// The hosts a project's chats were refused most, from the network record (#1662): what a
+/// misconfigured project shows from the terminal.
+#[test]
+fn the_sandbox_blocks_row_names_the_hosts_refused_most() {
+    let (_d, root) = bare();
+    let now = 1_000 * 24 * 60 * 60;
+    let refused = |host: &str| {
+        format!(
+            "Exit code 1\n<sandbox_violations>\ndeny network-outbound {host}:443 (host is not on \
+             the allow list)\n</sandbox_violations>"
+        )
+    };
+    for (host, times) in [
+        ("a.example", 3),
+        ("b.example", 1),
+        ("c.example", 2),
+        ("d.example", 1),
+    ] {
+        for at in 0..times {
+            blocked(&root, "curl", &refused(host), now - 60 * (at + 1));
+        }
+    }
+    assert_eq!(
+        super::sandbox::blocks_at(&recorded(&root), now),
+        Some(Row::ok(
+            "sandbox blocks",
+            "connect 7 in the last 7 days; hosts refused most: a.example:443 (3), \
+             c.example:443 (2), b.example:443 (1) and 1 more"
+        ))
     );
 }
 
@@ -3220,7 +3272,7 @@ fn the_sandbox_blocks_row_sits_after_the_sandbox_rows_place() {
         "<sandbox_violations>\ntouch(1) deny(1) file-write-create /opt/x\n</sandbox_violations>",
         now,
     );
-    let names: Vec<String> = doctor(&root).run().into_iter().map(|r| r.name).collect();
+    let names: Vec<String> = recorded(&root).run().into_iter().map(|r| r.name).collect();
     let at = names.iter().position(|n| n == "version lock").unwrap();
     assert_eq!(names[at + 1], "sandbox blocks");
 }

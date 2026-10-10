@@ -1,4 +1,5 @@
 import { activityView, isActivity } from "./activity";
+import { chatNetworkView, isChatNetwork } from "./chatNetwork";
 import { archiveTitle } from "./memories";
 
 /**
@@ -1158,12 +1159,12 @@ export function panesOf(tabs: Tabs, id: number): { pane: number; session: number
  * pane's focus all stay as they were; every other pane is left alone. Answers `tabs` itself
  * when no pane shows `from`.
  *
- * **Its Activity tab goes with it** (#1495): that view is keyed by the chat's number, which is
- * all the window knows a chat by, so one open on `from` is about `to` from here on. It would
- * otherwise say the chat is not open, of a chat that is.
+ * **Its Activity and Network tabs go with it** (#1495, #1662): those views are keyed by the
+ * chat's number, which is all the window knows a chat by, so one open on `from` is about `to`
+ * from here on. It would otherwise say the chat is not open, of a chat that is.
  */
 export function replaceSession(tabs: Tabs, from: number, to: number): Tabs {
-  const moved = activityFollows(tabs, from, to);
+  const moved = viewsFollow(tabs, from, to);
   for (const id of moved.order) {
     const tab = moved.byId[id];
     const found = contents(tab.layout).find(
@@ -1185,16 +1186,22 @@ export function replaceSession(tabs: Tabs, from: number, to: number): Tabs {
   return moved;
 }
 
-/** `tabs` with every Activity view of chat `from` about chat `to`; `tabs` itself where none is. */
-function activityFollows(tabs: Tabs, from: number, to: number): Tabs {
-  const was = activityView(from);
+/** `tabs` with every Activity and Network view of chat `from` about chat `to`; `tabs` itself
+ *  where none is. */
+function viewsFollow(tabs: Tabs, from: number, to: number): Tabs {
+  const was = String(from);
   let byId = tabs.byId;
   for (const id of tabs.order) {
     let layout = byId[id].layout;
     for (const { pane, content } of contents(layout)) {
-      if (content.kind !== "view" || !isActivity(content.view) || content.view.key !== was.key)
-        continue;
-      const now: Content = { ...content, view: activityView(to) };
+      if (content.kind !== "view" || content.view.key !== was) continue;
+      const view = isActivity(content.view)
+        ? activityView(to)
+        : isChatNetwork(content.view)
+          ? chatNetworkView(to)
+          : undefined;
+      if (view === undefined) continue;
+      const now: Content = { ...content, view };
       layout = replace(layout, pane, (found) => ({ ...found, content: now }));
     }
     if (layout !== byId[id].layout) byId = { ...byId, [id]: { ...byId[id], layout } };

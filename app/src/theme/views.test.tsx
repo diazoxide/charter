@@ -928,6 +928,39 @@ const STATES: State[] = [
     drawn: /This chat is not open/,
   },
   {
+    name: "a chat's network, what it reaches and was refused",
+    view: { from: null, view: "chat-network", key: "3" },
+    answers: {
+      chat_network: {
+        open: true,
+        sandboxed: true,
+        reach: [
+          { host: "api.anthropic.com", by: "open" },
+          { host: "db.internal:5432", by: "persona" },
+          { host: "extra.example:443", by: "allowed" },
+        ],
+        refused: [
+          {
+            target: "db.example.com:5432",
+            said: "a connection to an internet host this project does not allow",
+            chat: null,
+            at: 1_790_000_000,
+            times: 2,
+            reached: false,
+            levels: ["you", "project"],
+          },
+        ],
+      },
+    },
+    drawn: /Can reach now/,
+  },
+  {
+    name: "a chat's network, not sandboxed",
+    view: { from: null, view: "chat-network", key: "3" },
+    answers: { chat_network: { open: true, sandboxed: false, reach: [], refused: [] } },
+    drawn: /Not sandboxed: can reach anything/,
+  },
+  {
     name: "what one task changed, on its own branch (#1511)",
     view: { from: null, view: "task-changes", key: "01K6TASK" },
     answers: {

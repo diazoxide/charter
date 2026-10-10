@@ -648,7 +648,7 @@ describe("the one list of actions", () => {
       expect.arrayContaining([
         "Your settings: Text",
         "Project settings: Saving",
-        "Project settings: Granted",
+        "Project settings: Network",
         "Workspace settings: Repos",
       ]),
     );
@@ -1711,6 +1711,8 @@ describe("carrying out a row", () => {
         // A chat's Activity, one row per chat tab (#1495).
         "openView:charter/activity/7,Activity · one",
         "openView:charter/activity/8,Activity · two",
+        "openView:charter/chat-network/7,Network · one",
+        "openView:charter/chat-network/8,Network · two",
         "openView:charter/todo/alpha/20260302-091400-review,Review the plan",
         "pickVault",
         "createVault",
@@ -1981,6 +1983,8 @@ describe("the catalogue as the tabs change", () => {
       // A chat's Activity only reads (#1495), so it is above the line too.
       "tab.activity:1",
       "tab.activity:2",
+      "tab.network:1",
+      "tab.network:2",
       "tab.close:1",
       "tab.close:2",
     ]);
@@ -2312,8 +2316,9 @@ describe("the palette at fifty chats", () => {
     // tab, three rows a branch as its browse and focus rows are.
     // 839 since #1152: Focus on repo, one row in each of the ten clones.
     // 842 since #1673: Show the Chats view, Show the Explorer view, and the Navigation region.
+    // 892 since #1662: Network, one row per chat.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(842);
+    expect(offers).toHaveLength(892);
   });
 
   /**
@@ -2355,18 +2360,18 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for ten rows per tab and never walks the list", () => {
+    it("asks for eleven rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the ten ids a chat menu lists (the two work link rows are V60's, Start
-      // fresh is NO-3's, Restart chat is #1428's, Activity is #1495's).
+      // 50 tabs × the eleven ids a chat menu lists (the two work link rows are V60's, Start
+      // fresh is NO-3's, Restart chat is #1428's, Activity is #1495's, Network is #1662's).
       // **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(500);
+      expect(strip(offers)).toBe(550);
     });
 
-    it("is the same 500 whether the catalogue carries the pieces or not", () => {
+    it("is the same 550 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -2375,7 +2380,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(500);
+      expect(strip(small)).toBe(550);
     });
   });
 });

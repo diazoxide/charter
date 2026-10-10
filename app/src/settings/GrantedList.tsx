@@ -7,15 +7,17 @@ import { DISPATCH } from "./dispatch";
 import { linkToGroup, openVault, settingsPlace, showPersona } from "./links";
 import { OutLink } from "./OutLink";
 import type { SettingsGroup } from "./groups";
+import { BlockedLatelyList, OpenHostsList, useAllowedHere } from "./NetworkLists";
 
-/** The address of the Granted list (#1348): a sub-page of Sandbox. */
-export const GRANTED = "project.sandbox.granted";
+/** The address of the Network page (#1662): a sub-page of Sandbox, where the Granted list of
+ *  #1348 is now the Allowed list. */
+export const NETWORK = "project.sandbox.network";
 
-/** What each level is called on the list. */
+/** What each scope is called on the list (spec #1661's three scopes). */
 const LEVELS: Readonly<Record<SandboxGrant["level"], string>> = {
-  chat: "One chat",
-  you: "Me on this machine",
-  project: "Everyone in this project",
+  chat: "This chat",
+  you: "This project on this machine",
+  project: "Everyone in the project",
 };
 
 /** When, as the list says it: the day and time, or nothing where it is not known. */
@@ -24,7 +26,7 @@ function when(at: number | null): string {
   return new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** One grant, as a sentence: what it allows, for whom, who granted it and when. */
+/** One Allow, as a sentence: what it allows, at which scope, who allowed it and when. */
 export function grantSaid(one: SandboxGrant): string {
   const allows =
     one.what === "host"
@@ -36,7 +38,7 @@ export function grantSaid(one: SandboxGrant): string {
           : `Write ${one.target} and everything in it`;
   const by =
     one.level !== "project"
-      ? "granted by you"
+      ? "allowed by you"
       : one.by === null
         ? "not committed yet"
         : `committed by ${one.by}`;
@@ -45,8 +47,8 @@ export function grantSaid(one: SandboxGrant): string {
   return `${allows} · ${LEVELS[one.level]} · ${by}${at === "" ? "" : `, ${at}`}${from}`;
 }
 
-/** What Revoke takes away, as its button says it. */
-function revoked(one: SandboxGrant): string {
+/** What Remove takes away, as its button says it. */
+function removed(one: SandboxGrant): string {
   if (one.what === "host") return `reaching ${one.target}`;
   if (one.what === "vault") return `using vault ${one.target} as ${one.persona ?? "a persona"}`;
   if (one.what === "persona-hosts") return `${one.persona ?? "a persona"}'s hosts`;
@@ -56,23 +58,24 @@ function revoked(one: SandboxGrant): string {
 /** What the core said went wrong, through the Notice every surface says it with. */
 function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
   return (
-    <Notice cause={`granted:${said}`} at="pane" tone="trouble" onDismiss={onDismiss}>
+    <Notice cause={`allowed:${said}`} at="pane" tone="trouble" onDismiss={onDismiss}>
       {said}
     </Notice>
   );
 }
 
 /**
- * **Every grant, each revocable** (#1348): what a person allowed past this project's sandbox,
- * at every level — this chat, every chat here on this machine, and the project's own hosts —
- * with who granted it and when. A vault you let a persona's chats use on this machine although
- * it is not tagged for the persona is one of them (#1430). **Revoke** takes it out of every later start, through the core,
- * which audits it; a project host's revoke is a change to the committed file, which teammates
- * follow. One a policy locks out (a host it does not allow, a folder where it forbids write
- * grants) is kept and not in force: it says so, with the policy and who set it, and is drawn
- * locked, with Revoke still there to take it away (#1431).
+ * **Allowed: every Allow, each removable** (#1348, renamed by #1662): what a person allowed past
+ * this project's sandbox, at every scope — this chat, this project on this machine, and
+ * everyone in the project — with who allowed it and when. A vault you let a persona's chats use
+ * on this machine although it is not tagged for the persona is one of them (#1430). **Remove**
+ * (the Granted list's Revoke) takes it out of every later start, through the core, which
+ * audits it and writes it to the network record; a project host's removal is a change to the
+ * committed file, which teammates follow. One a policy locks out (a host it does not allow, a
+ * folder where it forbids writing) is kept and not in force: it says so, with the policy and
+ * who set it, and is drawn locked, with Remove still there to take it away (#1431).
  */
-function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
+function AllowedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
   const [grants, setGrants] = useState<readonly SandboxGrant[]>();
   const [said, setSaid] = useState<string>();
   /** The newest list asked for. Both commands answer off the window's thread (#1543), so an
@@ -94,12 +97,14 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
       })
       .catch(
         (err: unknown) =>
-          newest() && setSaid(`purlis could not list what was granted: ${String(err)}`),
+          newest() && setSaid(`purlis could not list what is allowed: ${String(err)}`),
       );
   }, [plane]);
-  useEffect(read, [read]);
+  // Read again when an Allow on Blocked lately returns.
+  const allowed = useAllowedHere();
+  useEffect(read, [read, allowed]);
 
-  const revoke = (one: SandboxGrant) => {
+  const remove = (one: SandboxGrant) => {
     setSaid(undefined);
     const newest = ask();
     void commands
@@ -108,7 +113,7 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
         if (done.status === "error") setSaid(done.error);
         else if (newest()) setGrants(done.data);
       })
-      .catch((err: unknown) => setSaid(`purlis could not revoke it: ${String(err)}`))
+      .catch((err: unknown) => setSaid(`purlis could not remove it: ${String(err)}`))
       // What chats may write moved, or did not: the Notice for chats left behind asks again.
       .finally(sandboxCommandReturned);
   };
@@ -116,11 +121,11 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
   return (
     <div id={ids.id} aria-labelledby={ids.labelledBy}>
       {grants === undefined ? (
-        said === undefined && <p>Reading what was granted…</p>
+        said === undefined && <p>Reading what is allowed…</p>
       ) : grants.length === 0 ? (
-        <p>Nothing is granted past this project&apos;s sandbox.</p>
+        <p>Nothing is allowed beyond the Open hosts.</p>
       ) : (
-        <ul className="granted-list" aria-label="Granted">
+        <ul className="granted-list" aria-label="Allowed">
           {grants.map((one) => (
             <li key={one.id}>
               <span>{grantSaid(one)}</span>
@@ -137,10 +142,10 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
                 </OutLink>
               )}
               {one.level === "project" && (
-                <span className="granted-note">Revoking it edits the committed {file}.</span>
+                <span className="granted-note">Removing it edits the committed {file}.</span>
               )}
               {one.waiting !== null && (
-                // An Allow whose list changed since (#1362, D-1362-13): kept only to be revoked or
+                // An Allow whose list changed since (#1362, D-1362-13): kept only to be removed or
                 // allowed anew, never in force again by itself.
                 <span className="granted-note"> Not in force: {one.waiting}.</span>
               )}
@@ -152,10 +157,10 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
               <button
                 type="button"
                 tabIndex={0}
-                aria-label={`Revoke ${revoked(one)}`}
-                onClick={() => revoke(one)}
+                aria-label={`Remove ${removed(one)}`}
+                onClick={() => remove(one)}
               >
-                Revoke
+                Remove
               </button>
             </li>
           ))}
@@ -226,7 +231,7 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
 
   return (
     <div aria-labelledby={ids.labelledBy}>
-      <ul className="granted-list" aria-label="Folders chats may be granted">
+      <ul className="granted-list" aria-label="Folders a block's Allow may name">
         {(folders ?? []).map((folder) => (
           <li key={folder}>
             <code>{folder}</code>
@@ -283,7 +288,7 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
               <code>{one}</code>
             </span>
           ))}
-          . A chat granted a folder inside it may change what they run. Remove it unless you meant
+          . A chat allowed a folder inside it may change what they run. Remove it unless you meant
           that.
         </Notice>
       )}
@@ -292,33 +297,50 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
   );
 }
 
-/** The Granted list's group, for the project at `plane`, whose committed file is `file`. */
 /**
- * The Granted page. Where an administrator's policy forbids write grants (#1343), `writesLocked`
- * is what it says — "Locked by policy" and who set it — and the folders list offers no control.
+ * **The Network page** (#1662), for the project at `plane`, whose committed file is `file`:
+ * Open hosts, Allowed, Blocked lately, then the folders a block's Allow may name. Where an
+ * administrator's policy forbids letting a chat write a folder (#1343), `writesLocked` is what it
+ * says — "Locked by policy" and who set it — and the folders list offers no control.
  */
-export function grantedGroup(
+export function networkGroup(
   plane: PlaneId,
   file: string,
   writesLocked: string | null = null,
 ): SettingsGroup {
   return {
-    id: GRANTED,
-    label: "Granted",
-    help: "What chats here may reach or write beyond the project's sandbox, and who allowed it. Revoke takes it away from each chat when it next starts.",
+    id: NETWORK,
+    label: "Network",
+    help: "What chats here can reach: the Open hosts every sandboxed chat reaches, the hosts and folders you allowed, and what was blocked lately. Nothing here changes until you press Allow or Remove.",
     sub: true,
     settings: [
       {
-        id: `${GRANTED}.list`,
-        label: "Granted",
-        help: `One chat lasts until that chat closes. Me on this machine is kept on this machine only. Everyone in this project is kept in ${file}, which your team follows.`,
-        useControl: function useGranted() {
-          return { control: (ids) => <GrantedRows plane={plane} file={file} ids={ids} /> };
+        id: `${NETWORK}.open`,
+        label: "Open hosts",
+        help: "Every sandboxed chat here reaches these without asking: each Internet access preset, host by host, and the project's own hosts.",
+        useControl: function useOpenHosts() {
+          return { control: (ids) => <OpenHostsList plane={plane} ids={ids} /> };
         },
       },
       {
-        id: `${GRANTED}.folders`,
-        label: "Folders chats may be granted",
+        id: `${NETWORK}.allowed`,
+        label: "Allowed",
+        help: `What you or a teammate allowed beyond the Open hosts, at its scope. This chat lasts until that chat closes. This project on this machine is kept on this machine only. Everyone in the project is kept in ${file}, which your team follows. Remove takes it away from each chat when it next starts.`,
+        useControl: function useAllowed() {
+          return { control: (ids) => <AllowedRows plane={plane} file={file} ids={ids} /> };
+        },
+      },
+      {
+        id: `${NETWORK}.blocked`,
+        label: "Blocked lately",
+        help: "What chats here were refused in the last 30 days, kept on this machine only and never committed. Allow keeps a host for this project on this machine; a chat that is running reaches it from its next start.",
+        useControl: function useBlockedLately() {
+          return { control: (ids) => <BlockedLatelyList plane={plane} ids={ids} /> };
+        },
+      },
+      {
+        id: `${NETWORK}.folders`,
+        label: "Folders a block's Allow may name",
         help: "Folders outside this project that a block's Allow may name, such as a tool's cache. Kept on this machine only, never committed.",
         useControl: function useGrantableFolders() {
           return {
@@ -340,10 +362,10 @@ export function grantedGroup(
         },
       },
       {
-        id: `${GRANTED}.dispatch`,
+        id: `${NETWORK}.dispatch`,
         // Its own words: "Dispatch grants" is the row of the Dispatch page, and a label is one row's.
         label: "Who may dispatch to whom",
-        help: "Which personas' chats may dispatch to which is one table, with where each grant comes from and how to take it back.",
+        help: "Which personas' chats may dispatch to which is one table, with where each comes from and how to take it back.",
         useControl: function useDispatchGrants() {
           return {
             grouped: true,
@@ -355,7 +377,7 @@ export function grantedGroup(
                 aria-labelledby={ids.labelledBy}
                 aria-describedby={ids.describedBy}
               >
-                Dispatch grants are listed, revoked and lifted on the Dispatch page.
+                Who may dispatch to whom is listed and changed on the Dispatch page.
                 <button
                   type="button"
                   className="ui-setting-reset"
