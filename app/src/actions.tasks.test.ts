@@ -10,7 +10,9 @@ import {
   ownTabId,
   paneCloseOf,
   perform,
+  TASK_FRESH_NOTE,
   TASK_NOT_FRESH,
+  TASKS_START_FRESH,
   taskRows,
   taskShowId,
   type Doing,
@@ -248,8 +250,8 @@ describe("the next and the previous chat in a tab (fix round 1)", () => {
   });
 });
 
-describe("starting a task fresh (fix round 1, M2)", () => {
-  it("is a row that cannot run on a task's own tab, with the core's own sentence", () => {
+describe("starting a task fresh (fix round 1, M2; #1609)", () => {
+  const freshRows = (tasksStartFresh?: boolean) => {
     const tabs = moveToOwnTab(sessions(), 2, "talk", "devops", null);
     const rows = catalogued(
       catalogue({
@@ -259,13 +261,44 @@ describe("starting a task fresh (fix round 1, M2)", () => {
         nameOf: (number) => names[number] ?? String(number),
         listed: all,
         planeUpdated: { 1: ["CLAUDE.md"], 2: ["CLAUDE.md"] },
+        ...(tasksStartFresh === undefined ? {} : { tasksStartFresh }),
       }),
     );
-    expect(rows.get(`tab.fresh:${tabOf(tabs, 2)}`)).toMatchObject({
-      available: false,
-      reason: TASK_NOT_FRESH,
+    return {
+      task: rows.get(`tab.fresh:${tabOf(tabs, 2)}`),
+      session: rows.get(`tab.fresh:${tabOf(tabs, 1)}`),
+      tab: tabOf(tabs, 2),
+    };
+  };
+
+  it("is a row that cannot run on a task's own tab, with the core's own sentence, while the core refuses it", () => {
+    const { task, session } = freshRows(false);
+    expect(task).toMatchObject({ available: false, reason: TASK_NOT_FRESH });
+    expect(session?.available).toBe(true);
+  });
+
+  it("follows what the core serves when the window is told nothing", () => {
+    expect(freshRows().task?.available).toBe(TASKS_START_FRESH);
+  });
+
+  it("runs Start fresh for a task where the core hands it its brief again, and says so", async () => {
+    const { task, tab } = freshRows(true);
+    expect(task).toMatchObject({
+      available: true,
+      does: { verb: "startFresh", tab },
+      note: `Changed since it started: CLAUDE.md. ${TASK_FRESH_NOTE}`,
     });
-    expect(rows.get(`tab.fresh:${tabOf(tabs, 1)}`)?.available).toBe(true);
+    if (task === undefined) throw new Error("no row");
+    const calls: string[] = [];
+    const doing = new Proxy({} as Doing, {
+      get:
+        (_, verb: string) =>
+        (...args: unknown[]) => {
+          calls.push(`${verb}:${args.join(",")}`);
+        },
+    });
+    await perform(task, doing);
+    expect(calls).toEqual([`startFresh:${tab}`]);
   });
 });
 

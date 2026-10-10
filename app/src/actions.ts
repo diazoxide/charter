@@ -752,6 +752,8 @@ export type Now = {
    *  launch, from what was put back): what makes a task's own tab a task's from its first
    *  frame (#1489). Left out, it is read off `listed`. */
   askedBy?: AskedBy;
+  /** Whether the core starts a task fresh (#1609): left out, {@link TASKS_START_FRESH}. */
+  tasksStartFresh?: boolean;
   /** The chats being stopped (#1448): each one's Stop row ends it now. */
   stopping?: readonly number[];
   /** Each chat's finished tasks, by its number (#1485): a tab whose tasks have all finished
@@ -1563,11 +1565,25 @@ export function catalogue(now: Now): Offer[] {
     const files = chat === undefined ? undefined : now.planeUpdated?.[chat];
     if (files === undefined || files.length === 0) continue;
     const name = now.tabs.byId[tab].name;
-    // **Not for a task** (#1489): a fresh start is a new conversation, and a task's brief is in
-    // the one it has. The core refuses it too (`Held::start_chat_fresh`); the row stays, and
-    // says why, so its tab's menu answers the question instead of losing the row.
+    // **A task** (#1489, #1609): a fresh start is a new conversation, and a task's brief is in
+    // the one it has. Where the core hands the brief again it runs, and says so; a refusal (a
+    // brief purlis cannot confirm) is said in its question as any refused act is. Until the core
+    // does, the row stays and says why, so its tab's menu answers the question instead of
+    // losing the row.
     if (chat !== undefined && (now.askedBy ?? askedByOf(now.listed ?? []))(chat) !== undefined) {
-      offers.push(cannot(`tab.fresh:${tab}`, `Start chat ${name} fresh`, TASK_NOT_FRESH, name));
+      offers.push(
+        (now.tasksStartFresh ?? TASKS_START_FRESH)
+          ? {
+              ...can(
+                `tab.fresh:${tab}`,
+                `Start chat ${name} fresh`,
+                { verb: "startFresh", tab },
+                name,
+              ),
+              note: `Changed since it started: ${files.join(", ")}. ${TASK_FRESH_NOTE}`,
+            }
+          : cannot(`tab.fresh:${tab}`, `Start chat ${name} fresh`, TASK_NOT_FRESH, name),
+      );
       continue;
     }
     offers.push({
@@ -3385,6 +3401,18 @@ export function ownTabId(session: number): string {
 export function backId(session: number): string {
   return `chat.back:${session}`;
 }
+
+/**
+ * **Whether a task's Start fresh runs** (#1609): the window half of lifting #1489's refusal,
+ * which rides one train with the core half. Off until the core's `Held::start_chat_fresh` hands
+ * a task its brief again (`rebrief::again`) instead of refusing it: while the core refuses every
+ * task, a row offered as able to run would only ever be refused. The core half turns this on.
+ */
+export const TASKS_START_FRESH = false;
+
+/** What a task's Start fresh does that its title cannot fit (#1609). */
+export const TASK_FRESH_NOTE =
+  "A task starts again on the brief it was given, where purlis can confirm it, and still owes its report.";
 
 /** Why a task is not started fresh: the core's own sentence (`A_TASK_IS_NOT_STARTED_FRESH`). */
 export const TASK_NOT_FRESH =
