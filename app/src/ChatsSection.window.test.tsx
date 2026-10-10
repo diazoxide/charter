@@ -16,6 +16,7 @@ import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { drawnWith } from "./cascade.testkit";
 import { card, cardOf as cardOfRow, facts, theCard } from "./chatCard.testkit";
+import { CARD_LEAVE_MS } from "./ChatsSection";
 import { forgetThisLaunch } from "./regions";
 import type { Shown } from "./shownState";
 import { stripNamed } from "./test-strips";
@@ -1781,6 +1782,24 @@ describe("a chat's row is one line, with a hover card (#1675)", () => {
     await waitFor(() => expect(card()).toHaveTextContent("Tokens: 12k in, 3k out"));
 
     await userEvent.unhover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  it("keeps the card up while the pointer crosses to it, and on it (WCAG 1.4.13)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.hover(row(tree, "devops 3"));
+    const shown = await theCard();
+    // Off the row and onto the card, as a pointer reading it goes.
+    await userEvent.unhover(row(tree, "devops 3"));
+    await userEvent.hover(shown);
+    await new Promise((done) => setTimeout(done, CARD_LEAVE_MS * 2));
+    expect(card()).toBe(shown);
+
+    await userEvent.unhover(shown);
     await waitFor(() => expect(card()).toBeNull());
   });
 

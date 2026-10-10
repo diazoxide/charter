@@ -30,6 +30,8 @@ export async function cardOf(row: HTMLElement): Promise<{
   text: string;
   facts: Record<string, string | undefined>;
 }> {
+  // A card the pointer just left stays a moment (`CARD_LEAVE_MS`): read this row's, not that.
+  await waitFor(() => expect(card()).toBeNull());
   await userEvent.hover(row);
   const shown = await theCard();
   const read = { text: shown.textContent ?? "", facts: facts(shown) };

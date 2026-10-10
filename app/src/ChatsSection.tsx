@@ -1081,6 +1081,12 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
 export const CARD_DELAY_MS = 500;
 
 /**
+ * How long a card the pointer brought up stays once the pointer leaves its row (#1675): long
+ * enough to cross to the card, so its words can be pointed at and read (WCAG 1.4.13, hoverable).
+ */
+export const CARD_LEAVE_MS = 150;
+
+/**
  * One chat's row. Held on plain values, so only a row whose own facts changed is drawn again.
  *
  * **One line** (#1675, B-3): its state's mark, its persona's badge, its name, and nothing more.
@@ -1269,6 +1275,13 @@ const Row = memo(function Row({
     if (carded) card(false);
     else unrest();
   };
+  /** The pointer left the row or its card: the card stays a moment, so the pointer can cross
+   *  to it, and stays up while the pointer is on it. */
+  const leave = () => {
+    if (!carded) return unrest();
+    unrest();
+    resting.current = window.setTimeout(() => card(false), CARD_LEAVE_MS);
+  };
   return (
     <li role="none" data-level={level}>
       {open === null ? (
@@ -1325,7 +1338,7 @@ const Row = memo(function Row({
                 onPointerEnter={(event) => {
                   if (event.pointerType !== "touch") rest();
                 }}
-                onPointerLeave={away}
+                onPointerLeave={leave}
                 onFocus={rested}
                 onBlur={away}
                 onKeyDown={keys}
@@ -1377,6 +1390,9 @@ const Row = memo(function Row({
             align="start"
             sideOffset={6}
             collisionPadding={8}
+            // The pointer on the card holds it up (WCAG 1.4.13): it came across from the row.
+            onPointerEnter={unrest}
+            onPointerLeave={leave}
           >
             <ChatCard
               state={state}
