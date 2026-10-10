@@ -252,3 +252,24 @@ fn after_a_timeout_or_keep_blocked_the_host_is_no_longer_said_to_be_waiting() {
     assert_eq!(waiting.join().unwrap(), Answer::Refused);
     assert!(!asks.asks_about(&host("api.example.com")));
 }
+
+#[test]
+fn a_host_allowed_live_reaches_a_run_started_after_and_a_removed_one_does_not() {
+    use super::reach::Reach;
+    use super::tunnel::{Route, route};
+    let (asks, _) = board(Duration::from_millis(100), Duration::from_millis(10));
+    let dsn = "postgres://app@db.example.com:6543/app";
+    asks.allow(&host("db.example.com:6543"), By::Chat);
+    let live = asks.allowed_live();
+    assert_eq!(live, vec!["db.example.com:6543".to_owned()]);
+    assert!(matches!(
+        route(dsn, &Reach::open(live), &[]),
+        Route::Through(..)
+    ));
+    asks.forget(&host("db.example.com:6543"), By::Chat);
+    assert!(asks.allowed_live().is_empty());
+    assert!(matches!(
+        route(dsn, &Reach::open(asks.allowed_live()), &[]),
+        Route::Refused(_)
+    ));
+}

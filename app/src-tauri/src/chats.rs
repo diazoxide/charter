@@ -2045,11 +2045,9 @@ impl Chats {
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
         // command, finds the one this app shipped, from a Finder launch too (charter-app#136).
         let env = purlis_core::start::with_chat_path(env, self.shipped.binary.as_deref());
-        // ssh through the chat's SOCKS port (#1667): its route's `ssh` first on the chat's PATH.
-        let env = match confinement
-            .as_ref()
-            .and_then(purlis_core::sandbox::Confinement::ssh_route)
-        {
+        // ssh through the chat's SOCKS port (#1667): its route's `ssh` first on the chat's PATH,
+        // for a harness its sandbox wraps whole.
+        let env = match sandbox.and_then(|applied| applied.ssh_route(confinement.as_ref())) {
             Some(route) => route.first_on_path(env),
             None => env,
         };
@@ -2938,6 +2936,21 @@ impl Chats {
         lock(&self.open)
             .get(&session)
             .and_then(|running| running.confines.clone())
+    }
+
+    /// What chat `session`'s sandbox was compiled to as it started ([`Self::confines_of`]), with
+    /// the hosts the person allowed it live since (#1666): what a brokered `secret exec` run for
+    /// it now is held to, so an Allow from a run's Notice reaches the chat's next run (#1667).
+    pub fn confines_now(&self, session: u32) -> Option<purlis_core::sandbox::Confines> {
+        let mut confines = self.confines_of(session)?;
+        if let Some(board) = self.board_of(session) {
+            for host in board.allowed_live() {
+                if !confines.hosts.contains(&host) {
+                    confines.hosts.push(host);
+                }
+            }
+        }
+        Some(confines)
     }
 
     /// What hears each connection a command run for chat `session` makes (#1667): a brokered

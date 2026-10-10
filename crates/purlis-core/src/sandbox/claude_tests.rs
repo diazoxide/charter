@@ -281,6 +281,9 @@ fn a_claude_code_chat_through_purlis_s_proxy_is_given_its_own_pair_of_ports() {
     let two = applied.confine().expect("started").expect("a proxy");
     let [http, socks] = one.proxy_ports();
     assert_ne!(http, socks);
+    // Claude Code runs outside its sandbox, with its hooks: no file in the chat's temp
+    // directory is on its PATH or its git's ssh (#1667).
+    assert!(applied.ssh_route(Some(&one)).is_none());
     assert!(
         two.proxy_ports()
             .iter()
