@@ -365,6 +365,54 @@ function offTheTerminal(seen: {
 }
 
 /**
+ * **The brief, scrolled to in the box under the line** (#1647): the pane's row is at most three
+ * fifths of the pane, so what a way out opened gives way first and scrolls in its own box
+ * (#1481). The box is scrolled to the brief's top, and the brief is held there: at the box's
+ * width, its top shown, and the rest of it shown too or scrolled to in the same box.
+ */
+async function briefInTheBoxUnder(pane: number) {
+  const seen = await browser.execute((at: number) => {
+    const box = (el: Element | null | undefined) => {
+      if (!el) return null;
+      const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
+      return { left, right, top, bottom, width, height };
+    };
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const raised = frames[at]?.querySelector('[data-raised="pane-notices.e2e"]');
+    const under = raised?.querySelector<HTMLElement>(".notice-under-pane");
+    const pre = raised?.querySelector<HTMLElement>("pre");
+    if (under && pre)
+      under.scrollTop += pre.getBoundingClientRect().top - under.getBoundingClientRect().top;
+    return {
+      under: box(under),
+      pre: box(pre),
+      underScrolls: under ? under.scrollHeight > under.clientHeight + 1 : false,
+    };
+  }, pane);
+  check("the brief's box was not drawn", seen.pre !== null, "is", true);
+  check("there is no box under the line", seen.under !== null, "is", true);
+  const [pre, under] = [seen.pre as Box, seen.under as Box];
+  check("the brief's box has no width", pre.width, "above", 0);
+  check("the brief's box has no height", pre.height, "above", 0);
+  check(
+    "the brief's box starts left of the box under the line",
+    pre.left,
+    "atLeast",
+    under.left - 1,
+  );
+  check("the brief's box runs past the box under the line", pre.right, "atMost", under.right + 1);
+  check("the brief's box starts above the box under the line", pre.top, "atLeast", under.top - 1);
+  check(
+    "the brief's box runs past the box under the line, which does not scroll",
+    pre.bottom <= under.bottom + 1 || seen.underScrolls,
+    "is",
+    true,
+  );
+}
+
+/**
  * How far anything is scrolled sideways, from the pane's frame up to the page. A focus scrolls
  * a `hidden` box to show what overflowed it, which is how the band and the sidebar came to be
  * cut at the left: every number here is 0 when nothing overflows.
@@ -510,8 +558,8 @@ describe("a Notice in a pane", () => {
       expect(under.top).toBeGreaterThanOrEqual(line.bottom - 1);
       expect(under.left).toBeGreaterThanOrEqual(box.left - 1);
       expect(under.right).toBeLessThanOrEqual(box.right + 1);
-      inside(notice.pre, under, "the brief's box under the line");
       expect(notice.preScrolls).toBe(true);
+      await briefInTheBoxUnder(pane);
 
       // Opaque: the terminal does not show through it.
       expect(notice.background).not.toMatch(/rgba\(.*,\s*0\)|transparent/);
@@ -563,8 +611,8 @@ describe("a Notice in a pane", () => {
     // The brief is still under all five, never pushed beside them or out of the pane.
     const [under, line] = [notice.under as Box, notice.line as Box];
     expect(under.top).toBeGreaterThanOrEqual(line.bottom - 1);
-    inside(notice.pre, under, "the brief's box under the line");
     offTheTerminal(seen);
+    await briefInTheBoxUnder(0);
   });
 
   for (const pane of [0, 1]) {
