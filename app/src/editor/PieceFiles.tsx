@@ -51,6 +51,7 @@ import { useYourEditor } from "../yourEditor";
 import { askSettingsLink, type SettingsLink } from "../settings/links";
 import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
+import { useBranchMoved } from "./branchMoved";
 
 /** A size, as a person reads one. */
 export function sized(bytes: number): string {
@@ -96,8 +97,10 @@ function useFile(plane: PlaneId, cut: Place, path: string | undefined): FileRead
 /**
  * **Whether the branch changed the file at `path`** against its base, committed or not (FM-11):
  * its mark in `branch_status`, the explorer's own markers (FM-4), or `undefined` when it did not
- * or the status could not be read. Read when the tab opens and again when another file is picked,
- * **one read at a time**: a pick during a read asks for one more after it, never one each.
+ * or the status could not be read. Read when the tab opens, again when another file is picked, and
+ * again when the window hears this branch moved (#1189, as the comparison tab does), so *Show
+ * what changed* comes and goes with the branch. **One read at a time**: a pick or a move during
+ * a read asks for one more after it, never one each.
  */
 function useChanged(plane: PlaneId, cut: Place, path: string | undefined): ChangeMark | undefined {
   const [marks, setMarks] = useState<ReadonlyMap<string, ChangeMark>>();
@@ -131,6 +134,9 @@ function useChanged(plane: PlaneId, cut: Place, path: string | undefined): Chang
   useEffect(() => {
     if (path !== undefined) read.current();
   }, [plane, cut.workspace, cut.repo, cut.piece, path]);
+  useBranchMoved(plane, cut, () => {
+    if (path !== undefined) read.current();
+  });
   if (path === undefined) return undefined;
   const mark = marks?.get(path);
   // A deleted file has nothing to pick; one that was, a moment ago, is not offered either.

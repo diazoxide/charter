@@ -319,11 +319,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "editor/BranchTree.tsx": { count: 1, why: "the branch tree's read refusal, inside the editor" },
   "editor/PieceDiff.tsx": {
-    count: 5,
+    count: 6,
     why:
       "the comparison tab's whole answer when it draws no merge view: reading, the core's " +
       "refusal, or why no line is drawn (#1189). The tab's own Compare again and Open in your " +
-      "editor, at its top, are the way out",
+      "editor, at its top, are the way out. And the line that says the comparison drawn is " +
+      "being read again after the branch moved, which goes when the new one comes",
   },
   "editor/PieceFiles.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },
   "references.tsx": {
