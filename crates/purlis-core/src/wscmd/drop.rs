@@ -11,6 +11,9 @@
 //! in the clone's store, so deleting the clone breaks every one of them whatever they hold.
 //! The operator removes the worktrees first (the app's "Remove folder …" action), and then
 //! the repo.
+//!
+//! **Its sentences are the window's** (#1102): the app's repo picker is the only caller, so a
+//! refusal names a branch and its folder (ADR 0072 §4), never a worktree or a flag.
 
 use std::path::Path;
 
@@ -61,22 +64,13 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
     }
     match crate::worktree::list(root, ws, repo) {
         Ok(pieces) if pieces.iter().any(|p| p.prunable.is_none()) => {
-            let names: Vec<String> = pieces.into_iter().map(|p| p.piece).collect();
-            return fail(
-                say,
-                format!(
-                    "Refusing to remove '{repo}' — it has branch folders ({}), and they keep \
-                     their commits in this clone. Remove them first (the \"Remove folder …\" \
-                     action in the app).",
-                    names.join(", ")
-                ),
-            );
+            return fail(say, branches_with_folders(repo, pieces));
         }
         Ok(_) => {}
         Err(why) => {
             return fail(
                 say,
-                format!("Refusing to remove '{repo}' — its worktrees could not be read ({why})."),
+                format!("Refusing to remove '{repo}' — {}", why.in_window()),
             );
         }
     }
@@ -111,6 +105,32 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
     Removal {
         code: 0,
         refused_over: Vec::new(),
+    }
+}
+
+/// The refusal of a clone whose branches have folders of their own, in the window's words
+/// (ADR 0072 §4, #1102): each branch by its own name, sorted, and a folder with no branch
+/// checked out by the folder's name. Only the window takes a repo out of a workspace, so
+/// there is no command's wording beside this one.
+fn branches_with_folders(repo: &str, pieces: Vec<crate::worktree::Piece>) -> String {
+    let mut names: Vec<String> = pieces
+        .into_iter()
+        .filter(|p| p.prunable.is_none())
+        .map(|p| p.branch.unwrap_or(p.piece))
+        .collect();
+    names.sort();
+    match names.as_slice() {
+        [one] => format!(
+            "Refusing to remove '{repo}' — branch {one} has a folder of its own, which keeps \
+             its commits in this clone. Remove that folder first, from the branch's row in the \
+             explorer."
+        ),
+        _ => format!(
+            "Refusing to remove '{repo}' — these branches have folders of their own, which \
+             keep their commits in this clone: {}. Remove each branch's folder first, from its \
+             row in the explorer.",
+            names.join(", ")
+        ),
     }
 }
 
@@ -352,6 +372,78 @@ mod tests {
         assert!(ws.join("notes").is_dir());
         assert_eq!(up.code, 1);
         assert!(ws.is_dir());
+    }
+
+    /// #1102: only the window takes a repo out of a workspace, so its refusal is in the
+    /// window's words: each branch by its own name, no "worktree", and no flag.
+    #[test]
+    fn a_clone_whose_branches_have_folders_is_refused_naming_each_branch() {
+        let dir = plane();
+        let clone = repo(&dir.path().join("workspaces/alpha/svc"));
+        let folders = crate::worktree::root_of(dir.path(), "alpha").join("svc");
+        for (branch, folder) in [("fix/login", "fix-login"), ("feat/x", "feat-x")] {
+            let at = folders.join(folder);
+            git(
+                &clone,
+                &["worktree", "add", "-q", "-b", branch, at.to_str().unwrap()],
+            );
+        }
+
+        let (done, said) = run(dir.path(), "alpha", "svc");
+
+        assert_eq!(done.code, 1, "{said:?}");
+        assert!(clone.join("README.md").is_file());
+        let [line] = said.as_slice() else {
+            panic!("one line: {said:?}")
+        };
+        assert_eq!(
+            line,
+            "✗ Refusing to remove 'svc' — these branches have folders of their own, which keep \
+             their commits in this clone: feat/x, fix/login. Remove each branch's folder first, \
+             from its row in the explorer."
+        );
+        assert!(!line.contains("worktree") && !line.contains("--"), "{line}");
+
+        // One branch is said as one.
+        git(
+            &clone,
+            &[
+                "worktree",
+                "remove",
+                folders.join("feat-x").to_str().unwrap(),
+            ],
+        );
+        let (_, said) = run(dir.path(), "alpha", "svc");
+        assert_eq!(
+            said,
+            [
+                "✗ Refusing to remove 'svc' — branch fix/login has a folder of its own, which \
+              keeps its commits in this clone. Remove that folder first, from the branch's row \
+              in the explorer."
+            ]
+        );
+    }
+
+    /// A clone whose branches' folders could not be read is refused in the window's words too.
+    #[test]
+    fn a_clone_whose_branch_folders_cannot_be_read_is_refused_in_the_windows_words() {
+        let dir = plane();
+        std::fs::write(
+            dir.path().join("charter.toml"),
+            "[plane]\nworktrees = \"../far\"\n",
+        )
+        .unwrap();
+        let clone = repo(&dir.path().join("workspaces/alpha/svc"));
+
+        let (done, said) = run(dir.path(), "alpha", "svc");
+
+        assert_eq!(done.code, 1, "{said:?}");
+        assert!(clone.join("README.md").is_file());
+        let [line] = said.as_slice() else {
+            panic!("one line: {said:?}")
+        };
+        assert!(line.starts_with("✗ Refusing to remove 'svc' — "), "{line}");
+        assert!(!line.contains("worktree"), "{line}");
     }
 
     #[test]
