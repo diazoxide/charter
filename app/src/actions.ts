@@ -74,6 +74,7 @@ import type { RegionId } from "./regions";
 import { ATTENTION_VIEWS, VIEWS, type OwnViewId, type PanelViewId, type ViewId } from "./sideViews";
 import { SIDE_KEYS_SAID } from "./sideKeys";
 import { SETTINGS_GROUPS } from "./settings/catalogue";
+import { profilePage } from "./settings/profileAddress";
 import { askSettingsLink, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import {
   changesTitle,
@@ -629,6 +630,11 @@ export type Now = {
    * One row each, and they are cheap: a plane has a handful, not a workspace's worth.
    */
   personas?: readonly string[];
+  /**
+   * The project's harness profiles, by name: one Settings row each, to the profile's own page
+   * (#1201, D-1201-4). Absent until the window holds the list, and then no row is drawn.
+   */
+  profiles?: readonly string[];
   /**
    * The plane's vaults, by name (`vault_list`), one row each: a vault opens its own tab. A
    * vault is the plane's, so these rows are the same whichever workspace is focused.
@@ -1911,6 +1917,7 @@ export function catalogue(now: Now): Offer[] {
     note: "Your text sizes and your editor, on this machine.",
   });
   offers.push(...settingsGroupRows(now.plane, now.focused === OUTSIDE ? undefined : now.focused));
+  offers.push(...profilePageRows(now.plane, now.profiles));
 
   // **A finished task's Merge… and Discard branch…, on its row's menu** (#1534): for a task
   // that worked on a branch purlis cut for it. Each opens the task's Changes tab's own
@@ -2999,6 +3006,31 @@ function settingsGroupRows(plane: string | undefined, workspace: string | undefi
       note: `${workspace}: Settings at its level, at ${one.label}.`,
     });
   return rows;
+}
+
+/**
+ * **One row per profile page** (#1201, D-1201-4): "Project settings: Profile claude", to the
+ * profile's own page beneath Harness & profiles, through the same link as a group's row. A
+ * profile is the project's, so there are none with no project in front. A committed profile has
+ * no page of its own; its row lands on Harness & profiles, the longest group its address starts
+ * with (`profileAddress.ts`).
+ */
+function profilePageRows(
+  plane: string | undefined,
+  profiles: readonly string[] | undefined,
+): Offer[] {
+  if (plane === undefined) return [];
+  return (profiles ?? []).map((name) => {
+    const group = profilePage(name);
+    return {
+      ...can(`settings.group:${group}`, `Project settings: Profile ${name}`, {
+        verb: "openSettingsGroup",
+        group,
+        plane,
+      }),
+      note: `The project's Settings, at the profile ${name}.`,
+    };
+  });
 }
 
 /**
