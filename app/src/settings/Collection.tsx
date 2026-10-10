@@ -19,6 +19,11 @@ import type { Collection, CollectionEntry, EntryField, Setting } from "./groups"
  * a name the core refuses is said under it, and what uses the entry under the entry, as for a
  * Remove. When every user follows a rename (#1380), that is said as what a rename everywhere
  * would change, before anything is written, and the form offers Rename everywhere: one write.
+ *
+ * **Open chats that run on the entry** (#1290, a collection that counts them: the profiles) are
+ * said before a rename or a remove, by count: they keep running, and the next launch cannot
+ * start them again under a name the collection no longer has. Remove asks first where any
+ * runs on it, and stays one press where none does; the Rename form says it as it opens.
  */
 export function CollectionView({
   id,
@@ -51,8 +56,15 @@ export function CollectionView({
   const key = collection.home ?? id;
   const [removing, setRemoving] = useState<string>();
   const [renaming, setRenaming] = useState<string>();
+  /** A Remove that asks first: the entry, and how many open chats run on it (#1290). */
+  const [sure, setSure] = useState<{ entry: string; running: number }>();
   const addButton = useRef<HTMLButtonElement>(null);
   const whole = useRef<HTMLDivElement>(null);
+  const sureButton = useRef<HTMLButtonElement>(null);
+  // The question's Remove takes the focus as it is drawn, so Enter and Escape answer it.
+  useEffect(() => {
+    if (sure !== undefined) sureButton.current?.focus();
+  }, [sure]);
   /** Where the focus goes once what had it is gone: Add, or the collection itself. */
   const settle = () => (addButton.current ?? whole.current)?.focus();
   const undoSaid = driver.undoable === key ? driver.undoSaid : undefined;
@@ -77,8 +89,29 @@ export function CollectionView({
     settle();
   };
 
-  const remove = async (entry: CollectionEntry) => {
+  /** Puts the question away, the focus back on the Remove that asked it. */
+  const unsure = (entry: CollectionEntry) => {
+    setSure(undefined);
+    whole.current
+      ?.querySelector<HTMLButtonElement>(
+        `button[aria-label="${CSS.escape(`Remove ${entry.label}`)}"]`,
+      )
+      ?.focus();
+  };
+
+  const remove = async (entry: CollectionEntry, asked = false) => {
     setRemoving(entry.id);
+    if (!asked && collection.running !== undefined) {
+      // Counted as it is pressed: the open chats now, not when the page was drawn.
+      // A count that cannot be read is none: the core still refuses what uses the entry.
+      const running = await collection.running(entry).catch(() => 0);
+      if (running > 0) {
+        setRemoving(undefined);
+        setSure({ entry: entry.id, running });
+        return;
+      }
+    }
+    setSure(undefined);
     // Sent against the text this entry was drawn from, whatever is queued before it.
     const refusal = await driver.entry(key, {
       collection: collection.name,
@@ -173,6 +206,37 @@ export function CollectionView({
               Remove
             </button>
           </div>
+          {sure?.entry === entry.id && (
+            <div
+              className="ui-collection-form"
+              role="group"
+              aria-label={`Remove ${entry.label}?`}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                unsure(entry);
+              }}
+            >
+              <p className="ui-setting-help">
+                {`${runningSaid(sure.running, entry.label, noun)} Remove ${entry.label}?`}
+              </p>
+              <SettingActions>
+                <button
+                  ref={sureButton}
+                  type="button"
+                  tabIndex={0}
+                  disabled={removing !== undefined}
+                  onClick={() => void remove(entry, true)}
+                >
+                  Remove
+                </button>
+                <button type="button" tabIndex={0} onClick={() => unsure(entry)}>
+                  Cancel
+                </button>
+              </SettingActions>
+            </div>
+          )}
           {renaming === entry.id && (
             <RenameForm
               id={key}
@@ -204,6 +268,16 @@ export function CollectionView({
       )}
     </div>
   );
+}
+
+/**
+ * What a rename or a remove says of the open chats that run on the entry (#1290): they keep
+ * running, and the next launch cannot start them again on a name the collection does not have
+ * then. Records of chats that are not open are not the window's, so they are not counted.
+ */
+export function runningSaid(running: number, label: string, noun: string): string {
+  const one = running === 1;
+  return `${one ? "1 open chat runs" : `${running} open chats run`} on ${label}. ${one ? "It keeps" : "They keep"} running, but the next launch cannot start ${one ? "it" : "them"} again, since no ${noun} is called ${label} then.`;
 }
 
 /** A picker's New… asking for the Add form (ST-4): `then` is handed the added entry's name. */
@@ -480,10 +554,28 @@ function RenameForm({
   const [to, setTo] = useState(entry.name ?? "");
   const [refusal, setRefusal] = useState<EntryRefusal>();
   const [sending, setSending] = useState(false);
+  /** How many open chats run on the entry, asked as the form opens (#1290). */
+  const [running, setRunning] = useState(0);
   const form = useId();
   useEffect(() => {
     document.getElementById(form)?.querySelector<HTMLElement>("input")?.focus();
   }, [form]);
+  // Asked once, as the form opens for the entry: the collection is drawn anew on every read.
+  const [opened] = useState(() => ({ count: collection.running, entry }));
+  useEffect(() => {
+    const { count, entry: shown } = opened;
+    if (count === undefined) return;
+    let gone = false;
+    count(shown).then(
+      (now) => {
+        if (!gone) setRunning(now);
+      },
+      () => undefined,
+    );
+    return () => {
+      gone = true;
+    };
+  }, [opened]);
   const send = async (everywhere: boolean) => {
     setSending(true);
     const said = await driver.entry(id, {
@@ -519,6 +611,9 @@ function RenameForm({
         error={refusal?.fields.name}
         control={(ids) => <Field kind="text" ids={ids} value={to} onChange={setTo} />}
       />
+      {running > 0 && (
+        <p className="ui-setting-help">{runningSaid(running, entry.label, collection.noun)}</p>
+      )}
       <SettingActions>
         <button type="submit" tabIndex={0} disabled={sending}>
           Rename

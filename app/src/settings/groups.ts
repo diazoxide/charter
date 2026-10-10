@@ -92,6 +92,10 @@ export type Collection = {
   /** The address of the page an entry called `name` has, for a collection whose entries have
    *  pages of their own (ST-4): where a rename goes to. */
   pageOf?: (name: string) => string;
+  /** How many of the project's open chats run on `entry` now (#1290), asked as its Rename or
+   *  Remove is pressed: the window's own record, so a chat that is not open is not counted. A
+   *  count that cannot be read is none. */
+  running?: (entry: CollectionEntry) => Promise<number>;
 };
 
 /** One entry of a collection. */

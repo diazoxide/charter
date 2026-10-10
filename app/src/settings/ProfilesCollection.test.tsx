@@ -137,11 +137,14 @@ function core({
   used: usedElsewhere = () => [],
   localDefault,
   refuseAdd,
+  chats = [],
 }: {
   profiles?: Profile[];
   used?: (name: string) => EntryReferrer[];
   localDefault?: string;
   refuseAdd?: (entry: ProfileEntry) => EntryWritten | undefined;
+  /** The profile each of the window's open chats started on (#1290). */
+  chats?: (string | null)[];
 } = {}) {
   let profiles = [...start];
   let named = localDefault;
@@ -167,6 +170,8 @@ function core({
           return { extensions: [], local_left_out: null };
         case "project_harness_plugins":
           return [];
+        case "opened_chats":
+          return chats.map((profile, at) => ({ session: at + 1, name: `chat ${at + 1}`, profile }));
         case "sandbox_state":
           return {
             on: false,
@@ -536,6 +541,85 @@ describe("Rename a profile", () => {
     ).toBeVisible();
     expect(screen.queryByText(/is not renamed while/)).toBeNull();
     expect(within(form).getByLabelText("New name")).toHaveValue("alt.x");
+  });
+});
+
+describe("open chats on a profile, before a rename or remove (#1290)", () => {
+  const ONE =
+    "1 open chat runs on alt. It keeps running, but the next launch cannot start it again, since no profile is called alt then.";
+  const TWO =
+    "2 open chats run on alt. They keep running, but the next launch cannot start them again, since no profile is called alt then.";
+  const question = () => screen.findByRole("group", { name: "Remove alt?" });
+
+  it("removes at one press where no open chat runs on it, whatever runs on another", async () => {
+    const { names } = core({ chats: ["work", null] });
+    await atProject();
+    await open("alt");
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove alt" }));
+
+    await waitFor(() => expect(names()).toEqual(["work"]));
+    expect(screen.queryByRole("group", { name: "Remove alt?" })).toBeNull();
+  });
+
+  it("asks first where one open chat runs on it, and Cancel writes nothing", async () => {
+    const { asked, names } = core({ chats: ["alt", "work"] });
+    await atProject();
+    await open("alt");
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove alt" }));
+
+    const ask = await question();
+    expect(ask).toHaveTextContent(`${ONE} Remove alt?`);
+    expect(within(ask).getByRole("button", { name: "Remove" })).toHaveFocus();
+    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: "Remove alt?" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove alt" })).toHaveFocus();
+    expect(asked.filter((one) => one.cmd === "remove")).toEqual([]);
+    expect(names()).toEqual(["work", "alt"]);
+  });
+
+  it("removes once the question is answered, where two open chats run on it", async () => {
+    const { names } = core({ chats: ["alt", "alt"] });
+    await atProject();
+    await open("alt");
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove alt" }));
+    const ask = await question();
+    expect(ask).toHaveTextContent(TWO);
+    await userEvent.click(within(ask).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(names()).toEqual(["work"]));
+  });
+
+  it("says nothing of open chats in the Rename form where none runs on it", async () => {
+    core({ chats: ["work"] });
+    await atProject();
+    await open("alt");
+
+    await userEvent.click(screen.getByRole("button", { name: "Rename alt" }));
+    const form = screen.getByRole("form", { name: "Rename alt" });
+    await waitFor(() => expect(form).toBeInTheDocument());
+    expect(within(form).queryByText(/open chats? runs?/)).toBeNull();
+  });
+
+  it("says in the Rename form how many open chats run on it, one or two", async () => {
+    core({ chats: ["alt"] });
+    await atProject();
+    await open("alt");
+    await userEvent.click(screen.getByRole("button", { name: "Rename alt" }));
+    expect(
+      await within(screen.getByRole("form", { name: "Rename alt" })).findByText(ONE),
+    ).toBeVisible();
+    cleanup();
+
+    core({ chats: ["alt", "work", "alt"] });
+    await atProject();
+    await open("alt");
+    await userEvent.click(screen.getByRole("button", { name: "Rename alt" }));
+    expect(
+      await within(screen.getByRole("form", { name: "Rename alt" })).findByText(TWO),
+    ).toBeVisible();
   });
 });
 
