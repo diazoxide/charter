@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791568239110,
+  "lastUpdate": 1791611565821,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5418,6 +5418,48 @@ window.BENCHMARK_DATA = {
             "value": 104.028697,
             "unit": "ms",
             "extra": "median of 5 runs: 102.442, 103.780, 104.029, 104.421, 104.625 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "0ea74452f71fe154ab502618d2731d0474c5d2da",
+          "message": "Keep every installed package's .deb for the Linux packages cache\n\nThe check for which downloaded files are installed piped the installed list into\n`grep -q`. Under `pipefail`, grep leaving at its first match ended the writer with\nSIGPIPE once the list outgrew the pipe's buffer, as a runner image's thousands of\npackages do, so a match read as a miss and the cache came up short. It reads a\nhere-string now, and a test lists 4,000 installed packages.\n\nThe install limit is 120 s, so the worst case with each limit's kill grace and the\npause is 510 s, under the step's 540, and the script's own message is what is read.\nA run that finds nothing to keep says so in the job summary.\n\nRefs #1477\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T09:27:01+04:00",
+          "tree_id": "09e062e05813421d6989fc4e4856867219594a7e",
+          "url": "https://github.com/purlis/purlis/commit/0ea74452f71fe154ab502618d2731d0474c5d2da"
+        },
+        "date": 1791611564468,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.321033,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.309, 0.319, 0.321, 0.323, 0.324 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.174612,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.106, 16.144, 16.175, 16.284, 16.650 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.5935275,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.433, 101.481, 101.594, 101.637, 102.274 ms"
           }
         ]
       }
