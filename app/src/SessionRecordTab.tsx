@@ -9,7 +9,7 @@ import { NO_PERSONA_SAID } from "./dispatches";
 import { commands, type PlaneId, type SessionRecordView } from "./bindings";
 import { jumpTo } from "./fileJump";
 import { codeSpans, recordRef, type RecordRef } from "./recordRefs";
-import { ToYourEditor } from "./editor/PieceFiles";
+import { ToYourEditor } from "./editor/ToYourEditor";
 
 /**
  * **One session record, in a tab of its own** (SI-8d): what a chat wrote of its session when it
