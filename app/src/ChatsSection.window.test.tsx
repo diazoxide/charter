@@ -1582,6 +1582,28 @@ describe("the Chats view's scope: this tab, the workspace, or all (#1679)", () =
     expect(screen.queryByText(/needs you, outside this tab/)).toBeNull();
   });
 
+  it("stays on This tab when going to a task brings its tab forward, the tab read once it is in front (#1696)", async () => {
+    const { move } = core([
+      ...three(),
+      chat(5, "alpha", { persona: "devops", from: by(3, "task") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    await pickScope("This tab");
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+
+    move(5, "waiting", 10, [5]);
+    await screen.findByText("devops 5 needs you, outside this tab.");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Go to devops 5, which needs you outside this tab" }),
+    );
+
+    // Its asker's tab came forward with it: This tab lists it, and is not widened.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 3", "2 devops 5"]));
+    expect(scopeOn()).toEqual(["This tab"]);
+  });
+
   it("names a chat in another workspace that needs you, by its name", async () => {
     const { move } = core(three());
     render(<App />);

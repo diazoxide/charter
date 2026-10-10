@@ -433,6 +433,42 @@ describe("a chat's finished tasks", () => {
     expect(names()).toEqual(["steward 4", "steward 12"]);
   });
 
+  it("keeps a task's row on This tab too until its finished row is read (#1696)", async () => {
+    const reported: OpenChat = {
+      ...WORKING,
+      label: "probe",
+      from: { ...WORKING.from, reported: true, outcome: "failed" } as OpenChat["from"],
+    };
+    const other: OpenChat = { ...STEWARD, session: 12, name: "12", in_front: false };
+    const held = core([], [STEWARD, reported, other]);
+    render(<App />);
+    const tree = await section();
+    const names = () =>
+      within(tree)
+        .getAllByRole("treeitem")
+        .map((one) => one.querySelector(".session")?.textContent);
+    await waitFor(() => expect(names()).toEqual(["steward 4", "probe", "steward 12"]));
+    await userEvent.click(screen.getByRole("radio", { name: "This tab" }));
+    await waitFor(() => expect(names()).toEqual(["steward 4", "probe"]));
+
+    const answer = held.holdFinished();
+    held.end(
+      9,
+      finished("01K6PROBE", "probe", { chat: 9, how: "failed", outcome: "failed", folds: false }),
+    );
+    await held.stopped(9);
+
+    // Ended, so in no tab's chats now; the list keeps its row, and This tab does too.
+    await waitFor(() => expect(held.asked("plane_sidebar").length).toBeGreaterThan(1));
+    expect(names()).toEqual(["steward 4", "probe"]);
+
+    answer();
+
+    const group = await theirs();
+    expect(theRow(group, "probe")).toHaveTextContent("failed");
+    expect(names()).toEqual(["steward 4"]);
+  });
+
   it("clears the finished rows and nothing else: the failure stays, and no chat is touched", async () => {
     const said = core([...FIVE_DONE, FAILED]);
     render(<App />);

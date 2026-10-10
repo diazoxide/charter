@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chatsTree, type ListedChat } from "./chatsTree";
-import { inScope, inTab, keepScope, keptScope, settleScope } from "./chatsScope";
+import { inScope, inTab, keepScope, keptScope, settleScope, tabSessions } from "./chatsScope";
 import { keptFacet } from "./projectViews";
 import { GLOBAL, usingTheDefaultLayout } from "./windowprefs";
 
@@ -91,6 +91,43 @@ describe("the chats a tab lists (#1679)", () => {
 
   it("gives back the same rows where it leaves nothing out", () => {
     expect(inTab(rows, new Set([1, 2, 3, 4, 5, 6]))).toBe(rows);
+  });
+});
+
+describe("the chats This tab holds (#1696)", () => {
+  const tab = (...sessions: number[]) => chatsTree(sessions.map((one) => listed(one, "alpha")));
+  const every = chatsTree([
+    listed(1, "alpha"),
+    listed(2, "alpha", 1),
+    listed(3, "alpha", 1),
+    listed(4, "alpha"),
+  ]);
+
+  it("are the tab's own chats", () => {
+    expect([...tabSessions(tab(1, 2, 3), undefined, every)]).toEqual([1, 2, 3]);
+  });
+
+  it("keep a task that ended while the list keeps its row, until its finished row is read", () => {
+    const before = tabSessions(tab(1, 2, 3), undefined, every);
+    // Task 3 ended: it is in no tab now, and the list still keeps its row.
+    const now = tabSessions(tab(1, 2), before, every);
+    expect([...now].sort()).toEqual([1, 2, 3]);
+    // Its finished row was read: the list lets the row go, and so does the tab.
+    const read = every.filter((row) => row.session !== 3);
+    expect([...tabSessions(tab(1, 2), now, read)].sort()).toEqual([1, 2]);
+  });
+
+  it("keep nothing for a chat that is not a task, nor for another tab's", () => {
+    const before = tabSessions(tab(1, 4), undefined, every);
+    expect([...tabSessions(tab(1), before, every)]).toEqual([1]);
+    expect([...tabSessions(tab(4), undefined, every)]).toEqual([4]);
+  });
+
+  it("answer what they answered before where nothing changed, so nothing is drawn again", () => {
+    const before = tabSessions(tab(1, 2, 3), undefined, every);
+    expect(tabSessions(tab(1, 2, 3), before, every)).toBe(before);
+    const kept = tabSessions(tab(1, 2), before, every);
+    expect(tabSessions(tab(1, 2), kept, every)).toBe(kept);
   });
 });
 

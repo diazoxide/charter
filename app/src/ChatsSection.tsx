@@ -52,6 +52,7 @@ import {
   keptScope,
   SCOPES,
   settleScope,
+  tabSessions,
   type Scope,
 } from "./chatsScope";
 import { useArrowPick } from "./settings/components";
@@ -146,6 +147,8 @@ const NO_RESTARTS: Readonly<Record<number, string>> = {};
 
 /** No chat that needs you has had the rows above it opened yet. */
 const NONE_OPENED: ReadonlySet<number> = new Set();
+/** The chats of no tab. */
+const NO_ROWS: readonly ChatRow[] = [];
 
 /** No folds set by hand. */
 const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
@@ -372,14 +375,28 @@ export function ChatsSection({
   /** The scope the list is drawn in: every chat where the caller names no workspace. */
   const scope: Scope = here === undefined ? "all" : picked;
   const tabChats = tab?.chats;
+  const tabId = tab?.id;
+  /** The chats This tab holds (`chatsScope.tabSessions`): its own, and a task of it that
+   *  ended while the list keeps its row until its finished row is read (#1696). What they were
+   *  for the same tab last is kept, and nothing for a tab just brought forward. */
+  const [tabHeld, setTabHeld] = useState<{
+    id: number | undefined;
+    sessions: ReadonlySet<number>;
+  }>();
+  const before = tabHeld !== undefined && tabHeld.id === tabId ? tabHeld.sessions : undefined;
+  const inThisTab = useMemo(
+    () => tabSessions(tabChats ?? NO_ROWS, before, every),
+    [tabChats, before, every],
+  );
+  if (inThisTab !== before) setTabHeld({ id: tabId, sessions: inThisTab });
   const rows = useMemo(
     () =>
       scope === "all" || here === undefined
         ? every
         : scope === "tab"
-          ? inTab(every, new Set((tabChats ?? []).map((row) => row.session)))
+          ? inTab(every, inThisTab)
           : inScope(every, here),
-    [every, here, scope, tabChats],
+    [every, here, scope, inThisTab],
   );
   const [text, setText] = useState("");
   const [ranks, setRanks] = useState<readonly Rank[]>([]);
@@ -706,14 +723,31 @@ export function ChatsSection({
   // the narrowest scope that lists it, so the row can be shown: the switch says so, and the
   // person picks again. It is not the person's pick, so it is not kept.
   const [widenedFor, setWidenedFor] = useState<number>();
-  if (
+  /** The asking whose tab in front has settled (#1696): This tab is read for it on the draw
+   *  after it arrived, since the step that asks for a row can bring its tab forward too, and
+   *  that tab's chats can come a draw later. */
+  const [settledFor, setSettledFor] = useState<number>();
+  const outsideScope =
     reveal !== undefined &&
     reveal.at !== widenedFor &&
     scope !== "all" &&
     here !== undefined &&
     !byNumber.has(reveal.asker) &&
-    everyByNumber.has(reveal.asker)
-  ) {
+    everyByNumber.has(reveal.asker);
+  const settling = outsideScope && scope === "tab" && settledFor !== reveal.at;
+  const settlingAt = settling ? reveal.at : undefined;
+  useEffect(() => {
+    if (settlingAt === undefined) return;
+    // Once this draw's effects have run, so a tab one of them brings forward is drawn with it.
+    let gone = false;
+    queueMicrotask(() => {
+      if (!gone) setSettledFor(settlingAt);
+    });
+    return () => {
+      gone = true;
+    };
+  }, [settlingAt]);
+  if (outsideScope && !settling) {
     setWidenedFor(reveal.at);
     setPicked(
       scope === "tab" && inScope(every, here).some((row) => row.session === reveal.asker)
@@ -721,7 +755,8 @@ export function ChatsSection({
         : "all",
     );
   }
-  useRevealedTask(section, reveal, rows, {
+  // Not looked for while This tab settles: a row not listed yet would be given up on.
+  useRevealedTask(section, settling ? undefined : reveal, rows, {
     fold,
     shut: (session) => opens.get(session) === false,
     // A finished row, or a chat's own, that the filter does not ask for. And a chat's own row
