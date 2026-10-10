@@ -608,3 +608,31 @@ fn a_task_record_naming_a_folder_in_the_old_place_names_it_in_the_new_one() {
     assert_eq!(folder(&outside).as_deref(), Some("/somewhere/else"));
     assert_eq!(folder(&relative).as_deref(), Some("workspaces/shop"));
 }
+
+/// #1698: only a folder inside the old place by plain steps is rewritten. One that leaves it by
+/// `..`, or only shares its spelling's start, is left as it was, so no record is made to name
+/// a place outside the project.
+#[test]
+fn a_task_folder_that_leaves_the_old_place_is_not_rewritten() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let project = dir.path().canonicalize().expect("the directory");
+    let old = PathBuf::from("/old/place");
+    let inside = a_task_record(&project, "/old/place/workspaces/shop");
+    let escaping = a_task_record(&project, "/old/place/../../etc");
+    let sibling = a_task_record(&project, "/old/place-two/workspaces/shop");
+
+    task_records(&project, &[old], &project).expect("rewritten");
+
+    let folder = |id: &str| {
+        crate::dispatchrecord::read(&project, id)
+            .expect("the record")
+            .place
+            .folder
+    };
+    assert_eq!(folder(&inside).as_deref(), Some("workspaces/shop"));
+    assert_eq!(folder(&escaping).as_deref(), Some("/old/place/../../etc"));
+    assert_eq!(
+        folder(&sibling).as_deref(),
+        Some("/old/place-two/workspaces/shop")
+    );
+}
