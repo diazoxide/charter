@@ -13,6 +13,7 @@ import {
 } from "./harness.js";
 import { theWindowIsDrawn } from "./drawn.js";
 import { PANIC_LOG, collectEvidence } from "./processes.js";
+import { recordFailure } from "./failures.js";
 
 /**
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
@@ -128,10 +129,17 @@ export const config: WebdriverIO.Config = {
   // A test that fails because the app died looks, from the test, like any other: an element
   // that never came. So every failure writes down whether the app is alive, its size, and
   // what the operating system and the app's panic hook recorded (charter-app#16).
-  afterTest(test, _context, { passed }) {
+  afterTest(test, _context, { passed, error }) {
     if (!passed) {
+      recordFailure(test, error ?? "failed with no error");
       const where = collectEvidence(app, `${test.parent} ${test.title}`);
       console.error(`charter-e2e: what was left to look at is in ${where}`);
     }
+  },
+
+  // A failed `before` or `beforeEach` fails every test under it without an `afterTest`, so the
+  // hook's own failure is what gets annotated (`failures.ts`).
+  afterHook(test, _context, { error }) {
+    recordFailure(test, error);
   },
 };

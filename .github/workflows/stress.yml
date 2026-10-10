@@ -211,6 +211,11 @@ jobs:
         env:
           CHARTER_LAUNCH_LOG: "1"
           STRESS: "1"
+      # Each failed test as an annotation, as the `scenario` job in ci.yml has them.
+      - name: The failed scenario tests, as annotations
+        if: failure()
+        run: node ../tools/e2e-annotations.mjs logs/failures.jsonl
+        working-directory: app
       # `always()`, not `failure()`: this job's whole output is the numbers, and the run that
       # SUCCEEDED is the one that says what healthy costs. The comment at the top of this job
       # claimed the logs were kept either way and nothing kept them — the console scrollback

@@ -683,6 +683,12 @@ jobs:
         run: dbus-run-session -- xvfb-run -a npm run e2e:relaunch
         if: runner.os == 'Linux'
         working-directory: app
+      # Each failed test as an annotation on its spec's line, with its assertion: the checks API
+      # carries annotations, so a failure reads there without the log or the artifact.
+      - name: The failed scenario tests, as annotations
+        if: failure()
+        run: node ../tools/e2e-annotations.mjs logs/failures.jsonl
+        working-directory: app
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
