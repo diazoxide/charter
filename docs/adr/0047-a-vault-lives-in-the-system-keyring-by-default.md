@@ -461,3 +461,40 @@ of that path, each the operator's call:
 
 A terminal has no chat token and `local-ui` is the window's alone (V16a), so either way it
 needs a route of its own.
+
+## Amendment, 2026-10-10: one Keychain question per item per run of the app (#1654)
+
+**The problem it closes.** After an update of an ad-hoc signed build, reopening the app with
+several chats raised a stream of Keychain questions for one kept token. The amendment above made
+each command read a kept token once, but the app built a new context for every request it
+served, so each brokered `secret exec` and each vault tab read the item again, and the Vaults
+panel, which every project window draws as it opens, ran `op` with the token to draw its status.
+
+**Decision (delegated, 2026-10-10; flagged for the operator).**
+
+- **The app reads each kept token once per run.** Every context the app builds shares the app's
+  one memory of the kept tokens it read. It lives in the app's process only. It is never
+  written anywhere and never handed to a chat: a brokered `secret exec` hands the token to `op`
+  as before, and the chat gets the command's output. The app's next run reads afresh. This
+  replaces "the app builds a new context for every request it serves" above, for the memory
+  only.
+- **It fails closed where purlis can see a change.** The vault's record of its kept token is
+  checked again before every use, so a token removed through purlis is never answered from
+  memory, a token put in again is a new item, read afresh, and an item purlis deletes is
+  dropped from memory with it. **What it does not see:** a token
+  deleted or edited directly in Keychain Access while the app runs is still used until the app
+  quits. Revoking the token in 1Password stops it either way. That gap is the widening, and the
+  operator rules on it: keep it, or re-check that the item still exists before each use.
+- **No listing reads a kept token** (#1180): `persona list`, `persona show` and the app's Vaults
+  panel draw the same status `vault list` does, from the record. `vault add` still checks the
+  vault live, because the person just asked for it. This replaces "`persona list` and
+  `vault add` still check the vault live" above. The app's Vaults panel runs no `op` at all to
+  draw a 1Password vault's row, since a vault that signs in through the 1Password app reads
+  that app's data; the vault's tab reads it.
+- **An `op` handed a service-account token is told not to read the 1Password app's settings**
+  (`OP_LOAD_DESKTOP_APP_SETTINGS=false`). It read them from the 1Password app's container on
+  every run, which made macOS ask whether purlis may "access data from other apps". A vault that
+  signs in through the 1Password app reads them as before.
+
+The lasting fix for questions after every update is a stable code-signing identity (Developer
+ID, #606).

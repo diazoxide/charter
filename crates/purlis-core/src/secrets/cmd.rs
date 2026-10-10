@@ -137,6 +137,34 @@ pub fn rename(ctx: &Ctx, v: &Vault, from: &str, to: &str) -> Result<(), VaultErr
     })
 }
 
+/// The health line a listing draws for `v`: the vault list, a persona's vault line, and the
+/// app's Vaults panel, which every plane window draws as it opens. `(ok, detail)`, never a
+/// value, and **never a read of a secret** (#1180, #1654): where the identity is, never the
+/// identity, so a moved one is not read from the keyring to draw a row, and a token kept in the
+/// keyring is not read either. Each such read made the Keychain ask the person, once per vault
+/// in every listing and every window the app opened. `vault verify` reads it.
+pub fn listed_health(ctx: &Ctx, v: &Vault) -> (bool, String) {
+    if let Some(e) = super::identity_missing(ctx, v) {
+        return (false, first_line(&e));
+    }
+    if super::identity::in_keyring(ctx, v) {
+        return (
+            true,
+            format!(
+                "token kept in {}, not read to list it (`purlis vault verify {}` reads it)",
+                keyring::STORE_NAME,
+                crate::personas::one_line(&v.name)
+            ),
+        );
+    }
+    health(ctx, v)
+}
+
+/// The first line of `e`'s sentence: what a listing's row has room for.
+pub(crate) fn first_line(e: &VaultError) -> String {
+    e.message.split('\n').next().unwrap_or_default().to_string()
+}
+
 /// `health()`: `(ok, detail)`, never a value.
 pub fn health(ctx: &Ctx, v: &Vault) -> (bool, String) {
     match v.provider.as_str() {

@@ -8,6 +8,10 @@
 //!   `/dev/null`, never charter's own stdin: a CLI that reads it gets EOF instead of blocking
 //!   on a descriptor nobody will write to (#324).
 //! - **Output is captured, never inherited**, and callers never interpolate it into a message.
+//! - **A child handed a service-account token leaves the 1Password app's data alone**
+//!   ([`NO_APP_SETTINGS`], #1654): such a token never signs in through that app, and reading
+//!   the app's settings, which macOS keeps in its group container, made macOS ask the person
+//!   whether purlis may "access data from other apps" on every run.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +19,23 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::Env;
+
+/// The variable that tells the 1Password CLI not to read the 1Password app's own settings,
+/// which it otherwise reads from that app's group container on every run (#1654). Set for a
+/// child that is handed a service-account token, which never signs in through that app; a
+/// vault that signs in through the app is run as before, since the person chose that app.
+pub const NO_APP_SETTINGS: &str = "OP_LOAD_DESKTOP_APP_SETTINGS";
+
+/// Whether the child run with `env` and `overlay` is handed a service-account token.
+fn hands_a_service_account_token(env: &Env, overlay: &[(String, String)]) -> bool {
+    overlay
+        .iter()
+        .rev()
+        .find(|(k, _)| k == super::identity::TOKEN_TARGET)
+        .map(|(_, v)| v.clone())
+        .or_else(|| env.get(super::identity::TOKEN_TARGET))
+        .is_some_and(|token| !token.is_empty())
+}
 
 /// What a CLI said and how it exited.
 #[derive(Clone, Default)]
@@ -120,6 +141,9 @@ pub fn run(
     }
     for (k, v) in overlay {
         command.env(k, v);
+    }
+    if hands_a_service_account_token(env, overlay) {
+        command.env(NO_APP_SETTINGS, "false");
     }
     command
         .stdin(if input.is_some() {

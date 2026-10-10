@@ -497,26 +497,57 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
     Ok(token)
 }
 
-/// **The kept tokens one command has read, so it reads each from the keyring once** (#1638).
+/// **The kept tokens one command has read, so it reads each from the keyring once** (#1638),
+/// **and in the app, the ones this run of the app has read** (#1654).
 ///
 /// A 1Password vault is read by one `op` per value, and each `op` is handed the token. Where the
 /// `purlis` command is the reader, each keyring read is one question the Keychain asks the
 /// person (V90a), so `secret exec` with three values asked three times. A [`Ctx`] carries one
-/// of these: it lives as long as the command, or the one request the app serves with it, and a
-/// replaced token is a new item, so it is never read stale. Only a token found is remembered;
-/// a read that found none, or failed, is made again. `Debug` names no token, and each token
-/// it holds is wiped from memory when the context goes.
+/// of these ([`Kept::for_a_new_context`]): in the command it lives as long as the command. In
+/// the app every context shares the app's one memory, so the requests the app serves (a chat's
+/// brokered `secret exec`, a vault's tab) read each item once per run of the app, and not once
+/// each: after an update an ad-hoc signed app is a new program to the Keychain, and every read
+/// asked again. It is never written anywhere and never handed to a chat; the app's next run
+/// reads afresh.
+///
+/// **It fails closed.** It is asked only after the vault's record in the keyring is checked
+/// again, on every read ([`from_keyring`]): a token removed through purlis takes its record
+/// with it and is never answered from here, a replaced token is a new item, so it is never
+/// read stale, and an item purlis deletes is forgotten here too ([`forget`]). Only a token found is remembered; a read that found none, or failed, is made
+/// again. `Debug` names no token, and each token it holds is wiped from memory when the last
+/// context holding it goes.
 #[derive(Clone, Default)]
 pub struct Kept(std::sync::Arc<std::sync::Mutex<KeptTokens>>);
+
+/// The app's one memory of the kept tokens it read, for this run of the app ([`Kept`]).
+static APP_RUN_KEPT_TOKENS: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
 
 /// Each kept token read, by `(service, account)`, wiped when it is dropped.
 type KeptTokens = BTreeMap<(String, String), zeroize::Zeroizing<String>>;
 
 impl Kept {
+    /// The memory a new [`Ctx`] starts with: the app's own, shared by every context the app
+    /// builds, in the app ([`super::keyhold::is_the_app`]); an empty one anywhere else.
+    pub(crate) fn for_a_new_context() -> Self {
+        if super::keyhold::is_the_app() {
+            APP_RUN_KEPT_TOKENS.get_or_init(Self::default).clone()
+        } else {
+            Self::default()
+        }
+    }
+
     fn get(&self, service: &str, account: &str) -> Option<String> {
         let kept = self.0.lock().ok()?;
         kept.get(&(service.to_owned(), account.to_owned()))
             .map(|token| String::clone(token))
+    }
+
+    /// Forget the token of one item, which purlis is deleting: the app holds no copy of a
+    /// token past its item.
+    fn drop_item(&self, service: &str, account: &str) {
+        if let Ok(mut kept) = self.0.lock() {
+            kept.remove(&(service.to_owned(), account.to_owned()));
+        }
     }
 
     fn put(&self, service: &str, account: &str, token: &str) {
@@ -865,6 +896,9 @@ pub(super) fn items_recorded(ctx: &Ctx, vault: &Vault) -> Vec<(String, String)> 
 /// failure never refuses the store that asked: the new token is already in place.
 pub(super) fn forget(ctx: &Ctx, items: &[(String, String)]) -> usize {
     let store = keyring::store(ctx);
+    for (service, account) in items {
+        ctx.kept.drop_item(service, account);
+    }
     items
         .iter()
         .filter(|(service, account)| store.delete(service, account).is_err())

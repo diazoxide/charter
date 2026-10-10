@@ -129,8 +129,11 @@ the keys and the command — never a value.
   the command reads it), and the vault's next read through the command says so once. A
   purlis update is a new binary, so with an ad-hoc signed build the first read after an
   update asks again. A 1Password vault's kept token is read once per `secret exec`, however
-  many values it hands on, not once per value (#1638), and `vault list` never reads it: its
-  status says the token is kept in the keyring and that `vault verify` reads it (#1180).
+  many values it hands on, not once per value (#1638), and the app reads it once per run of
+  the app, however many chats and tabs ask, keeping it in the app's memory only (#1654).
+  `vault list`, `persona list` and `persona show`, and the app's Vaults panel never read it:
+  their status says the token is kept in the keyring and that `vault verify` reads it
+  (#1180, #1654).
 - **`plain-file`** (`--provider plain-file`) — a JSON object of key → value at 0600,
   `.charter/vaults/<vault>.json` by default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
   refuses a `--file` git would commit, and `secret set` checks again before it writes, because
@@ -143,7 +146,11 @@ the keys and the command — never a value.
   and refused: the browser lane is not in this version yet (#996).
 - **`1password`** — purlis keeps the vault in one 1Password item (`charter-<vault>`, or
   `--op-item`), each secret a concealed field of it, read and written through the `op` CLI; a
-  value reaches `op` on stdin, never in its arguments.
+  value reaches `op` on stdin, never in its arguments. When `op` signs in with a
+  service-account token, purlis tells it not to read the 1Password app's own settings, which
+  macOS keeps in that app's container: such a token never uses that app, and the read made
+  macOS ask whether purlis may "access data from other apps" on every run (#1654). Without a
+  token `op` signs in through the 1Password app and reads its settings as before.
 
 **Where purlis looks for `op` and `vault`.** In the `PATH` of the process that reads the vault,
 then in the directories installers use under your home (`~/.local/bin` first), then in

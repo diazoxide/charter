@@ -246,3 +246,77 @@ fn vault_list_never_reads_a_kept_token_from_the_keychain_to_draw_its_status() {
         "drawing the list never makes the Keychain ask the person"
     );
 }
+
+// --- what an `op` handed a service-account token touches besides 1Password (#1654) --------- //
+
+use crate::secrets::run::NO_APP_SETTINGS;
+
+/// `kept_plane`, with an `op` that answers only when it was told to leave the 1Password app's
+/// data alone, and says which way it ran otherwise.
+fn kept_plane_whose_op_checks_the_app_data() -> (tempfile::TempDir, tempfile::TempDir) {
+    let (tmp, bin) = kept_plane();
+    stand_in::program(
+        bin.path(),
+        "op",
+        &format!(
+            "#!/bin/sh\n[ \"${NO_APP_SETTINGS}\" = false ] || {{ echo 'read the 1Password app data' >&2; exit 3; }}\nprintf 'value-of-%s' \"${{3##*/}}\"\n"
+        ),
+    );
+    (tmp, bin)
+}
+
+#[test]
+fn an_op_handed_a_service_account_token_never_reads_the_1password_apps_own_data() {
+    // macOS asks the person "would like to access data from other apps" for every program
+    // that reads another app's container, and `op` reads the 1Password app's settings there
+    // on every run, even with a service-account token that never uses that app.
+    let (tmp, bin) = kept_plane_whose_op_checks_the_app_data();
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let mut io = Rec::default();
+
+    let code = exec(&ctx, &three_values(), &mut io);
+
+    assert_eq!(code, 0, "{}", io.said());
+    assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
+}
+
+#[test]
+fn a_vault_signed_in_through_the_1password_app_still_reads_that_apps_settings() {
+    // Without a token `op` signs in through the 1Password app, whose settings say whether it
+    // may: the person chose that app, so its data is read as before.
+    crate::secrets::program::stand_ins_live_in_temp_folders();
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    stand_in::program(
+        bin.path(),
+        "op",
+        &format!(
+            "#!/bin/sh\n[ -z \"${NO_APP_SETTINGS}\" ] || exit 3\nprintf 'value-of-%s' \"${{3##*/}}\"\n"
+        ),
+    );
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+    let mut io = Rec::default();
+
+    let code = exec(&ctx, &three_values(), &mut io);
+
+    assert_eq!(code, 0, "{}", io.said());
+    assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
+}
+
+#[test]
+fn a_personas_vault_line_never_reads_a_kept_token_from_the_keychain() {
+    // `persona list` and `persona show` draw a line for each persona's vault, as `vault list`
+    // draws a row: from the record, never the token (#1180, #1654).
+    let (tmp, bin) = kept_plane();
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let before = reads(&ctx);
+
+    let line = crate::personaverbs::list::vault_status(&ctx.root, &ctx.state, Some("team"));
+
+    assert!(line.contains(keyring::STORE_NAME), "{line}");
+    assert!(line.contains("purlis vault verify team"), "{line}");
+    assert_eq!(reads(&ctx) - before, 0);
+}

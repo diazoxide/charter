@@ -71,6 +71,30 @@ fn health(ctx: &Ctx, v: &Vault) -> VaultHealth {
     }
 }
 
+/// The health line the Vaults panel draws, which every plane window asks for as it opens: the
+/// core's listing line ([`cmd::listed_health`]), which never reads a secret, so opening the app
+/// never makes the Keychain ask the person anything (#1654). **A 1Password vault is not asked
+/// at all**: `op` is a round trip, and one that signs in through the 1Password app reads that
+/// app's data, which makes macOS ask whether purlis may "access data from other apps", for a
+/// panel nobody asked to check. A vault's own tab reads the vault and says the provider's own
+/// line ([`health`]), as `purlis vault list` does in a terminal.
+fn listed_health(ctx: &Ctx, v: &Vault) -> VaultHealth {
+    if v.provider == "1password"
+        && identity_missing(ctx, v).is_none()
+        && !identity::in_keyring(ctx, v)
+    {
+        return VaultHealth {
+            ok: true,
+            detail: match onepassword::op_item(v) {
+                Ok(item) => format!("1Password item '{item}', read when you open the vault"),
+                Err(e) => e.message.lines().next().unwrap_or_default().to_owned(),
+            },
+        };
+    }
+    let (ok, detail) = cmd::listed_health(ctx, v);
+    VaultHealth { ok, detail }
+}
+
 /// How many secrets the vault holds, where charter can say so without a network: the keys
 /// index for a keyring vault, the file for a plain-file or reference one. `None` for a
 /// 1Password vault, whose count is `op`'s to give and is not worth a round trip per panel draw.
@@ -179,7 +203,7 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<VaultSummary>, String> {
         .map(|name| match registry::vault_in(&doc, &name) {
             Ok(v) => VaultSummary {
                 count: count(ctx, &v),
-                health: health(ctx, &v),
+                health: listed_health(ctx, &v),
                 provider: v.provider,
                 name,
             },
@@ -2327,6 +2351,52 @@ mod tests {
             [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
         );
         assert!(reopened.health.ok, "{reopened:?}");
+    }
+
+    #[test]
+    fn the_vaults_panel_every_window_draws_as_it_opens_never_asks_the_keychain() {
+        // #1654: each plane window lists its vaults as it opens, and a 1Password vault's line
+        // ran `op` with its kept token, which after an update made the Keychain ask once per
+        // vault per window.
+        let (dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+        move_identity(&ctx, "team").unwrap();
+        let path = format!("{}:/usr/bin:/bin", dir.path().join("bin").display());
+        let opening = Ctx::new(
+            &dir.path().join("plane"),
+            Env::of(&[("PATH", path.as_str())]),
+        );
+        let stub = opening.state.join(keyring::STUB_FILE);
+        let before = keyring::stub_reads(&stub);
+
+        let listed = list(&opening).unwrap();
+
+        assert_eq!(keyring::stub_reads(&stub) - before, 0);
+        let team = listed.iter().find(|v| v.name == "team").expect("team");
+        assert!(team.health.ok, "{team:?}");
+        assert!(team.health.detail.contains("vault verify team"), "{team:?}");
+    }
+
+    #[test]
+    fn the_vaults_panel_never_runs_op_for_a_vault_signed_in_through_the_1password_app() {
+        // #1654: `op` reads the 1Password app's data, which makes macOS ask the person, so
+        // drawing the panel as a window opens never runs it.
+        let (dir, ctx) = team(&[]);
+        let ran = dir.path().join("op-ran");
+        std::fs::write(
+            dir.path().join("bin/op"),
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
+        )
+        .unwrap();
+        let mut config = serde_json::Map::new();
+        config.insert("op-vault".into(), serde_json::json!("Fixture"));
+        registry::add_vault(&ctx, "desk", "1password", config, None, false, false).unwrap();
+
+        let listed = list(&ctx).unwrap();
+
+        assert!(!ran.exists(), "op ran to draw the list");
+        let desk = listed.iter().find(|v| v.name == "desk").expect("desk");
+        assert!(desk.health.ok, "{desk:?}");
+        assert!(desk.health.detail.contains("open the vault"), "{desk:?}");
     }
 
     #[test]
