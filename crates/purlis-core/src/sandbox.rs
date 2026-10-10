@@ -1641,7 +1641,7 @@ impl Compiled {
             widened: Widened::of(policy, machine, root, &denied),
             denied,
             hosts: reached,
-            reach: reach::Reach::of(layered),
+            reach: reach::Reach::of(layered).never(locks.never_hosts().to_vec()),
             writable,
             os: machine.os,
             homes: Homes {
@@ -1917,12 +1917,27 @@ impl Applied {
         refusals: egress::Refusals,
         reached: Option<egress::Reached>,
     ) -> std::io::Result<Option<Confinement>> {
+        self.confine_asking(refusals, reached, None)
+    }
+
+    /// [`Self::confine_telling`], its proxy holding a connection to a host nothing lists on
+    /// `asks` while the person is asked (#1666); none refuses it at once.
+    pub fn confine_asking(
+        &self,
+        refusals: egress::Refusals,
+        reached: Option<egress::Reached>,
+        asks: Option<std::sync::Arc<asks::Asks>>,
+    ) -> std::io::Result<Option<Confinement>> {
         // Claude Code through purlis's proxy (#1665): its pair of ports, which its adapter
         // names in its `--settings`; an older one keeps its own proxy.
         if !self.through_proxy {
             return Ok(None);
         }
-        Confinement::serving(self.serving(refusals, reached)).map(Some)
+        Confinement::serving(egress::Serving {
+            asks,
+            ..self.serving(refusals, reached)
+        })
+        .map(Some)
     }
 
     /// What this chat's proxy serves ([`Self::confine_telling`]): the layers this was compiled
@@ -1987,6 +2002,8 @@ pub struct Line {
 pub struct Confinement {
     proxy: egress::Proxy,
     tmp: tempfile::TempDir,
+    /// Its proxy's live asks (#1666), where it holds connections while the person is asked.
+    asks: Option<std::sync::Arc<asks::Asks>>,
 }
 
 impl Confinement {
@@ -2005,7 +2022,9 @@ impl Confinement {
 
     /// A proxy serving `serving` on a pair of ports of its own (#1664), and a new temp directory.
     pub fn serving(serving: egress::Serving) -> std::io::Result<Self> {
+        let asks = serving.asks.clone();
         Ok(Self {
+            asks,
             proxy: egress::Proxy::serving(serving)?,
             tmp: tempfile::Builder::new().prefix("charter-chat-").tempdir()?,
         })
@@ -2029,6 +2048,11 @@ impl Confinement {
     /// The URL its proxy is named by in the chat's environment.
     pub fn proxy_url(&self) -> String {
         self.proxy.url()
+    }
+
+    /// Its proxy's live asks (#1666), which the window's answers reach the chat by.
+    pub fn asks(&self) -> Option<&std::sync::Arc<asks::Asks>> {
+        self.asks.as_ref()
     }
 
     /// The chat's own temp directory.
@@ -3406,6 +3430,7 @@ pub fn at_start(
     }
 }
 
+pub mod asks;
 pub mod backend;
 pub mod caches;
 pub mod claude;
@@ -3422,6 +3447,8 @@ pub mod program;
 pub mod reach;
 pub mod seatbelt;
 
+#[cfg(test)]
+mod asks_tests;
 #[cfg(test)]
 mod claude_tests;
 #[cfg(test)]

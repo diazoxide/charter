@@ -55,14 +55,13 @@ pub const AT_MOST_KEPT: usize = 5000;
 pub enum Event {
     /// A chat's sandbox refused something: a **Block**.
     Block,
-    /// purlis held a connection and asked the person (the live ask, spec #1661 step 4). Named
-    /// here so the record's words are settled; not written yet.
+    /// purlis held a connection and asked the person (the live ask, #1666).
     Ask,
     /// A person allowed something: an **Allowed host**, a folder, a vault, a persona's hosts.
     Allow,
     /// A person removed what was allowed.
     Remove,
-    /// A held connection nobody answered in time (spec #1661 step 4). Not written yet.
+    /// A held connection nobody answered in time (#1666): refused.
     Timeout,
     /// purlis's own proxy carried a chat's connections to a host (#1664).
     Connect,
@@ -180,22 +179,25 @@ impl Entry {
         persona: Option<&str>,
         at: u64,
     ) -> Self {
+        // The live ask (#1666) tells its ask and its timeout on the same road.
+        let (event, outcome) = match by {
+            ASKED => (Event::Ask, Outcome::Held),
+            TIMED_OUT => (Event::Timeout, Outcome::Refused),
+            "ask" | "refused" => (Event::Connect, Outcome::Refused),
+            _ => (Event::Connect, Outcome::Allowed),
+        };
         Self {
             at,
-            event: Event::Connect,
+            event,
             block: None,
             what: None,
             target: target.and_then(super::named_host),
             looked_up: None,
             chat,
             persona: persona.map(str::to_owned),
-            scope: Some(by.to_owned()),
+            scope: matches!(event, Event::Connect).then(|| by.to_owned()),
             who: None,
-            outcome: if matches!(by, "ask" | "refused") {
-                Outcome::Refused
-            } else {
-                Outcome::Allowed
-            },
+            outcome,
             times: Some(times),
         }
     }
@@ -242,6 +244,14 @@ impl Entry {
                 .is_some_and(|block| matches!(block.kind, Kind::Host | Kind::LocalSocket))
     }
 }
+
+/// The word [`Entry::connected`] is told a held connection's ask by (#1666): written as an
+/// [`Event::Ask`], waiting on the person.
+pub const ASKED: &str = "asked";
+
+/// The word [`Entry::connected`] is told a held connection's timeout by (#1666): written as an
+/// [`Event::Timeout`], refused.
+pub const TIMED_OUT: &str = "timeout";
 
 /// Who decides every Allow and removal written today: the person at this machine.
 pub const WHO: &str = "you";

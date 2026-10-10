@@ -17,9 +17,10 @@
 //! address and port is listed. purlis's egress proxy asks [`Reach::lists_exactly`] of every
 //! address a name resolves to as well, so a name pointed at one of them reaches nothing.
 //!
-//! **Ask** is a host nothing lists that a person could allow. Until purlis holds a connection
-//! while it asks (#1666), the proxy refuses it, and the chat's sandbox raises a Block with an
-//! Allow on it.
+//! **Ask** is a host nothing lists that a person could allow: the proxy holds the connection
+//! while the person is asked ([`super::asks`], #1666), or, where policy turns that off, refuses
+//! it and the chat's sandbox raises a Block with an Allow on it. A host policy pins as never
+//! allowed is refused and never asked about ([`Refused::Policy`]).
 
 use std::net::IpAddr;
 
@@ -39,6 +40,18 @@ pub enum By {
     Chat,
 }
 
+/// The scope an Allow kept at `level` is carried at (#1666): everyone in the project's is an
+/// Open host, as a committed host is.
+impl From<super::grant::Level> for By {
+    fn from(level: super::grant::Level) -> Self {
+        match level {
+            super::grant::Level::Chat => Self::Chat,
+            super::grant::Level::You => Self::You,
+            super::grant::Level::Project => Self::Open,
+        }
+    }
+}
+
 /// Why a connection is refused outright, never asked about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
@@ -48,6 +61,8 @@ pub enum Refused {
     /// This machine, a link-local address or a cloud metadata service, by address or by what a
     /// name resolved to.
     LocalAddress,
+    /// A host an administrator's policy pins as never allowed (#1666): never asked about.
+    Policy,
 }
 
 /// What a chat's connection to a host and port is answered with.
@@ -83,6 +98,11 @@ impl Decision {
         }
     }
 
+    /// The decision a layer's listing makes: Open, Persona, or Allowed at its scope.
+    pub fn by(by: By) -> Self {
+        Self::of(by)
+    }
+
     fn of(by: By) -> Self {
         match by {
             By::Open => Self::Open,
@@ -97,6 +117,8 @@ impl Decision {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reach {
     listed: Vec<(String, By)>,
+    /// The hosts policy pins as never allowed (#1666): refused, never asked about.
+    never: Vec<Host>,
 }
 
 impl Reach {
@@ -110,7 +132,20 @@ impl Reach {
             By::You => 2,
             By::Chat => 3,
         });
-        Self { listed }
+        Self {
+            listed,
+            never: Vec::new(),
+        }
+    }
+
+    /// This, refusing `hosts` outright where nothing lists them: the hosts an administrator's
+    /// policy pins as never allowed (#1666), which no person is asked about.
+    #[must_use]
+    pub fn never(self, hosts: Vec<Host>) -> Self {
+        Self {
+            never: hosts,
+            ..self
+        }
     }
 
     /// `hosts`, every one an Open host.
@@ -155,6 +190,9 @@ impl Reach {
             Ok(parsed) if parsed.to_string().starts_with("*.") => Decision::Refused(
                 Refused::NeverAHost(format!("{named} names many hosts, not one.")),
             ),
+            Ok(parsed) if self.never.iter().any(|pinned| pinned.covers(&parsed)) => {
+                Decision::Refused(Refused::Policy)
+            }
             Ok(_) => Decision::Ask,
         }
     }

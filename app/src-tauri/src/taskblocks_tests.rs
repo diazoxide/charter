@@ -120,7 +120,7 @@ impl App {
                     self.noted.borrow_mut().push(task);
                     Ok(())
                 },
-                owe: &|task, told| self.owed.borrow_mut().push((task, told)),
+                owe: &|task, _, told| self.owed.borrow_mut().push((task, told)),
             },
         )
     }

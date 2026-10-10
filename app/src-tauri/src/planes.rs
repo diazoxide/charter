@@ -1964,8 +1964,11 @@ impl Planes {
             // is told of it, so an answer to it can be checked against what was heard (#1508).
             let held = Arc::downgrade(&held);
             Arc::new(move |block| {
-                let told = hooks::blocked(&plane, &block);
+                let mut told = hooks::blocked(&plane, &block);
                 if let Some(strong) = held.upgrade() {
+                    // Held while the person answers (#1666): the chat's own board says so,
+                    // never anything the block's sender said.
+                    told.held = strong.chats().asking(told.session, told.target.as_deref());
                     if let Some(network) = &network {
                         crate::network::record_block(
                             network,
@@ -1992,6 +1995,17 @@ impl Planes {
         if let Some(hear) = held.hooks.block_hearer() {
             held.chats().tell_refusals_to(hear);
         }
+        // purlis's word on a chat's held connections (#1666) is handed to its next turn on
+        // the road the person's words take: the app's memory, never a file. Weak for the
+        // handoff's reason.
+        held.chats().tell_network_words_to({
+            let weak = Arc::downgrade(&held);
+            Arc::new(move |session, word| {
+                if let Some(strong) = weak.upgrade() {
+                    strong.tasks().ledger().talk.network_word(session, word);
+                }
+            })
+        });
         // Every connection purlis's own proxy carried for a chat it wraps is kept in this
         // machine's network record (#1664), coalesced by the proxy, under the chat whose port
         // it came in on. Weak for the handoff's reason.

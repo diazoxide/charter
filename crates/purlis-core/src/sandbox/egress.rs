@@ -32,8 +32,9 @@
 //!
 //! **What is carried is decided by the core decision module** ([`super::reach`]): by host and
 //! port only, open, persona, allowed, ask or refused. Anything not carried is refused before a
-//! connection is made: a host nothing lists (an ask, refused until purlis holds a connection
-//! while it asks, #1666), a tunnel to any port but 443, a plain request to any port but 80, and
+//! connection is made: a host nothing lists (an ask, held while the person is asked where the
+//! chat's proxy has a board of live asks, [`super::asks`], #1666, and refused where it has
+//! none or nobody answered in time), a tunnel to any port but 443, a plain request to any port but 80, and
 //! a request that is not one of the two above.
 //!
 //! **Bounded** ([`Limits`]): at most a few connections at once are served, over both ports
@@ -71,6 +72,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use super::asks::{Answer, Asks};
 use super::reach::{Decision, Reach, Refused};
 
 /// The port a tunnel is carried to: HTTPS's.
@@ -395,6 +397,9 @@ pub struct Serving {
     pub refusals: Refusals,
     /// Told each connection carried, coalesced ([`Tally`]); none tells nobody.
     pub reached: Option<Reached>,
+    /// The chat's live asks (#1666): a connection to a host nothing lists is held while the
+    /// person is asked. None refuses it at once, as where policy turns asking off.
+    pub asks: Option<Arc<Asks>>,
 }
 
 impl Serving {
@@ -409,6 +414,7 @@ impl Serving {
             limits: LIMITS,
             refusals: Refusals::default(),
             reached: None,
+            asks: None,
         }
     }
 }
@@ -488,6 +494,7 @@ impl Proxy {
             head: limits.head,
             refusals: serving.refusals.clone(),
             reached: serving.reached,
+            asks: serving.asks,
             tally: Mutex::new(Tally::default()),
         });
         // One count for both ports: the limit is the chat's, whichever port it uses.
@@ -622,6 +629,7 @@ struct Allowed {
     head: Duration,
     refusals: Refusals,
     reached: Option<Reached>,
+    asks: Option<Arc<Asks>>,
     tally: Mutex<Tally>,
 }
 
@@ -637,6 +645,44 @@ impl Allowed {
             &self.plain_ports
         };
         self.reach.decide(host, port, ports, own)
+    }
+
+    /// **The decision, once the person had their say** (#1666): an ask is held on the chat's
+    /// board while the person is asked, and carried as an Allowed host at the scope they chose;
+    /// refused where they kept it blocked or nobody answered in time. Either refusal is in the
+    /// record's tally, and raises no second Block: the ask's Notice stays up. `None` is the
+    /// decision as it was: carry it, or refuse it as [`Self::refused`] does.
+    fn asked(
+        &self,
+        host: &str,
+        port: u16,
+        tunnel: bool,
+        decision: Decision,
+    ) -> Result<Decision, GaveUp> {
+        let (Decision::Ask, Some(asks)) = (&decision, &self.asks) else {
+            return Ok(decision);
+        };
+        let ports = if self.any_port {
+            vec![port]
+        } else if tunnel {
+            self.tunnel_ports.clone()
+        } else {
+            self.plain_ports.clone()
+        };
+        match asks.hold(host, port, &ports) {
+            Answer::Allowed(by) => Ok(Decision::by(by)),
+            // The board is full: refused as before, with a Block of its own.
+            Answer::Busy => Ok(decision),
+            answer => {
+                let target = host_and_port(host, port);
+                self.tell(|tally| tally.heard(&target, decision.word(), Instant::now()));
+                Err(if answer == Answer::TimedOut {
+                    GaveUp::TimedOut
+                } else {
+                    GaveUp::KeptBlocked
+                })
+            }
+        }
     }
 
     /// Tells what `step` makes of the tally, outside its lock.
@@ -673,9 +719,36 @@ impl Allowed {
     }
 }
 
+/// How a held connection ended without being carried (#1666).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GaveUp {
+    TimedOut,
+    KeptBlocked,
+}
+
+/// Why a held connection was refused, as the client is told: fixed words, so a chat reads what
+/// to do next.
+fn held_said(host: &str, port: u16, held: GaveUp) -> String {
+    match held {
+        GaveUp::TimedOut => format!(
+            "purlis's sandbox does not allow {host}:{port} yet: purlis asked the person while \
+             this connection waited, and nobody answered in time. The ask stays with them; once \
+             they allow it, run the command again"
+        ),
+        GaveUp::KeptBlocked => format!(
+            "purlis's sandbox does not allow {host}:{port}: the person kept it blocked. Do not \
+             try it again unless they ask"
+        ),
+    }
+}
+
 /// Why a decision refused, as the client is told.
 fn refusal_said(host: &str, port: u16, decision: &Decision) -> String {
     match decision {
+        Decision::Refused(Refused::Policy) => format!(
+            "purlis's sandbox does not allow {host}:{port}: an administrator's policy pins it as \
+             never allowed"
+        ),
         Decision::Refused(Refused::LocalAddress) => format!(
             "purlis's sandbox does not allow {host}:{port}: it is this machine, a link-local \
              address or a cloud metadata service"
@@ -722,7 +795,19 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
     }
     // This machine's addresses, read once for the decision and the connect.
     let own = super::hosts::own_addresses();
-    let decision = allowed.decide(&request.host, request.port, request.forward.is_none(), &own);
+    let tunnel = request.forward.is_none();
+    let decision = allowed.decide(&request.host, request.port, tunnel, &own);
+    let decision = match allowed.asked(&request.host, request.port, tunnel, decision) {
+        Ok(decision) => decision,
+        Err(held) => {
+            answer(
+                &mut client,
+                "403 Forbidden",
+                &held_said(&request.host, request.port, held),
+            );
+            return;
+        }
+    };
     if !decision.carries() {
         allowed.refused(&request.host, request.port, &decision);
         answer(
@@ -806,7 +891,10 @@ fn serve_socks(mut client: TcpStream, allowed: &Allowed) {
         Err(code) => return socks_reply(&mut client, code),
     };
     let own = super::hosts::own_addresses();
-    let decision = allowed.decide(&host, port, true, &own);
+    let decision = match allowed.asked(&host, port, true, allowed.decide(&host, port, true, &own)) {
+        Ok(decision) => decision,
+        Err(_) => return socks_reply(&mut client, reply::NOT_ALLOWED),
+    };
     if !decision.carries() {
         allowed.refused(&host, port, &decision);
         return socks_reply(&mut client, reply::NOT_ALLOWED);

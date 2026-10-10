@@ -173,3 +173,13 @@ fn each_decision_has_the_word_the_record_keeps() {
     assert!(!Decision::Ask.carries());
     assert!(!Decision::Refused(Refused::LocalAddress).carries());
 }
+
+#[test]
+fn a_host_policy_pins_never_allowed_is_refused_never_asked() {
+    let pinned = reach().never(vec![super::hosts::Host::parse("*.paste.example").unwrap()]);
+    assert_eq!(
+        pinned.decide("drop.paste.example", 443, HTTPS, &[]),
+        Decision::Refused(Refused::Policy)
+    );
+    assert_eq!(pinned.decide("example.org", 443, HTTPS, &[]), Decision::Ask);
+}

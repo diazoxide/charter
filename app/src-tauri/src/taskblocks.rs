@@ -395,8 +395,9 @@ pub struct Doing<'a> {
     pub keep: &'a mut dyn FnMut(u32, &What, Level) -> Result<(), String>,
     /// Audits a grant kept once for everyone as reaching one more task.
     pub note: &'a dyn Fn(u32, &What, Level) -> Result<(), String>,
-    /// Owes one task a restart that tells it what it was allowed.
-    pub owe: &'a dyn Fn(u32, String),
+    /// Owes one task a restart that tells it what it was allowed: unless its proxy took a
+    /// host live (#1666), which the app reads as it owes it.
+    pub owe: &'a dyn Fn(u32, &What, String),
 }
 
 /// **The one Allow to the tasks a Notice listed** ([module](self)): [`checked`], every task
@@ -467,7 +468,7 @@ pub fn answered(
             // The grant stands, audited once; only this task's line of it is missing.
             tracing::warn!("purlis: a sandbox grant reaching chat {task} was not audited ({why})");
         }
-        (doing.owe)(*task, told.clone());
+        (doing.owe)(*task, what, told.clone());
     }
     Ok(TasksAnswered {
         said: format!(
@@ -532,7 +533,7 @@ pub fn allow_for_tasks(
                     )
                 },
                 keep: &mut |task, what, level| {
-                    crate::sandboxing::kept(root, chats, task, (what, level), audit, at)
+                    crate::sandboxing::kept(root, chats, task, (what, level), audit, at).map(|_| ())
                 },
                 note: &|task, what, level| {
                     audit(
@@ -545,7 +546,13 @@ pub fn allow_for_tasks(
                         },
                     )
                 },
-                owe: &|task, told| chats.owe_restart(task, told),
+                // A host reaches each task whose proxy asks live at once (#1666): only the
+                // others are owed the restart that takes it.
+                owe: &|task, what, told| {
+                    if !(matches!(what, What::Host(_)) && chats.board_of(task).is_some()) {
+                        chats.owe_restart(task, told);
+                    }
+                },
             },
         )
     })?;
@@ -623,8 +630,16 @@ pub fn keep_blocked(
     session: u32,
     seen: &[SeenBlock],
 ) -> Result<Vec<u32>, String> {
-    let (tasks, _) = reading(chats, |reading| checked(session, seen, reading))?;
+    let (tasks, block) = reading(chats, |reading| checked(session, seen, reading))?;
     let_go(chats, seen, &tasks);
+    // Each task is told, and what its proxy holds on the host is refused now (#1666, #1411).
+    if block.what == GrantWhat::Host
+        && let Ok(host) = grant::host(&block.target)
+    {
+        for task in &tasks {
+            chats.keep_blocked_live(*task, &host);
+        }
+    }
     Ok(tasks)
 }
 

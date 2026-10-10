@@ -172,6 +172,8 @@ function blocked(session: number): ChatBlocked {
     target: null,
     route: null,
     levels: [],
+    held: false,
+    ruled: null,
   };
 }
 
@@ -189,6 +191,8 @@ function blockedOnHost(session: number, host = "registry.npmjs.org"): ChatBlocke
     target: host,
     route: null,
     levels: ["chat", "you", "project"],
+    held: false,
+    ruled: null,
   };
 }
 
@@ -1873,14 +1877,16 @@ describe("what a task asks, on its session's tab (#1508)", () => {
 
     expect(await screen.findByRole("status", { name: "Sandbox block for 2 tasks" })).toBeTruthy();
     const own = await screen.findByRole("status", { name: "Sandbox block" });
-    await userEvent.click(within(own).getByRole("button", { name: "Allow for this chat" }));
+    await userEvent.click(
+      within(own).getByRole("button", { name: "Allow for me on this machine" }),
+    );
     await waitFor(() =>
       expect(commandsOf(asked, "allow_sandbox_block")).toEqual([
         {
           plane: PLANE,
           session: 1,
           shown: { operation: "connect", kind: "host", what: "host", target: "registry.npmjs.org" },
-          level: "chat",
+          level: "you",
         },
       ]),
     );
