@@ -26,7 +26,8 @@
 // lockfile entry names no licence or the wrong one; what it says is then held to the list like
 // the lock's own word. Each entry gives its reason, as each line of `deny.toml` does in a
 // comment. An entry no package in the lock needs, or a clarification the lock already agrees
-// with, is stale and fails the check: left, it would cover whatever later takes that name.
+// with, is stale and fails the check: left, it would cover whatever later takes that name. So
+// is a licence an exception allows that none of its package's entries names.
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +191,15 @@ function nameOf(path, entry) {
   return at === -1 ? path : path.slice(at + "node_modules/".length);
 }
 
+/** Whether the SPDX `expression` names `licence` (an id, or an `id WITH exception` pair). */
+function names(expression, licence) {
+  const words = expression.match(/\(|\)|[^\s()]+/g) ?? [];
+  const wanted = licence.trim().split(/\s+/);
+  return words.some((_, at) =>
+    wanted.every((word, i) => words[at + i] === word),
+  );
+}
+
 /** What is outside the list (`failures`), and what is outside it but never shipped (`notes`). */
 export function check({
   lock,
@@ -200,7 +210,8 @@ export function check({
 }) {
   const failures = [...waysOut.problems];
   const notes = [];
-  const excepted = new Set();
+  /** Each exception that let a package pass, with the licences of its own those packages name. */
+  const excepted = new Map();
   const clarified = new Set();
   for (const [path, entry] of Object.entries(lock.packages ?? {})) {
     if (path === "" || entry.link === true) continue;
@@ -224,7 +235,9 @@ export function check({
       exception !== undefined &&
       satisfies(licence, [...allowed, ...exception.allow])
     ) {
-      excepted.add(exception);
+      const used = excepted.get(exception) ?? new Set();
+      for (const one of exception.allow) if (names(licence, one)) used.add(one);
+      excepted.set(exception, used);
       continue;
     }
     if (entry.dev === true)
@@ -244,10 +257,19 @@ export function check({
     }
   }
   for (const one of waysOut.exceptions) {
-    if (!excepted.has(one))
+    const used = excepted.get(one);
+    if (used === undefined)
       failures.push(
         `the exception for ${one.name} is stale: it lets no package in the lock pass`,
       );
+    // A licence no package of that name is under would let a later release of it pass
+    // unlooked-at under that licence: stale too.
+    else
+      for (const licence of one.allow)
+        if (!used.has(licence))
+          failures.push(
+            `the exception for ${one.name} allows ${licence}, which none of its packages is under: that part is stale`,
+          );
   }
   for (const one of waysOut.clarify) {
     if (!clarified.has(one))

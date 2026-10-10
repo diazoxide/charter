@@ -141,6 +141,40 @@ test("an exception allows only its own licences, and a package's other terms sti
   ]);
 });
 
+test("a licence an exception allows that none of its packages is under is stale, and fails", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/fonts": { version: "1.0.0", license: "CC-BY-4.0" },
+      "node_modules/either": {
+        version: "1.0.0",
+        license: "(CC0-1.0 OR CC-BY-4.0)",
+      },
+      "node_modules/linked": {
+        version: "1.0.0",
+        license: "GPL-2.0-only WITH Classpath-exception-2.0",
+      },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut([
+      {
+        name: "fonts",
+        allow: ["CC-BY-4.0", "GPL-3.0-only"],
+        reason: "glyph data",
+      },
+      { name: "either", allow: ["CC0-1.0", "CC-BY-4.0"], reason: "data" },
+      {
+        name: "linked",
+        allow: ["GPL-2.0-only WITH Classpath-exception-2.0"],
+        reason: "runtime",
+      },
+    ]),
+  });
+  assert.deepEqual(said.failures, [
+    "the exception for fonts allows GPL-3.0-only, which none of its packages is under: that part is stale",
+  ]);
+});
+
 test("a clarification overrides only the version it names", () => {
   const said = check({
     lock: lock({
