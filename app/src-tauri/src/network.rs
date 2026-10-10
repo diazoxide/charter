@@ -59,6 +59,48 @@ pub(crate) fn record_block(
     }
 }
 
+/// Connections purlis's own proxy carried for one chat, as its tally told them (#1664).
+pub(crate) struct Connections<'a> {
+    /// The chat's number: the one whose proxy it came in on.
+    pub session: u32,
+    pub who: &'a crate::chats::ReachedAs,
+    /// The host and port, where the tally told one apart.
+    pub target: Option<&'a str>,
+    /// The layer that let them through.
+    pub by: &'static str,
+    pub times: u64,
+}
+
+/// **Records connections purlis's own proxy carried** for a chat in the project at `root`, told
+/// at `at`. The chat is who its proxy started for; its name, while it is still open.
+pub(crate) fn record_connections(
+    record: &Record,
+    root: &Path,
+    chats: &crate::chats::Chats,
+    connections: &Connections<'_>,
+    at: u64,
+) {
+    let chat = record::Chat {
+        id: connections.who.id.clone(),
+        name: chats.shown_name(connections.session),
+        session: Some(connections.session),
+    };
+    let entry = Entry::connected(
+        connections.target,
+        connections.by,
+        connections.times,
+        chat,
+        connections.who.persona.as_deref(),
+        at,
+    );
+    if let Err(why) = record.write(root, &entry) {
+        tracing::warn!(
+            "purlis: connections of chat {} were not kept in the network record ({why})",
+            connections.session
+        );
+    }
+}
+
 /// **`audit`, then the network record**: every Allow and removal a person makes is audited
 /// first (an audit that cannot be written changes nothing), then written to `record` with the
 /// chat it came from. A record that cannot be written is said in the log and changes nothing:

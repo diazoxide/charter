@@ -292,3 +292,50 @@ fn what_is_kept_of_a_hooks_blocks_names_no_path_argument_or_output() {
         assert!(!text.contains(leak), "{leak} in {text}");
     }
 }
+
+/// #1664: connections purlis's own proxy carried are a `connect` line, with the host and port,
+/// the layer that let them through and how many; never a Block, and never anything but a host.
+#[test]
+fn connections_the_proxy_carried_are_kept_with_their_layer_and_count() {
+    let (dir, root) = project();
+    let record = Record::in_data(&dir.path().join("data"));
+    let carried = Entry::connected(
+        Some("registry.npmjs.org:443"),
+        "open",
+        42,
+        chat("01J", "install"),
+        Some("steward"),
+        1_000,
+    );
+    let past_the_tally = Entry::connected(None, "you", 3, chat("01J", "install"), None, 1_001);
+    let not_a_host = Entry::connected(Some("/etc/passwd"), "open", 1, Chat::default(), None, 1_002);
+    let refused = Entry::connected(
+        Some("example.org:443"),
+        "ask",
+        2,
+        Chat::default(),
+        None,
+        1_003,
+    );
+    assert_eq!(refused.outcome, Outcome::Refused);
+    assert_eq!(carried.outcome, Outcome::Allowed);
+    for entry in [&carried, &past_the_tally, &not_a_host] {
+        record.write(&root, entry).expect("written");
+    }
+    let read = record.read(&root, 2_000);
+    assert_eq!(read.len(), 3);
+    assert_eq!(read[0], carried);
+    assert_eq!(read[0].event, Event::Connect);
+    assert_eq!(read[0].scope.as_deref(), Some("open"));
+    assert_eq!(read[0].times, Some(42));
+    assert_eq!(read[1].target, None);
+    assert_eq!(read[2].target, None, "only a host is kept");
+    // Not a Block: neither listed as refused nor counted.
+    assert!(read.iter().all(|entry| !entry.is_host_block()));
+    assert!(counts(&read, 2_000).is_empty());
+    assert!(
+        std::fs::read_to_string(record.file(&root))
+            .expect("the file")
+            .contains("\"event\":\"connect\"")
+    );
+}

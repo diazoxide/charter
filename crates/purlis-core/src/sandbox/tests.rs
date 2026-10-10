@@ -519,7 +519,7 @@ fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
             &seatbelt::Own::default(),
             &plane.path().join("workspaces/alpha"),
             std::path::Path::new("/private/tmp/chat"),
-            4040,
+            &[4040],
             None,
         )
         .expect("a profile");
@@ -595,7 +595,7 @@ fn every_harness_denies_a_chat_reading_or_writing_the_dispatch_records() {
         &seatbelt::Own::default(),
         &cwd,
         std::path::Path::new("/private/tmp/chat"),
-        4040,
+        &[4040],
         None,
     )
     .expect("a profile");
@@ -913,7 +913,7 @@ fn every_harness_denies_a_chat_writing_the_persons_harness_approvals_or_the_decl
                     &seatbelt::Own::default(),
                     plane.path(),
                     std::path::Path::new("/private/tmp/chat"),
-                    4040,
+                    &[4040],
                     None,
                 )
                 .expect("a profile");
@@ -1338,6 +1338,7 @@ fn compiled(denied: Denied, os: Os) -> Compiled {
     Compiled {
         denied,
         hosts: vec!["github.com".to_owned()],
+        reach: reach::Reach::open(vec!["github.com".to_owned()]),
         writable: Vec::new(),
         os,
         homes: Homes::default(),
@@ -1913,8 +1914,8 @@ fn a_chat_in_a_branch_folder_is_given_nothing_under_its_clones_git_directory() {
     }
     let cwd = Path::new("/project/workspaces/w/.worktrees/repo/piece");
     let tmp = Path::new("/tmp-of/the-chat");
-    let profile =
-        seatbelt::profile(&[], &seatbelt::Own::default(), cwd, tmp, 4040, None).expect("a profile");
+    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), cwd, tmp, &[4040], None)
+        .expect("a profile");
     // The wrap (Codex, opencode): the two folders it may write, and no other folder of the
     // project, the clone least of all.
     let subpaths: Vec<&str> = profile
@@ -3221,7 +3222,7 @@ fn charters_own_wrap_never_lets_a_chat_ask_the_keychains_service() {
     let dir = tempfile::tempdir().expect("a directory");
     let cwd = dir.path().join("chat");
     let tmp = dir.path().join("tmp");
-    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, 4040, None)
+    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, &[4040], None)
         .expect("a profile");
     let probe = seatbelt::probe_profile(&tmp).expect("a profile");
     for text in [&profile, &probe] {
@@ -3252,7 +3253,7 @@ fn a_chat_started_in_a_worktree_writes_that_folder_and_nothing_of_the_clone_it_w
         std::fs::create_dir_all(made).expect("a folder");
     }
 
-    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, 4040, None)
+    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, &[4040], None)
         .expect("a profile");
 
     // Every path the profile lets the chat write, by the rule that names it.
@@ -3858,8 +3859,8 @@ fn wrap_profile(applied: &Applied) -> String {
     let cwd = StdPath::new(PROJECT);
     let tmp = StdPath::new("/Users/op/project-tmp");
     match applied.form() {
-        Form::Opencode(wrap) => opencode::profile(wrap, cwd, tmp, 4040, None),
-        Form::Codex(wrap) => codex::profile(wrap, cwd, tmp, 4040, None),
+        Form::Opencode(wrap) => opencode::profile(wrap, cwd, tmp, &[4040], None),
+        Form::Codex(wrap) => codex::profile(wrap, cwd, tmp, &[4040], None),
         Form::ClaudeCode(_) => panic!("Claude Code is not wrapped"),
     }
     .expect("a profile")
@@ -4688,8 +4689,9 @@ fn charters_own_wrap_denies_a_path_and_pins_its_folders_under_both_firmlink_name
         "/System/Volumes/Data/Users/op-1356/plane/tools/hook.sh",
     ] {
         let denied = [later_code(written, "/f", "./tools/hook.sh")];
-        let profile = seatbelt::profile(&denied, &seatbelt::Own::default(), cwd, tmp, 4040, None)
-            .expect("a profile");
+        let profile =
+            seatbelt::profile(&denied, &seatbelt::Own::default(), cwd, tmp, &[4040], None)
+                .expect("a profile");
         let rules: Vec<&str> = profile
             .lines()
             .filter(|line| {
@@ -4874,7 +4876,7 @@ fn a_profile_too_large_to_hand_seatbelt_is_refused_by_name() {
         &seatbelt::Own::default(),
         cwd,
         tmp,
-        4040,
+        &[4040],
         None,
     )
     .expect("one config at its cap");
@@ -4885,7 +4887,7 @@ fn a_profile_too_large_to_hand_seatbelt_is_refused_by_name() {
             &seatbelt::Own::default(),
             cwd,
             tmp,
-            4040,
+            &[4040],
             None,
         ),
         Err(seatbelt::TOO_LARGE)

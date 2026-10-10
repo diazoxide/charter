@@ -1384,6 +1384,9 @@ fn counted_hosts(granted: &[hosts::Granted]) -> Besides {
 pub struct Compiled {
     pub denied: Denied,
     pub hosts: Vec<String>,
+    /// The same hosts, each with the layer that lists it (#1664): what purlis's egress proxy
+    /// decides by ([`reach`]). [`Self::hosts`] is what a harness's own form names.
+    pub reach: reach::Reach,
     /// The folders a person let this chat write besides its own and the temp folders (#1342):
     /// its own grants and yours ([`grant`]), each judged again as it is compiled. Every compiler
     /// puts its denials after them, so a class still wins inside one.
@@ -1581,10 +1584,22 @@ impl Compiled {
             ..policy.clone()
         };
         let mut reached = hosts(&policy.egress, plane, &locks);
+        let mut layered: Vec<(String, reach::By)> = reached
+            .iter()
+            .map(|host| (host.clone(), reach::By::Open))
+            .collect();
         // A persona's hosts only as the person on this machine allowed them (D-1362-7).
         let personas = persona::in_force_here(root, &policy.personas, persona, &locks);
+        let yours = hosts::personal(root);
         for one in granted_hosts(policy, root, &personas, &chat.hosts, &locks) {
             let spelled = one.host.to_string();
+            let by = match one.level {
+                hosts::Level::Project => reach::By::Open,
+                hosts::Level::Persona => reach::By::Persona,
+                hosts::Level::You if !yours.contains(&one.host) => reach::By::Chat,
+                hosts::Level::You => reach::By::You,
+            };
+            layered.push((spelled.clone(), by));
             if !reached.contains(&spelled) {
                 reached.push(spelled);
             }
@@ -1595,6 +1610,7 @@ impl Compiled {
             widened: Widened::of(policy, machine, root, &denied),
             denied,
             hosts: reached,
+            reach: reach::Reach::of(layered),
             writable,
             os: machine.os,
             homes: Homes {
@@ -1653,6 +1669,9 @@ pub struct Applied {
     /// What a command run on the chat's behalf is held to. Boxed: it is a list of paths, and
     /// [`Decided`] carries this beside a variant of a few words.
     confines: Box<Confines>,
+    /// The hosts it lets the chat reach, each with its layer: what its proxy decides by
+    /// (#1664). Boxed for [`Decided`]'s reason.
+    reach: Box<reach::Reach>,
 }
 
 impl Applied {
@@ -1782,11 +1801,24 @@ impl Applied {
         &self,
         refusals: egress::Refusals,
     ) -> std::io::Result<Option<Confinement>> {
+        self.confine_telling(refusals, None)
+    }
+
+    /// [`Self::confine_keeping`], its proxy also telling `reached` each connection it carried
+    /// (#1664), coalesced: what the app keeps every connection in the network record by. The
+    /// proxy decides by the layers this was compiled with ([`reach`]).
+    pub fn confine_telling(
+        &self,
+        refusals: egress::Refusals,
+        reached: Option<egress::Reached>,
+    ) -> std::io::Result<Option<Confinement>> {
         match &*self.form {
-            Form::Opencode(opencode::Wrap { hosts, .. })
-            | Form::Codex(codex::Wrap { hosts, .. }) => {
-                Confinement::start_keeping(hosts.clone(), refusals).map(Some)
-            }
+            Form::Opencode(_) | Form::Codex(_) => Confinement::serving(egress::Serving {
+                refusals,
+                reached,
+                ..egress::Serving::of((*self.reach).clone())
+            })
+            .map(Some),
             Form::ClaudeCode(_) => Ok(None),
         }
     }
@@ -1847,15 +1879,33 @@ impl Confinement {
 
     /// [`Self::start`], with its proxy keeping what it refuses in `refusals`.
     pub fn start_keeping(hosts: Vec<String>, refusals: egress::Refusals) -> std::io::Result<Self> {
+        Self::serving(egress::Serving {
+            refusals,
+            ..egress::Serving::of(reach::Reach::open(hosts))
+        })
+    }
+
+    /// A proxy serving `serving` on a pair of ports of its own (#1664), and a new temp directory.
+    pub fn serving(serving: egress::Serving) -> std::io::Result<Self> {
         Ok(Self {
-            proxy: egress::Proxy::start_keeping(hosts, refusals)?,
+            proxy: egress::Proxy::serving(serving)?,
             tmp: tempfile::Builder::new().prefix("charter-chat-").tempdir()?,
         })
     }
 
-    /// The loopback port of its proxy.
+    /// The loopback port of its proxy's HTTP side.
     pub fn proxy_port(&self) -> u16 {
         self.proxy.port()
+    }
+
+    /// The loopback port of its proxy's SOCKS5 side.
+    pub fn socks_port(&self) -> u16 {
+        self.proxy.socks_port()
+    }
+
+    /// Both its proxy's ports, the only ones its wrap lets the chat connect to: HTTP, then SOCKS5.
+    pub fn proxy_ports(&self) -> [u16; 2] {
+        [self.proxy.port(), self.proxy.socks_port()]
     }
 
     /// The URL its proxy is named by in the chat's environment.
@@ -1945,6 +1995,7 @@ fn never_with(compile: Option<Compiler>, held_back: Option<u32>, os: Os) -> Opti
     let nothing = Compiled {
         denied: Denied::default(),
         hosts: Vec::new(),
+        reach: reach::Reach::default(),
         writable: Vec::new(),
         os,
         homes: Homes::default(),
@@ -2838,6 +2889,7 @@ pub(crate) fn applied_of(
             widened: compiled.widened.clone(),
             writable: compiled.writable.clone(),
         }),
+        reach: Box::new(compiled.reach.clone()),
     })
 }
 
@@ -3232,6 +3284,7 @@ pub mod persona;
 pub mod planted;
 pub mod policy;
 pub mod program;
+pub mod reach;
 pub mod seatbelt;
 
 #[cfg(test)]
@@ -3244,5 +3297,7 @@ mod hosts_tests;
 mod opencode_tests;
 #[cfg(test)]
 mod persona_tests;
+#[cfg(test)]
+mod reach_tests;
 #[cfg(test)]
 mod tests;

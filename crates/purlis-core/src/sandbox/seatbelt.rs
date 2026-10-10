@@ -235,14 +235,15 @@ pub fn keychains(home: Option<&Path>) -> Option<Denial> {
 }
 
 /// The Seatbelt profile for a chat in `cwd`, with its own temp directory `tmp`, denied
-/// `denied`, keeping `own` for its harness, reaching the network through the proxy on
-/// `proxy_port` and reporting on `hook_socket`.
+/// `denied`, keeping `own` for its harness, reaching the network through its own proxy's
+/// `proxy_ports` alone (#1664: HTTP and SOCKS5, so never another chat's) and reporting on
+/// `hook_socket`.
 pub fn profile(
     denied: &[Denial],
     own: &Own,
     cwd: &Path,
     tmp: &Path,
-    proxy_port: u16,
+    proxy_ports: &[u16],
     hook_socket: Option<&Path>,
 ) -> Result<String, &'static str> {
     let mut out = String::from(BASE);
@@ -250,9 +251,11 @@ pub fn profile(
         out.push_str(&text);
         out.push('\n');
     };
-    line(format!(
-        "(allow network-outbound (remote ip \"localhost:{proxy_port}\"))"
-    ));
+    for port in proxy_ports {
+        line(format!(
+            "(allow network-outbound (remote ip \"localhost:{port}\"))"
+        ));
+    }
     if let Some(socket) = hook_socket {
         line(format!(
             "(allow network-outbound (remote unix-socket (path-literal {})))",

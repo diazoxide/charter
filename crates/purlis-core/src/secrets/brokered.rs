@@ -1314,7 +1314,7 @@ pub(crate) fn profile_on(
             seatbelt::quote(file)?
         ));
     }
-    seatbelt::profile(denied, &own, folder, tmp, proxy_port, None)
+    seatbelt::profile(denied, &own, folder, tmp, &[proxy_port], None)
 }
 
 /// What [`run`] hears from the child's pipes and the asker.
