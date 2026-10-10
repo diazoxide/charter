@@ -56,7 +56,7 @@ describe("a persona's one-line description (#1460)", () => {
     });
 
     expect(screen.getByRole("radio", { name: /^steward/ })).toHaveAccessibleDescription(
-      "Scopes the work · plane default",
+      "Scopes the work · project default",
     );
     expect(screen.getByRole("radio", { name: /^ops/ })).toHaveAccessibleDescription(
       "Keeps the lights on",
@@ -408,7 +408,7 @@ describe("the picker a chat starts from", () => {
     // only for the focused one. An operator deciding this is owed both halves on screen.
     show();
 
-    expect(screen.getByText(/panels already draw the plane/)).toBeInTheDocument();
+    expect(screen.getByText(/panels already draw the project/)).toBeInTheDocument();
     expect(screen.getByText(/This chat only/)).toBeInTheDocument();
   });
 
@@ -526,10 +526,12 @@ describe("the picker a chat starts from", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("as it now stands");
   });
 
-  it("says a plane that declares nothing declares nothing, rather than looking broken", () => {
+  it("says a project that declares nothing declares nothing, rather than looking broken", () => {
     show();
 
-    expect(screen.getByText(/declares no profiles of its own/)).toBeInTheDocument();
+    // "project", the window's word (#602), never the retired "plane".
+    expect(screen.getByText(/This project declares no profiles of its own/)).toBeInTheDocument();
+    expect(screen.queryByText(/\bplane\b/)).not.toBeInTheDocument();
   });
 
   it("says when git would carry the file, because then every declared profile is refused", () => {

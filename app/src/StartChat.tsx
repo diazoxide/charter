@@ -302,9 +302,9 @@ export function StartChat({
           )}
           {options.declares_none && !options.ignore_fix && (
             <p className="honest">
-              {/* Said rather than shown as an empty list: a plane that declares nothing is the
+              {/* Said rather than shown as an empty list: a project that declares nothing is the
                 ordinary first state, not a fault, and the built-ins below still start. */}
-              This plane declares no profiles of its own, so these are purlis&apos;s built-ins.
+              This project declares no profiles of its own, so these are purlis&apos;s built-ins.
               Declare your own in <code>charter.local.toml</code>, which stays on this machine.
             </p>
           )}
@@ -346,7 +346,7 @@ export function StartChat({
                     const says = [
                       // What the persona says of itself in a line (#1460).
                       options.persona_descriptions?.[who],
-                      who === options.persona ? "plane default" : undefined,
+                      who === options.persona ? "project default" : undefined,
                       own === undefined ? undefined : `its profile is ${own}`,
                     ].filter((word) => word !== undefined);
                     return {
@@ -369,7 +369,7 @@ export function StartChat({
           <SettingRow
             label="draw purlis's footer in this chat"
             help={
-              "Blank by default, because the panels already draw the plane. The footer says " +
+              "Blank by default, because the panels already draw the project. The footer says " +
               "which workspace this chat is on, which the panels say only for the focused one. " +
               "This chat only, and only from its next start."
             }
