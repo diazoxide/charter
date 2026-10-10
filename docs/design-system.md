@@ -542,6 +542,12 @@ carries are the dialog's to keep, and every question keeps the same ones:
 
 `answerBar.guard.test.ts` fails on a dialog that builds an `answer` or `doing` row by hand.
 
+**One rule for both rows.** A form's `SettingActions` stands at the leading edge, in the form's
+flow, with its act first (Create workspace, then Cancel). A question's bar stands at the
+trailing edge with its act last. In both, the act that moves things on stands at the edge the
+row is anchored to, and the way out sits inward of it. A dialog that holds a form (a delete that
+asks for the name typed) ends in the form's row, not the bar.
+
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
 and a theme reaches it without an icon ever naming a colour. `app/src/lib/icons.test.tsx` pins
