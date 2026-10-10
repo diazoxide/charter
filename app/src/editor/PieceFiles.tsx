@@ -52,6 +52,7 @@ import { askSettingsLink, type SettingsLink } from "../settings/links";
 import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
 import { useBranchMoved } from "./branchMoved";
+import { readAt } from "./lastRead";
 
 /** A size, as a person reads one. */
 export function sized(bytes: number): string {
@@ -146,12 +147,21 @@ function useChanged(plane: PlaneId, cut: Place, path: string | undefined): Chang
 /**
  * The line the cursor is on in the file at `path`: `start` (else 1) until it moves, and back to
  * that when another file is drawn.
+ *
+ * Each move is also the file's line last read (`lastRead.ts`, #1143): where a tree row's *Open
+ * in your editor* opens it. A jump's line arrives as a move too, since it puts the cursor there.
  */
-function useCursorLine(path: string | undefined, start?: number) {
+function useCursorLine(plane: PlaneId, place: Place, path: string | undefined, start?: number) {
   const [moved, setMoved] = useState<{ path: string | undefined; start?: number; line: number }>();
   const line =
     moved !== undefined && moved.path === path && moved.start === start ? moved.line : (start ?? 1);
-  return { line, moved: (line: number) => setMoved({ path, start, line }) };
+  return {
+    line,
+    moved: (line: number) => {
+      setMoved({ path, start, line });
+      if (path !== undefined) readAt(plane, place, path, line);
+    },
+  };
 }
 
 /** What *Open in your editor* says when no editor is chosen. */
@@ -471,7 +481,7 @@ export function PieceFileTab({
 }) {
   const read = useFile(plane, cut, path) ?? READING;
   const changed = useChanged(plane, cut, path);
-  const at = useCursorLine(path, line);
+  const at = useCursorLine(plane, cut, path, line);
   const selection = useSelectedLines(path);
   // A jump to a line (a diff, a record) lands in the text at that line; a file opened to be read
   // is rendered.
@@ -589,7 +599,7 @@ export function PieceFilesTab({
     if (landed !== undefined) settleJump(landed.at);
   }, [landed]);
   const line = landed !== undefined && landed.path === picked ? landed.line : undefined;
-  const at = useCursorLine(picked, line);
+  const at = useCursorLine(plane, cut, picked, line);
   const selection = useSelectedLines(picked);
   const read = useFile(plane, cut, picked);
   const changed = useChanged(plane, cut, picked);
