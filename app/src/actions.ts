@@ -57,6 +57,7 @@ import {
   scopeKey,
   type MemoryRef,
 } from "./memories";
+import { PUBLISHED_WITH_THE_PROJECT, publishedStore } from "./memoryMoves";
 import { searchFromFocus, searchTitle, searchView, type SearchAsk } from "./contentSearch";
 import { pieceFilesTitle, pieceFilesView, type Place } from "./pieceViews";
 import { searchKeySaid } from "./searchKey";
@@ -302,6 +303,10 @@ export type Does =
    *  an Undo is offered for a few seconds (ADR 0065 Q8). Nothing asks first, because nothing
    *  is lost: Undo, or `unarchive` on the command line, puts it back. */
   | { verb: "archiveMemory"; ref: MemoryRef; title: string }
+  /** Moves a memory whole to the store `to` (KN-3, #1190): the tab's own Move, from a row's
+   *  menu or the palette, with the same Undo. Nothing asks first, as the tab's Move does not:
+   *  the row says who reads the store it goes to, and Undo moves it back. */
+  | { verb: "moveMemory"; ref: MemoryRef; title: string; to: MemoryScope }
   /** Opens a new memory's tab in edit mode, for the store `scope` (ADR 0065 Q9). Nothing is
    *  written until it is saved. */
   | { verb: "newMemory"; scope: MemoryScope }
@@ -716,6 +721,9 @@ export type Now = {
   /** The cards of the harnesses the project has (`harnessCards.ts`, #1134): one
    *  *What <product> can do here* row each, with no chat open. */
   harnesses?: readonly HarnessGlance[];
+  /** The project's memory stores (`memory_scopes`): an open memory tab's Move rows, one per
+   *  store but its own (#1190). None while unread, and then there are no Move rows. */
+  memoryStores?: readonly MemoryScope[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -795,6 +803,9 @@ export type Doing = {
   editMemory: (ref: MemoryRef, title: string) => void;
   /** Archives a memory, closes its tab and offers Undo. The core can refuse. */
   archiveMemory: (ref: MemoryRef, title: string) => Promise<Ran>;
+  /** Moves a memory to another store, its tab following it, and offers Undo. The core can
+   *  refuse: a store holding that name already, one charter may not write. */
+  moveMemory: (ref: MemoryRef, title: string, to: MemoryScope) => Promise<Ran>;
   /** Opens a new memory's tab for `scope`, in edit mode. */
   newMemory: (scope: MemoryScope) => void;
   /** Keeps a preview tab. */
@@ -1974,7 +1985,7 @@ export function catalogue(now: Now): Offer[] {
       const ref = memoryRefOf(content.view.key);
       if (ref === undefined || ref.slug === DRAFT) continue;
       memories.add(content.view.key);
-      offers.push(...memoryOffers(ref, now.tabs.byId[id]?.name ?? ref.slug));
+      offers.push(...memoryOffers(ref, now.tabs.byId[id]?.name ?? ref.slug, now.memoryStores));
     }
   }
 
@@ -2570,6 +2581,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "archiveMemory":
       return doing.archiveMemory(does.ref, does.title);
+    case "moveMemory":
+      return doing.moveMemory(does.ref, does.title, does.to);
     case "newMemory":
       doing.newMemory(does.scope);
       return DID;
@@ -3434,14 +3447,47 @@ export function dismissId(session: number): string {
 }
 
 /** The catalogue's id for a wrapping-up tab's Cancel smart close row (ADR 0064). */
+/** What starts the id of every Move row of the memory `key` (#1190). */
+const movePrefix = (key: string) => `memory.move:${key}:`;
+
 /**
- * One memory's three rows (SI-9b, ADR 0065 Q12): Open, Edit and Delete, named for its store and
- * slug (`memory.<verb>:<key>`). The catalogue carries them for every open memory tab; a list of
- * memories adds them for its own rows, whose titles it has — a persona's tab, and SI-9c's
- * workspace and shared lists.
+ * The catalogue's id for moving the memory `key` into the store `to` (#1190, D-1190-1):
+ * `memory.move:<key>:<store>`, the store as {@link scopeKey} names it. A memory's key and a
+ * store's are both slashes and names, never a colon, so the last colon is where the store
+ * starts and the prefix up to it is this memory's alone.
  */
-export function memoryOffers(ref: MemoryRef, title: string): Offer[] {
+export function memoryMoveId(key: string, to: MemoryScope): string {
+  return `${movePrefix(key)}${scopeKey(to)}`;
+}
+
+/**
+ * One memory's rows (SI-9b, ADR 0065 Q12): Open, Edit and Delete, named for its store and slug
+ * (`memory.<verb>:<key>`), and a Move into each of `stores` but its own (#1190). The catalogue
+ * carries them for every open memory tab; a list of memories adds them for its own rows, whose
+ * titles it has — a persona's tab, and SI-9c's workspace and shared lists.
+ *
+ * **A Move row says who reads the store it moves into** where the project publishes that store
+ * (`PUBLISHED_WITH_THE_PROJECT`, the sentence the tab's Move says), and asks nothing more than
+ * the tab's Move asks: a pick of the store, then the move, with Undo after.
+ */
+export function memoryOffers(
+  ref: MemoryRef,
+  title: string,
+  stores: readonly MemoryScope[] = [],
+): Offer[] {
   const key = memoryKey(ref);
+  const here = scopeKey(ref.scope);
+  const moves = stores
+    .filter((to) => scopeKey(to) !== here)
+    .map((to): Offer => {
+      const row = can(
+        memoryMoveId(key, to),
+        `Move memory to ${memoryOf(to)}: ${title}`,
+        { verb: "moveMemory", ref, title, to },
+        title,
+      );
+      return publishedStore(to) ? { ...row, note: PUBLISHED_WITH_THE_PROJECT } : row;
+    });
   return [
     can(
       `memory.open:${key}`,
@@ -3459,7 +3505,20 @@ export function memoryOffers(ref: MemoryRef, title: string): Offer[] {
       ),
       note: "Moves it to the store's archive. Undo puts it back.",
     },
+    ...moves,
   ];
+}
+
+/**
+ * The memory `key`'s Move rows, in the catalogue's order: what a row's "Move to ▸" submenu
+ * draws (#1190). A scan, as {@link curateRows} is and for its reason: which stores a project has
+ * is not a list of ids known ahead, and the submenu is drawn only while its menu is open.
+ */
+export function moveRows(key: string, offers: Catalogued): Offer[] {
+  const prefix = movePrefix(key);
+  const rows: Offer[] = [];
+  for (const [id, offer] of offers) if (id.startsWith(prefix)) rows.push(offer);
+  return rows;
 }
 
 /** The memory a row opens — its key, out of the row's `memory.open:<key>` — or `undefined`. */
@@ -3474,14 +3533,18 @@ export function memoryKeyRun(runs: string | null | undefined): string | undefine
  * list of every memory in the plane, and needs none: the list that draws the row supplies its
  * rows — a persona's tab, the shared list, a workspace's Memory section, all through this.
  */
-export function listedMemoryOffers(blocks: readonly PanelBlock[]): Catalogued {
+export function listedMemoryOffers(
+  blocks: readonly PanelBlock[],
+  /** The project's stores, for each row's Move rows (#1190): none while they are unread. */
+  stores: readonly MemoryScope[] = [],
+): Catalogued {
   return catalogued(
     blocks.flatMap((block) =>
       block.kind !== "list"
         ? []
         : block.rows.flatMap((row) => {
             const ref = memoryRefOf(memoryKeyRun(row.runs) ?? "");
-            return ref === undefined ? [] : memoryOffers(ref, row.text);
+            return ref === undefined ? [] : memoryOffers(ref, row.text, stores);
           }),
     ),
   );

@@ -6,6 +6,7 @@ import {
   curateRows,
   curateSubjectOf,
   menuRows,
+  moveRows,
   noteOf,
   titleOf,
   type Catalogued,
@@ -14,6 +15,7 @@ import {
 } from "./actions";
 import { stateOf, useChatsHere, useChatsSelect } from "./chatState";
 import { landSettingsFocus } from "./settings/entering";
+import { storeLabel } from "./memoryMoves";
 
 /**
  * The window's context menus: right-click on a thing, and charter offers what it can do to it.
@@ -91,6 +93,8 @@ export function Menued({
           {curating !== undefined && (
             <Curate subject={curating} offers={offers} onPress={onPress} />
           )}
+          {/* **Move to ▸**, on a memory's row (#1190): a row per store but its own. */}
+          {on.on === "memory" && <MoveTo memory={on.key} offers={offers} onPress={onPress} />}
           {rows.above.length > 0 && rows.below.length > 0 && (
             <ContextMenu.Separator className="menu-line" />
           )}
@@ -159,6 +163,47 @@ function Curate({
               ))}
             </ContextMenu.Group>
           )}
+        </ContextMenu.SubContent>
+      </ContextMenu.Portal>
+    </ContextMenu.Sub>
+  );
+}
+
+/**
+ * The "Move to ▸" submenu of a memory's row (KN-3, #1190): one row per store the memory can go
+ * to, named as the tab's Move names it, each with the catalogue's note on who reads that store.
+ * Drawn only while its menu is open, for `Curate`'s reason; a memory with nowhere to go (the
+ * stores not read yet, or a project with one store) draws none.
+ */
+function MoveTo({
+  memory,
+  offers,
+  onPress,
+}: {
+  memory: string;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+}) {
+  const rows = moveRows(memory, offers);
+  if (rows.length === 0) return null;
+  return (
+    <ContextMenu.Sub>
+      <ContextMenu.SubTrigger className="menu-row menu-sub">
+        <span className="menu-title">Move to</span>
+        <span className="menu-sub-mark" aria-hidden="true">
+          <ChevronRight />
+        </span>
+      </ContextMenu.SubTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.SubContent className="item-menu" collisionPadding={8}>
+          {rows.map((offer) => (
+            <Row
+              key={offer.id}
+              offer={offer}
+              onPress={onPress}
+              words={offer.does.verb === "moveMemory" ? storeLabel(offer.does.to) : undefined}
+            />
+          ))}
         </ContextMenu.SubContent>
       </ContextMenu.Portal>
     </ContextMenu.Sub>

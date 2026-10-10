@@ -462,6 +462,8 @@ describe("deleting a workspace", () => {
       // The workspaces changed, so what each subject is offered to curate is asked again
       // (ADR 0061): a read of the plane.
       "curation_offers",
+      // And so are the memory stores a memory's Move can go to (#1190): a read of the plane.
+      "memory_scopes",
     ];
     const during = asked.slice(before).map((one) => one.cmd);
     expect(during.filter((cmd) => !READS.includes(cmd))).toEqual(["workspace_remove"]);
