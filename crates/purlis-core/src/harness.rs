@@ -350,7 +350,8 @@ impl Harness {
     }
 
     /// The arguments that start this harness's program as an ACP agent, for a chat at level 3
-    /// over [`crate::acp`], or `None` where charter does not run it over ACP yet. A fact, as
+    /// over [`crate::acp`], or `None` where charter does not run it over ACP yet (HP-3 and HP-4,
+    /// #670 and #783). A fact, as
     /// the `[levels] acp` argv of its declaration will be once FD-14 moves it there.
     ///
     /// opencode's ACP agent is opencode itself, `opencode acp` (ADR 0080 §3, measured on

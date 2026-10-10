@@ -245,11 +245,11 @@ enum Command {
     #[command(subcommand)]
     Vault(secret::VaultCommand),
 
-    // The checks doctor does not run yet are planned in OB-8, #994.
     /// Preflight: check the plane, its workspaces, personas and profiles before working.
     ///
     /// Exits non-zero only on a blocker. Every check this purlis does not run yet is still
     /// listed, as a warning saying it was not checked — never as a pass.
+    // The checks doctor does not run yet are planned in OB-8, #994.
     Doctor {
         /// Emit machine-readable results.
         #[arg(long)]
