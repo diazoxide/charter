@@ -506,6 +506,27 @@ fn a_chats_own_grants_reach_its_compiled_sandbox_and_no_other_start() {
     assert!(other.writable.is_empty());
 }
 
+/// #1664: the proxy decides by the layer that lists a host. A preset's host is open, and a
+/// host allowed for this chat alone is allowed at that scope, for this chat and no other.
+#[test]
+fn a_chats_compiled_reach_says_which_layer_lets_each_host_through() {
+    use crate::sandbox::reach::{By, Decision};
+    let project = project();
+    let mut chat = Grants::default();
+    chat.add(&What::Host(host("api.example.com").unwrap()));
+    let granted = compiled_with(&project, Os::MacOs, &chat);
+    let decide = |compiled: &Compiled, host: &str| compiled.reach.decide(host, 443, &[443], &[]);
+    assert_eq!(decide(&granted, "api.anthropic.com"), Decision::Open);
+    assert_eq!(
+        decide(&granted, "api.example.com"),
+        Decision::Allowed(By::Chat)
+    );
+    assert_eq!(decide(&granted, "unlisted.example.org"), Decision::Ask);
+    assert_eq!(granted.reach.hosts().len(), granted.hosts.len());
+    let other = compiled_with(&project, Os::MacOs, &Grants::default());
+    assert_eq!(decide(&other, "api.example.com"), Decision::Ask);
+}
+
 #[test]
 fn a_folder_you_granted_reaches_every_chat_here_until_it_is_revoked() {
     let project = project();
@@ -596,7 +617,7 @@ fn a_wrapped_chat_writes_a_granted_folder_with_every_denial_after_it() {
         &opencode::wrap(&compiled).expect("wraps"),
         &cwd,
         &tmp,
-        4000,
+        &[4000],
         None,
     )
     .expect("a profile");
@@ -604,7 +625,7 @@ fn a_wrapped_chat_writes_a_granted_folder_with_every_denial_after_it() {
         &codex::wrap(&compiled).expect("wraps"),
         &cwd,
         &tmp,
-        4000,
+        &[4000],
         None,
     )
     .expect("a profile");

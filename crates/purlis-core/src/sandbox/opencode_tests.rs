@@ -229,6 +229,10 @@ fn the_profile_denies_by_default_and_reaches_only_the_proxy_and_the_hook_socket(
                 confinement.proxy_port()
             ),
             format!(
+                "(allow network-outbound (remote ip \"localhost:{}\"))",
+                confinement.socks_port()
+            ),
+            format!(
                 "(allow network-outbound (remote unix-socket (path-literal \"{}\")))",
                 real(&socket).display()
             ),
@@ -612,6 +616,20 @@ mod live {
             &format!("/usr/bin/nc -z -w 2 127.0.0.1 {}", confinement.proxy_port()),
         );
         assert!(proxy.status.success(), "the proxy: {proxy:?}");
+        // Its own SOCKS5 port, and never another chat's proxy (#1664).
+        let socks = run(
+            &line,
+            &format!("/usr/bin/nc -z -w 2 127.0.0.1 {}", confinement.socks_port()),
+        );
+        assert!(socks.status.success(), "its SOCKS port: {socks:?}");
+        let another = applied.confine().expect("confined").expect("a wrap");
+        for port in another.proxy_ports() {
+            let theirs = run(&line, &format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}"));
+            assert!(
+                !theirs.status.success(),
+                "reached another chat's proxy: {theirs:?}"
+            );
+        }
     }
     /// A home reached through a link (a dotfiles `~/.config`, a config root under `/var` or
     /// `/tmp`): every denial is still held, because Seatbelt matches the path as the kernel

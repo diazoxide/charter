@@ -409,6 +409,10 @@ pub struct Chats {
     /// #1663), as that chat's block: the road a hook's block takes into the app
     /// ([`crate::hooks::Hooks::block_hearer`]). Empty until the project's hooks listen.
     refused: Arc<Mutex<Option<crate::hooks::Blocks>>>,
+    /// What hears each connection purlis's own proxy carried for a chat it wraps (#1664),
+    /// coalesced by the proxy: what keeps every connection in the network record. Empty until
+    /// the project records its network.
+    reached: Arc<Mutex<Option<ProxyReached>>>,
     /// The session record the app last wrote for each open chat, project-relative (#1436): what
     /// a task's report names as its record. The app's own knowledge of what it wrote, so a
     /// report never names a path its chat chose. **In memory only**, and gone with the chat.
@@ -718,6 +722,7 @@ impl Chats {
             grants: Mutex::new(HashMap::new()),
             blocks: crate::taskblocks::Blocks::default(),
             refused: Arc::new(Mutex::new(None)),
+            reached: Arc::new(Mutex::new(None)),
             records: Mutex::new(HashMap::new()),
             briefs: crate::rebrief::Sent::default(),
             dispatching: Mutex::new(()),
@@ -1262,6 +1267,12 @@ impl Chats {
     /// Who hears, from now on, each host purlis's own proxy refuses a chat it wraps (#1663).
     pub fn tell_refusals_to(&self, hear: crate::hooks::Blocks) {
         *lock(&self.refused) = Some(hear);
+    }
+
+    /// Who hears, from now on, each connection purlis's own proxy carries for a chat it wraps
+    /// (#1664).
+    pub fn tell_connections_to(&self, hear: ProxyReached) {
+        *lock(&self.reached) = Some(hear);
     }
 
     /// The folder chat `session` was started in: what a write grant for it is judged against.
@@ -1810,9 +1821,19 @@ impl Chats {
         // Its proxy tells the app each host it refuses, by the proxy's word (#1663): the
         // chat's block, under the number the chat is given below.
         let whose = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        // Each chat its own pair of ports (#1664): a connection's chat is the proxy it came in
+        // on, and what it carried is told under that chat, never under anything it said.
         let refusals = refused_by_the_proxy(Arc::clone(&self.refused), Arc::clone(&whose), harness);
+        let reached = reached_by_the_proxy(
+            Arc::clone(&self.reached),
+            Arc::clone(&whose),
+            ReachedAs {
+                id: identity.id.clone(),
+                persona: runs_as.clone(),
+            },
+        );
         let confinement = match sandbox {
-            Some(applied) => applied.confine_keeping(refusals).map_err(|err| {
+            Some(applied) => applied.confine_telling(refusals, Some(reached)).map_err(|err| {
                 purlis_core::sandbox::under_policy(
                     &purlis_core::sandbox::policy::Locks::of(&self.project),
                     format!(
@@ -3340,6 +3361,7 @@ fn refused_by_the_proxy(
     harness: Option<Harness>,
 ) -> purlis_core::sandbox::egress::Refusals {
     use purlis_core::sandboxblock::{Block, Kind, Operation};
+    let (hear_local, whose_local) = (Arc::clone(&hear), Arc::clone(&whose));
     purlis_core::sandbox::egress::Refusals::telling(Arc::new(move |host: &str, port: u16| {
         let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
         let Some(told) = lock(&hear).clone() else {
@@ -3362,6 +3384,72 @@ fn refused_by_the_proxy(
             .name("purlis-refused".into())
             .spawn(move || told(block));
     }))
+    .telling_local({
+        let (hear, whose) = (Arc::clone(&hear_local), Arc::clone(&whose_local));
+        Arc::new(move |_: &str, _: u16| {
+            let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
+            let Some(told) = lock(&hear).clone() else {
+                return;
+            };
+            if chat == 0 {
+                return;
+            }
+            // This machine, a link-local address or a metadata service (#1664): never a host
+            // to allow, so the Block names none, and its Notice offers what a local socket's
+            // does.
+            let block = purlis_core::hookwire::SandboxBlocked {
+                chat,
+                sandbox_blocked: Block {
+                    operation: Operation::Connect,
+                    kind: Kind::LocalSocket,
+                    ours: false,
+                },
+                harness: harness.map(|harness| harness.name().to_owned()),
+                target: None,
+            };
+            let _ = std::thread::Builder::new()
+                .name("purlis-refused".into())
+                .spawn(move || told(block));
+        })
+    })
+}
+
+/// What hears each connection purlis's own proxy carried for a chat (#1664): the chat's number,
+/// who it is ([`ReachedAs`]), the host and port (none for the hosts past what the proxy's tally
+/// tells apart), the layer that let it through, and how many connections.
+pub type ProxyReached =
+    Arc<dyn Fn(u32, &ReachedAs, Option<&str>, &'static str, u64) + Send + Sync + 'static>;
+
+/// Who a chat is, as the network record names its connections: known when its proxy starts, so
+/// the connections its proxy tells as the chat ends are still the chat's.
+#[derive(Debug, Clone, Default)]
+pub struct ReachedAs {
+    pub id: Option<String>,
+    pub persona: Option<String>,
+}
+
+/// **What purlis's own proxy beside a chat it wraps tells of each connection it carried**
+/// (#1664), coalesced by the proxy (`purlis_core::sandbox::egress::Tally`): told to whoever
+/// `hear` holds once the chat has its number (`whose`, 0 before), on a thread of its own so a
+/// connection is never held up by the record's write.
+fn reached_by_the_proxy(
+    hear: Arc<Mutex<Option<ProxyReached>>>,
+    whose: Arc<std::sync::atomic::AtomicU32>,
+    who: ReachedAs,
+) -> purlis_core::sandbox::egress::Reached {
+    Arc::new(move |target: Option<&str>, by: &'static str, times: u64| {
+        let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
+        let Some(told) = lock(&hear).clone() else {
+            return;
+        };
+        if chat == 0 {
+            return;
+        }
+        let (who, target) = (who.clone(), target.map(str::to_owned));
+        let _ = std::thread::Builder::new()
+            .name("purlis-reached".into())
+            .spawn(move || told(chat, &who, target.as_deref(), by, times));
+    })
 }
 
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3438,6 +3526,105 @@ pub(crate) mod tests {
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err(),
             "once"
+        );
+    }
+
+    /// #1664: a local address the proxy refused is the chat's Block of a local socket, naming no
+    /// host, since no Allow would let it through.
+    #[test]
+    fn a_local_address_the_proxy_refused_is_a_block_naming_no_host() {
+        use purlis_core::sandboxblock::{Block, Kind, Operation};
+        let hear: Arc<Mutex<Option<crate::hooks::Blocks>>> = Arc::new(Mutex::new(None));
+        let whose = Arc::new(std::sync::atomic::AtomicU32::new(7));
+        let refusals = super::refused_by_the_proxy(
+            Arc::clone(&hear),
+            Arc::clone(&whose),
+            Some(Harness::Opencode),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        *lock(&hear) = Some(Arc::new(move |block| lock(&tx).send(block).unwrap()));
+        refusals.heard_local("169.254.169.254", 80);
+        let told = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("told");
+        assert_eq!(
+            told,
+            purlis_core::hookwire::SandboxBlocked {
+                chat: 7,
+                sandbox_blocked: Block {
+                    operation: Operation::Connect,
+                    kind: Kind::LocalSocket,
+                    ours: false,
+                },
+                harness: Some("opencode".to_owned()),
+                target: None,
+            }
+        );
+        assert!(
+            refusals.refused().is_empty(),
+            "never kept as a host to allow"
+        );
+    }
+
+    /// #1664: what a chat's proxy carried is told under the chat whose proxy it is, once the
+    /// chat has its number, with who it is as known when it started.
+    #[test]
+    fn connections_the_proxy_carried_are_told_under_its_chat() {
+        type Told = (
+            u32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            &'static str,
+            u64,
+        );
+        let hear: Arc<Mutex<Option<super::ProxyReached>>> = Arc::new(Mutex::new(None));
+        let whose = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let reached = super::reached_by_the_proxy(
+            Arc::clone(&hear),
+            Arc::clone(&whose),
+            super::ReachedAs {
+                id: Some("01JCHAT".to_owned()),
+                persona: Some("steward".to_owned()),
+            },
+        );
+        let (tx, rx) = std::sync::mpsc::channel::<Told>();
+        let tx = Mutex::new(tx);
+        reached(Some("early.example.com:443"), "open", 1);
+        *lock(&hear) = Some(Arc::new(move |chat, who, target, by, times| {
+            lock(&tx)
+                .send((
+                    chat,
+                    who.id.clone(),
+                    who.persona.clone(),
+                    target.map(str::to_owned),
+                    by,
+                    times,
+                ))
+                .unwrap();
+        }));
+        reached(Some("before.example.com:443"), "open", 1);
+        whose.store(5, std::sync::atomic::Ordering::SeqCst);
+        reached(Some("api.example.com:443"), "you", 3);
+        let told = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("told");
+        assert_eq!(
+            told,
+            (
+                5,
+                Some("01JCHAT".to_owned()),
+                Some("steward".to_owned()),
+                Some("api.example.com:443".to_owned()),
+                "you",
+                3
+            )
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "nothing before the chat had its number"
         );
     }
 

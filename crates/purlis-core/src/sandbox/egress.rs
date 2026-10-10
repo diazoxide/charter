@@ -1,17 +1,28 @@
-//! Charter's loopback egress proxy (ADR 0067 §3): what a harness charter wraps reaches the
-//! network through, where the harness has no proxy of its own.
+//! purlis's loopback egress proxy (ADR 0067 §3 as amended 2026-10-10): what a harness purlis
+//! wraps reaches the network through, where the harness has no proxy of its own.
 //!
-//! The wrap lets the chat connect to this proxy's port on the loopback interface and nowhere
-//! else, so a program that ignores `HTTPS_PROXY` reaches nothing. The proxy carries:
+//! **One chat, one pair of ports** (#1664). Each chat purlis wraps gets its own proxy, made when
+//! the chat starts and gone when it ends ([`Proxy`] stops listening when dropped): an HTTP port
+//! ([`Proxy::port`]) and a SOCKS5 port ([`Proxy::socks_port`]). The wrap lets the chat connect to
+//! those two ports on the loopback interface and nowhere else, so a program that ignores
+//! `HTTPS_PROXY` reaches nothing, and one chat never reaches another's ports. **Which chat a
+//! connection is from is which proxy it arrived on**: nothing a connection sends names a chat,
+//! and nothing it sends is read as one.
+//!
+//! The HTTP port carries:
 //!
 //! - **`CONNECT host:443`**, the tunnel every HTTPS client asks a proxy for, to a listed host.
 //!   The bytes inside the tunnel are the client's TLS, which the proxy does not read, so what
 //!   host a TLS client names inside it (SNI) is the client's to say, as with any proxy that
-//!   does not decrypt.
+//!   does not decrypt. There is no TLS interception and no certificate of purlis's own.
 //! - **A plain request in absolute form** (`GET http://host/path`) to a listed host on port 80,
 //!   sent on in origin form with `Connection: close`, so one connection reaches one host. Its
 //!   one `Host` must name the same host, and its body must state its length: the body is
 //!   carried and nothing after it, so a second request cannot ride the same connection.
+//!
+//! The SOCKS5 port carries a `CONNECT` with no authentication (RFC 1928), to a name or an
+//! address, on the ports a tunnel is carried to. Every other method, command and address type
+//! is refused with SOCKS's own reply.
 //!
 //! **The head is read strictly**, so the proxy and the host it reaches cannot read it two ways:
 //! CRLF line ends only, one space between the request line's three parts, `HTTP/1.1` or
@@ -19,21 +30,26 @@
 //! header, at most one `Host` and one `Content-Length` (digits only), and no
 //! `Transfer-Encoding`. A head that breaks any of these is refused.
 //!
-//! Anything else is refused before a connection is made: a host no preset lists, a tunnel to
-//! any port but 443, a plain request to any port but 80, and a request that is not one of the
-//! two above.
+//! **What is carried is decided by the core decision module** ([`super::reach`]): by host and
+//! port only, open, persona, allowed, ask or refused. Anything not carried is refused before a
+//! connection is made: a host nothing lists (an ask, refused until purlis holds a connection
+//! while it asks, #1666), a tunnel to any port but 443, a plain request to any port but 80, and
+//! a request that is not one of the two above.
 //!
-//! **Bounded** ([`Limits`]): it runs in the app, so at most a few connections at once are
-//! served, a head must arrive whole within a deadline, a connection that carries nothing either
-//! way for long is closed, a write the other side does not take in that time ends it, and a
-//! failing accept backs off rather than spinning.
+//! **Bounded** ([`Limits`]): at most a few connections at once are served, over both ports
+//! together; a head or a SOCKS greeting must arrive whole within a deadline; a connection that
+//! carries nothing either way for long is closed; a write the other side does not take in that
+//! time ends it; and a failing accept backs off rather than spinning. No buffer grows past a
+//! fixed size.
 //!
-//! The proxy resolves each name itself. A listed name is a name, so an address literal is
-//! never carried unless a preset or a host lists it, and a wildcard never matches one. **A
-//! name is reached only at the addresses it resolves to that a chat may reach**
-//! ([`reachable`]): never this machine, a link-local, multicast or broadcast address, or a cloud
-//! metadata service, checked at every connect, so a name that resolves or is rebound there
-//! reaches nothing.
+//! **The local-address check.** The proxy resolves each name itself, and a name is reached only
+//! at the addresses it resolves to that a chat may reach ([`reachable`]): never this machine, a
+//! link-local, multicast or broadcast address, or a cloud metadata service, checked at every
+//! connect, so a name that resolves or is rebound there reaches nothing. A name that resolves
+//! *only* there is refused as a Block. An address literal is held to the same check: the one
+//! exception is that exact address and port, listed ([`super::reach::Reach::lists_exactly`]).
+//! A listed name is a name, so an address literal is never carried unless a preset or a host
+//! lists it, and a wildcard never matches one.
 //!
 //! **A host listed with a port** (`10.0.0.5:6443`, a project's or a person's, #1341) is carried
 //! on that port alone, tunnel or plain; a host without one on the ports above.
@@ -41,7 +57,12 @@
 //! **What it refused is its own record** ([`Refusals`]): each host and port it refused because
 //! no preset or host lists it, as the request named them, once each and at most
 //! [`REFUSALS_KEPT`]. A brokered `secret exec` reads it to tell the asking chat which host its
-//! command was refused (`crate::secrets::brokered`): the proxy's word, never the command's.
+//! command was refused (`crate::secrets::brokered`), and the app raises the chat's Block from
+//! it: the proxy's word, never the command's.
+//!
+//! **Every connection is told** ([`Reached`]): each connection carried or refused, by host and
+//! port and the decision's word, coalesced to a line per host and port a minute ([`Tally`]), so
+//! the app keeps every connection in the network record without a chat being able to flood it.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -49,6 +70,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+use super::reach::{Decision, Reach, Refused};
 
 /// The port a tunnel is carried to: HTTPS's.
 pub const TUNNEL_PORTS: [u16; 1] = [443];
@@ -131,7 +154,7 @@ pub fn allows_on(listed: &[String], host: &str, port: u16, defaults: &[u16]) -> 
 
 /// A listed entry's name and the port it is held to, where it has one: `[v6]` and `[v6]:port`,
 /// `name:port` with one colon, or the name alone.
-fn entry_parts(entry: &str) -> (&str, Option<u16>) {
+pub(crate) fn entry_parts(entry: &str) -> (&str, Option<u16>) {
     if let Some(rest) = entry.strip_prefix('[')
         && let Some((inside, after)) = rest.split_once(']')
     {
@@ -159,9 +182,15 @@ pub type Told = Arc<dyn Fn(&str, u16) + Send + Sync + 'static>;
 /// grant would let it through.
 #[derive(Clone, Default)]
 pub struct Refusals {
-    kept: Arc<Mutex<Vec<(String, u16)>>>,
+    kept: Kept,
     told: Option<Told>,
+    /// Told each host and port refused by the local-address check (#1664), once each and at
+    /// most [`REFUSALS_KEPT`]: never one a person could allow, so never kept in [`Self::refused`].
+    local: Option<(Told, Kept)>,
 }
+
+/// Hosts and ports a [`Refusals`] has told, shared by its clones.
+type Kept = Arc<Mutex<Vec<(String, u16)>>>;
 
 impl std::fmt::Debug for Refusals {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -177,25 +206,36 @@ impl Refusals {
         Self {
             kept: Arc::default(),
             told: Some(told),
+            local: None,
         }
+    }
+
+    /// This record, telling `told` each host and port the local-address check refuses as well.
+    #[must_use]
+    pub fn telling_local(self, told: Told) -> Self {
+        Self {
+            local: Some((told, Arc::default())),
+            ..self
+        }
+    }
+
+    /// Tells `host` on `port` as refused by the local-address check, unless it was told already
+    /// or [`REFUSALS_KEPT`] were.
+    pub fn heard_local(&self, host: &str, port: u16) {
+        let Some((told, seen)) = &self.local else {
+            return;
+        };
+        if !once(seen, host, port) {
+            return;
+        }
+        told(host, port);
     }
 
     /// Keeps `host` on `port` as refused, and tells it, unless it is kept already or the
     /// record is full.
     pub fn heard(&self, host: &str, port: u16) {
-        {
-            let mut kept = self
-                .kept
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if kept.len() >= REFUSALS_KEPT
-                || kept
-                    .iter()
-                    .any(|(h, p)| *p == port && h.eq_ignore_ascii_case(host))
-            {
-                return;
-            }
-            kept.push((host.to_owned(), port));
+        if !once(&self.kept, host, port) {
+            return;
         }
         if let Some(told) = &self.told {
             told(host, port);
@@ -214,6 +254,22 @@ impl Refusals {
     }
 }
 
+/// Keeps `host` on `port` in `kept`, and says whether it was new and there was room.
+fn once(kept: &Mutex<Vec<(String, u16)>>, host: &str, port: u16) -> bool {
+    let mut kept = kept
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if kept.len() >= REFUSALS_KEPT
+        || kept
+            .iter()
+            .any(|(h, p)| *p == port && h.eq_ignore_ascii_case(host))
+    {
+        return false;
+    }
+    kept.push((host.to_owned(), port));
+    true
+}
+
 /// `host` on `port` as a grant names it: `host:port`, an IPv6 address in brackets.
 pub fn host_and_port(host: &str, port: u16) -> String {
     if host.contains(':') {
@@ -223,14 +279,156 @@ pub fn host_and_port(host: &str, port: u16) -> String {
     }
 }
 
-/// A running proxy, on a port of the loopback interface. It stops listening when dropped;
-/// a tunnel already open runs until either end closes it.
+/// What is told each connection a proxy carried or refused, coalesced by its [`Tally`]: the host
+/// and port, the decision's word ([`super::reach::Decision::word`]: the layer that let it
+/// through, or `ask` or `refused`), and how many connections the line stands for. A target of `None` stands for hosts past what one tally tells apart.
+pub type Reached = Arc<dyn Fn(Option<&str>, &'static str, u64) + Send + Sync + 'static>;
+
+/// How long one tally line stands for: a host and port is told once a [`TALLY_WINDOW`], with
+/// how many connections went to it since it was last told.
+pub const TALLY_WINDOW: Duration = Duration::from_secs(60);
+
+/// The most hosts and ports one tally tells apart at once; connections past it are counted
+/// together, with no target.
+pub const TALLY_HOSTS: usize = 32;
+
+/// **Every connection a proxy carried, coalesced** (#1664): the first to a host and port is told
+/// at once; those after it in the same [`TALLY_WINDOW`] are counted and told as one line when
+/// the window has passed (at the next connection to it) or when the proxy stops. So a chat that
+/// opens a thousand connections to its registry is a line or two a minute, never a thousand,
+/// and the network record keeps every connection without a chat being able to turn it over.
+#[derive(Debug, Default)]
+pub struct Tally {
+    seen: Vec<Seen>,
+    /// Connections past [`TALLY_HOSTS`] since they were last told, per layer, and when they
+    /// began.
+    others: Vec<(&'static str, Instant, u64)>,
+}
+
 #[derive(Debug)]
+struct Seen {
+    target: String,
+    by: &'static str,
+    since: Instant,
+    /// Connections since it was last told.
+    untold: u64,
+}
+
+/// One line a [`Tally`] tells: a target (none for the hosts past what it tells apart), the
+/// layer, and how many connections.
+pub type Line = (Option<String>, &'static str, u64);
+
+impl Tally {
+    /// A connection to `target`, let through by `by`, at `now`: the lines to tell now.
+    pub fn heard(&mut self, target: &str, by: &'static str, now: Instant) -> Vec<Line> {
+        let mut out = Vec::new();
+        // What has waited a window is told, and a host told with nothing since is let go.
+        self.seen.retain_mut(|seen| {
+            if now.saturating_duration_since(seen.since) < TALLY_WINDOW {
+                return true;
+            }
+            if seen.untold > 0 {
+                out.push((Some(seen.target.clone()), seen.by, seen.untold));
+            }
+            false
+        });
+        self.others.retain(|(layer, since, untold)| {
+            if now.saturating_duration_since(*since) < TALLY_WINDOW {
+                return true;
+            }
+            out.push((None, layer, *untold));
+            false
+        });
+        if let Some(seen) = self
+            .seen
+            .iter_mut()
+            .find(|seen| seen.by == by && seen.target.eq_ignore_ascii_case(target))
+        {
+            seen.untold += 1;
+        } else if self.seen.len() < TALLY_HOSTS {
+            self.seen.push(Seen {
+                target: target.to_owned(),
+                by,
+                since: now,
+                untold: 0,
+            });
+            out.push((Some(target.to_owned()), by, 1));
+        } else if let Some((_, _, untold)) = self.others.iter_mut().find(|(layer, ..)| *layer == by)
+        {
+            *untold += 1;
+        } else {
+            self.others.push((by, now, 1));
+        }
+        out
+    }
+
+    /// Everything not told yet, as the proxy stops.
+    pub fn ended(&mut self) -> Vec<Line> {
+        let mut out: Vec<Line> = self
+            .seen
+            .drain(..)
+            .filter(|seen| seen.untold > 0)
+            .map(|seen| (Some(seen.target), seen.by, seen.untold))
+            .collect();
+        out.extend(
+            self.others
+                .drain(..)
+                .map(|(layer, _, untold)| (None, layer, untold)),
+        );
+        out
+    }
+}
+
+/// What a proxy carries, and to whom it tells what it did.
+#[derive(Clone)]
+pub struct Serving {
+    /// Each host the chat's sandbox lists, with its layer.
+    pub reach: Reach,
+    /// The ports a tunnel (HTTP `CONNECT`, SOCKS5) is carried to for a host listed without one.
+    pub tunnel_ports: Vec<u16>,
+    /// The ports a plain request is carried to for a host listed without one.
+    pub plain_ports: Vec<u16>,
+    pub limits: Limits,
+    pub refusals: Refusals,
+    /// Told each connection carried, coalesced ([`Tally`]); none tells nobody.
+    pub reached: Option<Reached>,
+}
+
+impl Serving {
+    /// A chat's proxy for `reach`: tunnels on [`TUNNEL_PORTS`], plain requests on
+    /// [`PLAIN_PORTS`], within [`LIMITS`], keeping nothing.
+    pub fn of(reach: Reach) -> Self {
+        Self {
+            reach,
+            tunnel_ports: TUNNEL_PORTS.to_vec(),
+            plain_ports: PLAIN_PORTS.to_vec(),
+            limits: LIMITS,
+            refusals: Refusals::default(),
+            reached: None,
+        }
+    }
+}
+
+/// A running proxy, on a pair of ports of the loopback interface: HTTP and SOCKS5. It stops
+/// listening on both when dropped, and tells what its tally still holds; a tunnel already open
+/// runs until either end closes it.
 pub struct Proxy {
-    addr: SocketAddr,
+    http: SocketAddr,
+    socks: SocketAddr,
     ports: Vec<u16>,
     stop: Arc<AtomicBool>,
     refusals: Refusals,
+    allowed: Arc<Allowed>,
+}
+
+impl std::fmt::Debug for Proxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Proxy")
+            .field("http", &self.http)
+            .field("socks", &self.socks)
+            .field("ports", &self.ports)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Proxy {
@@ -242,13 +440,10 @@ impl Proxy {
 
     /// [`Self::start`], keeping what it refuses in `refusals`.
     pub fn start_keeping(hosts: Vec<String>, refusals: Refusals) -> io::Result<Self> {
-        Self::carrying(
-            hosts,
-            TUNNEL_PORTS.to_vec(),
-            PLAIN_PORTS.to_vec(),
-            LIMITS,
+        Self::serving(Serving {
             refusals,
-        )
+            ..Serving::of(Reach::open(hosts))
+        })
     }
 
     /// A proxy that carries `hosts` on `ports`, tunnels and plain requests alike.
@@ -259,66 +454,48 @@ impl Proxy {
     /// A proxy that carries `hosts` on `ports`, tunnels and plain requests alike, within
     /// `limits`.
     pub fn limited(hosts: Vec<String>, ports: Vec<u16>, limits: Limits) -> io::Result<Self> {
-        Self::carrying(hosts, ports.clone(), ports, limits, Refusals::default())
+        Self::serving(Serving {
+            tunnel_ports: ports.clone(),
+            plain_ports: ports,
+            limits,
+            ..Serving::of(Reach::open(hosts))
+        })
     }
 
-    fn carrying(
-        hosts: Vec<String>,
-        tunnel_ports: Vec<u16>,
-        plain_ports: Vec<u16>,
-        limits: Limits,
-        refusals: Refusals,
-    ) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let addr = listener.local_addr()?;
+    /// **A chat's proxy**: two new ports on the loopback interface, serving `serving`.
+    pub fn serving(serving: Serving) -> io::Result<Self> {
+        let http = TcpListener::bind(("127.0.0.1", 0))?;
+        let socks = TcpListener::bind(("127.0.0.1", 0))?;
+        let (http_addr, socks_addr) = (http.local_addr()?, socks.local_addr()?);
         let stop = Arc::new(AtomicBool::new(false));
-        let ports: Vec<u16> = tunnel_ports.iter().chain(&plain_ports).copied().collect();
+        let ports: Vec<u16> = serving
+            .tunnel_ports
+            .iter()
+            .chain(&serving.plain_ports)
+            .copied()
+            .collect();
+        let limits = serving.limits;
         let allowed = Arc::new(Allowed {
-            hosts,
-            tunnel_ports,
-            plain_ports,
+            reach: serving.reach,
+            tunnel_ports: serving.tunnel_ports,
+            plain_ports: serving.plain_ports,
             idle: limits.idle,
             head: limits.head,
-            refusals: refusals.clone(),
+            refusals: serving.refusals.clone(),
+            reached: serving.reached,
+            tally: Mutex::new(Tally::default()),
         });
+        // One count for both ports: the limit is the chat's, whichever port it uses.
         let open = Arc::new(AtomicUsize::new(0));
-        let stopping = Arc::clone(&stop);
-        std::thread::Builder::new()
-            .name("charter-egress".into())
-            .spawn(move || {
-                for stream in listener.incoming() {
-                    if stopping.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let Ok(mut stream) = stream else {
-                        std::thread::sleep(BACKOFF);
-                        continue;
-                    };
-                    if open.fetch_add(1, Ordering::SeqCst) >= limits.connections {
-                        open.fetch_sub(1, Ordering::SeqCst);
-                        let _ = stream.set_write_timeout(Some(BACKOFF));
-                        answer(
-                            &mut stream,
-                            "503 Service Unavailable",
-                            "purlis's egress proxy is carrying all the connections it takes",
-                        );
-                        continue;
-                    }
-                    let held = Held(Arc::clone(&open));
-                    let allowed = Arc::clone(&allowed);
-                    let _ = std::thread::Builder::new()
-                        .name("charter-egress-conn".into())
-                        .spawn(move || {
-                            let _held = held;
-                            serve(stream, &allowed);
-                        });
-                }
-            })?;
+        listen(http, Speaks::Http, &allowed, &open, &stop, limits)?;
+        listen(socks, Speaks::Socks, &allowed, &open, &stop, limits)?;
         Ok(Self {
-            addr,
+            http: http_addr,
+            socks: socks_addr,
             ports,
             stop,
-            refusals,
+            refusals: serving.refusals,
+            allowed,
         })
     }
 
@@ -327,9 +504,14 @@ impl Proxy {
         &self.refusals
     }
 
-    /// The loopback port it listens on.
+    /// The loopback port its HTTP proxy listens on.
     pub fn port(&self) -> u16 {
-        self.addr.port()
+        self.http.port()
+    }
+
+    /// The loopback port its SOCKS5 proxy listens on.
+    pub fn socks_port(&self) -> u16 {
+        self.socks.port()
     }
 
     /// The ports it carries.
@@ -346,9 +528,75 @@ impl Proxy {
 impl Drop for Proxy {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wakes the accept, which then sees the stop and closes the listener.
-        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
+        // Wakes each accept, which then sees the stop and closes its listener.
+        for addr in [self.http, self.socks] {
+            let _ = TcpStream::connect_timeout(&addr, Duration::from_secs(1));
+        }
+        self.allowed.tell(|tally| tally.ended());
     }
+}
+
+/// Which protocol a port speaks.
+#[derive(Debug, Clone, Copy)]
+enum Speaks {
+    Http,
+    Socks,
+}
+
+/// Accepts on `listener` until `stop`, serving each connection on a thread of its own while
+/// fewer than `limits.connections` are open across the proxy's ports.
+fn listen(
+    listener: TcpListener,
+    speaks: Speaks,
+    allowed: &Arc<Allowed>,
+    open: &Arc<AtomicUsize>,
+    stop: &Arc<AtomicBool>,
+    limits: Limits,
+) -> io::Result<()> {
+    let (allowed, open, stopping) = (Arc::clone(allowed), Arc::clone(open), Arc::clone(stop));
+    std::thread::Builder::new()
+        .name("purlis-egress".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                if stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(mut stream) = stream else {
+                    std::thread::sleep(BACKOFF);
+                    continue;
+                };
+                if open.fetch_add(1, Ordering::SeqCst) >= limits.connections {
+                    open.fetch_sub(1, Ordering::SeqCst);
+                    let _ = stream.set_write_timeout(Some(BACKOFF));
+                    match speaks {
+                        Speaks::Http => answer(
+                            &mut stream,
+                            "503 Service Unavailable",
+                            "purlis's egress proxy is carrying all the connections it takes",
+                        ),
+                        // Not knowing yet what the client asks, the greeting is answered with
+                        // no acceptable method, and the connection closed.
+                        Speaks::Socks => {
+                            let _ = stream.write_all(&[SOCKS_VERSION, NO_METHOD]);
+                            let _ = stream.shutdown(Shutdown::Both);
+                        }
+                    }
+                    continue;
+                }
+                let held = Held(Arc::clone(&open));
+                let allowed = Arc::clone(&allowed);
+                let _ = std::thread::Builder::new()
+                    .name("purlis-egress-conn".into())
+                    .spawn(move || {
+                        let _held = held;
+                        match speaks {
+                            Speaks::Http => serve(stream, &allowed),
+                            Speaks::Socks => serve_socks(stream, &allowed),
+                        }
+                    });
+            }
+        })?;
+    Ok(())
 }
 
 /// One connection being served, counted until it ends.
@@ -360,23 +608,73 @@ impl Drop for Held {
     }
 }
 
-#[derive(Debug)]
 struct Allowed {
-    hosts: Vec<String>,
+    reach: Reach,
     tunnel_ports: Vec<u16>,
     plain_ports: Vec<u16>,
     idle: Duration,
     head: Duration,
     refusals: Refusals,
+    reached: Option<Reached>,
+    tally: Mutex<Tally>,
 }
 
 impl Allowed {
-    fn carries(&self, request: &Request) -> bool {
-        let ports = match request.forward {
-            None => &self.tunnel_ports,
-            Some(_) => &self.plain_ports,
+    /// The decision for a connection to `host` on `port`, a tunnel or not.
+    fn decide(&self, host: &str, port: u16, tunnel: bool, own: &[std::net::IpAddr]) -> Decision {
+        let ports = if tunnel {
+            &self.tunnel_ports
+        } else {
+            &self.plain_ports
         };
-        allows_on(&self.hosts, &request.host, request.port, ports)
+        self.reach.decide(host, port, ports, own)
+    }
+
+    /// Tells what `step` makes of the tally, outside its lock.
+    fn tell(&self, step: impl FnOnce(&mut Tally) -> Vec<Line>) {
+        let Some(reached) = &self.reached else { return };
+        let lines = step(
+            &mut self
+                .tally
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for (target, by, times) in lines {
+            reached(target.as_deref(), by, times);
+        }
+    }
+
+    /// A connection to `host` on `port` carried, by `decision`.
+    fn carried(&self, host: &str, port: u16, decision: &Decision) {
+        let target = host_and_port(host, port);
+        self.tell(|tally| tally.heard(&target, decision.word(), Instant::now()));
+    }
+
+    /// The decision's refusal of `host` on `port`, told where it is told: an ask, or a host
+    /// that could never be one, as nothing lists it; a local address as such. Counted in the
+    /// tally too, so every refused connection is in the record, not only the first a Block is
+    /// raised for.
+    fn refused(&self, host: &str, port: u16, decision: &Decision) {
+        let target = host_and_port(host, port);
+        self.tell(|tally| tally.heard(&target, decision.word(), Instant::now()));
+        match decision {
+            Decision::Refused(Refused::LocalAddress) => self.refusals.heard_local(host, port),
+            _ => self.refusals.heard(host, port),
+        }
+    }
+}
+
+/// Why a decision refused, as the client is told.
+fn refusal_said(host: &str, port: u16, decision: &Decision) -> String {
+    match decision {
+        Decision::Refused(Refused::LocalAddress) => format!(
+            "purlis's sandbox does not allow {host}:{port}: it is this machine, a link-local \
+             address or a cloud metadata service"
+        ),
+        _ => format!(
+            "purlis's sandbox does not allow {host}:{port}: no egress preset or host of this \
+             project lists it"
+        ),
     }
 }
 
@@ -413,27 +711,39 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
         );
         return;
     }
-    if !allowed.carries(&request) {
-        allowed.refusals.heard(&request.host, request.port);
+    // This machine's addresses, read once for the decision and the connect.
+    let own = super::hosts::own_addresses();
+    let decision = allowed.decide(&request.host, request.port, request.forward.is_none(), &own);
+    if !decision.carries() {
+        allowed.refused(&request.host, request.port, &decision);
         answer(
             &mut client,
             "403 Forbidden",
-            &format!(
-                "purlis's sandbox does not allow {}:{}: no egress preset or host of this \
-                 project lists it",
-                request.host, request.port
-            ),
+            &refusal_said(&request.host, request.port, &decision),
         );
         return;
     }
     let _ = client.set_write_timeout(Some(allowed.idle));
-    let Some(mut upstream) = connect(&request.host, request.port) else {
-        answer(
-            &mut client,
-            "502 Bad Gateway",
-            &format!("purlis's egress proxy could not reach {}", request.host),
-        );
-        return;
+    let mut upstream = match connect(&request.host, request.port, &allowed.reach, &own) {
+        Connected::To(upstream) => upstream,
+        Connected::OnlyLocal => {
+            let local = Decision::Refused(Refused::LocalAddress);
+            allowed.refused(&request.host, request.port, &local);
+            answer(
+                &mut client,
+                "403 Forbidden",
+                &refusal_said(&request.host, request.port, &local),
+            );
+            return;
+        }
+        Connected::Not => {
+            answer(
+                &mut client,
+                "502 Bad Gateway",
+                &format!("purlis's egress proxy could not reach {}", request.host),
+            );
+            return;
+        }
     };
     let _ = upstream.set_write_timeout(Some(allowed.idle));
     let sent = match &request.forward {
@@ -443,6 +753,7 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
     if sent.is_err() {
         return;
     }
+    allowed.carried(&request.host, request.port, &decision);
     // A plain request's body, and nothing after it; a tunnel's bytes, all of them.
     let up_to = request.body.unwrap_or(u64::MAX);
     let rest = &rest[..rest.len().min(usize::try_from(up_to).unwrap_or(usize::MAX))];
@@ -450,6 +761,142 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
         return;
     }
     splice(client, upstream, up_to - rest.len() as u64, allowed.idle);
+}
+
+/// SOCKS's version byte (RFC 1928).
+const SOCKS_VERSION: u8 = 5;
+
+/// The one method served: no authentication. A port is one chat's, so nothing a client sends
+/// is asked to say whose it is.
+const NO_AUTH: u8 = 0;
+
+/// The method reply that refuses every method offered.
+const NO_METHOD: u8 = 0xff;
+
+/// SOCKS's reply codes the proxy answers with.
+mod reply {
+    pub const SUCCEEDED: u8 = 0;
+    pub const NOT_ALLOWED: u8 = 2;
+    pub const HOST_UNREACHABLE: u8 = 4;
+    pub const COMMAND_NOT_SUPPORTED: u8 = 7;
+    pub const ADDRESS_NOT_SUPPORTED: u8 = 8;
+}
+
+/// One SOCKS5 client connection: the greeting, one `CONNECT`, judged as a tunnel is, then
+/// carried or refused with SOCKS's own reply. The whole of the greeting and the request must
+/// arrive within the head's deadline, and neither is more than a few hundred bytes.
+fn serve_socks(mut client: TcpStream, allowed: &Allowed) {
+    let _ = client.set_write_timeout(Some(allowed.idle.min(PATIENCE)));
+    let deadline = Instant::now() + allowed.head;
+    let Some(target) = socks_request(&mut client, deadline) else {
+        let _ = client.shutdown(Shutdown::Both);
+        return;
+    };
+    let (host, port) = match target {
+        Ok(target) => target,
+        Err(code) => return socks_reply(&mut client, code),
+    };
+    let own = super::hosts::own_addresses();
+    let decision = allowed.decide(&host, port, true, &own);
+    if !decision.carries() {
+        allowed.refused(&host, port, &decision);
+        return socks_reply(&mut client, reply::NOT_ALLOWED);
+    }
+    let _ = client.set_write_timeout(Some(allowed.idle));
+    let upstream = match connect(&host, port, &allowed.reach, &own) {
+        Connected::To(upstream) => upstream,
+        Connected::OnlyLocal => {
+            allowed.refused(&host, port, &Decision::Refused(Refused::LocalAddress));
+            return socks_reply(&mut client, reply::NOT_ALLOWED);
+        }
+        Connected::Not => return socks_reply(&mut client, reply::HOST_UNREACHABLE),
+    };
+    let _ = upstream.set_write_timeout(Some(allowed.idle));
+    if client.write_all(&socks_answer(reply::SUCCEEDED)).is_err() {
+        return;
+    }
+    allowed.carried(&host, port, &decision);
+    splice(client, upstream, u64::MAX, allowed.idle);
+}
+
+/// Answers a SOCKS request with `code` and closes the connection.
+fn socks_reply(client: &mut TcpStream, code: u8) {
+    let _ = client.write_all(&socks_answer(code));
+    let _ = client.shutdown(Shutdown::Both);
+}
+
+/// SOCKS's reply with `code`. The bound address is not this proxy's to say: zeros, as many
+/// proxies answer.
+fn socks_answer(code: u8) -> [u8; 10] {
+    [SOCKS_VERSION, code, 0, 1, 0, 0, 0, 0, 0, 0]
+}
+
+/// Reads the greeting, answers it, and reads the request: the host and port a `CONNECT` names,
+/// or the reply code that refuses what it asked. `None` where the client said nothing a SOCKS5
+/// client says, or not in time: the connection is closed with no reply.
+fn socks_request(client: &mut TcpStream, deadline: Instant) -> Option<Result<(String, u16), u8>> {
+    let [version, methods] = read_exact::<2>(client, deadline)?;
+    if version != SOCKS_VERSION || methods == 0 {
+        return None;
+    }
+    let mut offered = [0u8; 255];
+    read_into(client, &mut offered[..usize::from(methods)], deadline)?;
+    if !offered[..usize::from(methods)].contains(&NO_AUTH) {
+        let _ = client.write_all(&[SOCKS_VERSION, NO_METHOD]);
+        return None;
+    }
+    client.write_all(&[SOCKS_VERSION, NO_AUTH]).ok()?;
+    let [version, command, _, kind] = read_exact::<4>(client, deadline)?;
+    if version != SOCKS_VERSION {
+        return None;
+    }
+    let host = match kind {
+        1 => std::net::Ipv4Addr::from(read_exact::<4>(client, deadline)?).to_string(),
+        3 => {
+            let [len] = read_exact::<1>(client, deadline)?;
+            let mut name = [0u8; 255];
+            let name = &mut name[..usize::from(len)];
+            read_into(client, name, deadline)?;
+            match std::str::from_utf8(name) {
+                Ok(name) if !name.is_empty() && name.bytes().all(|b| b.is_ascii_graphic()) => {
+                    name.to_owned()
+                }
+                _ => return Some(Err(reply::ADDRESS_NOT_SUPPORTED)),
+            }
+        }
+        4 => std::net::Ipv6Addr::from(read_exact::<16>(client, deadline)?).to_string(),
+        _ => return Some(Err(reply::ADDRESS_NOT_SUPPORTED)),
+    };
+    let port = u16::from_be_bytes(read_exact::<2>(client, deadline)?);
+    if command != 1 {
+        return Some(Err(reply::COMMAND_NOT_SUPPORTED));
+    }
+    Some(Ok((host, port)))
+}
+
+/// `N` bytes from `client`, all of them before `deadline`.
+fn read_exact<const N: usize>(client: &mut TcpStream, deadline: Instant) -> Option<[u8; N]> {
+    let mut buf = [0u8; N];
+    read_into(client, &mut buf, deadline)?;
+    Some(buf)
+}
+
+/// Fills `buf` from `client` before `deadline`, however slowly each byte comes.
+fn read_into(client: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Option<()> {
+    let mut have = 0;
+    while have < buf.len() {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        if left.is_zero() || client.set_read_timeout(Some(left)).is_err() {
+            return None;
+        }
+        match client.read(&mut buf[have..]) {
+            Ok(0) => return None,
+            Ok(n) => have += n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(())
 }
 
 /// Whether a `Host` header's `named` is `host` on `port`.
@@ -628,37 +1075,66 @@ fn host_port(authority: &str) -> Option<(String, u16)> {
     (!host.is_empty()).then(|| (host.to_owned(), port))
 }
 
-/// Connects to `host` on `port`: to an address literal as listed, and to a name only at the
-/// addresses it resolves to now that a chat may reach ([`reachable`]), checked at every
-/// connect so a name rebound to this machine or a metadata service reaches nothing.
-fn connect(host: &str, port: u16) -> Option<TcpStream> {
+/// What a connect came to.
+enum Connected {
+    To(TcpStream),
+    /// The name resolved, and only to addresses a chat never reaches: refused, as a Block.
+    OnlyLocal,
+    /// It did not resolve, or nothing answered.
+    Not,
+}
+
+/// Connects to `host` on `port`, only at the addresses it resolves to now that a chat may reach
+/// ([`reachable`]), checked at every connect so a name rebound to this machine or a metadata
+/// service reaches nothing. An address literal was decided as itself
+/// ([`super::reach::Reach::decide`]) and is held to the same check here.
+fn connect(host: &str, port: u16, reach: &Reach, own: &[std::net::IpAddr]) -> Connected {
     let resolve = |host: &str, port: u16| {
         (host, port)
             .to_socket_addrs()
             .map(Iterator::collect)
             .unwrap_or_default()
     };
-    reachable(host, port, &resolve, &super::hosts::own_addresses())
+    let resolved: Vec<SocketAddr> = resolve(host, port);
+    if resolved.is_empty() {
+        return Connected::Not;
+    }
+    let reached = reachable_from(&resolved, reach, own);
+    if reached.is_empty() {
+        return Connected::OnlyLocal;
+    }
+    reached
         .into_iter()
         .find_map(|addr| TcpStream::connect_timeout(&addr, PATIENCE).ok())
+        .map_or(Connected::Not, Connected::To)
 }
 
-/// The addresses `host` on `port` is reached at, as `resolve` answers: an address literal as
-/// it is (it was listed as itself, and a listed address is checked when it is added), and a
-/// name's addresses less every one a chat is never let reach
-/// ([`super::hosts::refused_address`], with `own` this machine's interface addresses).
+/// The addresses `host` on `port` is reached at, as `resolve` answers: each one a chat may
+/// reach ([`super::hosts::refused_address`], with `own` this machine's interface addresses),
+/// and one it may not only where `reach` lists that exact address and port. An address literal
+/// is held to it as a name is.
 pub fn reachable(
     host: &str,
     port: u16,
     resolve: &dyn Fn(&str, u16) -> Vec<SocketAddr>,
+    reach: &Reach,
     own: &[std::net::IpAddr],
 ) -> Vec<SocketAddr> {
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return resolve(host, port);
-    }
-    resolve(host, port)
-        .into_iter()
-        .filter(|addr| !super::hosts::refused_address(addr.ip(), own))
+    reachable_from(&resolve(host, port), reach, own)
+}
+
+fn reachable_from(
+    resolved: &[SocketAddr],
+    reach: &Reach,
+    own: &[std::net::IpAddr],
+) -> Vec<SocketAddr> {
+    resolved
+        .iter()
+        .copied()
+        .filter(|addr| {
+            !super::hosts::refused_address(addr.ip(), own)
+                || reach.lists_exactly(addr.ip(), addr.port())
+        })
         .collect()
 }
 
