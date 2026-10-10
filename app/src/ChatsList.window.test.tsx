@@ -274,8 +274,8 @@ function core(open: Filed[], ended: FinishedTask[] = []) {
  *  which the list shows on the person's word (#1655). */
 const section = async () => {
   const tree = await screen.findByRole("tree", { name: "Chats of this project" });
-  const every = screen.getByRole<HTMLInputElement>("checkbox", { name: "all workspaces" });
-  if (!every.checked) fireEvent.click(every);
+  const every = screen.getByRole("radio", { name: "All" });
+  if (every.getAttribute("aria-checked") !== "true") fireEvent.click(every);
   return tree;
 };
 const theTree = () => screen.getByRole("tree", { name: "Chats of this project" });
@@ -822,7 +822,9 @@ describe("the filter over the Chats list (V100-49)", () => {
     move(2, "waiting", [2]);
 
     expect(screen.queryByRole("tree", { name: "Chats of this project" })).toBeNull();
-    expect(hiddenSaid()).toBe("1 chat the filter hides needs you. No chat matches the filter.");
+    expect(hiddenSaid()).toBe(
+      "live check talk needs you, and the filter hides it. No chat matches the filter.",
+    );
     await userEvent.click(
       screen.getByRole("button", {
         name: "Go to live check talk, which needs you and the filter hides",
