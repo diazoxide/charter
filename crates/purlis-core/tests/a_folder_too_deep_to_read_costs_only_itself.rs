@@ -92,3 +92,64 @@ fn a_chain_deeper_than_the_path_limit_is_marked_once_and_a_later_file_still_is()
     assert!(!in_chain[0].ends_with("bottom.txt"), "{marked:?}");
     assert_eq!(marked.len(), 2, "{marked:?}");
 }
+
+/// The path [`deep_chain`] gave its bottom file, from `at`, when it was built `levels` deep.
+fn bottom_of(levels: usize) -> String {
+    let mut path = String::from("top");
+    for n in (0..levels).rev() {
+        path.push('/');
+        path.push_str(&format!("{n:03}{}", "d".repeat(197)));
+    }
+    path.push_str("/bottom.txt");
+    path
+}
+
+/// #1130 (train 20, item 2): a folder chain deeper than the system's path limit that git
+/// **tracks** costs the branch's markers only that chain too. git is handed the bottom file by
+/// its blob and its path (`update-index --cacheinfo`), so no call names the long path on the
+/// disk; the status then has to look at an entry it cannot name.
+///
+/// **Ignored until gitoxide reads such an index** (#1130): a path of 4,095 bytes or more is
+/// written to the index with its length unsaid and its name ended by padding, and gitoxide's
+/// index decoder takes the name up to its first NUL without skipping the rest of the padding,
+/// so the whole index fails to read ("Index trailer should have been 20 bytes long"), before the
+/// status gets to the entry. Run with `--ignored` to see it.
+#[test]
+#[ignore = "#1130: gitoxide cannot read an index holding a path of 4,095 bytes or more"]
+fn a_tracked_chain_deeper_than_the_path_limit_still_lets_a_later_file_be_marked() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let at = &f.clone;
+    let built = deep_chain(at, 4096 + at.as_os_str().len());
+    assert!(built > 4096);
+    let levels = built / 201;
+    std::fs::write(at.join("blob.txt"), "at the bottom\n").unwrap();
+    let blob = support::git(at, &["hash-object", "-w", "blob.txt"]);
+    std::fs::remove_file(at.join("blob.txt")).unwrap();
+    let entry = format!(
+        "100644,{},{}",
+        String::from_utf8(blob.stdout).unwrap().trim(),
+        bottom_of(levels)
+    );
+    support::git(at, &["update-index", "--add", "--cacheinfo", &entry]);
+    support::git(at, &["commit", "-q", "-m", "a tracked chain"]);
+    std::fs::write(at.join("zz-new.txt"), "new\n").unwrap();
+
+    let status = files::status(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo))
+        .expect("the status degrades rather than fails");
+
+    let marked: Vec<(&str, Mark)> = status
+        .changes
+        .iter()
+        .map(|one| (one.path.as_str(), one.mark))
+        .collect();
+    assert!(
+        marked.contains(&("zz-new.txt", Mark::Added)),
+        "a file past the chain is still marked: {marked:?}"
+    );
+    let in_chain = marked
+        .iter()
+        .filter(|(path, _)| path.starts_with("top/"))
+        .count();
+    assert!(in_chain <= 1, "{marked:?}");
+}
