@@ -9,10 +9,10 @@
 //! window.
 //!
 //! **The window names folders, never directories.** Each one is a branch and a path inside it,
-//! resolved by `purlis_core::files::folders` with every check the tree's own read makes; one
-//! that does not resolve is not watched. Each branch is found once per call, however many of
-//! its folders are open, and at most `purlis_core::files::WATCHED` folders are watched for a
-//! window.
+//! resolved by `purlis_core::files::Root::resolve` with every check the tree's own read makes,
+//! the branch found by the bounded reader's child; one that does not resolve is not watched.
+//! Each branch is found once per call, however many of its folders are open, and at most
+//! `purlis_core::files::WATCHED` folders are watched for a window.
 //!
 //! **One event per burst** ([`crate::watchset::bursts`]), and an access is not a change: the
 //! window reads the folder again when told, and on inotify that read is an `IN_OPEN`.
@@ -239,7 +239,7 @@ impl<W: notify::Watcher> Inner<W> {
 /// The folders of branches this window's explorer has expanded, watched until it names others
 /// (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
 /// watched.
-// Each folder is resolved by `purlis_core::files::folder`, with the tree's own checks; the
+// Each folder is resolved by `purlis_core::files::Root::resolve`, with the tree's own checks; the
 // window never names a directory. Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
@@ -265,14 +265,18 @@ pub async fn files_watch(
             None => by_branch.push((held.root().to_path_buf(), vec![folder])),
         }
     }
-    // Off the thread that draws (SC-2): finding a branch's folder asks git for its worktrees.
+    // Off the thread that draws (SC-2): finding a branch's folder waits on the reader's child.
     let resolved = tauri::async_runtime::spawn_blocking(move || {
         let mut resolved = Vec::new();
         for (root, of) in by_branch {
             let first = &of[0];
             let branch = crate::piecefiles::branch(&first.workspace, &first.repo, &first.piece);
             let named: Vec<&str> = of.iter().map(|folder| folder.folder.as_str()).collect();
-            let dirs = purlis_core::files::folders(&root, branch, &named);
+            // The branch's folder is found by the bounded reader's child, so this process
+            // starts no git for it (#1189); a branch it does not find has nothing watched.
+            let dirs = purlis_core::files::root(&crate::reader(), &root, branch)
+                .map(|found| found.resolve(&named))
+                .unwrap_or_default();
             for (folder, dir) in of.iter().zip(dirs) {
                 if let Ok(dir) = dir {
                     resolved.push((folder.clone(), dir));

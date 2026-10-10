@@ -114,9 +114,11 @@ pub struct FolderListing {
 
 /// One folder of a branch, one level deep: folders first, then files, each in the order a
 /// person reads names, the first 5,000 and a count of the rest. `""` is the branch's own folder.
-// Lazy by design (#1103 story 2): one directory listing and one `git check-ignore` per call, so
-// nothing below a folder is read until it is expanded. On a blocking thread and never the one
-// that draws (SC-2): git answers in milliseconds on a warm disk, and in seconds on a cold one.
+// Lazy by design (#1103 story 2): one directory listing and one ignore check per call, so
+// nothing below a folder is read until it is expanded. The ignore check and the submodules are
+// read by gitoxide in the core's bounded reader, so this process starts no git (#1189, FM-11).
+// On a blocking thread and never the one that draws (SC-2): the reader answers in milliseconds
+// on a warm disk, and in seconds on a cold one.
 // Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
@@ -406,8 +408,9 @@ pub(crate) fn branch<'a>(
     }
 }
 
-// The branch's folder is found by the bounded reader's child (#1189), so this process starts
-// no git to find it; the folder is then listed here, as `files::tree` lists one.
+// The branch's folder is found by the bounded reader's child (#1189), and so are what git
+// ignores in it and its submodules, so this process starts no git; the folder is then listed
+// here, as `files::tree` lists one.
 fn tree_of(
     reader: &Reader,
     plane: &Path,
@@ -415,7 +418,7 @@ fn tree_of(
     folder: &str,
 ) -> Result<FolderListing, String> {
     files::root(reader, plane, branch)
-        .and_then(|root| root.tree(folder))
+        .and_then(|root| root.tree(reader, folder))
         .map(|level| FolderListing {
             entries: level.entries.into_iter().map(FolderEntry::from).collect(),
             more: u32::try_from(level.more).unwrap_or(u32::MAX),
@@ -555,6 +558,8 @@ pub async fn move_their_agents_md_aside(
     .await
 }
 
+// The offered list the path is checked against is read by the bounded reader's child (#1189),
+// so this process starts no git.
 fn launch_of(
     reader: &Reader,
     plane: &Path,
@@ -565,7 +570,7 @@ fn launch_of(
     var: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Launch, String> {
     files::root(reader, plane, branch)
-        .and_then(|root| root.in_your_editor(path, line, editor.into(), var))
+        .and_then(|root| root.in_your_editor(reader, path, line, editor.into(), var))
         .map_err(|refused| refused.to_string())
 }
 
@@ -697,6 +702,8 @@ fn shell_folder_by(
         .map_err(|refused| refused.to_string())
 }
 
+// The offered list the path is checked against is read by the bounded reader's child (#1189),
+// so this process starts no git.
 fn file_of(
     reader: &Reader,
     plane: &Path,
@@ -707,7 +714,7 @@ fn file_of(
     // that wide. A binary or oversized file past 4 GiB is said as 4 GiB.
     let bytes = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
     files::root(reader, plane, branch)
-        .and_then(|root| root.open(path))
+        .and_then(|root| root.open(reader, path))
         .map(|opened| match opened {
             Opened::Text { text } => PieceFile::Text { text },
             Opened::Image { mime, data } => PieceFile::Image {
@@ -807,6 +814,72 @@ mod tests {
                 said
             );
         }
+    }
+
+    /// #1189 (FM-11): a reader whose child finds the branch at `folder` and answers every other
+    /// ask — the offered list, the ignore check — with `answer` (the child's JSON).
+    #[cfg(unix)]
+    fn reader_finding(folder: &Path, answer: &str) -> (tempfile::TempDir, Reader) {
+        let dir = tempfile::tempdir().unwrap();
+        let found = serde_json::json!({ "Ok": { "Root": { "base": folder, "refs": [] } } });
+        for (name, said) in [("root", found.to_string()), ("other", answer.to_string())] {
+            std::fs::write(
+                dir.path().join(name),
+                format!("\u{1e}charter-read\u{1e}{said}\n"),
+            )
+            .unwrap();
+        }
+        let at = dir.path().display();
+        let script = format!(
+            "q=$(cat); case \"$q\" in *'\"ask\":\"Root\"'*) cat '{at}/root';; \
+             *) cat '{at}/other';; esac"
+        );
+        let reader = Reader::new(
+            "/bin/sh".into(),
+            ["-c", &script, files::READ_ARG].map(std::ffi::OsString::from),
+        );
+        (dir, reader)
+    }
+
+    /// #1189 (FM-11): the light editor, the editor hand-off and the tree read what git would
+    /// answer — the offered list, what is ignored — in the reader's child, not in this process:
+    /// a child that refuses those reads refuses each command in its sentence, in a folder no git
+    /// here could read.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_commands_read_git_only_in_the_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = plane.join("workspaces/alpha/.worktrees/thing/piece");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a.txt"), "a\n").unwrap();
+        let said = "purlis could not read 'the files of piece': the index is not one";
+        let refusing = serde_json::json!({ "Err": said }).to_string();
+        let (_answers, reader) = reader_finding(&folder, &refusing);
+        let none = |_: &str| None;
+        let refused = |answered: Result<(), String>| answered.unwrap_err();
+
+        assert_eq!(
+            refused(file_of(&reader, &plane, PIECE, "a.txt").map(drop)),
+            said
+        );
+        assert_eq!(
+            refused(
+                launch_of(&reader, &plane, PIECE, "a.txt", 1, YourEditor::Zed, &none).map(drop)
+            ),
+            said
+        );
+        assert_eq!(refused(tree_of(&reader, &plane, PIECE, "").map(drop)), said);
+
+        // Answered, the offered list is what opens.
+        let offered = serde_json::json!({
+            "Ok": { "Offered": { "files": ["a.txt"], "total": 1 } }
+        });
+        let (_answers, reader) = reader_finding(&folder, &offered.to_string());
+        assert!(matches!(
+            file_of(&reader, &plane, PIECE, "a.txt"),
+            Ok(PieceFile::Text { .. })
+        ));
     }
 
     /// #1189: Copy path, Reveal and the shell's folder act on the folder the reader found.

@@ -200,7 +200,11 @@ pub fn here(
     copy: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<StartedHere, String> {
     let root = held.root().to_path_buf();
-    let folder = purlis_core::files::folder(&root, at, "").map_err(|why| why.to_string())?;
+    // The branch's folder is found by the bounded reader's child, so this process starts no git
+    // for it (#1189).
+    let folder = purlis_core::files::root(&crate::reader(), &root, at)
+        .and_then(|found| found.folder(""))
+        .map_err(|why| why.to_string())?;
     let made =
         reference::of(&root, at, path, lines, Some(&folder)).map_err(|why| why.to_string())?;
     let (profile, kind) = curation::default_profile(&root, "no chat was started")?;
