@@ -14,6 +14,7 @@ import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { forgetYourEditor, setYourEditor } from "./yourEditor";
 import { stripNamed } from "./test-strips";
+import { SETTINGS_LINK, type SettingsLinkAsk } from "./settings/links";
 
 /**
  * **A file or folder row's actions, against the whole window** (FM-10, #1113): each row of its
@@ -217,6 +218,28 @@ describe("a file or folder row's actions (FM-10)", () => {
         { plane: PLANE, ...ONE, path: "README.md", line: 1, editor: "zed" },
       ]),
     );
+  });
+
+  it("links the no-editor refusal to Settings › You › Editor (#1201)", async () => {
+    core();
+    const links: SettingsLinkAsk[] = [];
+    const heard = (event: Event) => links.push((event as CustomEvent<SettingsLinkAsk>).detail);
+    window.addEventListener(SETTINGS_LINK, heard);
+    try {
+      render(<App />);
+
+      await fromTheMenu("README.md", "Open in your editor");
+      const words = await screen.findByText("Choose your editor in Settings first.");
+      const said = words.closest<HTMLElement>('[role="alert"]');
+      if (said === null) throw new Error("the refusal is not said as an alert");
+      await userEvent.click(within(said).getByRole("button", { name: "Choose your editor" }));
+
+      expect(links).toEqual([
+        { plane: PLANE, link: { group: "you.editor", setting: "you.editor.yours" } },
+      ]);
+    } finally {
+      window.removeEventListener(SETTINGS_LINK, heard);
+    }
   });
 
   it("adds a file to an open chat's context from its row, through the chat picker (#1151)", async () => {
