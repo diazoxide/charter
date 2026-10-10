@@ -83,10 +83,13 @@ What keeps it from becoming the library this file forbids:
   0037, not a commit.
 - **SettingActions is a row, and the buttons are the caller's.** Native `<button>`s with their
   own `type`, `disabled` and `onClick` (and `tabIndex={0}`, for #190), drawn alike; a button
-  that destroys something says so with `ends-it`. It ends a _form_. A dialog's answer bar (a
-  question with a way out and an act or two, and nothing to fill in, like the quit warning or a
-  delete's confirm) is an `AnswerBar` (`app/src/AnswerBar.tsx`, #1210): a row, not a settings
-  piece.
+  that destroys something says so with `ends-it` on a page (NotCloned, a workspace's Repos). It
+  ends a _form_ that makes or changes something. A dialog's answer bar (a question with a way out
+  and an act or two, and nothing to fill in, like the quit warning or a delete's confirm) is an
+  `AnswerBar` (`app/src/AnswerBar.tsx`, #1210): a row, not a settings piece. A confirm whose only
+  field is the typed name of what it ends is a question too, and ends in the bar with the delete
+  last (D-1210-8, Delete vault), so no dialog puts an `ends-it` act in `SettingActions`;
+  `answerBar.guard.test.ts` holds that.
 - **A box the set's `Field` cannot hold goes in the row's control slot as a native element.**
   A `Field` is controlled; a secret's value is never held in React state (a vault's value box),
   so that box is a native `<input type="password">` drawn with `ui-field`, in a `SettingRow`.
@@ -445,10 +448,14 @@ container, both below `document`, and the roving focus moves on a timer set when
 down, so a single press moves the focus and picks nothing; only a held key picks. The repair
 lives in the settings set's `Choice` (`app/src/settings/components.tsx`, DS-3d): it hears the
 arrow in the capture phase on the group, picks the option the focus then lands on, and forgets
-the arrow when the key comes up or the focus leaves the group. Every radio drawn with `Choice`
-has it; a hand-built `RadioGroup` does not. The guards are `components.test.tsx`'s "picks the
-next option on a single arrow, once" and `StartChat.test.tsx`'s "moves between harnesses with
-the arrow keys".
+the arrow when the key comes up or the focus leaves the group. The repair is one hook,
+`useArrowPick`, in the same file: every radio drawn with `Choice` has it, and so has
+`SettingsLayout`'s level switcher (#626, D-626-4), whose level follows the arrow as a `Choice`
+radio's pick does; a hand-built `RadioGroup` elsewhere does not. Because `SettingsTab` draws each
+level with a layout of its own, the switcher an arrow left is unmounted, and the layout drawn at
+the level arrowed to takes the focus back (D-626-5). The guards are `components.test.tsx`'s
+"picks the next option on a single arrow, once" and its level switcher's tests, and
+`StartChat.test.tsx`'s "moves between harnesses with the arrow keys".
 
 **A radio whose pick writes something with no Undo, or starts something, holds the pick and
 writes on a button.** Because an arrow picks, and a held arrow repeats, a radio that wrote on
