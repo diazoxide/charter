@@ -618,9 +618,14 @@ pub async fn add_sandbox_host(
     host: String,
 ) -> Result<EntryWritten, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || add_host(&root, which, base.as_deref(), &host))
-        .await
-        .map_err(|err| format!("adding the host did not finish: {err}"))?
+    let network = planes.network().cloned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let written = add_host(&root, which, base.as_deref(), &host)?;
+        crate::network::record_settings_host(network.as_ref(), &root, &written, true, which);
+        Ok(written)
+    })
+    .await
+    .map_err(|err| format!("adding the host did not finish: {err}"))?
 }
 
 /// **The host field, checked as it is typed** (#1405): why `host` is not a host the sandbox
@@ -663,9 +668,14 @@ pub async fn remove_sandbox_host(
     id: String,
 ) -> Result<EntryWritten, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || remove_host(&root, which, base.as_deref(), &id))
-        .await
-        .map_err(|err| format!("removing the host did not finish: {err}"))?
+    let network = planes.network().cloned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let written = remove_host(&root, which, base.as_deref(), &id)?;
+        crate::network::record_settings_host(network.as_ref(), &root, &written, false, which);
+        Ok(written)
+    })
+    .await
+    .map_err(|err| format!("removing the host did not finish: {err}"))?
 }
 
 /// [`remove_sandbox_host`], without a runtime.
@@ -697,9 +707,20 @@ pub async fn confirm_sandbox_host(
     id: String,
 ) -> Result<EntryWritten, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || confirm_host(&root, base.as_deref(), &id))
-        .await
-        .map_err(|err| format!("confirming the host did not finish: {err}"))?
+    let network = planes.network().cloned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let written = confirm_host(&root, base.as_deref(), &id)?;
+        crate::network::record_settings_host(
+            network.as_ref(),
+            &root,
+            &written,
+            true,
+            SettingsWhich::Local,
+        );
+        Ok(written)
+    })
+    .await
+    .map_err(|err| format!("confirming the host did not finish: {err}"))?
 }
 
 /// [`confirm_sandbox_host`], without a runtime.

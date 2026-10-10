@@ -39,6 +39,7 @@ import type {
   SubjectCurations,
 } from "./bindings";
 import { activityTitle, activityView } from "./activity";
+import { chatNetworkTitle, chatNetworkView } from "./chatNetwork";
 import { DISPATCHES_TITLE, DISPATCHES_VIEW } from "./dispatches";
 import { backSaid } from "./chatState";
 import { handedOff, tasksOf, type ListedChat } from "./chatsTree";
@@ -1213,6 +1214,9 @@ function isPinned<T>(held: readonly T[], one: T): boolean {
 /** The catalogue's id for the row that opens the Activity of `tab`'s chat (#1495). */
 export const activityId = (tab: number) => `tab.activity:${tab}`;
 
+/** The catalogue's id for the row that opens the Network view of `tab`'s chat (#1662). */
+export const networkId = (tab: number) => `tab.network:${tab}`;
+
 /** The catalogue's id for the row that opens the project's Dispatches tab (#1452). */
 export const DISPATCHES_SHOW = "dispatches.show";
 
@@ -1515,6 +1519,22 @@ export function catalogue(now: Now): Offer[] {
         title: activityTitle(name),
       }),
       note: `Chat ${name}: what it and its tasks said to each other, in a tab of its own.`,
+    });
+  }
+
+  // **A chat's Network** (#1662): what it can reach now and what it was refused, in a tab of
+  // its own. One row per chat, as Activity's; it only reads, so it sits above the line.
+  for (const tab of now.tabs.order) {
+    const chat = chatOf(now.tabs, tab);
+    if (chat === undefined) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(networkId(tab), "Network", {
+        verb: "openView",
+        view: chatNetworkView(chat),
+        title: chatNetworkTitle(name),
+      }),
+      note: `Chat ${name}: what it can reach now and what it was refused, in a tab of its own.`,
     });
   }
 
@@ -4115,6 +4135,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           // A task asking its asking chat: the person may answer it (#1551).
           ...(what.session === undefined ? [] : [answerId(what.session)]),
           activityId(what.tab),
+          networkId(what.tab),
         ],
         below: [
           `tab.restart:${what.tab}`,

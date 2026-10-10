@@ -16,7 +16,7 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  * - **Allow {persona} to use this vault**: every chat opened as that persona may use the vault
  *   in this project on this machine. The core takes the persona from its own record of the
  *   chat, audits it, and keeps it where no chat writes; it is listed in Settings › Sandbox ›
- *   Granted and revoked there. The chat does not restart: its next run reads it. The core
+ *   Network, and removed there. The chat does not restart: its next run reads it. The core
  *   tells the chat to run the command again only when that is safe (a waiting chat now, a
  *   chat mid-turn when its turn ends), and otherwise the Notice says to ask the chat.
  * - **Keep blocked**: puts the Notice away. The chat's next try raises it again.
@@ -162,7 +162,7 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
           <p>
             Allow lets every chat opened as {persona} use vault{" "}
             <code className="block-allow-target">{vault}</code> in this project on this machine.{" "}
-            {That} does not restart. You can revoke it in Settings › Sandbox › Granted.
+            {That} does not restart. You can remove it in Settings › Sandbox › Network.
           </p>
         )}
         {dispatch !== null && !asked && (

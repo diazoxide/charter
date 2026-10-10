@@ -116,7 +116,7 @@ describe("the refused vault Notice", () => {
     ]);
     // What the press would do is on screen before it, and so is the way that is the chat's own.
     expect(screen.getByText(/Allow lets every chat opened as steward use vault/)).toHaveTextContent(
-      "Allow lets every chat opened as steward use vault devops in this project on this machine. This chat does not restart. You can revoke it in Settings › Sandbox › Granted.",
+      "Allow lets every chat opened as steward use vault devops in this project on this machine. This chat does not restart. You can remove it in Settings › Sandbox › Network.",
     );
     expect(screen.getByText(/The other way is to have devops do the work/)).toHaveTextContent(
       "The other way is to have devops do the work. Dispatch to devops… asks it from this chat, in your words. purlis also told this chat how to dispatch to devops.",
@@ -416,7 +416,7 @@ describe("the refused vault Notice, for a chat that is not on screen", () => {
       `${WHOSE}: It runs as steward, and vault devops is tagged for devops, so purlis did not open it.`,
     );
     expect(screen.getByText(/Allow lets every chat opened as steward use vault/)).toHaveTextContent(
-      "Allow lets every chat opened as steward use vault devops in this project on this machine. That chat does not restart. You can revoke it in Settings › Sandbox › Granted.",
+      "Allow lets every chat opened as steward use vault devops in this project on this machine. That chat does not restart. You can remove it in Settings › Sandbox › Network.",
     );
     expect(screen.getByText(/The other way is to have devops do the work/)).toHaveTextContent(
       "The other way is to have devops do the work. Dispatch to devops… asks it from that chat, in your words. purlis also told that chat how to dispatch to devops.",

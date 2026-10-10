@@ -30,7 +30,7 @@ export const SETTINGS_GROUPS: Readonly<
     { id: "project.harness", label: "Harness & profiles" },
     { id: "project.sandbox", label: "Sandbox" },
     { id: "project.sandbox.mine", label: "Your hosts" },
-    { id: "project.sandbox.granted", label: "Granted" },
+    { id: "project.sandbox.network", label: "Network" },
     { id: "project.dispatch", label: "Dispatch" },
     { id: "project.forges", label: "Forges" },
     { id: "project.extensions", label: "Extensions" },

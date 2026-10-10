@@ -248,6 +248,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "keep_sandbox_block_for_tasks",
     // Widens what a persona's chats reach on this machine (#1362).
     "allow_persona_hosts",
+    // Allow on Settings' Blocked lately (#1662): widens what every chat here reaches.
+    "allow_blocked_host",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

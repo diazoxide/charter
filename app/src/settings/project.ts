@@ -49,7 +49,7 @@ import { EXTENSIONS_LINK } from "./links";
 import { askIconThemes, iconsControl, iconsHeld, iconsNotes } from "./iconsPick";
 import { discoverRow } from "./discover";
 import { settled } from "../PlaneEdits";
-import { GRANTED, grantedGroup } from "./GrantedList";
+import { NETWORK, networkGroup } from "./GrantedList";
 import { dispatchGroup } from "./dispatch";
 import { onAMac } from "../tabKeys";
 import { sandboxCommandReturned } from "../sandboxAsked";
@@ -415,7 +415,7 @@ export function projectGroups(read: ProjectRead, reread?: () => void): SettingsG
 }
 
 /** The groups whose text already names the files in use. */
-const WRITTEN_NAMED = new Set(["project.sandbox", MY_HOSTS, GRANTED]);
+const WRITTEN_NAMED = new Set(["project.sandbox", MY_HOSTS, NETWORK]);
 
 /**
  * `text`, naming the project's two files as the project names them (#1340): the level's
@@ -607,7 +607,7 @@ function declaredGroups(read: ProjectRead, reread?: () => void): SettingsGroup[]
       : []),
     ...(read.plane !== undefined
       ? [
-          grantedGroup(
+          networkGroup(
             read.plane,
             read.shared.file,
             read.sandbox?.policy?.write_grants === true
@@ -617,7 +617,7 @@ function declaredGroups(read: ProjectRead, reread?: () => void): SettingsGroup[]
         ]
       : []),
     // Dispatch (#1439, #1437): the limits, the grants and the policy's locks. It reads the core
-    // on its own, as the Granted list does.
+    // on its own, as the Network page does.
     ...(read.plane !== undefined ? [dispatchGroup(read.plane, read.shared.file)] : []),
     {
       id: "project.forges",

@@ -22,6 +22,7 @@ import {
   FileText,
   FolderGit2,
   GitPullRequest,
+  Globe,
   History,
   KeyRound,
   ListChecks,
@@ -83,6 +84,8 @@ import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
 import { ActivityTab } from "./ActivityTab";
+import { ChatNetworkTab } from "./ChatNetworkTab";
+import { CHAT_NETWORK_VIEW, chatNetworkSession, isChatNetwork } from "./chatNetwork";
 import { ACTIVITY_VIEW, activitySession, isActivity } from "./activity";
 import { DispatchesTab } from "./DispatchesTab";
 import { TaskChangesTab } from "./TaskChangesTab";
@@ -255,6 +258,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [DISPATCHES_VIEW.view]: Send,
   /** One chat's Activity (#1495). */
   [ACTIVITY_VIEW]: Activity,
+  /** One chat's Network (#1662). */
+  [CHAT_NETWORK_VIEW]: Globe,
   [MEMORY_VIEW]: Brain,
   /** One todo (#1214), drawn as the Todos panel marks one. */
   [TODO_VIEW]: CircleDashed,
@@ -578,6 +583,14 @@ export function ViewPane({
                 does: { verb: "showChat", session },
               })
             }
+          />
+        ) : isChatNetwork(view) ? (
+          /* One chat's Network (#1662): what it can reach now and what it was refused, read
+             from the core as it opens. Keyed by the chat. */
+          <ChatNetworkTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            session={chatNetworkSession(view)}
           />
         ) : isSession(view) ? (
           /* A session record (SI-8d): read-only Markdown the window renders from the core's
