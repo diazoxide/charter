@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderBare,
@@ -33,8 +34,14 @@ const ALPHA = `${PLANE}/workspaces/alpha`;
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
+/** How the clone's branch listing answers: with its one branch, never, or refused. */
+type Listing = "answers" | "pending" | "refused";
+
 /** One workspace with one clone and one branch, and the focus the record put back. */
-function core({ focus = null }: { focus?: Record<string, unknown> | null } = {}) {
+function core({
+  focus = null,
+  listing = "answers",
+}: { focus?: Record<string, unknown> | null; listing?: Listing } = {}) {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -63,6 +70,9 @@ function core({ focus = null }: { focus?: Record<string, unknown> | null } = {})
       };
     if (cmd === "workspace_repos")
       return { workspace: a.workspace, repos: [], cache_refused: null };
+    if (cmd === "worktree_list" && listing === "pending") return new Promise(() => {});
+    if (cmd === "worktree_list" && listing === "refused")
+      return Promise.reject(new Error("git could not list the branches"));
     if (cmd === "worktree_list")
       return [
         {
@@ -130,6 +140,44 @@ describe("the branch cockpit in the window (FM-5)", () => {
 
     await screen.findByRole("tree", { name: "Repos and branches" });
     await waitFor(() => expect(said(asked).at(-1)).toBeNull());
+  });
+
+  describe("a focus whose branch was removed (#1152)", () => {
+    const GONE = { workspace: "alpha", repo: "svc", piece: "gone" };
+    /** Every answer the first draw asked for, landed. */
+    const settle = async () => {
+      for (let turn = 0; turn < 20; turn += 1) await act(async () => {});
+    };
+
+    it("is forgotten once the listing answers without the branch", async () => {
+      const asked = core({ focus: GONE });
+      render(<App />);
+
+      await screen.findByRole("tree", { name: "Repos and branches" });
+      await waitFor(() => expect(said(asked).at(-1)).toBeNull());
+      // And nothing tells the core it again.
+      await settle();
+      expect(said(asked).at(-1)).toBeNull();
+    });
+
+    it("is kept while the listing has not answered", async () => {
+      const asked = core({ focus: GONE, listing: "pending" });
+      render(<App />);
+
+      await waitFor(() => expect(said(asked)).toContainEqual(GONE));
+      await settle();
+      expect(said(asked)).not.toContain(null);
+    });
+
+    it("is kept when the listing was refused, which says nothing of the branch", async () => {
+      const asked = core({ focus: GONE, listing: "refused" });
+      render(<App />);
+
+      await waitFor(() => expect(said(asked)).toContainEqual(GONE));
+      await waitFor(() => expect(asked.some((one) => one.cmd === "worktree_list")).toBe(true));
+      await settle();
+      expect(said(asked)).not.toContain(null);
+    });
   });
 
   it("draws the focus the record put back as the cockpit", async () => {

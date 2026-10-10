@@ -140,7 +140,7 @@ import {
 import { isSearch, searchFromFocus, searchTitle, searchView } from "./contentSearch";
 import { opensSearch } from "./searchKey";
 import { BottomBar } from "./BottomBar";
-import { useWorkspaceState } from "./workspaceState";
+import { useWorkspaceState, type WorkspaceState } from "./workspaceState";
 import {
   heardFrom,
   lostOnResume,
@@ -2002,6 +2002,19 @@ export const PlaneView = memo(function PlaneView({
     if (focusedBranch === undefined || focusedBranch.workspace !== ofWorkspace) return undefined;
     return focusStands(workspaceState, focusedBranch) === undefined ? undefined : focusedBranch;
   }, [focusedBranch, ofWorkspace, workspaceState]);
+  // **A focus whose branch was removed is forgotten** (#1152), once the workspace's listing has
+  // answered without it, so the record the window keeps does not put it back at the next launch.
+  // Never while the listing is still being read, and never on a refusal, which says nothing of
+  // the branch. Only for the workspace in front: another one's listing is not read here.
+  //
+  // Set while rendering, React's way of adjusting state to what a render found: an effect would
+  // draw the gone focus once more first, and the answer is already here.
+  if (
+    focusedBranch !== undefined &&
+    focusedBranch.workspace === ofWorkspace &&
+    focusGone(workspaceState, focusedBranch)
+  )
+    setFocusedBranch(undefined);
   /** The nearest branch to the operator: the cockpit's, else the one the explorer picked. */
   const nearBranch = useMemo<Place | undefined>(
     () =>
@@ -8556,6 +8569,21 @@ function listedMenuOf(session: number, offerFor: (id: string) => Offer | undefin
 const NO_ROWS: readonly ChatRow[] = [];
 const NO_ENDED: readonly Ended[] = [];
 const NO_NEEDS: readonly Needing[] = [];
+/**
+ * Whether the listing of `focus`'s workspace has answered without its branch (#1152): its repo's
+ * branches were listed and it is not among them, or the workspace no longer holds the repo. A
+ * listing still being read, or refused, has not said so. A focus on a repo's own folder is not
+ * judged here: it is no branch (`focusStands`).
+ */
+function focusGone(state: WorkspaceState, focus: Place): boolean {
+  if (focus.piece === null) return false;
+  if (state.piecesRefused[focus.repo] !== undefined) return false;
+  const repos = state.panels?.repos;
+  if (repos !== undefined && !repos.includes(focus.repo)) return true;
+  const listed = state.pieces[focus.repo];
+  return listed !== undefined && !listed.some((one) => one.piece === focus.piece);
+}
+
 /** The queue the catalogue is built with: none (#1034, `withQueue`). */
 const NO_QUEUE: readonly number[] = [];
 const NO_ASKS: readonly Shown[] = [];
