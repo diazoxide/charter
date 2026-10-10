@@ -3137,18 +3137,24 @@ fn an_icon_theme_is_contributed_as_data_and_in_force_only_once_approved() {
 }
 
 /// #1145: a theme's `name` is drawn in the settings tabs' picks and the approval, so the core
-/// holds it to the rule a label is held to (`facts::drawable_label`), for both kinds of theme,
-/// and the refusal names the theme by its place.
+/// holds it to the rule a label is held to (`facts::drawable_label`), for both kinds of theme.
+/// A name it will not draw leaves out that theme only: the extension's other contributions
+/// stand, and the approval and the Extensions list say which one went, by its place and never
+/// by the name.
 #[test]
-fn a_theme_name_purlis_would_not_draw_refuses_the_extension() {
-    for (key, noun) in [("themes", "theme"), ("icon_themes", "icon theme")] {
+fn a_theme_name_purlis_would_not_draw_leaves_out_that_theme_only() {
+    for (key, noun) in [("themes", "a theme"), ("icon_themes", "an icon theme")] {
         let longest = "L".repeat(40);
         let made = Made::new();
         made.file("t.json", r#"{"name":"T","symbols":{}}"#);
         made.manifest(&format!(
             r#"{{"version":1,"id":"x","contributes":{{"{key}":[{{"name":"{longest}","file":"t.json"}}]}}}}"#
         ));
-        read_at(&made.at()).unwrap_or_else(|why| panic!("{noun}: {why}"));
+        let found = read_at(&made.at()).unwrap_or_else(|why| panic!("{noun}: {why}"));
+        assert!(
+            found.manifest.left_out.is_empty(),
+            "{noun}: 40 bytes is drawn"
+        );
 
         for name in [
             "L".repeat(41),
@@ -3159,17 +3165,75 @@ fn a_theme_name_purlis_would_not_draw_refuses_the_extension() {
             let made = Made::new();
             made.file("t.json", r#"{"name":"T","symbols":{}}"#);
             made.manifest(&format!(
-                r#"{{"version":1,"id":"x","contributes":{{"{key}":[{{"file":"t.json"}},{{"name":"{name}","file":"t.json"}}]}}}}"#
+                r#"{{"version":1,"id":"x","contributes":{{"{key}":[{{"name":"Kept","file":"t.json"}},{{"name":"{name}","file":"t.json"}}]}}}}"#
             ));
-            let why = read_at(&made.at()).expect_err(&name);
+            let found = read_at(&made.at()).unwrap_or_else(|why| panic!("{noun} {name:?}: {why}"));
+            let kept: Vec<&str> = found
+                .manifest
+                .themes
+                .iter()
+                .chain(&found.manifest.icon_themes)
+                .map(|theme| theme.name.as_str())
+                .collect();
+            assert_eq!(
+                kept,
+                ["Kept"],
+                "{noun} {name:?}: only the drawable one stands"
+            );
+            let line = format!("{noun} at 1, left out: its name is longer than 40 bytes");
             assert!(
-                why.contains(&format!(
-                    "declares a {noun} at 1 with a name purlis will not draw"
-                )),
-                "{noun} {name:?}: {why}"
+                found.manifest.left_out.len() == 1 && found.manifest.left_out[0].starts_with(&line),
+                "{noun} {name:?}: {:?}",
+                found.manifest.left_out
+            );
+            let declares = prompt(&found, Standing::New).declares;
+            assert!(
+                declares.iter().any(|it| it.starts_with(&line)),
+                "{noun} {name:?}: the approval says what was left out: {declares:?}"
+            );
+            let drawn: String = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+            assert!(
+                declares.iter().all(|it| !it.contains(&drawn)),
+                "{noun} {name:?}: the name it will not draw is never shown: {declares:?}"
             );
         }
     }
+}
+
+/// #1145: an extension whose every contribution was a theme it left out has nothing left to
+/// consent to, and says why in those themes' words.
+#[test]
+fn an_extension_whose_only_theme_is_left_out_is_refused_with_that_reason() {
+    let made = Made::new();
+    made.file("t.json", r#"{"name":"T","symbols":{}}"#);
+    made.manifest(&format!(
+        r#"{{"version":1,"id":"x","contributes":{{"icon_themes":[{{"name":"{}","file":"t.json"}}]}}}}"#,
+        "L".repeat(41)
+    ));
+    let why = read_at(&made.at()).expect_err("nothing left to take");
+    assert!(
+        why.contains("declares nothing purlis will take: an icon theme at 0, left out"),
+        "{why}"
+    );
+}
+
+/// #1145: a theme left out does not take the extension's other contributions with it, and is
+/// not in force once the extension is approved.
+#[test]
+fn a_theme_left_out_keeps_the_extensions_other_contributions_in_force() {
+    let made = Made::new();
+    made.file("t.json", r#"{"name":"T","symbols":{}}"#);
+    made.file("c.json", r#"{"name":"C"}"#);
+    made.manifest(&format!(
+        r#"{{"version":1,"id":"x","contributes":{{"themes":[{{"name":"{}","file":"c.json"}}],"icon_themes":[{{"name":"Seti","file":"t.json"}}]}}}}"#,
+        "L".repeat(41)
+    ));
+    let found = read_at(&made.at()).expect("the icon theme stands");
+    install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    let seen = survey(&made.config(), &BuiltIn::none());
+    assert!(seen.installed[0].themes_in_force().is_empty());
+    assert_eq!(seen.installed[0].icon_themes_in_force().len(), 1);
 }
 
 #[test]
