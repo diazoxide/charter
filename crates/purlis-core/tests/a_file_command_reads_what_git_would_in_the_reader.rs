@@ -184,9 +184,9 @@ fn a_cut_branch_is_read_in_the_reader_as_git_reads_it_here() {
 /// (30 s); a raised stop kills the child, and the page answers `Stopped` at once.
 #[test]
 fn a_stop_ends_a_listing_the_readers_child_is_held_in() {
+    purlis_core::unsteered!();
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
-    purlis_core::unsteered!();
     let f = support::plane_with_clone("thing");
     write(&f.clone, "a.txt", "needle\n");
     let made = purlis_core::forklock::output(
