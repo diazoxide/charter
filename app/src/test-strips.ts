@@ -90,3 +90,15 @@ export async function dragWithTheKeyboard(arrow: "{ArrowLeft}" | "{ArrowRight}")
  */
 export const sayingSomething = () =>
   screen.queryAllByRole("status").filter((one) => (one.textContent ?? "") !== "");
+
+/**
+ * **Opens the Explorer view of the left side** (#1673), as a person presses its icon on the
+ * activity bar: the left side opens on Chats, and a test about the explorer's rows starts
+ * where a person would.
+ */
+export async function showTheExplorer() {
+  const tab = await screen.findByRole("tab", { name: "Explorer" });
+  // A press of the open view puts the side away, so it is pressed only when it is not open.
+  if (tab.getAttribute("aria-selected") !== "true") await userEvent.click(tab);
+  return screen.findByRole("navigation", { name: "Explorer" });
+}

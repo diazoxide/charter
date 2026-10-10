@@ -169,3 +169,21 @@ export async function closeProject(closer: string): Promise<void> {
   await answer.click();
   await expect(asking).not.toBeDisplayed();
 }
+
+/**
+ * **Shows a view of the left side** (#1673): presses its icon on the activity bar unless it is
+ * already the open one, since a press of the open view puts the side away. The left side opens
+ * on Chats, so a spec about the explorer's rows shows the Explorer first and puts Chats back
+ * after, leaving the window as the next spec expects it.
+ */
+export async function showView(name: "Chats" | "Explorer"): Promise<void> {
+  const tab = await $(
+    `[role="tablist"][aria-label="Navigation"] [role="tab"][aria-label="${name}"]`,
+  );
+  await tab.waitForExist({ timeout: 30_000 });
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+  await browser.waitUntil(async () => (await tab.getAttribute("aria-selected")) === "true", {
+    timeout: 10_000,
+    timeoutMsg: `the ${name} view never opened`,
+  });
+}

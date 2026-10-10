@@ -2457,6 +2457,137 @@ button.show-more:focus-visible {
    Every boundary is a `[data-separator]`, which is the same handle the pane splits use. */
 .regions {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* **The frame: an activity bar at each edge that has one, the regions between them** (ADR 0038
+   as amended 2026-10-10, #1673). The bars are outside the resizable group, so a side put away
+   leaves its bar, and its badges, on screen. */
+.region-frame {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* **A side's activity bar** (`ActivityBar.tsx`): VS Code's strip of view icons, in the window's
+   own tokens. The deep surface the title bar and the status line are drawn on, because it is
+   the window's frame and not a region's content; a hairline toward the regions. */
+.activity-bar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 2.5rem;
+  padding-block: 0.25rem;
+  background: var(--surface-deep);
+}
+
+.activity-bar[data-side="left"] {
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+.activity-bar[data-side="right"] {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.activity-bar [role="tablist"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.activity-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.activity-tab svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.activity-tab:hover {
+  color: var(--text-primary);
+}
+
+.activity-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* **The open view: the icon at full strength and the accent edge toward the side it opens**,
+   VS Code's mark. Nothing is selected while the side is away, so a bar alone says whether
+   the side is out. */
+.activity-tab[aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+.activity-bar[data-side="left"] .activity-tab[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--accent-base);
+}
+
+.activity-bar[data-side="right"] .activity-tab[aria-selected="true"] {
+  box-shadow: inset -2px 0 0 var(--accent-base);
+}
+
+/* A count on a view's tab (B-8): the project and workspace tabs' pill, small, at the icon's
+   corner. In the needs-you colours for the chats that need you, the plain count's otherwise. */
+.activity-count {
+  position: absolute;
+  inset-block-end: 0.2rem;
+  inset-inline-end: 0.15rem;
+  min-width: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--control-count);
+  color: var(--text-primary);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.activity-count[data-tone="needs-you"] {
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
+}
+
+/* What the count says, for the tab's description: read out, not drawn. */
+.activity-said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A region's views fill its slot, one shown at a time; the others are `hidden`. */
+.region-views,
+.region-view {
+  height: 100%;
+  min-height: 0;
+}
+
+.region-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.region-view > .explorer {
+  flex: 1 1 0;
+  height: auto;
   min-height: 0;
 }
 
@@ -3253,30 +3384,14 @@ h2.sidebar-title .node-icon {
   cursor: default;
 }
 
-/* **The left region** (ADR 0038, as amended): the project's chats over the workspace's
-   explorer. The chats take what they need up to two fifths of the region and scroll inside it,
-   so fifty chats never push the explorer off the screen; the explorer has the rest. */
-.left-region {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.left-region > .explorer {
-  flex: 1 1 0;
-  height: auto;
-  min-height: 0;
-}
-
 .chats-section {
   /* Its own width is what its rows are laid out by: a narrow list indents less (below). */
   container: chats / inline-size;
-  flex: 0 1 auto;
-  max-height: 40%;
+  /* The Chats view's whole height (#1673): it was two fifths of a region it shared. */
+  flex: 1 1 0;
+  min-height: 0;
   overflow: auto;
   padding: 0 0.5rem 0.5rem;
-  border-block-end: 1px solid var(--border-subtle);
   font-size: 0.85rem;
 }
 

@@ -8,7 +8,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { sequenceIn } from "./tabSequence";
-import { stripNamed } from "./test-strips";
+import { showTheExplorer, stripNamed } from "./test-strips";
 
 /**
  * **Where Tab goes in the window outside its dialogs** (charter-app#189).
@@ -291,7 +291,11 @@ function said(el: HTMLElement): string {
 describe("the window's tab order", () => {
   it("goes top to bottom, left to right, one stop per strip and per list", async () => {
     await theWholeWindow();
-    const stops = sequenceIn(document.body).map(said);
+    // What is `hidden` is not drawn, so the engine never stops in it: the views of a side that
+    // are not open (#1673).
+    const stops = sequenceIn(document.body)
+      .filter((el) => el.closest("[hidden]") === null)
+      .map(said);
     expect(stops).toEqual([
       // The title bar, left to right (ADR 0054). The project strip first: ONE stop for its
       // tabs, then its own controls…
@@ -314,6 +318,8 @@ describe("the window's tab order", () => {
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
       "tab steward two",
       "button New tab",
+      // The left side's activity bar (#1673): ONE stop, the open view's tab.
+      "tab Chats",
       // The left region, top to bottom. The Chats list's filter (#1499): its box, then its
       // chips, needs you and working, which are ONE stop with the arrows between them.
       "input Filter chats by name, persona, workspace or state",
@@ -321,8 +327,7 @@ describe("the window's tab order", () => {
       // The project's chats (#1447): ONE stop, the row of the chat in front, which reads as
       // its name and its state's word (#1484), then its workspace on its second line (#1499).
       "treeitem steward tworunning (no detail from Claude Code)alpha",
-      // The explorer: ONE stop, its current row.
-      "treeitem alphathe workspace itself",
+      // The explorer is the side's other view, hidden while Chats is open.
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",
       // The focused pane's own controls, drawn in its top corners left to right — the harness
@@ -341,7 +346,7 @@ describe("the window's tab order", () => {
       // The handle above the bottom region, which has no controls of its own.
       "separator",
       // The status line: the region toggles at its left, then Alerts and the doctor.
-      "button Explorer",
+      "button Navigation",
       "button Attention",
       "button State",
       "button Alerts: none",
@@ -366,50 +371,42 @@ const rowsIn = (region: HTMLElement) => [
 describe("a list is one Tab stop", () => {
   it("the explorer: the current row is the stop, and Up, Down, Home and End move", async () => {
     await theWholeWindow();
-    const explorer = screen.getByRole("navigation", { name: "Explorer" });
+    const explorer = await showTheExplorer();
     const rows = rowsIn(explorer);
-    // The workspace row, three chats working in it, the clone, its own files, its one branch
-    // and that branch's files (FM-1).
+    // The workspace row, the clone, its own files, its one branch and that branch's files
+    // (FM-1). No chat: the Chats view lists them (#1673).
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^treeitem alpha/),
-      expect.stringMatching(/^treeitem steward one/),
-      expect.stringMatching(/^treeitem steward two/),
-      expect.stringMatching(/^treeitem steward three/),
       "treeitem svc1",
       "treeitem Files",
       "treeitem one in svc",
       "treeitem Files",
     ]);
-    expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual([
-      "0",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
-    ]);
+    expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual(["0", "-1", "-1", "-1", "-1"]);
 
     rows[0].focus();
     await userEvent.keyboard("{ArrowDown}");
     await waitFor(() => expect(rows[1]).toHaveFocus());
     await userEvent.keyboard("{End}");
-    await waitFor(() => expect(rows[7]).toHaveFocus());
+    await waitFor(() => expect(rows[4]).toHaveFocus());
     await userEvent.keyboard("{ArrowUp}");
-    await waitFor(() => expect(rows[6]).toHaveFocus());
+    await waitFor(() => expect(rows[3]).toHaveFocus());
     await userEvent.keyboard("{Home}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
     // And it is a tree (#238): Right goes into the workspace row, Left climbs back out. The
     // rest of the tree's keys are `Explorer.test.tsx`'s.
     await userEvent.keyboard("{ArrowRight}");
     await waitFor(() => expect(rows[1]).toHaveFocus());
+    // The clone it lands on is open: Left closes it first, then climbs.
+    await userEvent.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(rows[1]).toHaveAttribute("aria-expanded", "false"));
     await userEvent.keyboard("{ArrowLeft}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
   });
 
   it("the explorer: a picked worktree is where the keyboard comes back in", async () => {
     await theWholeWindow();
+    await showTheExplorer();
     const piece = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
       name: "one in svc",
     });

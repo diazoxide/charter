@@ -222,6 +222,8 @@ function doing(): Doing & { calls: string[] } {
     openProject: note("openProject"),
     createProject: note("createProject"),
     showExtensions: note("showExtensions"),
+    showSideView: note("showSideView"),
+    toggleRegion: note("toggleRegion"),
     installCli: vi.fn(async () => {
       calls.push("installCli");
       return { ok: true as const, said: "On PATH" };
@@ -1724,6 +1726,9 @@ describe("carrying out a row", () => {
         "openProject",
         "createProject",
         "showExtensions",
+        "showSideView:chats",
+        "showSideView:explorer",
+        "toggleRegion:navigation",
         "openSettingsTab",
         "openYourSettings",
         "installCli",
@@ -2102,6 +2107,9 @@ describe("the palette at fifty chats", () => {
       // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's branch into its clone",
       "Remove the folder of this chat's branch",
+      // The left side's rows (#1673): about this window, and `Explorer` has `re` in it.
+      "Show the Explorer view",
+      "Put the Navigation region away",
       // Then the rows about things that are not in front, in the catalogue's order.
       // `ignore` has `re` in it, and it is charter's word, so the two queued chats' Ignore
       // rows (charter-app#248) are verbs here too, and still behind every row about what is
@@ -2109,8 +2117,6 @@ describe("the palette at fifty chats", () => {
       // rows always have.
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
-      "Rename chat ide.1…",
-      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -2305,8 +2311,9 @@ describe("the palette at fifty chats", () => {
     // 829 since #1143: each of the 50 branches' own folder copied, revealed and given a shell
     // tab, three rows a branch as its browse and focus rows are.
     // 839 since #1152: Focus on repo, one row in each of the ten clones.
+    // 842 since #1673: Show the Chats view, Show the Explorer view, and the Navigation region.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(839);
+    expect(offers).toHaveLength(842);
   });
 
   /**

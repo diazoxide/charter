@@ -107,35 +107,39 @@ describe("starting a chat", () => {
     });
   });
 
-  it("names the profile and the persona on the chat in the explorer", async () => {
+  it("names the profile the chat runs on, on its row in the Chats list", async () => {
     // The profile AND its kind. The kind is the one the profile declares, not one read off
     // the program's name — the program here is `claude-stand-in`, a wrapper, and
     // `Harness::of_command` answers `None` for one exactly as it does for a shell.
     //
-    // In the explorer since ADR 0038: the chats are listed under the spot each one
-    // works in, and the left region is `nav[aria-label="Explorer"]`.
-    const explorer = await $('nav[aria-label="Explorer"]');
-    await explorer.waitForDisplayed({ timeout: 20_000 });
+    // On the row's hover in the Chats list since #1673: the explorer, which said it on the
+    // chat's row, lists no chats, and the Chats view is open by default.
+    const list = await $('[data-testid="chats-section"]');
+    await list.waitForDisplayed({ timeout: 20_000 });
 
-    let said = "";
+    let said: string[] = [];
     await browser
       .waitUntil(
         async () => {
-          said = await explorer.getText();
-          return said.includes("needs-approval") && said.includes("(claude)");
+          said = await browser.execute(() =>
+            [
+              ...document.querySelectorAll<HTMLElement>(
+                '[data-testid="chats-section"] [role="treeitem"][title]',
+              ),
+            ].map((row) => row.title),
+          );
+          return said.some((title) => title.includes("needs-approval (claude)"));
         },
         {
           timeout: 20_000,
           interval: 250,
-          // What it actually said, so a failure here is one somebody can act on rather than
-          // one they have to reproduce.
-          timeoutMsg: "the explorer never named the profile the chat started on",
+          timeoutMsg: "the Chats list never named the profile the chat started on",
         },
       )
       .catch((why: unknown) => {
         // What it actually said, so a failure here is one somebody can act on rather than one
         // they have to reproduce.
-        throw new Error(`${String(why)} — the explorer said: ${said}`);
+        throw new Error(`${String(why)} — the rows said: ${said.join(" | ")}`);
       });
   });
 

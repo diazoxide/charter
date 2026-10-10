@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Explorer, type Spot } from "./Explorer";
-import { ChatsHere, fixedChats, moved, nothingKnown, type ChatStates } from "./chatState";
+import { ChatsHere, fixedChats, nothingKnown, type ChatStates } from "./chatState";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
 import type { OpenChat, Panels as PanelsModel, Piece } from "./bindings";
@@ -79,7 +79,6 @@ function draw(on: {
   chats?: OpenChat[];
   spot?: Spot;
   onPick?: (spot: Spot | undefined) => void;
-  onShowChat?: (session: number) => void;
   workspace?: string;
   /** The catalogue a piece row's menu is drawn out of. Empty here for every test but the one
    *  about the menu: `Menued` draws nothing for an item the catalogue has no rows for, so the
@@ -98,7 +97,6 @@ function draw(on: {
         chats={on.chats ?? []}
         spot={on.spot}
         onPick={on.onPick ?? (() => {})}
-        onShowChat={on.onShowChat ?? (() => {})}
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
         onReadAgain={() => {}}
@@ -132,6 +130,27 @@ describe("the explorer", () => {
 
     expect(screen.queryByText("beta")).not.toBeInTheDocument();
     expect(screen.getByTestId("explorer")).not.toHaveTextContent("vision");
+  });
+
+  it("draws no chat, wherever it works: the Chats view lists them (#1673)", () => {
+    draw({
+      chats: [
+        chat(1, "ide.1", `${CUT}/one`),
+        chat(2, "root.2", ALPHA),
+        chat(3, "tool.3", `${ALPHA}/tool`, { from: { chat: 1, task: true } as OpenChat["from"] }),
+      ],
+    });
+
+    const explorer = screen.getByRole("navigation", { name: "Explorer" });
+    for (const name of ["ide.1", "root.2", "tool.3"])
+      expect(within(explorer).queryByText(name, { exact: false })).toBeNull();
+    expect(within(explorer).queryByText(/tasks?\b/)).toBeNull();
+    // The tree is the place: the workspace, its clones, their branches and files.
+    expect(
+      within(explorer)
+        .getAllByRole("treeitem")
+        .map((row) => row.dataset.row?.split(":")[0]),
+    ).not.toContain("chat");
   });
 
   it("starts on the workspace's own directory, so a plain New tab opens where it always did", () => {
@@ -272,244 +291,6 @@ describe("the explorer", () => {
   // ---------------------------------------------------------------------------------------
   // What is already running where
   // ---------------------------------------------------------------------------------------
-
-  it("draws no state on a shell tab's chat, and what is not known on a harness's", () => {
-    // A shell's terminal icon already says what it is; a broken ring beside it read as a
-    // spinner. A harness that has reported nothing yet still says so (#1484).
-    draw({
-      chats: [
-        chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null }),
-        chat(2, "ide.2", `${CUT}/one`),
-      ],
-    });
-
-    const mark = (name: string) =>
-      screen.getByRole("treeitem", { name: new RegExp(name) }).querySelector("[data-state]");
-    expect(mark("shell 1")).toBeNull();
-    expect(mark("ide.2")).toHaveAttribute("data-state", "unheard");
-    expect(mark("ide.2")).toHaveTextContent("running (no detail from claude)");
-  });
-
-  it("draws a shell tab's state once a harness in it reports one", () => {
-    const states = moved(nothingKnown, {
-      plane: "/home/dev/plane",
-      session: 1,
-      state: "waiting",
-      needs_you: true,
-      queue: [1],
-      moved_at: 1,
-      reports: [],
-      refusals: [],
-      sequence: 1,
-      children: [],
-    });
-    draw({ chats: [chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null })], states });
-
-    expect(
-      screen.getByRole("treeitem", { name: /shell 1/ }).querySelector("[data-state]"),
-    ).toHaveAttribute("data-state", "needs-you");
-  });
-
-  it("shows the chats working in a worktree under that worktree", () => {
-    draw({ chats: [chat(1, "ide.1", `${CUT}/one/deep`), chat(2, "ide.2", ALPHA)] });
-
-    expect(screen.getByTestId("piece-svc-one")).toHaveTextContent("ide.1");
-    expect(screen.getByTestId("piece-svc-one")).not.toHaveTextContent("ide.2");
-  });
-
-  it("shows a chat that is in no worktree under the workspace itself", () => {
-    draw({ chats: [chat(2, "ide.2", `${ALPHA}/svc`)] });
-
-    // Not inside any `piece-…` row: it works in the clone, not in a piece of it.
-    expect(screen.getByTestId("explorer")).toHaveTextContent("ide.2");
-    expect(screen.getByTestId("piece-svc-one")).not.toHaveTextContent("ide.2");
-  });
-
-  it("does not put a chat in a worktree whose name merely starts the same way", () => {
-    // By path components and never by string prefix: `…/one-more` starts with `…/one`.
-    draw({ chats: [chat(3, "ide.3", `${CUT}/one-more`)] });
-
-    expect(screen.getByTestId("piece-svc-one")).not.toHaveTextContent("ide.3");
-  });
-
-  it("brings a chat forward when its row is pressed", async () => {
-    const onShowChat = vi.fn();
-    draw({ chats: [chat(1, "ide.1", `${CUT}/one`)], onShowChat });
-
-    await userEvent.click(screen.getByRole("treeitem", { name: /ide\.1/ }));
-
-    expect(onShowChat).toHaveBeenCalledWith(1);
-  });
-
-  it("says a chat's helpers as a count on its row, and lists none until it is unfolded (FD-18, #1490)", () => {
-    const states = moved(nothingKnown, {
-      plane: "/home/dev/plane",
-      session: 1,
-      state: "failed",
-      needs_you: false,
-      queue: [],
-      moved_at: 1,
-      reports: [],
-      refusals: [],
-      sequence: 1,
-      children: [
-        { agent: "a1b2c3d4e5f6a7b8c9d0", state: "failed" },
-        { agent: "thread-1", state: "done" },
-        { agent: "thread-10", state: "running" },
-      ],
-    });
-    draw({ chats: [chat(1, "ide.1", `${CUT}/one`), chat(2, "ide.2", `${CUT}/one`)], states });
-
-    // A row of the tree, folded: what unfolds it and what it then lists is
-    // `Explorer.tasks.test.tsx`'s.
-    const count = screen.getByRole("treeitem", { name: "3 helpers of ide.1, 1 working, 1 failed" });
-    expect(count).toHaveAttribute("aria-expanded", "false");
-    // The chat's row is described by it, so a screen reader on it hears how many it spawned.
-    expect(screen.getByRole("treeitem", { name: /^ide\.1/ })).toHaveAccessibleDescription(
-      /3 helpers/,
-    );
-    expect(screen.getByRole("treeitem", { name: /^ide\.2/ })).not.toHaveAccessibleDescription(
-      /helper/,
-    );
-    // No row of ids until it is asked for.
-    expect(screen.queryByRole("treeitem", { name: /helper thread/ })).toBeNull();
-    expect(screen.getByTestId("explorer")).not.toHaveTextContent("a1b2c3d4");
-  });
-
-  it("lists a task that has a tab of its own beside the chat that asked, by name and state (#1436, #1490)", () => {
-    const states = moved(nothingKnown, {
-      plane: "/home/dev/plane",
-      session: 7,
-      state: "running",
-      needs_you: false,
-      queue: [],
-      moved_at: 1,
-      reports: [],
-      refusals: [],
-      sequence: 1,
-      children: [],
-    });
-    // Each has a tab: a task has none unless the person gave it one, and one with none is
-    // counted on its session's line and not listed (`Explorer.tasks.test.tsx`).
-    const asked = {
-      name: "steward 1",
-      workspace: "alpha",
-      chat: 1,
-      tab: true,
-      reported: false,
-      unreported: false,
-    };
-    draw({
-      chats: [
-        chat(1, "steward 1", ALPHA),
-        chat(2, "steward 2", ALPHA),
-        chat(7, "check the queue", ALPHA, { from: { ...asked, task: true } }),
-        // A handoff is the person's to follow: it is listed beside the chat it came from.
-        chat(8, "moved on", ALPHA, { from: { ...asked, task: false } }),
-      ],
-      states,
-    });
-
-    const asking = screen.getByRole("treeitem", { name: /steward 1/ });
-    const task = screen.getByRole("treeitem", { name: /check the queue/ });
-    // A row of its own at the place it works. Who asked whom is the Chats list's to say.
-    expect(asking.closest("li")).not.toContainElement(task);
-    expect(task.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
-    expect(task.querySelector("[data-state]")).toHaveAttribute("data-state", "working");
-    expect(task.querySelector("[data-state]")).toHaveTextContent("working");
-    const handoff = screen.getByRole("treeitem", { name: /moved on/ });
-    expect(handoff.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
-    expect(asking.closest("li")).not.toContainElement(handoff);
-    // It is still one of the session's tasks, and the session's line counts it.
-    expect(asking.closest("li")).toContainElement(
-      screen.getByRole("treeitem", { name: "1 task · 1 working" }),
-    );
-  });
-
-  it("lists a task whose asking chat is not at this spot beside the other chats", () => {
-    draw({
-      chats: [
-        chat(2, "steward 2", ALPHA),
-        chat(7, "check the queue", ALPHA, {
-          from: {
-            name: "steward 1",
-            workspace: "alpha",
-            chat: 1,
-            task: true,
-            tab: true,
-            reported: false,
-            unreported: false,
-          },
-        }),
-      ],
-    });
-
-    const task = screen.getByRole("treeitem", { name: /check the queue/ });
-    expect(task.getAttribute("aria-level")).toBe(
-      screen.getByRole("treeitem", { name: /steward 2/ }).getAttribute("aria-level"),
-    );
-  });
-
-  it("marks a task that has reported, and one that ended without reporting, and both still open", async () => {
-    const onShowChat = vi.fn();
-    const from = { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true };
-    draw({
-      chats: [
-        chat(1, "steward 1", ALPHA),
-        chat(7, "check the queue", ALPHA, { from: { ...from, reported: true, unreported: false } }),
-        chat(8, "check prod", ALPHA, { from: { ...from, reported: false, unreported: false } }),
-        chat(9, "check staging", ALPHA, { from: { ...from, reported: false, unreported: true } }),
-      ],
-      onShowChat,
-    });
-
-    const reported = screen.getByRole("treeitem", { name: /check the queue/ });
-    expect(reported).toHaveTextContent("reported");
-    expect(screen.getByRole("treeitem", { name: /check prod/ })).not.toHaveTextContent("report");
-    // Never "reported" for a chat that did not: purlis reported in its place.
-    const ended = screen.getByRole("treeitem", { name: /check staging/ });
-    expect(ended).toHaveTextContent("ended without a report");
-    // Still a chat: its row opens it.
-    await userEvent.click(reported);
-    expect(onShowChat).toHaveBeenCalledWith(7);
-  });
-
-  it("brings a task forward when its row is pressed, as any chat", async () => {
-    const onShowChat = vi.fn();
-    draw({
-      chats: [
-        chat(1, "steward 1", ALPHA),
-        chat(7, "check the queue", ALPHA, {
-          from: {
-            name: "steward 1",
-            workspace: "alpha",
-            chat: 1,
-            task: true,
-            tab: true,
-            reported: false,
-            unreported: false,
-          },
-        }),
-      ],
-      onShowChat,
-    });
-
-    await userEvent.click(screen.getByRole("treeitem", { name: /check the queue/ }));
-
-    expect(onShowChat).toHaveBeenCalledWith(7);
-  });
-
-  it("says on a chat what its harness cannot report, rather than leaving it unexplained", () => {
-    draw({
-      chats: [
-        chat(1, "ide.1", `${CUT}/one`, {
-          unreported: "codex does not report an approval prompt",
-        }),
-      ],
-    });
-
-    expect(screen.getByTestId("piece-svc-one")).toHaveTextContent("does not report");
-  });
 
   // ---------------------------------------------------------------------------------------
   // Nothing to explore
@@ -702,8 +483,8 @@ describe("a clone row's menu", () => {
 // ---------------------------------------------------------------------------------------
 
 describe("the explorer is drawn as a tree", () => {
-  it("marks each kind of node with its own icon, so a chat leaf is told from a worktree leaf", () => {
-    draw({ chats: [chat(1, "ide.1", `${CUT}/one`)] });
+  it("marks each kind of node with its own icon", () => {
+    draw({});
 
     const svc = screen.getByTestId("clone-svc");
     // Lucide names each `<svg>` after its icon, which is the only handle a test has on which
@@ -712,7 +493,6 @@ describe("the explorer is drawn as a tree", () => {
     expect(svc.querySelector("summary .twisty")).not.toBeNull();
     const one = screen.getByTestId("piece-svc-one");
     expect(one.querySelector(".spot .lucide-git-branch")).not.toBeNull();
-    expect(one.querySelector(".chat .lucide-square-terminal")).not.toBeNull();
   });
 
   it("keeps every row named by its words, with the icons beside them unread", () => {
@@ -795,6 +575,8 @@ describe("the explorer's tree guides", () => {
  * (FM-1), closed until opened.
  */
 describe("the explorer is a WAI-ARIA tree", () => {
+  // A chat working in a branch, which the tree no longer draws (#1673): its shape is the same
+  // with or without it.
   const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
   const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
   const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
@@ -820,8 +602,7 @@ describe("the explorer is a WAI-ARIA tree", () => {
       "svc 2 1/2",
       "Files 3 1/3",
       "one 3 2/3",
-      "Files 4 1/2",
-      "seven 4 2/2",
+      "Files 4 1/1",
       "two 3 3/3",
       "Files 4 1/1",
       "tool 2 2/2",
@@ -839,7 +620,6 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(item(/^alpha/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^one/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^two/)).toHaveAttribute("aria-expanded", "true");
-    expect(item(/^seven/)).not.toHaveAttribute("aria-expanded");
     // A branch's files fold, and are closed until opened.
     expect(row("file:svc/one:")).toHaveAttribute("aria-expanded", "false");
 
@@ -864,10 +644,6 @@ describe("the explorer is a WAI-ARIA tree", () => {
     // A branch is a parent that is always open: Right goes in, to its Files row first.
     await userEvent.keyboard("{ArrowRight}");
     expect(row("file:svc/one:")).toHaveFocus();
-    await userEvent.keyboard("{ArrowDown}");
-    expect(item(/^seven/)).toHaveFocus();
-    await userEvent.keyboard("{ArrowRight}");
-    expect(item(/^seven/)).toHaveFocus();
   });
 
   it("Right on the workspace row moves to its first child", async () => {
@@ -880,7 +656,7 @@ describe("the explorer is a WAI-ARIA tree", () => {
 
   it("Left moves to the parent, closes an open clone, and stops at the workspace row", async () => {
     withAChat();
-    item(/^seven/).focus();
+    row("file:svc/one:").focus();
 
     await userEvent.keyboard("{ArrowLeft}");
     expect(item(/^one/)).toHaveFocus();
@@ -934,18 +710,13 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(item(/^work\/login in svc/)).toHaveFocus();
   });
 
-  it("Enter does what a click does: a worktree is picked and a chat brought forward", async () => {
+  it("Enter does what a click does: a worktree is picked", async () => {
     const onPick = vi.fn();
-    const onShowChat = vi.fn();
-    draw({ chats: [chat(7, "seven", `${CUT}/one`)], onPick, onShowChat });
+    draw({ chats: [chat(7, "seven", `${CUT}/one`)], onPick });
 
     item(/^one/).focus();
     await userEvent.keyboard("{Enter}");
     expect(onPick).toHaveBeenCalledWith({ repo: "svc", piece: "one", path: `${CUT}/one` });
-
-    item(/^seven/).focus();
-    await userEvent.keyboard("{Enter}");
-    expect(onShowChat).toHaveBeenCalledWith(7);
   });
 
   it("leaves a key with a modifier alone", async () => {

@@ -295,3 +295,36 @@ describe("a task the person asked for (#1492, V100-70)", () => {
     expect(chat({ task: false, tab: true, by_person: true }).byYou).toBe(false);
   });
 });
+
+describe("what a chat runs on (#1673)", () => {
+  const on = (profile: string | null, harness: string | null) =>
+    listedChat(
+      {
+        session: 4,
+        name: "4",
+        cwd: null,
+        harness,
+        in_front: false,
+        resumed: null,
+        fresh: null,
+        guessed: null,
+        profile,
+        persona: null,
+        unreported: null,
+        card: null,
+        pinned: false,
+        label: null,
+        from: null,
+      },
+      "alpha",
+      "steward 4",
+      true,
+    ).runsOn;
+
+  it("is the profile and its kind, as the explorer's row said it until the Chats list did", () => {
+    expect(on("needs-approval", "claude")).toBe("needs-approval (claude)");
+    expect(on("work", null)).toBe("work");
+    expect(on(null, "codex")).toBe("codex");
+    expect(on(null, null)).toBeNull();
+  });
+});

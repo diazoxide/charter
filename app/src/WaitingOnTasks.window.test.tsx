@@ -263,16 +263,6 @@ const row = (tree: HTMLElement, name: string) => {
   return found;
 };
 
-/** The explorer's row for the chat it calls `name`. */
-const explorerRow = async (name: string) => {
-  const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
-  const found = within(explorer)
-    .getAllByRole("treeitem")
-    .find((one) => one.querySelector(".session")?.textContent === name);
-  if (found === undefined) throw new Error(`the explorer has no row named ${name}`);
-  return found;
-};
-
 /** What a row says its chat is doing: its word, its mark's shape, and the mark's colour. */
 const says = (on: HTMLElement) => ({
   word: on.querySelector(".shown-state .word")?.textContent,
@@ -301,7 +291,7 @@ afterEach(() => {
 });
 
 describe("a session whose turn has ended while its tasks work", () => {
-  it("says waiting on 2 tasks in both lists, in the working colour, and wears no hand", async () => {
+  it("says waiting on 2 tasks, in the working colour, and wears no hand", async () => {
     const { move } = core([chat(1), task(2, "check prod"), task(3, "check staging")]);
     render(<App />);
     const tree = await rows(3);
@@ -313,7 +303,6 @@ describe("a session whose turn has ended while its tasks work", () => {
 
     const waiting = { word: "waiting on 2 tasks", shape: "hourglass" };
     expect(says(row(tree, "steward 1"))).toEqual(waiting);
-    expect(says(await explorerRow("steward 1"))).toEqual(waiting);
     // The working colour, which a working task's ring wears too.
     expect(colour(row(tree, "steward 1"))).toBe("var(--state-running)");
     expect(colour(row(tree, "check prod"))).toBe("var(--state-running)");

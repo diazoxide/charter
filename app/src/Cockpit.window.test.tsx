@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { showTheExplorer } from "./test-strips";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 
@@ -122,6 +123,7 @@ describe("the branch cockpit in the window (FM-5)", () => {
   it("focuses a branch from its row's menu, and tells the core, and steps back out on Esc", async () => {
     const asked = core();
     render(<App />);
+    await showTheExplorer();
     const tree = await screen.findByRole("tree", { name: "Repos and branches" });
 
     fireEvent.contextMenu(await within(tree).findByRole("treeitem", { name: /^one/ }));
@@ -133,7 +135,7 @@ describe("the branch cockpit in the window (FM-5)", () => {
     await waitFor(() => expect(said(asked).at(-1)).toEqual(ONE));
 
     screen
-      .getByRole("tree", { name: "Chats and files of one" })
+      .getByRole("tree", { name: "Files of one" })
       .querySelector<HTMLElement>("[data-row]")
       ?.focus();
     await userEvent.keyboard("{Escape}");
@@ -152,6 +154,7 @@ describe("the branch cockpit in the window (FM-5)", () => {
     it("is forgotten once the listing answers without the branch", async () => {
       const asked = core({ focus: GONE });
       render(<App />);
+      await showTheExplorer();
 
       await screen.findByRole("tree", { name: "Repos and branches" });
       await waitFor(() => expect(said(asked).at(-1)).toBeNull());
@@ -183,6 +186,7 @@ describe("the branch cockpit in the window (FM-5)", () => {
   it("draws the focus the record put back as the cockpit", async () => {
     core({ focus: ONE });
     render(<App />);
+    await showTheExplorer();
 
     await screen.findByRole("region", { name: "Branch one" });
     expect(screen.queryByRole("tree", { name: "Repos and branches" })).toBeNull();
