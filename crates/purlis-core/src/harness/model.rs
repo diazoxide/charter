@@ -55,6 +55,10 @@ pub enum Turn {
     Began,
     /// The agent has nothing more to do, so the next move is the operator's.
     Ended,
+    /// The agent stopped for now while helpers it started in the background are still at
+    /// work, and the harness wakes it with what they say (#1626). Its work goes on: the next
+    /// move is nobody's yet, and the turn that follows their end is the one that ends.
+    AwaitsItsHelpers,
 }
 
 /// One thing done inside a turn.

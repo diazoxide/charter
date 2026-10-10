@@ -216,6 +216,8 @@ impl Report {
                     && field("prompt")
                         .is_some_and(|prompt| crate::state::smart_close_typed(&prompt)),
                 unattended: crate::floorguard::unattended(field("permission_mode").as_deref()),
+                // Only a `Stop` of the chat's own can end its turn, so only there is it asked.
+                helpers_at_work: event == Event::Stop && helpers_at_work(read.as_ref()),
                 // The model the session runs on, only where a `SessionStart` names it (#1021):
                 // what a commit's `Assisted-by` then names.
                 model: (event == Event::SessionStart)
@@ -225,6 +227,37 @@ impl Report {
             },
         })
     }
+}
+
+/// **Whether a `Stop` payload says helpers of the chat's own are still at work in the
+/// background**, and will wake it when they finish (#1626).
+///
+/// Claude Code's `Stop` input carries `background_tasks`, the in-flight background work of the
+/// session, which its own schema says is there to tell "session is done" from "session is
+/// paused waiting for background work to wake it" (read from the hook input schema of
+/// 2.1.296; an empty array when nothing is in flight, absent from older versions). Each entry
+/// has a `type`, Claude Code's friendly label for the kind of work.
+///
+/// **Only agents count: `subagent` and `workflow`.** They end by themselves and their end
+/// wakes the chat. A background `shell` or `monitor` may run for as long as the chat does (a
+/// dev server, a log tail), so a chat left with only those has stopped and the person has the
+/// next move. An entry whose `status` is a finished word is not in flight, whatever list it is
+/// in. Anything not read as one of these is no helper at work, so a payload this cannot read
+/// hands the end of the turn to the person, as before.
+pub fn helpers_at_work(payload: Option<&serde_json::Value>) -> bool {
+    payload
+        .and_then(|payload| payload.get("background_tasks"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tasks| {
+            tasks.iter().any(|task| {
+                let word = |name: &str| task.get(name).and_then(serde_json::Value::as_str);
+                matches!(word("type"), Some("subagent" | "workflow"))
+                    && !matches!(
+                        word("status"),
+                        Some("completed" | "failed" | "killed" | "stopped" | "cancelled")
+                    )
+            })
+        })
 }
 
 /// The sub-agent a payload's `agent_id` names, only on a harness where that field was measured
@@ -3717,6 +3750,55 @@ mod tests {
             serde_json::from_str::<Answer>(&line).expect("it reads"),
             said
         );
+    }
+
+    #[test]
+    fn only_a_stop_naming_an_agent_in_flight_says_its_helpers_are_at_work() {
+        // #1626: Claude Code's `background_tasks`, as its 2.1.296 hook input schema shapes it.
+        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        let with = |tasks: serde_json::Value| {
+            serde_json::json!({
+                "session_id": "11111111-2222-4333-8444-555555555555",
+                "background_tasks": tasks,
+            })
+            .to_string()
+        };
+        let task = |kind: &str, status: &str| serde_json::json!({"id": "t1", "type": kind, "status": status, "description": "d"});
+        let at_work = |event: Event, payload: &str| {
+            Report::read(event, payload, &env)
+                .expect("a report")
+                .detail
+                .helpers_at_work
+        };
+        assert!(at_work(
+            Event::Stop,
+            &with(serde_json::json!([task("subagent", "running")]))
+        ));
+        assert!(at_work(
+            Event::Stop,
+            &with(serde_json::json!([task("workflow", "pending")]))
+        ));
+        // On no other event: only a `Stop` of the chat's own ends its turn.
+        let one_agent = with(serde_json::json!([task("subagent", "running")]));
+        assert!(!at_work(Event::Notification, &one_agent));
+        assert!(!at_work(Event::SubagentStop, &one_agent));
+        for not_one in [
+            with(serde_json::json!([])),
+            with(serde_json::json!([
+                task("shell", "running"),
+                task("monitor", "running")
+            ])),
+            with(serde_json::json!([task("subagent", "completed")])),
+            with(serde_json::json!([{"type": 7}])),
+            with(serde_json::json!("subagent")),
+            CLAUDE_STOP.to_owned(),
+            "not json".to_owned(),
+        ] {
+            assert!(
+                !at_work(Event::Stop, &not_one),
+                "{not_one} said helpers at work"
+            );
+        }
     }
 
     #[test]
