@@ -47,6 +47,21 @@
 //! fallback folder in the temp directory is not. `allowAllUnixSockets` is set `false`, never
 //! left out, so a user's `true` cannot merge in. On Linux a sandboxed chat reaches no socket.
 //!
+//! **Through purlis's proxy** (#1665). Read out of Claude Code 2.1.296's own sandbox, and in its
+//! docs: from 2.1.285, `network.httpProxyPort` and `network.socksProxyPort` replace its own
+//! proxy with the one listening there, and a port left out is still its own, so purlis names
+//! both ([`Settings::through`]) or neither. Once they are set, the proxy decides every
+//! connection, and Claude Code's allowed domains, its approval prompts and its check of local
+//! addresses stop applying; purlis's proxy runs that check itself ([`super::reach`]). The
+//! allowed domains are still written: Claude Code restricts a command's network only while
+//! they are set. Its macOS profile then lets a command connect to those two loopback ports and
+//! no other, **unless a settings source turns `allowLocalBinding` on**: that adds every loopback
+//! port, every local service among them. So purlis names it `false`, never leaves it out,
+//! which outranks a user's or a project's `true` (read in 2.1.296's settings merge: a `false`
+//! in force wins; an administrator's settings still outrank purlis's). A Claude Code older
+//! than 2.1.285 keeps its own proxy and the allowed domains, as before
+//! ([`super::Applied::answered`]).
+//!
 //! **What a project's sandbox widens** (spec #1330, #1337). Read out of Claude Code 2.1.291's
 //! own settings schema and its profile builder:
 //! - `filesystem.allowWrite` is *"Additional paths to allow writing within the sandbox"*,
@@ -230,6 +245,7 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
                 "allowedDomains": compiled.hosts,
                 "strictAllowlist": true,
                 "allowAllUnixSockets": false,
+                "allowLocalBinding": false,
             },
             "filesystem": filesystem,
     });
@@ -237,6 +253,23 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
 }
 
 impl Settings {
+    /// These settings for a chat whose commands reach the network through purlis's proxy
+    /// (#1665): `ports`, its HTTP and then its SOCKS5 port, as `network.httpProxyPort` and
+    /// `network.socksProxyPort`, and nothing else changed.
+    ///
+    /// **Both, always**, which a pair of ports holds by its type: with one left out, Claude Code
+    /// starts its own proxy for that one, and a command reaches whatever it allows there. The
+    /// allowed domains stay: Claude Code restricts a command's network only while they are set,
+    /// and with the ports set it hands every connection to the proxy, which decides by the same
+    /// hosts ([`super::reach`]).
+    pub fn through(&self, ports: [u16; 2]) -> Settings {
+        let mut out = self.clone();
+        let [http, socks] = ports;
+        out.sandbox["network"]["httpProxyPort"] = json!(http);
+        out.sandbox["network"]["socksProxyPort"] = json!(socks);
+        out
+    }
+
     /// These settings for a chat whose hooks and `purlis` commands report on `socket`: as
     /// compiled, with that one socket, as the kernel names it, as the only path in
     /// `network.allowUnixSockets` (ADR 0067 §2: the chat may connect to that socket and

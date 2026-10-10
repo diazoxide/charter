@@ -159,6 +159,13 @@ impl Reach {
         }
     }
 
+    /// [`Self::decide`], where a host listed without a port is carried on every port: what
+    /// Claude Code's own proxy did, by name alone, so a Claude Code chat reaches through purlis's
+    /// proxy what it reached before (#1665). The local-address check is the same.
+    pub fn decide_on_any_port(&self, host: &str, port: u16, own: &[IpAddr]) -> Decision {
+        self.decide(host, port, &[port], own)
+    }
+
     /// Whether `ip` on `port` is listed as exactly that address and that port: the one way a
     /// local address is ever carried.
     pub fn lists_exactly(&self, ip: IpAddr, port: u16) -> bool {

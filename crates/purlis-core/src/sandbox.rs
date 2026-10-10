@@ -1672,9 +1672,72 @@ pub struct Applied {
     /// The hosts it lets the chat reach, each with its layer: what its proxy decides by
     /// (#1664). Boxed for [`Decided`]'s reason.
     reach: Box<reach::Reach>,
+    /// Whether the chat's network goes through purlis's proxy (#1665): always for a harness
+    /// purlis wraps, and for Claude Code once its program answered a version that takes the
+    /// proxy's ports ([`Self::answered`]).
+    through_proxy: bool,
+    /// What [`Self::answered`] found to say once about an older Claude Code.
+    older: Option<String>,
 }
 
+/// The first Claude Code whose sandbox takes a proxy's ports from `--settings` (#1665):
+/// `sandbox.network.httpProxyPort` and `socksProxyPort`.
+pub const CLAUDE_CODE_TAKES_PROXY_PORTS: (u32, u32, u32) = (2, 1, 285);
+
+/// The Claude Code versions an older one was already said for, in this process: said once.
+static OLDER_SAID: std::sync::Mutex<Vec<(u32, u32, u32)>> = std::sync::Mutex::new(Vec::new());
+
 impl Applied {
+    /// What a Claude Code chat's program answered `--version` ([`program::checked_answering`],
+    /// #1665): from [`CLAUDE_CODE_TAKES_PROXY_PORTS`] on, its network goes through purlis's
+    /// proxy, its pair of ports named in its `--settings`. An older one, or an answer with no
+    /// version in it, keeps Claude Code's own proxy and the allowed domains, as before, and the
+    /// first such chat on that version in this process carries the sentence that says so
+    /// ([`Self::older_notice`]). A harness purlis wraps goes through the proxy whatever it
+    /// answers.
+    pub fn answered(&mut self, answer: &str) {
+        if self.harness != Harness::ClaudeCode {
+            return;
+        }
+        let version = program::claude_code_version(answer);
+        self.through_proxy = version.is_some_and(|it| it >= CLAUDE_CODE_TAKES_PROXY_PORTS);
+        self.older = None;
+        if self.through_proxy {
+            return;
+        }
+        let key = version.unwrap_or_default();
+        {
+            let mut already = OLDER_SAID.lock().unwrap_or_else(|e| e.into_inner());
+            if already.contains(&key) {
+                return;
+            }
+            already.push(key);
+        }
+        let dotted = |(major, minor, patch): (u32, u32, u32)| format!("{major}.{minor}.{patch}");
+        let newer = dotted(CLAUDE_CODE_TAKES_PROXY_PORTS);
+        let this = version.map_or_else(
+            || "This Claude Code is".to_owned(),
+            |version| format!("Claude Code {} is", dotted(version)),
+        );
+        self.older = Some(format!(
+            "{this} older than {newer}, so its chats reach the network through Claude Code's \
+             own proxy and the same allowed hosts as before, and their connections are not in \
+             purlis's network record. Update Claude Code to {newer} or later to see them there."
+        ));
+    }
+
+    /// The sentence a chat on a Claude Code older than [`CLAUDE_CODE_TAKES_PROXY_PORTS`] says as
+    /// it starts, once per version in this process ([`Self::answered`]); `None` for every other.
+    pub fn older_notice(&self) -> Option<&str> {
+        self.older.as_deref()
+    }
+
+    /// Whether the chat's network goes through purlis's proxy (#1665): what
+    /// [`Self::confine_telling`] starts one for.
+    pub fn through_purlis_proxy(&self) -> bool {
+        self.through_proxy
+    }
+
     /// The harness it was compiled for.
     pub fn harness(&self) -> Harness {
         self.harness
@@ -1745,6 +1808,15 @@ impl Applied {
             no_opt_out: locked.is_some(),
             ..*at
         };
+        // A chat whose network goes through purlis's proxy is never started without it (#1665):
+        // a Claude Code chat's line without its ports would leave it on its own proxy, unseen.
+        // (A wrapped harness's adapter refuses that itself.)
+        if self.harness == Harness::ClaudeCode && self.through_proxy && at.confinement.is_none() {
+            return Err(under(format!(
+                "{LEAD}, and purlis's network proxy was not started for this Claude Code chat, \
+                 so nothing was started."
+            )));
+        }
         let mut line = self
             .harness
             .adapter()
@@ -1789,7 +1861,9 @@ impl Applied {
 
     /// What has to run for as long as a chat under this sandbox does, started now: charter's
     /// egress proxy and the chat's own temp directory, for a harness charter wraps ([`Form::
-    /// Opencode`], [`Form::Codex`]); `None` for a harness whose own sandbox holds the policy.
+    /// Opencode`], [`Form::Codex`]) and for a Claude Code that goes through purlis's proxy
+    /// ([`Self::through_purlis_proxy`], #1665); `None` for an older Claude Code, whose own
+    /// proxy holds the policy.
     pub fn confine(&self) -> std::io::Result<Option<Confinement>> {
         self.confine_keeping(egress::Refusals::default())
     }
@@ -1812,14 +1886,27 @@ impl Applied {
         refusals: egress::Refusals,
         reached: Option<egress::Reached>,
     ) -> std::io::Result<Option<Confinement>> {
-        match &*self.form {
-            Form::Opencode(_) | Form::Codex(_) => Confinement::serving(egress::Serving {
-                refusals,
-                reached,
-                ..egress::Serving::of((*self.reach).clone())
-            })
-            .map(Some),
-            Form::ClaudeCode(_) => Ok(None),
+        // Claude Code through purlis's proxy (#1665): its pair of ports, which its adapter
+        // names in its `--settings`; an older one keeps its own proxy.
+        if !self.through_proxy {
+            return Ok(None);
+        }
+        Confinement::serving(self.serving(refusals, reached)).map(Some)
+    }
+
+    /// What this chat's proxy serves ([`Self::confine_telling`]): the layers this was compiled
+    /// with ([`reach`]), and for Claude Code a host listed without a port on every port, as
+    /// Claude Code's own proxy carried it (#1665), so a chat reaches what it reached before.
+    pub fn serving(
+        &self,
+        refusals: egress::Refusals,
+        reached: Option<egress::Reached>,
+    ) -> egress::Serving {
+        egress::Serving {
+            refusals,
+            reached,
+            any_port: matches!(*self.form, Form::ClaudeCode(_)),
+            ..egress::Serving::of((*self.reach).clone())
         }
     }
 }
@@ -2890,6 +2977,9 @@ pub(crate) fn applied_of(
             writable: compiled.writable.clone(),
         }),
         reach: Box::new(compiled.reach.clone()),
+        // Claude Code waits for its program's answer ([`Applied::answered`]).
+        through_proxy: harness != Harness::ClaudeCode,
+        older: None,
     })
 }
 
@@ -3287,6 +3377,8 @@ pub mod program;
 pub mod reach;
 pub mod seatbelt;
 
+#[cfg(test)]
+mod claude_tests;
 #[cfg(test)]
 mod codex_tests;
 #[cfg(test)]
