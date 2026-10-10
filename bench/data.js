@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791619123033,
+  "lastUpdate": 1791620139434,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5670,6 +5670,48 @@ window.BENCHMARK_DATA = {
             "value": 104.10549850000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.885, 104.045, 104.105, 104.803, 104.833 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "3c23459003415fafcc94c30bdb195e823ac956df",
+          "message": "Install the cached Linux packages from apt's archives directory\n\napt takes a .deb named on its command line as already downloaded only when the file is in\nDir::Cache::Archives. From ~/.cache/linux-packages it queued every cached file as a download,\n--no-download dropped them, and each warm run failed with \"Unable to fetch some archives\"\nand fell back to the mirror. The cached files are now copied there and named from there.\n\nThe test's apt-get stand-in now behaves the same way, so the old call fails the warm-cache test.\n\nRefs #1477\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T12:03:28+04:00",
+          "tree_id": "89039b5d12378cf7cc47d11b1dbfc064803c3d4d",
+          "url": "https://github.com/purlis/purlis/commit/3c23459003415fafcc94c30bdb195e823ac956df"
+        },
+        "date": 1791620138910,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4672655,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.439, 0.454, 0.467, 0.468, 0.472 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.312037,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.212, 16.260, 16.312, 16.315, 16.454 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.862476,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.179, 101.229, 101.862, 102.009, 102.945 ms"
           }
         ]
       }
