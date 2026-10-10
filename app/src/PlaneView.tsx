@@ -59,6 +59,7 @@ import {
   type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
+  type MemoryScope,
   type MemoryView,
   type ViewTab,
 } from "./bindings";
@@ -308,7 +309,7 @@ import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
-import { useMemoryEdits } from "./MemoryEdits";
+import { MemoryStores, useMemoryEdits, useMemoryStores } from "./MemoryEdits";
 import { AddToAChat } from "./AddToAChat";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewPane } from "./Views";
@@ -5865,6 +5866,17 @@ export const PlaneView = memo(function PlaneView({
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
   const personas = workspaceState.panels?.personas;
+  /** The project's memory stores, for a memory's Move rows (#1190): read again when a memory is
+   *  written, or a workspace or a persona comes or goes. */
+  const memoryStores = useMemoryStores(
+    plane,
+    [
+      memoryEdits.changed,
+      ...(sidebar?.workspaces ?? []).map((ws) => ws.name),
+      "",
+      ...(personas ?? []),
+    ].join("\n"),
+  );
   /** What Ask {persona}… offers on this project's chats, as the core answers. */
   const askOffer = useAskOffer(
     plane,
@@ -5967,6 +5979,7 @@ export const PlaneView = memo(function PlaneView({
             askable: (session) => !shells.has(session),
             branch: nearBranch,
             harnesses: harnessCards,
+            memoryStores,
           }),
     [
       askedBy,
@@ -6013,6 +6026,7 @@ export const PlaneView = memo(function PlaneView({
       shells,
       nearBranch,
       harnessCards,
+      memoryStores,
     ],
   );
 
@@ -6749,6 +6763,7 @@ export const PlaneView = memo(function PlaneView({
       tasksBelow={tasksBelow}
       doings={doings}
       references={referenceChats}
+      memoryStores={memoryStores}
       personas={personaMarks}
       askPersona={openAskPersona}
       brief={openBrief}
@@ -8142,6 +8157,7 @@ function Lent({
   tasksBelow,
   doings,
   references,
+  memoryStores,
   personas,
   askPersona,
   brief,
@@ -8154,6 +8170,8 @@ function Lent({
   /** What each working chat is doing, for the one line under its name (#1493). */
   doings: DoingsOf;
   references: ChatsForReferences;
+  /** The project's memory stores, for the memory lists' Move rows (#1190). */
+  memoryStores: readonly MemoryScope[];
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
   askPersona: OpenAskPersona;
@@ -8168,15 +8186,17 @@ function Lent({
       <TasksBelowLent below={tasksBelow}>
         <DoingsHere.Provider value={doings}>
           <ReferenceChats.Provider value={references}>
-            <PersonaMarks.Provider value={personas.marks}>
-              <ReloadPersonaMarks.Provider value={personas.reload}>
-                <AskPersonaOpener value={askPersona}>
-                  <BriefOpener value={brief}>
-                    <AnswerOpener value={answer}>{children}</AnswerOpener>
-                  </BriefOpener>
-                </AskPersonaOpener>
-              </ReloadPersonaMarks.Provider>
-            </PersonaMarks.Provider>
+            <MemoryStores.Provider value={memoryStores}>
+              <PersonaMarks.Provider value={personas.marks}>
+                <ReloadPersonaMarks.Provider value={personas.reload}>
+                  <AskPersonaOpener value={askPersona}>
+                    <BriefOpener value={brief}>
+                      <AnswerOpener value={answer}>{children}</AnswerOpener>
+                    </BriefOpener>
+                  </AskPersonaOpener>
+                </ReloadPersonaMarks.Provider>
+              </PersonaMarks.Provider>
+            </MemoryStores.Provider>
           </ReferenceChats.Provider>
         </DoingsHere.Provider>
       </TasksBelowLent>

@@ -23,6 +23,7 @@ import {
   type Draft,
   type MemoryRef,
 } from "./memories";
+import { MOVES_WHOLE, PUBLISHED_WITH_THE_PROJECT, storeLabel } from "./memoryMoves";
 
 /**
  * **One memory, in a tab of its own** (SI-9b, ADR 0065 Q2, Q3, Q10).
@@ -300,18 +301,6 @@ function Meta({ at, memory }: { at: MemoryRef; memory?: MemoryView }) {
   );
 }
 
-/** What the Move choice calls a store. */
-function scopeLabel(scope: MemoryScope): string {
-  switch (scope.kind) {
-    case "workspace":
-      return `${scope.name} — workspace`;
-    case "persona":
-      return `${scope.name} — persona`;
-    case "shared":
-      return "shared";
-  }
-}
-
 /**
  * **Move a memory to another store** (KN-3): a workspace's journal, a persona's memory or shared
  * memory. The file moves whole — its title and stamp with it, nothing copied — and the tab
@@ -379,13 +368,13 @@ function MoveMemory({
     <div className="memory-move">
       <SettingRow
         label="Move to"
-        help="Moves the file whole, with its title and date. Nothing is copied. Persona and shared memory are published with the project."
+        help={`${MOVES_WHOLE} ${PUBLISHED_WITH_THE_PROJECT}`}
         control={(ids) => (
           <Choice
             ids={ids}
             kind="select"
             unset="Pick a store…"
-            options={others.map((scope) => ({ value: scopeKey(scope), label: scopeLabel(scope) }))}
+            options={others.map((scope) => ({ value: scopeKey(scope), label: storeLabel(scope) }))}
             value={picked}
             onValueChange={setPicked}
           />

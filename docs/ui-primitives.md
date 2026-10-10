@@ -277,6 +277,10 @@ details:
   declaring persona, then each action the core left out as a disabled row whose tooltip is the
   core's sentence — and it runs inside the menu's content, which Radix mounts only while the
   menu is open, so a strip's fifty tabs do not pay the scan per render.
+  "Move to ▸" on a memory's row is the same shape (#1190): `actions.moveRows` picks that
+  memory's `memory.move:<key>:<store>` rows, one per store but its own, each named as the
+  memory tab's Move names the store, with the tab's audience sentence as the note of a row into
+  a store the project publishes.
 - **Shift+F10 and the menu key open it on the element that has the keyboard** (purlis#174).
   macOS has no keyboard convention for a context menu and its WebView raises no `contextmenu`
   for either key, so `Menued` dispatches the one a right-click would — and only when the

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useLentMemoryStores } from "./MemoryEdits";
 import {
   Activity,
   Archive,
@@ -1062,7 +1063,9 @@ function AnsweredBlocks({
   const [open, setOpen] = useState<string>();
   // **A memory row's own rows** (SI-9b): Open, Edit and Delete for each memory this view lists
   // (`actions.listedMemoryOffers`, which a workspace's Memory section uses too).
-  const memories = useMemo(() => listedMemoryOffers(blocks), [blocks]);
+  // And a Move into each of the project's other stores (#1190), which the window lends.
+  const stores = useLentMemoryStores();
+  const memories = useMemo(() => listedMemoryOffers(blocks, stores), [blocks, stores]);
   const lookUp = (id: string) => memories.get(id) ?? offerFor?.(id);
   return (
     <>

@@ -56,7 +56,8 @@ import {
   besideId,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows, inPalette } from "./actions";
-import { NO_LINK_FOLLOWED } from "./actions";
+import { NO_LINK_FOLLOWED, listedMemoryOffers, memoryMoveId, moveRows } from "./actions";
+import { PUBLISHED_WITH_THE_PROJECT } from "./memoryMoves";
 import { ANSWER_SAYS, BRIEF_SAYS, answerId, answerRows, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
 import {
@@ -250,6 +251,10 @@ function doing(): Doing & { calls: string[] } {
     }),
     archiveMemory: vi.fn(async (ref: MemoryRef, title: string) => {
       calls.push(`archiveMemory:${memoryKey(ref)},${title}`);
+      return { ok: true as const };
+    }),
+    moveMemory: vi.fn(async (ref: MemoryRef, title: string, to: MemoryScope) => {
+      calls.push(`moveMemory:${memoryKey(ref)},${title},${JSON.stringify(to)}`);
       return { ok: true as const };
     }),
     newMemory: vi.fn((scope: MemoryScope) => {
@@ -2555,6 +2560,121 @@ describe("a memory's rows (SI-9b, ADR 0065)", () => {
       expect.arrayContaining([`memory.open:${key}`, `memory.edit:${key}`, `memory.delete:${key}`]),
     );
     expect(by(offers, `memory.edit:${key}`)?.title).toBe("Edit memory: Defects go upstream");
+  });
+
+  describe("Move (#1190)", () => {
+    const stores: MemoryScope[] = [
+      { kind: "workspace", name: "alpha" },
+      { kind: "persona", name: "steward" },
+      { kind: "persona", name: "ops" },
+      { kind: "shared" },
+    ];
+    const moves = (offers: readonly Offer[]) =>
+      offers.filter((offer) => offer.does.verb === "moveMemory");
+
+    it("offers a row per store but its own, by `memory.move:<key>:<store>`", () => {
+      const rows = moves(memoryOffers(ref, "Defects go upstream", stores));
+
+      expect(ids(rows)).toEqual([
+        `memory.move:${key}:workspace/alpha`,
+        `memory.move:${key}:persona/ops`,
+        `memory.move:${key}:shared`,
+      ]);
+      expect(rows.map((row) => row.title)).toEqual([
+        "Move memory to alpha's memory: Defects go upstream",
+        "Move memory to ops's memory: Defects go upstream",
+        "Move memory to shared memory: Defects go upstream",
+      ]);
+      expect(memoryMoveId(key, { kind: "shared" })).toBe(`memory.move:${key}:shared`);
+    });
+
+    it("says the tab's audience sentence on a move into a store the project publishes", () => {
+      const rows = moves(memoryOffers(ref, "Defects go upstream", stores));
+
+      expect(rows.map((row) => row.note)).toEqual([
+        undefined,
+        PUBLISHED_WITH_THE_PROJECT,
+        PUBLISHED_WITH_THE_PROJECT,
+      ]);
+    });
+
+    it("offers no Move while the stores are unread, and none where its own is the only one", () => {
+      expect(moves(memoryOffers(ref, "Defects go upstream"))).toEqual([]);
+      expect(moves(memoryOffers(ref, "Defects go upstream", [ref.scope]))).toEqual([]);
+    });
+
+    it("moves that memory into that store, asking nothing first", async () => {
+      const hands = doing();
+      const offers = memoryOffers(ref, "Defects go upstream", stores);
+
+      await run(offers, `memory.move:${key}:shared`, hands);
+
+      expect(hands.calls).toEqual([`moveMemory:${key},Defects go upstream,{"kind":"shared"}`]);
+    });
+
+    it("says the core's refusal in its words", async () => {
+      const hands = doing();
+      hands.moveMemory = vi.fn(async () => ({
+        ok: false as const,
+        refused: "shared memory already holds defects-go-upstream",
+      }));
+      const [row] = moves(memoryOffers(ref, "Defects go upstream", stores));
+
+      expect(await perform(row, hands)).toEqual({
+        ok: false,
+        refused: "shared memory already holds defects-go-upstream",
+      });
+    });
+
+    it("are what a row's Move to submenu draws, and only that memory's", () => {
+      const other = { scope: ref.scope, slug: "defects" };
+      const offers = catalogued([
+        ...memoryOffers(ref, "Defects go upstream", stores),
+        ...memoryOffers(other, "Defects", stores),
+      ]);
+
+      expect(ids(moveRows(key, offers))).toEqual([
+        `memory.move:${key}:workspace/alpha`,
+        `memory.move:${key}:persona/ops`,
+        `memory.move:${key}:shared`,
+      ]);
+      // A memory whose slug starts another's is not mixed into it.
+      expect(moveRows("persona/steward/defects", offers).map((row) => row.name)).toEqual([
+        "Defects",
+        "Defects",
+        "Defects",
+      ]);
+    });
+
+    it("are listed for a memory list's rows, and for an open memory tab in the palette", () => {
+      const listed = listedMemoryOffers(
+        [
+          {
+            kind: "list",
+            empty: { headline: "", body: null, offer: null },
+            rows: [
+              {
+                key: "a",
+                text: "Defects go upstream",
+                note: null,
+                mark: "",
+                tone: "",
+                detail: null,
+                runs: `memory.open:${key}`,
+                actions: [],
+              },
+            ],
+          },
+        ],
+        stores,
+      );
+      expect(listed.has(`memory.move:${key}:shared`)).toBe(true);
+
+      const tabs = openView(noTabs(), memoryView(ref), "Defects go upstream", "alpha");
+      expect(ids(catalogue(now({ tabs, memoryStores: stores })))).toEqual(
+        expect.arrayContaining([`memory.move:${key}:shared`, `memory.move:${key}:persona/ops`]),
+      );
+    });
   });
 
   it("are not offered for a new memory's tab, which has nothing yet to edit or delete", () => {
