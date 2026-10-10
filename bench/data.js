@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791642948988,
+  "lastUpdate": 1791643946369,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5964,6 +5964,48 @@ window.BENCHMARK_DATA = {
             "value": 101.136529,
             "unit": "ms",
             "extra": "median of 5 runs: 100.325, 100.942, 101.137, 101.703, 102.166 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "53e42d1ebc4d4a2f520b77d9fd982d61b694c42e",
+          "message": "Show the focused workspace's chats in the Chats list\n\nThe Chats section listed every running chat of the project whatever\nworkspace the strip had focused. That was the 2026-10-07 design (#1447,\nADR 0038's amendment), not a regression; the operator's report of\n2026-10-10 replaces it.\n\nThe section now lists the trees whose top row works in the focused\nworkspace, each with every task below it wherever the task works. A chat\nstarted at the plane root is the root view's. An \"all workspaces\" chip\nbeside \"needs you\" and \"working\" lists every workspace again, and a row\nasked for elsewhere (the explorer's tasks-from-other-places line) turns it\non. A chat in another workspace that needs you is named on the line under\nthe filter with a Go button, and the title bar's queue still lists it.\n\nADR 0038 gains a 2026-10-10 amendment saying so.\n\nCloses #1655\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T18:27:39+04:00",
+          "tree_id": "df274053d5e0274bc85faef3586e2fb83ff4cfd3",
+          "url": "https://github.com/purlis/purlis/commit/53e42d1ebc4d4a2f520b77d9fd982d61b694c42e"
+        },
+        "date": 1791643945846,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5326215,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.490, 0.511, 0.533, 0.553, 0.572 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.97886,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.601, 16.736, 16.979, 16.984, 17.259 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.929711,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.928, 103.512, 103.930, 105.539, 106.180 ms"
           }
         ]
       }
