@@ -388,6 +388,9 @@ pub struct Serving {
     pub tunnel_ports: Vec<u16>,
     /// The ports a plain request is carried to for a host listed without one.
     pub plain_ports: Vec<u16>,
+    /// Whether a host listed without a port is carried on every port instead (#1665): what a
+    /// Claude Code chat's own proxy did, by name alone ([`Reach::decide_on_any_port`]).
+    pub any_port: bool,
     pub limits: Limits,
     pub refusals: Refusals,
     /// Told each connection carried, coalesced ([`Tally`]); none tells nobody.
@@ -402,6 +405,7 @@ impl Serving {
             reach,
             tunnel_ports: TUNNEL_PORTS.to_vec(),
             plain_ports: PLAIN_PORTS.to_vec(),
+            any_port: false,
             limits: LIMITS,
             refusals: Refusals::default(),
             reached: None,
@@ -479,6 +483,7 @@ impl Proxy {
             reach: serving.reach,
             tunnel_ports: serving.tunnel_ports,
             plain_ports: serving.plain_ports,
+            any_port: serving.any_port,
             idle: limits.idle,
             head: limits.head,
             refusals: serving.refusals.clone(),
@@ -612,6 +617,7 @@ struct Allowed {
     reach: Reach,
     tunnel_ports: Vec<u16>,
     plain_ports: Vec<u16>,
+    any_port: bool,
     idle: Duration,
     head: Duration,
     refusals: Refusals,
@@ -622,6 +628,9 @@ struct Allowed {
 impl Allowed {
     /// The decision for a connection to `host` on `port`, a tunnel or not.
     fn decide(&self, host: &str, port: u16, tunnel: bool, own: &[std::net::IpAddr]) -> Decision {
+        if self.any_port {
+            return self.reach.decide_on_any_port(host, port, own);
+        }
         let ports = if tunnel {
             &self.tunnel_ports
         } else {

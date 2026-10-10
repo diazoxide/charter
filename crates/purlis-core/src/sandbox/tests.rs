@@ -1372,6 +1372,7 @@ fn a_claude_code_chat_reaches_only_the_presets_hosts_and_is_never_asked_to_widen
             "allowedDomains": ["github.com"],
             "strictAllowlist": true,
             "allowAllUnixSockets": false,
+            "allowLocalBinding": false,
         })
     );
 }
