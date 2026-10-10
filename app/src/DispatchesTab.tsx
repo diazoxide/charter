@@ -4,6 +4,7 @@ import { ChatAsk } from "./ChatAsk";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
 import { PersonaMark } from "./PersonaMark";
+import { useTaskBranchActs, type BranchTold } from "./taskBranchActs";
 import {
   commands,
   type DispatchRow,
@@ -70,6 +71,9 @@ const WHILE_RUNNING_MS = 5000;
  * that holds work stays. Commits made in the folder on no branch are the one thing a discard
  * loses, and the question names them as lost. The paths the person was shown go back with the
  * answer, and the core removes nothing where the folder holds other paths by then. A refusal (a chat is still open in it) stands as a Notice.
+ * **Merge…** beside it, for a task that has ended, asks the Changes tab's own question
+ * (`taskBranchActs.tsx`, #1534): what the merge would do, read from the core now, and nothing
+ * merged until it is answered; a merge the core would refuse is said instead.
  * **Review changes** beside it opens the task's Changes tab (#1534), with what its branch
  * changed and the person's Merge: the same tab its finished row in the chats list opens, so a
  * row cleared there still reaches it here. A branch whose folder is gone (discarded, removed by
@@ -114,6 +118,18 @@ export function DispatchesTab({
   /** Why the core would not ask about a row's worktree at all. */
   const [kept, setKept] = useState<{ id: string; task: string; why: string }>();
   const [busy, setBusy] = useState(false);
+  /** What the last Merge… came to: merged, or why not, in the core's words. */
+  const [merged, setMerged] = useState<{ task: string } & BranchTold>();
+  const branchActs = useTaskBranchActs({
+    plane,
+    told: (said) => setMerged((was) => (was === undefined ? undefined : { ...was, ...said })),
+    changed: () => setAgain((was) => was + 1),
+  });
+  const askToMerge = (row: DispatchRow) => {
+    setKept(undefined);
+    setMerged({ task: row.task, tone: "news", says: "" });
+    void branchActs.askToMerge(row.id);
+  };
   const askToDiscard = async (row: DispatchRow) => {
     setKept(undefined);
     const answer = await commands
@@ -361,6 +377,19 @@ export function DispatchesTab({
                             Review changes
                           </button>
                         )}
+                        {/* Its folder is there and the task has ended: the Changes tab's
+                            Merge, asked the same way (#1534). */}
+                        {row.worktree.discard && row.ended !== null && (
+                          <button
+                            type="button"
+                            className="dispatch-discard"
+                            tabIndex={0}
+                            aria-label={`Merge the branch of ${row.task}`}
+                            onClick={() => askToMerge(row)}
+                          >
+                            Merge…
+                          </button>
+                        )}
                         {row.worktree.discard && (
                           <button
                             type="button"
@@ -437,6 +466,17 @@ export function DispatchesTab({
           {kept.why}
         </Notice>
       )}
+      {merged !== undefined && merged.says !== "" && (
+        <Notice
+          cause={`dispatch-merged:${merged.task}`}
+          tone={merged.tone}
+          label={merged.tone === "trouble" ? "Nothing was merged" : "Merged"}
+          onDismiss={() => setMerged(undefined)}
+        >
+          {merged.says}
+        </Notice>
+      )}
+      {branchActs.asking}
       {discarding !== undefined && (
         <ChatAsk
           title="Discard this branch's folder?"

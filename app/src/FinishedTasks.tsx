@@ -1,6 +1,8 @@
 import { memo, useContext, useState } from "react";
 import { ChevronDown, ChevronRight, SquareTerminal } from "lucide-react";
 import type { FinishedTask } from "./bindings";
+import type { Catalogued, Offer } from "./actions";
+import { Menued } from "./Menus";
 import { briefTitle, useOpenBrief } from "./Brief";
 import { firstLine, foldedOf, qualifierOf, shownOf } from "./finished";
 import { PersonaMark } from "./PersonaMark";
@@ -35,6 +37,9 @@ import { WaitingTaskWaysContext } from "./waitingTasks";
  * V100-66); **Review changes** for a task that worked on its own branch, whose tab offers the
  * person's Merge and Discard. The report's line about what changed opens the same tab.
  *
+ * **A row has a menu** (#1534): for a task on its own branch, the catalogue's Merge… and, under
+ * the line, Discard branch…, which ask the Changes tab's own questions.
+ *
  * Not rows of the tree: there is no chat behind one to bring forward, so the arrows stop on the
  * chats and Tab reaches these, each a button of its own.
  */
@@ -46,6 +51,8 @@ export const FinishedTasks = memo(function FinishedTasks({
   onReopen,
   onLook,
   onChanges,
+  offers,
+  onPress,
 }: {
   /** The chat that asked for them, by the name its row has. */
   asker: string;
@@ -61,6 +68,9 @@ export const FinishedTasks = memo(function FinishedTasks({
   onLook?: (task: FinishedTask) => void;
   /** Opens what a task changed, in a tab of its own; no Changes is offered without it. */
   onChanges?: (task: FinishedTask) => void;
+  /** The catalogue a row's menu is drawn from (#1534); no menu without it. */
+  offers?: Catalogued;
+  onPress?: (offer: Offer) => void;
 }) {
   /** Whether the folded rows are drawn. This window's own, and folded to start with. */
   const [open, setOpen] = useState(false);
@@ -77,6 +87,8 @@ export const FinishedTasks = memo(function FinishedTasks({
             onReopen={onReopen}
             onLook={onLook}
             onChanges={onChanges}
+            offers={offers}
+            onPress={onPress}
           />
         ))}
         {folded.length > 0 && (
@@ -105,7 +117,14 @@ export const FinishedTasks = memo(function FinishedTasks({
         )}
         {open &&
           folded.map((task) => (
-            <FinishedRow key={task.id} task={task} onReopen={onReopen} onChanges={onChanges} />
+            <FinishedRow
+              key={task.id}
+              task={task}
+              onReopen={onReopen}
+              onChanges={onChanges}
+              offers={offers}
+              onPress={onPress}
+            />
           ))}
       </div>
     </li>
@@ -123,12 +142,16 @@ function FinishedRow({
   onReopen,
   onLook,
   onChanges,
+  offers,
+  onPress,
 }: {
   task: FinishedTask;
   onClear?: (ids: string[]) => void;
   onReopen: (task: FinishedTask) => Promise<string | undefined>;
   onLook?: (task: FinishedTask) => void;
   onChanges?: (task: FinishedTask) => void;
+  offers?: Catalogued;
+  onPress?: (offer: Offer) => void;
 }) {
   // A task that did not start says why at once (#1497): its report is purlis's one sentence,
   // and the reason is the whole of what there is to know about it.
@@ -169,7 +192,7 @@ function FinishedRow({
       .then(setRefused)
       .finally(() => setBusy(false));
   };
-  return (
+  const row = (
     <div className="finished-task" data-how={task.how} data-task-id={task.id}>
       <div className="finished-line">
         <button
@@ -377,5 +400,12 @@ function FinishedRow({
         </div>
       )}
     </div>
+  );
+  // Its menu (#1534): the catalogue's rows for this task, where it has any.
+  if (offers === undefined || onPress === undefined) return row;
+  return (
+    <Menued on={{ on: "finished", id: task.id }} offers={offers} onPress={onPress}>
+      {row}
+    </Menued>
   );
 }

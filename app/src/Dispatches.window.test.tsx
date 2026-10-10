@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type {
+  BranchMerge,
   DispatchRow,
   NotStartedRow,
   OpenChat,
@@ -192,6 +193,8 @@ function core(
     loss?: WorktreeLoss | Error;
     /** The core's refusal of the discard itself. */
     discardRefused?: string;
+    /** What the core says a merge would do now (#1534). */
+    merge?: BranchMerge;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -254,6 +257,9 @@ function core(
         said: null,
         unknown: null,
       };
+    if (cmd === "task_branch_merge_question") return on.merge;
+    if (cmd === "task_branch_merge")
+      return { branch: on.merge?.branch ?? "", folder_removed: true };
     if (cmd === "dispatch_worktree_discard") {
       if (on.discardRefused !== undefined) throw on.discardRefused;
       return null;
@@ -909,6 +915,78 @@ describe("a dispatch's own branch", () => {
         id: "01K6D",
       }),
     );
+  });
+
+  const MERGE: BranchMerge = {
+    task: "fix the queue",
+    repo: "api",
+    branch: BRANCH,
+    into: "main",
+    tip: "a".repeat(40),
+    ahead: 2,
+    behind: 0,
+    uncommitted: [],
+  };
+  const MERGES = "Merge the branch of fix the queue";
+
+  it("offers Merge… on a kept branch of a task that has ended, and on no other row (#1534)", async () => {
+    core({
+      rows: [
+        ...WITH_BRANCHES,
+        LEFT,
+        dispatch({
+          ...WITH_BRANCHES[0],
+          id: "01K6R",
+          task: "still at it",
+          outcome: "running",
+          ended: null,
+        }),
+      ],
+    });
+    render(<App />);
+    await opened();
+
+    expect(within(row("01K6W")).getByRole("button", { name: MERGES })).toBeInTheDocument();
+    for (const id of ["01K6M", "01K6P", "01K6D", "01K6R"])
+      expect(within(row(id)).queryByRole("button", { name: /^Merge/ })).toBeNull();
+  });
+
+  it("asks the Changes tab's own question before it merges, and merges what was shown", async () => {
+    const { asked } = core({ rows: WITH_BRANCHES, merge: MERGE });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: MERGES }));
+
+    const question = await screen.findByRole("alertdialog", { name: "Merge this task's branch?" });
+    expect(question).toHaveTextContent(
+      `This lands 2 commits of ${BRANCH}, which purlis cut for fix the queue, in main in api.`,
+    );
+    expect(asked.some((one) => one.cmd === "task_branch_merge")).toBe(false);
+    await userEvent.click(within(question).getByRole("button", { name: "Merge" }));
+
+    await waitFor(() =>
+      expect(asked.find((one) => one.cmd === "task_branch_merge")?.args).toEqual(
+        expect.objectContaining({ id: "01K6W", seen: MERGE }),
+      ),
+    );
+    expect(
+      await screen.findByText(
+        `${BRANCH} is merged, and its folder is removed: it held nothing else.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says why a merge would be refused, and asks nothing", async () => {
+    const { asked } = core({ rows: WITH_BRANCHES, merge: { ...MERGE, behind: 3 } });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: MERGES }));
+
+    expect(await screen.findByText(/no longer fast-forwards/)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(asked.some((one) => one.cmd === "task_branch_merge")).toBe(false);
   });
 
   it("asks before it discards, naming every file that would go and what the branch keeps", async () => {
