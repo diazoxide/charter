@@ -1,5 +1,6 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import type { ReactNode } from "react";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **The question a chat Notice asks before it does what cannot be taken back** (NO-3): Forget
@@ -69,7 +70,7 @@ export function ChatAsk({
               {trouble}
             </p>
           )}
-          <div className="answer">
+          <AnswerBar>
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
             <AlertDialog.Cancel asChild>
               <button type="button" tabIndex={0} disabled={busy}>
@@ -85,7 +86,7 @@ export function ChatAsk({
             >
               {answer}
             </button>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

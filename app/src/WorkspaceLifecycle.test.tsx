@@ -286,7 +286,7 @@ describe("deleting a workspace", () => {
       within(dialog)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Delete workspace", "Cancel"]);
+    ).toEqual(["Cancel", "Delete workspace"]);
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
 
@@ -407,7 +407,7 @@ describe("deleting a workspace", () => {
       within(dialog)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Delete workspace", "Cancel"]);
+    ).toEqual(["Cancel", "Delete workspace"]);
   });
 
   it("deletes nothing when the dialog is cancelled", async () => {

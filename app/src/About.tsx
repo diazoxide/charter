@@ -4,6 +4,7 @@ import { Info } from "lucide-react";
 import { commands, type About } from "./bindings";
 import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
 import vendored from "../icons/vendored.json";
+import { AnswerBar } from "./AnswerBar";
 
 /** Where every version's notes are, the same text this dialog shows for one of them. */
 const RELEASES = "https://github.com/purlis/purlis/releases";
@@ -102,25 +103,9 @@ export function AboutCharter() {
           <Dialog.Title>About purlis</Dialog.Title>
           <div id="about-what">
             {trouble !== undefined ? (
-              <>
-                <p className="honest doctor-trouble" role="alert">
-                  purlis could not read what this version brought: {trouble}
-                </p>
-                {/* The dialog reads once (NO-8's follow-up, #1296): this is the retry, where
-                    closing and opening it again was. */}
-                <div className="doing">
-                  <button
-                    type="button"
-                    tabIndex={0}
-                    onClick={() => {
-                      setTrouble(undefined);
-                      ask();
-                    }}
-                  >
-                    Read again
-                  </button>
-                </div>
-              </>
+              <p className="honest doctor-trouble" role="alert">
+                purlis could not read what this version brought: {trouble}
+              </p>
             ) : about === undefined ? (
               <p className="pending">reading what this version brought…</p>
             ) : (
@@ -136,14 +121,28 @@ export function AboutCharter() {
             </p>
             <Notices />
           </div>
-          {/* `tabIndex={0}` on Close, per `docs/ui-primitives.md`, as `ExternalLink` gives each link. */}
-          <div className="answer">
+          {/* `tabIndex={0}` on each, per `docs/ui-primitives.md`, as `ExternalLink` gives each link. */}
+          <AnswerBar>
             <Dialog.Close asChild>
               <button type="button" tabIndex={0}>
                 Close
               </button>
             </Dialog.Close>
-          </div>
+            {/* The dialog reads once (NO-8's follow-up, #1296): this is the retry, where closing
+                and opening it again was. In the bar, after the way out, as every act is (#1210). */}
+            {trouble !== undefined && (
+              <button
+                type="button"
+                tabIndex={0}
+                onClick={() => {
+                  setTrouble(undefined);
+                  ask();
+                }}
+              >
+                Read again
+              </button>
+            )}
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

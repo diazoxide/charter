@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { commands, type ActionAnswer, type PlaneId, type RowAction } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **An extension's action, run** — from a row of its view or from a palette command
@@ -107,7 +108,12 @@ export function AskFirst({
               {trouble ?? seen}
             </p>
           )}
-          <div className="doing">
+          <AnswerBar>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} disabled={running} ref={cancel}>
+                {seen === undefined ? "Cancel" : "Close"}
+              </button>
+            </AlertDialog.Cancel>
             {seen === undefined && (
               <button
                 type="button"
@@ -130,12 +136,7 @@ export function AskFirst({
                 {action.deletes ? "Delete" : "Run"}
               </button>
             )}
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} disabled={running} ref={cancel}>
-                {seen === undefined ? "Cancel" : "Close"}
-              </button>
-            </AlertDialog.Cancel>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

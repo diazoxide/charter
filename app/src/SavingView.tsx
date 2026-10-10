@@ -24,6 +24,7 @@ import {
 import { Choice, Field, SettingActions, SettingRow, type Option } from "./settings/components";
 import { askSettingsLink, type SettingsLink } from "./settings/links";
 import { Notice } from "./Notice";
+import { AnswerBar } from "./AnswerBar";
 
 /** Settings › Saving › Mode: where a project's save mode is changed (SE-22's address). */
 const SAVING_MODE: SettingsLink = { group: "project.saving", setting: "project.saving.plane.mode" };
@@ -423,16 +424,16 @@ function ConfirmSaveAll({
               </li>
             ))}
           </ul>
-          <div className="doing">
-            <button type="button" className="ends-it" tabIndex={0} onClick={onSave}>
-              {`Save all ${count}`}
-            </button>
+          <AnswerBar>
             <AlertDialog.Cancel asChild>
               <button type="button" tabIndex={0} ref={cancel}>
                 Cancel
               </button>
             </AlertDialog.Cancel>
-          </div>
+            <button type="button" className="ends-it" tabIndex={0} onClick={onSave}>
+              {`Save all ${count}`}
+            </button>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

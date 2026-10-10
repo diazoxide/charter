@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { LoaderCircle } from "lucide-react";
 import { commands, type LandQuestion, type PlaneId, type PushQuestion } from "./bindings";
 import { Choice, SettingRow } from "./settings/components";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **A cross-repo change's Push and Land, from its changes view** (#474, ADR 0060).
@@ -58,7 +59,12 @@ function Doing({
   cancel: React.RefObject<HTMLButtonElement | null>;
 }) {
   return (
-    <div className="doing">
+    <AnswerBar>
+      <AlertDialog.Cancel asChild>
+        <button type="button" tabIndex={0} disabled={running} ref={cancel}>
+          {done ? "Close" : "Cancel"}
+        </button>
+      </AlertDialog.Cancel>
       {!done && (
         <button
           type="button"
@@ -72,12 +78,7 @@ function Doing({
           {act}
         </button>
       )}
-      <AlertDialog.Cancel asChild>
-        <button type="button" tabIndex={0} disabled={running} ref={cancel}>
-          {done ? "Close" : "Cancel"}
-        </button>
-      </AlertDialog.Cancel>
-    </div>
+    </AnswerBar>
   );
 }
 

@@ -3,6 +3,7 @@ import * as Alert from "@radix-ui/react-alert-dialog";
 import { useFocusBack } from "./EndingChat";
 import { ChatState } from "./NeedsYou";
 import type { Ending } from "./QuitWarning";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What charter asks before it closes a project that has chats open.
@@ -86,7 +87,7 @@ export function ClosingProject({
             </ul>
           )}
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-          <div className="answer">
+          <AnswerBar>
             <Alert.Cancel asChild>
               <button ref={cancel} tabIndex={0}>
                 Cancel
@@ -97,7 +98,7 @@ export function ClosingProject({
                 {chats.length > 0 ? `Close and end ${count}` : "Close"}
               </button>
             </Alert.Action>
-          </div>
+          </AnswerBar>
         </Alert.Content>
       </Alert.Portal>
     </Alert.Root>
