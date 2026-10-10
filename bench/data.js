@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791665686709,
+  "lastUpdate": 1791666924211,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6468,6 +6468,48 @@ window.BENCHMARK_DATA = {
             "value": 101.7040365,
             "unit": "ms",
             "extra": "median of 5 runs: 100.113, 101.148, 101.704, 102.345, 102.359 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "942ebc6e1d73c408d5e005ca721d03ea4936fecb",
+          "message": "ci: run the rust suite and the macOS scenario specs in two parts each\n\nThe two jobs a pull request waits on longest each run on two runners: the rust suite with\nnextest's `--partition count:N/2` (fmt and clippy in part 1, doctests in part 2) and the macOS\nscenario specs with WebdriverIO's `--shard N/2` (the five single-app runs in part 1). Each part\nbuilds for itself; a handed-on build saves runner minutes, not the wait. Two small jobs carry the\nrequired checks' names, `rust (fmt, clippy, test)` and `scenario tests (macos-latest)`, and pass\nonly when both parts did; Linux's scenario job keeps its name as a job of its own with the same\nanchored steps. The job ids `rust` and `scenario` stay, so main's Rust caches keep their keys.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T01:13:32+04:00",
+          "tree_id": "c6879cbdf30b4bce3924c3fbdeff650130b4adac",
+          "url": "https://github.com/purlis/purlis/commit/942ebc6e1d73c408d5e005ca721d03ea4936fecb"
+        },
+        "date": 1791666923311,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4953475,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.474, 0.494, 0.495, 0.502, 0.508 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.122338,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.706, 16.969, 17.122, 17.142, 17.271 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.005258,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.357, 103.675, 105.005, 105.092, 105.596 ms"
           }
         ]
       }
