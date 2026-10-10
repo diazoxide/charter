@@ -651,12 +651,27 @@ pub(crate) fn reopened_focus(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn window_focus(
+    window: tauri::Window,
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
     focus: Option<Focused>,
 ) -> Result<(), String> {
+    use tauri::Manager as _;
     let focus = focus.map(held_focus).transpose()?;
+    // The branch watch hears the cockpit's refs too (#1152), so its count follows a commit
+    // that writes no file in its folder.
+    let cockpit = focus
+        .as_ref()
+        .map(|focus| crate::branchwatch::WatchedBranch {
+            plane: plane.clone(),
+            workspace: focus.workspace.clone(),
+            repo: focus.repo.clone(),
+            piece: focus.piece.clone(),
+        });
     planes.held(&plane)?.chats().hold_focus(focus);
+    window
+        .state::<crate::branchwatch::BranchWatch>()
+        .focus(window.label(), cockpit);
     Ok(())
 }
 

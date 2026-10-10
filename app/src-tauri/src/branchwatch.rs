@@ -24,6 +24,13 @@
 //! is a FIFO) holds only its own worker until the reader's deadline, which counts as "it
 //! matters", and every other branch's markers keep moving.
 //!
+//! **The cockpit's refs are heard too** (#1152). A commit that writes no file in the branch's
+//! folder — `git commit --amend --no-edit`, a commit of what was staged — moves only git's own
+//! folder, which the checks above pass over. So for the branch a window's sidebar is focused on
+//! ([`BranchWatch::focus`]), and only that one, the folders holding its refs
+//! (`purlis_core::files::Root::refs`) are watched one by one, and a burst naming one of those
+//! files tells the window as a move in the folder would.
+//!
 //! **Every burst is told by what it named** ([`crate::watchset::bursts`], #1139): a file made
 //! and removed inside one is still a move. A burst that is everything — the platform lost
 //! track, a watcher error, more paths than a burst holds — moves every branch listened to, and
@@ -156,6 +163,8 @@ struct Inner<W: notify::Watcher> {
     let_go: HashMap<PathBuf, u64>,
     /// Clones the reader would not find, and until when they are not asked for again.
     refused: HashMap<PathBuf, Instant>,
+    /// Each window's cockpit (FM-5): the one branch whose refs are watched too (#1152).
+    cockpits: HashMap<String, WatchedBranch>,
 }
 
 /// How long a clone the reader would not find is left alone before it is asked for again: the
@@ -244,6 +253,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                 covering: HashSet::new(),
                 let_go: HashMap::new(),
                 refused: HashMap::new(),
+                cockpits: HashMap::new(),
             })),
             told,
             reader,
@@ -302,7 +312,25 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
     pub fn forget(&self, window: &str) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.newest.remove(window);
-        if inner.by_window.remove(window).is_some() {
+        let had_cockpit = inner.cockpits.remove(window).is_some();
+        if inner.by_window.remove(window).is_some() || had_cockpit {
+            inner.follow();
+        }
+    }
+
+    /// `window`'s sidebar is focused on `cockpit` now, or on the whole workspace (FM-5). While
+    /// the window listens to that branch, its refs are watched too ([`Root::refs`], #1152), so
+    /// a commit that writes no file in its folder still moves the cockpit's count. Only the
+    /// cockpit's: one branch a window, a few folders each, whatever the window listens to.
+    pub fn focus(&self, window: &str, cockpit: Option<WatchedBranch>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let moved = match cockpit {
+            Some(branch) => {
+                inner.cockpits.insert(window.to_string(), branch.clone()) != Some(branch)
+            }
+            None => inner.cockpits.remove(window).is_some(),
+        };
+        if moved {
             inner.follow();
         }
     }
@@ -454,18 +482,31 @@ fn heard<W: notify::Watcher + Send + 'static>(
     told: &Told,
     burst: &crate::watchset::Burst,
 ) {
-    let roots: Vec<Root> = {
+    let (roots, refs_moved) = {
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
         if burst.lost {
             held.watch_again();
         }
         let mut seen: HashSet<PathBuf> = HashSet::new();
-        held.listened()
+        let roots: Vec<Root> = held
+            .listened()
             .map(|(root, _)| root)
             .filter(|root| seen.insert(root.path().to_path_buf()))
             .cloned()
-            .collect()
+            .collect();
+        // A burst that is everything moves every branch below, the cockpit's among them.
+        let refs_moved = if burst.everything {
+            HashMap::new()
+        } else {
+            refs_moved(held.cockpits_listened(), &burst.paths)
+        };
+        (roots, refs_moved)
     };
+    // The cockpit's branch moved in git's own folder only: nothing in it is the status's to
+    // sort (`Root::matters` passes over git's folder), so it is told as it is.
+    for (window, branches) in refs_moved {
+        told(&window, branches);
+    }
     for root in roots {
         // Everything moved the branch's folder itself, which always matters (`Root::matters`).
         let inside: Vec<PathBuf> = if burst.everything {
@@ -646,6 +687,48 @@ fn relist_soon<W: notify::Watcher + Send + 'static>(
 }
 
 impl<W: notify::Watcher> Inner<W> {
+    /// Each window's cockpit, while the window listens to it, with its refs: the branches whose
+    /// refs are watched (#1152).
+    fn cockpits_listened(&self) -> impl Iterator<Item = (&str, &WatchedBranch, &[PathBuf])> {
+        self.by_window.iter().flat_map(|(window, listened)| {
+            let cockpit = self.cockpits.get(window);
+            listened
+                .iter()
+                .filter(move |one| Some(&one.branch) == cockpit)
+                .map(move |one| (window.as_str(), &one.branch, one.root.refs()))
+        })
+    }
+}
+
+/// The folders to watch, each on its own, so the cockpits' refs are heard: the folder holding
+/// each ref file, since git replaces a ref by renaming a new file over it.
+fn ref_folders<'a>(
+    cockpits: impl Iterator<Item = (&'a str, &'a WatchedBranch, &'a [PathBuf])>,
+) -> HashSet<PathBuf> {
+    cockpits
+        .flat_map(|(_, _, refs)| refs.iter())
+        .filter_map(|file| file.parent().map(PathBuf::from))
+        .collect()
+}
+
+/// The windows whose cockpit's refs are among `moved`, each with that branch.
+fn refs_moved<'a>(
+    cockpits: impl Iterator<Item = (&'a str, &'a WatchedBranch, &'a [PathBuf])>,
+    moved: &HashSet<PathBuf>,
+) -> HashMap<String, Vec<WatchedBranch>> {
+    let mut told: HashMap<String, Vec<WatchedBranch>> = HashMap::new();
+    for (window, branch, refs) in cockpits {
+        if refs.iter().any(|file| moved.contains(file)) {
+            let branches = told.entry(window.to_string()).or_default();
+            if !branches.contains(branch) {
+                branches.push(branch.clone());
+            }
+        }
+    }
+    told
+}
+
+impl<W: notify::Watcher> Inner<W> {
     /// Watches what every window's branches need, and stops watching what none needs.
     fn follow(&mut self) {
         let mut wanted: HashMap<PathBuf, RecursiveMode> = HashMap::new();
@@ -665,6 +748,11 @@ impl<W: notify::Watcher> Inner<W> {
                     }
                 }
             }
+        }
+        // The cockpit's refs (#1152): the folders holding them, each on its own. A few a
+        // window, so outside the share below, which bounds what a branch's tree can cost.
+        for folder in ref_folders(self.cockpits_listened()) {
+            wanted.entry(folder).or_insert(RecursiveMode::NonRecursive);
         }
         // Within the app's share of the platform's watches, the shallowest first: past it, a
         // deep folder is heard only when something above it moves.
@@ -1373,5 +1461,105 @@ mod tests {
         told.recv_timeout(PATIENCE)
             .expect("the new folder was heard");
         assert!(watch.watching().contains(&new), "{:?}", watch.watching());
+    }
+
+    /// #1152, at the seam: the folders holding a cockpit's refs are watched, and a burst that
+    /// names one of its refs tells its window; a lock file beside it, or another branch's ref
+    /// in the same folder, tells nobody.
+    #[test]
+    fn a_cockpits_ref_moving_tells_its_window_and_nothing_else_does() {
+        let refs = [
+            PathBuf::from("/clone/.git/worktrees/piece/HEAD"),
+            PathBuf::from("/clone/.git/packed-refs"),
+            PathBuf::from("/clone/.git/refs/heads/piece"),
+        ];
+        let focused = branch();
+        let cockpits = || std::iter::once(("main", &focused, refs.as_slice()));
+
+        assert_eq!(
+            ref_folders(cockpits()),
+            HashSet::from([
+                PathBuf::from("/clone/.git/worktrees/piece"),
+                PathBuf::from("/clone/.git"),
+                PathBuf::from("/clone/.git/refs/heads"),
+            ])
+        );
+        let moved =
+            |paths: &[&str]| -> HashSet<PathBuf> { paths.iter().map(PathBuf::from).collect() };
+        assert!(
+            refs_moved(
+                cockpits(),
+                &moved(&[
+                    "/clone/.git/refs/heads/other",
+                    "/clone/.git/refs/heads/piece.lock",
+                    "/clone/.git/index",
+                ])
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            refs_moved(
+                cockpits(),
+                &moved(&[
+                    "/clone/.git/refs/heads/piece.lock",
+                    "/clone/.git/refs/heads/piece"
+                ])
+            ),
+            HashMap::from([("main".to_string(), vec![branch()])])
+        );
+        assert!(refs_moved(std::iter::empty(), &moved(&["/clone/.git/packed-refs"])).is_empty());
+    }
+
+    /// #1152, with a real watcher (first run on CI: it needs git): a commit that writes no file
+    /// in the cockpit's folder tells its window; the same in a branch the window listens to but
+    /// is not focused on does not, and once the window leaves the cockpit its refs are not
+    /// watched any more.
+    #[test]
+    fn a_commit_with_no_file_write_moves_the_cockpit_and_only_the_cockpit() {
+        let (_dir, root, piece) = plane();
+        let other = purlis_core::worktree::add(&root, "alpha", "thing", "other", None)
+            .unwrap()
+            .path;
+        let (watch, told) = watch_with(crate::reader());
+        let (found, found_other) = (root_of(&root, "piece"), root_of(&root, "other"));
+        let heads = found
+            .refs()
+            .iter()
+            .find(|file| file.ends_with("refs/heads/piece"))
+            .and_then(|file| file.parent())
+            .map(PathBuf::from)
+            .expect("the branch's ref is among its refs");
+        watch
+            .set_from(
+                "main",
+                watch.ticket(),
+                vec![
+                    (branch(), found, How::Whole),
+                    (named("other"), found_other, How::Whole),
+                ],
+            )
+            .unwrap();
+        assert!(!watch.watching().contains(&heads), "no cockpit yet");
+        watch.focus("main", Some(branch()));
+        assert!(watch.watching().contains(&heads), "{:?}", watch.watching());
+        // The poller's first look is its baseline; give it one.
+        std::thread::sleep(Duration::from_millis(300));
+
+        git(
+            &other,
+            &["commit", "-q", "--allow-empty", "-m", "elsewhere"],
+        );
+        assert!(told.recv_timeout(Duration::from_secs(2)).is_err());
+
+        git(
+            &piece,
+            &["commit", "-q", "--allow-empty", "-m", "no file written"],
+        );
+        let (window, branches) = told.recv_timeout(PATIENCE).expect("the window was told");
+        assert_eq!(window, "main");
+        assert_eq!(branches, [branch()]);
+
+        watch.focus("main", None);
+        assert!(!watch.watching().contains(&heads), "{:?}", watch.watching());
     }
 }
