@@ -42,7 +42,7 @@ export function askLand(
   return asked(() => commands.changeLandQuestion(plane, workspace, change, repo));
 }
 
-/** The buttons a question ends with: the act, then Cancel, which has the focus. */
+/** The buttons a question ends with: Cancel, which has the focus, then the act at the edge. */
 function Doing({
   act,
   running,
@@ -331,7 +331,7 @@ export function LandAsk({
           ))}
           {q.squash && !done && (
             <SettingRow
-              label="squash it into one commit"
+              label="Squash it into one commit"
               control={(ids) => (
                 <Choice
                   ids={ids}

@@ -47,7 +47,7 @@ describe("a persona's profile, set from its view (#1445)", () => {
     const { save, dialog, user } = draw();
 
     await user.click(within(dialog).getByRole("radio", { name: "work" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
 
     expect(save).toHaveBeenCalledWith("work");
   });
@@ -55,8 +55,8 @@ describe("a persona's profile, set from its view (#1445)", () => {
   it("saves none as no profile at all", async () => {
     const { save, dialog, user } = draw();
 
-    await user.click(within(dialog).getByRole("radio", { name: "none" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("radio", { name: "None" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
 
     expect(save).toHaveBeenCalledWith(null);
   });
@@ -67,8 +67,8 @@ describe("a persona's profile, set from its view (#1445)", () => {
 
     expect(dialog).toHaveTextContent("Inherited from base, which this persona extends.");
     expect(within(dialog).getByRole("radio", { name: "codex" })).toBeChecked();
-    await user.click(within(dialog).getByRole("radio", { name: "none" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("radio", { name: "None" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
 
     expect(save).toHaveBeenCalledWith(null);
   });
@@ -82,7 +82,7 @@ describe("a persona's profile, set from its view (#1445)", () => {
   it("starts on none for a persona that names no profile", () => {
     const { dialog } = draw({ read: { ...READ, named: null } });
 
-    expect(within(dialog).getByRole("radio", { name: "none" })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: "None" })).toBeChecked();
   });
 
   it("says so for a name the project does not offer, and offers no way to keep it", async () => {
@@ -90,10 +90,10 @@ describe("a persona's profile, set from its view (#1445)", () => {
 
     expect(dialog).toHaveTextContent("which this project does not offer");
     expect(within(dialog).queryByRole("radio", { name: "sh -c evil" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Save profile" })).toBeDisabled();
 
     await user.click(within(dialog).getByRole("radio", { name: "claude" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
     expect(save).toHaveBeenCalledWith("claude");
   });
 
@@ -110,6 +110,6 @@ describe("a persona's profile, set from its view (#1445)", () => {
     const { dialog } = draw({ read: null, unreadable: "no persona 'ops' on this plane" });
 
     expect(within(dialog).getByRole("alert")).toHaveTextContent("no persona 'ops'");
-    expect(within(dialog).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Save profile" })).not.toBeInTheDocument();
   });
 });

@@ -679,12 +679,15 @@ export function Health({
         >
           <Dialog.Title>Doctor</Dialog.Title>
           <p className="honest" id="doctor-depth">
+            {/* Work in progress says what is being done (`docs/ui-copy.md`, #630). */}
             {report === undefined
-              ? "purlis has not answered yet."
+              ? running
+                ? "Running the doctor…"
+                : "The doctor has not answered yet."
               : report.full
                 ? "Every check, with each harness profile probed — run inside this app, so every answer is the app's own environment."
-                : "The preflight every session start runs; the harness profiles are not probed. Run inside this app, so every answer is the app's own environment."}
-            {running && " Checking again…"}
+                : "The preflight every chat start runs; the harness profiles are not probed. Run inside this app, so every answer is the app's own environment."}
+            {report !== undefined && running && " Checking again…"}
           </p>
           {trouble !== undefined && (
             <p className="honest doctor-trouble" role="alert">
@@ -718,7 +721,8 @@ export function Health({
               {/* Said rather than left to be noticed: an operator comparing this with
                   `purlis doctor` in a terminal has to know why one row is not there. */}
               <p className="honest">
-                What the chats this window starts can do. `purlis doctor` does not print these.
+                What the chats this window starts can do. <code>purlis doctor</code> does not print
+                these.
               </p>
               <Rows rows={ours} onOpenSettings={settings} />
             </section>

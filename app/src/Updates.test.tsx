@@ -7,6 +7,7 @@ import {
   INSTALL_ENDS_SESSIONS,
   PinItem,
   UpdateItem,
+  usePin,
   useUpdates,
   type Updates,
   type UpdateState,
@@ -83,6 +84,32 @@ describe("the update button", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Install 0.2.0" }));
     expect(installed).toBe(1);
+  });
+
+  it("puts the way out first and the act that moves things on last (#1719)", async () => {
+    render(<UpdateItem updates={updates({ kind: "offered", offer: OFFER })} />);
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    const bar = dialog.querySelector(".answer");
+    const names = within(bar as HTMLElement)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names).toEqual(["Close", "Check now", "Install 0.2.0"]);
+  });
+
+  it("ends in Restart to update, after Close, once the update is installed", async () => {
+    render(<UpdateItem updates={updates({ kind: "installed", version: "0.2.0" })} />);
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    const bar = dialog.querySelector(".answer");
+    const names = within(bar as HTMLElement)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names).toEqual(["Close", "Restart to update"]);
   });
 
   it("offers no Install when there is nothing on offer", async () => {
@@ -499,12 +526,63 @@ describe("the pin item", () => {
     render(<PinItem pin={DRIFT} again={() => (asked += 1)} />);
 
     const item = screen.getByTestId("status-pin");
-    expect(item.textContent).toContain("pin 9.0.0");
+    // Sentence case, and named by the words it shows (WCAG 2.5.3); the sentence is its
+    // description, and it says project, not the retired word (#1719).
+    expect(item).toHaveAccessibleName("Pin 9.0.0");
+    expect(item).toHaveAccessibleDescription("The project pins purlis 9.0.0; this purlis is 0.1.0");
 
     await userEvent.click(item);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(DRIFT.said[0])).toBeInTheDocument();
     // Opening it asks again, so a pin moved since the project opened is not shown stale.
     expect(asked).toBe(1);
+  });
+
+  it("says the pin could not be read, rather than drawing nothing (#1719)", async () => {
+    let asked = 0;
+    render(
+      <PinItem pin={undefined} trouble="the manifest is unreadable" again={() => (asked += 1)} />,
+    );
+
+    const item = screen.getByTestId("status-pin");
+    expect(item).toHaveAccessibleName("Pin unread");
+    await userEvent.click(item);
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "purlis could not read the project's pin: the manifest is unreadable",
+      ),
+    ).toBeInTheDocument();
+    expect(asked).toBe(1);
+  });
+});
+
+describe("reading the pin", () => {
+  it("keeps a failed read, so the pin item can say it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_pin") throw "the manifest is unreadable";
+    });
+
+    const { result } = renderHook(() => usePin("/home/dev/plane"));
+
+    await waitFor(() => expect(result.current.trouble).toBe("the manifest is unreadable"));
+    expect(result.current.pin).toBeUndefined();
+  });
+
+  it("drops the failure once a read answers", async () => {
+    let fail = true;
+    mockIPC((cmd) => {
+      if (cmd !== "plane_pin") return;
+      if (fail) throw "the manifest is unreadable";
+      return { drift: false, brought: "0.1.0", pinned: null, said: [] };
+    });
+
+    const { result } = renderHook(() => usePin("/home/dev/plane"));
+    await waitFor(() => expect(result.current.trouble).toBeDefined());
+    fail = false;
+    act(() => result.current.again());
+
+    await waitFor(() => expect(result.current.trouble).toBeUndefined());
+    expect(result.current.pin?.drift).toBe(false);
   });
 });

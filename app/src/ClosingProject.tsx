@@ -1,8 +1,7 @@
 import { useRef } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import { useFocusBack } from "./EndingChat";
-import { ChatState } from "./NeedsYou";
-import type { Ending } from "./QuitWarning";
+import { EndingList, type Ending } from "./QuitWarning";
 import { AnswerBar } from "./AnswerBar";
 
 /**
@@ -48,7 +47,8 @@ export function ClosingProject({
   const count = chats.length === 1 ? "1 chat" : `${chats.length} chats`;
   // The workspaces in the order their chats are listed, each once.
   const where = [...new Set(chats.map((chat) => chat.workspace).filter(Boolean))];
-  const title = chats.length > 0 ? `Close project ${name} and end ${count}?` : `Close ${name}?`;
+  const title =
+    chats.length > 0 ? `Close project ${name} and end ${count}?` : `Close project ${name}?`;
   return (
     <Alert.Root
       open
@@ -74,28 +74,18 @@ export function ClosingProject({
             {!heard && "purlis has not yet heard what this project has open, so it may be more. "}
             Nothing of the project on disk goes.
           </Alert.Description>
-          {chats.length > 0 && (
-            <ul className="ending">
-              {chats.map((chat) => (
-                <li key={chat.key}>
-                  <span className="what">{chat.harness ?? "shell"}</span>
-                  <span>{chat.name}</span>
-                  <ChatState state={chat.state} />
-                  {chat.cwd && <code className="where">{chat.cwd}</code>}
-                </li>
-              ))}
-            </ul>
-          )}
+          {/* The quit warning's rows, so the two cannot drift apart. */}
+          {chats.length > 0 && <EndingList chats={chats} />}
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
           <AnswerBar>
             <Alert.Cancel asChild>
-              <button ref={cancel} tabIndex={0}>
+              <button type="button" ref={cancel} tabIndex={0}>
                 Cancel
               </button>
             </Alert.Cancel>
             <Alert.Action asChild>
-              <button className="ends-it" tabIndex={0} onClick={onClose}>
-                {chats.length > 0 ? `Close and end ${count}` : "Close"}
+              <button type="button" className="ends-it" tabIndex={0} onClick={onClose}>
+                {chats.length > 0 ? `Close and end ${count}` : "Close project"}
               </button>
             </Alert.Action>
           </AnswerBar>

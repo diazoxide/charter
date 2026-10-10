@@ -53,7 +53,7 @@ describe("LiveDialog", () => {
     expect(await screen.findByText("workspaces/ide/workspace.md")).toBeTruthy();
     expect(
       screen.getByText(
-        "The next save pushes them to https://github.com/acme/plane.git — anyone who can read that repository will read them.",
+        "The next save pushes them to https://github.com/acme/plane.git — anyone who can read that repo will read them.",
       ),
     ).toBeTruthy();
     expect(asked.some((a) => a.cmd === "workspace_live")).toBe(false);
@@ -64,7 +64,7 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
 
     expect(
-      await screen.findByText("That repository is public: anyone can read what is pushed to it."),
+      await screen.findByText("That repo is public: anyone can read what is pushed to it."),
     ).toBeTruthy();
     expect(asked.find((a) => a.cmd === "plane_remote_readers")?.args).toEqual({ plane: PLANE });
   });
@@ -74,7 +74,7 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "That repository is internal: everyone signed in to gitlab.corp can read it.",
+        "That repo is internal: everyone signed in to gitlab.corp can read it.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -82,7 +82,7 @@ describe("LiveDialog", () => {
     core(preview(), undefined, { kind: "private" });
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
-      await screen.findByText("That repository is private: only those given access can read it."),
+      await screen.findByText("That repo is private: only those given access can read it."),
     ).toBeTruthy();
   });
 
@@ -90,7 +90,9 @@ describe("LiveDialog", () => {
     core(preview(), undefined, { kind: "unknown", why: "gh: not logged in" });
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
-      await screen.findByText("Whether that repository is public is not known: gh: not logged in"),
+      await screen.findByText(
+        "purlis could not tell whether that repo is public: gh: not logged in",
+      ),
     ).toBeTruthy();
   });
 
@@ -99,7 +101,7 @@ describe("LiveDialog", () => {
     const onDone = vi.fn();
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={onDone} />);
 
-    expect(await screen.findByText("Asking who can read that repository…")).toBeTruthy();
+    expect(await screen.findByText("Asking who can read that repo…")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Make live" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   });
@@ -114,7 +116,20 @@ describe("LiveDialog", () => {
     expect(await screen.findByRole("button", { name: "Make local" })).toBeTruthy();
 
     expect([...asked, ...local].some((a) => a.cmd === "plane_remote_readers")).toBe(false);
-    expect(screen.queryByText(/That repository is/)).toBeNull();
+    expect(screen.queryByText(/That repo is/)).toBeNull();
+  });
+
+  it("says it is switching while the core makes it live (D-630-3)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "workspace_live_preview") return preview({ remote: null });
+      if (cmd === "workspace_live") return new Promise(() => {});
+      return null;
+    });
+    render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Make live" }));
+
+    expect(await screen.findByRole("button", { name: "Making live…" })).toBeDisabled();
   });
 
   it("switches and saves when the operator says yes", async () => {
@@ -139,7 +154,7 @@ describe("LiveDialog", () => {
     expect(await screen.findByRole("alertdialog", { name: "Make ide local?" })).toBeTruthy();
     expect(
       await screen.findByText(
-        "It stops publishing them from now on. What was already pushed stays in the repository's history.",
+        "It stops publishing them from now on. What was already pushed stays in the repo's history.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Make local" })).toBeTruthy();
@@ -229,7 +244,7 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "The next save pushes them to git@git.corp:team/plane.git — anyone who can read that repository will read them.",
+        "The next save pushes them to git@git.corp:team/plane.git — anyone who can read that repo will read them.",
       ),
     ).toBeTruthy();
     expect(

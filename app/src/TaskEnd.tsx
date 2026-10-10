@@ -12,6 +12,11 @@ import type { Offer, TaskEndWay } from "./actions";
 import type { TaskEnding } from "./bindings";
 import { fitWaysOn } from "./wholeWays";
 import { AnswerBar } from "./AnswerBar";
+import { Choice, SettingRow } from "./settings/components";
+
+/** The two answers about the tasks at work below the one being ended. */
+const TOO = "too";
+const KEEP = "keep";
 
 /**
  * **Ending a task by hand** (#1488, V100-5, V100-18): the second step every ending takes, and
@@ -167,33 +172,34 @@ export function TaskEndAsk({
                 )
               )}
               {asked.below.length > 0 && (
-                <fieldset className="task-end-below">
-                  <legend>{belowSaid(asked.below)}</legend>
-                  <label>
-                    <input
-                      type="radio"
-                      name="task-end-below"
-                      // #190: WebKit leaves a control out of the tab sequence without it.
-                      tabIndex={0}
-                      checked={asked.belowToo}
+                // The settings set's radio group (#630, DS-8; D-630-1, as Close a chat's): a Radix
+                // radio group, in WebKit's tab sequence and moved by the arrows, where two native
+                // radios in a hand-built fieldset were neither, and each answer says what it does.
+                <SettingRow
+                  label={belowSaid(asked.below)}
+                  grouped
+                  control={(ids) => (
+                    <Choice
+                      ids={ids}
+                      kind="radio"
+                      options={[
+                        {
+                          value: TOO,
+                          label: "End them too",
+                          says: "They end the same way, and each is told of in its own report.",
+                        },
+                        {
+                          value: KEEP,
+                          label: "Keep them working",
+                          says: `They finish with nobody to report to, and stay in the Chats list marked as from ${asked.name}.`,
+                        },
+                      ]}
+                      value={asked.belowToo ? TOO : KEEP}
+                      onValueChange={(to) => onBelow(to === TOO)}
                       disabled={asked.busy}
-                      onChange={() => onBelow(true)}
                     />
-                    End them too, the same way. Each is told of in its own report.
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="task-end-below"
-                      tabIndex={0}
-                      checked={!asked.belowToo}
-                      disabled={asked.busy}
-                      onChange={() => onBelow(false)}
-                    />
-                    Keep them working. They finish with nobody to report to, and stay in the Chats
-                    list marked as from {asked.name}.
-                  </label>
-                </fieldset>
+                  )}
+                />
               )}
             </div>
           </AlertDialog.Description>
