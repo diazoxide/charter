@@ -129,9 +129,10 @@ pub fn use_built_in_theme(config_root: &Path) -> Result<String, String> {
 /// anything**, never deleted, refused for no file or one that is not a plain file. The next
 /// launch draws the default arrangement, and the file is still there to mend.
 ///
-/// **What goes aside with it** is everything the file keeps besides the arrangement: the
-/// pins, the Notices dismissed in each project ([`set_dismissed`]) and the ones seen once on
-/// this machine ([`see_on_this_machine`]). The window says so before it asks. Under the
+/// **What goes aside with it** is everything the file keeps besides the arrangement: the text
+/// sizes, the editor, how chats are listed, the Notices dismissed in each project
+/// ([`set_dismissed`]) and the ones seen once on this machine ([`see_on_this_machine`]). Pins
+/// are the machine store's, and stay. The window says so before it asks. Under the
 /// layout's lock, so a dismissal written meanwhile goes either into the file moved aside or
 /// into the next one, and is never written over the move.
 pub fn use_default_layout(config_root: &Path) -> Result<String, String> {

@@ -93,8 +93,8 @@ pub async fn use_built_in_theme() -> Result<String, String> {
 }
 
 /// **Use the default layout** (#1289): moves the layout file aside to `layout.aside.json`,
-/// never over another file, so the next launch draws the default arrangement. Its pins and the
-/// Notices dismissed or seen once go aside with it. Answers where the file went.
+/// never over another file, so the next launch draws the default arrangement. What else the
+/// file keeps goes with it: text sizes, editor, Notices dismissed. Answers where it went.
 #[tauri::command]
 #[specta::specta]
 pub async fn use_default_layout() -> Result<String, String> {

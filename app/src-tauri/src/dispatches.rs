@@ -112,7 +112,7 @@ pub(crate) fn opened(held: &Held, id: Option<String>, opening: Opening) {
         // chat was started on is kept, as a digest in this app's memory, for a start of it
         // again with no conversation to be handed only that brief (#1609).
         Ok(record) => {
-            held.chats().brief_was_sent(&record.id, &brief);
+            held.chats().brief_was_sent(&record, &brief);
             crate::activity::dispatched(held, &record);
         }
         Err(why) => tracing::warn!("purlis: a dispatch's record was not written ({why})"),
