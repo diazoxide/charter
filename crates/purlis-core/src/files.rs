@@ -42,8 +42,8 @@ pub use reader::{
 // The one diff engine (RC-2): every comparison, read in the same bounded child.
 mod compare;
 pub use compare::{
-    COUNTED, Compared, Comparison, FileChange, FileDiff, Head, Hunk, Lines, MemberCompared, Sides,
-    WhatChanged, compare, compare_change, compare_file, what_changed,
+    COUNTED, Compared, Comparison, FileChange, FileDiff, Head, Hunk, Lines, MemberCompared, Shown,
+    Sides, WhatChanged, compare, compare_change, compare_file, what_changed,
 };
 mod search;
 pub use search::{
@@ -1190,17 +1190,30 @@ pub fn place_branch_folder(plane: &Path, branch: Branch<'_>) -> Result<Placed, R
 /// (`symlink_metadata`), so a link's row copies the link's own path. Refused, as [`place`]
 /// refuses, for an empty, absolute or walking-up path, and for git's own folder.
 pub fn named(plane: &Path, branch: Branch<'_>, path: &str) -> Result<String, Refused> {
+    spelled_inside(path)?;
+    named_in(&base_of(plane, branch)?, path)
+}
+
+/// `path` as git's file list spells it, refused as [`named`] refuses a path by its spelling
+/// alone — empty, absolute, walking up, or naming git's folder — before any disk is looked at.
+pub(crate) fn spelled_inside(path: &str) -> Result<String, Refused> {
     let relative = inside(path)?;
     let spelled = slashed(relative);
     if spelled.is_empty() || gits(relative) {
         return Err(Refused::NotInPiece(path.to_string()));
     }
+    Ok(spelled)
+}
+
+/// [`named`] in a branch whose folder is already resolved to `base`: by the app's process
+/// through [`base_of`], or by the reader's child through the status read's own opening (#1189).
+pub(crate) fn named_in(base: &Path, path: &str) -> Result<String, Refused> {
+    let spelled = spelled_inside(path)?;
     let (parent, leaf) = match spelled.rsplit_once('/') {
         Some((parent, leaf)) => (parent, leaf),
         None => ("", spelled.as_str()),
     };
-    let base = base_of(plane, branch)?;
-    let folder = folder_in(&base, parent).map_err(|refused| match refused {
+    let folder = folder_in(base, parent).map_err(|refused| match refused {
         Refused::NotInPiece(_) => Refused::NotInPiece(path.to_string()),
         Refused::NotThere(_) | Refused::NotAFolder(_) => Refused::NotThere(path.to_string()),
         other => other,
