@@ -865,8 +865,14 @@ component library gets added on.
 - **The explorer's repo groups are `<details>`**, per the rule above: the browser has a
   collapsible, and `@radix-ui/react-collapsible` is not installed because nothing needs it.
 - **Picking a spot in the explorer is `aria-current`, not `aria-selected`.** `aria-selected`
-  belongs to the three tablists that are the axis (ADR 0036); this is the current item of a
-  list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
+  belongs to the three tablists that are the axis (ADR 0036), and to the one tree that really
+  selects, a file tab's, whose selected file is what the tab previews; a spot is the current
+  item of a list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
+- **Every tree is drawn by the `.tree` class** (#1672): its levels, its straight guides, the
+  selected row (`aria-current` or `aria-selected`, in `list.selected` with an edge) and the
+  keyboard's ring. A class, not a component, so this rule needs no amendment; a new tree puts
+  `className="tree"` on its `role="tree"` element and draws nothing of its own.
+  `docs/design-system.md` has the tokens and why.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
   control that is on or off. They are **on the status line and icon-only** since purlis
   #193, which the operator asked for twice — _"show hide buttons can be movet to bottom status

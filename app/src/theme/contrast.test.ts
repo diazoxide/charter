@@ -156,6 +156,29 @@ const PAIRS: [Token, Token, number][] = [
   ["icon.purple", "surface.sunken", 3],
   ["icon.pink", "surface.base", 3],
   ["icon.pink", "surface.sunken", 3],
+  // **The row a tree or a list has selected** (#1672): the chat in front in the Chats tree, the
+  // spot in the explorer, the file a file tab shows. Everything a row draws is drawn on its
+  // fill — the name, its state's word and mark, the hand of a chat that needs you — and its
+  // edge is the shape that says "selected" without colour, held to a mark's floor on the fill
+  // and on the window beside it.
+  ["text.primary", "list.selected", 4.5],
+  ["text.secondary", "list.selected", 4.5],
+  ["text.muted", "list.selected", 4.5],
+  ["state.running", "list.selected", 3],
+  ["state.waiting", "list.selected", 3],
+  ["state.failed", "list.selected", 3],
+  ["state.unreadable", "list.selected", 3],
+  ["needs-you.base", "list.selected", 3],
+  ["accent.base", "list.selected", 3],
+  ["list.selected-edge", "list.selected", 3],
+  ["list.selected-edge", "surface.base", 3],
+  // The keyboard's ring on the selected row it is on.
+  ["focus.ring", "list.selected", 3],
+  // A tree's guides: a hairline, quieter than a border and still there, on each surface a tree
+  // is drawn on (the explorer on the window, a file tab's tree on a pane).
+  ["tree.guide", "surface.base", 1.3],
+  ["tree.guide", "surface.raised", 1.2],
+  ["tree.guide", "surface.sunken", 1.2],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
 ];
@@ -185,6 +208,22 @@ describe("the floor a text pair is held to", () => {
     expect(contrast("#ffffff", "#000000")).toBeCloseTo(21, 5);
     expect(contrast("#777777", "#ffffff")).toBeCloseTo(4.48, 2);
   });
+});
+
+/**
+ * **Selected is not hovered, and is not the tab you are on** (#1672). Before this, the chat in
+ * front was drawn in `surface.hover`, so the row you were on and the row the pointer passed
+ * over were the same row to the eye. Held as values, in each theme as it ships and tinted.
+ */
+describe.each(DRAWN)("%s keeps a selected row apart", (_name, theme) => {
+  it.each(["surface.hover", "layer.selected", "surface.base"] as const)(
+    "list.selected is not %s",
+    (other) => {
+      expect(theme.values["list.selected"].toLowerCase()).not.toBe(
+        theme.values[other].toLowerCase(),
+      );
+    },
+  );
 });
 
 describe.each(DRAWN)("%s can be read", (_name, theme) => {

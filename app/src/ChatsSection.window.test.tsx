@@ -14,6 +14,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
+import { drawnWith } from "./cascade.testkit";
 import { forgetThisLaunch } from "./regions";
 import type { Shown } from "./shownState";
 import { stripNamed } from "./test-strips";
@@ -1794,5 +1795,84 @@ describe("the Chats section follows the focused workspace", () => {
     // Its tab came forward, which focused its workspace: the list follows.
     await waitFor(() => expect(shape(tree)).toEqual(["1 devops 3"]));
     expect(screen.queryByText("1 chat in another workspace needs you.")).toBeNull();
+  });
+});
+
+describe("one tree style, in the Chats tree and the explorer (#1672)", () => {
+  it("draws a level of either as one step in and one straight guide", async () => {
+    core([
+      chat(1, "alpha"),
+      chat(2, "alpha", { from: by(1, "task"), label: "drop commons" }),
+      chat(3, "alpha", { from: by(2, "task", "drop commons") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 steward 3"]),
+    );
+    const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
+    expect(tree).toHaveClass("tree");
+    expect(explorer).toHaveClass("tree");
+
+    // The Chats tree is flat: each row draws a guide per level above it.
+    const item = (name: string) => row(tree, name).closest("li") as HTMLElement;
+    expect(drawnWith(item("steward 1"), "--tree-depth")).toBe("0");
+    expect(drawnWith(item("drop commons"), "--tree-depth")).toBe("1");
+    expect(drawnWith(item("steward 3"), "--tree-depth")).toBe("2");
+    expect(drawnWith(item("steward 3"), "background-image")).toContain("var(--tree-guide)");
+    expect(drawnWith(item("steward 3"), "padding-inline-start")).toBe(
+      "calc(var(--tree-depth) * var(--tree-indent))",
+    );
+
+    // The explorer is nested: a level is a group, and the group's edge is the guide.
+    const groups = explorer.querySelectorAll('[role="group"]');
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups)
+      expect(drawnWith(group, "border-inline-start")).toBe("1px solid var(--tree-guide)");
+  });
+});
+
+describe("the chat in front, as the Chats tree draws it (#1672)", () => {
+  it("is drawn selected, and a row under the pointer is drawn differently", async () => {
+    core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 2"]));
+    expect(tree).toHaveClass("tree");
+
+    const front = row(tree, "steward 1");
+    const other = row(tree, "steward 2");
+    expect(front.getAttribute("aria-current")).toBe("true");
+    // Selected is its own fill and an edge; under the pointer is the window's hover.
+    expect(drawnWith(front, "background")).toBe("var(--list-selected)");
+    expect(drawnWith(front, "box-shadow")).toContain("var(--list-selected-edge)");
+    expect(drawnWith(other, "background", { hover: true })).toBe("var(--surface-hover)");
+    expect(drawnWith(other, "box-shadow", { hover: true })).toBeUndefined();
+    // And the pointer over the selected row does not take its selection away.
+    expect(drawnWith(front, "background", { hover: true })).toBe("var(--list-selected)");
+
+    // Another chat brought forward is the one drawn selected.
+    await userEvent.click(other);
+    await waitFor(() => expect(frontTab()).toEqual(["steward 2"]));
+    await waitFor(() => expect(drawnWith(other, "background")).toBe("var(--list-selected)"));
+    expect(drawnWith(front, "background")).not.toBe("var(--list-selected)");
+  });
+
+  it("rings the row the keyboard is on, which is not how it says selected", async () => {
+    core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(2));
+    const front = row(tree, "steward 1");
+    const other = row(tree, "steward 2");
+
+    // The keyboard on a row that is not selected: a ring, and no selection's fill or edge.
+    expect(drawnWith(other, "outline", { focusVisible: true })).toBe("2px solid var(--focus-ring)");
+    expect(drawnWith(other, "background", { focusVisible: true })).not.toBe("var(--list-selected)");
+    // Selected and not focused: the fill and the edge, and no ring.
+    expect(drawnWith(front, "outline")).toBeUndefined();
+    // Both at once: each is still there.
+    expect(drawnWith(front, "outline", { focusVisible: true })).toBe("2px solid var(--focus-ring)");
+    expect(drawnWith(front, "background", { focusVisible: true })).toBe("var(--list-selected)");
   });
 });

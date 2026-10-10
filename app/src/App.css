@@ -2540,13 +2540,9 @@ button.show-more:focus-visible {
    separately — the box's own overflow for the first, the resolved `white-space` for the
    second — because a run with only one of them in place still looks right.
 
-   **Nothing here touches padding, font size or line height**, and that is deliberate rather
-   than incidental: a clone's and a piece's elbows below are drawn at a fixed offset down each
-   row (`0.9em`) tuned to exactly those three, and #154's author flagged that any change to them
-   misaligns the tree with nothing going red. A chat's elbow is drawn by its own row at that
-   row's middle, so it has no such number. `workspace-explorer.e2e.ts` now measures the
-   elbow against the middle of the row's first line in the real WebView, so a change to them
-   does go red — but this rule still had no business making one. */
+   **Nothing here touches padding, font size or line height**: what this rule is about is
+   wrapping, and a row's metrics are its own rule's. The tree's guides (`.tree`) are straight
+   lines down the group a level is (#1672), so no row's height is a number they are tuned to. */
 .explorer .spot,
 .explorer .file-node,
 .explorer .clone > summary,
@@ -2557,93 +2553,8 @@ button.show-more:focus-visible {
   white-space: nowrap;
 }
 
-/* **The tree's lines, drawn by the rows and not by the lists.**
-
-   A level is an indent plus a vertical guide, and each row draws its own segment of that guide
-   plus the elbow into its own first line. The last row's segment stops AT its elbow, which is
-   what makes a tree look finished at the bottom of a branch.
-
-   The usual way to do this is one line on the list and a rectangle in the background colour
-   masking its tail. That cannot be used here: **a region moves** (ADR 0038), so the explorer
-   may be sitting on `surface.base` or on `surface.deep`, and a mask has to know which. A row
-   that draws only its own segment never has to know what is behind it. `Explorer.tsx` says the
-   same thing from the other side.
-
-   A clone's first line is a `<summary>` and a piece's is a `.spot` button, and their elbow is
-   half a line down the row, as a length.
-
-   **A chat's elbow is drawn by the `.chat` button itself, at half its own height**, and its
-   last row's guide by the button too, down to there. The button is one line with everything
-   in it centred, so its middle is the middle of the name whatever the row holds: a persona's
-   mark (#1449) is taller than the terminal it stands in for, and a length tuned to the old row
-   pointed above the name. `vertical-align: top` puts the button at the top of its `<li>`, so
-   the guide the button draws starts where the row above's ended. */
-.explorer .clones,
-.explorer .pieces,
-.explorer .files,
-.explorer .here {
-  margin-inline-start: 0.5rem;
-  padding-inline-start: 0.85rem;
-}
-
-.explorer .clones > .clone,
-.explorer .pieces > li,
-.explorer .files > li,
-.explorer .here > li {
-  position: relative;
-}
-
-.explorer .clones > .clone::before,
-.explorer .pieces > li::before,
-.explorer .files > li::before,
-.explorer .here > li:not(:last-child)::before {
-  content: "";
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: -0.85rem;
-  border-inline-start: 1px solid var(--border-subtle);
-}
-
-.explorer .clones > .clone:last-child::before,
-.explorer .pieces > li:last-child::before,
-.explorer .files > li:last-child::before {
-  inset-block-end: auto;
-  height: 0.9em;
-}
-
-.explorer .here > li > .chat {
-  position: relative;
-  vertical-align: top;
-}
-
-.explorer .here > li:last-child > .chat::after {
-  content: "";
-  position: absolute;
-  inset-block: 0 50%;
-  inset-inline-start: -0.85rem;
-  border-inline-start: 1px solid var(--border-subtle);
-}
-
-.explorer .clones > .clone::after,
-.explorer .pieces > li::after,
-.explorer .files > li::after,
-.explorer .here > li > .chat::before {
-  content: "";
-  position: absolute;
-  inset-inline-start: -0.85rem;
-  width: 0.55rem;
-  border-block-start: 1px solid var(--border-subtle);
-}
-
-.explorer .clones > .clone::after,
-.explorer .pieces > li::after,
-.explorer .files > li::after {
-  inset-block-start: 0.9em;
-}
-
-.explorer .here > li > .chat::before {
-  inset-block-start: 50%;
-}
+/* The explorer's levels and their guides are the shared tree style's (`.tree`, below the Chats
+   section's rules): one straight guide per level, drawn by the group that holds the level. */
 
 /* An icon per kind of node, which is what tells the two kinds of leaf apart: a worktree is a
    branch and a chat is a terminal, and at four levels of indent the indent alone stopped
@@ -2714,8 +2625,9 @@ button.show-more:focus-visible {
   width: 100%;
   text-align: left;
   padding: 0.15rem 0.3rem;
+  /* The 2px a selected row's edge is drawn in (`.tree`), inside the row's own box. */
+  padding-inline-start: calc(0.3rem + 2px);
   border: none;
-  border-inline-start: 2px solid transparent;
   border-radius: 2px;
   color: inherit;
   background: none;
@@ -2727,9 +2639,8 @@ button.show-more:focus-visible {
   background: var(--surface-hover);
 }
 
+/* Its fill and edge are a selected row's (`.tree`); the weight is the spot's own, on top. */
 .explorer .spot[aria-current="true"] {
-  border-inline-start-color: var(--accent-base);
-  background: var(--accent-surface);
   font-weight: 600;
 }
 
@@ -2747,8 +2658,9 @@ button.show-more:focus-visible {
   width: 100%;
   text-align: left;
   padding: 0.15rem 0.3rem;
+  /* The 2px a selected row's edge is drawn in (`.tree`), inside the row's own box. */
+  padding-inline-start: calc(0.3rem + 2px);
   border: none;
-  border-inline-start: 2px solid transparent;
   border-radius: 2px;
   color: inherit;
   background: none;
@@ -3385,34 +3297,22 @@ h2.sidebar-title .node-icon {
   list-style: none;
 }
 
-/* One level of the tree is one step of indent. The level is the row's own, so the list stays
-   flat and a row is drawn again only for its own facts. */
-.chats-section li[data-level="2"] {
-  padding-inline-start: 0.85rem;
-}
-.chats-section li[data-level="3"] {
-  padding-inline-start: 1.7rem;
-}
-.chats-section li[data-level="4"] {
-  padding-inline-start: 2.55rem;
-}
-.chats-section li[data-level="5"],
-.chats-section li[data-level="6"],
-.chats-section li[data-level="7"],
-.chats-section li[data-level="8"] {
-  padding-inline-start: 3.4rem;
-}
+/* One level of the tree is one step of indent, and one guide: the shared tree style's flat
+   form (`.tree li[data-level]`, below). The level is the row's own, so the list stays flat and
+   a row is drawn again only for its own facts. */
 
 /* **A narrow list cannot afford a step per level** (#1499): at the sidebar's least width four
    steps of indent leave a row no room for its state. There, every row under another is
    indented by one small step, whatever its level, which a screen reader is still told. */
 @container chats (max-width: 16rem) {
   .chats-section li[data-level]:not([data-level="1"]) {
-    padding-inline-start: 0.5rem;
+    --tree-depth: 1;
+    --tree-indent: 0.5rem;
+    --tree-guide-at: 0.2rem;
   }
 
   .chats-section li.finished-tasks {
-    margin-inline-start: 0.5rem;
+    padding-inline-start: calc(var(--tree-depth) * var(--tree-indent) + 0.5rem);
   }
 }
 
@@ -3668,9 +3568,98 @@ h2.sidebar-title .node-icon {
   text-transform: uppercase;
 }
 
-.chats-section .chat:hover,
-.chats-section .chat[aria-current="true"] {
+.chats-section .chat:hover {
   background: var(--surface-hover);
+}
+
+/* **One tree style, for every tree in the window** (#1672): the Chats tree, the explorer and a
+   file tab's files. A class and not a component (ADR 0037): each tree keeps its own markup and
+   keys (`useTabStop`, `treeKey`), and draws its levels, its guides, its selected row and the
+   keyboard's place from these rules alone.
+
+   **A level is one step in and one straight guide**, VS Code's: a hairline in `tree.guide`
+   down the whole of the level, under the row it hangs from. No elbows: a guide that turns into
+   each row has to know where the row's first line is, and every time a row's metrics moved
+   the elbows pointed above the name (#154, train 58). A straight line knows nothing about the
+   rows beside it, and nothing has to mask its tail, so it is right on whatever surface the
+   region is moved onto (ADR 0038).
+
+   A tree is drawn in one of two shapes, and both are here:
+   - **nested**, a level a `role="group"` inside the row's `<li>` (the explorer, a file tab):
+     the group is the step in, and its inline-start border is the guide;
+   - **flat**, every row an `<li data-level>` of one list (the Chats tree, so a row that moves
+     is moved and not made again): the row draws one guide per level above it, as a background
+     of `--tree-depth` columns `--tree-indent` apart. */
+.tree {
+  --tree-indent: 0.85rem;
+  /* Where a level's guide stands in from the row it hangs from: under that row's fold. */
+  --tree-guide-at: 0.5rem;
+}
+
+.tree [role="group"] {
+  margin-inline-start: 0.5rem;
+  padding-inline-start: var(--tree-indent);
+  border-inline-start: 1px solid var(--tree-guide);
+}
+
+/* A group inside a flat tree's row (a chat's finished tasks) is part of that row, not a level:
+   the row's own `data-level` already says where it stands. */
+.tree li[data-level] [role="group"] {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+  border-inline-start: none;
+}
+
+.tree li[data-level] {
+  --tree-depth: 0;
+  padding-inline-start: calc(var(--tree-depth) * var(--tree-indent));
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--tree-guide) 0 1px,
+    transparent 1px var(--tree-indent)
+  );
+  background-position: var(--tree-guide-at) 0;
+  background-size: calc(var(--tree-depth) * var(--tree-indent)) 100%;
+  background-repeat: no-repeat;
+}
+
+.tree li[data-level="2"] {
+  --tree-depth: 1;
+}
+.tree li[data-level="3"] {
+  --tree-depth: 2;
+}
+.tree li[data-level="4"] {
+  --tree-depth: 3;
+}
+/* Deeper than four is drawn at four: a sidebar has no room for more steps, and the level is
+   still said to a screen reader by `aria-level`. */
+.tree li[data-level="5"],
+.tree li[data-level="6"],
+.tree li[data-level="7"],
+.tree li[data-level="8"] {
+  --tree-depth: 4;
+}
+
+/* **The selected row looks selected** (#1672): the chat in front, the spot the next chat starts
+   in, the file a file tab shows — `aria-current` where a tree marks the current item, and
+   `aria-selected` where it selects (ui-primitives.md). A fill in the accent's hue and an edge
+   down its start, so it is told by a shape and not by colour alone, and it is neither the
+   pointer's `surface.hover` (which it was, until a selected chat looked exactly like a hovered
+   one) nor the strips' `layer.selected`. After every tree's own hover, so the pointer passing
+   over the selected row does not take its selection away. The edge is a shadow and not a
+   border, so selecting a row moves nothing in it.
+
+   **The keyboard's place is a ring, and only a ring**: the window's own focus ring
+   (`:focus-visible` at the top of this file), with no fill, so a row that is focused and not
+   selected never reads as selected, and the selected row the keyboard is on shows both. */
+.tree [role="treeitem"]:is([aria-current="true"], [aria-selected="true"]) {
+  background: var(--list-selected);
+  box-shadow: inset 2px 0 0 var(--list-selected-edge);
+}
+
+.tree [role="treeitem"]:is([aria-current="true"], [aria-selected="true"]):dir(rtl) {
+  box-shadow: inset -2px 0 0 var(--list-selected-edge);
 }
 
 .chats-section .empty {
@@ -3731,9 +3720,11 @@ h2.sidebar-title .node-icon {
 
 /* **A chat's finished tasks, under its row** (#1485): the rows that stand alone, then the one
    "Finished (n)" line. A finished task is quieter than a chat: it is over. */
+/* Stood in by padding and not by a margin, so the guides it draws as a row of the tree
+   (`.tree li[data-level]`) line up with its chat's rows above it. */
 .chats-section li.finished-tasks {
   display: block;
-  margin-inline-start: 1.15rem;
+  padding-inline-start: calc(var(--tree-depth) * var(--tree-indent) + 1.15rem);
   color: var(--text-muted);
 }
 
@@ -6443,13 +6434,6 @@ h2.sidebar-title .node-icon {
   border-right: 1px solid var(--border-subtle);
 }
 
-/* The tree's file shown in the preview: what `aria-selected` says, drawn the way the explorer
-   draws the place the next chat starts in, with more than colour. */
-.explorer .file-node[aria-selected="true"] {
-  border-inline-start-color: var(--accent-base);
-  background: var(--accent-surface);
-}
-
 .piece-image {
   display: flex;
   flex: 1 1 auto;
@@ -7936,11 +7920,11 @@ h2.sidebar-title .node-icon {
   background: var(--surface-hover);
 }
 
-/* The hit stepped to: drawn the way the file tree draws the file picked, with more than
-   colour. */
+/* The hit stepped to: drawn the way every tree draws its selected row (`.tree`, #1672), with
+   more than colour. */
 .search-line.active {
-  border-inline-start-color: var(--accent-base);
-  background: var(--accent-surface);
+  border-inline-start-color: var(--list-selected-edge);
+  background: var(--list-selected);
 }
 
 .search-hits:focus-visible .search-line.active {
