@@ -156,6 +156,8 @@ function core(open: (OpenChat & { workspace: string })[], finished: FinishedTask
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return now();
     if (cmd === "finished_tasks") return [...finished];
+    // Both workspaces on the strip, so a test can focus either (#1655).
+    if (cmd === "plane_pins") return { project: false, workspaces: ["alpha", "beta"], missing: [] };
     if (cmd === "open_chat_tab") {
       const one = open.find((chat) => chat.session === a.session);
       if (one?.from) one.from = { ...one.from, tab: true };
@@ -363,6 +365,8 @@ describe("the Chats section", () => {
     ]);
     render(<App />);
     const tree = await section();
+    // Every workspace's, which the list shows on the person's word (#1655).
+    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
 
     await waitFor(() =>
       expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 steward 3", "1 devops 4"]),
@@ -439,6 +443,7 @@ describe("the Chats section", () => {
     ]);
     render(<App />);
     const tree = await section();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
     await waitFor(() => expect(shape(tree)).toHaveLength(3));
 
     const one = await screen.findByTestId("on-memory-1");
@@ -1347,6 +1352,7 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     ]);
     render(<App />);
     const tree = await section();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 2", "2 check prod"]));
     await userEvent.click(within(tree).getByTitle("Fold the chats under devops 2"));
 
@@ -1393,6 +1399,7 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     ]);
     render(<App />);
     const tree = await section();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
     await waitFor(() => expect(shape(tree)).toHaveLength(5));
     move(3, "running", 10);
     move(5, "running", 11);
@@ -1710,5 +1717,82 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     const working = { word: "working", shape: "ring" };
     expect(says(row(tree, "steward 1"))).toEqual(working);
     expect(says(await explorerRow("steward 1"))).toEqual(working);
+  });
+});
+
+/** Focuses a workspace from the strip, which is the axis, once the strip lists it. */
+async function focusWorkspace(name: string) {
+  const tab = await waitFor(() => {
+    const found = within(stripNamed("Workspaces"))
+      .getAllByRole("tab")
+      .find((one) => one.querySelector(".workspace-name")?.textContent === name);
+    if (found === undefined) throw new Error(`no ${name} on the workspace strip`);
+    return found;
+  });
+  await userEvent.click(tab);
+}
+
+describe("the Chats section follows the focused workspace", () => {
+  it("lists the focused workspace's chats, and another's once that one is focused", async () => {
+    core([
+      chat(1, "alpha"),
+      // Asked for by alpha's chat and working in beta: it stays under the chat that asked.
+      chat(2, "beta", { persona: "devops", from: by(1, "task") }),
+      chat(3, "beta", { persona: "devops", in_front: false }),
+    ]);
+    render(<App />);
+    const tree = await section();
+
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+
+    await focusWorkspace("beta");
+    await waitFor(() => expect(shape(tree)).toEqual(["1 devops 3"]));
+  });
+
+  it("lists every workspace's chats while All workspaces is on, until it is taken off", async () => {
+    core([chat(1, "alpha"), chat(3, "beta", { persona: "devops" })]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "all workspaces" }));
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 3"]));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "all workspaces" }));
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
+  });
+
+  it("lists every workspace when the explorer asks for a task whose asker works in another", async () => {
+    core([
+      chat(1, "alpha"),
+      chat(2, "beta", { persona: "devops" }),
+      chat(3, "alpha", { label: "check prod", from: by(2, "task", "devops 2", "beta") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    // The task is beta's tree: its asker started there.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
+
+    await userEvent.click(await inExplorer(/1 task from other places/));
+
+    await waitFor(() => expect(row(tree, "check prod")).toHaveFocus());
+    expect(screen.getByRole("checkbox", { name: "all workspaces" })).toBeChecked();
+  });
+
+  it("says a chat in another workspace needs you, with a way to it, and never hides it silently", async () => {
+    const { move } = core([chat(1, "alpha"), chat(3, "beta", { persona: "devops" })]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
+
+    move(3, "waiting", 10, [3]);
+
+    await screen.findByText("1 chat in another workspace needs you.");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Go to devops 3, which needs you in another workspace" }),
+    );
+    // Its tab came forward, which focused its workspace: the list follows.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 devops 3"]));
+    expect(screen.queryByText("1 chat in another workspace needs you.")).toBeNull();
   });
 });

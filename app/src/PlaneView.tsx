@@ -7581,6 +7581,8 @@ export const PlaneView = memo(function PlaneView({
               <WaitingTaskWaysContext.Provider value={waitingTaskWays}>
                 <ChatsSection
                   rows={listRows}
+                  // The trees that started in the focused workspace, or at the root (#1655).
+                  here={focused === OUTSIDE ? ROOT_WORD : focused}
                   // The chat that has the keyboard: a task, while its pane shows it (#1486).
                   front={focusedChat(tabs)}
                   onOpen={showChat}
