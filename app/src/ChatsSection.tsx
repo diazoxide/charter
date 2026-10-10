@@ -43,6 +43,7 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
+import { inScope } from "./chatsScope";
 import { keepFolds, keptFolds } from "./chatFolds";
 import {
   ASKED_BY_YOU,
@@ -90,7 +91,9 @@ const CHIPS: readonly { rank: Rank; says: string }[] = [
 
 /** A chip's id in the chips' roving focus. */
 const chipId = (rank: Rank) => `chats-chip:${rank}`;
-const CHIP_IDS = CHIPS.map((chip) => chipId(chip.rank));
+/** The chip that shows every workspace's chats (#1655), in the chips' roving focus. */
+const EVERYWHERE_CHIP = "chats-chip:everywhere";
+const CHIP_IDS = [...CHIPS.map((chip) => chipId(chip.rank)), EVERYWHERE_CHIP];
 
 /** What the list is drawn from that the chats' own moves change: held still while the pointer
  *  or the keyboard is in the list. */
@@ -143,9 +146,16 @@ function byKeyboard(target: Element): boolean {
 }
 
 /**
- * **Every running chat of the project, in one tree** (#1447), in the left region above the
- * explorer. The explorer answers what is running in this workspace; this answers who is doing
- * what across all of them, and which chat started which.
+ * **The running chats of the focused workspace, in one tree** (#1447, #1655), in the left
+ * region above the explorer. The explorer answers what is running at each place in this
+ * workspace; this answers who is doing what, and which chat started which.
+ *
+ * **It follows the workspace in the strip** (#1655, ADR 0038's 2026-10-10 amendment): a tree is
+ * listed where its top row works, with every task below it wherever that task works
+ * (`chatsScope.ts`), and a chat started at the plane root is the root's. The **all workspaces**
+ * chip lists every workspace's chats again, for as long as the window runs. A chat in another
+ * workspace that needs you is never left out silently: the line under the filter says so and
+ * goes to it, as it does for one the filter hides, and the title bar's queue lists it as ever.
  *
  * **A row is a way to the chat.** Pressing one, or Enter on it, shows its chat (`onOpen`, the
  * one way a row opens): a task has no tab of its own, and is shown inside the tab of the
@@ -204,7 +214,8 @@ function byKeyboard(target: Element): boolean {
  * rows.
  */
 export function ChatsSection({
-  rows,
+  rows: every,
+  here,
   front,
   onOpen,
   offers = NO_OFFERS,
@@ -225,6 +236,9 @@ export function ChatsSection({
   onChanges,
 }: {
   rows: readonly ChatRow[];
+  /** The workspace in the strip, by the word a row says for where it works: the rows listed
+   *  are the trees that started there (#1655). Left out, every workspace's. */
+  here?: string;
   /** The chat in front, whose row is the current one. */
   front?: number;
   /** A row was pressed: go to that chat. A task is shown inside its session's tab (#1486).
@@ -273,6 +287,14 @@ export function ChatsSection({
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
+  /** Whether every workspace's chats are listed (#1655): the person's own choice, for as long
+   *  as the window runs. */
+  const [everywhere, setEverywhere] = useState(false);
+  const scoped = !everywhere && here !== undefined;
+  const rows = useMemo(
+    () => (!scoped || here === undefined ? every : inScope(every, here)),
+    [every, here, scoped],
+  );
   const [text, setText] = useState("");
   const [ranks, setRanks] = useState<readonly Rank[]>([]);
   const filter = useMemo<Filter>(() => ({ text, ranks }), [text, ranks]);
@@ -354,7 +376,14 @@ export function ChatsSection({
   const resting = over || inside;
   const [held, setHeld] = useState<Moving | null>(null);
   const moving: Moving = { order, live, asked, listed };
-  if (resting && held === null) setHeld(moving);
+  // **A workspace focused, or the chip pressed, is the person's doing** (#1655): its rows are
+  // theirs to see at once, as a filter's are, and not held as the last workspace's were.
+  const scope = scoped ? here : null;
+  const [heldScope, setHeldScope] = useState(scope);
+  if (heldScope !== scope) {
+    setHeldScope(scope);
+    setHeld(resting ? moving : null);
+  } else if (resting && held === null) setHeld(moving);
   if (!resting && held !== null) setHeld(null);
   const now = resting && held !== null ? held : moving;
   /** The filter was changed by the person: its answer is theirs to see at once. */
@@ -449,6 +478,18 @@ export function ChatsSection({
     const kept = new Set(base.map((row) => row.session));
     return needsYou.filter((session) => byNumber.has(session) && !kept.has(session));
   }, [base, byNumber, needsYou, now.asked]);
+  /** Every workspace's rows by number, for what is said of a chat this workspace's list
+   *  leaves out (#1655). */
+  const everyByNumber = useMemo(() => new Map(every.map((row) => [row.session, row])), [every]);
+  /** **The chats that need the person in the workspaces not listed** (#1655), longest waiting
+   *  first: never left out silently. */
+  const elsewhereNeeding = useMemo(
+    () =>
+      rows === every
+        ? []
+        : needsYou.filter((session) => everyByNumber.has(session) && !byNumber.has(session)),
+    [rows, every, needsYou, everyByNumber, byNumber],
+  );
 
   // How long each chat has been in its state, as this window saw it: read off every chat, drawn
   // or not, so a row that was folded away says the same time when it is drawn again. One clock
@@ -523,6 +564,19 @@ export function ChatsSection({
     [offers, press],
   );
   const section = useRef<HTMLElement>(null);
+  // **A row asked for in another workspace lists every workspace** (#1655), once for each
+  // asking, so the row can be shown: the chip says it is on, and the person takes it off.
+  const [widenedFor, setWidenedFor] = useState<number>();
+  if (
+    reveal !== undefined &&
+    reveal.at !== widenedFor &&
+    scoped &&
+    !byNumber.has(reveal.asker) &&
+    everyByNumber.has(reveal.asker)
+  ) {
+    setWidenedFor(reveal.at);
+    setEverywhere(true);
+  }
   useRevealedTask(section, reveal, rows, {
     fold,
     shut: (session) => opens.get(session) === false,
@@ -559,10 +613,28 @@ export function ChatsSection({
     setSaid(undefined);
   };
   const hidden = steady.length - base.length;
-  const hiddenFirst = hiddenNeeding.length === 0 ? undefined : byNumber.get(hiddenNeeding[0]);
+  /** Where the Go button goes: a chat the filter hides that needs you, else one in another
+   *  workspace that does (#1655). */
+  const hiddenFirst =
+    hiddenNeeding.length > 0
+      ? { row: byNumber.get(hiddenNeeding[0]), why: "which needs you and the filter hides" }
+      : elsewhereNeeding.length > 0
+        ? {
+            row: everyByNumber.get(elsewhereNeeding[0]),
+            why: "which needs you in another workspace",
+          }
+        : undefined;
+  const goesTo = hiddenFirst?.row;
+  /** What the line says of the workspaces not listed: only a chat there that needs you. */
+  const elsewhere =
+    elsewhereNeeding.length === 0
+      ? ""
+      : elsewhereNeeding.length === 1
+        ? "1 chat in another workspace needs you."
+        : `${elsewhereNeeding.length} chats in other workspaces need you.`;
   /** What the line under the filter says of it. A chat that needs the person comes first. */
   const hides = !filtering
-    ? ""
+    ? elsewhere
     : [
         hiddenNeeding.length === 0
           ? ""
@@ -574,6 +646,7 @@ export function ChatsSection({
           : hidden === 0
             ? "The filter hides no chat."
             : `The filter hides ${hidden} of ${steady.length} chats.`,
+        elsewhere,
       ]
         .filter((one) => one !== "")
         .join(" ");
@@ -590,7 +663,7 @@ export function ChatsSection({
           <MessagesSquare className="node-icon" aria-hidden="true" />
           Chats
         </h2>
-        {rows.length > 0 && (
+        {every.length > 0 && (
           <>
             <div className="chats-filter" role="search" aria-label="Filter the chats">
               <input
@@ -641,6 +714,19 @@ export function ChatsSection({
                       {chip.says}
                     </label>
                   ))}
+                  {/* Every workspace's chats (#1655): off, the list follows the strip. */}
+                  {here !== undefined && (
+                    <label className="chats-chip" data-on={everywhere || undefined}>
+                      <RovingFocusGroup.Item asChild tabStopId={EVERYWHERE_CHIP}>
+                        <input
+                          type="checkbox"
+                          checked={everywhere}
+                          onChange={() => setEverywhere((was) => !was)}
+                        />
+                      </RovingFocusGroup.Item>
+                      all workspaces
+                    </label>
+                  )}
                 </div>
               </RovingFocusGroup.Root>
             </div>
@@ -649,16 +735,16 @@ export function ChatsSection({
                 are said on it: what the filter hides, and why a key just pressed on a row did
                 nothing, which is drawn in the count's place until the next key. */}
             <div className="chats-notes">
-              {hiddenFirst !== undefined && (
+              {hiddenFirst !== undefined && goesTo !== undefined && (
                 <button
                   type="button"
                   className="chats-hidden-go"
                   // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
                   tabIndex={0}
-                  data-leads-to={hiddenFirst.session}
-                  aria-label={`Go to ${hiddenFirst.name}, which needs you and the filter hides`}
-                  title={`Go to ${hiddenFirst.name}, which needs you and the filter hides`}
-                  onClick={() => onOpen(hiddenFirst.session)}
+                  data-leads-to={goesTo.session}
+                  aria-label={`Go to ${goesTo.name}, ${hiddenFirst.why}`}
+                  title={`Go to ${goesTo.name}, ${hiddenFirst.why}`}
+                  onClick={() => onOpen(goesTo.session)}
                 >
                   <Hand aria-hidden="true" />
                   Go
@@ -679,7 +765,11 @@ export function ChatsSection({
         )}
       </div>
       {rows.length === 0 ? (
-        <p className="empty">No chats are running in this project.</p>
+        <p className="empty">
+          {every.length === 0
+            ? "No chats are running in this project."
+            : "No chats are running here. All workspaces lists the others."}
+        </p>
       ) : (
         <div
           ref={list}

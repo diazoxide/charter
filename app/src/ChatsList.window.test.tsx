@@ -264,7 +264,14 @@ function core(open: Filed[], ended: FinishedTask[] = []) {
   };
 }
 
-const section = () => screen.findByRole("tree", { name: "Chats of this project" });
+/** The list, with every workspace's chats on it: these read chats in alpha and beta at once,
+ *  which the list shows on the person's word (#1655). */
+const section = async () => {
+  const tree = await screen.findByRole("tree", { name: "Chats of this project" });
+  const every = screen.getByRole<HTMLInputElement>("checkbox", { name: "all workspaces" });
+  if (!every.checked) fireEvent.click(every);
+  return tree;
+};
 const theTree = () => screen.getByRole("tree", { name: "Chats of this project" });
 /** The list the pointer rests over: the tree and what holds it. */
 const list = () => {
