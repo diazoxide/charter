@@ -12,6 +12,13 @@
 //! source's own prompt decides, in the pane; charter neither allows nor denies on the
 //! operator's behalf. An ACP ask has no deadline and waits (ADR 0080 §5, V28d).
 //!
+//! **"Allow always" is never offered** (V28c, #1059). An allow that a source keeps past the
+//! session can be written into the worktree's harness settings, where it outlives the chat and
+//! a later chat reads it as standing permission (`claude-agent-acp` does, #783). The hook path
+//! drops it where the ask is read (`super::hooked`); the registry drops it from every ask it
+//! raises, whatever the source, so no client is offered it, and refuses it, saying why, from a
+//! client that sends its id anyway. A lasting reject, and an allow for the session, stay.
+//!
 //! **Only a human answers** (V16, V75, ADR 0080 §5.3). An [`Answerer`] is made only from a
 //! connection the host admitted as a human scope, the window or `charter inbox`; a chat never
 //! is one. An ask that elicits a secret is answered from the window alone.
@@ -158,6 +165,11 @@ pub enum Refused {
     NotAnOption(String),
     #[error("this ask elicits a secret, so it is answered only in purlis's window")]
     NotYours,
+    /// An allow that would last from now on, which the registry never offers (V28c).
+    #[error(
+        "\"allow always\" is not offered here: it would be kept in the worktree's harness settings, where a later chat reads it as standing permission. Allow it once, or set a standing permission in Settings"
+    )]
+    LastsFromNowOn,
     #[error("this ask offers no answers here; answer it in the chat's pane")]
     InThePane,
     /// An answer to a form that does not fit it, which leaves the ask open. It names the field,
@@ -191,6 +203,9 @@ struct Held {
 struct Open {
     raised: Raised,
     at: Instant,
+    /// The ids of the options the source offered and the registry hid (V28c): an answer naming
+    /// one hears why.
+    hidden: Vec<String>,
 }
 
 impl Open {
@@ -248,7 +263,12 @@ impl Asks {
 
     /// Holds `ask`, raised by `chat` at `now`, under a new id. An ask the source sent again
     /// supersedes the one before it, whose late answers then hear so.
-    pub fn raise(&self, chat: &str, ask: Ask, now: Instant) -> Raising {
+    pub fn raise(&self, chat: &str, mut ask: Ask, now: Instant) -> Raising {
+        let (hidden, offered): (Vec<_>, Vec<_>) = std::mem::take(&mut ask.options)
+            .into_iter()
+            .partition(lasts);
+        ask.options = offered;
+        let hidden = hidden.into_iter().map(|option| option.id).collect();
         let raised = Raised {
             id: AskId(ulid::Ulid::generate()),
             chat: chat.to_owned(),
@@ -266,6 +286,7 @@ impl Asks {
         held.open.push(Open {
             raised: raised.clone(),
             at: now,
+            hidden,
         });
         Raising { raised, superseded }
     }
@@ -304,6 +325,9 @@ impl Asks {
         }
         if ask.options.is_empty() {
             return Err(Refused::InThePane);
+        }
+        if open.hidden.iter().any(|hidden| hidden == choice) {
+            return Err(Refused::LastsFromNowOn);
         }
         let Some(chosen) = ask
             .options
@@ -393,6 +417,12 @@ impl Asks {
             _ => (waits[middle - 1] + waits[middle]) / 2,
         })
     }
+}
+
+/// Whether `option` lets the call run from now on, past the session: what V28c hides.
+fn lasts(option: &super::model::Choice) -> bool {
+    option.kind == super::model::ChoiceKind::Allow
+        && option.scope == super::model::ChoiceScope::Always
 }
 
 /// Whether `by` may answer `ask`: any human scope, but only the window for an ask that elicits
