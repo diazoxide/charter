@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use purlis_core::engine::Size;
 use purlis_core::instructions::Stamp;
@@ -1390,6 +1390,30 @@ pub struct Planes {
     /// Collects a plane's month-old per-session files as it opens (SC-7):
     /// [`purlis_core::retention::on_open`], or a test's stand-in.
     sweep: Sweep,
+    /// The projects an open is between its sweep and holding them (#1027), so a second open of
+    /// one waits for the first: see [`Planes::opening`].
+    opening: Mutex<HashSet<PlaneId>>,
+    /// Told each time an open of a project ends, for an open of the same one waiting on it.
+    opened: Condvar,
+}
+
+/// One open of a project, from before its sweep until it holds the project or finds it held
+/// ([`Planes::opening`]). Dropped, it lets the next open of that project go on.
+struct OpenTurn<'a> {
+    planes: &'a Planes,
+    id: PlaneId,
+}
+
+impl Drop for OpenTurn<'_> {
+    fn drop(&mut self) {
+        let mut opening = self
+            .planes
+            .opening
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        opening.remove(&self.id);
+        self.planes.opened.notify_all();
+    }
 }
 
 /// What collects a plane's month-old per-session files as [`Planes::open`] opens it.
@@ -1488,6 +1512,8 @@ impl Planes {
             sweep: Arc::new(|root| {
                 purlis_core::retention::on_open(root, std::time::SystemTime::now());
             }),
+            opening: Mutex::new(HashSet::new()),
+            opened: Condvar::new(),
         }
     }
 
@@ -1672,9 +1698,10 @@ impl Planes {
         // **Not under the registry's lock** (#1027): a sweep reads every aged trace, which on a
         // plane used for months takes a while, and the lock is what every other project's open,
         // close and lookup takes. So whether the plane is held is asked under the lock, and the
-        // sweep runs outside it, before this open holds the plane. Two opens of one root at once
-        // may both sweep, which removes nothing one sweep would keep; and a chat the other one
-        // starts meanwhile writes only files newer than the month a sweep removes.
+        // sweep runs outside it, before this open holds the plane. **An open of the same root
+        // waits for this one** ([`Self::opening`]): it then finds the plane held and sweeps
+        // nothing, so no sweep ever runs beside a chat of a plane this app holds.
+        let _opening = self.opening(&id);
         if !self.map().contains_key(&id) {
             (self.sweep)(&root);
         }
@@ -2895,6 +2922,23 @@ impl Planes {
 
     /// The registry, whether or not a thread panicked while holding it. What it holds is
     /// still the best answer there is, and refusing to draw anything at all would be worse.
+    /// This open's turn at project `id` (#1027): it waits while another open of the same project
+    /// is between its sweep and holding it, and an open of any other project waits for nothing.
+    fn opening(&self, id: &PlaneId) -> OpenTurn<'_> {
+        let mut opening = self.opening.lock().unwrap_or_else(PoisonError::into_inner);
+        while opening.contains(id) {
+            opening = self
+                .opened
+                .wait(opening)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        opening.insert(id.clone());
+        OpenTurn {
+            planes: self,
+            id: id.clone(),
+        }
+    }
+
     fn map(&self) -> MutexGuard<'_, HashMap<PlaneId, Arc<Held>>> {
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -3957,6 +4001,65 @@ mod tests {
         let mut both = vec![slow_id, quick_id];
         both.sort_by(|one, two| one.0.cmp(&two.0));
         assert_eq!(planes.open_now(), both);
+    }
+
+    /// #1027: a second open of a project whose sweep is still running waits for it, then finds
+    /// the project held and sweeps nothing: no sweep runs beside a project this app holds.
+    #[test]
+    fn a_second_open_of_a_project_waits_for_its_sweep_and_sweeps_nothing() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path().canonicalize().expect("resolved");
+        let (entered, sweeping) = mpsc::channel::<()>();
+        let (release, released) = mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let sweeps = Arc::new(AtomicUsize::new(0));
+        let planes = Arc::new(planes().sweeping_with(Arc::new({
+            let sweeps = Arc::clone(&sweeps);
+            move |_| {
+                if sweeps.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let _ = entered.send(());
+                    let _ = released
+                        .lock()
+                        .expect("the release")
+                        .recv_timeout(Duration::from_secs(60));
+                }
+            }
+        })));
+
+        let first = std::thread::spawn({
+            let (planes, root) = (Arc::clone(&planes), root.clone());
+            move || planes.open(&root)
+        });
+        sweeping
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the first open's sweep has begun");
+        let second = std::thread::spawn({
+            let (planes, root) = (Arc::clone(&planes), root.clone());
+            move || planes.open(&root)
+        });
+        // Long enough for an open that does not wait to sweep and hold the project.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !second.is_finished(),
+            "the second open waits for the first one's sweep"
+        );
+        assert_eq!(sweeps.load(Ordering::SeqCst), 1, "only one sweep ran");
+
+        release.send(()).expect("released");
+        let (one, two) = (
+            first.join().expect("opened"),
+            second.join().expect("opened"),
+        );
+        assert_eq!(one, two, "one project, one id");
+        assert_eq!(
+            sweeps.load(Ordering::SeqCst),
+            1,
+            "the second open found the project held and swept nothing"
+        );
     }
 
     #[test]
