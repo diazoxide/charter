@@ -89,6 +89,20 @@ describe("a question dialog's answer bar", () => {
     expect(readFileSync(join(SRC, "App.css"), "utf8")).toMatch(/\n\.answer \{[^}]*display: flex/);
   });
 
+  /**
+   * **What cannot be taken back keeps its danger under the pointer** (#1210). The tint was on
+   * `.warning .doing button.ends-it:hover`, which no dialog draws once every row is the bar's.
+   * jsdom computes no hover, so this reads the rule, and the rule must outrank the bar's own
+   * neutral `.answer button:hover:not(:disabled)` (0,4,0 against 0,3,1).
+   */
+  it("tints a destructive answer with the danger surface under the pointer", () => {
+    const css = readFileSync(join(SRC, "App.css"), "utf8");
+    const hover = /\n\.answer \.ends-it:hover:not\(:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(hover).toMatch(/background:\s*var\(--danger-surface\)/);
+    // Nothing is left styling a row no dialog draws.
+    expect(css).not.toMatch(/\.warning \.doing/);
+  });
+
   it("would be caught if one came back", () => {
     // The reader above is what the guard rests on, so it is held to the shapes a dialog writes.
     const dialog = `import * as AlertDialog from "@radix-ui/react-alert-dialog";\n`;
