@@ -8,6 +8,9 @@
 //
 // Two notices, each one line per entry: the LIMIT slowest tests, and the LIMIT binaries whose
 // tests took longest in all. Tests run at once, so a binary's sum is machine time, not the wait.
+//
+// And each failed test as an error, with where it panicked and what it said: a red `rust` job is
+// read through the checks API too, never through its log.
 
 import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
@@ -30,6 +33,44 @@ export function readCases(xml) {
     cases.push({ binary: attr("classname"), name: attr("name"), seconds: Number(attr("time")) || 0 });
   }
   return cases;
+}
+
+/** How many lines of a failed test's output its error keeps, from where it panicked. */
+export const FAILURE_LINES = 12;
+
+/**
+ * Every failed `<testcase>` in a JUnit report: `{ binary, name, said }`, `said` being the lines
+ * from its first `panicked at` on (or its failure's message, where it never panicked).
+ */
+export function readFailures(xml) {
+  const failed = [];
+  for (const [, attrs, body = ""] of xml.matchAll(
+    /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g,
+  )) {
+    if (!/<(failure|error)\b/.test(body)) continue;
+    const attr = (key) => {
+      const match = new RegExp(`\\b${key}="([^"]*)"`).exec(attrs);
+      return match ? unescape(match[1]) : "";
+    };
+    const text = unescape(body.replace(/<[^>]*>/g, "\n"));
+    const lines = text.split("\n").map((line) => line.trimEnd());
+    const at = lines.findIndex((line) => line.includes("panicked at"));
+    const message = /<(?:failure|error)\b[^>]*\bmessage="([^"]*)"/.exec(body);
+    const said =
+      at >= 0
+        ? lines.slice(at, at + FAILURE_LINES).filter((line) => line.trim() !== "")
+        : [message ? unescape(message[1]) : "failed"];
+    failed.push({ binary: attr("classname"), name: attr("name"), said });
+  }
+  return failed;
+}
+
+/** One `::error` line per failed test. */
+export function failureAnnotations(failed) {
+  return failed.map(
+    (one) =>
+      `::error title=${escapeProperty(`Failed: ${one.binary} ${one.name}`)}::${escapeData(one.said.join("\n"))}`,
+  );
 }
 
 /** The `limit` slowest tests, and the `limit` binaries whose tests took longest in all. */
@@ -73,6 +114,9 @@ export function annotations(cases, { limit = LIMIT } = {}) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const file = process.argv[2] ?? "target/nextest/ci/junit.xml";
-  const cases = existsSync(file) ? readCases(readFileSync(file, "utf8")) : [];
-  for (const line of annotations(cases)) console.log(line);
+  const xml = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const cases = readCases(xml);
+  for (const line of [...failureAnnotations(readFailures(xml)), ...annotations(cases)]) {
+    console.log(line);
+  }
 }

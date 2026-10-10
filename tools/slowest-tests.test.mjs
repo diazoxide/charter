@@ -3,7 +3,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { annotations, readCases, slowest } from "./slowest-tests.mjs";
+import {
+  annotations,
+  failureAnnotations,
+  readCases,
+  readFailures,
+  slowest,
+} from "./slowest-tests.mjs";
 
 /** A report as nextest writes it: one testsuite per test binary, a testcase per test. */
 const report = `<?xml version="1.0" encoding="UTF-8"?>
@@ -62,4 +68,32 @@ test("a name that holds a workflow command's own characters is escaped", () => {
 
 test("a run that wrote no report says so, and does not fail", () => {
   assert.deepEqual(annotations([]), ["::notice title=Slowest Rust tests::No JUnit report with tests was found."]);
+});
+
+test("each failed test is an error, with where it panicked and what it said", () => {
+  const failing = `<testsuites>
+    <testsuite name="purlis-core">
+        <testcase name="passes" classname="purlis-core" time="0.1"/>
+        <testcase name="sandbox::x::fails" classname="purlis-core" time="0.2">
+            <failure type="test failure with exit code 101" message="thread panicked"/>
+            <system-out>running 1 test</system-out>
+            <system-err>thread &apos;sandbox::x::fails&apos; panicked at src/x.rs:3:5:
+assertion failed: a &lt; b
+note: run with RUST_BACKTRACE=1</system-err>
+        </testcase>
+        <testcase name="no_panic" classname="purlis-core" time="0.3"><failure message="timed out"/></testcase>
+    </testsuite>
+</testsuites>`;
+  const failed = readFailures(failing);
+  assert.deepEqual(
+    failed.map((one) => [one.name, one.said[0], one.said[1]]),
+    [
+      ["sandbox::x::fails", "thread 'sandbox::x::fails' panicked at src/x.rs:3:5:", "assertion failed: a < b"],
+      ["no_panic", "timed out", undefined],
+    ],
+  );
+  const [first] = failureAnnotations(failed);
+  assert.match(first, /^::error title=Failed%3A purlis-core sandbox%3A%3Ax%3A%3Afails::thread /);
+  assert.match(first, /a < b%0Anote/);
+  assert.deepEqual(readFailures(report), []);
 });
