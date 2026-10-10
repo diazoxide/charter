@@ -14,7 +14,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { BlockReport, ChatBlocked, Moved } from "./bindings";
-import { AT_MOST_PER_CHAT, blocked, putAway } from "./sandboxBlocks";
+import { AT_MOST_HOSTS, AT_MOST_PER_CHAT, blocked, hostsOf, putAway } from "./sandboxBlocks";
+import { SETTLE_MS } from "./TaskBlocksNotice";
 
 /**
  * **A sandbox block becomes a Notice on the chat's tab** (#1338), against the whole window: the
@@ -429,6 +430,85 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
   });
 });
 
+describe("several hosts refused at once are one Notice (#1637)", () => {
+  const ON = (host: string): ChatBlocked => ({
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    said: "a connection to an internet host this project does not allow",
+    offer: "host",
+    target: host,
+    levels: ["chat", "you", "project"],
+  });
+  const HOSTS = ["a.example.com:443", "b.example.com:443", "c.example.com:443"];
+  /** Past the guard on a press just after a host joined. */
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS + 50));
+    });
+
+  it("lists every host, allows each with one press, and restarts the chat once", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-moved", WAITING));
+    for (const host of HOSTS) await act(() => emit("chat-sandbox-blocked", ON(host)));
+
+    const notices = await screen.findAllByRole("status", { name: "Sandbox block" });
+    expect(notices).toHaveLength(1);
+    const [notice] = notices;
+    for (const host of HOSTS) expect(screen.getByText(host).tagName).toBe("CODE");
+    expect(notice).toHaveTextContent("3 hosts were refused");
+    expect(notice).not.toHaveTextContent("more block");
+
+    // A press just after a host joined allows nothing, and says why.
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    expect(notice).toHaveTextContent("A host joined this Notice just now, so nothing was allowed.");
+    expect(asked("allow_sandbox_block")).toEqual([]);
+    await settle();
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+
+    await waitFor(() =>
+      expect(asked("allow_sandbox_block")).toEqual(
+        HOSTS.map((host) => ({
+          plane: PLANE,
+          session: 4,
+          shown: { operation: "connect", kind: "host", what: "host", target: host },
+          level: "chat",
+        })),
+      ),
+    );
+    await waitFor(() => expect(asked("restart_chat")).toHaveLength(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(asked("restart_chat")).toHaveLength(1);
+  });
+
+  it("keeps a host that arrives while the answer is on its way up, asking", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-moved", RUNNING));
+    for (const host of HOSTS) await act(() => emit("chat-sandbox-blocked", ON(host)));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await settle();
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await act(() => emit("chat-sandbox-blocked", ON("d.example.com:443")));
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(3));
+    expect(
+      asked("allow_sandbox_block").map((one) => (one.shown as { target: string }).target),
+    ).toEqual(HOSTS);
+
+    // The fourth is still asked, in the same Notice, with what was allowed said.
+    const now = await screen.findByRole("status", { name: "Sandbox block" });
+    await waitFor(() => expect(now).toHaveTextContent("Allowed already"));
+    expect(screen.getByText("d.example.com:443")).toBeInTheDocument();
+    await settle();
+    await userEvent.click(within(now).getByRole("button", { name: "Allow for this chat" }));
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(4));
+    expect((asked("allow_sandbox_block")[3].shown as { target: string }).target).toBe(
+      "d.example.com:443",
+    );
+  });
+});
+
 describe("a block policy forbids offers nothing it forbids and says who forbade it (#1343)", () => {
   const LOCKED = "Locked by policy, set by Platform team in /etc/purlis/policy.json.";
   const HOST: ChatBlocked = {
@@ -541,5 +621,37 @@ describe("the blocks a window holds", () => {
       held = blocked(held, { ...THEIRS, kind });
     expect(held[4]).toHaveLength(AT_MOST_PER_CHAT);
     expect(putAway({ 4: [OURS] }, 4, OURS)).toEqual({});
+  });
+
+  it("holds the hosts of one block together, each once, within the bound (#1637)", () => {
+    const on = (host: string, levels: ChatBlocked["levels"] = ["chat", "you", "project"]) => ({
+      ...THEIRS,
+      operation: "connect",
+      kind: "host",
+      offer: "host" as const,
+      target: host,
+      levels,
+    });
+    let held = blocked({}, on("a.example.com"));
+    held = blocked(held, on("b.example.com", ["chat", "you"]));
+    held = blocked(held, on("A.example.com:443"));
+    expect(held[4]).toHaveLength(1);
+    expect(hostsOf(held[4][0])).toEqual(["a.example.com", "b.example.com"]);
+    // The first host names it, so its Notice stays the one drawn as hosts join.
+    expect(held[4][0].target).toBe("a.example.com");
+    // Allow only where every host it lists may be allowed.
+    expect(held[4][0].levels).toEqual(["chat", "you"]);
+    // A host the report did not name is a block of its own.
+    held = blocked(held, { ...on("x"), target: null });
+    expect(held[4]).toHaveLength(2);
+    for (let at = 0; at < AT_MOST_HOSTS + 2; at += 1)
+      held = blocked(held, on(`h${at}.example.com`));
+    const hosts = held[4].find((one) => one.target !== null);
+    expect(hosts !== undefined && hostsOf(hosts)).toHaveLength(AT_MOST_HOSTS);
+    // Answered, it loses only the hosts the answer named.
+    const shown = blocked({}, on("a.example.com"));
+    const more = blocked(shown, on("b.example.com"));
+    expect(putAway(more, 4, shown[4][0], true)[4]?.map(hostsOf)).toEqual([["b.example.com"]]);
+    expect(putAway(more, 4, more[4][0])).toEqual({});
   });
 });
