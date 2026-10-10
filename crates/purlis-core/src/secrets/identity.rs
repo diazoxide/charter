@@ -478,10 +478,48 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
         return Ok(None);
     };
     let base = base_of(&rec, vault)?;
-    Ok(keyring::store(ctx)
-        .get(&format!("{base}/{id}"), source)?
+    let service = format!("{base}/{id}");
+    if let Some(token) = ctx.kept.get(&service, source) {
+        return Ok(Some(token));
+    }
+    let token = keyring::store(ctx)
+        .get(&service, source)?
         .map(keyring::Secret::into_inner)
-        .filter(|v| !v.is_empty()))
+        .filter(|v| !v.is_empty());
+    if let Some(token) = &token {
+        ctx.kept.put(&service, source, token);
+    }
+    Ok(token)
+}
+
+/// **The kept tokens one command has read, so it reads each from the keyring once** (#1180).
+///
+/// A 1Password vault is read by one `op` per value, and each `op` is handed the token. Where the
+/// `purlis` command is the reader, each keyring read is one question the Keychain asks the
+/// person (V90a), so `secret exec` with three values asked three times. A [`Ctx`] carries one
+/// of these: it lives as long as the command, or the one request the app serves with it, and a
+/// replaced token is a new item, so it is never read stale. Only a token found is remembered;
+/// a read that found none, or failed, is made again. `Debug` names no token.
+#[derive(Clone, Default)]
+pub struct Kept(std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), String>>>);
+
+impl Kept {
+    fn get(&self, service: &str, account: &str) -> Option<String> {
+        let kept = self.0.lock().ok()?;
+        kept.get(&(service.to_owned(), account.to_owned())).cloned()
+    }
+
+    fn put(&self, service: &str, account: &str, token: &str) {
+        if let Ok(mut kept) = self.0.lock() {
+            kept.insert((service.to_owned(), account.to_owned()), token.to_owned());
+        }
+    }
+}
+
+impl std::fmt::Debug for Kept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Kept(***)")
+    }
 }
 
 /// **Upgrade a record made before #1527, which names no item, to pin the one it is read with

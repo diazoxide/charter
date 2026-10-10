@@ -380,6 +380,11 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         )));
         return 2;
     }
+    // No app took it: a sandboxed chat still never reads the keyring here (#1180).
+    if let Some(why) = super::brokered::refused_in_this_chat(ctx, &v, "exec") {
+        io.say(Say::Err(why));
+        return 1;
+    }
 
     let env = match child_env(ctx, &req.vault) {
         Ok(env) => env,
@@ -634,3 +639,7 @@ impl Drop for Termination {
 #[cfg(test)]
 #[path = "exec_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "exec_keychain_tests.rs"]
+mod keychain_tests;
