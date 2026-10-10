@@ -102,3 +102,11 @@ export async function showTheExplorer() {
   if (tab.getAttribute("aria-selected") !== "true") await userEvent.click(tab);
   return screen.findByRole("navigation", { name: "Explorer" });
 }
+
+/** Shows the left side's Changes view (#1676): the repos' state, which the bottom region drew
+ *  until then. Returns the view's content. */
+export async function showTheChanges() {
+  const tab = await screen.findByRole("tab", { name: "Changes" });
+  if (tab.getAttribute("aria-selected") !== "true") await userEvent.click(tab);
+  return screen.findByTestId("changes-view");
+}

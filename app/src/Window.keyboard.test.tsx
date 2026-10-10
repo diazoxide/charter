@@ -327,7 +327,7 @@ describe("the window's tab order", () => {
       // The project's chats (#1447): ONE stop, the row of the chat in front, which reads as
       // its name and its state's word (#1484), then its workspace on its second line (#1499).
       "treeitem steward tworunning (no detail from Claude Code)alpha",
-      // The explorer is the side's other view, hidden while Chats is open.
+      // Explorer, Search and Changes are the side's other views, hidden while Chats is open.
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",
       // The focused pane's own controls, drawn in its top corners left to right — the harness
@@ -343,12 +343,10 @@ describe("the window's tab order", () => {
       // bar (charter-app#249), so its one stop is the Vaults heading's `+` — New vault…, which
       // needs a plane and not a vault (SI-3).
       "button New vault…",
-      // The handle above the bottom region, which has no controls of its own.
-      "separator",
+      // Nothing along the bottom since #1676: its content is the Changes view, hidden here.
       // The status line: the region toggles at its left, then Alerts and the doctor.
       "button Navigation",
       "button Attention",
-      "button State",
       "button Alerts: none",
       "button Doctor",
     ]);

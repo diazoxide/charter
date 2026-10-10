@@ -27,8 +27,9 @@ import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } fro
  * Adding a region is a line in {@link CATALOGUE}, a line in {@link DEFAULT_ARRANGEMENT} and a
  * piece of content for `RegionFrame` to put in a slot. No JSX moves.
  *
- * **Slots are fixed; regions are not.** `RegionFrame` always renders the same four panels —
- * left, centre, right, bottom — and a region's `side` says which of them its content goes in.
+ * **Slots are fixed; regions are not.** `RegionFrame` always renders the same three panels —
+ * left, centre, right — and a region's `side` says which of them its content goes in. (There
+ * was a fourth, along the bottom, until #1676 folded its content into the Changes view.)
  * That is not timidity: `react-resizable-panels` throws *"Panel constraints not found for
  * index 3"* from a document listener when a panel leaves a live group, measured in
  * charter-app#141, and clamping a panel's constraints to zero throws the same way. Fixed slots
@@ -74,19 +75,24 @@ import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } fro
  *
  *  **`navigation` was `explorer` in version 1 of the file** (#1673): the left region holds
  *  the Chats and Explorer views now, so the explorer is one of its views and no longer its
- *  name. {@link load} reads the old id as the new one. */
-export type RegionId = "navigation" | "aside" | "bottom";
+ *  name. {@link load} reads the old id as the new one.
+ *
+ *  **There is no `bottom` region any more** (#1676, B-7): what it drew is the navigation
+ *  region's Changes view, so the terminals have the window's whole height. A file that still
+ *  places it is read without it, and without a word ({@link RETIRED}). */
+export type RegionId = "navigation" | "aside";
 
 // A view (`sideViews.ts`): what a region with an activity bar shows, one at a time.
 export { VIEWS, type ViewId } from "./sideViews";
 
 /** Where a region can be put. These are the slots `RegionFrame` draws, and the centre is not
  *  one of them: the terminal panes are the product, and a window with no centre is not a state
- *  the operator can get into by pressing something. */
-export type Side = "left" | "right" | "bottom";
+ *  the operator can get into by pressing something. Nothing is drawn along the bottom (#1676):
+ *  a side is the whole height of the window, as the terminals are. */
+export type Side = "left" | "right";
 
 /** Every slot, in the order the toggle buttons list their regions. */
-export const SIDES: readonly Side[] = ["left", "right", "bottom"];
+export const SIDES: readonly Side[] = ["left", "right"];
 
 /**
  * How far a slot may be dragged.
@@ -105,7 +111,6 @@ export const SLOTS: Record<Side, { least: number; most: number; floor?: string }
   // person who makes the text bigger does not get a sidebar its rows no longer fit.
   left: { least: 8, most: 45, floor: "11rem" },
   right: { least: 10, most: 45 },
-  bottom: { least: 6, most: 50 },
 };
 
 /** The least a slot may be dragged to, as its panel is told: its floor where it has one. */
@@ -130,13 +135,18 @@ export type Definition = {
  * A region's *look* is not in here — a slot's border is the slot's (`App.css`), because
  * `surface.deep` is defined as the topmost strip and the bottom of the window rather than as
  * one region's colour. A region that moves to another side takes on that side's look, which is
- * what "the window is four regions" means.
+ * what "the window is regions" means.
  */
 export const CATALOGUE: Record<RegionId, Definition> = {
-  // ADR 0038's own reading: the left is navigation, the right is attention, the bottom is state.
-  navigation: { name: "Navigation", size: 16, views: ["chats", "explorer"] },
+  // ADR 0038's own reading: the left is navigation, the right is attention. The bottom was
+  // state, and is the left's Changes view since #1676.
+  navigation: {
+    name: "Navigation",
+    size: 16,
+    // Search and Changes since #1676: Changes holds what the bottom region drew (B-7).
+    views: ["chats", "explorer", "search", "changes"],
+  },
   aside: { name: "Attention", size: 20 },
-  bottom: { name: "State", size: 16 },
 };
 
 /** Every region there is, in a fixed order, so anything iterating them is deterministic. */
@@ -177,12 +187,11 @@ export type Placement = {
 
 export type Arrangement = Placement[];
 
-/** Today's four-region window (ADR 0038), as the default *value* of the arrangement
+/** Today's window (ADR 0038, as #1676 left it), as the default *value* of the arrangement
  *  rather than as a shape in `PlaneView`. */
 export const DEFAULT_ARRANGEMENT: Arrangement = [
   { id: "navigation", side: "left", order: 0, collapsed: false },
   { id: "aside", side: "right", order: 0, collapsed: false },
-  { id: "bottom", side: "bottom", order: 0, collapsed: false },
 ];
 
 /** Where web storage held the arrangement before it was a file. Read once, to move it. */
@@ -199,6 +208,15 @@ export const MOST_PROJECTS = 32;
 
 /** A region id version 1 wrote, by the id it has now. */
 const RENAMED: Record<string, RegionId> = { explorer: "navigation" };
+
+/** Region ids an older build wrote for a region this one has folded into another, and so
+ *  skips without a word: what it drew is still on screen, somewhere else. The `bottom` region
+ *  is the navigation region's Changes view since #1676. */
+const RETIRED: readonly string[] = ["bottom"];
+
+/** The side every build before #1676 had along the bottom. A region a file put there goes
+ *  back to its own side without a word, and its size, a height there, is not read as a width. */
+const RETIRED_SIDE = "bottom";
 
 /** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
  *  charter-app#283), kept here because they are the same kind of preference — how one operator
@@ -563,6 +581,8 @@ function placements(regions: unknown, said: string[]): Arrangement {
           : placement.id;
       if (typeof id !== "string") {
         said.push("a placement with no id was skipped");
+      } else if (RETIRED.includes(id)) {
+        // Folded into another region (#1676): nothing of the person's is lost by skipping it.
       } else if (!(REGION_IDS as string[]).includes(id)) {
         said.push(
           `${JSON.stringify(id)} is not a region this purlis has (${REGION_IDS.join(", ")}), so it was left out`,
@@ -578,15 +598,16 @@ function placements(regions: unknown, said: string[]): Arrangement {
   return DEFAULT_ARRANGEMENT.map((fallback) => {
     const one = held.get(fallback.id);
     if (one === undefined) return fallback;
-    if (one.side !== undefined && !isSide(one.side)) {
+    const sideRetired = one.side === RETIRED_SIDE;
+    if (one.side !== undefined && !isSide(one.side) && !sideRetired) {
       said.push(
-        `${fallback.id}'s side ${JSON.stringify(one.side)} is not left, right or bottom, so it is on the ${fallback.side}`,
+        `${fallback.id}'s side ${JSON.stringify(one.side)} is not left or right, so it is on the ${fallback.side}`,
       );
     }
     if (one.order !== undefined && !Number.isFinite(one.order)) {
       said.push(`${fallback.id}'s order ${JSON.stringify(one.order)} is not a number`);
     }
-    if (one.size !== undefined && !usable(one.size)) {
+    if (one.size !== undefined && !usable(one.size) && !sideRetired) {
       said.push(`${fallback.id}'s size ${JSON.stringify(one.size)} is not a percentage above 0`);
     }
     const views = CATALOGUE[fallback.id].views;
@@ -605,7 +626,7 @@ function placements(regions: unknown, said: string[]): Arrangement {
       // Only `true` puts a region away. Anything else — missing, a string, a number — is a
       // region charter cannot read the answer for, and it is SHOWN.
       collapsed: one.collapsed === true,
-      ...(usable(one.size) ? { size: one.size } : {}),
+      ...(usable(one.size) && !sideRetired ? { size: one.size } : {}),
       ...(view !== undefined ? { view } : {}),
     };
   });
@@ -652,7 +673,7 @@ function usable(size: unknown): size is number {
 }
 
 function isSide(side: unknown): side is Side {
-  return side === "left" || side === "right" || side === "bottom";
+  return side === "left" || side === "right";
 }
 
 /**
@@ -663,7 +684,7 @@ function isSide(side: unknown): side is Side {
  * side whatever the data says — see this module's docstring for why the panel list is fixed.
  */
 export function inSlots(arrangement: Arrangement): Record<Side, Placement[]> {
-  const slots: Record<Side, Placement[]> = { left: [], right: [], bottom: [] };
+  const slots: Record<Side, Placement[]> = { left: [], right: [] };
   for (const one of arrangement) slots[one.side].push(one);
   for (const side of SIDES) {
     slots[side].sort(

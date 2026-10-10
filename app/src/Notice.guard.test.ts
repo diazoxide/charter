@@ -104,10 +104,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
       "; and what Copy did in the Brief panel, beside its button: replaced by the next press, " +
       "not about something true now (#1494)",
   },
-  "BottomBar.tsx": {
+  "ChangesView.tsx": {
     count: 2,
     why:
-      "the repos bar's read refusal and a branch it cannot read: the bottom region has nothing " +
+      "the repos bar's read refusal and a branch it cannot read: the Changes view has nothing " +
       "to press (ADR 0038), so their way out is the explorer's Read again on the same read (NO-4)",
   },
   "ChangeActions.tsx": {

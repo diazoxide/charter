@@ -233,8 +233,7 @@ has it; nothing reads the key after that.
       "size": 22,
       "view": "explorer"
     },
-    { "id": "aside", "side": "left", "order": 0, "collapsed": false },
-    { "id": "bottom", "side": "bottom", "order": 0, "collapsed": true }
+    { "id": "aside", "side": "left", "order": 0, "collapsed": false }
   ],
   "projects": {
     "/home/me/project": {
@@ -256,27 +255,30 @@ has it; nothing reads the key after that.
 - **`regions`** lists placements: **the machine's arrangement**, what a project with none of its
   own starts from. Changing the arrangement in any project writes it here too, so a project
   opened afterwards starts as the person last left one. The ids this build has are `navigation`
-  (the left side: the Chats and Explorer views; version 1 called it `explorer`, and that id is
-  still read as this one), `aside` (the attention region: personas, memory, contributed panels)
-  and `bottom` (the repository state bar). A region the list leaves out is where it starts; an
-  id this build does not have is left out and named in the alerts drawer.
+  (the left side: the Chats, Explorer, Search and Changes views; version 1 called it `explorer`,
+  and that id is still read as this one) and `aside` (the attention region: personas, memory,
+  contributed panels). A region the list leaves out is where it starts; an id this build does
+  not have is left out and named in the alerts drawer. **`bottom`**, the repository state bar
+  every file before #1676 placed, is read past without a word: its content is the Changes view.
 - **`projects`** is each project's own arrangement, by its path, as `regions` is written
   (#1673): the side a view is on, which view it shows, its width and whether it is away come
   back as that project left them. purlis writes a project's entry when its arrangement changes;
   the core keeps the entries a window did not send, so two windows keep each other's, and keeps
   at most 32, letting go of the projects opened longest ago first. An entry that is not an
   arrangement is skipped, and the project starts from the machine's.
-- **`view`**, on a region that has views, is the one it shows: `chats` or `explorer` for
-  `navigation`. Leave it out for the first, `chats`. A view the region does not have is its
+- **`view`**, on a region that has views, is the one it shows: `chats`, `explorer`, `search`
+  or `changes` for `navigation`. Leave it out for the first, `chats`. A view the region does not have is its
   first, and the alerts drawer says so.
-- **`side`** is `left`, `right` or `bottom` — the three slots around the terminals. Two regions
+- **`side`** is `left` or `right` — the two slots beside the terminals, which have the window's
+  whole height (#1676: there is no slot along the bottom; a region a file still puts on
+  `bottom` goes back to its own side without a word, and its size, a height there, is left
+  out). Two regions
   on one side stack in **`order`**, lowest first; a tie is broken the same way at every launch.
 - **`collapsed`** puts a region away when it is `true`, and only then. Anything else draws it.
   A region with views keeps them, hidden, and its activity bar stays at the window's edge.
-- **`size`** is how big the region's slot is, as a percentage of the window's width — of its
-  height, for the bottom slot — above 0 and at most 100; leave it out for the default. Keep it
-  inside the slot's own bounds, which a drag is held to as well: the left slot is 8–45%, the
-  right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`). The left slot is also never
+- **`size`** is how big the region's slot is, as a percentage of the window's width, above 0
+  and at most 100; leave it out for the default. Keep it inside the slot's own bounds, which a
+  drag is held to as well: the left slot is 8–45%, the right 10–45% (`SLOTS` in `regions.ts`). The left slot is also never
   narrower than 11rem, whatever percentage that is of the window (#1499): under it a nested row
   of the Chats list has no room for its state, and the floor follows the text size.
 - **`text`** is the two text sizes, in px (purlis#283): **`window`**, the root font size

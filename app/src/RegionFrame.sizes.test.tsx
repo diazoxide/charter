@@ -82,7 +82,6 @@ vi.mock("react-resizable-panels", () => ({
 const CONTENT: Record<RegionId, ReactNode> = {
   navigation: <div data-testid="c-navigation">navigation</div>,
   aside: <div data-testid="c-aside">aside</div>,
-  bottom: <div data-testid="c-bottom">bottom</div>,
 };
 
 const onResized = vi.fn();
@@ -112,11 +111,7 @@ const on = (id: RegionId, side: Side, order = 0, collapsed = false, size?: numbe
   ...(size === undefined ? {} : { size }),
 });
 
-const AWAY: Arrangement = [
-  on("navigation", "left", 0, true),
-  on("aside", "right"),
-  on("bottom", "bottom"),
-];
+const AWAY: Arrangement = [on("navigation", "left", 0, true), on("aside", "right")];
 
 beforeEach(() => {
   given.clear();
@@ -133,19 +128,12 @@ describe("how big a slot starts", () => {
 
     expect(given.get("region-left")?.defaultSize).toBe("16%");
     expect(given.get("region-right")?.defaultSize).toBe("20%");
-    expect(given.get("region-bottom")?.defaultSize).toBe("16%");
+    // Nothing along the bottom since #1676: the panes are the window's whole height.
+    expect(given.has("region-bottom")).toBe(false);
   });
 
   it("is the size the arrangement remembers, which is what charter-app#141 deferred", () => {
-    render(
-      <Harness
-        from={[
-          on("navigation", "left", 0, false, 31.5),
-          on("aside", "right"),
-          on("bottom", "bottom"),
-        ]}
-      />,
-    );
+    render(<Harness from={[on("navigation", "left", 0, false, 31.5), on("aside", "right")]} />);
 
     expect(given.get("region-left")?.defaultSize).toBe("31.5%");
   });
@@ -164,11 +152,7 @@ describe("how big a slot starts", () => {
   });
 
   it("is nothing at all when every region has moved off that side", () => {
-    render(
-      <Harness
-        from={[on("navigation", "right", 1), on("aside", "right"), on("bottom", "bottom")]}
-      />,
-    );
+    render(<Harness from={[on("navigation", "right", 1), on("aside", "right")]} />);
 
     expect(given.get("region-left")?.defaultSize).toBe("0%");
   });
@@ -182,11 +166,7 @@ describe("the constraints the group is registered with", () => {
     render(
       <Harness
         from={DEFAULT_ARRANGEMENT}
-        to={[
-          on("navigation", "bottom", 1, true),
-          on("aside", "left", 0, false, 40),
-          on("bottom", "bottom", 2),
-        ]}
+        to={[on("navigation", "right", 1, true), on("aside", "left", 0, false, 40)]}
       />,
     );
 
@@ -211,10 +191,6 @@ describe("the constraints the group is registered with", () => {
     expect(constraints(given.get("region-right"))).toMatchObject({
       minSize: "10%",
       maxSize: "45%",
-    });
-    expect(constraints(given.get("region-bottom"))).toMatchObject({
-      minSize: "6%",
-      maxSize: "50%",
     });
   });
 });
@@ -254,16 +230,8 @@ describe("putting a region away while the window is up", () => {
     // it back at `minSize`. The remembered size is what it should come back to.
     render(
       <Harness
-        from={[
-          on("navigation", "left", 0, true, 31.5),
-          on("aside", "right"),
-          on("bottom", "bottom"),
-        ]}
-        to={[
-          on("navigation", "left", 0, false, 31.5),
-          on("aside", "right"),
-          on("bottom", "bottom"),
-        ]}
+        from={[on("navigation", "left", 0, true, 31.5), on("aside", "right")]}
+        to={[on("navigation", "left", 0, false, 31.5), on("aside", "right")]}
       />,
     );
 
@@ -286,13 +254,13 @@ describe("remembering how big a slot was left", () => {
   });
 
   it("says nothing about a slot the group did not report", () => {
-    // The two groups each report their own panels. The outer one never mentions the left slot,
-    // and answering for it would write the bottom's height into the explorer's width.
+    // A layout that does not mention the left slot leaves its width alone, rather than writing
+    // a width it was never told.
     render(<Harness from={DEFAULT_ARRANGEMENT} />);
 
-    settled[0]?.({ "region-upper": 84, "region-bottom": 16 }, { isUserInteraction: true });
+    settled[0]?.({ "region-centre": 80, "region-right": 20 }, { isUserInteraction: true });
 
-    expect(onResized).toHaveBeenCalledWith({ bottom: 16 });
+    expect(onResized).toHaveBeenCalledWith({ right: 20 });
   });
 
   it("ignores a layout charter itself caused", () => {

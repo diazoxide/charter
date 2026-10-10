@@ -26,7 +26,6 @@ const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMo
 const CONTENT: Record<RegionId, React.ReactNode> = {
   navigation: <div data-testid="c-navigation">navigation</div>,
   aside: <div data-testid="c-aside">aside</div>,
-  bottom: <div data-testid="c-bottom">bottom</div>,
 };
 
 /** The frame, with a button that rearranges it — standing in for whatever eventually does. */
@@ -65,38 +64,37 @@ describe("where a region is drawn", () => {
 
     expect(within(slot("left")).getByTestId("c-navigation")).toBeInTheDocument();
     expect(within(slot("right")).getByTestId("c-aside")).toBeInTheDocument();
-    expect(within(slot("bottom")).getByTestId("c-bottom")).toBeInTheDocument();
+  });
+
+  it("has a slot on each side and none along the bottom (#1676)", () => {
+    render(<Harness from={DEFAULT_ARRANGEMENT} />);
+
+    expect([...document.querySelectorAll("[data-panel]")].map((one) => one.id)).toEqual([
+      "region-left",
+      "region-centre",
+      "region-right",
+    ]);
   });
 
   it("draws it on the other side when the arrangement says so, and no JSX moves", () => {
-    // The whole point of the ticket: the bottom bar on the right is a change to the data.
-    render(
-      <Harness from={[on("navigation", "left"), on("aside", "right"), on("bottom", "right", 1)]} />,
-    );
+    // The whole point of the ticket: the attention region on the left is a change to the data.
+    render(<Harness from={[on("navigation", "right"), on("aside", "left")]} />);
 
-    expect(within(slot("right")).getByTestId("c-bottom")).toBeInTheDocument();
-    expect(within(slot("bottom")).queryByTestId("c-bottom")).not.toBeInTheDocument();
+    expect(within(slot("left")).getByTestId("c-aside")).toBeInTheDocument();
+    expect(within(slot("right")).queryByTestId("c-aside")).not.toBeInTheDocument();
   });
 
   it("draws two regions in one slot, in the order the arrangement gives them", () => {
-    render(
-      <Harness
-        from={[on("navigation", "left", 1), on("bottom", "left", 0), on("aside", "right")]}
-      />,
-    );
+    render(<Harness from={[on("navigation", "left", 1), on("aside", "left", 0)]} />);
 
     const drawn = within(slot("left"))
       .getAllByTestId(/^c-/)
       .map((one) => one.dataset.testid);
-    expect(drawn).toEqual(["c-bottom", "c-navigation"]);
+    expect(drawn).toEqual(["c-aside", "c-navigation"]);
   });
 
   it("draws nothing in a slot every region has left, and keeps the slot", () => {
-    render(
-      <Harness
-        from={[on("navigation", "right", 1), on("aside", "right"), on("bottom", "bottom")]}
-      />,
-    );
+    render(<Harness from={[on("navigation", "right", 1), on("aside", "right")]} />);
 
     expect(within(slot("left")).queryAllByTestId(/^c-/)).toEqual([]);
     expect(within(slot("right")).getByTestId("c-navigation")).toBeInTheDocument();
@@ -108,7 +106,7 @@ describe("a region put away", () => {
     render(
       <Harness
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "left", 0, true), on("aside", "right"), on("bottom", "bottom")]}
+        to={[on("navigation", "left", 0, true), on("aside", "right")]}
       />,
     );
     expect(screen.getByTestId("c-navigation")).toBeInTheDocument();
@@ -122,7 +120,7 @@ describe("a region put away", () => {
     render(
       <Harness
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "left", 0, true), on("aside", "right"), on("bottom", "bottom")]}
+        to={[on("navigation", "left", 0, true), on("aside", "right")]}
       />,
     );
 
@@ -144,7 +142,7 @@ describe("what a rearrangement may not cost", () => {
     render(
       <Harness
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "bottom", 1, true), on("aside", "bottom"), on("bottom", "bottom", 2)]}
+        to={[on("navigation", "right", 1, true), on("aside", "left")]}
       />,
     );
     const before = [...document.querySelectorAll("[data-panel]")].map((one) => one.id);
@@ -152,13 +150,7 @@ describe("what a rearrangement may not cost", () => {
     await rearrange();
 
     expect([...document.querySelectorAll("[data-panel]")].map((one) => one.id)).toEqual(before);
-    expect(before).toEqual([
-      "region-upper",
-      "region-left",
-      "region-centre",
-      "region-right",
-      "region-bottom",
-    ]);
+    expect(before).toEqual(["region-left", "region-centre", "region-right"]);
   });
 
   it("never takes the terminal panes with it", async () => {
@@ -168,7 +160,7 @@ describe("what a rearrangement may not cost", () => {
     render(
       <Harness
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "right", 1), on("aside", "right"), on("bottom", "bottom")]}
+        to={[on("navigation", "right", 1), on("aside", "right")]}
       />,
     );
     const centre = screen.getByTestId("centre");
@@ -179,10 +171,12 @@ describe("what a rearrangement may not cost", () => {
   });
 });
 
-/** The two views of the navigation region, as a window hands them over. */
+/** The views of the navigation region, as a window hands them over. */
 const VIEWS: Record<ViewId, React.ReactNode> = {
   chats: <div data-testid="v-chats">chats</div>,
   explorer: <div data-testid="v-explorer">explorer</div>,
+  search: <div data-testid="v-search">search</div>,
+  changes: <div data-testid="v-changes">changes</div>,
 };
 
 /** The frame with views, an activity bar and a badge, rearranged by `to` on the button. */
@@ -222,7 +216,12 @@ describe("the activity bar of a region with views (#1673)", () => {
 
     expect(bar()).toHaveAttribute("aria-orientation", "vertical");
     const tabs = within(bar()).getAllByRole("tab");
-    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual(["Chats", "Explorer"]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Chats",
+      "Explorer",
+      "Search",
+      "Changes",
+    ]);
     for (const tab of tabs) expect(tab.getAttribute("title")).toBeTruthy();
     // Outside the slot, so it stays when the slot is put away.
     expect(slot("left").contains(bar())).toBe(false);
@@ -271,7 +270,7 @@ describe("the activity bar of a region with views (#1673)", () => {
     render(
       <WithViews
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "left", 0, true), on("aside", "right"), on("bottom", "bottom")]}
+        to={[on("navigation", "left", 0, true), on("aside", "right")]}
       />,
     );
     const chats = screen.getByTestId("v-chats");
@@ -287,7 +286,7 @@ describe("the activity bar of a region with views (#1673)", () => {
     render(
       <WithViews
         from={DEFAULT_ARRANGEMENT}
-        to={[on("navigation", "right", 1), on("aside", "right"), on("bottom", "bottom")]}
+        to={[on("navigation", "right", 1), on("aside", "right")]}
       />,
     );
 
@@ -299,7 +298,7 @@ describe("the activity bar of a region with views (#1673)", () => {
   it("draws a view's badge on its tab, and the tab is described by it", () => {
     render(
       <WithViews
-        from={[on("navigation", "left", 0, true), on("aside", "right"), on("bottom", "bottom")]}
+        from={[on("navigation", "left", 0, true), on("aside", "right")]}
         badge={<ActivityCount count={2} said="2 chats need you" tone="needs-you" />}
       />,
     );

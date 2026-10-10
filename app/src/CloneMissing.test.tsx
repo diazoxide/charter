@@ -13,7 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetRepoClones } from "./repoClones";
 import { forgetThisLaunch } from "./regions";
-import { showTheExplorer } from "./test-strips";
+import { showTheChanges, showTheExplorer } from "./test-strips";
 
 /**
  * **A repo the workspace names and this machine has not cloned, cloned from the window**
@@ -233,10 +233,10 @@ describe("a repo that is not cloned here", () => {
     expect(clones().map((one) => one.args.repo)).toEqual(["web"]);
   });
 
-  it("is offered on the bottom bar's row, as a menu, so the bar stays unpressable", async () => {
+  it("is offered on the Changes view's row, as a menu, so the view stays unpressable", async () => {
     const { clones } = core();
     render(<App />);
-    const bar = await screen.findByTestId("bottom-bar");
+    const bar = await showTheChanges();
     const row = await within(bar).findByTestId("repo-web");
 
     fireEvent.contextMenu(within(row).getByText("web"));

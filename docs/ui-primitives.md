@@ -274,7 +274,7 @@ a loop on a strip that collapses.
 
 And the **context menus** (`app/src/Menus.tsx`): `@radix-ui/react-context-menu`, on the project
 tabs, the workspace tabs, the chat tabs, the panes, the explorer's worktree and clone rows, the
-persona rows and the bottom bar's repo rows. Four things about them are decisions and not
+persona rows and the Changes view's repo rows. Four things about them are decisions and not
 details:
 
 - **A menu is a third reader of `app/src/actions.ts`**, after the palette and the bar.
@@ -841,7 +841,8 @@ component library gets added on.
   `RegionFrame`'s `Slot` holds the reasoning. What the constraints are is written once and
   never changed; only the collapse moves.
 - **The layout is data, and the panels are slots** (`app/src/regions.ts`). The frame renders the
-  same four panels for the life of a window — left, centre, right, bottom — and an _arrangement_
+  same three panels for the life of a window — left, centre, right; the bottom one went with
+  the bottom region in #1676 — and an _arrangement_
   says which slot each region's content goes in, in what order, whether it is drawn and how big
   its slot starts. That is what makes the rule above survivable: a region can move side while
   the window is up, because moving it adds nothing to the group and takes nothing out. Adding a
@@ -883,7 +884,7 @@ component library gets added on.
   - **The status line hosts every region's way back and has none of its own**, which is not a
     contradiction of `StatusLine.tsx`'s argument for not being a region but the sharpest form
     of it: it is the frame. `FourRegions.test.tsx`'s _"cannot be put away, because it is not a
-    region"_ is the guard, and it presses all three toggles to get there.
+    region"_ is the guard, and it presses every toggle to get there.
   - **A scenario reaches them by `[aria-label="Navigation"]` and no longer by `=Navigation`.**
     WebdriverIO's `=` is a whole-text match, and there is no text. `regions.e2e.ts`,
     `pane-fill.e2e.ts` and `status-line.e2e.ts` all moved; `StripMarks.test.tsx` is what holds
@@ -1058,8 +1059,8 @@ native menu claims `F`: the macOS menu is purlis's, Edit's predefined items and 
 (FM-8, `searchKey.opensSearch`). xterm.js 6.0.0 sends nothing for a `⌘` chord, and `Ctrl+Shift+F`
 is no byte for the new-shell key's reason. Off a Mac the chord is the pane's find first: while a
 chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in the window it
-opens a Search tab. It is a capture listener on the window, held by the project in front, as the
-new-shell key is.
+shows the left side's Search view (#1676; it opened a Search tab before), searching as narrow as
+the focus. It is one of the left side's keys, below.
 
 **In the Search tab's hits, `Shift+Enter` hands the hit stepped to to a chat** (#1151): it opens
 the preview's chat picker for that hit and its line, as *Add to a chat's context* does, and
@@ -1073,15 +1074,20 @@ it with Shift+F10 or the menu key. The row's menu has closed by the time it runs
 chat picker (`ChatsToPick`) is drawn in a dialog (`AddToAChat.tsx`), the keyboard on its first
 chat, and Escape or Cancel closes it with nothing typed.
 
-**The left side's keys are an editor's** (#1673, `sideKeys.sideKeyOf`): `⌘B` puts the
-navigation region away or brings it back, `⌘⇧E` shows Explorer and `⌘⇧C` shows Chats, each
-giving the view the keyboard; off a Mac they are `Ctrl+B`, `Ctrl+Shift+E` and `Ctrl+Shift+C`.
+**The left side's keys are an editor's** (#1673, #1676, `sideKeys.sideKeyOf`): `⌘B` puts the
+navigation region away or brings it back, `⌘⇧E` shows Explorer, `⌘⇧C` shows Chats and `⌘⇧F`
+shows Search, each giving the view the keyboard (Search's box); off a Mac they are `Ctrl+B`,
+`Ctrl+Shift+E`, `Ctrl+Shift+C` and `Ctrl+Shift+F`. **`⌃⇧G` shows Changes on every platform**, a
+Mac's too, as VS Code has it: `Ctrl` with `Shift` and a letter is no byte, so it is the
+window's even while a chat has the keyboard. Changes has nothing to press, so the keyboard stays
+where it was.
 xterm.js 6.0.0 sends nothing for a `⌘` chord, so on a Mac none was a byte. Off a Mac `Ctrl+B` is
 one (readline's back-char, tmux's prefix) and `Ctrl+Shift+C` is a Linux terminal's copy, so while
 a chat has the keyboard both stay the chat's, as Search's key stays the find bar's;
 `Ctrl+Shift+E` is no byte and is the window's everywhere. They are a capture listener on the
 window, held by the project in front, and never under a dialog. Every view is also a palette
-row (_Show the Chats view_, _Show the Explorer view_), with the key said on the row.
+row (_Show the Chats view_, _Show the Explorer view_, _Search in files_, _Show the Changes
+view_), with the key said on the row.
 
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 

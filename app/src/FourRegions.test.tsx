@@ -138,7 +138,11 @@ function core(
         persona: "steward",
       };
     if (cmd === "workspace_repos")
-      return { workspace: a.workspace, repos: [], cache_refused: null };
+      return {
+        workspace: a.workspace,
+        repos: a.workspace === "alpha" ? repos : [],
+        cache_refused: null,
+      };
     if (cmd === "worktree_list")
       return a.workspace === "alpha" ? [...cut(), ...madeHere.map((name) => piece(name))] : [];
     if (cmd === "worktree_add") {
@@ -163,12 +167,38 @@ let startHeld: Promise<void> | undefined;
 /** What the core says is wrong in every project it holds. A test sets it before `core()`. */
 let alerts: unknown = [];
 
+/** What git says of alpha's clones. A test sets it before `core()`. */
+let repos: unknown[] = [];
+
+/** One clone's git answer, clean unless the test says otherwise. */
+function repoState(name: string, on: Record<string, unknown> = {}) {
+  return {
+    name,
+    branch: "main",
+    unborn: false,
+    detached: null,
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    tracked: 0,
+    untracked: 0,
+    unreadable: null,
+    ci: null,
+    change: null,
+    sigil: null,
+    fetched_seconds_ago: null,
+    not_fetched: "nothing fetched yet",
+    ...on,
+  };
+}
+
 beforeEach(() => {
   startHeld = undefined;
   globalThis.localStorage.clear();
   // Every test is a launch: what an earlier one toggled is not this one's arrangement.
   forgetThisLaunch();
   alerts = [{ plane: PLANE, alerts: [], stopped: null }];
+  repos = [];
 });
 afterEach(() => {
   cleanup();
@@ -195,7 +225,7 @@ const startedIn = (asked: { cmd: string; args: Record<string, unknown> }[]) =>
   asked.filter((one) => one.cmd === "start_chat").map((one) => one.args.cwd);
 
 describe("the four regions", () => {
-  it("draws all four, and each one is named for what it holds", async () => {
+  it("draws every region, and each one is named for what it holds", async () => {
     core();
     render(<App />);
 
@@ -263,7 +293,7 @@ describe("the four regions", () => {
     expect(startedIn(asked)).toEqual([`${ALPHA}/svc`]);
   });
 
-  it("opens the picker for a new tab in the clone from the bottom bar's row too", async () => {
+  it("opens the picker for a new tab in the clone from the Changes view's row too", async () => {
     const { asked } = core();
     render(<App />);
     const row = await screen.findByTestId("repo-svc");
@@ -444,15 +474,13 @@ describe("the four regions", () => {
     expect(screen.getByTestId("chats-section")).toBe(chats);
   });
 
-  it("can put the bottom bar and the right-hand side away too", async () => {
+  it("can put the right-hand side away too", async () => {
     core();
     render(<App />);
-    await screen.findByTestId("bottom-bar");
+    await screen.findByTestId("panels");
 
-    await userEvent.click(screen.getByRole("button", { name: "State", pressed: true }));
     await userEvent.click(screen.getByRole("button", { name: "Attention", pressed: true }));
 
-    expect(screen.queryByTestId("bottom-bar")).not.toBeInTheDocument();
     expect(screen.queryByTestId("panels")).not.toBeInTheDocument();
   });
 
@@ -476,7 +504,7 @@ describe("the four regions", () => {
         .getAllByRole("button")
         .filter((one) => one.getAttribute("aria-pressed") !== null)
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Navigation", "Attention", "State"]);
+    ).toEqual(["Navigation", "Attention"]);
     expect(document.querySelector("header.bar .regions-doing")).toBeNull();
   });
 
@@ -605,6 +633,144 @@ describe("the left side's activity bar", () => {
 });
 
 /**
+ * **Search and Changes on the left** (#1676, B-2, B-7): two more views on the navigation
+ * region's bar. Search is the Search tab's content in the side; Changes is what the bottom
+ * region drew, which is gone, so the terminals have the window's whole height.
+ */
+describe("the Search and Changes views", () => {
+  const bar = () => screen.getByRole("tablist", { name: "Navigation" });
+  const tab = (name: string) => within(bar()).getByRole("tab", { name });
+
+  it("holds every view of the left side, in the bar's order", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    expect(
+      within(bar())
+        .getAllByRole("tab")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Chats", "Explorer", "Search", "Changes"]);
+  });
+
+  it("shows Search on its key, with the box given the keyboard", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    fireEvent.keyDown(document.body, {
+      key: "F",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+
+    const view = await screen.findByRole("tabpanel", { name: "Search" });
+    const box = within(view).getByRole("searchbox", { name: "Search the files" });
+    await waitFor(() => expect(box).toHaveFocus());
+    // A view in the side, not a tab in the centre: the tab strip gained nothing.
+    expect(within(stripNamed("Tabs")).queryByRole("tab", { name: /^Search/ })).toBeNull();
+  });
+
+  it("keeps what was typed when the side is switched away and back", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    await userEvent.click(tab("Search"));
+    const box = within(await screen.findByRole("tabpanel", { name: "Search" })).getByRole(
+      "searchbox",
+    );
+    // `change` rather than typed keys: jsdom lays nothing out, so the panels' separator takes
+    // a pointer press anywhere in the group (as `ChatsList.window.test.tsx` meets it too).
+    fireEvent.change(box, { target: { value: "needle" } });
+
+    await userEvent.click(tab("Chats"));
+    await userEvent.click(tab("Search"));
+
+    expect(
+      within(await screen.findByRole("tabpanel", { name: "Search" })).getByRole("searchbox"),
+    ).toHaveValue("needle");
+  });
+
+  it("searches where the window is when its tab opens it, as its key does", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    const scope = () =>
+      within(screen.getByRole("tabpanel", { name: "Search" })).getByRole("combobox", {
+        name: "Where to search",
+      });
+    await userEvent.click(tab("Search"));
+    await waitFor(() => expect(scope()).toHaveDisplayValue("Workspace alpha"));
+
+    await userEvent.click(tab("Chats"));
+    await focus("beta");
+    await userEvent.click(tab("Search"));
+
+    await waitFor(() => expect(scope()).toHaveDisplayValue("Workspace beta"));
+  });
+
+  it("shows Changes on ⌃⇧G, holding the repos, their branches and pipelines", async () => {
+    repos = [repoState("svc", { tracked: 3, untracked: 1 })];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    fireEvent.keyDown(document.body, { key: "G", shiftKey: true, ctrlKey: true });
+
+    const view = await screen.findByRole("tabpanel", { name: "Changes" });
+    const state = within(view).getByLabelText("Repository state");
+    await waitFor(() => expect(within(state).getByTestId("repo-svc")).toHaveTextContent("main"));
+    expect(within(state).getByTestId("repo-svc")).toHaveTextContent("3 changed, 1 untracked");
+    expect(within(state).getByTestId("ci-svc")).toHaveTextContent("not fetched");
+  });
+
+  it("counts the uncommitted files on the Changes tab, while the side is away too", async () => {
+    repos = [
+      repoState("svc", { tracked: 3, untracked: 1 }),
+      repoState("tool", { tracked: 1 }),
+      // A tree purlis could not read is not counted as clean, nor as anything.
+      repoState("gone", { unreadable: "permission denied" }),
+    ];
+    core();
+    render(<App />);
+    await waitFor(() => expect(tab("Changes")).toHaveAccessibleDescription("5 uncommitted files"));
+    expect(tab("Changes").querySelector(".activity-count")).toHaveTextContent("5");
+    // Not a question for the person: the plain count's colours, never the needs-you ones.
+    expect(tab("Changes").querySelector('.activity-count[data-tone="needs-you"]')).toBeNull();
+
+    await userEvent.click(tab("Chats"));
+
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(tab("Changes")).toHaveAccessibleDescription("5 uncommitted files");
+  });
+
+  it("draws no count on Changes when every tree is clean", async () => {
+    repos = [repoState("svc")];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    await userEvent.click(tab("Changes"));
+    await within(await screen.findByRole("tabpanel", { name: "Changes" })).findByTestId("repo-svc");
+
+    expect(tab("Changes").querySelector(".activity-count")).toBeNull();
+  });
+
+  it("has no bottom region any more: what it showed is in Changes alone", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    expect(screen.queryByTestId("region-bottom")).toBeNull();
+    expect(screen.getAllByLabelText("Repository state")).toHaveLength(1);
+    expect(screen.getByLabelText("Repository state").closest('[role="tabpanel"]')).toHaveAttribute(
+      "data-view",
+      "changes",
+    );
+    expect(screen.queryByRole("button", { name: "State" })).toBeNull();
+  });
+});
+
+/**
  * **The arrangement, against the whole window** (`regions.ts`).
  *
  * The four regions used to be the shape of `PlaneView`'s JSX. They are a stored document now,
@@ -633,30 +799,43 @@ describe("the window the stored arrangement asks for", () => {
 
   it("draws a region on the side the document names, with no JSX moved", async () => {
     arrange([
-      { id: "explorer", side: "left", order: 0, collapsed: false },
-      { id: "aside", side: "right", order: 0, collapsed: false },
-      { id: "bottom", side: "right", order: 1, collapsed: false },
+      { id: "explorer", side: "right", order: 0, collapsed: false },
+      { id: "aside", side: "left", order: 0, collapsed: false },
     ]);
     core();
     render(<App />);
-    await screen.findByLabelText("Repository state");
+    await screen.findByTestId("panels");
 
-    expect(inSlot("right").getByLabelText("Repository state")).toBeInTheDocument();
-    expect(inSlot("bottom").queryByLabelText("Repository state")).not.toBeInTheDocument();
+    expect(inSlot("left").getByTestId("panels")).toBeInTheDocument();
+    expect(inSlot("right").getByTestId("chats-section")).toBeInTheDocument();
   });
 
   it("stacks two regions in one slot in the order the document gives them", async () => {
     arrange([
       { id: "explorer", side: "left", order: 0, collapsed: false },
-      { id: "bottom", side: "left", order: -1, collapsed: false },
-      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "aside", side: "left", order: -1, collapsed: false },
     ]);
     core();
     render(<App />);
-    await screen.findByLabelText("Repository state");
+    await screen.findByTestId("panels");
 
-    const drawn = inSlot("left").getAllByTestId(/^(explorer|bottom-bar)$/);
-    expect(drawn.map((one) => one.dataset.testid)).toEqual(["bottom-bar", "explorer"]);
+    const drawn = inSlot("left").getAllByTestId(/^(panels|chats-section)$/);
+    expect(drawn.map((one) => one.dataset.testid)).toEqual(["panels", "chats-section"]);
+  });
+
+  it("draws a file that still places the bottom region, without it and without a word", async () => {
+    // Every file before #1676 placed it. What it drew is the Changes view now.
+    arrange([
+      { id: "explorer", side: "left", order: 0, collapsed: false },
+      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "bottom", side: "bottom", order: 0, collapsed: true },
+    ]);
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    expect(screen.queryByTestId("region-bottom")).toBeNull();
+    expect(screen.getAllByLabelText("Repository state")).toHaveLength(1);
   });
 
   it("launches with a region away, and its slot is still in the group", async () => {
@@ -665,7 +844,6 @@ describe("the window the stored arrangement asks for", () => {
     arrange([
       { id: "explorer", side: "left", order: 0, collapsed: true },
       { id: "aside", side: "right", order: 0, collapsed: false },
-      { id: "bottom", side: "bottom", order: 0, collapsed: false },
     ]);
     core();
     render(<App />);
@@ -691,7 +869,6 @@ describe("the window the stored arrangement asks for", () => {
     const arrangement = [
       { id: "navigation", side: "left", order: 0, collapsed: true },
       { id: "aside", side: "right", order: 0, collapsed: false },
-      { id: "bottom", side: "bottom", order: 0, collapsed: false },
     ];
     expect(JSON.parse(String(written?.args.text))).toEqual({
       version: 2,
@@ -717,12 +894,13 @@ describe("the status line", () => {
   it("sits below every region, and outside the group that draws them", async () => {
     core();
     render(<App />);
-    await screen.findByLabelText("Repository state");
+    await screen.findByTestId("panels");
 
     const line = screen.getByTestId("status-line");
-    const bottom = screen.getByTestId("bottom-bar");
-    // Under the bottom region, not beside it.
-    expect(bottom.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const frame = document.querySelector(".region-frame");
+    if (frame === null) throw new Error("no region frame");
+    // Under the regions, not beside them.
+    expect(frame.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // And not inside the panel group at all: it is the window's chrome, the way the project
     // strip above the regions is, and `StatusLine.tsx` argues why it is not in the arrangement.
     expect(document.querySelector(".regions")?.contains(line)).toBe(false);
@@ -776,9 +954,9 @@ describe("the status line", () => {
     // it is the frame, and a status line an operator can lose is one they will lose.
     core();
     render(<App />);
-    await screen.findByLabelText("Repository state");
+    await screen.findByTestId("panels");
 
-    for (const name of ["Navigation", "Attention", "State"]) {
+    for (const name of ["Navigation", "Attention"]) {
       await userEvent.click(screen.getByRole("button", { name, pressed: true }));
     }
 
