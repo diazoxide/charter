@@ -396,6 +396,8 @@ export function ViewPane({
         onChanged={onVaultChanged}
         onOpenVault={(name) => onOpenView({ from: null, view: "vault", key: name }, name)}
         actions={own}
+        waits={waits}
+        onAsk={onAsk}
       />
     );
   }

@@ -110,3 +110,54 @@ fn the_app_reads_a_kept_token_once_however_many_requests_ask_and_afresh_once_it_
     }
     assert_eq!(reads() - before, 2);
 }
+
+/// A token removed in the Keychain's own window while the app runs: before each reuse the app
+/// asks whether the item is still there, a question that reads no secret, and a token whose
+/// item has gone is no longer used (#1660).
+#[test]
+fn a_kept_token_deleted_outside_purlis_is_not_answered_from_the_apps_memory() {
+    purlis_core::unsteered!();
+    keyhold::this_process_is_the_app();
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    stand_in::program(
+        bin.path(),
+        "op",
+        "#!/bin/sh\n[ -n \"$OP_SERVICE_ACCOUNT_TOKEN\" ] || exit 1\nprintf 'value-of-%s' \"${3##*/}\"\n",
+    );
+    let path = bin.path().to_string_lossy().into_owned();
+    let request = || Ctx::new(tmp.path(), Env::of(&[("PATH", path.as_str())]));
+    let setup = request();
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+    );
+    registry::add_vault(&setup, "solo", "1password", config, None, false, false).unwrap();
+    let v = registry::vault(&setup, "solo").unwrap();
+    identity::put_in_keyring(&setup, &v, KEPT).unwrap();
+    let stub = setup.state.join(keyring::STUB_FILE);
+    let solo = || Request {
+        vault: "solo".into(),
+        ..two_values()
+    };
+    let mut io = Heard::default();
+    assert_eq!(exec(&request(), &solo(), &mut io), 0, "{:?}", io.said);
+    let reads = keyring::stub_reads(&stub);
+
+    // Deleted in the store itself, as Keychain Access deletes it: purlis's record stays.
+    std::fs::write(&stub, "{}").unwrap();
+
+    let mut io = Heard::default();
+    assert_ne!(exec(&request(), &solo(), &mut io), 0, "{:?}", io.said);
+    assert!(
+        io.out.is_empty(),
+        "the command never ran with the forgotten token"
+    );
+    assert_eq!(
+        keyring::stub_reads(&stub) - reads,
+        1,
+        "asking whether the item is there reads no secret; the read that follows finds none"
+    );
+}
