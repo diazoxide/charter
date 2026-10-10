@@ -337,6 +337,16 @@ fn offer(loaded: machine::Loaded) -> Recents {
 #[tauri::command]
 #[specta::specta]
 pub async fn pick_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    pick_folder(&app).await
+}
+
+/// The operating system's folder picker, which every folder pick in the app goes through
+/// (`pick_project`, `pick_extension`), and the one place a scenario spec answers it
+/// ([`scenario_answer`]).
+pub(crate) async fn pick_folder(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    if let Some(answered) = scenario_answer(Dialog::Folder, purlis_core::envvar::var) {
+        return answered;
+    }
     let (chose, chosen) = std::sync::mpsc::channel();
     app.dialog().file().pick_folder(move |picked| {
         // The window may have gone while the dialog was up; then there is nobody to tell.
@@ -346,6 +356,102 @@ pub async fn pick_project(app: tauri::AppHandle) -> Result<Option<String>, Strin
         .await
         .map(|picked| picked.map(|path| path.to_string()))
         .map_err(|err| format!("the folder picker did not finish: {err}"))
+}
+
+/// A native dialog the app opens, by the name a scenario's answer gives it (#1680).
+///
+/// One kind today, the folder pick. A file pick, or any other dialog the operating system
+/// draws, is one more variant here and is answered the same way, so a later spec needs no
+/// seam of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dialog {
+    /// A folder, as `pick_folder` asks for one.
+    Folder,
+}
+
+impl Dialog {
+    #[cfg(any(test, feature = "e2e"))]
+    fn named(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+        }
+    }
+}
+
+/// The variable a scenario run sets to the file that answers the next native dialog (#1680).
+/// Read only by the `e2e` build; `e2e/dialogs.ts` writes the file and the run's environment
+/// (`e2e/harness.ts`) names it.
+#[cfg(feature = "e2e")]
+const DIALOG_ANSWER: &str = "PURLIS_E2E_DIALOG_ANSWER";
+
+/// What a scenario spec says the next `dialog` answers, or `None` for the system's own dialog.
+///
+/// **The e2e build's seam for the dialogs no WebDriver reaches** (#1680, D-1680-1): a native
+/// dialog is the operating system's window, so a scenario that clicks Locate… would wait on a
+/// picker nobody can close. In the `e2e` build only, the file `DIALOG_ANSWER` names (`var`
+/// reads the environment) answers the next dialog, once (`answered`).
+///
+/// **Every other build reads nothing**: the variable is never looked up, so a release build's
+/// dialogs are the system's whatever its environment holds.
+#[cfg_attr(not(feature = "e2e"), allow(clippy::unnecessary_wraps))]
+pub(crate) fn scenario_answer(
+    dialog: Dialog,
+    var: impl FnOnce(&str) -> Option<String>,
+) -> Option<Result<Option<String>, String>> {
+    #[cfg(feature = "e2e")]
+    {
+        answered(std::path::Path::new(&var(DIALOG_ANSWER)?), dialog)
+    }
+    #[cfg(not(feature = "e2e"))]
+    {
+        let _ = (dialog, var);
+        None
+    }
+}
+
+/// The answer waiting in `file` for a `dialog`, read once: the file is removed before the
+/// answer is used, so the dialog after it is the system's again.
+///
+/// The file holds `{"dialog": "folder", "picked": "/a/path"}`; `"picked": null` is a cancel.
+/// No file is no answer. An answer that cannot be read or is for another kind of dialog is
+/// said as the pick's failure, never passed to the system's dialog: a spec that meant to
+/// answer and did not would otherwise wait on a window nobody can close.
+#[cfg(any(test, feature = "e2e"))]
+fn answered(file: &std::path::Path, dialog: Dialog) -> Option<Result<Option<String>, String>> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Answer {
+        dialog: String,
+        picked: Option<String>,
+    }
+    let text = match std::fs::read_to_string(file) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            return Some(Err(format!(
+                "the scenario's answer at {} could not be read: {err}",
+                file.display()
+            )));
+        }
+        Ok(text) => text,
+    };
+    if let Err(err) = std::fs::remove_file(file) {
+        return Some(Err(format!(
+            "the scenario's answer at {} could not be used up: {err}",
+            file.display()
+        )));
+    }
+    Some(match serde_json::from_str::<Answer>(&text) {
+        Err(err) => Err(format!(
+            "the scenario's answer at {} is not one: {err}",
+            file.display()
+        )),
+        Ok(answer) if answer.dialog != dialog.named() => Err(format!(
+            "the scenario answered a {} dialog, and a {} dialog was asked",
+            answer.dialog,
+            dialog.named()
+        )),
+        Ok(answer) => Ok(answer.picked),
+    })
 }
 
 /// Opens a plane, **or answers with the question that has to be asked first**.
@@ -1179,5 +1285,110 @@ mod tests {
             "{}",
             again.changes[0]
         );
+    }
+
+    /// #1680: what a scenario says the next folder pick answers, read from the file the
+    /// variable names. `None` here is "no answer waiting", and the real dialog opens.
+    fn answers_to(
+        file: &Path,
+        text: &str,
+        asked: Dialog,
+    ) -> Option<Result<Option<String>, String>> {
+        std::fs::write(file, text).expect("the scenario's answer");
+        answered(file, asked)
+    }
+
+    #[test]
+    fn a_scenario_answers_the_next_folder_pick_once_and_the_answer_is_gone_after() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("dialog.json");
+
+        let picked = answers_to(
+            &file,
+            r#"{"dialog":"folder","picked":"/where/it/went"}"#,
+            Dialog::Folder,
+        );
+
+        assert_eq!(picked, Some(Ok(Some("/where/it/went".to_owned()))));
+        assert!(!file.exists(), "an answer is read once");
+        assert_eq!(
+            answered(&file, Dialog::Folder),
+            None,
+            "the next pick is the system's"
+        );
+    }
+
+    #[test]
+    fn a_scenario_can_cancel_the_next_pick() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("dialog.json");
+
+        let picked = answers_to(
+            &file,
+            r#"{"dialog":"folder","picked":null}"#,
+            Dialog::Folder,
+        );
+
+        assert_eq!(picked, Some(Ok(None)));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn an_answer_for_another_kind_of_dialog_or_one_unread_is_said_and_never_opens_the_system_dialog()
+     {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("dialog.json");
+
+        let other = answers_to(
+            &file,
+            r#"{"dialog":"file","picked":"/a/file"}"#,
+            Dialog::Folder,
+        );
+        let garbled = answers_to(&file, "not an answer", Dialog::Folder);
+
+        let other = other.expect("answered").expect_err("refused");
+        assert!(
+            other.contains("file") && other.contains("folder"),
+            "{other}"
+        );
+        let garbled = garbled.expect("answered").expect_err("refused");
+        assert!(garbled.contains(&file.display().to_string()), "{garbled}");
+        assert!(!file.exists(), "a refused answer is used up too");
+    }
+
+    /// The seam is absent from every build but the `e2e` one: the variable is not even read,
+    /// and an answer waiting at the place it would name is left alone.
+    #[cfg(not(feature = "e2e"))]
+    #[test]
+    fn a_build_without_the_e2e_feature_never_reads_a_scenario_answer() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("dialog.json");
+        std::fs::write(&file, r#"{"dialog":"folder","picked":"/x"}"#).expect("written");
+        let read = std::cell::Cell::new(false);
+
+        let picked = scenario_answer(Dialog::Folder, |_| {
+            read.set(true);
+            Some(file.display().to_string())
+        });
+
+        assert_eq!(picked, None);
+        assert!(!read.get(), "a release build read the scenario's variable");
+        assert!(file.exists());
+    }
+
+    /// The `e2e` build reads the answer from the file its one variable names.
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn the_e2e_build_reads_the_answer_from_the_file_its_variable_names() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("dialog.json");
+        std::fs::write(&file, r#"{"dialog":"folder","picked":"/x"}"#).expect("written");
+
+        let picked = scenario_answer(Dialog::Folder, |name| {
+            (name == DIALOG_ANSWER).then(|| file.display().to_string())
+        });
+
+        assert_eq!(picked, Some(Ok(Some("/x".to_owned()))));
+        assert_eq!(scenario_answer(Dialog::Folder, |_| None), None);
     }
 }

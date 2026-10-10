@@ -22,7 +22,6 @@
 use std::sync::OnceLock;
 
 use purlis_core::extension;
-use tauri_plugin_dialog::DialogExt;
 
 /// Where this app's bundle keeps its built-in extensions, relative to its resource directory.
 pub(crate) const BUILT_IN_DIR: &str = extension::bundle::BUILT_IN_DIR;
@@ -352,15 +351,7 @@ fn listed(seen: &extension::Survey) -> InstalledExtensions {
 #[tauri::command]
 #[specta::specta]
 pub async fn pick_extension(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let (chose, chosen) = std::sync::mpsc::channel();
-    app.dialog().file().pick_folder(move |picked| {
-        // The window may have gone while the dialog was up; then there is nobody to tell.
-        let _ = chose.send(picked);
-    });
-    tauri::async_runtime::spawn_blocking(move || chosen.recv().ok().flatten())
-        .await
-        .map(|picked| picked.map(|path| path.to_string()))
-        .map_err(|err| format!("the folder picker did not finish: {err}"))
+    crate::opener::pick_folder(&app).await
 }
 
 /// Read the extension at `path`, write it into the record **unapproved**, and hand back the
