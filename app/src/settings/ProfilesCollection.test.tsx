@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
-import { forgetGroups } from "./links";
+import { forgetGroups, linkToGroup, settingsPlace } from "./links";
+import { profileCommand, profilePage } from "./profileAddress";
 import type {
   EntryReferrer,
   EntryWritten,
@@ -338,6 +339,31 @@ describe("a page per harness profile", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open alt" }));
 
     expect(shown()).toHaveAccessibleName("alt");
+  });
+});
+
+describe("a link to a profile's page (#1296)", () => {
+  const place = settingsPlace("project", PLANE);
+
+  it("shows the profile's page, its command focused when the link names it", async () => {
+    core();
+    await atProject();
+    await waitFor(() => expect(pages()).toContain("alt"));
+
+    act(() => linkToGroup(place, profilePage("alt"), profileCommand("alt")));
+
+    expect(shown()).toHaveAccessibleName("alt");
+    await waitFor(() => expect(screen.getByLabelText("alt: command")).toHaveFocus());
+  });
+
+  it("lands on Harness & profiles for a profile with no page: committed, or renamed away", async () => {
+    core();
+    await atProject();
+    await waitFor(() => expect(pages()).toContain("alt"));
+
+    act(() => linkToGroup(place, profilePage("team"), profileCommand("team")));
+
+    expect(shown()).toHaveAccessibleName("Harness & profiles");
   });
 });
 

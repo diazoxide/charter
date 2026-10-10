@@ -4,6 +4,7 @@ import { useState } from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { StartOptions } from "./bindings";
 import { StartChat } from "./StartChat";
+import { profileCommand, profilePage } from "./settings/profileAddress";
 
 afterEach(cleanup);
 
@@ -568,15 +569,21 @@ describe("the picker a chat starts from", () => {
       return { onFix, onOpenSettings, user: userEvent.setup() };
     }
 
-    it("links the refused profiles to Settings › Harness, where profiles are declared", async () => {
+    it("links each refused profile to its own page in Settings, its command focused (#1296)", async () => {
       const { onOpenSettings, user } = withWays({
-        refused: [["bad-kind", "profile 'bad-kind' has kind opencodex, which is not a harness"]],
+        refused: [
+          ["bad-kind", "profile 'bad-kind' has kind opencodex, which is not a harness"],
+          ["team", "profile 'team' has no command"],
+        ],
       });
 
-      await user.click(screen.getByText("1 refused"));
-      await user.click(screen.getByRole("button", { name: "Open Settings › Harness & profiles" }));
+      await user.click(screen.getByText("2 refused"));
+      await user.click(screen.getByRole("button", { name: "Open team in Settings" }));
 
-      expect(onOpenSettings).toHaveBeenCalledWith("project.harness");
+      // A profile with no page of its own (a committed one) lands on Harness & profiles: the
+      // Settings tab takes an unknown sub-page to its parent group.
+      expect(onOpenSettings).toHaveBeenCalledWith(profilePage("team"), profileCommand("team"));
+      expect(screen.getByRole("button", { name: "Open bad-kind in Settings" })).toBeVisible();
     });
 
     it("fixes the file git would carry with the doctor's own fix, where one line cures it", async () => {

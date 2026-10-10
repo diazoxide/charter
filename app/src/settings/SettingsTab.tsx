@@ -397,7 +397,7 @@ function Shown({
     ),
     filter,
   );
-  const group = groups.find((one) => one.id === shown?.group) ?? groups[0];
+  const group = landsOn(groups, shown?.group) ?? groups[0];
   /** The group on screen, once the level is read and no file's text is in its place. */
   const drawn = waiting === undefined && editing === undefined ? group?.id : undefined;
   /**
@@ -551,6 +551,25 @@ function Shown({
       {children}
     </SettingsLayout>
   );
+}
+
+/**
+ * **Which group an address lands on** (#1296): the group it names, or else the longest group
+ * whose address it starts with, a part at a time. A sub-page that is not there — a profile that
+ * has no page, or was renamed away since the link was made — lands on the group it is under,
+ * never on the level's first. `undefined` for an address under no group, or none.
+ */
+function landsOn(
+  groups: readonly SettingsGroup[],
+  address: string | undefined,
+): SettingsGroup | undefined {
+  if (address === undefined) return undefined;
+  let under: SettingsGroup | undefined;
+  for (const one of groups) {
+    if (one.id === address) return one;
+    if (address.startsWith(`${one.id}.`) && one.id.length > (under?.id.length ?? 0)) under = one;
+  }
+  return under;
 }
 
 /**
