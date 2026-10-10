@@ -494,3 +494,20 @@ function Empty({ recent }: { recent: readonly Answered[] }) {
     </>
   );
 }
+
+/**
+ * **Where a click on an ask's notification lands** (#1694, I-7): chat `session`'s group in the
+ * Inbox drawn now, brought on screen, its first ask given the keyboard, from which the keys go
+ * on as from any ask. Answers whether the chat has a group to land on: its asks may have been
+ * answered elsewhere since.
+ */
+export function landOnGroup(session: number): boolean {
+  const group = document.querySelector<HTMLElement>(
+    `section.inbox .inbox-chat[data-session="${session}"]`,
+  );
+  const first = group?.querySelector<HTMLElement>("li");
+  if (!group || !first) return false;
+  group.scrollIntoView?.({ block: "nearest" });
+  first.focus();
+  return true;
+}

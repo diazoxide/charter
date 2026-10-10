@@ -323,3 +323,9 @@ queue's only place: its count is the Inbox's, and its list is opened now only wh
 asks for it (the away summary's dispatches refused while nobody was there), until #1693 and
 #1695 move those into the Inbox and retire the list. ⌘⇧I (Ctrl+Shift+I elsewhere) shows the
 Inbox, and so does its palette row.
+
+**Only an ask raises a system notification** (I-7, built in #1694): an update never does. One
+chat's asks a few seconds apart share one notification, titled by its chain and saying the kind of
+ask, never its words. None is sent while the window holding the project is focused with that
+project in front and its Inbox open, or with the chat itself on screen. A click on one brings the
+window forward, and the Inbox opens at that chat's group.

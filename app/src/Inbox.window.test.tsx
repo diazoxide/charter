@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Inbox, NOTHING_WAITS } from "./Inbox";
+import { Inbox, NOTHING_WAITS, landOnGroup } from "./Inbox";
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { forgetInbox, replyBytes } from "./inboxRules";
 import type { DispatchPending, Shown } from "./bindings";
@@ -462,6 +462,31 @@ describe("the keyboard (I-11)", () => {
     act(() => screen.getAllByRole("button", { name: "Allow" })[0].focus());
     await userEvent.keyboard("ydn");
     expect(calls.filter((one) => one.cmd !== "dispatch_grants_needed")).toEqual([]);
+  });
+});
+
+describe("where a notification lands (#1694)", () => {
+  it("is the chat's group, its first ask given the keyboard, and the list keeps one Tab stop", async () => {
+    core();
+    draw([
+      permission(3, "n1", ["steward 3"]),
+      permission(5, "n2", ["steward 5"], "Run ls"),
+      permission(5, "n3", ["steward 5"], "Run pwd"),
+    ]);
+    act(() => {
+      expect(landOnGroup(5)).toBe(true);
+    });
+    const group = screen.getByRole("region", { name: "steward 5" });
+    expect(document.activeElement).toBe(within(group).getAllByRole("listitem")[0]);
+    // From there the keys go on as from any ask.
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement?.textContent).toBe("Allow");
+  });
+
+  it("is nowhere for a chat with nothing left in the Inbox", () => {
+    core();
+    draw([permission(3, "n1", ["steward 3"])]);
+    expect(landOnGroup(9)).toBe(false);
   });
 });
 

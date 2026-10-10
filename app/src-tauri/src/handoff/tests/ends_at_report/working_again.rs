@@ -330,7 +330,7 @@ fn a_task_shown_in_a_tab_that_is_no_longer_in_front_is_ended() {
 
 #[test]
 fn the_chat_looked_at_is_the_one_a_tab_shows_and_not_the_session_hidden_behind_it() {
-    // What the notification's "already looking at it" asks (`already_looking_at`): a task on
+    // What the notification's "already looking at it" asks (`asknotify::looking`): a task on
     // screen is not notified about, and the session's own chat behind it is.
     let (_plane, _host, _planes, _id, held, steward, task) = on_the_clock();
     held.chats().bring_to_front(Some(steward));

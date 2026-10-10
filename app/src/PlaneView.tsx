@@ -178,7 +178,8 @@ import { heldFor as blockHeldFor, noticeKey, useSandboxBlocks, type Blocks } fro
 import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
 import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
-import { Inbox } from "./Inbox";
+import { Inbox, landOnGroup } from "./Inbox";
+import { useInboxOpenTold } from "./askNotices";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
 import {
@@ -520,6 +521,7 @@ export const PlaneView = memo(function PlaneView({
   onShowNeedsYou,
   waiting,
   inboxAsked,
+  inboxGroup,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -576,6 +578,9 @@ export const PlaneView = memo(function PlaneView({
   /** A count that goes up each time the window asks for THIS project's Inbox: the title bar's
    *  ✋ (#1692, I-2). */
   inboxAsked?: number;
+  /** The chat whose group that Inbox opens at, where one was asked for: the one a clicked
+   *  notification was about (#1694, I-7). */
+  inboxGroup?: number;
   /** The first chat a repository opened into this project asks for (FR-4): started in that
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
@@ -3397,7 +3402,23 @@ export const PlaneView = memo(function PlaneView({
     if (inboxAsked === undefined || inboxHandled.current === inboxAsked) return;
     inboxHandled.current = inboxAsked;
     showSideView("inbox");
-  }, [inboxAsked, showSideView]);
+    // After the view has given its first stop the keyboard: the group's first ask takes it.
+    if (inboxGroup !== undefined) requestAnimationFrame(() => landOnGroup(inboxGroup));
+  }, [inboxAsked, inboxGroup, showSideView]);
+  /** Whether this project's Inbox is open on screen, told to the core: no notification is sent
+   *  about what the person is reading (#1694, I-7). */
+  useInboxOpenTold(
+    plane,
+    inFront &&
+      arrangement.some(
+        (one) =>
+          !one.collapsed &&
+          viewOpenIn(
+            one,
+            sidePanels.map((panel) => panel.view),
+          ) === "inbox",
+      ),
+  );
 
   /** A file ⌘P found here (FM-7), opened in its file tab the way the explorer opens one. */
   const fileHandled = useRef(fileAsked?.at);

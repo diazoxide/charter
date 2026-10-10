@@ -106,6 +106,7 @@ import { TitleBar, useTitleBarRoom } from "./TitleBar";
 import type { Needing, OtherAsk, PermissionAsk, Quiet } from "./NeedsYou";
 import { answerAsk, usePermissionAsks } from "./permissionAsks";
 import { answerThrough, useAsks } from "./asks";
+import { useNotificationLanding, type Landing } from "./askNotices";
 import { useAwayRefusals } from "./dispatchAway";
 import type { AwayItem } from "./AwayRefusals";
 import { useUpdates } from "./Updates";
@@ -249,8 +250,9 @@ function App() {
   /** The same, for the Settings tab at the You level (SE-23's Your settings…): on the project in
    *  front's strip, since You is the machine's and any strip will do. */
   const [yourSettingsAsk, setYourSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
-  /** The Inbox the title bar's ✋ asked for (#1692, I-2): the project it opens on, and a count. */
-  const [inboxAsk, setInboxAsk] = useState<{ plane: PlaneId; at: number }>();
+  /** The Inbox the title bar's ✋ asked for (#1692, I-2): the project it opens on, and a count;
+   *  and the chat whose group it opens at, for a clicked notification (#1694). */
+  const [inboxAsk, setInboxAsk] = useState<{ plane: PlaneId; at: number; session?: number }>();
   /**
    * The last link into a Settings group the window followed (SE-22): the project in front, the
    * link, and a count. Its own ask and not `settingsTabAsk`, because a link names its level and
@@ -1690,6 +1692,21 @@ function App() {
     setShowing({ at: "plane", plane });
     setInboxAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
   }, [registry.held]);
+  /**
+   * **A clicked notification lands on the Inbox at its chat's group** (#1694, I-7): its project
+   * brought to the front, while that chat still has something waiting there. One answered
+   * elsewhere since moves nothing.
+   */
+  const landOnNotified = useCallback(
+    ({ plane, session }: Landing) => {
+      if (!planesNow.current.includes(plane)) return;
+      if (!(registry.held[plane] ?? []).some((ask) => ask.session === session)) return;
+      setShowing({ at: "plane", plane });
+      setInboxAsk((was) => ({ plane, at: (was?.at ?? 0) + 1, session }));
+    },
+    [registry.held],
+  );
+  useNotificationLanding(landOnNotified);
   const otherAsks = useMemo<OtherAsk[]>(
     () =>
       planes.flatMap((plane) =>
@@ -2157,6 +2174,7 @@ function App() {
           onShowNeedsYou={showNeedsYou}
           waiting={registry.held[plane]}
           inboxAsked={inboxAsk?.plane === plane ? inboxAsk.at : undefined}
+          inboxGroup={inboxAsk?.plane === plane ? inboxAsk.session : undefined}
         />
       ))}
 
