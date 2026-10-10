@@ -42,7 +42,10 @@
 //!     "persona-hosts": false,
 //!     "opt-out": false,
 //!     "write-grants": false,
-//!     "vault-grants": false
+//!     "vault-grants": false,
+//!     "live-asks": false,
+//!     "allow-scopes": ["you"],
+//!     "never-hosts": ["*.paste.example"]
 //!   },
 //!   "dispatch": {
 //!     "running-per-chat": 4,
@@ -74,6 +77,16 @@
 //! - `vault-grants`: `false` forbids letting a persona's chats use a vault the vault registry
 //!   does not tag for it (a refused vault's Allow, #1430), and takes away any such grant
 //!   already made: only the registry's tags open a vault to a chat.
+//! - `live-asks`: `false` turns off the live ask (#1666): a connection to a host nothing lists
+//!   is refused at once, as before purlis asked while it waited, and the Notice says policy
+//!   turned asking off.
+//! - `allow-scopes`: the scopes an Allow may keep a host or a folder at, of `chat` (only this
+//!   chat), `you` (this project on this machine) and `project` (everyone in the project); any
+//!   other is removed from every Notice and refused. It removes a choice only: what was kept before
+//!   stays, judged by the other locks.
+//! - `never-hosts`: hosts no level may ever add and no Allow may ever keep, written as `hosts`
+//!   is; a chat's connection to one is refused and never asked about. A preset's fixed list is
+//!   still the `presets` lock's.
 //! - `dispatch.allow`: `false` forbids one chat dispatching to another at all (#1437), a chat's
 //!   own persona included.
 //! - `dispatch.locked`: the pairs no chat may dispatch across, each a `from` persona and a `to`
@@ -131,6 +144,12 @@ pub struct Locks {
     no_opt_out: bool,
     no_write_grants: bool,
     no_vault_grants: bool,
+    /// Whether the live ask is turned off (#1666).
+    no_live_asks: bool,
+    /// The scopes an Allow may keep a host at, where the policy fixes them (#1666).
+    allow_scopes: Option<Vec<grant::Level>>,
+    /// The hosts no level may add and no Allow may keep (#1666).
+    never_hosts: Vec<Host>,
     /// The most each dispatch limit may be, where the policy says (#1440).
     dispatch: crate::dispatchlimits::Level,
     /// Whether every dispatch from one chat to another is forbidden (#1437).
@@ -209,6 +228,9 @@ impl Locks {
             no_opt_out: true,
             no_write_grants: true,
             no_vault_grants: true,
+            no_live_asks: true,
+            allow_scopes: Some(Vec::new()),
+            never_hosts: Vec::new(),
             dispatch: crate::dispatchlimits::ceiling_when_refused(),
             no_dispatch: true,
             dispatch_locked: Vec::new(),
@@ -322,10 +344,44 @@ impl Locks {
         self.no_write_grants
     }
 
-    /// **Why `granted` is locked out**, if it is: a level policy forbids, or a host it does not
-    /// allow.
+    /// Whether policy turns the live ask off (#1666): a connection to a host nothing lists is
+    /// refused at once.
+    pub fn forbids_live_asks(&self) -> bool {
+        self.no_live_asks
+    }
+
+    /// Why a connection is not held while the person is asked, where policy turns that off: the
+    /// sentence a Notice says (#1666).
+    pub fn live_asks_refused(&self) -> Option<String> {
+        self.no_live_asks.then(|| {
+            format!(
+                "Policy turns off asking while a connection waits, so the command was refused \
+                 and an Allow reaches the chat once it restarts. {}",
+                self.locked_by()
+            )
+        })
+    }
+
+    /// **Why `host` can never be allowed**, where policy pins it so (#1666).
+    pub fn never_allows(&self, host: &Host) -> Option<String> {
+        self.never_hosts
+            .iter()
+            .any(|pinned| pinned.covers(host))
+            .then(|| format!("Policy never allows {host}. {}", self.locked_by()))
+    }
+
+    /// The hosts policy pins as never allowed (#1666).
+    pub fn never_hosts(&self) -> &[Host] {
+        &self.never_hosts
+    }
+
+    /// **Why `granted` is locked out**, if it is: a host it pins as never allowed, a level
+    /// policy forbids, or a host it does not allow.
     pub fn refuses(&self, granted: &Granted) -> Option<String> {
         let host = &granted.host;
+        if let Some(never) = self.never_allows(host) {
+            return Some(never);
+        }
         let why = match granted.level {
             Level::Persona if self.no_persona_hosts => Some(format!(
                 "{host} is a persona's host, and policy forbids a persona's own hosts."
@@ -348,6 +404,20 @@ impl Locks {
     /// [`Self::refuses`] judges it at the level it would be kept at, and a folder where policy
     /// forbids write grants.
     pub fn refuses_grant(&self, what: &grant::What, level: grant::Level) -> Option<String> {
+        if let grant::What::Host(host) = what
+            && let Some(never) = self.never_allows(host)
+        {
+            return Some(never);
+        }
+        if let Some(scopes) = &self.allow_scopes
+            && !scopes.contains(&level)
+        {
+            return Some(format!(
+                "Policy removed Allow {}. {}",
+                level.said(),
+                self.locked_by()
+            ));
+        }
         match what {
             grant::What::Host(host) => self.refuses(&Granted {
                 host: host.clone(),
@@ -421,7 +491,7 @@ impl Locks {
 }
 
 /// The keys `sandbox` may hold, each a lock.
-const KEYS: [&str; 7] = [
+const KEYS: [&str; 10] = [
     "presets",
     "hosts",
     "personal-hosts",
@@ -429,6 +499,9 @@ const KEYS: [&str; 7] = [
     "opt-out",
     "write-grants",
     "vault-grants",
+    "live-asks",
+    "allow-scopes",
+    "never-hosts",
 ];
 
 /// `text` as a policy read from `file`, or why it is refused.
@@ -505,13 +578,32 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
-    let hosts = words("hosts")?
+    let hosts_of = |key: &str| -> Result<Option<Vec<Host>>, String> {
+        words(key)?
+            .map(|words| {
+                words
+                    .iter()
+                    .map(|word| {
+                        Host::parse(word)
+                            .map_err(|why| format!("its {key} name \"{}\": {why}", clip(word)))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+    };
+    let hosts = hosts_of("hosts")?;
+    let never_hosts = hosts_of("never-hosts")?.unwrap_or_default();
+    let allow_scopes = words("allow-scopes")?
         .map(|words| {
             words
                 .iter()
                 .map(|word| {
-                    Host::parse(word)
-                        .map_err(|why| format!("its hosts name \"{}\": {why}", clip(word)))
+                    grant::Level::of_word(word).ok_or_else(|| {
+                        format!(
+                            "its allow-scopes name \"{}\", which is not chat, you or project",
+                            clip(word)
+                        )
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
@@ -529,6 +621,9 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         no_opt_out: forbids("opt-out")?,
         no_write_grants: forbids("write-grants")?,
         no_vault_grants: forbids("vault-grants")?,
+        no_live_asks: forbids("live-asks")?,
+        allow_scopes,
+        never_hosts,
         dispatch,
         no_dispatch,
         dispatch_locked,

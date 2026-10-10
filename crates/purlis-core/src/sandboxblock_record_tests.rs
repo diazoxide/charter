@@ -339,3 +339,39 @@ fn connections_the_proxy_carried_are_kept_with_their_layer_and_count() {
             .contains("\"event\":\"connect\"")
     );
 }
+
+#[test]
+fn a_held_connection_s_ask_and_its_timeout_are_kept_as_such() {
+    let (dir, root) = project();
+    let record = Record::in_data(&dir.path().join("data"));
+    let asked = Entry::connected(
+        Some("api.example.com:443"),
+        ASKED,
+        1,
+        chat("01J", "install"),
+        None,
+        1_000,
+    );
+    let gave_up = Entry::connected(
+        Some("api.example.com:443"),
+        TIMED_OUT,
+        1,
+        chat("01J", "install"),
+        None,
+        1_060,
+    );
+    for entry in [&asked, &gave_up] {
+        record.write(&root, entry).expect("written");
+    }
+    let read = record.read(&root, 2_000);
+    assert_eq!(read[0].event, Event::Ask);
+    assert_eq!(read[0].outcome, Outcome::Held);
+    assert_eq!(read[1].event, Event::Timeout);
+    assert_eq!(read[1].outcome, Outcome::Refused);
+    assert_eq!(read[1].target.as_deref(), Some("api.example.com:443"));
+    assert!(
+        std::fs::read_to_string(record.file(&root))
+            .expect("the file")
+            .contains("\"event\":\"timeout\"")
+    );
+}

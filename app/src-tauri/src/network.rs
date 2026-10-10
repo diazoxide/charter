@@ -538,13 +538,24 @@ fn allow_blocked(
         0,
         (crate::sandboxing::GrantWhat::Host, host, level),
     )?;
-    crate::sandboxing::kept_for(root, chats, None, (&what, level), audit, at)?;
+    let kept = crate::sandboxing::kept_for(root, chats, None, (&what, level), audit, at)?;
     Ok(Allowed {
-        said: format!(
-            "Allowed {} {}. A chat that is running reaches it from its next start.",
-            what.target(),
-            level.said()
-        ),
+        // Whether any running chat took it at once (#1666); none is owed a restart from here.
+        live: !kept.live.is_empty(),
+        said: match (kept.already, kept.live.is_empty()) {
+            (true, _) => format!("{} was allowed already, {}.", what.target(), level.said()),
+            // A chat whose proxy asks live takes it now (#1666); any other at its next start.
+            (false, false) => format!(
+                "Allowed {} {}. Running chats reach it now, or from their next start.",
+                what.target(),
+                level.said()
+            ),
+            (false, true) => format!(
+                "Allowed {} {}. A chat that is running reaches it from its next start.",
+                what.target(),
+                level.said()
+            ),
+        },
     })
 }
 

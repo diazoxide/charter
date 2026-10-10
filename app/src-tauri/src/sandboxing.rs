@@ -777,10 +777,14 @@ impl From<sandbox::grant::Level> for GrantLevel {
 }
 
 /// What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
-/// a restart on its conversation, which the window asks for once its turn has ended.
+/// a restart on its conversation, which the window asks for once its turn has ended, unless
+/// [`Self::live`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct Allowed {
     pub said: String,
+    /// The chat took it at once, through its proxy's live ask (#1666): the command that asked
+    /// carries on, and nothing restarts, so the window owes the chat no restart.
+    pub live: bool,
 }
 
 /// Seconds since 1970, now.
@@ -819,14 +823,10 @@ fn allow(
 ) -> Result<Allowed, String> {
     let folder = chats.folder_of(session);
     let (what, level) = judged(root, machine, folder.as_deref(), session, asked)?;
-    kept(root, chats, session, (&what, level), audit, at)?;
+    let kept = kept(root, chats, session, (&what, level), audit, at)?;
     Ok(Allowed {
-        said: format!(
-            // No target in the sentence: it is the chat's choice, and the window shows it apart.
-            "Allowed {}. The chat restarts on the same conversation once its turn ends, and is \
-             told to retry.",
-            level.said()
-        ),
+        said: allowed_said(session, level, &kept),
+        live: kept.live.contains(&session),
     })
 }
 
@@ -882,9 +882,21 @@ pub(crate) fn judged(
     Ok((what, level))
 }
 
+/// What keeping a grant came to (#1666).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Kept {
+    /// The open chats that took it at once, through their proxy's live asks: a held connection
+    /// of theirs goes on, and none of them is owed a restart for it.
+    pub live: Vec<u32>,
+    /// Those of them whose held connection had given up before the Allow: told to retry.
+    pub retry: Vec<u32>,
+    /// It was allowed already, at this scope or everyone's: nothing new was kept or audited.
+    pub already: bool,
+}
+
 /// **Keeps a grant [`judged`] made for chat `session`**: audited first, then kept where
-/// `level` keeps it, and the chat owed a restart on its conversation. An audit that cannot be
-/// written keeps nothing.
+/// `level` keeps it, and the chat owed a restart on its conversation unless its proxy took it
+/// live (#1666). An audit that cannot be written keeps nothing.
 pub(crate) fn kept(
     root: &std::path::Path,
     chats: &crate::chats::Chats,
@@ -892,13 +904,19 @@ pub(crate) fn kept(
     grant: (&sandbox::grant::What, sandbox::grant::Level),
     audit: Audit<'_>,
     at: u64,
-) -> Result<(), String> {
+) -> Result<Kept, String> {
     kept_for(root, chats, Some(session), grant, audit, at)
 }
 
 /// [`kept`] for chat `session`, or for no chat (#1662, Allow on Settings' Blocked lately): then
 /// nothing is kept for one chat alone, and no chat is owed a restart, so each takes it from its
 /// next start.
+///
+/// **A host is taken live** (#1666): every open chat it reaches whose proxy asks live takes it
+/// at once ([`crate::chats::Chats::allow_live`]), and only a chat that does not is owed the
+/// restart. **A host allowed already** at this scope, or for everyone, is not kept twice: no
+/// write, no audit, and the answer says so (#1666's fold-in), where it used to be refused with
+/// "already listed" and the Notice stayed up.
 pub(crate) fn kept_for(
     root: &std::path::Path,
     chats: &crate::chats::Chats,
@@ -906,7 +924,7 @@ pub(crate) fn kept_for(
     (what, level): (&sandbox::grant::What, sandbox::grant::Level),
     audit: Audit<'_>,
     at: u64,
-) -> Result<(), String> {
+) -> Result<Kept, String> {
     use sandbox::grant::{self, Level, What};
     let target = what.target();
     if session.is_none() && level == Level::Chat {
@@ -916,35 +934,52 @@ pub(crate) fn kept_for(
                 .to_owned(),
         );
     }
-    audit(
-        session,
-        &grant::Audited {
-            granted: true,
-            what: what.word(),
-            target: &target,
-            level,
-        },
-    )?;
-    let told = grant::told(what, level);
-    let owe = |told: String| {
-        if let Some(session) = session {
-            chats.owe_restart(session, told);
-        }
+    let already = match (what, level, session) {
+        (What::Host(host), Level::You | Level::Project, _) => grant::allowed_already(root, host)
+            .is_some_and(|held| held == level || held == Level::Project),
+        (_, Level::Chat, Some(session)) => chats.holds_for(session, what),
+        _ => false,
     };
+    if !already {
+        audit(
+            session,
+            &grant::Audited {
+                granted: true,
+                what: what.word(),
+                target: &target,
+                level,
+            },
+        )?;
+    }
+    let told = grant::told(what, level);
     match (what, level, session) {
-        (_, Level::Chat, Some(session)) => chats.grant(session, what.clone(), at, told)?,
+        (_, Level::Chat, Some(session)) => chats.hold_grant(session, what.clone(), at)?,
         (_, Level::Chat, None) => {}
         (What::Host(host), Level::You | Level::Project, _) => {
-            purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
-            owe(told);
+            if !already {
+                purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
+            }
         }
         (What::Write(folder), _, _) => {
             sandbox::local::grant_write(root, folder)
                 .map_err(|why| format!("purlis could not keep {}: {why}", folder.display()))?;
-            owe(told);
         }
     }
+    // Taken live where a chat's proxy asks live; owed a restart where it does not.
+    let crate::chats::Live {
+        reached: live,
+        told_to_retry: retry,
+    } = match what {
+        What::Host(host) => chats.allow_live(session, host, level),
+        What::Write(_) => crate::chats::Live::default(),
+    };
+    if let Some(session) = session
+        && !live.contains(&session)
+    {
+        chats.owe_restart(session, told);
+    }
     if level != Level::Chat
+        && !already
         && let Err(why) = sandbox::local::record_made(
             root,
             sandbox::local::Made {
@@ -959,7 +994,48 @@ pub(crate) fn kept_for(
         // The grant stands, and is audited; only the Granted list's "when" is lost.
         tracing::warn!("purlis: a sandbox grant was kept without when it was made ({why})");
     }
-    Ok(())
+    Ok(Kept {
+        live,
+        retry,
+        already,
+    })
+}
+
+/// What an Allow on chat `session`'s Notice says, once [`kept`] came to `kept` at `level`.
+pub(crate) fn allowed_said(session: u32, level: sandbox::grant::Level, kept: &Kept) -> String {
+    let retry = kept.retry.contains(&session);
+    match (kept.already, kept.live.contains(&session)) {
+        (true, true) => format!(
+            "It was allowed already, {}. {}",
+            level.said(),
+            if retry {
+                "The command that asked had given up waiting, so the chat is told to run it \
+                 again; nothing restarts."
+            } else {
+                "The command that asked carries on now; nothing restarts."
+            }
+        ),
+        (false, true) if retry => format!(
+            "Allowed {}. The command that asked had given up waiting, so the chat is told to \
+             run it again; nothing restarts.",
+            level.said()
+        ),
+        (false, true) => format!(
+            "Allowed {}. The command that asked carries on now; nothing restarts.",
+            level.said()
+        ),
+        (true, false) => format!(
+            "It was allowed already, {}. This chat started before that, so it restarts on the \
+             same conversation once its turn ends to take it.",
+            level.said()
+        ),
+        (false, false) => format!(
+            // No target in the sentence: it is the chat's choice, and the window shows it apart.
+            "Allowed {}. The chat restarts on the same conversation once its turn ends, and is \
+             told to retry.",
+            level.said()
+        ),
+    }
 }
 
 /// **Allow** on a block's Notice (#1342): `shown` is the block and the host or folder the
@@ -994,6 +1070,38 @@ pub fn allow_sandbox_block(
     // Answered: neither this Notice nor a question for several tasks answers it again.
     held.chats().blocks().answered(session, &block);
     Ok(allowed)
+}
+
+/// **Keep blocked** on a block's Notice (#1666, taking over #1411's line): `shown` is the block
+/// the Notice showed. Refused unless the chat is held on that block now (#1538). Nothing is
+/// granted. For a host, what the chat's proxy holds on it is refused now, and the chat is told,
+/// in purlis's fixed words, not to try it again unless the person asks.
+#[tauri::command]
+#[specta::specta]
+pub fn keep_sandbox_block(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    shown: crate::taskblocks::BlockShown,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    keep_block(held.chats(), session, &shown)
+}
+
+/// [`keep_sandbox_block`] on `chats`.
+pub(crate) fn keep_block(
+    chats: &crate::chats::Chats,
+    session: u32,
+    shown: &crate::taskblocks::BlockShown,
+) -> Result<(), String> {
+    let block = crate::taskblocks::shown_one(chats.blocks(), session, shown)?;
+    chats.blocks().answered(session, &block);
+    if block.what == GrantWhat::Host
+        && let Ok(host) = sandbox::grant::host(&block.target)
+    {
+        chats.keep_blocked_live(session, &host);
+    }
+    Ok(())
 }
 
 /// The chats of this project owed a restart (#1342, #1428): to take a grant, or because the
@@ -1253,9 +1361,14 @@ fn revoke(
     match (&grant, chat) {
         (_, Some(chat)) => {
             chats.revoke(chat, &grant);
+            if let What::Host(host) = &grant {
+                chats.forget_live(Some(chat), host, level);
+            }
         }
         (What::Host(host), None) => {
             purlis_core::settings::hosts::revoke(root, hosts_file(level), host)?;
+            // What it allowed live goes with it (#1666).
+            chats.forget_live(None, host, level);
         }
         (What::Write(folder), None) => {
             sandbox::local::revoke_write(root, folder)
@@ -1475,6 +1588,93 @@ pub fn unlist_grantable_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the live ask (#1666) ----------------------------------------------------------------
+
+    #[test]
+    fn an_allow_says_whether_the_command_carries_on_or_the_chat_restarts() {
+        use sandbox::grant::Level;
+        let live = Kept {
+            live: vec![4, 6],
+            retry: vec![6],
+            already: false,
+        };
+        assert_eq!(
+            allowed_said(4, Level::You, &live),
+            "Allowed for me on this machine. The command that asked carries on now; nothing \
+             restarts."
+        );
+        // Taken live by other chats only: this one still restarts.
+        assert!(allowed_said(5, Level::You, &live).contains("restarts on the same conversation"));
+        // Allowed already, and this chat is not on the proxy: said so, and it restarts to take
+        // it, where pressing Allow used to be refused and the Notice stayed up.
+        // A held connection that had given up: the chat is told to run it again.
+        assert!(
+            allowed_said(6, Level::You, &live).contains("told to run it again"),
+            "{}",
+            allowed_said(6, Level::You, &live)
+        );
+        // Allowed already, and taken live: said so, and the command carries on.
+        let both = Kept {
+            live: vec![4],
+            retry: Vec::new(),
+            already: true,
+        };
+        assert!(allowed_said(4, Level::You, &both).starts_with("It was allowed already"));
+        let already = Kept {
+            live: Vec::new(),
+            retry: Vec::new(),
+            already: true,
+        };
+        let said = allowed_said(4, Level::Project, &already);
+        assert!(
+            said.starts_with("It was allowed already, for everyone in this project."),
+            "{said}"
+        );
+        assert!(said.contains("restarts on the same conversation"), "{said}");
+    }
+
+    #[test]
+    fn keep_blocked_answers_the_block_it_showed_and_tells_the_chat_in_fixed_words() {
+        let chats = crate::chats::Chats::new();
+        let told: std::sync::Arc<
+            std::sync::Mutex<Vec<(u32, purlis_core::dispatchtalk::NetworkWord)>>,
+        > = std::sync::Arc::default();
+        let keep = std::sync::Arc::clone(&told);
+        chats.tell_network_words_to(std::sync::Arc::new(move |session, word| {
+            keep.lock().unwrap().push((session, word));
+        }));
+        let shown = crate::taskblocks::BlockShown {
+            operation: "connect".to_owned(),
+            kind: "host".to_owned(),
+            what: GrantWhat::Host,
+            target: "paste.example:8443".to_owned(),
+        };
+        // Not held on it: refused whole, and the chat is told nothing.
+        assert!(keep_block(&chats, 4, &shown).is_err());
+        assert!(told.lock().unwrap().is_empty());
+        chats.blocks().heard(
+            4,
+            crate::taskblocks::HeldBlock {
+                operation: "connect".to_owned(),
+                kind: "host".to_owned(),
+                what: GrantWhat::Host,
+                target: "paste.example:8443".to_owned(),
+            },
+        );
+        keep_block(&chats, 4, &shown).expect("kept blocked");
+        assert_eq!(
+            *told.lock().unwrap(),
+            vec![(
+                4,
+                purlis_core::dispatchtalk::NetworkWord::KeptBlocked {
+                    hosts: vec!["paste.example:8443".to_owned()],
+                },
+            )]
+        );
+        // Answered: a second press finds nothing held.
+        assert!(keep_block(&chats, 4, &shown).is_err());
+    }
 
     // ---- an administrator's policy (#1343), through the test build's seam ----
 

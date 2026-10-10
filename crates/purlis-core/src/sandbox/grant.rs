@@ -131,6 +131,44 @@ impl Level {
     }
 }
 
+/// **Where `host` is allowed already**, of `yours` (this project on this machine) and `project`
+/// (everyone in it), as `locks` leave them in force: the level that holds it, or none. What a
+/// Notice asks of a host before offering Allow, and an Allow before keeping one (#1666): a host
+/// allowed already is not allowed twice.
+pub fn already(
+    host: &Host,
+    yours: &[Host],
+    project: &[Host],
+    locks: &super::policy::Locks,
+) -> Option<Level> {
+    let held = |listed: &[Host], level: super::hosts::Level| {
+        listed.iter().any(|one| {
+            one.covers(host)
+                && locks
+                    .refuses(&super::hosts::Granted {
+                        host: one.clone(),
+                        level,
+                    })
+                    .is_none()
+        })
+    };
+    if held(yours, super::hosts::Level::You) {
+        return Some(Level::You);
+    }
+    held(project, super::hosts::Level::Project).then_some(Level::Project)
+}
+
+/// [`already`] for the project at `root` on this machine: your hosts and the project's, as they
+/// are on disk now, under the policy in force.
+pub fn allowed_already(root: &Path, host: &Host) -> Option<Level> {
+    let locks = super::policy::Locks::of(root);
+    let project = super::Plane::read(root)
+        .in_force(&locks)
+        .map(|policy| policy.hosts)
+        .unwrap_or_default();
+    already(host, &super::hosts::personal(root), &project, &locks)
+}
+
 /// **One chat's grants**, as a start compiles them in beside the project's and this machine's
 /// ([`super::Compiled::granted`]). Empty for every start but a chat the person allowed something
 /// for.

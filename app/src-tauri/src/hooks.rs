@@ -370,6 +370,14 @@ pub struct ChatBlocked {
     /// For [`BlockOffer::Host`] and [`BlockOffer::Write`], the levels Allow may keep it at:
     /// each a policy does not forbid (#1343).
     pub levels: Vec<crate::sandboxing::GrantLevel>,
+    /// Whether the connection is **held** while the person answers (#1666): purlis's proxy
+    /// waits on this Notice, and an Allow lets the same command carry on with nothing
+    /// restarting. Set by the app from the chat's own board, never from what a chat sent.
+    pub held: bool,
+    /// For [`BlockOffer::Host`]: what an administrator's policy ruled out here, and who set it
+    /// (#1666): a scope it removed, or asking while a connection waits. None where it ruled
+    /// nothing out.
+    pub ruled: Option<String>,
 }
 
 /// What the app does with a sandbox block chat `block.chat`'s hook sent (#1338), heard at `at`:
@@ -409,15 +417,25 @@ pub type BlockTeller = Arc<dyn Fn(ChatBlocked) + Send + Sync + 'static>;
 /// app does not start is no harness: the line is the chat's own.
 pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked) -> ChatBlocked {
     let block = blocked.sandbox_blocked;
+    let locks = purlis_core::sandbox::policy::Locks::of(plane.root());
     let (offer, target, route, levels) = held(
-        &purlis_core::sandbox::policy::Locks::of(plane.root()),
+        &locks,
         offered(plane.root(), &block, blocked.target.as_deref()),
     );
+    let ruled = (offer == BlockOffer::Host)
+        .then(|| ruled_out(&locks, target.as_deref(), &levels))
+        .flatten();
+    let (offer, route, levels) = match allowed_already(plane.root(), offer, target.as_deref()) {
+        Some(said) => (BlockOffer::Allowed, Some(said), Vec::new()),
+        None => (offer, route, levels),
+    };
     ChatBlocked {
         offer,
         target,
         route,
         levels,
+        held: false,
+        ruled,
         plane: plane.clone(),
         session: blocked.chat,
         operation: block.operation.word().to_owned(),
@@ -430,6 +448,54 @@ pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked)
             .map(|harness| harness.name().to_owned()),
         said: block.said(),
     }
+}
+
+/// **What a Notice says of a host that is allowed already** (#1666's fold-in): no Allow is
+/// offered for it, since one would allow nothing new. This chat started before it was allowed,
+/// so it reaches it once it restarts; a chat on purlis's proxy takes an Allow at once and is
+/// never shown this, as its held connection is let on as soon as it is asked
+/// (`chats::asked_by_the_proxy`). None for anything but a host offered to allow.
+fn allowed_already(
+    root: &std::path::Path,
+    offer: BlockOffer,
+    target: Option<&str>,
+) -> Option<String> {
+    use purlis_core::sandbox::grant;
+    if offer != BlockOffer::Host {
+        return None;
+    }
+    let host = grant::host(target?).ok()?;
+    let level = grant::allowed_already(root, &host)?;
+    Some(format!(
+        "It is allowed already, {}. This chat started before that, so it reaches it once it \
+         restarts on the same conversation.",
+        level.said()
+    ))
+}
+
+/// **What policy ruled out on a host's Notice** (#1666): the first scope it removed, and that
+/// asking while a connection waits is off, each naming who set it. None where it ruled nothing
+/// out, or where it ruled out every Allow ([`held`] then says so instead).
+fn ruled_out(
+    locks: &purlis_core::sandbox::policy::Locks,
+    target: Option<&str>,
+    levels: &[crate::sandboxing::GrantLevel],
+) -> Option<String> {
+    use crate::sandboxing::GrantLevel;
+    use purlis_core::sandbox::grant::{self, What};
+    let host = target.and_then(|typed| grant::host(typed).ok());
+    let removed = [GrantLevel::Chat, GrantLevel::You, GrantLevel::Project]
+        .into_iter()
+        .filter(|level| !levels.contains(level))
+        .find_map(|level| match &host {
+            Some(host) => locks.refuses_grant(&What::Host(host.clone()), level.into()),
+            None => None,
+        });
+    let said: Vec<String> = removed
+        .into_iter()
+        .chain(locks.live_asks_refused())
+        .collect();
+    (!said.is_empty()).then(|| said.join(" "))
 }
 
 /// What a block's Notice offers (#1342).
@@ -452,6 +518,10 @@ pub enum BlockOffer {
     /// sandbox (#1343): nothing is offered, and [`ChatBlocked::route`] names the policy and who
     /// set it, so the person knows whom to ask.
     Policy,
+    /// The host is allowed already (#1666's fold-in): no Allow, since one would allow nothing
+    /// new. [`ChatBlocked::route`] says so and that this chat reaches it once it restarts; the
+    /// Notice offers Restart this chat.
+    Allowed,
 }
 
 /// What a block's Notice offers once `locks`, an administrator's policy (#1343), have their say
@@ -534,7 +604,7 @@ fn held(
             ),
             None => (offer, target, route, Vec::new()),
         },
-        BlockOffer::Brokered | BlockOffer::None | BlockOffer::Policy => {
+        BlockOffer::Brokered | BlockOffer::None | BlockOffer::Policy | BlockOffer::Allowed => {
             (offer, target, route, Vec::new())
         }
     }
@@ -2341,6 +2411,8 @@ mod tests {
                 target: None,
                 route: None,
                 levels: Vec::new(),
+                held: false,
+                ruled: None,
             }]
         );
         // A harness word purlis does not start is no harness.
@@ -2663,6 +2735,52 @@ mod tests {
             Some("Use the broker.".to_owned()),
         );
         assert_eq!(held(&both, brokered).0, BlockOffer::Brokered);
+    }
+
+    #[test]
+    fn a_host_s_notice_says_what_policy_ruled_out_and_who_set_it() {
+        use crate::sandboxing::GrantLevel;
+        use purlis_core::sandbox::policy::Locks;
+        let policy = |json: &str| Locks::parse(json, Path::new("/etc/purlis/policy.json"));
+        let host = || (BlockOffer::Host, Some("pastebin.example".to_owned()), None);
+        // Nothing ruled out: nothing said.
+        let none = held(&Locks::none(), host());
+        assert_eq!(ruled_out(&Locks::none(), none.1.as_deref(), &none.3), None);
+        // A scope removed: the Notice says which, and who removed it.
+        let scopes = policy(r#"{"owner": "IT", "sandbox": {"allow-scopes": ["you"]}}"#);
+        let (_, target, _, levels) = held(&scopes, host());
+        assert_eq!(levels, [GrantLevel::You]);
+        let said = ruled_out(&scopes, target.as_deref(), &levels).expect("ruled");
+        assert!(
+            said.contains("Policy removed Allow for this chat"),
+            "{said}"
+        );
+        assert!(said.contains("set by IT"), "{said}");
+        // Asking while a connection waits turned off: said too.
+        let off = policy(r#"{"owner": "IT", "sandbox": {"live-asks": false}}"#);
+        let (_, target, _, levels) = held(&off, host());
+        let said = ruled_out(&off, target.as_deref(), &levels).expect("ruled");
+        assert!(said.contains("Policy turns off asking"), "{said}");
+        // A host pinned never allowed: no Allow at all, and the Notice says why.
+        let pinned = policy(r#"{"owner": "IT", "sandbox": {"never-hosts": ["pastebin.example"]}}"#);
+        let (offer, _, route, levels) = held(&pinned, host());
+        assert_eq!((offer, levels), (BlockOffer::Unsandboxed, Vec::new()));
+        assert!(route.expect("why").contains("Policy never allows"));
+    }
+
+    #[test]
+    fn a_host_allowed_already_offers_no_allow_and_says_the_chat_takes_it_on_a_restart() {
+        // No project file says so here: nothing is allowed, so Allow stays on offer.
+        let root = tempfile::tempdir().expect("a project");
+        assert_eq!(
+            allowed_already(root.path(), BlockOffer::Host, Some("api.example.com:443")),
+            None
+        );
+        // Only a host offered to allow is asked about.
+        assert_eq!(
+            allowed_already(root.path(), BlockOffer::Write, Some("/p/out")),
+            None
+        );
     }
 
     fn told_block() -> purlis_core::sandboxblock::Block {
