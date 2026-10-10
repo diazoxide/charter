@@ -336,8 +336,9 @@ pub enum Refusal {
     Host(String, String),
     /// `certificate-checks` that is not `true` or `false`.
     CertificateChecksNotABool,
-    /// Something in `personas` that grants nothing ([`persona::read`]), as one sentence.
-    Persona(String),
+    /// Something in `personas` that grants nothing ([`persona::read`]), as one sentence with
+    /// its key.
+    Persona(crate::settings::Refusal),
     /// A `[[forge]]` host the sandbox does not let chats reach while the `forge` preset is on
     /// ([`forge_hosts_of`]): as written, and why. Said, not a change: the forge still works
     /// outside the sandbox.
@@ -392,12 +393,30 @@ impl fmt::Display for Refusal {
                 "{TABLE}.{CERTIFICATE_CHECKS} in {FILE} is not true or false; certificate checks \
                  stay off"
             ),
-            Self::Persona(said) => f.write_str(said),
+            Self::Persona(said) => f.write_str(&said.why),
             Self::ForgeHost(written, why) => write!(
                 f,
                 "forge.host in {FILE} names {written}, which the sandbox does not let chats \
                  reach: {why}"
             ),
+        }
+    }
+}
+
+impl Refusal {
+    /// **The key it is about** (#1292), one step per table or key, so the Settings tab links it
+    /// to the setting that mends it. A `[[forge]]` host's is the array as a whole.
+    pub fn key(&self) -> Vec<String> {
+        let at = |key: &str| vec![TABLE.to_owned(), key.to_owned()];
+        match self {
+            Self::NotATable => vec![TABLE.to_owned()],
+            Self::UnknownKey(key) => at(key),
+            Self::ModeOff | Self::ModeUnknown => at("mode"),
+            Self::EgressNotAList | Self::EgressUnknown(_) => at("egress"),
+            Self::HostsNotAList | Self::Host(..) => at(hosts::KEY),
+            Self::CertificateChecksNotABool => at(CERTIFICATE_CHECKS),
+            Self::Persona(said) => said.key.clone().unwrap_or_else(|| at(persona::KEY)),
+            Self::ForgeHost(..) => vec!["forge".to_owned()],
         }
     }
 }
@@ -537,7 +556,7 @@ impl Said {
                 false
             }
         };
-        let (personas, not) = persona::read(table.get(persona::KEY), FILE, known);
+        let (personas, not) = persona::keyed(table.get(persona::KEY), FILE, known);
         refused.extend(not.into_iter().map(Refusal::Persona));
         // The forge preset lets a project's `[[forge]]` hosts through, but not one the sandbox
         // refuses: said here, while the sandbox and that preset are on (#1405).
@@ -572,16 +591,25 @@ impl Said {
 /// whole table, and this machine's `charter.local.toml`, which holds the person's own hosts and
 /// nothing else of the sandbox ([`hosts`], #1341).
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
-    refusals_of(text, file, None)
+    whys(keyed_of(text, file, None))
 }
 
 /// [`refusals`] for the project at `root`, which also refuses a grant for a persona it does not
 /// define ([`Said::of_known`], #1407): what the Settings tab's save asks.
 pub fn refusals_at(root: &Path, text: &str, file: &str) -> Vec<String> {
-    refusals_of(text, file, Some(&crate::personaverbs::names(root)))
+    whys(keyed_at(root, text, file))
 }
 
-fn refusals_of(text: &str, file: &str, known: Option<&[String]>) -> Vec<String> {
+/// [`refusals_at`], each with the key it is about (#1292).
+pub fn keyed_at(root: &Path, text: &str, file: &str) -> Vec<crate::settings::Refusal> {
+    keyed_of(text, file, Some(&crate::personaverbs::names(root)))
+}
+
+fn whys(keyed: Vec<crate::settings::Refusal>) -> Vec<String> {
+    keyed.into_iter().map(|one| one.why).collect()
+}
+
+fn keyed_of(text: &str, file: &str, known: Option<&[String]>) -> Vec<crate::settings::Refusal> {
     if file == crate::profiles::LOCAL_FILE {
         return local_refusals(text);
     }
@@ -592,7 +620,10 @@ fn refusals_of(text: &str, file: &str, known: Option<&[String]>) -> Vec<String> 
     Said::of_known(top.as_ref(), known)
         .refused
         .iter()
-        .map(ToString::to_string)
+        .map(|one| crate::settings::Refusal {
+            why: one.to_string(),
+            key: Some(one.key()),
+        })
         .collect()
 }
 
@@ -2673,8 +2704,9 @@ pub fn changes_a_sandbox_key(before: Option<&str>, after: &str) -> bool {
 }
 
 /// What this machine's `charter.local.toml` says in `[sandbox]` that purlis does not take: any
-/// key but `hosts`, and each entry of it that is not a host.
-fn local_refusals(text: &str) -> Vec<String> {
+/// key but `hosts`, and each entry of it that is not a host, each with its key (#1292).
+fn local_refusals(text: &str) -> Vec<crate::settings::Refusal> {
+    use crate::settings::Refusal as Keyed;
     let local = crate::profiles::LOCAL_FILE;
     let Ok(top) = text.parse::<toml::Table>() else {
         return Vec::new();
@@ -2683,33 +2715,46 @@ fn local_refusals(text: &str) -> Vec<String> {
         return Vec::new();
     };
     let Some(table) = table.as_table() else {
-        return vec![format!(
-            "{TABLE} in {local} is not a table — this machine's [{TABLE}] holds hosts, and only \
-             hosts"
+        return vec![Keyed::at(
+            format!(
+                "{TABLE} in {local} is not a table — this machine's [{TABLE}] holds hosts, and \
+                 only hosts"
+            ),
+            &[TABLE],
         )];
     };
-    let mut out: Vec<String> = table
+    let mut out: Vec<Keyed> = table
         .keys()
         .filter(|key| *key != hosts::KEY)
         .map(|key| {
-            format!(
-                "{TABLE}.{key} in {local} is not read — this machine's [{TABLE}] holds hosts, and \
-                 only hosts. Whether chats run sandboxed, and the presets, are the project's, in \
-                 {FILE}."
+            Keyed::at(
+                format!(
+                    "{TABLE}.{key} in {local} is not read — this machine's [{TABLE}] holds \
+                     hosts, and only hosts. Whether chats run sandboxed, and the presets, are \
+                     the project's, in {FILE}."
+                ),
+                &[TABLE, key.as_str()],
             )
         })
         .collect();
     match hosts::read(table.get(hosts::KEY)) {
         Ok(hosts::Listed { refused, .. }) => {
             out.extend(refused.into_iter().map(|(written, why)| {
-                format!(
-                    "{TABLE}.hosts in {local} names {written}, which no chat is let reach: {why}"
+                Keyed::at(
+                    format!(
+                        "{TABLE}.hosts in {local} names {written}, which no chat is let reach: \
+                         {why}"
+                    ),
+                    &[TABLE, hosts::KEY],
                 )
             }))
         }
-        Err(hosts::NotAList) => out.push(format!(
-            "{TABLE}.hosts in {local} is not a list of hosts, so none of yours is allowed — \
-             write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+        Err(hosts::NotAList) => out.push(Keyed::at(
+            format!(
+                "{TABLE}.hosts in {local} is not a list of hosts, so none of yours is allowed — \
+                 write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+            ),
+            &[TABLE, hosts::KEY],
         )),
     }
     out

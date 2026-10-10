@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use crate::settings::Refusal;
 pub use crate::settings::Source;
 
 /// How far a save goes. Each mode includes the steps of the one before it.
@@ -437,6 +438,14 @@ const REPO_KEYS: [&str; 6] = [
 /// `charter.local.toml`. Empty when the text is not TOML at all: that is the file's own
 /// reader's refusal, not this one's.
 pub fn refusals(text: &str, local: bool, file: &str) -> Vec<String> {
+    keyed(text, local, file)
+        .into_iter()
+        .map(|one| one.why)
+        .collect()
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(text: &str, local: bool, file: &str) -> Vec<Refusal> {
     let Ok(top) = text.parse::<toml::Table>() else {
         return Vec::new();
     };
@@ -445,25 +454,40 @@ pub fn refusals(text: &str, local: bool, file: &str) -> Vec<String> {
         None => {}
         Some(toml::Value::Table(plane)) => {
             for (key, value) in plane {
+                let keyed = ["plane", key.as_str()];
                 if key == "worktrees" {
                     if local {
-                        out.push(format!(
-                            "plane.worktrees in {file} is not read — it belongs in charter.toml, \
-                             and $CHARTER_WORKTREES sets it for this machine alone"
+                        out.push(Refusal::at(
+                            format!(
+                                "plane.worktrees in {file} is not read — it belongs in \
+                                 charter.toml, and $CHARTER_WORKTREES sets it for this machine \
+                                 alone"
+                            ),
+                            &keyed,
                         ));
                     }
                 } else if PLANE_KEYS.contains(&key.as_str()) {
-                    out.extend(value_refusal("plane", key, value, file));
+                    out.extend(
+                        value_refusal("plane", key, value, file)
+                            .map(|why| Refusal::at(why, &keyed)),
+                    );
                 } else {
-                    out.push(format!(
-                        "plane.{} in {file} is not read — [plane] holds mode, branch, \
-                         save_branch, sign, autosave, autosave_after, assisted_by and worktrees",
-                        toml_key(key)
+                    out.push(Refusal::at(
+                        format!(
+                            "plane.{} in {file} is not read — [plane] holds mode, branch, \
+                             save_branch, sign, autosave, autosave_after, assisted_by and \
+                             worktrees",
+                            toml_key(key)
+                        ),
+                        &keyed,
                     ));
                 }
             }
         }
-        Some(_) => out.push(format!("plane in {file} is not a table")),
+        Some(_) => out.push(Refusal::at(
+            format!("plane in {file} is not a table"),
+            &["plane"],
+        )),
     }
     match top.get("repos") {
         None => {}
@@ -471,23 +495,36 @@ pub fn refusals(text: &str, local: bool, file: &str) -> Vec<String> {
             for (name, repo) in repos {
                 let at = format!("repos.{}", toml_key(name));
                 let Some(repo) = repo.as_table() else {
-                    out.push(format!("{at} in {file} is not a table"));
+                    out.push(Refusal::at(
+                        format!("{at} in {file} is not a table"),
+                        &["repos", name.as_str()],
+                    ));
                     continue;
                 };
                 for (key, value) in repo {
+                    let keyed = ["repos", name.as_str(), key.as_str()];
                     if REPO_KEYS.contains(&key.as_str()) {
-                        out.extend(value_refusal(&at, key, value, file));
+                        out.extend(
+                            value_refusal(&at, key, value, file)
+                                .map(|why| Refusal::at(why, &keyed)),
+                        );
                     } else {
-                        out.push(format!(
-                            "{at}.{} in {file} is not read — [repos.<name>] holds mode, branch, \
-                             sign, autosave, autosave_after and assisted_by",
-                            toml_key(key)
+                        out.push(Refusal::at(
+                            format!(
+                                "{at}.{} in {file} is not read — [repos.<name>] holds mode, \
+                                 branch, sign, autosave, autosave_after and assisted_by",
+                                toml_key(key)
+                            ),
+                            &keyed,
                         ));
                     }
                 }
             }
         }
-        Some(_) => out.push(format!("repos in {file} is not a table")),
+        Some(_) => out.push(Refusal::at(
+            format!("repos in {file} is not a table"),
+            &["repos"],
+        )),
     }
     out
 }

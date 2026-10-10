@@ -1404,43 +1404,111 @@ fn a_tables_default_is_its_key_and_a_whole_file_refusal_has_none() {
     assert_eq!(broken[0].key, None);
 }
 
-/// The key of a reader's sentence that names it first, in the readers' convention (#1292): the
-/// readers that do not yet hand their key over are read the way the window used to read them,
-/// once, here.
+/// The refusal whose sentence holds `said`, among `refusals`, and the key it carries.
+fn key_of(refusals: &[Refusal], said: &str) -> Option<Vec<String>> {
+    let found: Vec<_> = refusals
+        .iter()
+        .filter(|one| one.why.contains(said))
+        .collect();
+    assert_eq!(found.len(), 1, "{said:?} in {refusals:#?}");
+    found[0].key.clone()
+}
+
+fn keys(k: &[&str]) -> Option<Vec<String>> {
+    Some(k.iter().map(|s| (*s).to_owned()).collect())
+}
+
+/// **Every reader of the committed file hands its key over** (#1292): harness plugins, the
+/// theme, the sandbox, the dispatch limits, the plane's saves, and the doctor's findings, each
+/// with the key its sentence is about, so none is read back from the sentence.
 #[test]
-fn a_sentence_that_starts_with_its_key_is_read_for_it() {
-    let file = "charter.toml";
-    let key = |why: &str| key_said(why, file, None);
-    let keys = |k: &[&str]| Some(k.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+fn each_reader_of_the_committed_file_gives_the_key_of_its_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = "schema = 1\n\
+                  [harness]\ndefault = \"ghost\"\n\
+                  [harness.mine]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+                  [harness_plugins.nope]\n\
+                  [harness_plugins.codex]\n\"one\" = 3\n\
+                  [theme]\nuse = 3\nfoo = 1\n\
+                  [sandbox]\nmode = \"off\"\negress = \"web\"\n\
+                  [sandbox.personas.ghost]\nhosts = []\n\
+                  [dispatch]\ndepth = \"deep\"\n\
+                  [dispatch.personas.devops]\nbogus = 1\n\
+                  [dispatch.grants]\nsteward = 3\n\
+                  [plane]\nmode = \"sideways\"\nworktrees = \"/far/away\"\n\
+                  [repos.app]\nsign = 1\n\
+                  [[forge]]\nkind = \"nope\"\n";
+    let refusals = standing(dir.path(), Which::Shared, shared);
+    let at = |said: &str| key_of(&refusals, said);
     assert_eq!(
-        key("plane.mode in charter.toml is not a mode"),
-        keys(&["plane", "mode"])
-    );
-    assert_eq!(
-        key("[harness] default = \"x\" names no profile"),
+        at("[harness] default = \"ghost\""),
         keys(&["harness", "default"])
     );
+    assert_eq!(at("[harness.mine] is in"), keys(&["harness", "mine"]));
     assert_eq!(
-        key("[extensions.\"a b\"] in charter.toml is not an extension id"),
-        keys(&["extensions", "a b"])
+        at("[harness_plugins.nope]"),
+        keys(&["harness_plugins", "nope"])
     );
     assert_eq!(
-        key("theme in charter.toml is not a table"),
-        keys(&["theme"])
+        at("harness_plugins.codex.one in"),
+        keys(&["harness_plugins", "codex", "one"])
     );
+    assert_eq!(at("theme.use in"), keys(&["theme", "use"]));
+    assert_eq!(at("theme.foo in"), keys(&["theme", "foo"]));
+    assert_eq!(at("sandbox.mode in"), keys(&["sandbox", "mode"]));
+    assert_eq!(at("sandbox.egress in"), keys(&["sandbox", "egress"]));
     assert_eq!(
-        key("[harness.x] is in charter.toml, which is committed"),
-        None
+        at("sandbox.personas.ghost in"),
+        keys(&["sandbox", "personas", "ghost"])
     );
-    assert_eq!(key("charter.toml could not be read (no)"), None);
-    assert_eq!(key("plane.mode in charter.local.toml is odd"), None);
-    let under = |why: &str| key_said(why, "workspaces/a/workspace.json", Some("settings"));
+    assert_eq!(at("dispatch.depth in"), keys(&["dispatch", "depth"]));
     assert_eq!(
-        under("settings.theme.icons in workspaces/a/workspace.json is 7"),
-        keys(&["theme", "icons"])
+        at("dispatch.personas.devops.bogus in"),
+        keys(&["dispatch", "personas", "devops", "bogus"])
     );
+    assert_eq!(at("dispatch.grants.steward"), keys(&["dispatch", "grants"]));
+    assert_eq!(at("plane.mode in"), keys(&["plane", "mode"]));
     assert_eq!(
-        under("settings in workspaces/a/workspace.json is not an object"),
-        None
+        at("[plane] worktrees points outside"),
+        keys(&["plane", "worktrees"])
+    );
+    assert_eq!(at("repos.app.sign in"), keys(&["repos", "app", "sign"]));
+    assert_eq!(at("[[forge]] block(s) failed"), keys(&["forge"]));
+}
+
+/// **This machine's file hands its keys over too** (#1292), and **a refused profile gives its
+/// own table**, so the window links it to that profile's page (`project.profile.<name>`).
+#[test]
+fn each_reader_of_the_local_file_gives_the_key_of_its_refusal_and_a_profile_its_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = "[harness.bad]\nkind = \"nope\"\ncommand = [\"x\"]\n\
+                 [harness.mine.sub]\nx = 1\n\
+                 [chat_env]\npass = 3\nother = 1\n\
+                 [sandbox]\nmode = \"on\"\n\
+                 [dispatch.profiles]\ndevops = [\"work\"]\n\
+                 [bogus]\nx = 1\n";
+    let refusals = standing(dir.path(), Which::Local, local);
+    let at = |said: &str| key_of(&refusals, said);
+    assert_eq!(at("'bad' has kind"), keys(&["harness", "bad", "kind"]));
+    assert_eq!(
+        at("[harness.mine] holds a table sub"),
+        keys(&["harness", "mine", "sub"])
+    );
+    assert_eq!(at("[chat_env].pass in"), keys(&["chat_env", "pass"]));
+    assert_eq!(at("[chat_env].other in"), keys(&["chat_env", "other"]));
+    assert_eq!(at("sandbox.mode in"), keys(&["sandbox", "mode"]));
+    assert_eq!(at("dispatch.profiles in"), keys(&["dispatch", "profiles"]));
+    assert_eq!(at("[bogus] in"), keys(&["bogus"]));
+}
+
+/// A profile refused for running purlis itself gives the key it is about: its command (ST-4).
+#[test]
+fn a_profile_that_runs_purlis_gives_its_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = "[harness.mine]\nkind = \"claude\"\ncommand = [\"purlis\"]\n";
+    let refusals = standing(dir.path(), Which::Local, local);
+    assert_eq!(
+        key_of(&refusals, "runs purlis itself"),
+        keys(&["harness", "mine", "command"])
     );
 }

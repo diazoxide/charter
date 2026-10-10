@@ -263,15 +263,18 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
 /// The row reports the first; a writer refuses on any of them (charter-app#252), so the
 /// Settings tab refuses exactly what the doctor would warn is being ignored, in the
 /// same sentences.
+///
+/// Each comes with the key it is about (#1292), one step per table or key, so the Settings tab
+/// links it to the setting that mends it: `[[forge]]`'s is the array as a whole.
 pub(crate) fn findings(
     root: &Path,
     cfg: &toml::Table,
     profiles: &crate::profiles::ProfileSet,
-) -> Vec<(String, String)> {
+) -> Vec<(&'static [&'static str], (String, String))> {
     [
-        worktrees_finding(root, cfg),
-        forge_finding(cfg),
-        default_finding(cfg, profiles),
+        worktrees_finding(root, cfg).map(|found| (&["plane", "worktrees"][..], found)),
+        forge_finding(cfg).map(|found| (&["forge"][..], found)),
+        default_finding(cfg, profiles).map(|found| (&["harness", "default"][..], found)),
     ]
     .into_iter()
     .flatten()

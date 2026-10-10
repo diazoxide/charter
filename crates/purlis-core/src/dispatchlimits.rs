@@ -93,6 +93,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
+use crate::settings::Refusal;
+
 /// The table of a settings file that holds the limits.
 pub const TABLE: &str = "dispatch";
 
@@ -984,37 +986,45 @@ fn value_of(limit: Limit, value: &toml::Value, here: &str, file: &str) -> Result
 
 /// One level's table: its limits, with each key that is not one refused. `nested` are the
 /// keys that hold further tables, which the project's own level has.
+/// `here` is the level's key, one step per table.
 fn level_of(
     table: &toml::Table,
-    here: &str,
+    here: &[&str],
     file: &str,
     persona: bool,
     nested: &[&str],
-    refused: &mut Vec<String>,
+    refused: &mut Vec<Refusal>,
 ) -> Level {
     let mut level = Level::unset();
     for (key, value) in table {
         if nested.contains(&key.as_str()) {
             continue;
         }
-        let at = format!("{here}.{key}");
+        let at = format!("{}.{key}", here.join("."));
+        let keyed = [here, &[key.as_str()][..]].concat();
         let Some(limit) = Limit::of_word(key) else {
-            refused.push(format!(
-                "{at} in {file} is not a key purlis reads — a dispatch limit is one of {}",
-                listed(persona)
+            refused.push(Refusal::at(
+                format!(
+                    "{at} in {file} is not a key purlis reads — a dispatch limit is one of {}",
+                    listed(persona)
+                ),
+                &keyed,
             ));
             continue;
         };
         if limit.persona_only() && !persona {
-            refused.push(format!(
-                "{at} in {file} is a persona's limit, so it is not read here — write it under \
-                 [{TABLE}.{PERSONAS}.<persona>]"
+            refused.push(Refusal::at(
+                format!(
+                    "{at} in {file} is a persona's limit, so it is not read here — write it \
+                     under [{TABLE}.{PERSONAS}.<persona>]"
+                ),
+                &keyed,
             ));
             continue;
         }
         match value_of(limit, value, &at, file) {
             Ok(value) => level = level.with(limit, value),
-            Err(why) => refused.push(why),
+            Err(why) => refused.push(Refusal::at(why, &keyed)),
         }
     }
     level
@@ -1037,7 +1047,7 @@ fn named_levels(
     what: &str,
     ok: fn(&str) -> bool,
     file: &str,
-    refused: &mut Vec<String>,
+    refused: &mut Vec<Refusal>,
 ) -> BTreeMap<String, Level> {
     let mut out = BTreeMap::new();
     let Some(value) = value else {
@@ -1045,29 +1055,35 @@ fn named_levels(
     };
     let at = format!("{TABLE}.{key}");
     let Some(table) = value.as_table() else {
-        refused.push(format!(
-            "{at} in {file} is not a table, so no {what} has limits of its own — write \
-             [{at}.<{what}>]"
+        refused.push(Refusal::at(
+            format!(
+                "{at} in {file} is not a table, so no {what} has limits of its own — write \
+                 [{at}.<{what}>]"
+            ),
+            &[TABLE, key],
         ));
         return out;
     };
     for (name, level) in table {
         let here = format!("{at}.{name}");
+        let keyed = [TABLE, key, name.as_str()];
         if !ok(name) {
-            refused.push(format!(
-                "{here} in {file} is not a {what}'s name, so it sets nothing"
+            refused.push(Refusal::at(
+                format!("{here} in {file} is not a {what}'s name, so it sets nothing"),
+                &keyed,
             ));
             continue;
         }
         let Some(level) = level.as_table() else {
-            refused.push(format!(
-                "{here} in {file} is not a table, so it sets nothing — it holds limits"
+            refused.push(Refusal::at(
+                format!("{here} in {file} is not a table, so it sets nothing — it holds limits"),
+                &keyed,
             ));
             continue;
         };
         out.insert(
             name.clone(),
-            level_of(level, &here, file, key == PERSONAS, &[], refused),
+            level_of(level, &keyed, file, key == PERSONAS, &[], refused),
         );
     }
     out
@@ -1076,30 +1092,44 @@ fn named_levels(
 /// **What `text`, a whole settings file, says in `[dispatch]`** (`None`: no file). A file that
 /// is not TOML says nothing here: every other reader of it refuses it already.
 pub fn read(text: Option<&str>, file: &str) -> Read {
-    let mut out = Read::default();
+    let (table, refused) = read_keyed(text, file);
+    Read {
+        table,
+        refused: refused.into_iter().map(|one| one.why).collect(),
+    }
+}
+
+/// [`read`], each refusal with the key it is about (#1292). What the `profiles` and `grants`
+/// readers refuse is about their key as a whole.
+fn read_keyed(text: Option<&str>, file: &str) -> (Table, Vec<Refusal>) {
+    let mut out = Table::default();
+    let mut said = Vec::new();
     let Some(top) = text.and_then(|text| text.parse::<toml::Table>().ok()) else {
-        return out;
+        return (out, said);
     };
     let Some(value) = top.get(TABLE) else {
-        return out;
+        return (out, said);
     };
     let Some(table) = value.as_table() else {
-        out.refused.push(format!(
-            "{TABLE} in {file} is not a table, so no dispatch limit is read from it — write \
-             [{TABLE}] with limits"
+        said.push(Refusal::at(
+            format!(
+                "{TABLE} in {file} is not a table, so no dispatch limit is read from it — write \
+                 [{TABLE}] with limits"
+            ),
+            &[TABLE],
         ));
-        return out;
+        return (out, said);
     };
-    let refused = &mut out.refused;
+    let refused = &mut said;
     // `grants` is the project's dispatch grants (#1437), read by `dispatchgrant`: not a limit
     // and not a level, and what it holds that grants nothing is said with the rest.
     let grants = crate::dispatchgrant::KEY;
     // And `profiles` is the profiles the project lists for a persona's dispatched chats
     // (#1509), read by `dispatchprofiles`: the same, and the committed file's alone.
     let profiles = crate::dispatchprofiles::KEY;
-    out.table.project = level_of(
+    out.project = level_of(
         table,
-        TABLE,
+        &[TABLE],
         file,
         false,
         &[WORKSPACES, PERSONAS, grants, profiles],
@@ -1107,25 +1137,41 @@ pub fn read(text: Option<&str>, file: &str) -> Read {
     );
     if table.contains_key(profiles) {
         if file == crate::profiles::LOCAL_FILE {
-            refused.push(format!(
-                "{TABLE}.{profiles} in {file} is not read: the profiles a persona's dispatched \
-                 chats may start on are listed in the project's committed file"
+            refused.push(Refusal::at(
+                format!(
+                    "{TABLE}.{profiles} in {file} is not read: the profiles a persona's \
+                     dispatched chats may start on are listed in the project's committed file"
+                ),
+                &[TABLE, profiles],
             ));
         } else {
-            refused.extend(crate::dispatchprofiles::listed(text).refused);
+            refused.extend(
+                crate::dispatchprofiles::listed(text)
+                    .refused
+                    .into_iter()
+                    .map(|why| Refusal::at(why, &[TABLE, profiles])),
+            );
         }
     }
     if table.contains_key(grants) {
         if file == crate::profiles::LOCAL_FILE {
-            refused.push(format!(
-                "{TABLE}.{grants} in {file} is not read: a dispatch grant of your own is kept \
-                 by purlis on this machine, and the project's are in its committed file"
+            refused.push(Refusal::at(
+                format!(
+                    "{TABLE}.{grants} in {file} is not read: a dispatch grant of your own is \
+                     kept by purlis on this machine, and the project's are in its committed file"
+                ),
+                &[TABLE, grants],
             ));
         } else {
-            refused.extend(crate::dispatchgrant::committed(text).refused);
+            refused.extend(
+                crate::dispatchgrant::committed(text)
+                    .refused
+                    .into_iter()
+                    .map(|why| Refusal::at(why, &[TABLE, grants])),
+            );
         }
     }
-    out.table.workspaces = named_levels(
+    out.workspaces = named_levels(
         table.get(WORKSPACES),
         WORKSPACES,
         "workspace",
@@ -1133,7 +1179,7 @@ pub fn read(text: Option<&str>, file: &str) -> Read {
         file,
         refused,
     );
-    out.table.personas = named_levels(
+    out.personas = named_levels(
         table.get(PERSONAS),
         PERSONAS,
         "persona",
@@ -1141,13 +1187,18 @@ pub fn read(text: Option<&str>, file: &str) -> Read {
         file,
         refused,
     );
-    out
+    (out, said)
 }
 
 /// Everything in `text`'s `[dispatch]` that purlis would not read as written, as `file` holds
 /// it: what the Settings tab's save refuses to write. A depth above [`DEEPEST`] is one.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
     read(Some(text), file).refused
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(text: &str, file: &str) -> Vec<Refusal> {
+    read_keyed(Some(text), file).1
 }
 
 /// **A policy's ceiling**, from the `dispatch` object of an administrator's policy file: each

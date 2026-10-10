@@ -59,6 +59,7 @@ use std::path::Path;
 
 use super::hosts::{self, Host};
 use super::policy::Locks;
+use crate::settings::Refusal;
 
 /// The key in `[sandbox]` that holds each persona's grants.
 pub const KEY: &str = "personas";
@@ -84,62 +85,95 @@ pub fn read(
     file: &str,
     known: Option<&[String]>,
 ) -> (BTreeMap<String, Grants>, Vec<String>) {
+    let (grants, refused) = keyed(value, file, known);
+    (grants, refused.into_iter().map(|one| one.why).collect())
+}
+
+/// [`read`], each refusal with the key it is about (#1292).
+pub fn keyed(
+    value: Option<&toml::Value>,
+    file: &str,
+    known: Option<&[String]>,
+) -> (BTreeMap<String, Grants>, Vec<Refusal>) {
     let mut out = BTreeMap::new();
     let mut refused = Vec::new();
     let Some(value) = value else {
         return (out, refused);
     };
+    let table_key = [super::TABLE, KEY];
     let at = format!("{}.{KEY}", super::TABLE);
     let Some(table) = value.as_table() else {
-        refused.push(format!(
-            "{at} in {file} is not a table, so no persona is granted anything — write \
-             [{at}.<persona>] with hosts"
+        refused.push(Refusal::at(
+            format!(
+                "{at} in {file} is not a table, so no persona is granted anything — write \
+                 [{at}.<persona>] with hosts"
+            ),
+            &table_key,
         ));
         return (out, refused);
     };
     for (persona, grants) in table {
         let here = format!("{at}.{persona}");
+        let here_key = [super::TABLE, KEY, persona.as_str()];
         if !crate::personas::valid_name(persona) {
-            refused.push(format!(
-                "{here} in {file} is not a persona's name, so it grants nothing — a persona's \
-                 name is lowercase letters, digits and hyphens"
+            refused.push(Refusal::at(
+                format!(
+                    "{here} in {file} is not a persona's name, so it grants nothing — a \
+                     persona's name is lowercase letters, digits and hyphens"
+                ),
+                &here_key,
             ));
             continue;
         }
         if known.is_some_and(|known| !known.iter().any(|name| name == persona)) {
-            refused.push(format!(
-                "{here} in {file} names no persona of this project, so it grants nothing — make \
-                 the persona first, or take its table out"
+            refused.push(Refusal::at(
+                format!(
+                    "{here} in {file} names no persona of this project, so it grants nothing — \
+                     make the persona first, or take its table out"
+                ),
+                &here_key,
             ));
             continue;
         }
         let Some(grants) = grants.as_table() else {
-            refused.push(format!(
-                "{here} in {file} is not a table, so it grants nothing — it holds hosts"
+            refused.push(Refusal::at(
+                format!("{here} in {file} is not a table, so it grants nothing — it holds hosts"),
+                &here_key,
             ));
             continue;
         };
         for key in grants.keys() {
             if !KEYS.contains(&key.as_str()) {
-                refused.push(format!(
-                    "{here}.{key} in {file} is not a key purlis reads — a persona's sandbox \
-                     holds hosts"
+                refused.push(Refusal::at(
+                    format!(
+                        "{here}.{key} in {file} is not a key purlis reads — a persona's sandbox \
+                         holds hosts"
+                    ),
+                    &[super::TABLE, KEY, persona.as_str(), key.as_str()],
                 ));
             }
         }
+        let hosts_key = [super::TABLE, KEY, persona.as_str(), hosts::KEY];
         let hosts = match hosts::read(grants.get(hosts::KEY)) {
             Ok(listed) => {
                 refused.extend(listed.refused.into_iter().map(|(written, why)| {
-                    format!(
-                        "{here}.hosts in {file} names {written}, which no chat is let reach: {why}"
+                    Refusal::at(
+                        format!(
+                            "{here}.hosts in {file} names {written}, which no chat is let reach: \
+                             {why}"
+                        ),
+                        &hosts_key,
                     )
                 }));
                 listed.hosts
             }
             Err(hosts::NotAList) => {
-                refused.push(format!(
-                    "{here}.hosts in {file} is not a list of hosts, so none of {persona}'s is \
-                     allowed — write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+                refused.push(Refusal::at(
+                    format!(
+                        "{here}.hosts in {file} is not a list of hosts, so none of {persona}'s is \
+                         allowed — write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+                    ),
+                    &hosts_key,
                 ));
                 Vec::new()
             }

@@ -237,13 +237,6 @@ impl Refusal {
             key: Some(key.iter().map(|step| (*step).to_owned()).collect()),
         }
     }
-
-    /// A refusal from a reader that does not yet hand its key over, whose sentence names it
-    /// first, as every reader of these files does ([`key_said`]).
-    pub fn said(why: String, file: &str, under: Option<&str>) -> Self {
-        let key = key_said(&why, file, under);
-        Self { why, key }
-    }
 }
 
 /// One step of the way to a key: a table's key, or an array of tables' place (`[[forge]]`).
@@ -326,84 +319,6 @@ pub fn standing(root: &Path, which: Which, text: &str) -> Vec<Refusal> {
         .collect()
 }
 
-/// **The key a reader's sentence names first** (#1292), in the convention every reader of the
-/// settings files writes: `<dotted key> in <file> …`, or a table as TOML writes it —
-/// `[<table>] in <file> …`, `[<table>] <key> = …`. `None` for a sentence of any other shape. A
-/// key under `under` (a workspace's `settings`) is given without it, and one that is `under`
-/// itself names no setting.
-///
-/// Only for the readers that do not hand their key over yet ([`Refusal::said`]). It cannot tell
-/// where an unquoted id with dots in it ends, which is why `[extensions]`'s reader says its keys
-/// itself.
-pub fn key_said(why: &str, file: &str, under: Option<&str>) -> Option<Vec<String>> {
-    let in_file = format!(" in {file}");
-    let mut keys = if let Some(table) = why.strip_prefix('[') {
-        let (mut keys, rest) = said_keys(table)?;
-        let after = rest.strip_prefix(']')?;
-        if !after.starts_with(&in_file) {
-            // `[harness.x] is in …`: the word after the table is the sentence's, not a key's.
-            let (name, rest) = one_key(after.strip_prefix(' ')?)?;
-            if !rest.starts_with(" =") {
-                return None;
-            }
-            keys.push(name);
-        }
-        keys
-    } else {
-        let (keys, rest) = said_keys(why)?;
-        if !rest.starts_with(&in_file) {
-            return None;
-        }
-        keys
-    };
-    if let Some(under) = under {
-        if keys.first().map(String::as_str) != Some(under) {
-            return None;
-        }
-        keys.remove(0);
-    }
-    (!keys.is_empty()).then_some(keys)
-}
-
-/// One key at the start of `text`, bare or quoted as TOML writes it, and what follows it.
-fn one_key(text: &str) -> Option<(String, &str)> {
-    let bare = text
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-        .unwrap_or(text.len());
-    if bare > 0 {
-        return Some((text[..bare].to_owned(), &text[bare..]));
-    }
-    if let Some(rest) = text.strip_prefix('\'') {
-        let end = rest.find('\'')?;
-        return Some((rest[..end].to_owned(), &rest[end + 1..]));
-    }
-    let rest = text.strip_prefix('"')?;
-    let mut key = String::new();
-    let mut chars = rest.char_indices();
-    while let Some((at, c)) = chars.next() {
-        match c {
-            '"' => return Some((key, &rest[at + 1..])),
-            '\\' => key.push(chars.next()?.1),
-            c => key.push(c),
-        }
-    }
-    None
-}
-
-/// The dotted key at the start of `text`, and what follows it.
-fn said_keys(text: &str) -> Option<(Vec<String>, &str)> {
-    let mut keys = Vec::new();
-    let mut rest = text;
-    loop {
-        let (key, after) = one_key(rest)?;
-        keys.push(key);
-        match after.strip_prefix('.') {
-            Some(next) => rest = next,
-            None => return Some((keys, after)),
-        }
-    }
-}
-
 /// `said`, a sentence a reader wrote naming the project's files by their old names, naming them
 /// `shared` and `local` instead: the names they have in this project (#1340).
 pub fn named_as(said: &str, shared: &str, local: &str) -> String {
@@ -459,38 +374,29 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
         .collect()
 }
 
-/// [`read_refusals`], each with its key: said by the reader where it says it, and read from its
-/// sentence ([`key_said`]) where it does not yet.
+/// [`read_refusals`], each with the key the reader that refuses it gives (#1292): no key is
+/// read back from a sentence.
 fn keyed_read_refusals(root: &Path, which: Which, text: &str) -> Vec<Refusal> {
     let file = which.file();
-    let said = |whys: Vec<String>| {
-        whys.into_iter()
-            .map(|why| Refusal::said(why, file, None))
-            .collect::<Vec<_>>()
-    };
     let mut out = match which {
         Which::Shared => shared_refusals(root, text),
-        Which::Local => said(local_refusals(root, text)),
+        Which::Local => local_refusals(root, text),
     };
     // Either file may hold `[extensions]` (charter-app#253), and it is read by one reader in
     // both, so it is refused in that reader's words in both — with its keys, since an id may
     // hold a dot (#1292).
     out.extend(crate::extension::project::keyed(text, file));
     // And `[harness_plugins]` (charter-app#274), the same way.
-    out.extend(said(crate::harness_plugin::refusals(text, file)));
+    out.extend(crate::harness_plugin::keyed(text, file));
     // And `[theme]` (charter-app#273), read by one reader in both too.
-    out.extend(said(crate::extension::project::theme::refusals(text, file)));
+    out.extend(crate::extension::project::theme::keyed(text, file));
     // And `[sandbox]` (ADR 0067), which only the Shared file may hold, and only as `on`.
-    out.extend(said(crate::sandbox::refusals_at(root, text, file)));
+    out.extend(crate::sandbox::keyed_at(root, text, file));
     // And `[dispatch]` (#1439), the limits: the project's in Shared, and yours, which only
     // lower, in Local. A depth above its ceiling is refused here.
-    out.extend(said(crate::dispatchlimits::refusals(text, file)));
+    out.extend(crate::dispatchlimits::keyed(text, file));
     // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
-    out.extend(said(crate::planesave::refusals(
-        text,
-        which == Which::Local,
-        file,
-    )));
+    out.extend(crate::planesave::keyed(text, which == Which::Local, file));
     out
 }
 
@@ -515,16 +421,20 @@ fn writer_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
 }
 
 /// The reasons the set refused a table or a profile in `file`, and the doctor's findings about
-/// `cfg`, as one sentence each — the finding's summary, then what to do.
-fn said(root: &Path, set: &profiles::ProfileSet, file: &str, cfg: &toml::Table) -> Vec<String> {
+/// `cfg`, as one sentence each — the finding's summary, then what to do — with the key each
+/// is about.
+fn said(root: &Path, set: &profiles::ProfileSet, file: &str, cfg: &toml::Table) -> Vec<Refusal> {
     set.refused
         .iter()
         .filter(|refused| refused.source == file)
-        .map(|refused| refused.reason.clone())
+        .map(|refused| Refusal {
+            why: refused.reason.clone(),
+            key: refused.key.clone(),
+        })
         .chain(
             crate::doctor::config_findings(root, cfg, set)
                 .into_iter()
-                .map(|(summary, detail)| format!("{summary} — {detail}")),
+                .map(|(key, (summary, detail))| Refusal::at(format!("{summary} — {detail}"), key)),
         )
         .collect()
 }
@@ -542,10 +452,7 @@ fn shared_refusals(root: &Path, text: &str) -> Vec<Refusal> {
         Some(text),
         profiles::read_local(root),
     ));
-    let mut out: Vec<Refusal> = said(root, &set, COMMITTED_FILE, &cfg)
-        .into_iter()
-        .map(|why| Refusal::said(why, COMMITTED_FILE, None))
-        .collect();
+    let mut out = said(root, &set, COMMITTED_FILE, &cfg);
     out.extend(
         names_nothing(root, &cfg)
             .into_iter()
@@ -607,7 +514,7 @@ fn names_nothing(root: &Path, cfg: &toml::Table) -> Vec<String> {
 
 /// The Local file's: every profile the loader would refuse, and a `default` that names none it
 /// keeps.
-fn local_refusals(root: &Path, text: &str) -> Vec<String> {
+fn local_refusals(root: &Path, text: &str) -> Vec<Refusal> {
     let committed = std::fs::read_to_string(Which::Shared.path(root)).ok();
     let set = profiles::current_of(profiles::derive_from(
         committed.as_deref(),
