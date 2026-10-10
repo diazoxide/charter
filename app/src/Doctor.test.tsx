@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Health, onTheLine, useDoctor, type DoctorState } from "./Doctor";
+import {
+  DoctorNotices,
+  FINDINGS_AS_NOTICES,
+  Health,
+  onTheLine,
+  useDoctor,
+  type DoctorState,
+} from "./Doctor";
 import type { DoctorReport, DoctorRow } from "./bindings";
 
 /**
@@ -661,5 +668,92 @@ describe("the git identity form fills in, never replaces (FX-3, D-FX3-8)", () =>
       "plane_doctor_fix_identity",
       { plane: PLANE, name: "", email: "bea@example.invalid" },
     ]);
+  });
+});
+
+describe("which doctor findings stand as Notices (#1301, D-1301-1)", () => {
+  /** Every fix the doctor offers, each on the row that offers it (core doctor/fix.rs). */
+  const findings: Record<string, DoctorRow> = {
+    "git-identity": row("git identity", "fail", {
+      detail: "not set: user.email",
+      fix: "git-identity",
+    }),
+    "memory-optimize": row("memory indexes", "warn", {
+      detail: "0 dangling, 2 unindexed",
+      fix: "memory-optimize",
+    }),
+    "plugin-install": row("plugin install", "warn", { fix: "plugin-install" }),
+    reinit: row("schema", "warn", { fix: "reinit" }),
+    "local-ignore": row("harness profiles", "warn", { fix: "local-ignore" }),
+    discover: row("inventory", "warn", { fix: "discover" }),
+    "persona-agents": row("personas", "warn", { fix: "persona-agents" }),
+    "handoff-rule": row("handoff gate", "warn", { fix: "handoff-rule" }),
+  };
+
+  function draw(rows: DoctorRow[], over: Partial<DoctorState> = {}, dismissed: string[] = []) {
+    const fix = vi.fn();
+    const settle = vi.fn();
+    render(
+      <DoctorNotices
+        doctor={state({ report: report(rows), fix, ...over })}
+        dismissed={new Set(dismissed)}
+        dismiss={() => {}}
+        settle={settle}
+      />,
+    );
+    return { fix, settle };
+  }
+
+  const causes = () =>
+    [...document.querySelectorAll("[data-cause]")].map((one) => one.getAttribute("data-cause"));
+
+  it("draws an unindexed memory as a Notice whose Fix links it, with no form", async () => {
+    const { fix } = draw([findings["memory-optimize"]]);
+
+    const notice = screen
+      .getByText(/^memory indexes: 0 dangling, 2 unindexed/)
+      .closest("[data-cause]") as HTMLElement;
+    expect(notice).toHaveAttribute("data-cause", "doctor-finding:memory-optimize");
+    await userEvent.click(within(notice).getByRole("button", { name: "Fix" }));
+    expect(fix).toHaveBeenCalledWith("memory-optimize");
+    expect(screen.queryByRole("form")).toBeNull();
+  });
+
+  it("leaves every other finding in the dialog, so opening a project is no band of rows", () => {
+    draw(Object.values(findings));
+
+    expect(causes()).toEqual(["doctor-finding:git-identity", "doctor-finding:memory-optimize"]);
+  });
+
+  it("never stands a fix that runs only by its name as a Notice", () => {
+    // `by_name_only` in core doctor/fix.rs: the network, this machine's folders, or committed
+    // files every teammate pulls. One press under the strip is not how those are asked for.
+    const byNameOnly = [
+      "discover",
+      "rename-plane",
+      "rename-local",
+      "persona-agents",
+      "handoff-rule",
+    ];
+    expect([...FINDINGS_AS_NOTICES.keys()].filter((id) => byNameOnly.includes(id))).toEqual([]);
+  });
+
+  it("names each finding by its row, so a clean row lets its dismissal go", () => {
+    const { settle } = draw(
+      [findings["git-identity"], row("memory indexes", "ok", { detail: "3 indexes, all linked" })],
+      {},
+      ["doctor-finding:memory-optimize"],
+    );
+
+    expect(settle).toHaveBeenLastCalledWith("doctor-finding", ["doctor-finding:git-identity"]);
+  });
+
+  it("keeps the dismissal of a finding that still stands", () => {
+    const { settle } = draw([row("git identity", "ok"), findings["memory-optimize"]], {}, [
+      "doctor-finding:memory-optimize",
+    ]);
+
+    expect(settle).toHaveBeenLastCalledWith("doctor-finding", ["doctor-finding:memory-optimize"]);
+    expect(causes()).toEqual([]);
   });
 });
