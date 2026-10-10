@@ -377,7 +377,7 @@ jobs:
       # `package-manager-cache: false` because setup-node caches on its own when package.json
       # names npm, and leaving out `cache:` does not stop that. A test in
       # `crates/release-manifest` holds every job here that has a secret or publishes to this.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
@@ -773,7 +773,7 @@ jobs:
           fi
 
       - name: Upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
@@ -956,12 +956,12 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-linux-x86_64-${{ needs.plan.outputs.version }}
           path: dist
@@ -1009,7 +1009,7 @@ jobs:
             echo "$sbom: $(grep -c '^pkg:cargo/' <<<"$purls") crates, $(grep -c '^pkg:npm/' <<<"$purls") npm packages"
           done
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: purlis-sbom-${{ needs.plan.outputs.version }}
           path: out/
@@ -1047,17 +1047,17 @@ jobs:
       # `purlis-sbom-<version>` from `sbom`), never by pattern. Any step of this run that holds
       # the artifact token can upload an artifact, and a pattern would take one it uploaded
       # under a lookalike name, attest it, and ship it (#584 review).
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-linux-x86_64-${{ needs.plan.outputs.version }}
           path: dist
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-sbom-${{ needs.plan.outputs.version }}
           path: dist
@@ -1119,17 +1119,17 @@ jobs:
 
       # The build artifacts by their exact names, the same set `provenance` attested (see the
       # note there on why never a pattern).
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-macos-arm64-${{ needs.plan.outputs.version }}
           path: dist
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-linux-x86_64-${{ needs.plan.outputs.version }}
           path: dist
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: purlis-sbom-${{ needs.plan.outputs.version }}
           path: dist
