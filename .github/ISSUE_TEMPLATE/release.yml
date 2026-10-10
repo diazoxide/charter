@@ -1,0 +1,125 @@
+# The release checklist (DF-3, #634): one issue per release, filled before the version is
+# promoted to stable. Each gate is a group of required boxes, and each box says where its
+# evidence is read. `node tools/release-form.mjs` fails when a gate, a required box or the place
+# its evidence is read goes missing from this file; CI runs its test with the other tools' tests.
+name: Release checklist
+description: One per release, filled before a version is promoted to stable. For maintainers.
+title: "Release checklist: v"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A version is promoted to stable, its `v*` tag pushed, only once every box below is
+        checked. Each box names where its evidence is read: link the run, the file or the
+        command's output in the evidence field under it. Filling this in cuts, tags and
+        publishes nothing; only the maintainer pushes a `v*` tag. CONTRIBUTING.md, "Releases",
+        says where this checklist fits.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version this checklist promotes, as CHANGELOG.md will head its section.
+      placeholder: 0.5.0
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: The commit on `main` the tag will point at.
+    validations:
+      required: true
+  - type: checkboxes
+    id: technical-gate
+    attributes:
+      label: Technical gate
+      description: What the build itself has to show before it reaches anyone on stable.
+      options:
+        - label: "CI: the `ci` run on `main` for this commit is green."
+          required: true
+        - label: "Nightly: the last scheduled `ci` run and the `release` workflow's nightly profile guard on `main` are green, and no issue a red night opened is still open."
+          required: true
+        - label: "Signing and notarization: the `release` run's macOS signing verdict says how the bundle is signed. Notarization is declined (ADR 0042), so a verdict of not notarized is the expected one."
+          required: true
+        - label: "Provenance: the `build provenance` job attested every file the release publishes, and `gh attestation verify <file> -R purlis/purlis` passes on a downloaded bundle."
+          required: true
+        - label: "SBOM: the release carries a CycloneDX SBOM for each platform, `purlis-<platform>.cdx.json`, from the `SBOM` job."
+          required: true
+  - type: textarea
+    id: technical-evidence
+    attributes:
+      label: Technical evidence
+      description: A link to each run named above, and the output of the attestation check.
+    validations:
+      required: true
+  - type: checkboxes
+    id: dogfood-gate
+    attributes:
+      label: Dogfood gate (DF-2)
+      description: The maintainer runs the current release every day (decision G6).
+      options:
+        - label: "The maintainer has run this version as their daily app for at least 3 days on the dev channel before it is promoted to stable."
+          required: true
+  - type: input
+    id: dogfood-evidence
+    attributes:
+      label: Days on the dev channel
+      description: The first and last day the maintainer ran this version daily, from the dev channel.
+      placeholder: 2026-10-01 to 2026-10-04
+    validations:
+      required: true
+  - type: textarea
+    id: user-signal-gate
+    attributes:
+      label: User-signal gate (LN-6)
+      description: |
+        Decision G3: from the Next horizon on, every gate also needs a signal from people using
+        purlis. LN-6 defines that signal, and no ticket for it is filed yet; the gate is listed in
+        DF-3 (#634). Until LN-6 is decided, write "not defined yet (LN-6)", or the signal there is.
+      placeholder: not defined yet (LN-6)
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-tests
+    attributes:
+      label: The test behind each acceptance line (QA-10)
+      description: |
+        Every acceptance line an issue closed by this release holds, with the test that checks
+        it, one per line: `#<issue> <line> -> <test name> (<file>)`. A line that cannot have a
+        test says why, and how it was checked instead.
+      placeholder: "#634 Every release has a filled checklist issue -> the form keeps every gate (tools/release-form.test.mjs)"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome-bars
+    attributes:
+      label: Outcome bars of the features shipped (QA-16)
+      description: |
+        Each feature this release ships, its outcome bar and what dogfood measured against it
+        (decision V12). Decided so far: SD-2's bar, the sandbox turned off in under 10% of chats,
+        with the false denials on the everyday corpus (ADR 0067); and HP-5's measure, the median
+        time from an ask being raised to its answer being applied. A feature whose bar is not
+        decided yet says so, and is "built", not "done".
+      placeholder: |
+        SD-2: off in <n>% of chats; <n> false denials on the everyday corpus
+        HP-5: median <n> s from an ask to its answer
+        FW-9: bar not decided yet (built, not done)
+    validations:
+      required: true
+  - type: checkboxes
+    id: notes-gate
+    attributes:
+      label: Changelog and news
+      description: What the release says it brought, which the release page, the updater and `purlis news` all read from CHANGELOG.md.
+      options:
+        - label: "Changelog: `node tools/changelog-fold.mjs` folded every fragment, `node tools/changelog-fold.mjs --check` passes, and `## [Unreleased]` is now this version's section."
+          required: true
+        - label: "News entry: `purlis news --for <version>` prints this version's section, and it says what people using purlis will notice."
+          required: true
+  - type: checkboxes
+    id: promotion
+    attributes:
+      label: Promotion
+      options:
+        - label: "The maintainer read this checklist and pushes the `v*` tag themselves (decision Q20: the maintainer is the reviewer for stable)."
+          required: true

@@ -47,7 +47,7 @@ function forms(): string[] {
 const community = () => [...DOCS, CHOOSER, ...forms()];
 
 describe("the community files", () => {
-  it("are where GitHub looks for them, with bug, feature, ticket, ADR and ideas forms", () => {
+  it("are where GitHub looks for them, with bug, feature, ticket, ADR, release and ideas forms", () => {
     const missing = DOCS.concat(CHOOSER).filter((path) => !existsSync(join(ROOT, path)));
     expect(missing).toEqual([]);
     expect(forms().sort()).toEqual(
@@ -56,6 +56,7 @@ describe("the community files", () => {
         `${ISSUE_FORMS}/feature.yml`,
         `${ISSUE_FORMS}/ticket.yml`,
         `${ISSUE_FORMS}/adr.yml`,
+        `${ISSUE_FORMS}/release.yml`,
         `${DISCUSSION_FORMS}/ideas.yml`,
       ].sort(),
     );
