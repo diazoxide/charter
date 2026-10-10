@@ -2225,7 +2225,12 @@ export const PlaneView = memo(function PlaneView({
             menu of what the strip is not drawing, which is why it is here and not a style of
             the tab alone. Hidden from a screen reader: the name says which workspace. */}
         {colour !== null && (
-          <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
+          <span
+            className="workspace-mark"
+            aria-hidden="true"
+            data-colour={colour}
+            style={tintOf(workspace)}
+          />
         )}
         {/* The plane root is drawn as an icon alone (SI-1): its tab's `aria-label` and tooltip
             say what it is. Everything else is drawn by name. */}
@@ -6803,6 +6808,7 @@ export const PlaneView = memo(function PlaneView({
                             className="workspace"
                             ref={sortable.setNodeRef}
                             data-dragging={sortable.isDragging || undefined}
+                            data-colour={colourOf(workspace) ?? undefined}
                             style={{ ...tintOf(workspace), ...style }}
                           >
                             {/* Right-click is the third reader of the catalogue (`Menus.tsx`):
@@ -6906,7 +6912,11 @@ export const PlaneView = memo(function PlaneView({
 
       {/* The chat strip is the focused workspace's, so it is drawn in that workspace's colour
           (charter-app#281): its shade, its selected tab and its accent. */}
-      <header className="bar" style={tintOf(ofWorkspace)}>
+      <header
+        className="bar"
+        data-colour={colourOf(ofWorkspace) ?? undefined}
+        style={tintOf(ofWorkspace)}
+      >
         {/* The chats of the FOCUSED WORKSPACE (ADR 0036), which is what the tmux frame's
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
