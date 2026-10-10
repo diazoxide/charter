@@ -453,8 +453,13 @@ export function NoticePaneRow({ children }: { children: ReactNode }) {
       }
     };
     place();
+    // A Notice that comes or goes, and one that comes to ask something or stops asking where it
+    // stands (an answered question says what was done in the same box): either changes the two.
+    // (`data-asks` is on each Notice's box, so the subtree is watched for that one attribute.)
     const watching = new MutationObserver(place);
     watching.observe(stack, { childList: true });
+    const asking = new MutationObserver(place);
+    asking.observe(stack, { subtree: true, attributeFilter: ["data-asks"] });
     // A Notice kept for the keyboard goes behind "+N more" once the keyboard has left it: after
     // the focus has moved, which is after `focusout`.
     let later: ReturnType<typeof setTimeout> | undefined;
@@ -465,6 +470,7 @@ export function NoticePaneRow({ children }: { children: ReactNode }) {
     stack.addEventListener("focusout", left);
     return () => {
       watching.disconnect();
+      asking.disconnect();
       stack.removeEventListener("focusout", left);
       clearTimeout(later);
     };
