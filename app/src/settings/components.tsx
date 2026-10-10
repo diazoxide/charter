@@ -697,8 +697,9 @@ export function Choice(props: ChoiceProps) {
  *
  * A row and nothing more: the buttons are native `<button>`s the caller writes, with their own
  * `type`, `disabled` and `onClick`, so the call site still says what each one is. The row draws
- * them all alike, from the same tokens as a row's reset; a button that destroys something says
- * so with `className="ends-it"`, as the dialogs' answers do.
+ * them all alike, from the same tokens as a row's reset; a button on a page that destroys
+ * something says so with `className="ends-it"`. A dialog never puts one here: a confirm that
+ * ends something is a question, and ends in the `AnswerBar` (D-1210-8, `answerBar.guard.test.ts`).
  *
  * Every button in it still needs `tabIndex={0}`: WebKit leaves a `<button>` out of the Tab order
  * without one (#190), and the row cannot add it to buttons it does not draw.
