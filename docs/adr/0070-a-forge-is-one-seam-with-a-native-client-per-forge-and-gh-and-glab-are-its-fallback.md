@@ -552,6 +552,23 @@ above. Each holds until the ticket named, and the text above is left as accepted
    GitLab's MIT one. Until #1031 settles that, the three GitLab documents (a work item's
    children, setting its parent, setting an issue's iteration) are constants that the recorded
    tests pin, and FW-15's live nightly is what catches a renamed field.
+
+   **Settled by the operator's V80 (2026-10-03), recorded by #1031 on 2026-10-10.** The schema
+   to vendor is GitLab Community Edition's (MIT), and a document that names an Enterprise Edition
+   field stays a hand-checked constant, pinned word for word by a recording. Those documents are:
+
+   - the work item read, `read::WORK_ITEM` and `read::WORK_ITEM_WITHOUT_STATUS`: their iteration
+     and status fragments name EE widget types. Recorded in
+     `tests/forge_contract/gitlab/read.json` and `read.self_managed.json`;
+   - setting an issue's iteration, `work::SET_ITERATION` (`issueSetIteration`). Recorded in
+     `forge/gitlab/work_tests.rs` (`RECORDED_SET_ITERATION`).
+
+   The CE documents, a work item's children (`work::CHILDREN`) and setting its parent
+   (`work::SET_PARENT`), are the ones to check against the vendored schema. GitLab stopped
+   publishing a schema file in the FOSS repository after 13.9
+   (`doc/api/graphql/reference/gitlab_schema.graphql`), before work items came in 15.1, so the
+   CE schema has to be introspected from a CE release at a named tag. Until it is, those two are
+   constants too, recorded word for word in `forge/gitlab/work_tests.rs`.
 3. **Epics use v4's REST epics endpoints.** GitLab deprecated them in 17.0 in favour of work
    items and still serves them in v4. FW-6b, which maps epics onto the neutral model, moves them
    to work items ([#1032](https://github.com/diazoxide/charter/issues/1032)).
