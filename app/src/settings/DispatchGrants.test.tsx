@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { DispatchGrant, DispatchGrants, DispatchStanding } from "../bindings";
 import { DispatchGrantsList, dispatchSourceSaid, dispatchWorkspaceSaid } from "./DispatchGrants";
@@ -92,26 +93,40 @@ function core(now: { grants?: DispatchGrant[]; standing?: Partial<DispatchStandi
   const asked: Asked[] = [];
   const held = { grants: now.grants ?? [], standing: stands(now.standing) };
   const writes: Record<string, (args: Record<string, unknown>) => void> = {};
-  mockIPC((cmd, args) => {
-    const sent = (args ?? {}) as Record<string, unknown>;
-    asked.push({ cmd, args: sent });
-    if (cmd === "dispatch_grants") return state({ grants: held.grants });
-    if (cmd === "dispatch_standing") return held.standing;
-    const write = writes[cmd];
-    if (write === undefined) return null;
-    write(sent);
-    return cmd === "revoke_dispatch_grant" ? state({ grants: held.grants }) : held.standing;
-  });
+  /** What asking for what waits does first: by default the settling it runs finds nothing to
+   *  change. One that throws is a read that failed. */
+  const settling = { run: () => {} };
+  mockIPC(
+    (cmd, args) => {
+      const sent = (args ?? {}) as Record<string, unknown>;
+      asked.push({ cmd, args: sent });
+      if (cmd === "dispatch_grants") return state({ grants: held.grants });
+      if (cmd === "dispatch_standing") return held.standing;
+      if (cmd === "dispatch_arrival") {
+        settling.run();
+        return { waiting: [], gone: [], unread: false };
+      }
+      const write = writes[cmd];
+      if (write === undefined) return null;
+      write(sent);
+      return cmd === "revoke_dispatch_grant" ? state({ grants: held.grants }) : held.standing;
+    },
+    { shouldMockEvents: true },
+  );
   return {
     asked,
     held,
+    settling,
     /** What `cmd` does to what the core holds; one that throws is the core's refusal. */
     on(cmd: string, write: (args: Record<string, unknown>) => void) {
       writes[cmd] = write;
     },
     sent: (cmd: string) => asked.filter((one) => one.cmd === cmd).map((one) => one.args),
-    /** Every command sent that is not one of the two reads. */
-    wrote: () => asked.filter((one) => !["dispatch_grants", "dispatch_standing"].includes(one.cmd)),
+    /** Every command sent that is not one of the reads. */
+    wrote: () =>
+      asked.filter(
+        (one) => !["dispatch_grants", "dispatch_standing", "dispatch_arrival"].includes(one.cmd),
+      ),
   };
 }
 
@@ -756,6 +771,98 @@ describe("while the project's grants accepted here are not checked against its h
     );
     expect(screen.queryByText(note)).toBeNull();
     expect(accepted(OURS_ROW)).not.toHaveClass("dispatch-dormant");
+  });
+});
+
+describe("the table reads again when the first settling lands (#1543)", () => {
+  const ACCEPTED_ANY = [
+    { asking: "qa", level: "project", waiting: false, declined: false, ...ANYWHERE },
+  ] as const;
+  const OURS_ROW = "Remove for everyone: the project's grant for steward to devops";
+  const NOT_CHECKED = /^purlis has not checked the project's grants/;
+  const UNREAD = /^purlis could not read this project's git history/;
+  const accepted = (name: string) => rowOf(screen.getByRole("button", { name }));
+  const notYet = () => ({
+    grants: [MINE, OURS],
+    standing: { project_unsettled: "not_yet" as const, any: [...ACCEPTED_ANY] },
+  });
+
+  it("draws the settled answer once the first settling lands, without Read again", async () => {
+    const fake = core(notYet());
+    // What waits is asked for, which settles first: the history read.
+    fake.settling.run = () => {
+      fake.held.standing = stands({ any: [...ACCEPTED_ANY] });
+    };
+    render(<Table />);
+
+    await waitFor(() => expect(screen.queryByText(NOT_CHECKED)).toBeNull());
+    await waitFor(() => expect(accepted(OURS_ROW)).not.toHaveClass("dispatch-dormant"));
+    expect(fake.sent("dispatch_arrival")).toEqual([{ plane: PLANE }]);
+    // Nothing was written to settle it.
+    expect(fake.wrote()).toEqual([]);
+  });
+
+  it("draws an unread history as not counting, where the settling could not read it", async () => {
+    const fake = core(notYet());
+    fake.settling.run = () => {
+      fake.held.standing = stands({ project_unsettled: "unread", any: [...ACCEPTED_ANY] });
+    };
+    render(<Table />);
+
+    expect(await screen.findByText(UNREAD)).toBeInTheDocument();
+    expect(screen.queryByText(NOT_CHECKED)).toBeNull();
+    expect(accepted(OURS_ROW)).toHaveClass("dispatch-dormant");
+    expect(accepted(OURS_ROW)).toHaveTextContent(
+      "Accepted, but does not count while purlis cannot read this project's history.",
+    );
+  });
+
+  it("stays not checked where asking what waits fails, and never draws the grants as counting", async () => {
+    const fake = core(notYet());
+    fake.settling.run = () => {
+      fake.held.standing = stands({ any: [...ACCEPTED_ANY] });
+      throw "purlis could not read the project's dispatch grants";
+    };
+    render(<Table />);
+
+    await waitFor(() => expect(fake.sent("dispatch_arrival")).toHaveLength(1));
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+    expect(screen.getByText(NOT_CHECKED)).toBeInTheDocument();
+    expect(accepted(OURS_ROW)).toHaveClass("dispatch-dormant");
+    // The failed ask is not followed by a read that would draw what the core holds now.
+    expect(fake.sent("dispatch_standing")).toHaveLength(1);
+  });
+
+  it("reads again on the core's word that what waits moved, for its own project only", async () => {
+    const fake = core(notYet());
+    fake.settling.run = () => {
+      throw "not now";
+    };
+    render(<Table />);
+    expect(await screen.findByText(NOT_CHECKED)).toBeInTheDocument();
+    await waitFor(() => expect(fake.sent("dispatch_arrival")).toHaveLength(1));
+    const before = fake.sent("dispatch_standing").length;
+
+    // Another project's settling reads nothing here.
+    fake.held.standing = stands({ any: [...ACCEPTED_ANY] });
+    await act(() => emit("dispatch-arrival", { plane: "/home/dev/other" }));
+    expect(fake.sent("dispatch_standing")).toHaveLength(before);
+    expect(fake.sent("dispatch_grants")).toHaveLength(before);
+    expect(screen.getByText(NOT_CHECKED)).toBeInTheDocument();
+
+    // This project's reads again and draws what it found.
+    await act(() => emit("dispatch-arrival", { plane: PLANE }));
+    await waitFor(() => expect(screen.queryByText(NOT_CHECKED)).toBeNull());
+    expect(accepted(OURS_ROW)).not.toHaveClass("dispatch-dormant");
+  });
+
+  it("asks nothing more where the grants are settled", async () => {
+    const fake = core({ grants: [MINE, OURS], standing: { any: [...ACCEPTED_ANY] } });
+    render(<Table />);
+    await table();
+    expect(fake.sent("dispatch_arrival")).toEqual([]);
   });
 });
 

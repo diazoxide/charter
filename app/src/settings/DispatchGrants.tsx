@@ -10,6 +10,7 @@ import {
   type DispatchStanding,
   type PlaneId,
 } from "../bindings";
+import { listen } from "../here";
 import { Notice } from "../Notice";
 import type { RowIds } from "./components";
 import { showPersona } from "./links";
@@ -181,7 +182,11 @@ const named = (offer: Offer) => `${offer.yes}: ${offer.about}`;
  *   it says which at the top, and each such grant says so and is drawn greyed: not checked
  *   since purlis started (a dispatch checks first, so it may still count), or a history that
  *   cannot be read (it counts for nobody: a chat you are at asks you, and one nobody is at is
- *   refused and listed under Needs you).
+ *   refused and listed under Needs you). **The table reads itself again once the first
+ *   settling lands** (#1543): it asks for what waits of the project's grants, which settles
+ *   first (or waits on a settling under way), and then reads again; and it reads again each
+ *   time the core says what waits may have moved (`dispatch-arrival`). A read that fails or
+ *   finds the history unread draws exactly that, never the grants as counting.
  * - **Each grant says which workspace it holds in** (#1505), and the person changes it there
  *   for a grant of their own or of the project's: narrowing and widening are each asked first,
  *   and a project grant's change says it edits the committed file. A grant whose workspace is
@@ -252,36 +257,66 @@ export function DispatchGrantsList({
     };
   }, []);
 
+  /** The newest read: an answer to an older one, which may have been asked before a settling
+   *  landed, is dropped (#1543). */
+  const reads = useRef(0);
   /** Reads everything again: what stands beside the grants, then the grants. */
-  const read = useCallback(
-    () =>
-      commands
-        .dispatchStanding(plane)
-        .then((stands) => {
-          if (!live.current) return;
-          if (stands.status === "error") setUnknown(stands.error);
-          else {
-            setUnknown(undefined);
-            setStanding({ ...NOTHING_STANDS, ...(stands.data ?? {}) });
-          }
-        })
-        .catch((err: unknown) => {
-          if (live.current) setUnknown(String(err));
-        })
-        .then(() => commands.dispatchGrants(plane))
-        .then((grants) => {
-          if (!live.current) return;
-          if (grants.status === "error") setSaid(grants.error);
-          else setHeld(grants.data ?? NONE);
-        })
-        .catch((err: unknown) => {
-          if (live.current) setSaid(`purlis could not list the dispatch grants: ${String(err)}`);
-        }),
-    [plane],
-  );
+  const read = useCallback(() => {
+    const mine = ++reads.current;
+    const newest = () => live.current && reads.current === mine;
+    return commands
+      .dispatchStanding(plane)
+      .then((stands) => {
+        if (!newest()) return;
+        if (stands.status === "error") setUnknown(stands.error);
+        else {
+          setUnknown(undefined);
+          setStanding((was) => {
+            const now = { ...NOTHING_STANDS, ...(stands.data ?? {}) };
+            // An answer that does not say whether the project's grants are settled leaves that
+            // as it was: never settled on a read that did not say so (#1543).
+            return stands.data?.project_unsettled === undefined
+              ? { ...now, project_unsettled: was.project_unsettled }
+              : now;
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        if (newest()) setUnknown(String(err));
+      })
+      .then(() => commands.dispatchGrants(plane))
+      .then((grants) => {
+        if (!newest()) return;
+        if (grants.status === "error") setSaid(grants.error);
+        else setHeld(grants.data ?? NONE);
+      })
+      .catch((err: unknown) => {
+        if (newest()) setSaid(`purlis could not list the dispatch grants: ${String(err)}`);
+      });
+  }, [plane]);
   useEffect(() => {
     void read();
   }, [read]);
+  // The core says what waits of the project's grants may have moved: an answer given here, in
+  // a Notice or in another window, or a settling after the watcher saw the project's file move.
+  useEffect(() => {
+    let gone = false;
+    let stop: (() => void) | undefined;
+    listen<{ plane: PlaneId }>("dispatch-arrival", (event) => {
+      if (event.payload.plane === plane) void read();
+    }).then(
+      (unlisten) => {
+        if (gone) unlisten();
+        else stop = unlisten;
+      },
+      // No window to listen in: a webview being torn down.
+      () => undefined,
+    );
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, [plane, read]);
 
   // The confirming button takes the focus as it is drawn, so Enter and Escape answer it. Once
   // the question is put away the focus goes to the button that asked; where that is gone, to
@@ -387,6 +422,24 @@ export function DispatchGrantsList({
    *  says (#1543): not checked against the project's history since purlis started, which a
    *  dispatch does first, or a history that could not be read, where none counts. */
   const unsettled = standing.project_unsettled;
+  const notYet = unsettled === "not_yet";
+  // The first settling after a launch is started by a read, and tells the window nothing when
+  // it lands (#1543). Asking what waits settles first, or waits on the settling under way, so
+  // the table reads again once it answers. One that fails leaves the table as it is: not
+  // checked, never counting.
+  useEffect(() => {
+    if (!notYet) return;
+    let gone = false;
+    commands.dispatchArrival(plane).then(
+      (answer) => {
+        if (!gone && answer.status === "ok") void read();
+      },
+      () => undefined,
+    );
+    return () => {
+      gone = true;
+    };
+  }, [notYet, plane, read]);
 
   /** {@link countsNote}, for a grant of the project's accepted on this machine: it counts
    *  only once purlis has checked it against the project's history (#1543). */
@@ -1215,7 +1268,8 @@ export function DispatchGrantsList({
         <Notice
           cause="dispatch-project-not-checked"
           at="pane"
-          // A settling lands on its own: Read again draws what it found.
+          // The table reads again once the first settling lands; Read again is the way to
+          // ask meanwhile.
           fixes={[{ label: "Read again", onPress: () => void read() }]}
         >
           purlis has not checked the project&apos;s grants you accepted against its git history
