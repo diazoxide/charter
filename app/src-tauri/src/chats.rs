@@ -409,6 +409,10 @@ pub struct Chats {
     /// a task's report names as its record. The app's own knowledge of what it wrote, so a
     /// report never names a path its chat chose. **In memory only**, and gone with the chat.
     records: Mutex<HashMap<u32, String>>,
+    /// The brief each dispatch this app started a chat on was sent, as a digest, by the
+    /// dispatch's id (#1609): what a start again with no conversation holds a record's brief to
+    /// before it hands it ([`crate::rebrief`]). **In memory only.**
+    briefs: crate::rebrief::Sent,
     /// **The one lock a dispatch is decided under** (#1436): held from reading where the asking
     /// chat stands until the new chat's slot is reserved, and across a report's "is one owed"
     /// and its "one was sent". Asks arrive a thread each, so without it two in flight would
@@ -577,6 +581,24 @@ impl Settled {
     }
 }
 
+/// `ready` with `told` as the chat's first message where there is one, **by the route its
+/// harness takes one** (`purlis_core::handoff::first_message_argv`): last on the line, as a
+/// handoff's brief is, since nothing may come after a positional prompt. A harness purlis has
+/// not measured the first message of is started without it.
+fn told_first(
+    mut ready: purlis_core::start::Ready,
+    told: Option<&str>,
+) -> purlis_core::start::Ready {
+    if let Some(first) = told.and_then(|told| {
+        ready
+            .harness
+            .and_then(|harness| purlis_core::handoff::first_message_argv(harness.name(), told))
+    }) {
+        ready.args.extend(first);
+    }
+    ready
+}
+
 /// Why chat `session` was not restarted when purlis holds no conversation to resume it by, and
 /// what to do (#1428). True of a chat that has not said which conversation it is in yet, and of
 /// one whose harness never says: the first way out is for the one, the second for both.
@@ -692,6 +714,7 @@ impl Chats {
             grants: Mutex::new(HashMap::new()),
             blocks: crate::taskblocks::Blocks::default(),
             records: Mutex::new(HashMap::new()),
+            briefs: crate::rebrief::Sent::default(),
             dispatching: Mutex::new(()),
             reserved: Mutex::new(HashMap::new()),
             stops_below: Mutex::new(std::collections::HashSet::new()),
@@ -1015,7 +1038,24 @@ impl Chats {
             reopened: was.reopened.or(chat.reopened),
             ..chat.clone()
         };
-        self.start_ready_as(&again, ready, size, Why::Again)
+        // **A dispatched chat is handed its brief again** (#1609): it starts with no
+        // conversation, and the brief was the whole of what it was asked.
+        let told = self.told_again(&again);
+        let ready = told_first(ready.clone(), told.as_deref());
+        self.start_ready_as(&again, &ready, size, Why::Again)
+    }
+
+    /// The dispatch `id` started its chat on `brief` (#1609): kept, as a digest, for a start
+    /// of that chat again with no conversation ([`crate::rebrief`]).
+    pub(crate) fn brief_was_sent(&self, id: &str, brief: &str) {
+        self.briefs.note(id, brief);
+    }
+
+    /// What `chat` is told as it starts again with no conversation (#1609): its brief, where a
+    /// dispatch started it and the brief can be handed, else why not. `None` for a chat no
+    /// dispatch started.
+    fn told_again(&self, chat: &Chat) -> Option<String> {
+        crate::rebrief::again(&self.project, chat, &self.briefs).map(|again| again.message)
     }
 
     fn start_ready_as(
@@ -1057,13 +1097,11 @@ impl Chats {
     /// means this chat is skipped BY NAME — another profile may be another account, where
     /// this chat's resume id does not exist and where its workspace's code was never meant
     /// to go. It stays in the record, so declaring the profile again brings it back.
-    fn start_recorded(&self, chat: &Chat, size: Size, why: Why) -> Result<u32, String> {
-        self.start_recorded_told(chat, size, why, None, None)
-    }
-
-    /// [`Self::start_recorded`], with `told` as the chat's first message where there is one: a
-    /// sentence purlis tells it (#1342), last on its line, where its harness takes one
-    /// (`handoff::first_message_argv`). A chat on no profile is started without it.
+    ///
+    /// `told` is the chat's first message where there is one: a sentence purlis tells it
+    /// (#1342), or the brief of a dispatched chat started again with no conversation (#1609),
+    /// last on its line, where its harness takes one (`handoff::first_message_argv`). A chat on
+    /// no profile is started without it.
     fn start_recorded_told(
         &self,
         chat: &Chat,
@@ -1102,18 +1140,11 @@ impl Chats {
         )?;
         // The core's start knows no chat, so it says "nothing recorded"; this chat may know
         // better — a workspace rename left it without its conversation (charter#367).
-        let mut ready = purlis_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             how: chat.told(ready.how.clone()),
             ..ready
         };
-        // Last on the line, as a handoff's brief is: nothing may come after a positional prompt.
-        if let Some(first) = told.and_then(|told| {
-            ready
-                .harness
-                .and_then(|harness| purlis_core::handoff::first_message_argv(harness.name(), told))
-        }) {
-            ready.args.extend(first);
-        }
+        let ready = told_first(ready, told);
         self.start_ready_as(chat, &ready, size, why)
     }
 
@@ -3062,7 +3093,7 @@ impl Chats {
     }
 
     /// **Retry now** on a chat a launch could not start (NO-3): starts it again the way the
-    /// launch did ([`Self::start_recorded`], as a relaunch), and answers its session.
+    /// launch did ([`Self::start_recorded_told`], as a relaunch), and answers its session.
     ///
     /// **Never twice, never lost.** The chat stays in the waiting list while it starts, so a
     /// record written meanwhile still has it; [`Self::record`] leaves out a waiting chat whose id
@@ -3148,7 +3179,7 @@ impl Chats {
     /// plane as it is now, as **the same chat** under its id in a run that begins `fresh`, with
     /// no conversation resumed (ADR 0066).
     ///
-    /// Its profile is looked up again, as at a relaunch ([`Self::start_recorded`]), so an edit
+    /// Its profile is looked up again, as at a relaunch ([`Self::start_recorded_told`]), so an edit
     /// to it is what the new run starts on. **The old one stays open until the new one has
     /// started**, so a refused start leaves it running and recorded as it was; while both are
     /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
@@ -3168,7 +3199,10 @@ impl Chats {
             number: None,
             ..was
         };
-        let started = self.start_recorded(&again, size, Why::Again)?;
+        // **A dispatched chat is handed its brief again** (#1609), as its first message: the
+        // brief was the whole of what it was asked, and this run has no conversation to hold it.
+        let told = self.told_again(&again);
+        let started = self.start_recorded_told(&again, size, Why::Again, told.as_deref(), None)?;
         // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
         // so the record puts it where the old one was in the strip's order. Unplaced, it would
         // go last, and the next launch would draw it at the end of the strip.
@@ -7342,6 +7376,103 @@ pub(crate) mod tests {
             );
             let _ = chats.close(again);
         }
+    }
+
+    /// A Claude Code chat's start, on a stand-in program: a harness that takes a first message.
+    fn a_claude_ready() -> purlis_core::start::Ready {
+        purlis_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            ..a_shell_ready()
+        }
+    }
+
+    #[test]
+    fn a_dispatched_chat_whose_conversation_was_lost_is_handed_its_brief_on_its_fresh_start() {
+        // #1609: the start in its place has no conversation, and the brief was the whole of
+        // what it was asked. It is read from the dispatch's record, last on its line.
+        use purlis_core::dispatchrecord::{self, Asker, ChatRef, Mode, Opening, Place, Worker};
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let host = Pretend::default();
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), root.clone());
+        let worker = chat("/bin/sh", "devops 2", None);
+        let first = chats.start_ready(&worker, &a_claude_ready(), SIZE).unwrap();
+        let id = chats.record().chats[0].identity.id.clone().expect("an id");
+        const BRIEF: &str = "# Check prod\n\nSay which pods restart.\n";
+        let record = dispatchrecord::open(
+            &root,
+            Opening {
+                mode: Mode::Handoff,
+                asker: Asker {
+                    chat: ChatRef {
+                        chat: 1,
+                        id: Some("01K6ASKER0000000000000000A".to_owned()),
+                        name: "steward 1".to_owned(),
+                        persona: Some("steward".to_owned()),
+                    },
+                    workspace: None,
+                    by_person: false,
+                    session_record: None,
+                },
+                persona: Some("devops".to_owned()),
+                worker: Worker {
+                    chat: ChatRef {
+                        chat: first,
+                        id: Some(id.clone()),
+                        name: "devops 2".to_owned(),
+                        persona: Some("devops".to_owned()),
+                    },
+                    harness: Some("claude".to_owned()),
+                    profile: None,
+                    session_record: None,
+                },
+                task: None,
+                place: Place {
+                    workspace: None,
+                    folder: None,
+                    worktree: None,
+                },
+                brief: BRIEF.to_owned(),
+                report_owed: false,
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        chats.brief_was_sent(&record.id, BRIEF);
+
+        let again = chats
+            .start_ready_instead_of(first, &worker, &a_claude_ready(), SIZE)
+            .unwrap();
+
+        let told = host
+            .openings()
+            .pop()
+            .and_then(|opening| opening.args.last().cloned())
+            .unwrap_or_default();
+        assert!(
+            told.starts_with(&crate::rebrief::STAMP.replace("{asker}", "steward 1")),
+            "{told:?}"
+        );
+        assert!(told.ends_with(&format!("\n\n{BRIEF}")), "{told:?}");
+        // And a chat no dispatch started, in the same place, is told nothing.
+        let other = chats.start_ready(&chat("/bin/sh", "mine", None), &a_claude_ready(), SIZE);
+        let other = other.unwrap();
+        let fresh = chats
+            .start_ready_instead_of(other, &worker, &a_claude_ready(), SIZE)
+            .unwrap();
+        let args = host
+            .openings()
+            .pop()
+            .map(|one| one.args)
+            .unwrap_or_default();
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("started this chat again")),
+            "{args:?}"
+        );
+        let _ = chats.close(again);
+        let _ = chats.close(fresh);
     }
 
     #[test]

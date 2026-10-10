@@ -102,13 +102,19 @@ pub(crate) fn folder(root: &Path, cwd: &Path) -> String {
 /// nothing: the chat is open.
 pub(crate) fn opened(held: &Held, id: Option<String>, opening: Opening) {
     let now = chrono::Utc::now();
+    let brief = opening.brief.clone();
     let written = match id {
         Some(id) => dispatchrecord::open_as(held.root(), id, opening, now),
         None => dispatchrecord::open(held.root(), opening, now),
     };
     match written {
-        // An open Activity tab hears of the dispatch as it starts (#1495).
-        Ok(record) => crate::activity::dispatched(held, &record),
+        // An open Activity tab hears of the dispatch as it starts (#1495). And the brief the
+        // chat was started on is kept, as a digest in this app's memory, for a start of it
+        // again with no conversation to be handed only that brief (#1609).
+        Ok(record) => {
+            held.chats().brief_was_sent(&record.id, &brief);
+            crate::activity::dispatched(held, &record);
+        }
         Err(why) => tracing::warn!("purlis: a dispatch's record was not written ({why})"),
     }
 }
