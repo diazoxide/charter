@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { built, READY, singleQuoted } from "../harness.js";
-import { harnessRowsDrawn, pressAndStart, pressOnly } from "../opening.js";
+import { endChat, harnessRowsDrawn, pressAndStart, pressOnly } from "../opening.js";
 import { textOfEach } from "../reading.js";
 import { ask } from "../switching.js";
 
@@ -958,6 +958,110 @@ describe("the explorer", () => {
     // Typed and unsent: the harness answers a line only on Enter, and it answered none.
     await browser.pause(1_000);
     expect((await rows()).some((text) => text.includes("you said:"))).toBe(false);
+  });
+
+  /**
+   * **A file a chat's tool touches is marked live, and the mark fades** (FM-6, #1109; #1154's
+   * third line), against the real core: the chat's harness runs the real `charter hook
+   * pretooluse-read` with a `Read` of the fixture branch's README, inside its own session, so
+   * the line reaches the app's socket with the chat's own token. The core confines the path to
+   * the chat's folder and rates it; the window draws a dot on the file's row and lets it go once
+   * the chat has been quiet on it for `touching.ts`'s `FADE_MS`.
+   *
+   * The hook waits for a file this spec writes, so the Read happens once the row is on screen
+   * and not while the chat is still starting. The profile it adds is taken out again: one app
+   * process serves the whole run, and the specs after this file draw the picker too.
+   */
+  it("marks a file a chat's tool is reading, and lets the mark fade", async () => {
+    await onAlpha();
+    const plane = (await ask<string[]>("open_planes"))[0];
+    const local = join(plane, "charter.local.toml");
+    const declared = readFileSync(local, "utf8");
+    const payload = join(plane, ".charter", "scenario-touch.json");
+    const program = join(plane, "touching-harness");
+    rmSync(payload, { force: true });
+    // Waits for the payload (two minutes at most), then hands it to the hook a real Claude Code
+    // runs before a Read. `CHARTER_HOOK_BINARY` is the binary the app armed the chat with.
+    const touch = [
+      `n=0; while [ ! -e ${singleQuoted(payload)} ] && [ $n -lt 600 ]; do sleep 0.2; n=$((n+1)); done;`,
+      `"\${CHARTER_HOOK_BINARY:-charter}" hook pretooluse-read < ${singleQuoted(payload)} >/dev/null`,
+    ].join(" ");
+    writeFileSync(
+      program,
+      [
+        "#!/bin/sh",
+        // A Claude Code chat is started with purlis's own flags, which the fake harness has none of.
+        "while [ $# -gt 0 ]; do shift; done",
+        `exec ${singleQuoted(built("fake-harness"))} --sentinel ${singleQuoted(READY)} \\`,
+        `  --hook ${singleQuoted(touch)} --interactive`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(program, 0o755);
+    writeFileSync(
+      local,
+      `${declared}\n[harness.touching]\nkind = "claude"\ncommand = [${JSON.stringify(program)}]\n`,
+    );
+
+    let started = "";
+    try {
+      await pressOnly("New tab");
+      await harnessRowsDrawn();
+      const label = await $("label*=touching");
+      await (await $(`[id="${await label.getAttribute("for")}"]`)).click();
+      await $("button=Approve and start").waitForExist({ timeout: 20_000 });
+      await browser.execute(() =>
+        [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+          .find((button) => button.textContent === "Approve and start")
+          ?.click(),
+      );
+      await $('[role="dialog"][aria-labelledby="start-chat"]').waitForExist({
+        timeout: 20_000,
+        reverse: true,
+      });
+      started = await tabInFront();
+
+      const files = await $('[data-testid="files-svc-fix-login"] .file-node');
+      await files.waitForExist({ timeout: 20_000 });
+      if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+      const readme = inExplorer('[data-row="file:svc/fix-login:README.md"] .touch-mark');
+      await explorerRow("fix-login", "README.md");
+      await $(readme).waitForExist({
+        timeout: 5_000,
+        reverse: true,
+        timeoutMsg: "README.md was marked before any chat touched it",
+      });
+
+      // What Claude Code pipes to the hook before a Read: the tool and the path it was given,
+      // from the chat's folder, which is the workspace's own and holds the fixture branch.
+      const tool = {
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        tool_use_id: "toolu_scenario_touch",
+        tool_input: { file_path: ".worktrees/svc/fix-login/README.md" },
+      };
+      writeFileSync(`${payload}.part`, JSON.stringify(tool));
+      renameSync(`${payload}.part`, payload);
+
+      const mark = await $(readme);
+      await mark.waitForExist({
+        timeout: 20_000,
+        timeoutMsg: "the explorer never marked README.md while the chat was reading it",
+      });
+      expect(await mark.getAttribute("aria-label")).toMatch(/ is working here now$/);
+      // And it fades, with nothing else said: the window keeps a touch for a few seconds only.
+      await mark.waitForExist({
+        timeout: 20_000,
+        reverse: true,
+        timeoutMsg: "the mark on README.md never faded",
+      });
+    } finally {
+      writeFileSync(local, declared);
+      rmSync(payload, { force: true });
+      rmSync(program, { force: true });
+      if (started !== "" && (await $(`button[aria-label="End chat ${started}"]`).isExisting()))
+        await endChat(`End chat ${started}`);
+    }
   });
 });
 

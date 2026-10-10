@@ -259,12 +259,15 @@ function chat(session: number): OpenChat {
 }
 
 /** A project with two pinned workspaces, the first in front with two chats open in it, so every
- *  strip draws tabs, and the project's and the workspace's gears are drawn. */
+ *  strip draws tabs, and the project's and the workspace's gears are drawn. The project's
+ *  instructions changed under the first chat, so its tab draws the fresh mark beside it (NO-3):
+ *  a button in the tab's cell, which the tablist must not own either. */
 function core() {
   mockIPC(
     (cmd) => {
       if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
       if (cmd === "opened_chats") return [chat(1), chat(2)];
+      if (cmd === "chats_plane_updated") return [{ session: 1, files: ["CLAUDE.md"] }];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
       if (cmd === "chat_states") return [];
@@ -314,6 +317,12 @@ describe("the window's three strips", () => {
     expect(
       within(stripNamed("Tabs")).getAllByRole("button", { name: /^(End|Close) / }),
     ).toHaveLength(2);
+    // The fresh mark (#1204's fixture line): drawn beside the first chat's tab, in its strip.
+    expect(
+      await within(stripNamed("Tabs")).findByRole("button", {
+        name: /plane updated since this chat started$/,
+      }),
+    ).toBeInTheDocument();
 
     expect({
       projects: notTabs(tablist("Projects")),
