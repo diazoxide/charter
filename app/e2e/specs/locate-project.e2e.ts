@@ -82,12 +82,16 @@ async function theDialogWillPick(folder: string): Promise<void> {
     const held = window as unknown as {
       __realFetch?: typeof fetch;
       __pickedFor?: number;
+      __fetched?: string[];
     };
     held.__realFetch ??= window.fetch.bind(window);
     held.__pickedFor = 0;
+    held.__fetched = [];
     const real = held.__realFetch;
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      // What went through here, for a failure's message: whether the IPC is sent this way at all.
+      held.__fetched = [...(held.__fetched ?? []), url.replace(/^.*\//, "")].slice(-8);
       if (/\/pick_project(\?|$)/.test(url)) {
         held.__pickedFor = (held.__pickedFor ?? 0) + 1;
         return Promise.resolve(
@@ -196,13 +200,18 @@ describe("Locate… for a remembered project that moved", function () {
       .catch(async () => {
         // Said in full, because a scenario's failure is read from its annotation: what the
         // store holds now, whether the stand-in answered, and what the window says.
-        const answered = await browser.execute(
-          () => (window as unknown as { __pickedFor?: number }).__pickedFor ?? 0,
-        );
+        const [answered, fetched, replaced] = await browser.execute(() => {
+          const held = window as unknown as { __pickedFor?: number; __fetched?: string[] };
+          return [
+            held.__pickedFor ?? 0,
+            (held.__fetched ?? []).join(","),
+            String(!/\[native code\]/.test(String(window.fetch))),
+          ] as const;
+        });
         throw new Error(
           `the machine store never held ${moved}; it holds ${JSON.stringify(
             (await remembered()).map((one) => `${one.path} (${one.gone ?? "here"})`),
-          )}; the dialog's stand-in answered ${answered} time(s); the window says: ${await windowSays()}`,
+          )}; the dialog's stand-in answered ${answered} time(s); fetch replaced: ${replaced}; it saw [${fetched}]; the window says: ${await windowSays()}`,
         );
       });
     const picked = await browser.execute(

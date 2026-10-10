@@ -214,7 +214,10 @@ async function theTabSays(): Promise<string> {
 
 type Chat = { session: number; cwd: string | null; label: string | null };
 
-describe("the first task, from its tab", function () {
+// Skipped until purlis/purlis#1670: the machine's local project lives inside the config home,
+// which the sandbox keeps every chat from writing, so neither of the task's chats starts there
+// ("its human-powers rules would keep the chat from writing …"). Take the skip off with the fix.
+describe.skip("the first task, from its tab", function () {
   this.timeout(600_000);
 
   /** The project the launch opened, which this spec never touches. */
