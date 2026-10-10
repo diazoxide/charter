@@ -188,8 +188,9 @@ repos it lists to `inventory/repos.json`, and rewrites purlis's generated `docs/
 behind the current layout, and by the Alerts drawer's Reinit button on its `reinit` row. The
 two read the same workspaces. A workspace purlis cannot read is left out of the row, because
 the rows that look inside it already say it cannot be checked. Bare `--fix` runs it, as does
-`purlis doctor --fix workspace-reinit` or the row's Fix button. It runs `purlis workspace reinit --all`, which brings every workspace behind
-the current layout up to it and never removes your content. It writes each workspace's missing
+`purlis doctor --fix workspace-reinit` or the row's Fix button. It runs
+`purlis workspace reinit --all`, which brings every workspace behind the current layout up to
+it and never removes your content. It writes each workspace's missing
 baseline files and its structure stamp, refreshes the live block purlis manages in the
 project's `.gitignore`, and rewires purlis's harness layer in each workspace and in each clone
 and worktree under it, including purlis's lines in a clone's `.git/info/exclude`. It removes
