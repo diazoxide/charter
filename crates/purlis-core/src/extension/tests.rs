@@ -3265,10 +3265,7 @@ fn the_record_opens_in_your_editor_at_its_own_path_and_a_link_does_not() {
     match record_in_your_editor(config.path(), crate::youreditor::Editor::Variable, &editor) {
         Ok(crate::youreditor::Launch::Program { program, args }) => {
             assert_eq!(program, "ed");
-            assert_eq!(
-                args.last().map(Path::new),
-                Some(record.as_path())
-            );
+            assert_eq!(args.last().map(Path::new), Some(record.as_path()));
         }
         other => panic!("{other:?}"),
     }
