@@ -656,10 +656,18 @@ fn walking(
         let (folder, offered) = match reader {
             Some(reader) => {
                 let folder = super::root(reader, plane, branch)?.path().to_path_buf();
-                let Some(offered) = super::offered_by(reader, plane, branch, None, stop)? else {
-                    return Ok(None);
-                };
-                (folder, offered.files)
+                match super::offered_by(reader, plane, branch, None, stop)? {
+                    super::Told::Answered(offered) => (folder, offered.files),
+                    super::Told::Stopped => return Ok(None),
+                    // A branch whose index the child could not read is listed here, still
+                    // hearing `stop` (#1130).
+                    super::Told::Unindexed => {
+                        let Some(offered) = super::files_in_until(&folder, branch, stop)? else {
+                            return Ok(None);
+                        };
+                        (folder, offered)
+                    }
+                }
             }
             None => {
                 let folder = super::folder_of(plane, branch)?;

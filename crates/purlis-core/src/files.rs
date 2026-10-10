@@ -343,15 +343,25 @@ fn tree_in(via: Via<'_>, base: &Path, branch: Branch<'_>, folder: &str) -> Resul
     // left, since git refuses a question about a path inside a submodule. The reader's child
     // answers both in one ask, for every path, and the answers about paths the submodules rule
     // out are not used.
-    let (submodules, told) = match via {
-        Via::Here => (gitlinks(&base, &above, branch)?, None),
+    let answered = match via {
+        Via::Here => None,
         Via::Reader { reader, plane } => {
             let paths: Vec<PathBuf> = asked
                 .iter()
                 .chain(targets.iter())
                 .map(|(path, _)| path.clone())
                 .collect();
-            let answer = ignored_by(reader, plane, branch, paths, above)?;
+            match ignored_by(reader, plane, branch, paths, above.clone())? {
+                Told::Answered(answer) => Some(answer),
+                // A branch whose index the child could not read is read here (#1130).
+                Told::Unindexed => None,
+                Told::Stopped => return Err(answered_else()),
+            }
+        }
+    };
+    let (submodules, told) = match answered {
+        None => (gitlinks(&base, &above, branch)?, None),
+        Some(answer) => {
             let (of_asked, of_targets) = answer
                 .ignored
                 .split_at_checked(asked.len())
@@ -816,27 +826,45 @@ impl Via<'_> {
         match self {
             Via::Here => files_in(base, branch),
             Via::Reader { reader, plane } => {
-                match reader.ask(plane, branch, Ask::Offered { most: None })? {
-                    Answer::Offered(offered) => Ok(offered.files),
-                    _ => Err(answered_else()),
+                let never = std::sync::atomic::AtomicBool::new(false);
+                match offered_by(reader, plane, branch, None, &never)? {
+                    Told::Answered(offered) => Ok(offered.files),
+                    Told::Unindexed => files_in(base, branch),
+                    Told::Stopped => Err(answered_else()),
                 }
             }
         }
     }
 }
 
+/// What the reader's child told a file command (#1189).
+///
+/// **[`Told::Unindexed`] is the one way back to the hardened git in this process** (#1130): the
+/// child answered, within its bounds, that gitoxide could not read the branch's index, so the
+/// command reads that branch here, as it did before #1189, and lists what git lists. A busy
+/// reader, a paused branch, a read past its deadline or memory, a stopped read and every other
+/// refusal stay refusals: none of them reads the branch here.
+#[derive(Debug)]
+enum Told<T> {
+    Answered(T),
+    /// The asker's stop was raised first (#1137).
+    Stopped,
+    Unindexed,
+}
+
 /// The offered list of `branch`, read by `reader`'s child ([`Ask::Offered`]): at most `most` of
-/// it, with how long it was; `Ok(None)` when `stop` was raised first (#1137).
+/// it, with how long it was; [`Told::Stopped`] when `stop` was raised first (#1137).
 fn offered_by(
     reader: &Reader,
     plane: &Path,
     branch: Branch<'_>,
     most: Option<usize>,
     stop: &std::sync::atomic::AtomicBool,
-) -> Result<Option<Offered>, Refused> {
+) -> Result<Told<Offered>, Refused> {
     match reader.ask_until(plane, branch, Ask::Offered { most }, stop)? {
-        None => Ok(None),
-        Some(Answer::Offered(offered)) => Ok(Some(offered)),
+        None => Ok(Told::Stopped),
+        Some(Answer::Offered(offered)) => Ok(Told::Answered(offered)),
+        Some(Answer::Unindexed(_)) => Ok(Told::Unindexed),
         Some(_) => Err(answered_else()),
     }
 }
@@ -849,15 +877,16 @@ fn ignored_by(
     branch: Branch<'_>,
     paths: Vec<PathBuf>,
     folders: Vec<PathBuf>,
-) -> Result<Ignored, Refused> {
+) -> Result<Told<Ignored>, Refused> {
     if paths.is_empty() && folders.is_empty() {
-        return Ok(Ignored {
+        return Ok(Told::Answered(Ignored {
             ignored: Vec::new(),
             gitlinks: Vec::new(),
-        });
+        }));
     }
     match reader.ask(plane, branch, Ask::Ignored { paths, folders })? {
-        Answer::Ignored(ignored) => Ok(ignored),
+        Answer::Ignored(ignored) => Ok(Told::Answered(ignored)),
+        Answer::Unindexed(_) => Ok(Told::Unindexed),
         _ => Err(answered_else()),
     }
 }
@@ -1821,6 +1850,87 @@ mod tests {
             root.tree(&reader, "").unwrap_err().to_string(),
             "the reader answered something else"
         );
+    }
+
+    #[cfg(unix)]
+    fn unindexed() -> String {
+        serde_json::json!({ "Ok": { "Unindexed": "Index trailer should have been 20 bytes long" } })
+            .to_string()
+    }
+
+    /// #1130, #1189: a branch whose index the reader's child says gitoxide cannot read is read
+    /// with the hardened git here instead, by every file command: the light editor, the editor
+    /// hand-off, the tree and ⌘P. The fixture's folder is no repository, so git's own refusal,
+    /// not the child's, is what each says.
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_whose_index_the_reader_cannot_read_is_read_with_git_here() {
+        let (_dir, plane, folder) = project();
+        let (_answers, reader) =
+            reader_answering_each(&found_at(&folder), &unindexed(), &unindexed());
+        let root = super::root(&reader, &plane, REPO).unwrap();
+        let git_said = |said: String| {
+            assert!(said.contains("not a git repository"), "{said}");
+        };
+
+        git_said(root.open(&reader, "a.txt").unwrap_err().to_string());
+        git_said(
+            root.in_your_editor(
+                &reader,
+                "a.txt",
+                1,
+                crate::youreditor::Editor::VsCode,
+                &|_| None,
+            )
+            .unwrap_err()
+            .to_string(),
+        );
+        git_said(root.tree(&reader, "").unwrap_err().to_string());
+        let scope = [super::Place {
+            plane: &plane,
+            branch: REPO,
+        }];
+        let found = super::Finder::default()
+            .reading_with(reader)
+            .find(&scope, "a", 50);
+        assert_eq!(found.refused.len(), 1, "{:?}", found.refused);
+        git_said(found.refused[0].1.clone());
+    }
+
+    /// #1130, #1189: only [`super::Answer::Unindexed`] reads a branch here. A read past its
+    /// deadline, a branch the child refuses, and an answer to another question stay refused,
+    /// and no git runs here for them: the fixture's folder is no repository, so a git run here
+    /// would say so.
+    #[cfg(unix)]
+    #[test]
+    fn no_other_answer_of_the_reader_reads_a_branch_here() {
+        let (_dir, plane, folder) = project();
+        let not_here = |refused: String| {
+            assert!(!refused.contains("not a git repository"), "{refused}");
+        };
+        for said in [
+            refusing("purlis could not read 'the files of thing': the index is not one"),
+            found_at(&folder),
+        ] {
+            let (_answers, reader) = reader_answering_each(&found_at(&folder), &said, &said);
+            let root = super::root(&reader, &plane, REPO).unwrap();
+            not_here(root.open(&reader, "a.txt").unwrap_err().to_string());
+            not_here(root.tree(&reader, "").unwrap_err().to_string());
+        }
+
+        // A child that finds the branch, then hangs on every other question past its deadline.
+        let (answers, _) = reader_answering_each(&found_at(&folder), "", "");
+        let at = answers.path().display();
+        let script = format!(
+            "q=$(cat); case \"$q\" in *'\"Root\"'*) cat '{at}/root';; *) exec sleep 20;; esac"
+        );
+        let reader = super::Reader::new(
+            "/bin/sh".into(),
+            ["-c", &script, super::READ_ARG].map(std::ffi::OsString::from),
+        )
+        .deadline(std::time::Duration::from_millis(600));
+        let root = super::root(&reader, &plane, REPO).unwrap();
+        not_here(root.open(&reader, "a.txt").unwrap_err().to_string());
     }
 
     /// A project holding the repo `alpha/thing` as a plain folder, with `a.txt` and `src/`.

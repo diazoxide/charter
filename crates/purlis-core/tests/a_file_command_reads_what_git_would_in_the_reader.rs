@@ -229,3 +229,85 @@ fn a_stop_ends_a_listing_the_readers_child_is_held_in() {
     assert_eq!(ended, files::Ended::Stopped);
     assert!(refused.is_empty(), "a stop is not a refusal: {refused:?}");
 }
+
+/// Every event a search of `scope` for `needle` hears to its end, read by the reader's child or,
+/// with none, here.
+fn searched(scope: &[Place<'_>], needle: &str, by_reader: bool) -> Vec<String> {
+    use std::sync::atomic::AtomicBool;
+    let search = files::search(scope, needle, files::SearchOptions::default()).unwrap();
+    let mut search = if by_reader {
+        search.reading_with(reader())
+    } else {
+        search
+    };
+    let never = AtomicBool::new(false);
+    let mut heard = Vec::new();
+    while search.more(usize::MAX, &never, &mut |one| {
+        heard.push(format!("{one:?}"))
+    }) != files::Ended::Done
+    {}
+    heard
+}
+
+/// #1130, #1189: a branch tracking a path of 4,095 bytes or more, an index gitoxide cannot read
+/// yet, still has its files listed, opened, shown and searched by the app's file commands as
+/// before #1189: the child says it cannot read the index, and each command reads that branch
+/// with the hardened git here instead.
+#[test]
+fn a_branch_whose_index_gitoxide_cannot_read_is_read_as_git_reads_it_here() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let at = &f.clone;
+    write(at, "blob.txt", "at the bottom\n");
+    let blob =
+        String::from_utf8(support::git(at, &["hash-object", "-w", "blob.txt"]).stdout).unwrap();
+    std::fs::remove_file(at.join("blob.txt")).unwrap();
+    // Twenty-one names of 200 bytes: past 4,095 bytes, each name within a system's limit.
+    let long = (0..21)
+        .map(|n| format!("{n:03}{}", "d".repeat(197)))
+        .collect::<Vec<_>>()
+        .join("/")
+        + "/bottom.txt";
+    assert!(long.len() > 4095);
+    let entry = format!("100644,{},{long}", blob.trim());
+    support::git(at, &["update-index", "--add", "--cacheinfo", &entry]);
+    support::git(at, &["commit", "-q", "-m", "a long path"]);
+    write(at, "zz-new.txt", "a needle\n");
+    let plane = f.plane.as_path();
+    let branch = Branch::repo(&f.ws, &f.repo);
+
+    let told = reader().ask(plane, branch, Ask::Offered { most: None });
+    assert!(matches!(told, Ok(Answer::Unindexed(_))), "{told:?}");
+    let listed = files::list(plane, branch).expect("git lists the branch");
+    assert!(listed.contains(&long), "{listed:?}");
+    assert!(listed.contains(&"zz-new.txt".to_string()), "{listed:?}");
+
+    let reader = reader();
+    let root = files::root(&reader, plane, branch).expect("the reader finds the branch");
+    let here = files::tree(plane, branch, "").map_err(|e| e.to_string());
+    let there = root.tree(&reader, "").map_err(|e| e.to_string());
+    assert!(there.is_ok(), "{there:?}");
+    assert_eq!(there, here);
+    for path in ["README.md", "zz-new.txt", long.as_str()] {
+        let here = files::open(plane, branch, path).map_err(|e| e.to_string());
+        let there = root.open(&reader, path).map_err(|e| e.to_string());
+        assert_eq!(there, here, "the path '{path}'");
+    }
+    assert!(root.open(&reader, "zz-new.txt").is_ok());
+
+    let scope = [Place { plane, branch }];
+    for query in ["new", "bottom"] {
+        let here = Finder::default().find(&scope, query, 50);
+        let there = Finder::default()
+            .reading_with(self::reader())
+            .find(&scope, query, 50);
+        assert!(there.refused.is_empty(), "{:?}", there.refused);
+        assert_eq!(there, here, "the query '{query}'");
+    }
+    let there = searched(&scope, "needle", true);
+    assert_eq!(there, searched(&scope, "needle", false));
+    assert!(
+        there.iter().any(|one| one.contains("zz-new.txt")),
+        "{there:?}"
+    );
+}

@@ -8,12 +8,17 @@
 //! [`super::Ask::Ignored`]), so the app process starts no git to read a branch an agent can
 //! write. The command line and the tests keep the free functions in `files.rs`, which run the
 //! hardened git: the answers here are held to be theirs.
+//!
+//! **An index gitoxide cannot read** is answered as such ([`super::Answer::Unindexed`]), not
+//! refused: the file command then reads that branch with the hardened git in the app, as it did
+//! before #1189, so a branch tracking a path gitoxide's index decoder trips on (#1130) still
+//! lists its files. Only that answer, from a child that answered within its bounds, does so.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::status::open;
-use super::{Branch, Refused};
+use super::{Answer, Branch, Refused};
 
 /// What the child answers [`super::Ask::Offered`] with: the offered list, sorted and once each,
 /// cut at the most asked for, and how long it was before the cut.
@@ -34,21 +39,23 @@ pub struct Ignored {
 /// The branch's offered list, here, in this process: the bounded child's half. Every path the
 /// index records, once whatever its stages, and every file the walk finds that git does not
 /// track and does not ignore; an untracked repository nested in the branch is one entry, its
-/// path and a `/`, as git lists it. At most `most`, after sorting.
+/// path and a `/`, as git lists it. At most `most`, after sorting. An index gitoxide cannot
+/// read is answered [`Answer::Unindexed`].
 pub(super) fn offered_here(
     plane: &Path,
     branch: Branch<'_>,
     most: Option<usize>,
-) -> Result<Offered, Refused> {
+) -> Result<Answer, Refused> {
     use gix::dir::entry::{Kind, Status};
     let unreadable = |why: String| Refused::Unreadable {
         what: format!("the files of {}", branch.called()),
         why,
     };
     let repo = open(plane, branch)?.repo;
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| unreadable(e.to_string()))?;
+    let index = match repo.index_or_empty() {
+        Ok(index) => index,
+        Err(e) => return Ok(Answer::Unindexed(e.to_string())),
+    };
     let mut files: BTreeSet<String> = index
         .entries()
         .iter()
@@ -103,10 +110,10 @@ pub(super) fn offered_here(
         }
     }
     let total = files.len();
-    Ok(Offered {
+    Ok(Answer::Offered(Offered {
         files: files.into_iter().take(most.unwrap_or(usize::MAX)).collect(),
         total,
-    })
+    }))
 }
 
 /// Whether git ignores each of `paths`, and which of `folders` are submodules, here, in this
@@ -119,12 +126,14 @@ pub(super) fn offered_here(
 ///
 /// **As `git ls-files --stage` answers**: a folder is a submodule when the index records it, by
 /// either spelling, as a gitlink.
+///
+/// An index gitoxide cannot read is answered [`Answer::Unindexed`].
 pub(super) fn ignored_here(
     plane: &Path,
     branch: Branch<'_>,
     paths: &[PathBuf],
     folders: &[PathBuf],
-) -> Result<Ignored, Refused> {
+) -> Result<Answer, Refused> {
     use unicode_normalization::UnicodeNormalization as _;
     let unreadable = |why: String| Refused::Unreadable {
         what: format!("the files of {}", branch.called()),
@@ -133,9 +142,10 @@ pub(super) fn ignored_here(
     let opened = open(plane, branch)?;
     let base = opened.base;
     let repo = opened.repo;
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| unreadable(e.to_string()))?;
+    let index = match repo.index_or_empty() {
+        Ok(index) => index,
+        Err(e) => return Ok(Answer::Unindexed(e.to_string())),
+    };
     let spellings = |path: &Path| -> Vec<String> {
         let Some(spelled) = path.to_str().map(|one| one.replace('\\', "/")) else {
             return Vec::new();
@@ -188,5 +198,5 @@ pub(super) fn ignored_here(
         }
         ignored.push(any);
     }
-    Ok(Ignored { ignored, gitlinks })
+    Ok(Answer::Ignored(Ignored { ignored, gitlinks }))
 }

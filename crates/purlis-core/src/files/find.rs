@@ -325,20 +325,23 @@ fn listing(
     let read = || -> Result<Listing, Refused> {
         // With a reader, its child finds the folder and lists it, cut at the cap there, so this
         // process starts no git (#1189); with none, both are done here.
+        // A branch whose index the child could not read is listed here (#1130).
+        let here = |folder: PathBuf| -> Result<(PathBuf, Vec<String>, usize), Refused> {
+            let paths = super::files_in(&folder, branch)?;
+            let total = paths.len();
+            Ok((folder, paths, total))
+        };
         let (folder, mut paths, total) = match reader {
             Some(reader) => {
                 let folder = super::root(reader, plane, branch)?.path().to_path_buf();
                 let never = std::sync::atomic::AtomicBool::new(false);
-                let offered = super::offered_by(reader, plane, branch, Some(cap), &never)?
-                    .ok_or_else(super::answered_else)?;
-                (folder, offered.files, offered.total)
+                match super::offered_by(reader, plane, branch, Some(cap), &never)? {
+                    super::Told::Answered(offered) => (folder, offered.files, offered.total),
+                    super::Told::Unindexed => here(folder)?,
+                    super::Told::Stopped => return Err(super::answered_else()),
+                }
             }
-            None => {
-                let folder = super::folder_of(plane, branch)?;
-                let paths = super::files_in(&folder, branch)?;
-                let total = paths.len();
-                (folder, paths, total)
-            }
+            None => here(super::folder_of(plane, branch)?)?,
         };
         let partial = (total > cap).then(|| {
             format!(
