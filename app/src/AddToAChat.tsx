@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { AnswerBar } from "./AnswerBar";
 import { ChatsToPick, referenceSaid, type ChatHere, type Referenced } from "./references";
 
 /**
@@ -56,11 +57,11 @@ export function AddToAChat({
               }}
             />
           </div>
-          <div className="doing">
+          <AnswerBar>
             <button type="button" tabIndex={0} onClick={onCancel}>
               Cancel
             </button>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
